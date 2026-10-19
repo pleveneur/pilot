@@ -44,43 +44,43 @@
   en attente (⏳) et du démarrage effectif (▶️) via le callback de notification
   (`setBusNotifyCallback`, `super-agent.js`) et son prompt système l'enjoint de ne
   pas relancer une demande mise en attente.
-- **T6 — Estimation préalable (fichiers réservés au codeur, informatifs)** :
-  quand l'assistant lance un **codeur** via `run_agents` sur un projet cible
-  (`super-agent.js`), il déclenche en amont l'agent `plan-maker` (lecture seule,
-  capabilities `["plan"]`) pour estimer les fichiers que le codeur va toucher.
-  Le résultat (plan JSON) est parsé (`reservations.js` : `parsePlanFiles`),
-  dédupliqué, puis écrit dans `.pilot/reservations.json` du projet (format
-  `{ coder, files }` compatible avec le gate `pilot-reserve-gate.ts` T3). Les
-  autres spécialistes sont alors bloqués en écriture sur ces fichiers (le codeur
-  reste prioritaire). Estimation **informative / fail-open** : plan-maker absent,
-  parsing échoué ou timeout (60 s) → on n'écrit rien et on **ne bloque pas** le
-  lancement du codeur. **Durée de vie / nettoyage** : les réservations sont
-  libérées à la fin du tour du codeur (propriétaire) via `finishAgentTurn` /
-  `failAgentTurn` dans `agents-bus.js` (`cleanupReservationsForAgent` →
-  `deleteReservations`), et effacées à l'arrêt/annulation d'un agent.
+- **T6 — Fichiers réservés au codeur (plus d'estimation préalable, mission 381)** :
+  **aucune estimation préalable automatique ne subsiste.** Le lancement d'un agent
+  par l'assistant (`run_agents` / `run_assistant_agents`, `super-agent.js`)
+  démarre **exactement les agents demandés** : aucun agent auxiliaire (ex.
+  `plan-maker`) n'est lancé en amont, **le texte de la mission n'est jamais remis
+  à un autre agent** et aucune session intermédiaire n'occupe le créneau de run du
+  projet. Un identifiant inconnu est **refusé** avec la liste des agents
+  disponibles (fonction pure `unknownAgentsError`), sans substitution. Preuves :
+  `agent-demande-exact.test.js`, `verrou-par-projet.test.js` (T6),
+  `reservations.test.js`.
+  Le mécanisme de **réservation de CHEMINS** reste disponible pour une
+  réservation **explicite** : `.pilot/reservations.json` (format
+  `{ coder, files }`, compatible avec la porte `pilot-reserve-gate.ts` T3) n'est
+  plus alimenté automatiquement ; ses helpers (`writeReservations`,
+  `deleteReservations`, `isProjectReserved*`) ne manipulent que des chemins.
+  **Durée de vie / nettoyage** : les réservations sont libérées à la fin du tour
+  du codeur (propriétaire) via `finishAgentTurn` / `failAgentTurn` dans
+  `agents-bus.js` (`cleanupReservationsForAgent` → `deleteReservations`), et
+  effacées à l'arrêt/annulation d'un agent.
   **Bail conditionné à la run (correctif « réservation abandonnée bloquante »)** :
-  le battement de cœur (`reservations.js`, 60 s) ne renouvelle plus à l'aveugle —
+  le battement de cœur (`reservations.js`, 60 s) ne renouvelle jamais à l'aveugle —
   il interroge la vivacité de la run détentrice
   (`isRunInProgress(projet, { nature: "write" })`, sonde injectée par le bus) et,
   si elle a disparu, arrête son minuteur et libère la réservation
   (`deleteReservations`, ciblé sur le projet, silencieux et fail-open). Sans ce
-  contrôle, un minuteur survivant à sa run (lancement avorté, mission mise en file
-  jamais rejouée, nettoyage manqué) maintenait `renewedAt` frais indéfiniment : la
-  péremption à 10 min de la porte `pilot-reserve-gate.ts` ne se déclenchait JAMAIS
-  et les fichiers restaient bloqués pour tous les agents. Preuve :
-  `reservations.test.js` (« run détentrice DISPARUE → libérée », « run VIVANTE →
-  renouvelée »).
-  **Ordre de libération du verrou (correctif « détour de routage »)** : la run
-  d'estimation du `plan-maker` est une run de LECTURE (`projet#read:N`) ; elle
-  occupe donc le verrou d'admission du projet (une modification est exclusive,
-  `run-policy.js`). `startParallelRun` (`agents-bus.js`) **libère la run
-  (`endRun`) AVANT de livrer son résultat à la mission** (`settleMission`) :
-  sans cet ordre, l'appelant (estimation → lancement du codeur) était réveillé
-  alors que la lecture était encore `running`, la mission du **codeur nommé**
-  était refusée par `isRunInProgress(projet, { nature: "write" })` et **mise en
-  file**, tandis que le `plan-maker` — jamais nommé pour cette mission — en
-  avait exécuté le texte à sa place (aucun fichier, aucun commit). Preuve :
-  `verrou-par-projet.test.js` (POINT I).
+  contrôle, un minuteur survivant à sa run maintenait `renewedAt` frais
+  indéfiniment : la péremption à 10 min de la porte `pilot-reserve-gate.ts` ne se
+  déclenchait JAMAIS et les fichiers restaient bloqués pour tous les agents.
+  Preuve : `reservations.test.js` (« bassin de vivacité »).
+  **Ordre de libération du verrou (correctif « détour de routage »)** : une run de
+  LECTURE (`projet#read:N`) occupe le verrou d'admission du projet (une
+  modification est exclusive, `run-policy.js`). `startParallelRun`
+  (`agents-bus.js`) **libère la run (`endRun`) AVANT de livrer son résultat à la
+  mission** (`settleMission`) : sans cet ordre, l'appelant était réveillé alors
+  que la lecture était encore `running` et la mission suivante (écriture) était
+  **mise en file** au lieu de démarrer. Preuve : `verrou-par-projet.test.js`
+  (POINT I).
   **Rejeu et verrou fantôme (correctif « mission acceptée, jamais démarrée »)** :
   le rejeu des files (missions `replayQueuedMissionForProject`, délégations
   `replayDelegationQueueForProject`) sonde l'admission via `isRunStillActive`.
@@ -112,8 +112,8 @@ de :
   spécialité par projet à la fois) ;
 - garantir la **primauté du codeur** (agent principal du projet) sur les fichiers
   de code, les autres spécialistes restant en lecture seule ;
-- éviter les **conflits d'écriture** grâce à une **estimation préalable** des
-  fichiers réservés au codeur ;
+- éviter les **conflits d'écriture** grâce à la **réservation explicite** de
+  fichiers au codeur (plus d'estimation préalable automatique, mission 381) ;
 - notifier l'assistant **par événement de fin** (au lieu d'un polling), pour qu'il
   informe l'utilisateur et consigne dans son suivi.
 
@@ -126,7 +126,7 @@ de :
 | **Agent spécifique / agent de spécialité** | Agent du registre (table `agents`), créé à la volée par l'utilisateur ou l'assistant. Sa **spécialité** est portée par son `role` (système prompt) + ses `capabilities` (ex : `write`, `edit`, `review`, `plan`, `test`, `doc`). Agents par défaut : coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker. |
 | **Spécialité** | Couple « (`id` d'agent, `role`/`capabilities`) ». L'unité d'exclusivité par projet. |
 | **Agent principal / codeur** | L'agent qui a le rôle de **modification du code** du projet (`capabilities` contient `write`/`edit`, `readonly=false`). C'est l'agent de référence d'un projet pour les fichiers de code. Il est **prioritaire** et **exclusif** sur les fichiers qu'il modifie. |
-| **Agent d'estimation / analyseur** | Agent **lecture seule** (`readonly=true`) qui, **avant** le lancement du codeur, analyse la demande et renvoie la liste des fichiers que le codeur va probablement toucher. Peut être l'agent `plan-maker` existant (il produit déjà un plan JSON avec `files`) ou un agent dédié. |
+| **Agent d'estimation / analyseur** | Agent **lecture seule** (`readonly=true`) qui produit un plan (ex. `plan-maker`, plan JSON avec `files`). **Il n'est plus lancé automatiquement** avant le codeur (mission 381) : un lancement démarre exactement les agents demandés ; il n'est employé que si l'utilisateur le demande. |
 | **Projet** | Répertoire de travail (clé `project_path`). L'unité de scope de l'exclusivité. |
 
 ---
@@ -163,13 +163,14 @@ de :
   - peuvent **LIRE** les fichiers du projet (analyse, lecture seule) ;
   - ne doivent **JAMAIS** modifier les fichiers que le codeur modifie.
 
-### 3.5 Anti-conflit par estimation préalable
-- **Avant** de lancer le codeur, l'assistant lance un **agent d'estimation**
-  (analyse/plan, lecture seule) qui évalue **rapidement quels fichiers** le codeur
-  va toucher et renvoie cette liste.
-- Cette liste (« fichiers réservés au codeur ») sert à **bloquer les autres
-  spécialistes en écriture** sur ces fichiers.
-- Un spécialiste en **lecture seule** reste autorisé à les lire/analyser.
+### 3.5 Anti-conflit par réservation de fichiers
+- La coordination passe par la **réservation de fichiers** (`reservations.json`,
+  porte `pilot-reserve-gate.ts`), alimentée par une réservation **explicite** :
+  **plus d'agent d'estimation lancé automatiquement** avant le codeur (mission
+  381). Un agent lancé est **exactement** l'agent demandé.
+- La liste des fichiers réservés sert à **bloquer les autres spécialistes en
+  écriture** sur ces fichiers ; un spécialiste en **lecture seule** reste
+  autorisé à les lire/analyser.
 
 ### 3.6 Notification de fin (au lieu du polling)
 - L'assistant lance les agents puis **attend passivement** (pas de polling).
@@ -260,9 +261,10 @@ de :
 - **Constat** : l'agent `plan-maker` existe déjà (`readonly=true`, `capabilities`
   `["plan"]`) et produit un **plan JSON** avec `files` par tâche. C'est un candidat
   naturel pour le rôle d'agent d'estimation.
-- **Question** : réutiliser `plan-maker` (et parser son JSON pour extraire les
-  fichiers) ou créer un agent `estimateur` dédié qui ne renvoie qu'une liste de
-  fichiers ?
+- **Décision (mission 381)** : **plus aucun agent d'estimation automatique** dans
+  le chemin de lancement. Le texte d'une mission n'est jamais remis à un agent non
+  demandé ; le fichier `.pilot/reservations.json` reste disponible pour une
+  réservation **explicite** (chemins uniquement).
 - **Question** : où stocker la liste des fichiers réservés — en mémoire frontend
   (variable du bus d'agents), dans le registre `AgentService`, ou dans une table
   dédiée (ex : `.pilot/reservations.json` par projet) ? Durée de vie : le temps du
@@ -310,9 +312,9 @@ de :
 
 1. **Définition de la spécialité pour l'exclusivité** : par `agent_id`, `role`, ou
    `capabilities` ? (impacte 5.1)
-2. **Agent d'estimation** : réutiliser `plan-maker` ou créer un agent `estimateur`
-   dédié ? Le plan-maker renvoie déjà des `files` — faut-il normaliser un format de
-   sortie « liste de fichiers » ? (impacte 5.3)
+2. **Agent d'estimation** : **tranché (mission 381)** — aucun agent d'estimation
+   automatique. Une réservation reste possible **explicitement**, sur des chemins
+   (5.3).
 3. **Durée de vie et nettoyage** des fichiers réservés (fin de chantier, annulation,
    arrêt d'agent) ? (impacte 5.3)
 4. **Comportement en cas de conflit d'exclusivité** (5.1) : refus explicite à

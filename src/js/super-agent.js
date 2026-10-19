@@ -25,9 +25,8 @@ import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 // ici : l'inertie du réglage est donc strictement inchangée.
 import { armDoneSound, noteSoundRenderActivity, markSoundRenderIdle, resetDeferredSound, setDeferredSoundPlayer } from "./sound-deferred.js";
 setDeferredSoundPlayer(playAssistantSound);
-import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classifyAgent } from "./agents.js";
-import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
-import { estimateAndReserve } from "./reservations.js";
+import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from "./agents.js";
+import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
@@ -87,10 +86,11 @@ export function computeRunLaunchVerdict(launchResult) {
   const r = launchResult || {};
   const launched = r.started === true;
   const queued = r.queued === true;
-  // `preparing` : le lancement est EN COURS en arrière-plan (estimation
-  // plan-maker d'une run avec codeur). La réponse à l'outil part
-  // immédiatement pour ne pas bloquer le tour de l'assistant ; le résultat
-  // réel (échec / mise en file) est déposé dans la remontée durable.
+  // `preparing` : plus AUCUN chemin de lancement ne le produit (mission 381 :
+  // l'estimation préalable automatique a été supprimée, le lancement ne rend
+  // jamais la main avant le démarrage réel ou la mise en file). Le champ est
+  // conservé — toujours `false` en pratique — pour ne pas casser les appelants
+  // ni les accusés déjà persistés qui le lisent.
   const preparing = r.preparing === true;
   // Issue #87 : l'accusé ne doit JAMAIS annoncer « ok » alors que rien ne s'est
   // passé. Une demande réellement lancée, mise en file d'attente ou en cours de
@@ -114,6 +114,26 @@ export function computeRunLaunchVerdict(launchResult) {
 // l'id résolu depuis l'objet (resolveDelegationAgentId), aligné sur la vue
 // affichée (règle de cohérence ecrans.md).
 const DEFAULT_AGENT_ID = "default";
+
+/**
+ * MISSION 381 — Refus EXPLICITE quand un ou plusieurs agents demandés sont
+ * inconnus du registre. Le message nomme les identifiants inconnus, affirme
+ * qu'AUCUN agent n'a été lancé et donne la LISTE DES AGENTS DISPONIBLES :
+ * jamais de substitution silencieuse (la mission ne part jamais vers un agent
+ * que l'utilisateur n'a pas demandé).
+ * @param {string[]} missing - identifiants demandés introuvables
+ * @param {{agents?: Array<{id?: string}>}|null} registry - registre des agents
+ * @returns {string}
+ */
+export function unknownAgentsError(missing, registry) {
+  const ids = (Array.isArray(missing) ? missing : []).filter(Boolean);
+  const available = ((registry && registry.agents) || [])
+    .map((a) => (a && a.id ? String(a.id) : ""))
+    .filter(Boolean);
+  return `Agents inconnus : ${ids.join(", ")}. Aucun agent n'a été lancé. Agents disponibles : ${
+    available.length ? available.join(", ") : "aucun"
+  }.`;
+}
 
 // Rendu Markdown identique à l'agent standard (agent-pi.js).
 const md = markdownit({
@@ -3946,7 +3966,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         const known = new Set((registry.agents || []).map((a) => a && a.id));
         const missing = agentIds.filter((aid) => !known.has(aid));
         if (missing.length > 0) {
-          await respondSuperAgent(id, JSON.stringify({ error: `Agents inconnus : ${missing.join(", ")}.` }), false);
+          await respondSuperAgent(id, JSON.stringify({ error: unknownAgentsError(missing, registry) }), false);
           return;
         }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche sur les agents : ${agentIds.join(", ")}…`);
@@ -4107,27 +4127,18 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           });
         });
 
-        // T6 : estimation préalable (fichiers réservés au codeur). Si la run
-        // contient un CODEUR, on déclenche en amont l'agent plan-maker (lecture
-        // seule) pour estimer les fichiers que le codeur va toucher, et on écrit
-        // .pilot/reservations.json du projet (les autres spécialistes seront
-        // bloqués en écriture sur ces fichiers via pilot-reserve-gate.ts).
-        // Estimation INFORMATIVE : fail-open — on ne bloque JAMAIS le lancement
-        // du codeur si l'estimation échoue (plan-maker absent, parsing, timeout).
-        const coderIds = agentIds.filter((aid) => {
-          const raw = (registry.agents || []).find((a) => a && a.id === aid);
-          return raw ? classifyAgent(normalizeAgent(raw)).isCoder : false;
-        });
-        // Étape 1 : estimation plan-maker (si codeur) puis lancement réel.
-        // Retest du verrou au moment du LANCEMENT RÉEL (pas seulement avant
-        // l'estimation) : l'estimation plan-maker (T6) occupe le verrou de run
-        // du projet pendant son exécution ; s'il est resté occupé (timeout) ou
-        // si une autre run a pris le projet entre-temps, `launchRun` lèverait
-        // « Une run est déjà en cours » APRÈS que l'assistant ait répondu
-        // « lancé » (faux succès, lancement perdu). On met alors la demande en
-        // FILE (mécanisme existant) — elle démarrera dès la fin de la run en
-        // cours — au lieu de la perdre. Retourne true si mise en file, false si
-        // réellement lancée.
+        // MISSION 381 — AUCUNE ESTIMATION PRÉALABLE AUTOMATIQUE.
+        // Le lancement démarre EXACTEMENT les agents demandés : aucun agent
+        // auxiliaire (ex. planificateur) n'est démarré en amont, et le texte de
+        // la mission n'est JAMAIS remis à un autre agent que ceux nommés. Le
+        // fichier `.pilot/reservations.json` et sa porte pré-écriture restent en
+        // place, mais plus rien ne les alimente automatiquement au lancement.
+        //
+        // Retest du verrou au moment du LANCEMENT : si une autre run a pris le
+        // projet entre-temps, `launchRun` lèverait « Une run est déjà en cours »
+        // APRÈS que l'assistant ait répondu « lancé » (faux succès, lancement
+        // perdu). On met alors la demande en FILE (mécanisme existant) — elle
+        // démarrera dès la fin de la run en cours — au lieu de la perdre.
         const launchOrQueue = async () => {
           // Plancher : un verrou de run RÉCENT n'est jamais libéré ici — sinon le
           // lancement fermait la run d'un agent qui travaillait encore. On met
@@ -4147,7 +4158,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             const wd = runAgentsWatchdogByProject[target];
             if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[target]; }
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
-            runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
+            runAgentsQueueByProject[target].push({ launch: launchMission });
             // `label` = texte de la demande : affiché « en attente » dans le volet
             // « En cours ». Posé APRÈS le push pour ne pas modifier la ligne de mise
             // en file (invariant vérifié par les tests d'accusé de lancement #87).
@@ -4165,59 +4176,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // DÉMARRAGE RÉEL, pas l'intention de lancer.
           return { queued: false, started: !!launched.started, error: launched.error || null };
         };
-        // Dépose dans la remontée durable le résultat d'un lancement DIFFÉRÉ
-        // (après estimation) que l'assistant n'a pas pu attendre : échec du
-        // lancement ou mise en file d'attente. Un succès est déjà rapporté par la
-        // fin de run (`settleRun`) → pas de doublon.
-        const reportDeferredLaunch = (verdict) => {
-          const v = verdict || {};
-          if (v.queued) {
-            injectRunAgentsResultToSuperAgent(
-              `[Info run_agents] La tâche a été mise en file d'attente sur le projet ${target} (une run était déjà en cours) : elle démarrera automatiquement dès que le projet sera libre (rejeu surveillé).`,
-              projectPath,
-            );
-          } else if (!v.started) {
-            injectRunAgentsResultToSuperAgent(
-              `[Échec du lancement run_agents] ${v.error || "le lancement n'a pas démarré après l'estimation des fichiers."}`,
-              projectPath,
-            );
-          }
-        };
-        const launchWithEstimate = () => {
-          if (coderIds.length > 0 && targetProject) {
-            // NON BLOQUANT : l'estimation plan-maker (T6) peut durer jusqu'à 60 s.
-            // L'assistant ne doit PAS rester occupé (saisie utilisateur bloquée)
-            // pendant ce temps. On lance donc l'estimation EN ARRIÈRE-PLAN et on
-            // rend la main immédiatement (accusé de lancement `preparing`). Le
-            // résultat réel du lancement (échec / mise en file) est déposé dans
-            // la remontée durable dès qu'il est connu ; un succès est déjà
-            // rapporté par la fin de run (settleRun). Fail-open : si l'estimation
-            // échoue, on lance quand même le codeur sans réservations.
-            appendSystemMessage(messagesEl, `🧠 J'estime d'abord les fichiers que le codeur va toucher (plan-maker)…`);
-            estimateAndReserve(targetProject, task, coderIds, {
-              runAgentsForAssistant,
-              loadAgentRegistry,
-              releaseStuckRunLock,
-              isRunInProgress,
-              forceEndRun: endRun,
-            }, agentIds)
-              .then((r) => {
-                if (r.reserved && r.files.length > 0) {
-                  appendSystemMessage(messagesEl, `🔒 ${r.files.length} fichier(s) réservé(s) au codeur ${r.coderId}. Les autres spécialistes seront bloqués en écriture dessus.`);
-                }
-                return launchOrQueue();
-              })
-              .catch(() => {
-                // Fail-open : ne jamais bloquer le codeur à cause d'une estimation.
-                return launchOrQueue();
-              })
-              .then(reportDeferredLaunch)
-              .catch((e) => reportDeferredLaunch({ started: false, queued: false, error: e && e.message ? e.message : String(e) }));
-            return { queued: false, started: false, preparing: true, error: null };
-          }
-          return launchOrQueue();
-        };
-        // Étape 2 : garde anti-chevauchement (P1-6 + T5) — met en file si une run
+        // Lancement de la mission : DIRECT. Aucune étape préalable, aucun accusé
+        // de lancement différé — le verdict rendu à l'assistant reflète le
+        // démarrage réel (`launched`) ou la mise en file (`queued`).
+        const launchMission = () => launchOrQueue();
+        // Garde anti-chevauchement (P1-6 + T5) — met en file si une run
         // est déjà en cours sur CE projet, sinon lance immédiatement. La détection
         // s'appuie sur le flag local du projet `runAgentsInFlightByProject[target]`
         // ET sur l'état réel du bus via `isRunInProgress(target)` (source de vérité
@@ -4253,14 +4216,14 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           const blockedByFlag = missionNature === "write" && runAgentsInFlightByProject[target];
           if (blockedByFlag || blockedByBus) {
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
-            runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
+            runAgentsQueueByProject[target].push({ launch: launchMission });
             runAgentsQueueByProject[target].at(-1).label = task;
             // POINT G : même garantie que dans `launchOrQueue` — déclencheur de
             // rejeu armé sur le projet (voir `armQueueReplay`).
             armQueueReplay(target);
             appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.");
             // Issue #87 : accusé de lancement structuré (même contrat que les
-            // autres branches `launchWithEstimate`). Renvoyer `true` produisait
+            // autres branches de lancement). Renvoyer `true` produisait
             // un accusé mensonger `{ok:true, launched:false, queued:false,
             // preparing:false, error:null}` : la demande ÉTAIT mise en file mais
             // l'accusé prétendait qu'il ne s'était rien passé.
@@ -4306,12 +4269,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             );
           };
           runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
-          return await launchWithEstimate(); // { queued, started, preparing, error } : résultat de lancement (ou accusé si estimation en cours)
+          return await launchMission(); // { queued, started, error } : verdict du lancement réel
         };
-        // Réponse à l'outil : quand une estimation plan-maker est nécessaire
-        // (run avec codeur), `startRun` rend la main IMMÉDIATEMENT avec
-        // `preparing: true` — l'assistant finit son tour et reste disponible, le
-        // lancement réel se poursuit en arrière-plan.
+        // Réponse à l'outil : verdict de lancement RÉEL (agent démarré ou
+        // mission mise en file). Aucun accusé « en préparation » : il n'existe
+        // plus d'étape préalable qui pourrait différer le démarrage (mission 381).
         const launchResult = await startRun();
         await respondSuperAgent(id, JSON.stringify(computeRunLaunchVerdict(launchResult)), false);
       } catch (e) {
@@ -4350,7 +4312,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         const known = new Set((registry.agents || []).map((a) => a && a.id));
         const missing = agentIds.filter((aid) => !known.has(aid));
         if (missing.length > 0) {
-          await respondSuperAgent(id, JSON.stringify({ error: `Agents inconnus : ${missing.join(", ")}.` }), false);
+          await respondSuperAgent(id, JSON.stringify({ error: unknownAgentsError(missing, registry) }), false);
           return;
         }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche d'assistant sur les agents : ${agentIds.join(", ")}…`);

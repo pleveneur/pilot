@@ -99,11 +99,16 @@ describe("computeRunLaunchVerdict — accusé de lancement honnête (issue #87)"
     });
   });
 
-  it("préparation en arrière-plan (estimation plan-maker) → ok, preparing=true", () => {
+  it("mission 381 — `preparing` n'est plus produit par aucun chemin de lancement", () => {
+    // Le devis automatique (estimation plan-maker) a été supprimé : le lanceur
+    // rend TOUJOURS le verdict réel (démarré ou mis en file). Le champ est
+    // conservé pour la compatibilité des accusés déjà persistés, mais un lanceur
+    // qui ne démarre rien et ne met rien en file ne doit jamais annoncer « ok ».
     const v = computeRunLaunchVerdict({ queued: false, started: false, preparing: true, error: null });
-    expect(v.ok).toBe(true);
     expect(v.preparing).toBe(true);
     expect(v.launched).toBe(false);
+    const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
+    expect(src).not.toContain("preparing: true");
   });
 
   it("refus explicite → ok=false (jamais de faux succès) et raison conservée", () => {
@@ -137,7 +142,7 @@ describe("computeRunLaunchVerdict — accusé de lancement honnête (issue #87)"
     // l'accusé mensonger {ok:true, launched:false, queued:false, preparing:false,
     // error:null} pour une demande pourtant bien mise en file.
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
-    const marker = "runAgentsQueueByProject[target].push({ launch: launchWithEstimate });";
+    const marker = "runAgentsQueueByProject[target].push({ launch: launchMission });";
     const structured = "return { queued: true, started: false, preparing: false, error: null };";
     const iMarker = src.indexOf(marker);
     expect(iMarker).toBeGreaterThan(-1);

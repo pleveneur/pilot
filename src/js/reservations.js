@@ -1,17 +1,17 @@
-// reservations.js — Fichiers réservés au codeur (orchestration multi-agents, T6).
+// reservations.js — Fichiers réservés au codeur (orchestration multi-agents).
 //
-// Flux d'estimation PRÉALABLE : avant de lancer un codeur via `run_agents`,
-// l'assistant déclenche l'agent `plan-maker` (lecture seule, capabilities
-// ["plan"]) pour obtenir un plan JSON, extrait la liste des fichiers que le
-// codeur va probablement toucher, et l'écrit dans `.pilot/reservations.json`
-// du projet concerné. Ce fichier est lu par l'extension `pilot-reserve-gate.ts`
-// (T3) qui bloque automatiquement les `write`/`edit` des agents HORS de la run
-// sur ces fichiers (les participants de la run, identifiés via PILOT_AGENT_ID,
-// ne sont jamais bloqués).
+// MISSION 381 : il n'y a PLUS d'estimation préalable automatique. Aucun agent
+// (planificateur ou autre) n'est lancé d'ici et le texte d'une mission ne
+// traverse jamais ce module : la seule chose écrite ici est une liste de
+// CHEMINS (`.pilot/reservations.json`). Le lancement d'un agent démarre
+// exactement l'agent demandé (voir `super-agent.js`, outil `run_agents`).
 //
-// Estimation INFORMATIVE : fail-open. Si l'estimation échoue (plan-maker absent,
-// parsing échoué, timeout, écriture impossible), on n'écrit rien et on NE BLOQUE
-// PAS le lancement du codeur.
+// Le fichier `.pilot/reservations.json` reste lu par l'extension
+// `pilot-reserve-gate.ts` (T3) qui bloque automatiquement les `write`/`edit` des
+// agents HORS de la run sur ces fichiers (les participants de la run, identifiés
+// via PILOT_AGENT_ID, ne sont jamais bloqués). Il n'est plus alimenté
+// automatiquement ; ses helpers restent disponibles pour une réservation
+// EXPLICITE (chemins uniquement).
 //
 // Format écrit (compatible pilot-reserve-gate.ts, T3) :
 //   { "coder": "<agent_id>", "files": ["src/lib.rs", ...], "agents": ["<agent_id>", ...],
@@ -30,7 +30,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
 const RESERVATIONS_FILE = ".pilot/reservations.json";
-const ESTIMATION_TIMEOUT_MS = 60000; // 60 s max pour l'estimation (fail-open au-delà)
 
 /**
  * Normalise un chemin pour la comparaison des réservations (séparateurs
@@ -195,7 +194,7 @@ export function unmarkProjectReserved(project) {
   }
 }
 
-/** Indique si le projet a des réservations écrites par l'estimation T6. */
+/** Indique si le projet a des réservations de fichiers actives (bail en cours). */
 export function isProjectReserved(project) {
   return !!project && reservedProjects.has(project);
 }
@@ -281,120 +280,7 @@ export async function deleteReservations(project) {
   }
 }
 
-// Arrêt CIBLÉ de la session plan-maker abandonnée (timeout d'estimation). Sans
-// cet arrêt, le process pi du planificateur reste vivant et conserve le VERROU
-// de run du projet : le lancement réel du codeur est ensuite refusé (« Une run
-// est déjà en cours sur ce projet ») alors que l'assistant a déjà répondu
-// « lancé ». On ne cible QUE la session (projet, plan-maker) lancée ici.
-// Fail-open : toute erreur est ignorée (le lancement réel reste prioritaire).
-// `releaseRunLock` / `isRunInProgress` sont injectés via `deps` (agents-bus.js,
-// pour éviter une dépendance circulaire) et servent à libérer le verrou laissé
-// par la run d'estimation, borné à ~2 s pour ne jamais bloquer longtemps.
-async function stopAbandonedEstimation(project, releaseRunLock, isRunInProgress, forceEndRun) {
-  if (!project) return;
-  try {
-    // 1. Arrêter le process pi du planificateur : sans cela, il continue
-    //    d'occuper le projet et peut avaler les lancements suivants.
-    await invoke("stop_agent_process", { agentId: "plan-maker", project }).catch(() => {});
-    if (typeof isRunInProgress !== "function") return;
-    // 2. Libération « douce » bornée : releaseStuckRunLock ne libère le verrou
-    //    que si plus aucun agent n'est réellement en activité (fenêtre de grâce)
-    //    — un planificateur fraîchement arrêté peut encore être vu « actif »,
-    //    donc la boucle seule ne garantit pas la libération.
-    for (let i = 0; i < 20 && isRunInProgress(project); i++) {
-      try {
-        if (typeof releaseRunLock === "function") await releaseRunLock(project);
-      } catch (_) {
-        // fail-open : le lancement réel retentera la libération.
-      }
-      if (isRunInProgress(project)) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
-    }
-    // 3. GARANTIE anti-fantôme (défaut « planificateur fantôme ») : si le verrou
-    //    est ENCORE marqué « running » après l'arrêt ciblé de la session, on le
-    //    libère de force. Un planificateur abandonné ne doit jamais conserver le
-    //    projet : sinon la run demandée reste en file et n'atteint jamais les
-    //    agents, alors que l'assistant l'a déjà annoncée.
-    if (typeof forceEndRun === "function" && isRunInProgress(project)) {
-      try {
-        forceEndRun(project);
-        console.warn("[reservations] verrou de run du planificateur abandonné libéré de force (endRun).");
-      } catch (_) {
-        // fail-open.
-      }
-    }
-  } catch (_) {
-    // fail-open : on ne bloque jamais le lancement du codeur.
-  }
-}
-
-/**
- * Flux d'estimation préalable (T6). Si `coderIds` contient au moins un codeur,
- * lance l'agent `plan-maker` (lecture seule) sur la tâche pour obtenir un plan,
- * extrait les fichiers et écrit `.pilot/reservations.json` du projet concerné.
- * Fail-open : en cas d'échec, n'écrit rien et ne bloque pas le lancement du
- * codeur ; en cas de TIMEOUT, la session plan-maker abandonnée est arrêtée pour
- * libérer le verrou de run du projet.
- *
- * `deps` est injecté par l'appelant (super-agent.js) pour éviter une dépendance
- * circulaire avec agents-bus.js : { runAgentsForAssistant, loadAgentRegistry,
- * releaseStuckRunLock, isRunInProgress }.
- *
- * @param {string} project - chemin absolu du projet cible
- * @param {string} task - la demande confiée au codeur
- * @param {string[]} coderIds - ids des agents codeurs de la run
- * @param {{runAgentsForAssistant: Function, loadAgentRegistry: Function, releaseStuckRunLock?: Function, isRunInProgress?: Function}} deps
- * @param {string[]} [participantIds] - ids de TOUS les agents de la run (ex:
- *   reservations.agents côté gate). Absent → fallback sur coderIds seul.
- * @returns {Promise<{reserved: boolean, coderId: string, files: string[]}>}
- */
-export async function estimateAndReserve(project, task, coderIds, deps, participantIds) {
-  const { runAgentsForAssistant, loadAgentRegistry, releaseStuckRunLock, isRunInProgress, forceEndRun } = deps || {};
-  const firstCoder = (Array.isArray(coderIds) ? coderIds : []).find(Boolean);
-  const empty = { reserved: false, coderId: firstCoder || "", files: [] };
-  if (!project || !firstCoder || !runAgentsForAssistant || !loadAgentRegistry) {
-    return empty;
-  }
-  // Purge préalable d'un éventuel résiduel (fuite 2, garde-fou défensif) : le
-  // fichier ne doit refléter QUE les réservations de la run qui démarre. Un
-  // résiduel d'une run précédente (reload webview, estimation fail-open) est
-  // supprimé AVANT l'estimation — ainsi, après estimateAndReserve, le fichier
-  // soit contient des réservations fraîches pour CETTE run, soit n'existe plus.
-  await deleteReservations(project);
-  // plan-maker absent du registre → pas d'estimation (fail-open).
-  try {
-    const registry = await loadAgentRegistry();
-    const hasPlanMaker = (registry.agents || []).some((a) => a && a.id === "plan-maker");
-    if (!hasPlanMaker) return empty;
-  } catch (_) {
-    return empty;
-  }
-  let timedOut = false;
-  try {
-    const result = await Promise.race([
-      runAgentsForAssistant([{ agentId: "plan-maker", brief: task, project }]),
-      new Promise((_, rej) => setTimeout(() => { timedOut = true; rej(new Error("estimation timeout")); }, ESTIMATION_TIMEOUT_MS)),
-    ]);
-    const files = parsePlanFiles(result);
-    if (files.length === 0) return empty;
-    // Sonde de vivacité de la run détentrice (fournie par le bus) : plus aucune
-    // mission d'écriture sur le projet → la réservation est abandonnée.
-    const isRunAlive =
-      typeof isRunInProgress === "function" ? () => isRunInProgress(project, { nature: "write" }) : null;
-    const ok = await writeReservations(project, firstCoder, files, participantIds, isRunAlive);
-    return { reserved: ok, coderId: firstCoder, files };
-  } catch (e) {
-    if (timedOut) {
-      // Arrêt CIBLÉ du planificateur abandonné : sans cela, il garde le verrou
-      // de run du projet et le lancement réel échoue (« Une run est déjà en
-      // cours »). On continue quand même (fail-open) : l'estimation ne bloque
-      // jamais le codeur, mais il ne reste plus de run fantôme.
-      await stopAbandonedEstimation(project, releaseStuckRunLock, isRunInProgress, forceEndRun);
-      console.warn("[reservations] estimation abandonnée (timeout) : session plan-maker arrêtée pour libérer le verrou de run.");
-    } else {
-      console.warn("[reservations] estimation échouée (fail-open, le codeur n'est pas bloqué) :", e);
-    }
-    return empty;
-  }
-}
+// MISSION 381 — le flux d'estimation préalable automatique (`estimateAndReserve`)
+// a été SUPPRIMÉ : plus aucun agent n'est lancé depuis ce module et le texte
+// d'une mission ne lui est plus jamais transmis. Seuls les helpers de réservation
+// de CHEMINS ci-dessus subsistent (écriture / suppression / état par projet).

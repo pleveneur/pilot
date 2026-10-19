@@ -1783,12 +1783,28 @@ uniquement un bloc d'instructions dans le prompt système.
   sûre à retenter. La recherche du fichier de session couvre aussi les
   **sous-dossiers d'agents** (`<sessions>/<projet>/<agent_id>/`), pas seulement
   la racine du projet.
-- **Plan structuré avant délégation (plan-maker)** : pour les demandes
-  importantes, l'Assistant peut d'abord appeler l'agent **`plan-maker`** (via
-  `run_agents`) pour obtenir un **plan structuré** (tâches, fichiers concernés,
-  coût estimé en tokens, contraintes suggérées), puis **délègue au codeur** avec
-  ce plan et les contraintes retenues. Le `plan-maker` est un agent lecture seule qui ne
-  modifie aucun code ; il ne fait que produire le plan JSON.
+- **L'agent lancé est exactement l'agent demandé (mission 381)** : `run_agents`
+  et `run_assistant_agents` démarrent **directement** les agents nommés. Aucune
+  **estimation préalable automatique** n'est plus déclenchée : le texte d'une
+  mission n'est **jamais** remis à un agent que vous n'avez pas demandé (plus
+  de planificateur lancé en amont, plus de session intermédiaire qui occupe le
+  créneau du projet). Un identifiant **inconnu** est **refusé** explicitement :
+  le message nomme les identifiants inconnus, précise qu'**aucun agent n'a été
+  lancé** et donne la **liste des agents disponibles** (fonction pure
+  `unknownAgentsError`, super-agent.js). Aucun routage silencieux, aucune
+  substitution : un agent demandé mais **impossible à démarrer** (modèle non
+  réglé, etc.) produit une **erreur nommant cet agent**, jamais son
+  remplacement. Preuves : `agent-demande-exact.test.js`,
+  `verrou-par-projet.test.js` (T6) et `reservations.test.js`.
+- **Plan structuré sur demande explicite (plan-maker, facultatif)** : si vous
+  demandez un plan, l'Assistant peut appeler l'agent **`plan-maker`** (via
+  `run_agents`, en le **nommant**) pour obtenir un **plan structuré** (tâches,
+  fichiers concernés, coût estimé en tokens, contraintes suggérées), puis
+  **délègue au codeur** avec ce plan et les contraintes retenues. Le
+  `plan-maker` est un agent lecture seule qui ne modifie aucun code ; il ne
+  fait que produire le plan JSON. Cette étape est **toujours facultative et
+  explicite** : elle n'est plus jamais automatique ni imposée avant un
+  lancement.
 
 ### Contexte de suivi joint automatiquement à la demande déléguée
 - Avant de **lancer un agent** — agent du projet (`run_agents`), agent hors

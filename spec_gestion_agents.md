@@ -56,7 +56,9 @@ concernés + coût estimé en tokens + contraintes suggérées + dépendances).
             "suggested_constraints": ["..."], "depends_on": []}]}
   ```
 - **Quand l'utiliser** : pour les demandes importantes nécessitant un découpage
-  et une validation avant délégation au codeur.
+  et une validation avant délégation au codeur — **sur demande** uniquement. Il
+  n'est **jamais lancé automatiquement** avant un codeur : un lancement démarre
+  exactement les agents demandés (mission 381).
 - **Utilisation par l'Assistant (Magnus)** : l'Assistant peut appeler le
   `plan-maker` via `run_agents` (extension `pilot-assistant-actions`) pour
   obtenir un plan structuré, le présenter à l'utilisateur (via `ask_multi_choice`

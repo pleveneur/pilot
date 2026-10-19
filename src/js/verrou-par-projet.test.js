@@ -73,7 +73,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { beginRun, endRun, isRunInProgress, getRunState, initAgentsBus, startParallelRun, handleAgentEvent, attachMissionSink, releaseStuckRunLock, runAgentsForAssistant, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
 import { canSendManualCommand, MANUAL_COMMAND_NATURE, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
 import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject, delegationState, replayDelegationQueueForProject, armDelegationQueueReplay, __superAgentQueueStateForTest, __resetSuperAgentQueueForTest } from "./super-agent.js";
-import { estimateAndReserve } from "./reservations.js";
 
 // POINT I — DÉTOUR DE ROUTAGE : une mission confiée à un agent PRÉCIS était
 // exécutée par un AUTRE agent (le planificateur), sans aucun fichier ni commit.
@@ -951,22 +950,23 @@ describe("POINT G — le bouton « Refaire » (dialogue de boucle) est gardé", 
   });
 });
 
-// T6 — DÉFAUT « le codeur NOMMÉ ne démarre jamais » : chaîne COMPLÈTE depuis la
-// préparation T6 (`estimateAndReserve`, reservations.js) jusqu'au démarrage réel
-// du codeur nommé. Une mission nommant un codeur lance d'abord l'estimation
-// plan-maker (run de LECTURE) SUR LE TEXTE MÊME DE LA MISSION ; à sa livraison le
-// verrou de lecture devait donc être DÉJÀ libéré, sinon `launchWithEstimate` →
-// `launchOrQueue` (super-agent.js) refuse l'admission d'ÉCRITURE et met la
-// mission EN FILE au lieu de démarrer le codeur (aucune session, aucun fichier,
-// aucun message d'erreur — l'accusé annonçait pourtant « lancé »).
-// Ce test ÉCHOUE avant `dffec24` (verrou de lecture encore pris à la livraison →
-// l'admission d'écriture est refusée) et PASSE après.
-describe("T6 — le codeur NOMMÉ démarre après l'estimation plan-maker", () => {
-  const P = "preuve-t6-codeur-nomme";
+// T6 (MISSION 381) — L'AGENT DEMANDÉ DÉMARRE, SEUL ET TOUT DE SUITE.
+//
+// Le flux d'estimation préalable (« devis ») qui faisait exécuter le TEXTE MÊME
+// de la mission par un planificateur (`plan-maker`, lecture seule) a été
+// SUPPRIMÉ : il occupait le créneau de run du projet et la mission demandée
+// pouvait ne jamais démarrer. Invariant mesuré ici, au niveau du lancement réel :
+//   (a) une mission qui nomme un codeur démarre IMMÉDIATEMENT ce codeur (aucune
+//       run intermédiaire, donc aucun verrou de lecture pris à sa place) ;
+//   (b) AUCUN autre agent n'est démarré et le texte de la mission n'est remis
+//       qu'aux agents nommés ;
+//   (c) le lancement n'écrit AUCUNE réservation automatique.
+describe("T6 (mission 381) — le codeur demandé démarre, seul, sans étape préalable", () => {
+  const P = "preuve-381-codeur-nomme";
   const registry = {
     agents: [
-      { id: "plan-maker", name: "Plan", readonly: true, keep_context: false, models: {}, max_calls_per_run: 3, call_depth: 1 },
-      { id: "coder", name: "Codeur", readonly: false, keep_context: false, models: {}, max_calls_per_run: 3, call_depth: 1 },
+      { id: "plan-maker", name: "Plan", readonly: true, keep_context: false, models: { pi: "test/model", plh: "test/model" }, max_calls_per_run: 3, call_depth: 1 },
+      { id: "coder", name: "Codeur", readonly: false, keep_context: false, models: { pi: "test/model", plh: "test/model" }, max_calls_per_run: 3, call_depth: 1 },
     ],
   };
   afterEach(() => {
@@ -976,51 +976,40 @@ describe("T6 — le codeur NOMMÉ démarre après l'estimation plan-maker", () =
     vi.mocked(invoke).mockResolvedValue(undefined);
   });
 
-  it("après l'estimation, l'admission d'écriture est libre et le codeur démarre", async () => {
-    vi.mocked(invoke).mockImplementation(async (cmd) => {
+  it("le codeur nommé démarre directement : aucun agent auxiliaire, aucune réservation", async () => {
+    const spawned = [];
+    vi.mocked(invoke).mockImplementation(async (cmd, args = {}) => {
       if (cmd === "get_config") return {};
       if (cmd === "list_agents") return registry;
+      if (cmd === "start_agent_process") spawned.push(args.agentId);
       return undefined;
     });
     globalThis._pilotProjectPath = P;
     await initAgentsBus({});
 
-    // Préparation T6 réelle : le plan-maker (LECTURE) estime les fichiers sur le
-    // texte même de la mission du codeur. On mesure l'admission d'écriture AU
-    // MOMENT où la mission d'estimation reçoit son résultat (le point exact du
-    // défaut : la livraison doit avoir lieu APRÈS la libération du verrou).
-    let writableAtDelivery = null;
-    await estimateAndReserve(P, "corrige le fichier X", ["coder"], {
-      runAgentsForAssistant: async (assignments) => {
-        const r = await runAgentsForAssistant(assignments);
-        writableAtDelivery = !isRunInProgress(P, { nature: "write" });
-        return r;
-      },
-      loadAgentRegistry: async () => registry,
-      releaseStuckRunLock,
-      isRunInProgress,
-      forceEndRun: endRun,
-    }, ["coder"]);
-
-    // INVARIANT (point du défaut) : à la livraison du résultat d'estimation, le
-    // projet est DÉJÀ libre pour une ÉCRITURE. Sinon `launchOrQueue` met la
-    // mission du codeur en file : il ne démarre jamais.
-    expect(writableAtDelivery, "projet encore verrouillé à la livraison de l'estimation").toBe(true);
-
-    // INVARIANT : à la fin de l'estimation, le projet est LIBRE pour une
-    // ÉCRITURE. Sinon `launchOrQueue` met la mission en file : le codeur ne
-    // démarre jamais (défaut observé).
-    expect(isRunInProgress(P, { nature: "write" }), "projet encore verrouillé après l'estimation").toBe(false);
-
-    // Lancement RÉEL du codeur NOMMÉ : l'admission d'écriture est franchie
-    // (aucune levée « Une run est déjà en cours ») et un démarrage est signalé.
     let started = false;
     await startParallelRun(
       [{ agentId: "coder", brief: "corrige le fichier X", project: P }],
       "",
       { onStart: () => { started = true; } },
     );
+
+    // (a) l'agent DEMANDÉ a bien démarré, et le projet est rendu libre.
     expect(started, "le codeur nommé n'a pas démarré").toBe(true);
+    // (b) aucun agent non demandé n'a été démarré (le planificateur n'est plus
+    //     lancé en amont par le chemin de lancement).
+    expect(spawned, "un agent autre que celui demandé a été démarré").toEqual(["coder"]);
+    // (c) plus de réservation automatique de fichiers au lancement.
+    const written = vi.mocked(invoke).mock.calls
+      .filter((c) => c[0] === "write_file_content")
+      .map((c) => String((c[1] || {}).path || ""));
+    expect(written.some((w) => w.includes("reservations.json")), "réservation automatique écrite").toBe(false);
+    // (d) le créneau de run du projet est occupé par l'agent DEMANDÉ — jamais
+    //     par un agent auxiliaire lancé en amont.
+    const ctx = globalThis.__agentBusState.runs[P];
+    expect(ctx, "aucune run inscrite pour le projet").toBeTruthy();
+    expect(Array.from(ctx.activeAgents || [])).toEqual(["coder"]);
+    expect(isRunInProgress(P), "le créneau du projet doit être pris par la mission demandée").toBe(true);
   });
 });
 

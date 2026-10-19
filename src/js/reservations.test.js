@@ -1,4 +1,4 @@
-// Tests unitaires — reservations.js (estimation préalable T6 : fichiers réservés)
+// Tests unitaires — reservations.js (fichiers réservés au codeur, mission 381)
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Store en mémoire pour simuler le disque via les commandes Tauri (vi.hoisted
@@ -33,8 +33,8 @@ import {
   deleteReservations,
   clearAllReservations,
   markProjectReserved,
+  unmarkProjectReserved,
   isProjectReserved,
-  estimateAndReserve,
 } from "./reservations.js";
 
 describe("normalizeReservedPath", () => {
@@ -222,141 +222,20 @@ describe("writeReservations / deleteReservations (I/O simulées, fail-open)", ()
   });
 });
 
-describe("estimateAndReserve (flux d'estimation préalable)", () => {
-  const baseDeps = () => ({
-    runAgentsForAssistant: vi.fn(async () =>
-      '```json\n{"plan":[{"files":["src/lib.rs","src/main.rs"]}]}\n```'
-    ),
-    loadAgentRegistry: vi.fn(async () => ({ agents: [{ id: "plan-maker" }] })),
-  });
-
-  beforeEach(() => {
-    store.clear();
-    vi.mocked(invoke).mockClear();
-  });
-
-  it("écrit les réservations avec TOUS les participants (fuite 3) et retourne le résultat", async () => {
-    const deps = baseDeps();
-    const r = await estimateAndReserve("/proj/", "tâche", ["codeur1"], deps, ["codeur1", "spec1", "codeur2"]);
-    expect(r).toEqual({ reserved: true, coderId: "codeur1", files: ["src/lib.rs", "src/main.rs"] });
-    const payload = JSON.parse(store.get(reservationsPath("/proj/")));
-    expect(payload.coder).toBe("codeur1");
-    expect(payload.agents).toEqual(["codeur1", "spec1", "codeur2"]);
-    expect(payload.files).toEqual(["src/lib.rs", "src/main.rs"]);
-  });
-
-  it("purge le résiduel AVANT l'estimation (fuite 2) : fichier final = réservations fraîches", async () => {
-    const deps = baseDeps();
-    const path = reservationsPath("/proj/");
-    store.set(path, '{"coder":"old-coder","files":["old.rs"]}');
-    const cmds = [];
-    vi.mocked(invoke).mockImplementation(async (cmd, args = {}) => {
-      cmds.push(cmd);
-      if (cmd === "write_file_content") store.set(args.path, args.content);
-      if (cmd === "file_exists") return store.has(args.path);
-      if (cmd === "delete_file_or_dir") store.delete(args.path);
-      return undefined;
-    });
-    const r = await estimateAndReserve("/proj/", "tâche", ["codeur1"], deps, ["codeur1"]);
-    expect(r.reserved).toBe(true);
-    // Ordre : purge (file_exists → delete) AVANT écriture (write).
-    expect(cmds.indexOf("file_exists")).toBeGreaterThanOrEqual(0);
-    expect(cmds.indexOf("delete_file_or_dir")).toBeLessThan(cmds.indexOf("write_file_content"));
-    // Le contenu final ne contient plus l'ancien résiduel.
-    const payload = JSON.parse(store.get(path));
-    expect(payload.coder).toBe("codeur1");
-    expect(payload.files).toEqual(["src/lib.rs", "src/main.rs"]);
-  });
-
-  it("fail-open : estimation en échec → aucune écriture, retour empty (le codeur n'est pas bloqué)", async () => {
-    const deps = baseDeps();
-    deps.runAgentsForAssistant.mockRejectedValueOnce(new Error("boom"));
-    const r = await estimateAndReserve("/proj/", "tâche", ["codeur1"], deps, ["codeur1"]);
-    expect(r.reserved).toBe(false);
-    expect(store.has(reservationsPath("/proj/"))).toBe(false);
-  });
-
-  it("timeout : arrête la session plan-maker abandonnée (arrêt ciblé) et libère le verrou de run", async () => {
-    vi.useFakeTimers();
-    try {
-      const deps = baseDeps();
-      // plan-maker ne répond jamais → déclenche le timeout d'estimation.
-      deps.runAgentsForAssistant.mockReturnValue(new Promise(() => {}));
-      const releaseStuckRunLock = vi.fn(async () => {});
-      const isRunInProgress = vi.fn(() => false);
-      const cmds = [];
-      vi.mocked(invoke).mockImplementation(async (cmd, args = {}) => {
-        cmds.push(cmd);
-        if (cmd === "write_file_content") store.set(args.path, args.content);
-        if (cmd === "file_exists") return store.has(args.path);
-        if (cmd === "delete_file_or_dir") store.delete(args.path);
-        return undefined;
-      });
-      const p = estimateAndReserve(
-        "/proj/",
-        "tâche",
-        ["codeur1"],
-        { ...deps, releaseStuckRunLock, isRunInProgress },
-        ["codeur1"]
-      );
-      await vi.advanceTimersByTimeAsync(60000);
-      const r = await p;
-      expect(r).toEqual({ reserved: false, coderId: "codeur1", files: [] });
-      // Arrêt CIBLÉ de la session plan-maker du projet (et d'aucune autre).
-      expect(cmds).toContain("stop_agent_process");
-      const stopCall = vi.mocked(invoke).mock.calls.find((c) => c[0] === "stop_agent_process");
-      expect(stopCall[1]).toEqual({ agentId: "plan-maker", project: "/proj/" });
-      expect(store.has(reservationsPath("/proj/"))).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("timeout + verrou encore 'running' → libération de FORCE (forceEndRun) : pas de planificateur fantôme", async () => {
-    vi.useFakeTimers();
-    try {
-      const deps = baseDeps();
-      // plan-maker ne répond jamais → timeout d'estimation.
-      deps.runAgentsForAssistant.mockReturnValue(new Promise(() => {}));
-      const releaseStuckRunLock = vi.fn(async () => {});
-      // Le verrou reste marqué "running" malgré la libération « douce » (agent
-      // fraîchement arrêté encore vu actif) → forceEndRun doit être appelé.
-      const isRunInProgress = vi.fn(() => true);
-      const forceEndRun = vi.fn();
-      const p = estimateAndReserve(
-        "/proj/",
-        "tâche",
-        ["codeur1"],
-        { ...deps, releaseStuckRunLock, isRunInProgress, forceEndRun },
-        ["codeur1"]
-      );
-      // 60 s de timeout d'estimation PUIS la boucle de libération « douce »
-      // (20 × 100 ms, le verrou restant vu « running ») : avancer au-delà.
-      await vi.advanceTimersByTimeAsync(70000);
-      const r = await p;
-      expect(r).toEqual({ reserved: false, coderId: "codeur1", files: [] });
-      // « arrêt réellement appelé » : le verrou du projet est libéré de force.
-      expect(forceEndRun).toHaveBeenCalledWith("/proj/");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("fail-open : plan-maker absent du registre → aucune écriture", async () => {
-    const deps = baseDeps();
-    deps.loadAgentRegistry.mockResolvedValueOnce({ agents: [{ id: "autre" }] });
-    const r = await estimateAndReserve("/proj/", "tâche", ["codeur1"], deps, ["codeur1"]);
-    expect(r.reserved).toBe(false);
-    expect(store.has(reservationsPath("/proj/"))).toBe(false);
-  });
-
+// MISSION 381 — le flux d'estimation préalable automatique (`estimateAndReserve`)
+// a été supprimé : aucun agent n'est plus lancé depuis ce module et le texte
+// d'une mission ne lui est jamais transmis. Le battement de cœur de réservation
+// (bail conditionné à la vivacité de la run détentrice) reste couvert ici,
+// puisqu'il est utilisé par le bus d'agents.
+describe("battement de cœur de réservation (bail de vivacité)", () => {
   it("la sonde de vivacité est branchée sur isRunInProgress(projet, {nature:'write'}) et libère la réservation", async () => {
     vi.useFakeTimers();
     try {
-      const deps = baseDeps();
+      store.clear();
+      vi.mocked(invoke).mockClear();
       const isRunInProgress = vi.fn(() => false);
       const path = reservationsPath("/proj/");
-      await estimateAndReserve("/proj/", "tâche", ["codeur1"], { ...deps, isRunInProgress }, ["codeur1"]);
+      await writeReservations("/proj/", "codeur1", ["src/lib.rs"], ["codeur1"], () => isRunInProgress("/proj/", { nature: "write" }));
       expect(store.has(path)).toBe(true);
 
       await vi.advanceTimersByTimeAsync(60000);
@@ -365,16 +244,7 @@ describe("estimateAndReserve (flux d'estimation préalable)", () => {
       expect(store.has(path)).toBe(false);
     } finally {
       vi.useRealTimers();
+      unmarkProjectReserved("/proj/");
     }
-  });
-
-  it("sans projet ni codeur → retour empty sans I/O", async () => {
-    const deps = baseDeps();
-    expect(await estimateAndReserve("", "tâche", ["codeur1"], deps, ["codeur1"])).toEqual({
-      reserved: false,
-      coderId: "codeur1",
-      files: [],
-    });
-    expect(vi.mocked(invoke).mock.calls.length).toBe(0);
   });
 });
