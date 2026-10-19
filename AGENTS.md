@@ -309,6 +309,15 @@ npm run build:handbook
 Le serveur GDS **ne dépend pas de Tauri** : ses tests (`gds-core`, `gds-server`)
 s'exécutent sans application graphique ni base PostgreSQL.
 
+### Fins de ligne (piège CI Windows)
+
+Les tests qui lisent le source et cherchent une ancre contenant `\n` échouent
+sur un worktree CRLF (runner `windows-latest` = `core.autocrlf=true`) alors
+qu'ils passent en local. `.gitattributes` force `eol=lf` sur les fichiers
+texte ; un test qui lit le source normalise quand même la lecture
+(`.replace(/\r\n/g, "\n")`). Vérification : `.pi/skills/quality-gate/SKILL.md`
+§ 3.4.
+
 ### Publication des versions (workflow de release)
 
 **Règle** : publier une nouvelle version **uniquement sur demande explicite de

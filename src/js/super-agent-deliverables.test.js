@@ -26,6 +26,14 @@ import {
   deliverableErrorMessage,
 } from "./super-agent-kanban.js";
 
+// Lecture de source INSENSIBLE AUX FINS DE LIGNE : plusieurs ancres ci-dessous
+// contiennent un saut de ligne (« if (isEdit) {\n      const »). Avec
+// core.autocrlf=true (défaut du git des runners windows-latest), le worktree est
+// en CRLF et ces ancres devenaient introuvables — release v0.4.30 bloquée par ce
+// seul écart alors que la suite était verte en local. Normaliser ici rend le test
+// identique sur les trois plateformes (.gitattributes force aussi LF au worktree).
+const readSource = (abs) => readFileSync(abs, "utf8").replace(/\r\n/g, "\n");
+
 // ── 1. Fonctions pures de préparation de l'affichage ────────────────────────
 
 describe("noms EXACTS des commandes de lecture de la traçabilité", () => {
@@ -37,10 +45,10 @@ describe("noms EXACTS des commandes de lecture de la traçabilité", () => {
   it("les noms sont bien ceux enregistrés côté cœur (#[tauri::command] + handler)", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const root = resolve(here, "../..");
-    const coreSrc = readFileSync(resolve(root, "src-tauri/src/super_agent.rs"), "utf8");
+    const coreSrc = readSource(resolve(root, "src-tauri/src/super_agent.rs"));
     expect(coreSrc).toContain(`pub fn ${TASK_DELIVERABLE_LIST_COMMAND}(`);
     expect(coreSrc).toContain(`pub fn ${PROJECT_DELIVERABLE_LIST_COMMAND}(`);
-    const libSrc = readFileSync(resolve(root, "src-tauri/src/lib.rs"), "utf8");
+    const libSrc = readSource(resolve(root, "src-tauri/src/lib.rs"));
     expect(libSrc).toContain(`super_agent_task_deliverable_list,`);
     expect(libSrc).toContain(`super_agent_project_deliverable_list,`);
   });
@@ -97,7 +105,7 @@ describe("origine non précisée — mention de repli du cœur, jamais inventée
     expect(DELIVERABLE_ORIGIN_UNKNOWN).toBe("origine non précisée");
     const here = dirname(fileURLToPath(import.meta.url));
     const root = resolve(here, "../..");
-    const coreSrc = readFileSync(resolve(root, "src-tauri/src/super_agent.rs"), "utf8");
+    const coreSrc = readSource(resolve(root, "src-tauri/src/super_agent.rs"));
     expect(coreSrc).toContain(
       `const DELIVERABLE_ORIGIN_UNKNOWN: &str = "${DELIVERABLE_ORIGIN_UNKNOWN}";`
     );
@@ -236,7 +244,7 @@ describe("deliverableErrorMessage — ligne d'information, jamais d'exception", 
 // ── 2. Branchement de la fiche de tâche (lecture de source) ─────────────────
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
-const viewSrc = readFileSync(resolve(root, "src/js/super-agent-kanban-view.js"), "utf8");
+const viewSrc = readSource(resolve(root, "src/js/super-agent-kanban-view.js"));
 
 /** Tranche de source entre deux ancres (échec explicite si une ancre disparaît). */
 function slice(src, from, to) {

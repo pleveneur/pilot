@@ -14,3 +14,23 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 Dockerfile.* text eol=lf
+
+# Fichiers texte lus par les tests (lecture de source + ancres multi-lignes).
+# Plusieurs tests verrouillent un branchement en cherchant dans le SOURCE une
+# ancre contenant un saut de ligne (ex: `slice(src, "    if (isEdit) {\n      const", ...)`).
+# Avec core.autocrlf=true (défaut du git des runners windows-latest), le worktree
+# était en CRLF et ces ancres devenaient introuvables : la release v0.4.30 a été
+# bloquée par 4 fichiers de tests verts en local (worktree LF) mais rouges sur le
+# runner Windows. Les fichiers sont déjà stockés en LF dans l'index : forcer LF au
+# worktree rend le checkout identique sur les trois plateformes.
+*.js   text eol=lf
+*.ts   text eol=lf
+*.rs   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.ps1  text eol=lf

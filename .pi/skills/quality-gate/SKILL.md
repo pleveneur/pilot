@@ -82,7 +82,29 @@ Si tu as ajouté quelque chose, vérifie **chaque** point de la liste des branch
 - [ ] L'appel est fait si nécessaire
 - [ ] La documentation est à jour (`README.md`, `AGENTS.md`, etc.)
 
-### Étape 3.4 : Annoncer explicitement ce qui a été vérifié
+### Étape 3.4 : Vérifier la neutralité des fins de ligne (Windows)
+
+Les tests qui **lisent le source** (lecture de fichier + recherche d'une ancre
+multi-lignes, ex: `slice(src, "    if (isEdit) {\n      const", ...)`) sont
+sensibles aux fins de ligne. Sur un runner `windows-latest`,
+`core.autocrlf=true` produit un worktree en **CRLF** : l'ancre `\n` devient
+introuvable alors que la suite est verte en local (worktree LF) — incident
+v0.4.30, release bloquée par 4 fichiers de tests.
+
+Deux protections, à conserver :
+
+- `.gitattributes` force `eol=lf` sur les fichiers texte du dépôt ;
+- dans les tests concernés, la lecture normalise : `.replace(/\r\n/g, "\n")`.
+
+Pour vérifier avant de tagger, se placer dans un worktree réellement en CRLF :
+
+```bash
+git worktree add ../pilot-crlfsim HEAD
+git -C ../pilot-crlfsim ls-files --eol src/js/<fichier>.js   # doit rester w/lf
+# puis lancer vitest avec les node_modules du dépôt principal
+```
+
+### Étape 3.5 : Annoncer explicitement ce qui a été vérifié
 
 Termine ta réponse par un récapitulatif de ce que tu as vérifié, par exemple :
 

@@ -19,7 +19,8 @@ import { LONG_TASK_PILL_LABEL, longTaskPill } from "./super-agent-kanban.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
-const read = (p) => readFileSync(resolve(root, p), "utf8");
+const read = (p) =>
+  readFileSync(resolve(root, p), "utf8").replace(/\r\n/g, "\n");
 
 const KANBAN_SRC = read("src/js/super-agent-kanban.js");
 const VIEW_SRC = read("src/js/super-agent-kanban-view.js");
