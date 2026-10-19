@@ -737,6 +737,165 @@ async function releaseStuckRunLockForKey(key, opts = {}) {
   endRun(key, ctx.generation);
 }
 
+// ── Verrou orphelin : balayage périodique AUTO-RÉPARANT (mission 380) ───────
+//
+// FAIT (défaut) : la libération d'un verrou de run reposait entièrement sur un
+// déclencheur EXTÉRIEUR — un nouveau lancement, le rejeu de file de l'assistant
+// (armé seulement s'il RESTE une demande en file) ou son watchdog de run
+// (15 min, seulement pendant une run suivie). Un agent MORT sans émettre
+// `agent_end`/`process_exit` (ou dont l'événement terminal arrive après le
+// passage de la run en `stopping`, ou après sa sortie de `activeAgents`) ne
+// libérait donc jamais le verrou : « Une tâche d'agents est déjà en cours sur ce
+// projet… » jusqu'au REDÉMARRAGE de Pilot.
+//
+// CE BALAYAGE rend la libération AUTONOME : toutes les RUN_LOCK_SWEEP_MS, on
+// repasse sur les runs du bus et on applique le chien de garde existant
+// (`releaseStuckRunLockForKey`), réutilisé TEL QUEL — ses portes restent la
+// seule autorité (« aucun agent actif », « groupe résiduel », « agents
+// fantômes », « travail en file sans porteur »), avec son plancher
+// d'inactivité et sa double mesure. Rien n'est coupé sur la seule horloge : une
+// run dont un agent travaille réellement est laissée intacte (sonde de
+// sessions, fail-closed).
+export const RUN_LOCK_SWEEP_MS = 30 * 1000;
+// Grâce de DÉMARRAGE : une run plus jeune que cette fenêtre n'est jamais
+// examinée (fenêtre entre `beginRun` et l'enregistrement de la 1re session).
+export const RUN_LOCK_SWEEP_START_GRACE_MS = 60 * 1000;
+// Plancher d'INACTIVITÉ du balayage : il ne coupe jamais une run qui vient de
+// produire un événement. Il protège aussi les transitions LÉGITIMES où
+// `activeAgents` est momentanément vide entre deux agents d'une même run
+// (passation séquentielle) : le balayage n'agit qu'après une vraie inactivité.
+// Un verrou réellement orphelin a toujours une activité ancienne : rien n'est
+// perdu, on borne seulement le zèle d'un observateur périodique.
+export const RUN_LOCK_SWEEP_MIN_IDLE_MS = RUN_LAUNCH_MIN_STUCK_IDLE_MS;
+let runLockSweepTimer = null;
+let runLockSweepInFlight = false;
+
+/** Arme le balayage périodique des verrous orphelins (idempotent). */
+function startRunLockSweep() {
+  if (runLockSweepTimer) return;
+  runLockSweepTimer = setInterval(() => {
+    sweepOrphanRunLocks().catch(() => {});
+  }, RUN_LOCK_SWEEP_MS);
+  // Ne jamais maintenir l'environnement de test éveillé (Node) : sans effet
+  // dans un navigateur (un identifiant numérique n'a pas de `.unref`).
+  if (runLockSweepTimer && typeof runLockSweepTimer.unref === "function") {
+    runLockSweepTimer.unref();
+  }
+}
+
+/** Désarme le balayage (destruction du bus). */
+function stopRunLockSweep() {
+  if (runLockSweepTimer) clearInterval(runLockSweepTimer);
+  runLockSweepTimer = null;
+}
+
+/**
+ * Balaye les runs du bus et libère les verrous ORPHELINS (mission 380).
+ *
+ * Un verrou est orphelin quand plus rien ne le porte : aucun agent actif et
+ * aucun groupe parallèle en attente, ou agents déclarés dont AUCUNE session ne
+ * travaille (process mort), ou travail encore en file sans porteur. La décision
+ * est celle du chien de garde existant (`releaseStuckRunLockForKey`) ; ce
+ * balayage ne fait que la DÉCLENCHER sans attendre un lancement.
+ *
+ * Une run plus jeune que `RUN_LOCK_SWEEP_START_GRACE_MS` est ignorée : jamais de
+ * coupe pendant la fenêtre de démarrage.
+ *
+ * Les runs en état `stopping` (arrêt demandé dont la libération ne s'est pas
+ * terminée, ex: I/O bloquée) sont libérées au-delà de la même grâce : elles ne
+ * portent plus aucun travail utile.
+ * @param {number} [now] - instant de référence (ms epoch), injectable en test
+ * @returns {Promise<string[]>} clés de run réellement libérées
+ */
+export async function sweepOrphanRunLocks(now = Date.now()) {
+  if (runLockSweepInFlight) return [];
+  runLockSweepInFlight = true;
+  const released = [];
+  try {
+    for (const key of Object.keys(busState.runs)) {
+      const ctx = busState.runs[key];
+      if (!ctx) continue;
+      const since = ctx.lastActivityAt || ctx.startedAt || 0;
+      if (!since || now - since < RUN_LOCK_SWEEP_START_GRACE_MS) continue;
+      if (ctx.runState === "stopping") {
+        // Arrêt demandé mais jamais terminé : le verrou ne porte plus rien.
+        const generation = ctx.generation;
+        settleMission(ctx.runKey, "stop", {});
+        endRun(key, generation);
+        released.push(key);
+        console.warn("[agents-bus] balayage : run restée « stopping », verrou libéré (", key, ").");
+        continue;
+      }
+      if (ctx.runState !== "running") continue;
+      const generation = ctx.generation;
+      // Observateur PÉRIODIQUE : plancher d'inactivité (jamais de coupe d'une run
+      // qui vient de produire un événement, ni pendant une passation d'agents).
+      const idleSince = ctx.lastActivityAt || ctx.startedAt || 0;
+      if (!idleSince || now - idleSince < RUN_LOCK_SWEEP_MIN_IDLE_MS) continue;
+      await releaseStuckRunLockForKey(key, { requireIdleMs: RUN_LOCK_SWEEP_MIN_IDLE_MS });
+      const after = busState.runs[key];
+      if (!after || after.generation !== generation) released.push(key);
+    }
+  } finally {
+    runLockSweepInFlight = false;
+  }
+  return released;
+}
+
+/**
+ * Photo du verrou de run d'un projet (mission 380) : permet de VOIR un verrou
+ * bloqué sans redémarrer Pilot (commande `/verrou`).
+ * @param {string} project - projet ciblé (chemin réel)
+ * @returns {{project:string, blocked:boolean, keys:Array<object>}}
+ */
+export function getProjectRunLockInfo(project) {
+  const target = project || ".";
+  const keys = runKeysOfProject(target).map((key) => {
+    const ctx = busState.runs[key];
+    const lastActivityAt = ctx.lastActivityAt || ctx.startedAt || null;
+    return {
+      key,
+      runState: ctx.runState,
+      readonly: ctx.readonly === true,
+      agents: Array.from(ctx.activeAgents),
+      startedAt: ctx.startedAt || null,
+      lastActivityAt,
+      idleMs: lastActivityAt ? Date.now() - lastActivityAt : null,
+      queued: pendingExclusivityCount(ctx),
+      pending: ctx.parallelGroup ? ctx.parallelGroup.pending : 0,
+    };
+  });
+  return { project: target, blocked: isRunInProgress(target), keys };
+}
+
+/**
+ * Libère À LA DEMANDE tous les verrous de run d'un projet (mission 380,
+ * commande `/verrou libere`). Action EXPLICITE de l'utilisateur : elle ne
+ * consulte pas les portes du chien de garde. Elle reste honnête : chaque
+ * mission encore suivie reçoit son arrêt, et les réservations du projet sont
+ * purgées (un `.pilot/reservations.json` résiduel bloquerait les écritures).
+ * @param {string} project - projet ciblé (chemin réel)
+ * @returns {Promise<{released:string[], queued:number}>}
+ */
+export async function forceReleaseProjectRunLock(project) {
+  const target = project || ".";
+  const released = [];
+  let queued = 0;
+  for (const key of runKeysOfProject(target)) {
+    const ctx = busState.runs[key];
+    if (!ctx) continue;
+    queued += pendingExclusivityCount(ctx);
+    settleMission(ctx.runKey, "stop", {});
+    endRun(key, ctx.generation);
+    released.push(key);
+  }
+  if (released.length > 0) {
+    await deleteReservations(target).catch(() => {});
+    console.warn("[agents-bus] verrou de run libéré à la demande :", released.join(", "));
+  }
+  return { released, queued };
+}
+
 // Tâche 2 (verrou fantôme) : lance les demandes en file d'exclusivité du projet
 // (exclusivityQueue) qui attendaient derrière un agent fantôme/inactif. Retourne
 // true si au moins une demande a été réellement lancée (la run redevient active)
@@ -1158,6 +1317,12 @@ export async function initAgentsBus(options = {}) {
     busState.listeners = null;
   }
   busState.listeners = await listen("rpc-event-agents", handleAgentEvent);
+  // Mission 380 : balayage périodique des verrous ORPHELINS. Un agent mort sans
+  // événement terminal (ou un événement ignoré parce que la run est passée en
+  // `stopping` / que l'agent a quitté `activeAgents`) ne doit plus bloquer le
+  // projet jusqu'au redémarrage de Pilot : le chien de garde est désormais
+  // déclenché aussi sans attendre un lancement.
+  startRunLockSweep();
 
   // T2 : écouter l'arrêt AUTOMATIQUE d'un agent délégué bloqué (émis par le
   // moniteur Rust). `stop_session` supprime l'émission `process_exit` → sans
@@ -1438,6 +1603,8 @@ async function ensureFallbackModel(ctx) {
 }
 
 export function destroyAgentsBus() {
+  // Mission 380 : le balayage périodique ne doit pas survivre au bus.
+  stopRunLockSweep();
   for (const key of Object.keys(busState.runs)) {
     const ctx = busState.runs[key];
     if (ctx.timeoutId) clearTimeout(ctx.timeoutId);

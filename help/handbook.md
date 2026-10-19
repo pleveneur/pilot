@@ -1067,6 +1067,16 @@ attente**. Un projet inactif dont l'agent réfléchit en arrière-plan est donc 
 - **Accès distant** : depuis le mode remote, la liste des projets ouverts est
 visible et on peut basculer de projet (route `/api/project/select`).
 
+**Un verrou de projet n'est jamais laissé fermé** : si un agent meurt sans
+signaler sa fin (plantage, processus tué), si une tâche échoue ou est arrêtée,
+le projet redevient **libre de lui-même** — au plus tard deux à trois minutes —
+sans redémarrer Pilot. Une mission dont l'agent travaille réellement n'est
+**jamais** interrompue au passage, et le message « ⏳ Une tâche d'agents est déjà
+en cours sur ce projet » ne s'affiche que si du travail est vraiment en cours.
+Si un blocage persiste, tapez **`/verrou`** dans la discussion de l'agent pour
+voir l'état du verrou du projet, puis **`/verrou libere`** pour le lever. Ces
+deux commandes ne sont pas envoyées au moteur.
+
 ---
 
 ## Discussion inter-projets (lier des projets)

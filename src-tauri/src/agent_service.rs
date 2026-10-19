@@ -649,6 +649,28 @@ impl AgentService {
         }
     }
 
+    /// Vrai si au moins une session VIVANTE existe pour ce projet, à la forme
+    /// NORMALISÉE du chemin près (`\` vs `/`, casse, slash final).
+    ///
+    /// Mission 380 : garde de VIVACITÉ des sondes d'admission
+    /// (`get_project_agent_states`). Une session vivante (active ou parkée)
+    /// conserve l'occupation du projet ; sans aucune session vivante, l'activité
+    /// marquée « busy » est un ORPHELIN (agent mort silencieusement) et ne doit
+    /// plus bloquer les commandes manuelles ni la file des missions.
+    pub fn project_has_alive_session(&self, project: &str) -> bool {
+        let norm = crate::normalize_project_path(project);
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.iter_mut().any(|(_, entry)| {
+            crate::normalize_project_path(&entry.project) == norm
+                && entry
+                    .session
+                    .child
+                    .try_wait()
+                    .map(|s| s.is_none())
+                    .unwrap_or(false)
+        })
+    }
+
     /// Vrai si une session (projet, agent) VIVANTE existe, à la forme NORMALISÉE
     /// du chemin près (`\` vs `/`, casse, slash final).
     ///

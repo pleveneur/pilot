@@ -278,6 +278,21 @@ pub(crate) fn project_activity_is_busy(
     (a.busy && age <= stale_grace) || age < grace
 }
 
+/// Décision FINALE « le projet est-il occupé ? » pour les sondes d'admission
+/// (mission 380), en croisant l'activité RPC avec la VIVACITÉ réelle.
+///
+/// Une activité marquée occupée alors qu'**aucune session du projet n'est
+/// vivante** est un ORPHELIN : l'agent est mort silencieusement (plantage sans
+/// EOF détecté, processus tué de l'extérieur, mise à jour de `pi`). Sans ce
+/// croisement, `busy` bloquait le projet jusqu'à la borne busy-stale (25 min) :
+/// la commande manuelle de l'utilisateur était refusée (« Une tâche d'agents est
+/// déjà en cours sur ce projet… ») et la file des missions n'avançait plus,
+/// alors que plus aucun processus ne travaillait. Un agent VIVANT (même parké)
+/// conserve l'occupation : aucun changement de comportement pour du travail réel.
+pub(crate) fn project_busy_with_liveness(activity_busy: bool, has_alive_session: bool) -> bool {
+    activity_busy && has_alive_session
+}
+
 /// Issue #13 : état d'activité des agents de TOUS les projets ouverts, sous forme
 /// de map `{ chemin_normalisé: { "busy": bool } }`. Permet à la barre « Projets
 /// en cours » d'afficher une pastille « travaille en arrière-plan » par projet,
@@ -299,12 +314,27 @@ pub fn get_project_agent_states(state: State<AppState>) -> Result<Value, String>
     let stale_grace = std::time::Duration::from_secs(
         crate::default_stale_busy_grace_minutes().max(1) as u64 * 60,
     );
+    // Mission 380 : on fige l'activité BRUTE sous verrou, puis on relâche la map
+    // avant d'interroger le registre de sessions (aucun verrou imbriqué).
+    let raw: Vec<(String, bool)> = keys
+        .into_iter()
+        .map(|k| {
+            let busy = project_activity_is_busy(activity.get(&k), grace, stale_grace, now);
+            (k, busy)
+        })
+        .collect();
+    drop(activity);
     let mut map = serde_json::Map::new();
-    for k in keys {
+    for (k, raw_busy) in raw {
         // Un projet reste « occupé » tant que busy (non périmé) OU qu'une activité
         // récente (fenêtre de grâce) : évite le flicker « prêt » entre deux
-        // sous-tâches d'un plan orchestration encore en cours.
-        let busy = project_activity_is_busy(activity.get(&k), grace, stale_grace, now);
+        // sous-tâches d'un plan orchestration encore en cours. Ce `busy` est
+        // TOUJOURS croisé avec la vivacité : l'activité d'un agent mort (plus
+        // aucune session vivante) ne bloque plus le projet (mission 380).
+        let busy = project_busy_with_liveness(
+            raw_busy,
+            state.agent_service.project_has_alive_session(&k),
+        );
         map.insert(k, serde_json::json!({ "busy": busy }));
     }
     Ok(Value::Object(map))
@@ -1111,8 +1141,8 @@ pub fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
 mod tests {
     use super::{
         agent_event_channel, command_result_ok, count_rpc_messages, extract_model_from_state,
-        kind_from_version_output, project_activity_is_busy, should_block_start,
-        COMMAND_DISCOVERY_ORDER,
+        kind_from_version_output, project_activity_is_busy, project_busy_with_liveness,
+        should_block_start, COMMAND_DISCOVERY_ORDER,
     };
     use crate::SessionActivity;
     use std::time::{Duration, Instant};
@@ -1172,6 +1202,19 @@ mod tests {
         // Au-delà de la grâce : libre.
         let (a, now) = activity(false, 16);
         assert!(!project_activity_is_busy(Some(&a), grace, stale, now));
+    }
+
+    #[test]
+    fn project_busy_with_liveness_requires_a_live_session() {
+        // Mission 380 : l'activité n'est retenue que si une session du projet est
+        // réellement vivante. Un agent mort silencieusement (aucun événement
+        // terminal, aucune session) laissait `busy` vrai jusqu'à la borne
+        // busy-stale : la commande manuelle était refusée alors que plus rien ne
+        // travaillait. Croisement = verrou orphelin immédiatement inopérant.
+        assert!(project_busy_with_liveness(true, true));
+        assert!(!project_busy_with_liveness(true, false));
+        assert!(!project_busy_with_liveness(false, true));
+        assert!(!project_busy_with_liveness(false, false));
     }
 
     #[test]

@@ -343,6 +343,41 @@ file d'exclusivité `exclusivity-queue.js`). Ce chantier a fermé les
 
 ---
 
+## 7 bis. Verrou orphelin : libération autonome et levée à la demande (mission 380)
+
+Le verrou de run (`busState.runs[clé].runState`) vit **en mémoire** (aucun
+fichier). Sa libération ne dépend plus d'un déclencheur extérieur :
+
+- **Balayage périodique auto-réparant** : `sweepOrphanRunLocks()`
+  (`agents-bus.js`, toutes les `RUN_LOCK_SWEEP_MS = 30 s`, armé à
+  `initAgentsBus`, désarmé à `destroyAgentsBus`) applique le chien de garde
+  existant `releaseStuckRunLockForKey` aux runs du projet — ses portes restent la
+  seule autorité (`noActive`, `residualParallel`, `ghosts`, `orphanQueue`), avec
+  son **plancher d'inactivité** et sa **double mesure**. Une run plus jeune que
+  `RUN_LOCK_SWEEP_START_GRACE_MS` (60 s) n'est jamais examinée ; une run restée
+  en `stopping` au-delà de cette grâce est libérée (elle ne porte plus rien).
+- **Diagnostic et levée manuels** : `getProjectRunLockInfo(project)` et
+  `forceReleaseProjectRunLock(project)`, exposés dans la discussion de l'agent
+  par `/verrou` et `/verrou libere` (jamais transmis au moteur). La levée forcée
+  résout le sink de chaque mission suivie et purge les réservations du projet.
+- **Commande manuelle jamais condamnée par un orphelin** :
+  `canSendManualCommandAsync(project, isRunInProgress, isAgentBusy,
+  releaseStaleLock)` tente une levée ciblée **avant** de refuser, puis
+  re-décide ; le refus n'est affiché que si le blocage est réel.
+- **Côté Rust, garde de vivacité** : `get_project_agent_states` croise `busy`
+  avec `AgentService::project_has_alive_session` (règle pure
+  `project_busy_with_liveness`). Une activité marquée occupée **sans aucune
+  session vivante** du projet est un orphelin (agent mort silencieusement) : elle
+  ne bloque plus ni la commande manuelle ni la file. Le moniteur d'anomalie
+  purgeait les états fantômes du registre et de la carte d'anomalie, pas
+  `agent_activity` — ce croisement ferme ce trou.
+
+Non-régressions : `src/js/verrou-orphelin.test.js` (agent mort, arrêt
+utilisateur, agent sain jamais coupé, commande manuelle, voir/lever) et
+`project_busy_with_liveness_requires_a_live_session` côté Rust.
+
+---
+
 <!-- HELP:multiprojets -->
 ## Projets multiples (multi-projets)
 
@@ -367,4 +402,14 @@ exactement là où il en était (contexte et historique préservés).
 attente**. Un projet inactif dont l'agent réfléchit en arrière-plan est donc visible.
 - **Accès distant** : depuis le mode remote, la liste des projets ouverts est
 visible et on peut basculer de projet (route `/api/project/select`).
+
+**Un verrou de projet n'est jamais laissé fermé** : si un agent meurt sans
+signaler sa fin (plantage, processus tué), si une tâche échoue ou est arrêtée,
+le projet redevient **libre de lui-même** — au plus tard deux à trois minutes —
+sans redémarrer Pilot. Une mission dont l'agent travaille réellement n'est
+**jamais** interrompue au passage, et le message « ⏳ Une tâche d'agents est déjà
+en cours sur ce projet » ne s'affiche que si du travail est vraiment en cours.
+Si un blocage persiste, tapez **`/verrou`** dans la discussion de l'agent pour
+voir l'état du verrou du projet, puis **`/verrou libere`** pour le lever. Ces
+deux commandes ne sont pas envoyées au moteur.
 <!-- /HELP:multiprojets -->

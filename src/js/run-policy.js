@@ -73,10 +73,27 @@ export function canSendManualCommand(project, isRunInProgress) {
  * @param {function(string, {nature:string}):boolean} isRunInProgress
  * @param {function(string):Promise<boolean>} [isAgentBusy] - sonde d'activité
  *   réelle de l'agent du projet (injectée pour rester sans dépendance).
+ * @param {function(string):Promise<void>} [releaseStaleLock] - levée d'un verrou
+ *   ORPHELIN (agent mort, tâche sans porteur) tentée AVANT de refuser
+ *   l'utilisateur (mission 380). Injectée pour rester sans dépendance ; absente
+ *   → comportement inchangé (refus).
  * @returns {Promise<boolean>}
  */
-export async function canSendManualCommandAsync(project, isRunInProgress, isAgentBusy) {
-  if (!canSendManualCommand(project, isRunInProgress)) return false;
+export async function canSendManualCommandAsync(project, isRunInProgress, isAgentBusy, releaseStaleLock) {
+  if (!canSendManualCommand(project, isRunInProgress)) {
+    // Mission 380 : un verrou resté fermé sans porteur ne doit pas condamner la
+    // saisie de l'utilisateur jusqu'au redémarrage. On tente une levée CIBLÉE
+    // (le chien de garde du bus ne libère que ce qui est réellement orphelin),
+    // puis on re-décide : le refus n'est affiché que si le blocage est réel.
+    if (typeof releaseStaleLock !== "function") return false;
+    try {
+      await releaseStaleLock(project);
+    } catch (_) {
+      // Sonde/levée en échec : on conserve le refus (fail-closed).
+      return false;
+    }
+    if (!canSendManualCommand(project, isRunInProgress)) return false;
+  }
   if (typeof isAgentBusy !== "function") return true;
   try {
     return !(await isAgentBusy(project));

@@ -63,7 +63,14 @@ import { injectSessionSummaryToSuperAgent, isProjectAgentBusy } from "./super-ag
 // passe par la même politique d'admission que les missions (run-policy.js),
 // appliquée au bus d'agents (isRunInProgress).
 import { canSendManualCommand, canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
-import { isRunInProgress } from "./agents-bus.js";
+import { isRunInProgress, releaseStuckRunLock, RUN_LAUNCH_MIN_STUCK_IDLE_MS, getProjectRunLockInfo, forceReleaseProjectRunLock } from "./agents-bus.js";
+
+// Mission 380 : levée d'un verrou de run ORPHELIN avant de refuser une commande
+// manuelle. Réutilise le chien de garde du bus (il ne libère que ce qui n'a plus
+// de porteur : agent mort, tâche sans session) avec le plancher d'inactivité de
+// lancement — une run qui travaille réellement n'est jamais coupée ici.
+const releaseOrphanRunLock = (project) =>
+  releaseStuckRunLock(project, { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS });
 import { shouldRememberExchange } from "./super-agent-exchange-filter.js";
 import { buildWorkStateSnapshot } from "./work-state.js";
 import {
@@ -1133,8 +1140,39 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     // deux onglets d'agent) n'inscrivent aucune run dans le bus → la sonde du bus
     // ne les voit pas. On sonde donc aussi l'activité réelle de l'agent du projet
     // (même sonde que la délégation). Refus visible, texte conservé.
-    if (!isSlashCommand && !(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+    if (!isSlashCommand && !(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
       appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+      return;
+    }
+    // Mission 380 : commandes LOCALES de diagnostic du verrou par projet. Elles
+    // ne sont JAMAIS transmises au moteur (`pi`) : `/verrou` affiche l'état, et
+    // `/verrou libere` lève un verrou bloqué sans redémarrer Pilot.
+    if (text === "/verrou" || text === "/verrou libere") {
+      const projectPath = window._pilotProjectPath || ".";
+      inputEl.value = "";
+      autoResizeTextarea();
+      hideAutocomplete();
+      if (text === "/verrou") {
+        const info = getProjectRunLockInfo(projectPath);
+        const lines = info.keys.map((k) => {
+          const idle = k.idleMs === null ? "aucune activité" : `inactif depuis ${Math.round(k.idleMs / 1000)} s`;
+          return `- \`${k.key}\` — ${k.runState}${k.readonly ? " (lecture)" : ""}, agents : ${k.agents.length ? k.agents.join(", ") : "aucun"}, ${idle}, en file : ${k.queued}, tâches attendues : ${k.pending}`;
+        });
+        appendSystemMessage(
+          messagesEl,
+          info.blocked
+            ? `🔒 Verrou de run du projet : OCCUPÉ\n${lines.join("\n")}\n\nPour le lever sans redémarrer Pilot : \`/verrou libere\`. Un verrou orphelin (agent mort) est aussi libéré automatiquement en ~2 min.`
+            : "🔓 Verrou de run du projet : LIBRE (aucune run en cours)",
+        );
+      } else {
+        const r = await forceReleaseProjectRunLock(projectPath);
+        appendSystemMessage(
+          messagesEl,
+          r.released.length > 0
+            ? `🔓 Verrou levé (${r.released.length} run(s) : ${r.released.join(", ")}).${r.queued > 0 ? ` ${r.queued} demande(s) en file ont été abandonnées : relancez la mission.` : ""} Le projet accepte de nouveau des tâches.`
+            : "🔓 Aucun verrou à lever : le projet était déjà libre.",
+        );
+      }
       return;
     }
     if (voiceActive) stopVoiceInput();
@@ -6061,7 +6099,7 @@ function renderLoopAbandonChoices(messagesEl, state, kind) {
       // l'agent (nouvelle session puis envoi), donc même politique que les autres
       // commandes manuelles. Évaluée AVANT `new_agent_session` : un refus ne doit
       // pas détruire la conversation sans rien relancer. Refus visible.
-      if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+      if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
         appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
         return;
       }
@@ -8092,7 +8130,7 @@ async function applyPromptSelection() {
   // refus d'admission quand il n'y a rien à envoyer. La garde reste AVANT tout
   // effacement : en cas de refus, la saisie reste intacte et le refus est
   // affiché dans le chat.
-  if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+  if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
     if (promptMessagesEl) appendSystemMessage(promptMessagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
     return;
   }
