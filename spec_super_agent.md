@@ -705,7 +705,8 @@ uniquement un bloc d'instructions dans le prompt système.
   `plan-maker` est un agent lecture seule qui ne modifie aucun code ; il ne
   fait que produire le plan JSON. Cette étape est **toujours facultative et
   explicite** : elle n'est plus jamais automatique ni imposée avant un
-  lancement.
+  lancement. L'Assistant ne lance **jamais** cet agent de lui-même — il faut
+  le demander.
 
 ### Contexte de suivi joint automatiquement à la demande déléguée
 - Avant de **lancer un agent** — agent du projet (`run_agents`), agent hors
@@ -1405,14 +1406,17 @@ Tables (V1) :
   `run_agents`, `create_agent`, `delegate_to_coder`, `ask_multi_choice`,
   `ask_confirm`, `ask_input`.
 - **Flux « plan-maker » (facultatif, mission 381)** : le prompt système décrit
-  la procédure de planification **à la demande** — pour une demande importante
-  où l'utilisateur veut un plan, appeler `run_agents(["plan-maker"], …)` (en
-  **nommant** l'agent) pour obtenir un plan JSON (tâches, fichiers, coût
-  estimé, contraintes), puis déléguer au codeur via `delegate_to_coder` avec ce
-  plan. Aucune estimation préalable automatique n'existe plus : le lancement
-  démarre **exactement** les agents demandés, et un agent inconnu est refusé
-  avec la liste des agents disponibles. Voir aussi la section « Déléguer le
-  code à l'agent du projet » (plan-maker).
+  la procédure de planification **à la demande** — `run_agents(["plan-maker"], …)`
+  (en **nommant** l'agent) pour obtenir un plan JSON (tâches, fichiers, coût
+  estimé, contraintes), puis délégation au codeur via `delegate_to_coder` avec
+  ce plan. Le prompt **interdit explicitement** de lancer un agent de
+  planification « de sa propre initiative » : `plan-maker` n'est employé que si
+  l'utilisateur demande explicitement un plan, sinon la demande part
+  directement à l'agent nommé. Aucune estimation préalable automatique n'existe
+  plus : le lancement démarre **exactement** les agents demandés, et un agent
+  inconnu est refusé avec la liste des agents disponibles (preuve Rust :
+  `super_agent_tools_prompt_ne_previent_plus_par_un_plan_automatique`). Voir
+  aussi la section « Déléguer le code à l'agent du projet » (plan-maker).
 
 ### Mémoire de session (reprise)
 

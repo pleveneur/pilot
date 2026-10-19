@@ -121,3 +121,30 @@ uniquement de cette **étape d'estimation insérée en amont** du lancement.
 | Bail de vivacité des réservations | `reservations.test.js` conserve le test du battement de cœur (libération si la run détentrice a disparu) | conforme |
 | Purges de `reservations.json` dans le bus | `agents-bus.js` inchangé sur ce point (arrêt, init, fin de tour) | conforme |
 | Accusé de lancement honnête (#87) | `super-agent-launch-verdict.test.js` : refus → `ok:false` avec raison ; plus aucun `preparing: true` construit | conforme |
+
+## 6. Complément : le prompt système ne prescrit plus de plan préalable
+
+La suppression du devis dans le chemin de lancement (`super-agent.js`,
+`reservations.js`) laissait **un second levier** intact, côté Rust :
+`SUPER_AGENT_TOOLS_PROMPT` (`src-tauri/src/super_agent.rs`) demandait à
+l'Assistant, mot pour mot, de « demander un plan à `plan-maker` via `run_agents` »
+pour **toute demande de code importante**. Le lancement était donc direct, mais
+l'Assistant lui-même réclamait un planificateur avant de déléguer : l'utilisateur
+continuait de voir un agent qui n'était pas celui qu'il avait demandé, et la
+mission du codeur n'arrivait qu'après.
+
+C'était aussi une **contradiction avec la documentation** déjà mise à jour
+(`spec_super_agent.md`, aide intégrée : « plus jamais automatique ni imposée
+avant un lancement », « facultatif et explicite »).
+
+**Correctif** : la consigne devient « Ne lance **jamais** d'agent de planification
+de ta propre initiative : `plan-maker` (plan JSON) uniquement si l'utilisateur
+demande explicitement un plan ; sinon délègue directement au codeur. » (texte
+plus court de 39 caractères : le garde-fou de budget du prompt reste respecté).
+La spécification est alignée (usage à la demande, preuve Rust citée) et l'aide
+intégrée régénérée.
+
+**Preuve** : `super_agent_tools_prompt_ne_previent_plus_par_un_plan_automatique`
+(`src-tauri/src/super_agent.rs`) — l'ancienne formule « Pour une demande de code
+importante » a disparu, `plan-maker` reste décrit (facultatif), et le prompt
+réserve son usage à une demande explicite de l'utilisateur.

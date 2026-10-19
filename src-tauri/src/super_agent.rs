@@ -478,9 +478,10 @@ fn available_agents_context(state: &AppState, app: &AppHandle) -> String {
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : décrit
 /// les outils d'agents (`run_agents`, `create_agent`, `delegate_to_coder`,
-/// `ask_multi_choice`, `ask_confirm`, `ask_input`) et le flux « plan-maker »
-/// pour les demandes de code importantes (plan → délégation).
-const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de DEUX familles de délégation : `run_agents(agent_ids, task, project)` (agents d'un projet : le travail se fait dans un projet, avec le projet comme contexte ; `project` omis = projet actif) et `run_assistant_agents(agent_ids, task)` (agents hors projet, créés pour toi, tournant dans `~/.pilot/assistant/` : recherche, analyse, rédaction interne — aucun contexte de projet). Tu disposes aussi de `create_agent(...)` (agent sur mesure si nécessaire), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent à la fois par projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin.\n\nExécute le travail via des agents spécifiques (`run_agents`/`run_assistant_agents`/`create_agent`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), puis lance.\n\nPour une demande de code importante (plusieurs fichiers/étapes) : demande un plan à `plan-maker` via `run_agents`, puis délègue l'exécution. Pour une demande simple (1 fichier, < 50 lignes), délègue directement sans plan-maker.\n";
+/// `ask_multi_choice`, `ask_confirm`, `ask_input`) et le caractère FACULTATIF du
+/// flux « plan-maker » : l'agent de planification n'est jamais lancé de sa propre
+/// initiative (mission 381 — l'agent lancé est exactement l'agent demandé).
+const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de DEUX familles de délégation : `run_agents(agent_ids, task, project)` (agents d'un projet : le travail se fait dans un projet, avec le projet comme contexte ; `project` omis = projet actif) et `run_assistant_agents(agent_ids, task)` (agents hors projet, créés pour toi, tournant dans `~/.pilot/assistant/` : recherche, analyse, rédaction interne — aucun contexte de projet). Tu disposes aussi de `create_agent(...)` (agent sur mesure si nécessaire), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent à la fois par projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin.\n\nExécute le travail via des agents spécifiques (`run_agents`/`run_assistant_agents`/`create_agent`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), puis lance.\n\nNe lance jamais d'agent de planification de ta propre initiative : `plan-maker` (plan JSON) uniquement si l'utilisateur demande explicitement un plan ; sinon délègue directement au codeur.\n";
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : règles
 /// de résilience / anti-blocage ET anti-boucle de `run_agents` (fusionnées : une
@@ -8011,6 +8012,30 @@ mod tests {
         assert!(
             super::SUPER_AGENT_TOOLS_PROMPT.contains("run_assistant_agents"),
             "le bloc outils doit mentionner run_assistant_agents (agents hors projet)"
+        );
+    }
+
+    /// MISSION 381 — l'agent lancé est exactement l'agent demandé : le prompt
+    /// système ne doit plus IMPOSER une étape de planification (`plan-maker`)
+    /// avant un lancement. Un planificateur ne démarre que si l'utilisateur
+    /// demande explicitement un plan — jamais de sa propre initiative.
+    #[test]
+    fn super_agent_tools_prompt_ne_previent_plus_par_un_plan_automatique() {
+        let prompt = super::SUPER_AGENT_TOOLS_PROMPT;
+        // L'ancienne consigne imposait un plan pour TOUTE demande « importante » :
+        // c'est elle qui faisait démarrer un agent non demandé avant la mission.
+        assert!(
+            !prompt.contains("Pour une demande de code importante"),
+            "le prompt ne doit plus imposer plan-maker pour une demande importante"
+        );
+        assert!(
+            prompt.contains("plan-maker"),
+            "le prompt doit toujours décrire plan-maker (usage facultatif)"
+        );
+        assert!(
+            prompt.contains("jamais d'agent de planification de ta propre initiative")
+                && prompt.contains("demande explicitement un plan"),
+            "le prompt doit réserver plan-maker à une demande explicite de l'utilisateur"
         );
     }
 

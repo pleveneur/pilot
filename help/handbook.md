@@ -1804,7 +1804,8 @@ uniquement un bloc d'instructions dans le prompt système.
   `plan-maker` est un agent lecture seule qui ne modifie aucun code ; il ne
   fait que produire le plan JSON. Cette étape est **toujours facultative et
   explicite** : elle n'est plus jamais automatique ni imposée avant un
-  lancement.
+  lancement. L'Assistant ne lance **jamais** cet agent de lui-même — il faut
+  le demander.
 
 ### Contexte de suivi joint automatiquement à la demande déléguée
 - Avant de **lancer un agent** — agent du projet (`run_agents`), agent hors
