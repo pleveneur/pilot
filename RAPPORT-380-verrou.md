@@ -177,6 +177,46 @@ conservé tant que la file vit) ; session du projet encore au travail → verrou
 conservé (borné par la fenêtre « busy-stale » de 25 min, donc aucun blocage à
 vie). Preuves : PREUVE 8 (3 cas).
 
+## 5 ter. Complément après relecture (mission 380, second passage)
+
+Cette reprise demandait de traiter les **4 manques** de `VERIF-380.md`. Constat
+de ce second passage : **les quatre sont déjà fermés dans l'arbre** par la
+mission 380bis (commits `76e03f1` et `5bc3e51`, section 5 bis ci-dessus). Ce
+complément n'a donc **ajouté aucun correctif de code** : il re-vérifie chaque
+point sur le code réel, refait les mutations (hors dépôt) et consigne les
+comptes exacts. Le rapport reste la source de vérité — rien n'est annoncé ici
+qui ne soit démontré.
+
+| Manque relevé par la revue | Où c'est corrigé (code réel) | Preuve exécutée dans ce complément |
+|---|---|---|
+| **1. § 1.4** — la levée ciblée manquait sur `prompt-builder.js` et `sidebar.js` (3 points d'entrée sur 5) | `src/js/prompt-builder.js:323` et `src/js/sidebar.js:330` passent bien `isProjectAgentBusy, releaseOrphanRunLock` ; définition **unique** `releaseOrphanRunLock(project)` dans `agents-bus.js:618` (aucune copie locale) | **6 appels gardés sur 3 fichiers** (`agent-pi.js` ×4, `sidebar.js` ×1, `prompt-builder.js` ×1) → PREUVE 7 (contrôle de source « 1 appel = 1 levée » + import unique). Mutation : retirer l'argument dans `prompt-builder.js` → PREUVE 7 **échoue** (`prompt-builder.js : chaque envoi manuel doit tenter la levée… expected +0 to be 1`) |
+| **2. § 2.1** — l'armement du balayage n'était couvert par aucun test (mutation M1 de la revue : 8/8 verts) | `initAgentsBus` appelle `startRunLockSweep()` (`agents-bus.js:1472`) : un minuteur `RUN_LOCK_SWEEP_MS` (**30 000 ms**), désarmé par `destroyAgentsBus` (`stopRunLockSweep`) | PREUVE 6 : `setInterval` espionné → **exactement 1** minuteur à 30 000 ms, **son rappel lève réellement** le verrou orphelin (deux tirs), `clearInterval` reçoit bien son handle à la destruction. Mutation : retirer `startRunLockSweep()` de `initAgentsBus` → **1 échec / 12 réussis** (le défaut d'origine redevient visible) |
+| **3. § 2.2** — le rapport annonçait un test Rust `project_has_alive_session` inexistant | les tests sont **écrits** (`src-tauri/src/agent_service.rs:4074`, `:4083`, `:4106`), sur de vrais processus enfants : aucune session → libre, session **morte** → libre, session **vivante** → occupée, y compris sous une autre forme du même chemin (`\`, casse, slash final) | `cargo test --lib project_has_alive_session` → **3 réussis** ; `cargo test --lib project_busy_with_liveness` → **1 réussi**. La ligne du § 6 est donc exacte aujourd'hui |
+| **4. § 4.1 / 4.2** — la branche `stopping` du balayage libérait sans drainer la file ni regarder une session vivante | même règle que `releaseStuckRunLockForKey` : **file non vide** → run réarmée (`runState = "running"`) + `drainExclusivityQueues`, verrou **conservé** tant que la file vit ; puis `projectHasWorkingSession(key)` → verrou **conservé** (borné par la fenêtre « busy-stale » de 25 min) | PREUVE 8 (3 cas : session vivante → conservé, demande en file → relancée, rien à porter → libéré). Mutation : revenir à la libération sèche → **2 échecs** (`preuve-380-stopping-vivant`, `preuve-380-stopping-file`) |
+
+**Comptes réels mesurés lors de ce complément** (arbre de travail, aucun
+échec) :
+
+| Commande | Résultat |
+|---|---|
+| `npm test` (Vitest) | **110 fichiers, 1 893 tests, 0 échec** |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | **641 réussis, 0 échec, 1 ignoré** |
+| dont `src/js/verrou-orphelin.test.js` | **13 tests** (8 à l'origine → 13 après 380bis) |
+| dont Rust `project_has_alive_session` / `project_busy_with_liveness` | **3 / 1** |
+
+**Le message de blocage reste affiché quand un agent travaille vraiment** :
+`MANUAL_COMMAND_BLOCKED_MESSAGE` (`src/js/run-policy.js`) est inchangé, et
+PREUVE 4 (2e cas) vérifie qu'un blocage **réel** — session vivante au travail —
+continue de renvoyer `false`, donc « ⏳ Une tâche d'agents est déjà en cours sur
+ce projet… » s'affiche toujours. Aucun test de la suite ne contredit ce point
+(1 893/1 893).
+
+Mutations exécutées sur des copies **hors dépôt** (`%TEMP%\v380`, jonction vers
+`node_modules`, dossier supprimé après usage) : l'arbre du projet n'a été modifié
+par aucune mutation. Depuis la mission 385, la sonde de file d'attente du projet
+(`setProjectQueueProbe`, `agent-pi.js`) applique la **même** politique : le
+compte des points gardés est passé de 5 à **6** (voir § 6, point 7).
+
 ## 6. Comment vérifier
 
 ```bash
@@ -204,8 +244,11 @@ Tests de non-régression ajoutés (`src/js/verrou-orphelin.test.js`) :
 6. **armement autonome** (PREUVE 6) : `initAgentsBus` arme le balayage
    périodique à `RUN_LOCK_SWEEP_MS`, son rappel lève réellement un verrou
    orphelin, `destroyAgentsBus` le désarme ;
-7. **tous les points d'entrée** (PREUVE 7) : les 5 sites d'envoi manuel passent
-   la levée ciblée (`releaseOrphanRunLock`) — aucun ne peut être oublié ;
+7. **tous les points d'entrée** (PREUVE 7) : les **6** points d'entrée — les 5
+   sites d'envoi manuel (`agent-pi.js` ×3, `sidebar.js`, `prompt-builder.js`) et
+   la sonde de la file d'attente du projet (`setProjectQueueProbe`, mission 385,
+   `agent-pi.js`) — passent la levée ciblée (`releaseOrphanRunLock`) ; aucun ne
+   peut être oublié ;
 8. **arrêt jamais terminé** (PREUVE 8) : une run `stopping` dont une session
    travaille encore garde son verrou, ses demandes en file sont **relancées**
    (jamais abandonnées), et elle est bien libérée quand plus rien ne la porte ;
