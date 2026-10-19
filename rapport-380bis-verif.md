@@ -127,3 +127,44 @@ Vérification manuelle conseillée dans Pilot :
    « ⏳ Une tâche d'agents est déjà en cours… ») ;
 3. même essai avec le bouton « Envoyer à l'agent » du **Prompt Builder** ;
 4. si le blocage persiste, `/verrou` puis `/verrou libere` dans le chat.
+
+---
+
+## 6. Re-vérification (nouvelle exécution de la mission 380bis)
+
+Le correctif des trois écarts était **déjà commité** (`76e03f1`, après la mission
+381 `813095c`). Cette exécution n'a donc **rien eu à corriger** : elle a vérifié,
+un par un, que les trois écarts sont bien fermés dans l'arbre, puis a **prouvé
+que les nouveaux tests ne sont pas complaisants** en les faisant échouer par
+mutation (copie jetable hors dépôt pour l'interface, `git checkout` immédiat
+pour le cœur ; arbre laissé propre, seul `geminiReport.md` non suivi préexiste
+et n'a pas été touché).
+
+### 6.1 État vérifié des trois écarts
+
+| Écart | Vérification | Résultat |
+|---|---|---|
+| 1 — levée ciblée sur les 5 points d'entrée | `grep` : `agent-pi.js` ×3, `sidebar.js:330`, `prompt-builder.js:323` passent tous `isProjectAgentBusy, releaseOrphanRunLock` ; import unique depuis `agents-bus.js` (`releaseOrphanRunLock` y est la seule définition, `agents-bus.js:618`) | **fermé** |
+| 2 — armement automatique du balayage protégé | PREUVE 6 (`verrou-orphelin.test.js:352`) : `setInterval` espionné, **1** minuteur à `RUN_LOCK_SWEEP_MS`, son rappel lève réellement un verrou orphelin, `destroyAgentsBus` l'efface | **fermé** |
+| 3 — test Rust annoncé dans le rapport 380 | les **trois** tests existent (`agent_service.rs` : sans session, session morte, session vivante) et passent ; `RAPPORT-380-verrou.md` § 6 les cite désormais correctement | **fermé** (test **ajouté**, ligne du rapport rendue vraie) |
+
+### 6.2 Preuve que les tests attrapent réellement la régression (mutations)
+
+| Mutation appliquée | Effet observé |
+|---|---|
+| **M1** — `startRunLockSweep();` retiré de `initAgentsBus` (défaut d'origine : aucun déclencheur autonome) | PREUVE 6 **échoue** (« initAgentsBus doit armer le balayage périodique: expected +0 to be 1 ») |
+| **M3** — `stopRunLockSweep();` retiré de `destroyAgentsBus` | PREUVE 6 **échoue** (minuteur orphelin non désarmé) |
+| **M2** — 4ᵉ argument retiré sur **un seul** site (`sidebar.js`, état d'avant `76e03f1`) | PREUVE 7 **échoue** (le compte des sites gardés passe sous le nombre d'appels) |
+| **M4** — `project_has_alive_session` forcée à `true` | les **3** tests Rust **échouent** (dont le cas « session morte ») |
+
+Sans ces mutations, le défaut d'origine (`VERIF-380.md` § 2.1) resterait
+invisible : les tests appelaient le balayage à la main.
+
+### 6.3 Comptes de tests de cette exécution
+
+| Commande | Résultat |
+|---|---|
+| `npm test` (Vitest, interface) | **1 864 réussis, 0 échec** (dont `verrou-orphelin.test.js` : 13) |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` (cœur) | **641 réussis, 0 échec, 1 ignoré** |
+| `npm run build:handbook` | aucun changement : `help/handbook.md` déjà à jour |
+| `git status` après vérifications | propre (hors `geminiReport.md` préexistant, non enregistré) |
