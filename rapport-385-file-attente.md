@@ -111,8 +111,9 @@ laissés intacts).
   `agents-bus.test.js`, `run-policy.test.js`, `exclusivity-queue.test.js`,
   `verrou-par-projet.test.js`, `verrou-orphelin.test.js`,
   `agent-pi-listeners.test.js`.
-- `cargo test --manifest-path src-tauri/Cargo.toml --lib` : voir résultat ci-dessous
-  (aucun code Rust modifié par cette mission).
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib` : **641 tests passés,
+  1 ignoré, 0 échec** (aucun code Rust modifié par cette mission : la place est
+  rendue côté Rust par les mécanismes existants, vérifiés par ces tests).
 
 ### Ce que les tests prouvent explicitement
 | Exigence | Test |
