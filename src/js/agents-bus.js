@@ -42,8 +42,10 @@ import {
   detectRepeatedActions,
   buildToolLoopFingerprint,
   // Décision « une lecture n'est jamais un motif d'arrêt » : classifie une ligne
-  // de commande shell comme CONSULTATIVE (git status/diff/log, ls, rg, sed -n…).
-  isReadOnlyShellCommand,
+  // de commande shell comme CONSULTATIVE (git status/diff/log, ls, rg, sed -n…)
+  // et fournit la SOURCE UNIQUE de vérité des outils de lecture pure
+  // (`AGENT_READ_ONLY_TOOLS`, partagée avec agent-pi.js et super-agent.js).
+  isReadOnlyAgentToolCall,
   findRepeatedTail,
   buildLoopCorrectionPrompt,
   MAX_LOOP_ESCALATION,
@@ -271,31 +273,13 @@ async function settleWatchdogRelease(ctx, door, idleSince) {
 const AGENT_LOOP_CHECK_INTERVAL_MS = 500; // throttle du streaming
 const AGENT_LOOP_BUFFER_MIN = 200; // taille min de texte avant test
 
-// P0-2 : outils de LECTURE PURE (sans effet de bord). Les répéter est de
-// l'exploration légitime (lire un gros fichier en plusieurs lectures, faire des
-// recherches). Ils ne sont PAS enregistrés dans l'historique de détection de
-// boucle (donc PAS comptés) pour éviter les faux positifs qui coupent des
-// sous-agents qui font des recherches/lectures légitimes. Seuls les outils qui
-// MODIFIENT réellement l'état ou exécutent (bash, write, edit, db_execute, …)
-// restent détectés. Même liste que agent-pi.js (README_READ_ONLY_TOOLS).
-const AGENT_READ_ONLY_TOOLS = new Set([
-  "read",
-  "search",
-  "grep",
-  "glob",
-  "list",
-  "ls",
-  "find",
-  "read_project_file",
-  "search_project",
-]);
-
-// Outils shell : une commande shell CONSULTATIVE (prouvée par
-// `isReadOnlyShellCommand`) est routée vers l'historique de LECTURE, jamais vers
-// l'historique qui peut fonder un arrêt (cf. décision « une lecture n'est jamais
-// une boucle » : une run de codeur a été tuée pour avoir relancé `git status
-// --short` entre deux corrections légitimes).
-const AGENT_SHELL_TOOLS = new Set(["bash", "shell"]);
+// P0-2 : les outils de LECTURE PURE (sans effet de bord) ne sont PAS enregistrés
+// dans l'historique de détection de boucle (donc PAS comptés) : les répéter est
+// de l'exploration légitime. La LISTE vit désormais dans le module pur
+// `loop-detection.js` (`AGENT_READ_ONLY_TOOLS`, `AGENT_SHELL_TOOLS`,
+// `isReadOnlyAgentToolCall`) : elle est PARTAGÉE avec l'onglet agent principal
+// (agent-pi.js) et l'Assistant (super-agent.js), pour que la règle « une lecture
+// n'est jamais un motif d'arrêt » soit la même sur TOUS les chemins.
 
 /**
  * Enregistre une empreinte dans l'historique de LECTURE d'un agent (borné à 40,
@@ -421,6 +405,94 @@ function dropProjectExclusivityQueue(project) {
   for (const qk of Object.keys(queue)) lost += (queue[qk] || []).length;
   delete projectExclusivityQueues[key];
   return lost;
+}
+
+/**
+ * Entrées de la file d'exclusivité MODULE d'un projet (source de vérité),
+ * indépendamment de l'existence d'une run vivante. C'est ce qui rend une
+ * entrée ORPHELINE (plus aucune run ne la porte) à la fois visible et
+ * abandonnable : sans cela, une demande conservée devenait invisible (aucun
+ * `busState.runs` à parcourir) et donc inexécutable ET nonsignalée.
+ * @param {string} project - projet réel (chemin)
+ * @returns {Array<{agentId:string, label:string, queueKey:string}>}
+ */
+function exclusivityQueueEntriesOf(project) {
+  const queue = projectExclusivityQueues[runKey(project || ".")];
+  const entries = [];
+  if (!queue) return entries;
+  for (const queueKey of Object.keys(queue)) {
+    const idx = queueKey.indexOf("\u{1f}");
+    const keyAgentId = idx < 0 ? "" : queueKey.slice(idx + 1);
+    for (const assignment of queue[queueKey] || []) {
+      const brief = assignment && (assignment.brief || assignment.task);
+      entries.push({
+        agentId: (assignment && assignment.agentId) || keyAgentId,
+        label: String(brief == null ? "" : brief),
+        queueKey,
+      });
+    }
+  }
+  return entries;
+}
+
+/**
+ * Toutes les files d'exclusivité visibles pour un projet : la file MODULE du
+ * projet (source de vérité, survit aux runs) PLUS la file de chaque contexte de
+ * run du projet (un contexte peut porter une file distincte, ex. file remplacée
+ * à la main ou entrée héritée d'une version antérieure). Les doublons d'objet
+ * sont éliminés : aucune entrée n'est comptée deux fois.
+ * @param {string} project
+ * @returns {object[]} maps `clé projet\u{1f}agent → assignment[]`
+ */
+function exclusivityQueuesOfProject(project) {
+  const realProject = runKey(project || ".");
+  const queues = [];
+  const seen = new Set();
+  const add = (queue) => {
+    if (!queue || typeof queue !== "object" || seen.has(queue)) return;
+    seen.add(queue);
+    queues.push(queue);
+  };
+  add(projectExclusivityQueues[realProject]);
+  for (const key of runKeysOfProject(project)) {
+    const ctx = busState.runs[key];
+    if (!ctx) continue;
+    if ((ctx.project || realProject) !== realProject) continue;
+    add(ctx.exclusivityQueue);
+  }
+  return queues;
+}
+
+/**
+ * Journalise (et ANNONCE) l'abandon de demandes en file d'attente. RÈGLE 3/4 :
+ * une demande qui ne peut plus être rejouée ne disparaît jamais en silence — on
+ * écrit le motif au journal des arrêts du projet et on prévient l'utilisateur.
+ * Fail-open : une écriture impossible ne doit pas bloquer l'abandon lui-même.
+ * @param {string} project - projet des demandes abandonnées
+ * @param {Array<{agentId?:string, label?:string}>} entries - demandes perdues
+ * @param {object} info - `{ detected, message }`
+ */
+function journalQueueAbandonment(project, entries, info = {}) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (list.length === 0) return;
+  const labels = list.map((e) => String((e && (e.label || e.agentId)) || "demande sans libellé"));
+  const detail = `${list.length} demande(s) en file : ${labels.join(" · ")}`.slice(0, 300);
+  traceAutomaticAgentStop({
+    reason: "queue-abandoned",
+    detected: info.detected || "queue-abandon",
+    agentId: list.length === 1 ? list[0].agentId || "" : "",
+    projectPath: projectOfRunKey(project || ""),
+    detail,
+  }).catch(() => {});
+  const message =
+    info.message ||
+    `⚠️ ${list.length} demande(s) en file d'attente abandonnée(s) sur ce projet (elles ne peuvent plus être relancées) : ${labels.join(" · ")}`;
+  console.warn("[agents-bus] file d'attente :", message);
+  try {
+    emit("notify", { agentId: null, message });
+  } catch (_) {
+    /* aucun écouteur : la console a déjà l'information */
+  }
 }
 
 function newRunCtx(key, project) {
@@ -660,11 +732,24 @@ function clearAllRuns() {
   }
   busState.runs = {};
   // Arrêt GLOBAL (« tout arrêter » / destruction du bus) : les files partagées
-  // des projets ne peuvent plus être rejouées, on les vide en le disant.
-  let lost = 0;
-  for (const project of Object.keys(projectExclusivityQueues)) lost += dropProjectExclusivityQueue(project);
-  if (lost > 0) {
-    console.warn("[agents-bus] arrêt global :", `${lost} demande(s) en file abandonnée(s) (aucune run ne peut les relancer).`);
+  // des projets ne peuvent plus être rejouées, on les vide.
+  //
+  // RÈGLE 4 : une demande en file ne doit JAMAIS disparaître en silence. On
+  // collecte donc les demandes perdues AVANT de vider la file (libellés
+  // compris), puis on les JOURNALISE (`.pilot/agent-stops.log`, reason
+  // `queue-abandoned`) et on PRÉVIENT l'utilisateur : sans cela, une mission
+  // mise en file disparaissait sans trace ni annonce (elle était seulement
+  // comptée dans un `console.warn`).
+  const lostByProject = [];
+  for (const project of Object.keys(projectExclusivityQueues)) {
+    const entries = exclusivityQueueEntriesOf(project);
+    const lost = dropProjectExclusivityQueue(project);
+    if (lost > 0) lostByProject.push({ project, entries });
+  }
+  for (const { project, entries } of lostByProject) {
+    journalQueueAbandonment(projectOfRunKey(project), entries, {
+      detected: "clear-all-runs",
+    });
   }
 }
 
@@ -1068,17 +1153,21 @@ export function getProjectRunLockInfo(project) {
 /**
  * File d'attente d'EXCLUSIVITÉ d'un projet, dans l'ordre (mission 385) :
  * demandes d'agents mises en file derrière un agent de la même spécialité.
- * Lecture seule, toutes clés de run du projet confondues (une mission de
- * LECTURE a sa propre clé de run mais partage la file du projet réel).
+ * Lecture seule.
+ *
+ * RÈGLE 4 : la lecture porte sur la file MODULE du projet (`projectExclusivityQueues`,
+ * source de vérité qui survit à la fin des runs) ET sur les files portées par les
+ * contextes de run vivants. Une entrée conservée alors qu'aucune run ne la porte
+ * plus (ORPHELINE) reste ainsi visible — c'est sa seule chance d'être relancée ou
+ * abandonnée explicitement (`orphan: true` dans le résultat).
  * @param {string} project - projet ciblé (chemin réel)
- * @returns {Array<{agentId:string, label:string, runKey:string}>}
+ * @returns {Array<{agentId:string, label:string, runKey:string, orphan:boolean}>}
  */
 export function listProjectExclusivityEntries(project) {
+  const realProject = runKey(project || ".");
   const entries = [];
-  for (const key of runKeysOfProject(project)) {
-    const ctx = busState.runs[key];
-    const queue = (ctx && ctx.exclusivityQueue) || {};
-    const realProject = ctx.project || project;
+  const alive = new Set(runKeysOfProject(project).filter((k) => !!busState.runs[k]));
+  for (const queue of exclusivityQueuesOfProject(project)) {
     for (const queueKey of Object.keys(queue)) {
       const idx = queueKey.indexOf('\u{1f}');
       if (idx < 0) continue;
@@ -1086,10 +1175,15 @@ export function listProjectExclusivityEntries(project) {
       const keyAgentId = queueKey.slice(idx + 1);
       for (const assignment of queue[queueKey] || []) {
         const brief = assignment && (assignment.brief || assignment.task);
+        const ownerRunKey = (assignment && assignment.runKey) || "";
         entries.push({
           agentId: (assignment && assignment.agentId) || keyAgentId,
           label: String(brief == null ? "" : brief),
-          runKey: key,
+          // Clé de run qui porte l'entrée ; vide pour une entrée ORPHELINE
+          // (plus aucune run ne la portera jamais → elle doit être rejouée ou
+          // abandonnée explicitement).
+          runKey: ownerRunKey && alive.has(ownerRunKey) ? ownerRunKey : "",
+          orphan: !(ownerRunKey && alive.has(ownerRunKey)),
         });
       }
     }
@@ -1106,12 +1200,13 @@ export function listProjectExclusivityEntries(project) {
  * @param {string} project - projet ciblé (chemin réel)
  * @returns {number}
  */
-export function abandonProjectExclusivityQueues(project) {
-  let removed = 0;
+export function abandonProjectExclusivityQueues(project, options = {}) {
+  const realProject = runKey(project || ".");
+  const abandoned = [];
   for (const key of runKeysOfProject(project)) {
     const ctx = busState.runs[key];
-    const queue = (ctx && ctx.exclusivityQueue) || {};
-    const realProject = ctx.project || project;
+    if (!ctx) continue;
+    const queue = ctx.exclusivityQueue || {};
     for (const queueKey of Object.keys(queue)) {
       const idx = queueKey.indexOf('\u{1f}');
       if (idx < 0) continue;
@@ -1126,10 +1221,24 @@ export function abandonProjectExclusivityQueues(project) {
           };
           ctx.parallelGroup.pending--;
         }
+        abandoned.push({ agentId, label: String((assignment && (assignment.brief || assignment.task)) || "") });
       }
-      removed += assignments.length;
       delete queue[queueKey];
     }
+  }
+  // File MODULE (source de vérité) : les entrées ORPHELINES n'appartiennent plus
+  // à aucun contexte de run — elles ne doivent pas survivre à un abandon explicite.
+  // (Les clés de la file module déjà vidées par la boucle ci-dessus ne sont donc
+  // plus comptées : aucun doublon.)
+  const moduleEntries = exclusivityQueueEntriesOf(project);
+  if (projectExclusivityQueues[realProject]) delete projectExclusivityQueues[realProject];
+  if (moduleEntries.length > 0) abandoned.push(...moduleEntries);
+  const removed = abandoned.length;
+  if (removed > 0 && options.journal !== false) {
+    journalQueueAbandonment(project, abandoned, {
+      detected: options.detected || "user-abandon",
+      message: options.message,
+    });
   }
   return removed;
 }
@@ -2279,32 +2388,17 @@ export function handleAgentEvent(ev) {
     emit("toolStart", { agentId, toolName });
     // Issue #10 : accumuler une empreinte du tool call (ex: requête DB) pour
     // détecter une boucle d'OUTILS identiques, même sans texte streamé répété.
-    // P0-2 : on exclut les outils de LECTURE PURE (read/search/grep/list/ls/
-    // find/glob…) du comptage — les répéter est de l'exploration légitime et
-    // générait des faux positifs (sous-agents coupés pendant recherche/lecture).
-    // Seules les actions qui MODIFIENT réellement sont comptées.
-    if (AGENT_READ_ONLY_TOOLS.has(toolName)) {
-      // P0-2 : les outils de lecture pure ne sont PAS comptés dans l'historique
-      // principal (faux positifs sur l'exploration légitime). On les suit dans
-      // un historique SÉPARÉ, jamais utilisé pour arrêter l'agent (observabilité).
-      pushReadOnlyToolCall(agentId, ctx, buildToolLoopFingerprint(toolName, event.args || event.arguments || {}));
+    // P0-2 / RÈGLE 2 : un appel de LECTURE (outil de lecture pure, ou commande
+    // shell PROUVÉE consultative — git status/diff/log, ls, cat, rg, sed -n…) ne
+    // peut JAMAIS fonder un arrêt : il rejoint l'historique de lecture
+    // (observabilité seule). Seules les actions qui MODIFIENT sont comptées.
+    const toolArgs = event.args || event.arguments || {};
+    if (isReadOnlyAgentToolCall(toolName, toolArgs)) {
+      pushReadOnlyToolCall(agentId, ctx, buildToolLoopFingerprint(toolName, toolArgs));
       maybeDetectAgentLoop(agentId, ctx);
       return;
     }
-    // Décision « une lecture n'est jamais un motif d'arrêt » : une commande
-    // shell CONSULTATIVE (git status/diff/log, ls, cat, rg, sed -n, wc, npm ls…)
-    // est une LECTURE. Elle rejoint l'historique de lecture (observabilité) et
-    // ne peut plus fonder un arrêt automatique — un agent qui relance la même
-    // consultation entre deux corrections légitimes n'est pas en boucle.
-    if (
-      AGENT_SHELL_TOOLS.has(toolName) &&
-      isReadOnlyShellCommand((event.args || event.arguments || {}).command || (event.args || event.arguments || {}).cmd || "")
-    ) {
-      pushReadOnlyToolCall(agentId, ctx, buildToolLoopFingerprint(toolName, event.args || event.arguments || {}));
-      maybeDetectAgentLoop(agentId, ctx);
-      return;
-    }
-    const fp = buildToolLoopFingerprint(toolName, event.args || event.arguments || {});
+    const fp = buildToolLoopFingerprint(toolName, toolArgs);
     const arr = (ctx.toolCallsByAgent[agentId] = ctx.toolCallsByAgent[agentId] || []);
     // Issue #35 : on accumule CHAQUE empreinte (pas de déduplication des
     // consécutives identiques). L'ancienne déduplication effondrait une séquence
@@ -3105,6 +3199,16 @@ async function forceStaleAgentProcessRestartIfNeeded(agent, project) {
       (s) => s.agent === agent.id && s.project === project && s.mode === "agent_process"
     );
     if (!existing) return;
+    // RÈGLE 3 : ce `stop_agent_process` est un ARRÊT AUTOMATIQUE (personne ne l'a
+    // demandé : il précède un respawn à contexte vierge). Il est donc journalisé
+    // AVANT l'arrêt, avec son motif propre, au lieu de disparaître en silence.
+    await traceAutomaticAgentStop({
+      reason: "stale-session-restart",
+      detected: "fresh-context",
+      agentId: agent.id,
+      projectPath: project,
+      detail: "Session agent_process d'une run précédente arrêtée pour forcer un contexte vierge.",
+    }).catch(() => {});
     await invoke("stop_agent_process", { agentId: agent.id, project }).catch(() => {});
   } catch (_) {
     // fail-open : inoffensif, le spawn suivant créera de toute façon une session.
@@ -3320,6 +3424,16 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     // Uniquement pour les agents de projet (run_agents) : les agents d'assistant
     // n'ont pas de commande stop dédiée.
     if (spawned && !isAssistant) {
+      // RÈGLE 3 : arrêt automatique d'un process orphelin (échec post-spawn). On
+      // journalise le motif AVANT l'arrêt : sans cela le process disparaîssait
+      // sans trace (mort silencieuse).
+      await traceAutomaticAgentStop({
+        reason: "spawn-failure-cleanup",
+        detected: "run-agent-turn-error",
+        agentId: agent.id,
+        projectPath: cwd,
+        detail: `Process orphelin arrêté après échec du tour : ${String(err).slice(0, 160)}`,
+      }).catch(() => {});
       await invoke("stop_agent_process", {
         agentId: agent.id,
         project: cwd,

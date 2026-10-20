@@ -18,6 +18,11 @@ import {
   detectSemanticLoop,
   buildToolLoopFingerprint,
   buildAgentStopRequest,
+  // RÈGLE 2 : une LECTURE (outil de lecture pure ou commande shell consultative)
+  // n'est jamais un motif d'arrêt — classifieur PARTAGÉ avec le bus et l'onglet
+  // agent principal (auparavant l'Assistant comptait toute lecture et coupait au
+  // bout de 3 consultations identiques).
+  isReadOnlyAgentToolCall,
 } from "./loop-detection.js";
 // Journal disque du MOTIF des arrêts automatiques (correctif faux positif de
 // détection de boucle : la cause de l'arrêt doit survivre à la session).
@@ -474,6 +479,39 @@ const RUN_AGENTS_WATCHDOG_MS = 15 * 60 * 1000; // 15 min
 // LECTURE seule et ABANDON de la file de missions, pour la file d'attente
 // affichée dans l'onglet de l'agent et la commande `/file` (`/file vide`).
 // Aucune logique de lancement n'est modifiée ici : ce sont des accesseurs.
+
+/**
+ * RÈGLE 4 — MISE EN FILE d'une mission : chemin de PRODUCTION UNIQUE.
+ *
+ * Les trois chemins d'empilement de l'assistant (`run_agents` via
+ * `launchOrQueue`, `run_agents` via `startRun`, `run_assistant_agents`) passent
+ * désormais par CETTE fonction : la demande est poussée, son libellé est posé,
+ * puis son IDENTITÉ de mission est allouée par `stampQueuedMission` (numéro
+ * monotone + agents visés, avec refus du double empilement). Un seul endroit à
+ * vérifier, donc aucune branche ne peut oublier l'identité.
+ *
+ * Le libellé est posé APRÈS le `push` : les tests d'accusé de lancement (#87)
+ * vérifient l'invariant « la ligne de mise en file ne contient que `launch` ».
+ * @param {string} projectPath - projet ciblé (clé de file)
+ * @param {Function} launch - lancement à exécuter quand le projet sera libre
+ * @param {string} label - texte de la demande (affiché « en attente »)
+ * @param {object} [identity] - identité préparée (`makeMissionIdentity`)
+ * @returns {{entry:object, id:number|null, duplicate:boolean, count:number}}
+ */
+export function enqueueMissionForProject(projectPath, launch, label, identity) {
+  const target = projectPath || "";
+  if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
+  const queue = runAgentsQueueByProject[target];
+  queue.push({ launch });
+  queue.at(-1).label = label;
+  const stamped = stampQueuedMission(queue, queue.at(-1), identity) || {};
+  return {
+    entry: queue.at(-1),
+    id: typeof stamped.id === "number" ? stamped.id : null,
+    duplicate: !!stamped.duplicate,
+    count: queue.length,
+  };
+}
 
 /**
  * Missions de l'assistant en attente pour un projet, dans l'ordre de démarrage.
@@ -3570,7 +3608,13 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     const toolName = payload.toolName || payload.tool || "outil";
     // Issue #55 : accumuler une empreinte du tool call (ex: commande bash) pour
     // détecter une boucle d'OUTILS identiques, même sans texte streamé répété.
-    superLoopToolCalls.push(buildToolLoopFingerprint(toolName, payload.args));
+    // RÈGLE 2 : une LECTURE n'est jamais un motif d'arrêt — ni un outil de lecture
+    // pure, ni une commande shell PROUVÉE consultative (git status/diff/log, ls,
+    // rg, sed -n…). Elle n'alimente donc pas l'historique qui peut arrêter
+    // l'assistant (auparavant 3 lectures identiques suffisaient à le couper).
+    if (!isReadOnlyAgentToolCall(toolName, payload.args)) {
+      superLoopToolCalls.push(buildToolLoopFingerprint(toolName, payload.args));
+    }
     maybeDetectSuperAgentLoop(messagesEl);
     if (!currentBody) {
       currentBody = createSuperAgentBlock(messagesEl);
@@ -4297,15 +4341,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             runAgentsInFlightByProject[target] = false;
             const wd = runAgentsWatchdogByProject[target];
             if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[target]; }
-            if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
-            runAgentsQueueByProject[target].push({ launch: launchMission });
-            // `label` = texte de la demande : affiché « en attente » dans le volet
-            // « En cours ». Posé APRÈS le push pour ne pas modifier la ligne de mise
-            // en file (invariant vérifié par les tests d'accusé de lancement #87).
-            runAgentsQueueByProject[target].at(-1).label = task;
-            // RÈGLE 4 : la demande en file porte SON identité de mission. Elle
-            // refuse aussi le double empilement de la même demande.
-            const queued = stampQueuedMission(runAgentsQueueByProject[target], runAgentsQueueByProject[target].at(-1), missionIdentity);
+            // RÈGLE 4 : mise en file par le chemin de PRODUCTION UNIQUE (libellé +
+            // identité de mission + refus du double empilement).
+            const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
             if (queued.duplicate) {
               appendSystemMessage(messagesEl, `ℹ️ Cette demande (mission #${queued.id}) est déjà en file : aucun doublon créé.`);
             }
@@ -4361,12 +4399,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // MODIFICATION attend toute run en cours sur le projet.
           const blockedByFlag = missionNature === "write" && runAgentsInFlightByProject[target];
           if (blockedByFlag || blockedByBus) {
-            if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
-            runAgentsQueueByProject[target].push({ launch: launchMission });
-            runAgentsQueueByProject[target].at(-1).label = task;
-            // RÈGLE 4 : même identité de mission que la branche `launchOrQueue`
-            // (une seule mission, un seul numéro) + refus du double empilement.
-            const queued = stampQueuedMission(runAgentsQueueByProject[target], runAgentsQueueByProject[target].at(-1), missionIdentity);
+            // RÈGLE 4 : même chemin de mise en file que `launchOrQueue` (une seule
+            // mission, un seul numéro) + refus du double empilement.
+            const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
             if (queued.duplicate) {
               appendSystemMessage(messagesEl, `ℹ️ Cette demande (mission #${queued.id}) est déjà en file : aucun doublon créé.`);
             }
@@ -4526,16 +4561,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // POINT E : mise en file RÉELLE (même file que `run_agents`, rejouée
             // par `settleRun`). Auparavant ce chemin répondait « queued » sans
             // jamais pousser dans une file → mission perdue en silence.
-            if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             // Volet (c) : la promesse de `startRun` est RETOURNÉE (et non avalée),
             // sinon un échec du lancement devenait un rejet non géré et laissait
             // le projet marqué « run en vol » — voir `launchQueuedMission`.
-            runAgentsQueueByProject[target].push({ launch: () => startRun() });
-            runAgentsQueueByProject[target].at(-1).label = task;
             // RÈGLE 4 : identité de la mission d'assistant en file (le numéro
             // survit à la fermeture du chat : il est porté par la file, indexée
-            // par projet/espace).
-            stampQueuedMission(runAgentsQueueByProject[target], runAgentsQueueByProject[target].at(-1), missionIdentity);
+            // par projet/espace) — même chemin de production unique.
+            enqueueMissionForProject(target, () => startRun(), task, missionIdentity);
             // POINT G : la file d'assistant est couverte par le MÊME déclencheur de
             // rejeu (aucune run d'assistant ne pose de watchdog : sans cela une
             // demande pouvait rester en vol sans suite).

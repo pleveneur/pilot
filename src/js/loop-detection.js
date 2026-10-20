@@ -965,3 +965,82 @@ export function isReadOnlyShellCommand(command) {
   }
   return checked > 0;
 }
+
+// ── RÈGLE 2 : « une lecture n'est JAMAIS un motif d'arrêt automatique » ───────
+// SOURCE UNIQUE de vérité, partagée par les TROIS détecteurs de boucle du
+// projet : le bus d'agents (agents-bus.js), l'onglet agent principal
+// (agent-pi.js) et l'Assistant (super-agent.js). Auparavant chaque fichier
+// portait sa propre liste (et l'onglet principal / l'Assistant ne consultaient
+// PAS le classifieur shell) : une consultation répétée (`git status --short`)
+// pouvait donc encore couper un agent hors du bus. La règle est désormais
+// vérifiée au même endroit pour tous les chemins.
+
+/**
+ * Outils d'agent dont l'exécution est PROUVÉE sans effet de bord (lecture
+ * pure). Les répéter est de l'exploration légitime : ils ne peuvent jamais
+ * fonder un arrêt automatique.
+ */
+export const AGENT_READ_ONLY_TOOLS = new Set([
+  // Outils de fichiers du socle pi / Pilot.
+  "read",
+  "search",
+  "grep",
+  "glob",
+  "list",
+  "ls",
+  "find",
+  "read_project_file",
+  "search_project",
+]);
+
+// PORTÉE DE LA RÈGLE : elle couvre les consultations du PROJET — lecture de
+// fichiers et commandes shell consultatives — sur les TROIS chemins d'arrêt
+// (bus, onglet agent principal, Assistant). Les outils de suivi de l'Assistant
+// (`db_query`, `db_execute`, `list_agent_sessions`, `mcp_state`) gardent leur
+// protection anti-boucle d'origine : ils interrogent SA PROPRE base de suivi, une
+// requête identique répétée sans fin y est un vrai bouclage (et non de
+// l'exploration), et l'arrêt reste tracé + annoncé (`loop-detection` / `tool-calls`).
+
+/** Outils qui exécutent une ligne de commande shell (classée par contenu). */
+export const AGENT_SHELL_TOOLS = new Set(["bash", "shell"]);
+
+/**
+ * Extrait la ligne de commande d'un appel d'outil shell, quel que soit le nom
+ * du champ utilisé par le backend (`command`, `cmd`, `script`, `commandLine`).
+ * @param {object} args
+ * @returns {string}
+ */
+export function toolCallCommand(args) {
+  if (!args || typeof args !== "object") return "";
+  for (const field of ["command", "cmd", "commandLine", "script"]) {
+    const value = args[field];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return "";
+}
+
+/**
+ * RÈGLE 2 (décision) : cet appel d'outil est-il une LECTURE ?
+ *
+ * `true` pour un outil de lecture pure (`AGENT_READ_ONLY_TOOLS`) et pour une
+ * commande shell PROUVÉE consultative (`git status`, `git diff`, `ls`, `rg`,
+ * `sed -n`…). Un appel shell non prouvé (ou inconnu) reste considéré comme
+ * MUTATEUR : la prudence est du côté de la détection, jamais du silence.
+ *
+ * Exemples :
+ *   isReadOnlyAgentToolCall("read", { path: "a.js" })            → true
+ *   isReadOnlyAgentToolCall("bash", { command: "git status" })    → true
+ *   isReadOnlyAgentToolCall("bash", { command: "npm test" })      → false
+ *   isReadOnlyAgentToolCall("edit", { path: "a.js" })             → false
+ *
+ * @param {string} toolName
+ * @param {object} [args]
+ * @returns {boolean}
+ */
+export function isReadOnlyAgentToolCall(toolName, args) {
+  const name = typeof toolName === "string" ? toolName.trim().toLowerCase() : "";
+  if (!name) return false;
+  if (AGENT_READ_ONLY_TOOLS.has(name)) return true;
+  if (AGENT_SHELL_TOOLS.has(name)) return isReadOnlyShellCommand(toolCallCommand(args));
+  return false;
+}

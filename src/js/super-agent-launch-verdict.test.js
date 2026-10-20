@@ -142,7 +142,10 @@ describe("computeRunLaunchVerdict — accusé de lancement honnête (issue #87)"
     // l'accusé mensonger {ok:true, launched:false, queued:false, preparing:false,
     // error:null} pour une demande pourtant bien mise en file.
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
-    const marker = "runAgentsQueueByProject[target].push({ launch: launchMission });";
+    // CONTRAT MODIFIÉ (fermeture des faux verrous 2-3-4) : la mise en file passe
+    // désormais par l'unique fonction de production `enqueueMissionForProject`
+    // (la ligne `push({ launch: launchMission })` n'existe plus dans la branche).
+    const marker = "const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);";
     const structured = "return { queued: true, started: false, preparing: false, error: null };";
     const iMarker = src.indexOf(marker);
     expect(iMarker).toBeGreaterThan(-1);

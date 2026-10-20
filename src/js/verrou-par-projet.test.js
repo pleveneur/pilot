@@ -531,7 +531,9 @@ describe("POINT D — le sens inverse : commande manuelle vs mission d'écriture
     expect(body).toContain("isProjectAgentBusy(target)");
     expect(body).toContain('missionNature === "write"');
     // Mise en file réelle (même file que les autres missions), pas un refus sec.
-    expect(body).toContain("runAgentsQueueByProject[target].push(");
+    // CONTRAT MODIFIÉ (fermeture des faux verrous 2-3-4) : la mise en file passe
+    // par l'unique chemin de PRODUCTION enqueueMissionForProject (plus de push direct).
+    expect(body).toContain("enqueueMissionForProject(target, launchMission");
   });
 
   it("deux commandes manuelles concurrentes : le chat sonde aussi l'activité", () => {
@@ -557,7 +559,8 @@ describe("POINT E — run_assistant_agents : file réelle, jamais un faux « que
     expect(startIdx).toBeGreaterThan(-1);
     const branch = src.slice(startIdx, endIdx);
     // La branche occupée pousse réellement dans la file partagée…
-    expect(branch).toContain("runAgentsQueueByProject[target].push(");
+    // CONTRAT MODIFIÉ (faux verrous 2-3-4) : via le chemin de PRODUCTION unique.
+    expect(branch).toContain("enqueueMissionForProject(target, () => startRun()");
     // …et settleRun vide la file (rejeu automatique, comme run_agents).
     const settleIdx = branch.indexOf("const settleRun = (ok, result) => {");
     const startRunIdx = branch.indexOf("const startRun = async () => {");
@@ -756,18 +759,18 @@ describe("POINT G — rejeu garanti de la file de missions", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
     // 1. run_agents — filet d'attente du lancement différé (launchOrQueue).
     const loq = src.slice(src.indexOf("const launchOrQueue = async () => {"), src.indexOf("const reportDeferredLaunch"));
-    expect(loq).toContain("runAgentsQueueByProject[target].push(");
+    expect(loq).toContain("enqueueMissionForProject(target, launchMission");
     expect(loq).toContain("armQueueReplay(target)");
     // 2. run_agents — garde de démarrage (startRun).
     const srIdx = src.indexOf("const startRun = async () => {");
     const sr = src.slice(srIdx, src.indexOf("const launchResult = await startRun();", srIdx));
-    expect(sr).toContain("runAgentsQueueByProject[target].push(");
+    expect(sr).toContain("enqueueMissionForProject(target, launchMission");
     expect(sr).toContain("armQueueReplay(target)");
     // 3. run_assistant_agents — même déclencheur (aucun watchdog d'assistant).
     const aIdx = src.indexOf("const target = ASSISTANT_SPACE;");
     const aSrIdx = src.indexOf("const startRun = async () => {", aIdx);
     const aSr = src.slice(aSrIdx, src.indexOf("const launchedNow = await startRun();", aSrIdx));
-    expect(aSr).toContain("runAgentsQueueByProject[target].push(");
+    expect(aSr).toContain("enqueueMissionForProject(target, () => startRun()");
     expect(aSr).toContain("armQueueReplay(target)");
     // Plus de promesse de délai intenable (« à la fin de la tâche en cours »).
     expect(src).not.toContain("je la mets en file d'attente et la lancerai dès la fin de la tâche en cours");

@@ -97,7 +97,9 @@ describe("(a) le chemin de lancement de l'assistant ne contient plus d'estimatio
 
   it("lance la mission directement (aucun enchaînement « estimation puis lancement »)", () => {
     expect(superAgent).toContain("const launchMission = () => launchOrQueue();");
-    expect(superAgent).toContain("launch: launchMission");
+    // CONTRAT MODIFIÉ (fermeture des faux verrous 2-3-4) : la mise en file passe
+    // par l'unique fonction de production ; c'est ELLE qui reçoit le lanceur.
+    expect(superAgent).toContain("enqueueMissionForProject(target, launchMission, task, missionIdentity)");
   });
 });
 

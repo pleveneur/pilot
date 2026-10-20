@@ -120,7 +120,14 @@ import {
   MAX_LOOP_ESCALATION,
   buildActionLoopCorrectionPrompt,
   ACTION_LOOP_MAX_ESCALATION,
+  // RÈGLE 2 : classifieur PARTAGÉ « lecture vs modification » (une lecture — y
+  // compris une commande shell consultative — n'est jamais un motif d'arrêt).
+  isReadOnlyAgentToolCall,
 } from "./loop-detection.js";
+// RÈGLE 3 : journal disque du MOTIF des arrêts automatiques. L'onglet agent
+// principal arrête aussi des sessions (boucle de réflexion, boucle d'actions) :
+// ces arrêts doivent laisser la même trace que ceux du bus.
+import { traceAutomaticAgentStop } from "./agent-stop-trace.js";
 
 // ── État global de l'autocomplétion ──
 let allCommands = [];
@@ -6067,6 +6074,16 @@ function maybeDetectReflectionLoop(state, messagesEl) {
     state.loopCorrectionPending = true;
     console.warn("[loop-detection] boucle détectée, arrêt de l'agent pour correction");
     appendSystemMessage(messagesEl, "🔁 Boucle détectée dans la réflexion : le modèle répète le même contenu. Arrêt de l'agent pour correction…");
+    // RÈGLE 3 : tout arrêt automatique laisse une trace écrite AVANT l'arrêt.
+    // L'onglet agent principal n'en écrivait aucune (seul le bus le faisait) :
+    // un arrêt survenu ici ne laissait aucun motif au disque.
+    traceAutomaticAgentStop({
+      reason: "loop-detection",
+      detected: "text",
+      agentId: state.agentId || "",
+      projectPath: window._pilotProjectPath,
+      detail: "Répétition de texte dans la réflexion du modèle.",
+    }).catch(() => {});
     invoke("abort_agent").catch((e) => console.error("Erreur abort_agent (loop):", e));
   }
 }
@@ -6075,23 +6092,15 @@ function maybeDetectReflectionLoop(state, messagesEl) {
 const ACTION_LOOP_WINDOW = 40;
 // Nombre d'occurrences d'une même action dans la fenêtre déclenchant la boucle.
 const ACTION_LOOP_MIN_REPEAT = 15;
-// Outils de LECTURE PURE : sans effet de bord, les répéter est de l'exploration
-// légitime (ex: lire un gros fichier en plusieurs lectures simples). Ils ne sont
-// PAS enregistrés dans l'historique d'actions (et donc PAS comptés dans la
-// détection de boucle) pour éviter les faux positifs. Seuls les outils qui
-// modifient l'état ou exécutent (bash, write, edit, db_execute, ...) restent
-// détectés.
-const READ_ONLY_TOOLS = new Set([
-  "read",
-  "search",
-  "grep",
-  "glob",
-  "list",
-  "ls",
-  "find",
-  "read_project_file",
-  "search_project",
-]);
+// RÈGLE 2 : les outils de LECTURE PURE (sans effet de bord) ne sont jamais
+// enregistrés dans l'historique d'actions, et une commande shell CONSULTATIVE
+// (`git status`, `git diff`, `ls`, `rg`, `sed -n`…) est traitée comme une
+// lecture. La classification vit dans le module pur `loop-detection.js`
+// (`isReadOnlyAgentToolCall`) : elle est PARTAGÉE avec le bus d'agents et
+// l'Assistant. Auparavant cet onglet ne connaissait que les outils de lecture
+// et comptait `bash` comme un mutateur : ~15 consultations identiques
+// (`git status --short`) y coupaient une run de codeur. Seuls les outils qui
+// modifient l'état ou exécutent restent détectés.
 
 /**
  * Détecte une boucle d'ACTIONS de l'agent standard (relire le même fichier,
@@ -6129,6 +6138,15 @@ function maybeDetectActionLoop(state, messagesEl) {
     state.actionLoopCorrectionPending = true;
     console.warn("[loop-detection] boucle d'actions détectée, arrêt pour reprise avec correction");
     appendSystemMessage(messagesEl, "🔁 Boucle d'actions détectée : l'agent répète les mêmes actions. Reprise avec correction…");
+    // RÈGLE 3 : trace écrite AVANT l'arrêt automatique (motif distinct de la
+    // boucle de texte : `detected=actions`).
+    traceAutomaticAgentStop({
+      reason: "loop-detection",
+      detected: "actions",
+      agentId: state.agentId || "",
+      projectPath: window._pilotProjectPath,
+      detail: "Répétition d'actions de modification identiques (lectures exclues).",
+    }).catch(() => {});
     invoke("abort_agent").catch((e) => console.error("Erreur abort_agent (action loop):", e));
   }
 }
@@ -7216,11 +7234,13 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         });
       }
       // Détection de boucle d'actions (agent standard) : on enregistre l'action
-      // dans l'historique (fenêtre glissante) puis on teste la répétition. Les
-      // lectures pures (sans effet de bord) sont exclues : les répéter est de
-      // l'exploration légitime (gros fichier lu par morceaux) et générait un
-      // faux positif « 🔁 Boucle d'actions détectée ».
-      if (toolName && !READ_ONLY_TOOLS.has(toolName)) {
+      // dans l'historique (fenêtre glissante) puis on teste la répétition. RÈGLE 2
+      // (« une lecture n'est jamais un motif d'arrêt ») : les LECTURES — outil de
+      // lecture pure ET commande shell PROUVÉE consultative (git status/diff/log,
+      // ls, cat, rg, sed -n, npm ls…) — ne sont jamais enregistrées : les répéter
+      // est de l'exploration légitime. Auparavant `bash` était compté comme un
+      // mutateur : ~15 consultations identiques coupaient l'agent.
+      if (toolName && !isReadOnlyAgentToolCall(toolName, toolArgs)) {
         state.actionHistory.push(buildToolLoopFingerprint(toolName, toolArgs));
         if (state.actionHistory.length > ACTION_LOOP_WINDOW) {
           state.actionHistory.shift();

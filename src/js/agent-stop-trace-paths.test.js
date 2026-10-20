@@ -243,6 +243,135 @@ describe("matrice des sites d'arrêt — aucun chemin automatique muet", () => {
   });
 });
 
+// ── 1 bis. Matrice ÉTENDUE aux TROIS fichiers d'arrêt automatique ───────────
+// L'audit indépendant a montré que la matrice d'origine n'inspectait QU'UN
+// fichier (`agents-bus.js`) : un arrêt automatique muet ajouté dans l'onglet
+// agent principal (`agent-pi.js`) ou dans l'Assistant (`super-agent.js`)
+// passait inaperçu. Cette matrice lit les TROIS sources, avec :
+//   • une cardinalité ÉPINGLÉE par fichier et par type de site (un nouveau site,
+//     muet ou non, fait échouer le test) ;
+//   • la PRÉCÉDENCE À PORTÉE DE BLOC : la trace du motif doit précéder le site
+//     terminal SANS qu'un autre arrêt du même type s'intercale (donc dans le
+//     même bloc, pas « quelque part avant dans le fichier ») ;
+//   • la liste EXPLICITE des sites hors famille (arrêts de TOUR : orchestration,
+//     reprise après compaction, arrêt manuel, test de modèle) — ils ne terminent
+//     pas la session et n'ont donc pas de ligne de journal.
+describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
+  const SRC_PI = readFileSync(new URL("./agent-pi.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const SRC_SA = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const SRC_BUS = readFileSync(new URL("./agents-bus.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+
+  /** Motif d'appel de trace (forme littérale ET forme transmise à la run). */
+  const TRACE_SRC = "traceAutomaticAgentStop[A-Za-z]*[(]";
+
+  /** Positions d'un motif dans une source. */
+  const positionsIn = (src, re) => {
+    const out = [];
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(src))) out.push(m.index);
+    return out;
+  };
+
+  /**
+   * Vérifie la PRÉCÉDENCE À PORTÉE DE BLOC : pour chaque site terminal, une trace
+   * de motif doit exister ENTRE le site précédent (même type) et ce site. Une
+   * trace placée « ailleurs dans le fichier » ne compte pas.
+   * @param {string} src
+   * @param {RegExp} siteRe
+   * @param {string} label
+   * @returns {{sites:number, traced:number, untraced:number[]}}
+   */
+  function precedences(src, siteRe, label) {
+    const sites = positionsIn(src, siteRe);
+    const traces = positionsIn(src, new RegExp(TRACE_SRC, "g"));
+    const untraced = [];
+    let traced = 0;
+    sites.forEach((site, i) => {
+      const from = i === 0 ? 0 : sites[i - 1];
+      if (traces.some((t) => t > from && t < site)) traced++;
+      else untraced.push(site);
+    });
+    return { sites: sites.length, traced, untraced, label };
+  }
+
+  it("agents-bus.js : TOUS les sites terminaux sont tracés dans leur bloc", () => {
+    const kinds = [
+      [/invoke\("abort_agent_process"/g, "abort_agent_process", 3],
+      // Les deux arrêts de processus ajoutés par la fermeture des faux verrous
+      // (session périmée → redémarrage ; échec de lancement → nettoyage).
+      [/invoke\("stop_agent_process"/g, "stop_agent_process", 2],
+      [/settleMission\(ctx\.runKey, "stop"/g, 'settleMission(..., "stop")', 3],
+    ];
+    for (const [re, label, expected] of kinds) {
+      const res = precedences(SRC_BUS, re, label);
+      expect(res.sites, `${label} : cardinalité changée`).toBe(expected);
+      expect(res.untraced, `${label} : site terminal MUET (aucune trace dans son bloc)`).toEqual([]);
+    }
+  });
+
+  it("agent-pi.js : les arrêts de SESSION sont tracés, les arrêts de TOUR sont comptés", () => {
+    // Famille « session » = les deux arrêts sur boucle détectée (réflexion et
+    // actions). Ce sont les seuls sites de ce fichier qui terminent la run sans
+    // action de l'utilisateur.
+    const loopText = SRC_PI.indexOf('detected: "text"');
+    const loopActions = SRC_PI.indexOf('detected: "actions"');
+    expect(loopText, "trace de la boucle de réflexion absente de l'onglet agent").toBeGreaterThan(-1);
+    expect(loopActions, "trace de la boucle d'actions absente de l'onglet agent").toBeGreaterThan(-1);
+    expect(SRC_PI).toContain('reason: "loop-detection",');
+    // Chaque trace est SUIVIE de l'arrêt effectif, dans le même bloc.
+    const aborts = positionsIn(SRC_PI, /invoke\("abort_agent"\)/g);
+    for (const traceAt of [loopText, loopActions]) {
+      const next = aborts.find((a) => a > traceAt);
+      expect(next, "trace de boucle sans arrêt effectif après elle").toBeDefined();
+      expect(next - traceAt, "l'arrêt doit suivre immédiatement sa trace").toBeLessThan(400);
+    }
+    // Cardinalité ÉPINGLÉE : 2 arrêts de SESSION tracés + 11 arrêts de TOUR ou
+    // manuels (orchestration : timeouts, subdivisions, reprise après compaction,
+    // erreur de connexion ; arrêt manuel ; test de modèle). Un NOUVEL arrêt
+    // change ce nombre → il faut décider sa famille et le tracer s'il termine
+    // une session.
+    expect(aborts, "un arrêt a été ajouté/retiré dans l'onglet agent sans décision de famille").toHaveLength(13);
+  });
+
+  it("super-agent.js : les deux arrêts sur boucle sont tracés (outils ET texte)", () => {
+    const aborts = positionsIn(SRC_SA, /invoke\("abort_super_agent"\)/g);
+    expect(aborts, "cardinalité des arrêts de l'Assistant changée").toHaveLength(3);
+    const traces = positionsIn(SRC_SA, new RegExp(TRACE_SRC, "g"));
+    const traced = aborts.filter((a) => traces.some((t) => t < a && a - t < 1500));
+    expect(traced, "les deux arrêts automatiques de l'Assistant doivent être tracés").toHaveLength(2);
+    // Les deux motifs sont DISTINCTS (boucle d'outils vs boucle de texte).
+    expect(SRC_SA).toContain('detected: "tool-calls"');
+    expect(SRC_SA).toContain('detected: "text"');
+  });
+
+  it("le nombre de traces par fichier est épinglé (dérive = rouge)", () => {
+    const traceRe = () => new RegExp(TRACE_SRC, "g");
+    const counts = {
+      bus: positionsIn(SRC_BUS, traceRe()).length,
+      pi: positionsIn(SRC_PI, traceRe()).length,
+      sa: positionsIn(SRC_SA, traceRe()).length,
+    };
+    expect(counts.pi, "l'onglet agent doit tracer ses deux arrêts automatiques").toBe(2);
+    expect(counts.sa, "traces de l'assistant").toBe(4);
+    expect(counts.bus, "traces du bus").toBeGreaterThanOrEqual(18);
+  });
+
+  it("un site terminal ajouté sans trace fait échouer la matrice (preuve du contrôle)", () => {
+    // Contrôle NÉGATIF du test lui-même : on injecte un site terminal MUET dans
+    // une COPIE de la source et on vérifie que la détection le voit. Si ce test
+    // passe au vert avec un site muet injecté, la matrice ne prouve plus rien.
+    const fake = SRC_BUS.replace(
+      "async function forceStaleAgentProcessRestartIfNeeded",
+      'async function fakeSilentStop() { await invoke("abort_agent_process", { agentId: "x" }); }\nasync function forceStaleAgentProcessRestartIfNeeded',
+    );
+    expect(fake, "injection impossible : ancre introuvable").not.toBe(SRC_BUS);
+    const res = precedences(fake, /invoke\("abort_agent_process"/g, "fake");
+    expect(res.sites, "le site injecté n'est pas vu").toBe(4);
+    expect(res.untraced.length, "la matrice doit voir le site muet injecté").toBe(1);
+  });
+});
+
 // ── 2. Comportement : la ligne est écrite AVANT l'arrêt effectif ─────────────
 describe("chemins d'arrêt automatique — une ligne par arrêt, écrite AVANT l'arrêt", () => {
   it("timeout d'inactivité → reason=idle-timeout / detected=no-event AVANT l'abort", async () => {

@@ -4,12 +4,17 @@
 // précédente.
 //
 // Deux mécanismes distincts portent cette identité, tous deux verrouillés ici :
-//   1. MISSIONS DE L'ASSISTANT (`super-agent.js`) : chaque entrée de file reçoit
-//      son libellé (`runAgentsQueueByProject[target].at(-1).label = task`) et son
-//      lanceur (`{ launch: launchMission }` / `{ launch: () => startRun() }`) est
-//      une fermeture déclarée DANS la branche, donc liée au texte de SA demande.
-//      Le rejeu (`replayQueuedMissionForProject`) sort la TÊTE de file : A part
-//      d'abord, puis B — jamais l'inverse, jamais deux fois la même.
+//   1. MISSIONS DE L'ASSISTANT (`super-agent.js`) : les TROIS chemins d'empilement
+//      passent par le chemin de PRODUCTION UNIQUE `enqueueMissionForProject`
+//      (`launchOrQueue`, `startRun`, `run_assistant_agents`), qui pose le libellé
+//      de LA demande (`label = task`) ET son identité de mission. La fermeture de
+//      lancement (`launchMission` / `() => startRun()`) est déclarée DANS la
+//      branche, donc liée au texte de SA demande. Le rejeu
+//      (`replayQueuedMissionForProject`) sort la TÊTE de file : A part d'abord,
+//      puis B — jamais l'inverse, jamais deux fois la même.
+//      (Depuis la fermeture des faux verrous 2-3-4, ces tests appellent la FONCTION
+//      DE PRODUCTION elle-même : neutraliser `enqueueMissionForProject` /
+//      `stampQueuedMission` rend ces tests ROUGES.)
 //   2. COMMANDES MANUELLES (`agent-pi.js`) : la fermeture de file réinjecte
 //      `inputEl.value = text`, où `text` est le PARAMÈTRE de la commande refusée
 //      (`queueRefusedCommand = (text) => …`) — donc le texte de SA demande.
@@ -75,8 +80,10 @@ import {
   replayQueuedMissionForProject,
   getProjectMissionQueue,
   runAgentsQueueByProject,
+  enqueueMissionForProject,
   __resetSuperAgentQueueForTest,
 } from "./super-agent.js";
+import { nextMissionId } from "./mission-identity.js";
 
 // Lecture du source en neutralisant les fins de ligne (worktree CRLF en CI
 // Windows : cf. AGENTS.md § Fins de ligne).
@@ -88,106 +95,79 @@ const AGENT_PI = source("src/js/agent-pi.js");
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
-const PUSH_START = "runAgentsQueueByProject[target].push({ launch:";
-const PUSH_END = "runAgentsQueueByProject[target].at(-1).label = task;";
+
 
 /**
- * Extrait de la production les snippets « mise en file d'une mission » tels
- * qu'ils sont écrits (un par appelant : run_agents ×2, run_assistant_agents ×1).
+ * Sites de mise en file EXTRAITS de la production : un par chemin d'empilement
+ * (`launchOrQueue`, `startRun`, `run_assistant_agents`). Il n'existe plus de
+ * `push` direct : toute mise en file passe par `enqueueMissionForProject`.
+ * @param {string} src
  * @returns {string[]}
  */
-function pushSnippets(src) {
-  const out = [];
-  let idx = src.indexOf(PUSH_START);
-  while (idx >= 0) {
-    const lineStart = src.lastIndexOf("\n", idx) + 1;
-    const endIdx = src.indexOf(PUSH_END, idx);
-    if (endIdx < 0) break;
-    const lineEnd = src.indexOf("\n", endIdx);
-    out.push(src.slice(lineStart, lineEnd < 0 ? src.length : lineEnd));
-    idx = src.indexOf(PUSH_START, lineEnd < 0 ? src.length : lineEnd);
-  }
-  return out;
+const TARGET = "G:/projet-file";
+const A = "Demande A : corriger le parser";
+const B = "Demande B : ajouter les tests du parser";
+
+function enqueueCallSites(src) {
+  // Appels de production comptes directement (aucune regex fragile) : chaque
+  // chemin d'empilement appelle enqueueMissionForProject(target, .
+  return src.match(/enqueueMissionForProject[(]target,/g) || [];
 }
 
 /**
- * Exécute un snippet de mise en file EXTRAIT de la production, avec la file
- * réelle passée en paramètre. Le lanceur est celui de la demande courante : il
- * enregistre le TEXTE que la production lui a associé.
- *
- * La ligne d'amorçage du tableau (`if (!runAgentsQueueByProject[target]) …`) est
- * celle des trois branches appelantes, juste avant le push : on la reproduit pour
- * que le snippet s'exécute dans le même contexte.
+ * Met une demande en file par la FONCTION DE PRODUCTION (aucune reproduction du
+ * mécanisme dans le test) : identité de mission allouée par la production.
+ * @param {Function} launch
+ * @param {string} label
+ * @returns {object} entrée de file
  */
-async function runPushSnippet(snippet, queueStore, target, task, launched) {
-  const launchMission = async () => {
-    launched.push(task);
-    return { started: true };
-  };
-  const startRun = async () => {
-    launched.push(task);
-    return { started: true };
-  };
-  const fn = new AsyncFunction(
-    "runAgentsQueueByProject",
-    "target",
-    "task",
-    "launchMission",
-    "startRun",
-    `if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];\n${snippet}`,
-  );
-  await fn(queueStore, target, task, launchMission, startRun);
+function enqueueForTest(launch, label) {
+  const res = enqueueMissionForProject(TARGET, launch, label, { id: nextMissionId(), agentIds: ["codeur"] });
+  return res.entry;
 }
 
 describe("règle 4a — missions de l'assistant : chaque entrée de file porte SA demande", () => {
-  const TARGET = "G:/projet-file";
-  const A = "Demande A : corriger le parser";
-  const B = "Demande B : ajouter les tests du parser";
 
-  it("les 3 sites de mise en file posent le libellé de LEUR demande", () => {
-    // Un site oublié = une mission sans libellé dans l'interface (et, si le
-    // libellé vient d'une variable partagée, le libellé d'une AUTRE demande).
-    const snippets = pushSnippets(SRC);
-    expect(snippets, "un site de mise en file ne pose plus le libellé de sa demande").toHaveLength(3);
-    for (const snippet of snippets) {
-      // La fermeture ET le libellé utilisent la variable LOCALE `task` de la
-      // branche (celle de la demande courante), jamais une autre source.
-      expect(snippet).toContain("at(-1).label = task;");
-      expect(snippet).toMatch(/push\(\{ launch: (launchMission|\(\) => startRun\(\)) \}\);/);
-    }
+  it("les 3 chemins de mise en file passent par le chemin de PRODUCTION unique", () => {
+    // Un chemin qui pousserait encore directement dans la file contournerait
+    // l'identité de mission (numéro + agents) : il ne doit plus en exister.
+    const sites = enqueueCallSites(SRC);
+    expect(sites, "un chemin de mise en file ne passe plus par enqueueMissionForProject").toHaveLength(3);
+    expect(SRC).not.toContain("runAgentsQueueByProject[target].push(");
+    // Le libellé de LA demande et l'identité sont posés dans l'unique fonction.
+    expect(SRC).toContain("queue.at(-1).label = label;");
+    expect(SRC).toContain("stampQueuedMission(queue, queue.at(-1), identity)");
   });
 
   it("A puis B en file : l'ordre et les libellés sont ceux des demandes (jamais A pour B)", async () => {
-    for (const snippet of pushSnippets(SRC)) {
-      const queueStore = {};
-      const launched = [];
-      await runPushSnippet(snippet, queueStore, TARGET, A, launched);
-      await runPushSnippet(snippet, queueStore, TARGET, B, launched);
+    __resetSuperAgentQueueForTest();
+    const launched = [];
+    // Chaque demande porte SA fermeture : c'est le texte de SA demande qui part.
+    enqueueForTest(async () => { launched.push(A); return { started: true }; }, A);
+    enqueueForTest(async () => { launched.push(B); return { started: true }; }, B);
 
-      const queue = queueStore[TARGET];
-      expect(queue.map((e) => e.label)).toEqual([A, B]);
+    const queue = runAgentsQueueByProject[TARGET];
+    expect(queue.map((e) => e.label)).toEqual([A, B]);
 
-      // Rejeu de la tête : c'est A qui part, et il reste B en file — avec le
-      // libellé de B.
-      const first = queue.shift();
-      await first.launch();
-      expect(launched).toEqual([A]);
-      expect(queueStore[TARGET].map((e) => e.label)).toEqual([B]);
+    // Rejeu de la tête : c'est A qui part, et il reste B en file — avec le
+    // libellé de B.
+    const first = queue.shift();
+    await first.launch();
+    expect(launched).toEqual([A]);
+    expect(runAgentsQueueByProject[TARGET].map((e) => e.label)).toEqual([B]);
 
-      // Rejeu suivant : c'est B qui part (jamais A une deuxième fois).
-      const second = queueStore[TARGET].shift();
-      await second.launch();
-      expect(launched).toEqual([A, B]);
-    }
+    // Rejeu suivant : c'est B qui part (jamais A une deuxième fois).
+    const second = runAgentsQueueByProject[TARGET].shift();
+    await second.launch();
+    expect(launched).toEqual([A, B]);
+    __resetSuperAgentQueueForTest();
   });
 
   it("rejeu RÉEL (`replayQueuedMissionForProject`) : la tête de file part, B garde son libellé", async () => {
     __resetSuperAgentQueueForTest();
-    const queueStore = runAgentsQueueByProject;
     const launched = [];
-    const snippet = pushSnippets(SRC)[0];
-    await runPushSnippet(snippet, queueStore, TARGET, A, launched);
-    await runPushSnippet(snippet, queueStore, TARGET, B, launched);
+    enqueueForTest(async () => { launched.push(A); return { started: true }; }, A);
+    enqueueForTest(async () => { launched.push(B); return { started: true }; }, B);
 
     // Mission 1 en file → libellés visibles par l'interface, dans l'ordre.
     expect(getProjectMissionQueue(TARGET).map((e) => e.label)).toEqual([A, B]);
@@ -213,9 +193,8 @@ describe("règle 4a — missions de l'assistant : chaque entrée de file porte S
   it("l'admission occupée ne consomme PAS la file (B reste la prochaine, intacte)", async () => {
     __resetSuperAgentQueueForTest();
     const launched = [];
-    const snippet = pushSnippets(SRC)[0];
-    await runPushSnippet(snippet, runAgentsQueueByProject, TARGET, A, launched);
-    await runPushSnippet(snippet, runAgentsQueueByProject, TARGET, B, launched);
+    enqueueForTest(async () => { launched.push(A); return { started: true }; }, A);
+    enqueueForTest(async () => { launched.push(B); return { started: true }; }, B);
 
     const busy = await replayQueuedMissionForProject(TARGET, { isAdmissionFree: async () => false });
     expect(busy).toEqual({ replayed: false, reason: "busy" });

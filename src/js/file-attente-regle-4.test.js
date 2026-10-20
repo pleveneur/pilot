@@ -82,6 +82,7 @@ import {
   runAgentsQueueByProject,
   replayQueuedMissionForProject,
   abandonQueuedRunAgentsMissions,
+  enqueueMissionForProject,
   injectRunAgentsResultToSuperAgent,
   __superAgentQueueStateForTest,
 } from "./super-agent.js";
@@ -119,14 +120,16 @@ function deliveredSummaries() {
     .map(([, args]) => String((args && args.summary) || ""));
 }
 
-/** Pousse une mission dans la file de l'assistant, EXACTEMENT comme le fait
- * l'outil `run_agents` : push + `label` + estampille d'identité. */
+/** Pousse une mission dans la file de l'assistant par le CHEMIN DE PRODUCTION
+ * de l'outil `run_agents` (`enqueueMissionForProject`) : push + `label` +
+ * estampille d'identité, exactement comme la production. */
 function queueMission(target, task, agentIds, launch) {
-  if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
+  // RÈGLE 4 : mise en file par le CHEMIN DE PRODUCTION.
+  // Neutraliser cette fonction (ou son estampille) rend les tests de ce fichier
+  // ROUGES : la fixture ne peut plus simuler un mécanisme que la production
+  // n'appliquerait plus.
   const identity = makeMissionIdentity(nextMissionId(), agentIds);
-  runAgentsQueueByProject[target].push({ launch });
-  runAgentsQueueByProject[target].at(-1).label = task;
-  stampQueuedMission(runAgentsQueueByProject[target], runAgentsQueueByProject[target].at(-1), identity);
+  enqueueMissionForProject(target, launch, task, identity);
   return identity;
 }
 
@@ -206,14 +209,20 @@ describe("RÈGLE 4 (a) — la demande rejouée exécute SA demande et son rappor
     expect(queue[0].label).toBe("demande unique");
   });
 
-  it("les 3 sites de mise en file de super-agent.js estampillent une identité", () => {
-    // Fix #1 : chaque `push({ launch: … })` de mise en file est suivi de
-    // `label` puis de l'estampille d'identité (forme conservée pour le test
-    // d'accusé de lancement #87).
-    const sites = superAgentSrc.match(/\.push\(\{ launch: [^}]*\}\);\n(?:\s*\/\/[^\n]*\n)*\s*[^\n]*at\(-1\)\.label = task;/g) || [];
-    expect(sites.length).toBe(3);
-    const stamps = superAgentSrc.match(/stampQueuedMission\(runAgentsQueueByProject\[target\]/g) || [];
-    expect(stamps.length).toBe(3);
+  it("les 3 chemins de mise en file de super-agent.js passent par le chemin de PRODUCTION unique", () => {
+    // AVANT : le test comptait 3 blocs `push({ launch: … })` + `label` et 3
+    // estampilles inline. CONTRAT MODIFIÉ (fermeture des faux verrous 2-3-4) :
+    // l'identité de mission est désormais posée dans UNE seule fonction de
+    // production (`enqueueMissionForProject`) appelée par les TROIS chemins. Le
+    // test vérifie donc : 3 appels, aucun `push` direct qui contournerait
+    // l'identité, et une estampille dans cette unique fonction.
+    const sites = superAgentSrc.match(/enqueueMissionForProject[(]target,/g) || [];
+    expect(sites, "un chemin de mise en file ne passe plus par enqueueMissionForProject").toHaveLength(3);
+    expect(superAgentSrc, "un chemin pousse encore directement dans la file").not.toContain(
+      "runAgentsQueueByProject[target].push(",
+    );
+    const stamps = superAgentSrc.match(/stampQueuedMission[(]/g) || [];
+    expect(stamps, "l'identité de mission n'est plus allouée à un seul endroit").toHaveLength(1);
   });
 });
 

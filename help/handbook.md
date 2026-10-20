@@ -1014,6 +1014,8 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 ### Suivre et arrêter
 - Une tâche lancée sur un agent **peut en appeler un autre** : Pilot relaie le résultat à l'appelant, un seul agent travaille à la fois (hors sous-tâches parallèles).
 - **Détection de cycle** : un agent déjà dans la chaîne ne peut pas être rappelé.
+- **Consulter n'est jamais une boucle** : relire `git status`, `git diff`, `git log`, `ls`, `grep`/`rg`, `sed -n`… entre deux corrections est un travail normal — ces lectures **ne déclenchent aucun arrêt**, quel que soit l'écran d'où la tâche a été lancée (onglet d'agent, bus d'agents, Assistant). Seules les **modifications** (écriture d'un fichier, commande qui écrit ou exécute) et la répétition d'un même **texte** peuvent fonder un arrêt.
+- **Chaque arrêt automatique laisse une trace** dans `.pilot/agent-stops.log` du projet (cause, type de détection, agent, session) : boucle, inactivité, plafond de tours, agent bloqué, libération de verrou. Rien ne s'arrête sans motif écrit.
 - **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (5 min par défaut), la run s'arrête et un message le signale. Réglable dans **Paramètres → Agents**.
 - **⏹ Arrêter** arrête tous les processus d'agents. Fermer l'onglet les arrête aussi.
 
@@ -1025,6 +1027,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - Sur un projet, **une seule tâche tourne à la fois**. Les demandes suivantes ne sont **pas perdues** : elles **attendent leur tour** et démarrent **automatiquement** dès que la place se libère.
 - Un **bloc discret** sous la barre d'outils de l'onglet de l'agent montre la file : la tâche **en cours**, puis les demandes **en attente** avec leur rang (« en attente (2e) »). Il n'apparaît que s'il y a quelque chose à dire.
 - La commande **`/file`** affiche la file complète du projet dans la discussion ; **`/file vide`** abandonne les demandes **en attente** et annonce **combien** ont été abandonnées (la tâche en cours n'est jamais arrêtée).
+- **Aucune demande ne disparaît en silence** : une demande en attente dont la tâche porteuse s'est arrêtée reste **visible** et **relançable** ; si elle est abandonnée (par vous, par le chien de garde ou par « tout arrêter »), son libellé est écrit dans `.pilot/agent-stops.log` et l'écran vous le signale.
 
 ---
 
@@ -2225,6 +2228,10 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
 | Run restée « stopping » (balayage) | `sweep-stopping-release` | `sweep` |
 | Libération forcée du verrou du projet | `force-release` | `user-command` |
 | Arrêt de run demandé par un appelant automatique (`stopAgentsRun({reason})`) | motif transmis | `stop-run` (défaut) |
+| Session périmée redémarrée avec un contexte vierge | `stale-session-restart` | `fresh-context` |
+| Nettoyage d'un processus orphelin après échec de lancement | `spawn-failure-cleanup` | `run-agent-turn-error` |
+| Demandes en file qui ne peuvent plus être rejouées / abandonnées | `queue-abandoned` | `watchdog`, `clear-all-runs`, `user-abandon` |
+| Boucle détectée dans l'onglet agent principal (`agent-pi.js`) | `loop-detection` | `text`, `actions` |
 
 - **Arrêt manuel** (bouton « tout arrêter ») : pas de ligne — il est volontaire et
   ne doit pas être présenté comme un arrêt automatique.
@@ -2238,11 +2245,20 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
   **dit** (`console.warn` + notification branchée par le bus via
   `setAgentStopTraceFailureReporter`, à défaut événement global
   `pilot-agent-stop-trace-failed`) — jamais un fail-open muet.
-- **Verrou anti-régression** : `agent-stop-trace-paths.test.js` énumère les sites
-  terminaux (`abort_agent_process`, `stopAgentsRun`, `settleWatchdogRelease`,
-  `settleMission(..., "stop")`) et exige une trace à motif littéral avant
-  chacun ; la **liste est épinglée** → un nouveau site d'arrêt muet fait échouer
-  le test.
+- **Verrou anti-régression** : `agent-stop-trace-paths.test.js` lit les **TROIS**
+  fichiers porteurs d'arrêts automatiques (`agents-bus.js`, `agent-pi.js`,
+  `super-agent.js`) et exige une trace à motif littéral avant chaque site
+  terminal (`abort_agent_process`, `stop_agent_process`,
+  `settleMission(..., "stop")`, `abort_agent` de session, `abort_super_agent`).
+  La **cardinalité est épinglée** par fichier et par type de site (un site
+  ajouté, muet ou non, fait échouer le test) et la **précédence est vérifiée à
+  portée de bloc** (la trace doit être dans le même bloc que l'arrêt, aucun
+  autre arrêt du même type intercalé). Les arrêts de **TOUR** de l'onglet agent
+  (orchestration : timeouts, subdivisions, reprise après compaction, erreur de
+  connexion ; arrêt manuel ; test de modèle) sont **comptés et documentés** mais
+  non tracés : ils n'interrompent pas la session, qui reprend immédiatement.
+  Un **contrôle négatif** intégré injecte un site muet dans une copie de la
+  source pour prouver que la détection le voit.
 
 <!-- HELP:loop-detection-writes -->
 ### Détection de boucle : une lecture n'est jamais une boucle
@@ -2261,6 +2277,10 @@ travaille :
   **identiques** répétées comptent comme une boucle.
 Les **autres filets de sécurité** restent actifs : inactivité prolongée, plafond
 de tours, agent bloqué repéré par le moniteur, boucle de texte.
+La règle vaut sur **tous** les chemins d'arrêt automatique : l'onglet agent
+principal, le bus d'agents et l'Assistant utilisent le **même** classifieur
+(`isReadOnlyAgentToolCall`) — une consultation du projet ne peut donc plus
+provoquer un arrêt, quel que soit l'écran d'où la tâche a été lancée.
 Chaque **arrêt automatique** laisse une ligne dans le fichier
 **`.pilot/agent-stops.log`** du projet (cause de l'arrêt, type de détection,
 agent, session) : utile pour comprendre après coup pourquoi un agent s'est
@@ -2270,6 +2290,9 @@ plus aucun ne se produit sans laisser de trace. Si le projet n'est pas connu (ou
 si le fichier du projet ne peut pas être écrit), la ligne est écrite dans le
 journal global de l'application (`agent-stops.log` du répertoire de données) ;
 et si même cela échoue, Pilot le **signale** au lieu de rester silencieux.
+Le journal note aussi les **demandes de tâches abandonnées** (`queue-abandoned`) :
+une demande mise en file qui ne peut plus être relancée est nommée dans le
+journal et annoncée à l'écran — elle ne disparaît jamais en silence.
 <!-- /HELP:loop-detection-writes -->
 
 ### Mode « Assistant seul » (A19, maquette ASS_Only_V4)
