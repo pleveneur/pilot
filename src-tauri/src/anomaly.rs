@@ -446,6 +446,45 @@ fn should_report_silent_session(
     idle_secs > (silent_minutes.max(1) as u64) * 60
 }
 
+/// Règle 2 : décide si l'alerte d'ANOMALIE (« agent bloqué », lecture seule +
+/// proposition de diagnostic) doit être émise pour cette entrée.
+///
+/// Ne signale JAMAIS :
+///  - une détection désactivée (`anomaly_enabled = false`) ;
+///  - une session non busy (au repos, travail terminé) ;
+///  - une session déjà signalée pour cette exécution (`blocked_reported` sert de
+///    verrou « un seul signalement » : pas de répétition toutes les 30 s) ;
+///  - une attente de réponse utilisateur encore valide (état légitime) ;
+///  - une session avec une OPÉRATION D'OUTIL EN COURS (`tool_in_progress`).
+///
+/// Règle 2 (vrai trou de comportement corrigé ici) : un `cargo test`, un build ou
+/// une installation qui tourne 40 min n'émet AUCUN `tool_execution_update`
+/// pendant son exécution. Sans cette exemption, ce travail parfaitement légitime
+/// déclenchait « agent bloqué » + agent de diagnostic + alerte Telegram alors que
+/// l'agent n'était pas figé du tout. Un agent RÉELLEMENT figé (aucun outil en
+/// cours, plus aucune activité) continue de déclencher l'alerte exactement comme
+/// avant.
+/// Pure et testable.
+fn should_report_anomaly(
+    entry: &AgentAnomalyState,
+    anomaly_enabled: bool,
+    anomaly_timeout_secs: u64,
+    now: Instant,
+) -> bool {
+    if !anomaly_enabled || !entry.busy || entry.blocked_reported || awaiting_user_suspends(entry, now) {
+        return false;
+    }
+    // Une opération d'outil EN COURS est un travail qui avance (build, série de
+    // tests, longue analyse) : aucun événement n'est émis entre
+    // `tool_execution_start` et `tool_execution_end`. Ne jamais crier « agent
+    // bloqué » pendant ce temps ; l'agent réellement figé est toujours alerté.
+    if entry.tool_in_progress {
+        return false;
+    }
+    let idle_secs = now.duration_since(entry.last_activity).as_secs();
+    idle_secs > anomaly_timeout_secs
+}
+
 /// Identifie la clé d'anomalie du super-agent (projet pseudo-global `""`).
 /// Le super-agent est géré par un plafond « réfléchit » dédié (tâche #141) et
 /// NON par l'arrêt auto T2 (scope agents délégués). Pure et testable.
@@ -680,12 +719,10 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                         ));
                     }
                     // 1. Anomalie (lecture seule, tâche 8) : agent busy sans progression.
-                    if anomaly_enabled
-                        && entry.busy
-                        && !entry.blocked_reported
-                        && !awaiting_user_suspends(entry, now)
-                        && idle_secs > anomaly_timeout_secs
-                    {
+                    //    Décision extraite dans `should_report_anomaly` (règle 2 :
+                    //    exemption `tool_in_progress` — un outil long et silencieux
+                    //    est du travail qui avance, pas un agent bloqué).
+                    if should_report_anomaly(entry, anomaly_enabled, anomaly_timeout_secs, now) {
                         entry.blocked_reported = true;
                         alerts.push((project.clone(), agent.clone(), entry.last_event.clone(), idle_secs / 60));
                     }
@@ -1539,6 +1576,64 @@ mod tests {
             ..state(true)
         };
         assert!(!should_auto_stop_on_progress(&fresh, true, 10, now));
+    }
+
+    /// Règle 2 (audit indépendant) : l'alerte d'ANOMALIE (« agent bloqué »,
+    /// lecture seule + agent de diagnostic + Telegram) ne doit PAS se déclencher
+    /// pendant qu'une opération d'outil est en cours — un `cargo test` ou un build
+    /// silencieux de 40 min n'émet aucun `tool_execution_update` et n'est pas un
+    /// agent figé. Un agent réellement figé est toujours alerté, et les autres
+    /// gardes (activation, verrou « un seul signalement ») restent inchangées.
+    #[test]
+    fn should_report_anomaly_suspends_while_tool_in_progress() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        // Fixture COMPLÈTE (aucun champ laissé par défaut) : agent busy dont la
+        // dernière activité ET la dernière progression datent de 60 min, soit
+        // au-delà du seuil d'alerte par défaut (30 min).
+        let state = |tool_in_progress: bool| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(3600),
+            last_progress: now - Duration::from_secs(3600),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "tool_execution_start".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress,
+            produced_output: true,
+        };
+        let timeout_secs = 30 * 60;
+
+        // Outil en cours (build/tests silencieux) → AUCUNE alerte, même 60 min
+        // sans événement : c'est du travail légitime qui avance.
+        assert!(
+            !should_report_anomaly(&state(true), true, timeout_secs, now),
+            "opération d'outil en cours → aucune alerte d'anomalie"
+        );
+
+        // Aucun outil en cours → agent réellement figé → alerte conservée.
+        assert!(
+            should_report_anomaly(&state(false), true, timeout_secs, now),
+            "agent figé (aucun outil) → alerte conservée"
+        );
+
+        // Détection désactivée → jamais d'alerte (réglage respecté).
+        assert!(!should_report_anomaly(&state(false), false, timeout_secs, now));
+
+        // Déjà signalé pour cette exécution → pas de répétition.
+        let reported = AgentAnomalyState {
+            blocked_reported: true,
+            ..state(false)
+        };
+        assert!(!should_report_anomaly(&reported, true, timeout_secs, now));
+
+        // Réglage complémentaire : inactivité SOUS le seuil → pas d'alerte.
+        let fresh = AgentAnomalyState {
+            last_activity: now - Duration::from_secs(300),
+            last_progress: now - Duration::from_secs(300),
+            ..state(false)
+        };
+        assert!(!should_report_anomaly(&fresh, true, timeout_secs, now));
     }
 
     /// Verrou fantôme (busy-stale) : `should_release_stale_busy` libère la marque

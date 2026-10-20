@@ -1806,15 +1806,18 @@ impl AgentService {
                     None => (None, None, None, None, None, None),
                 }
             };
-            let mut entry = serde_json::json!({
-                "project": project,
-                "agent": agent_id,
-                "mode": mode,
-                "state": state,
-                "alive": alive,
-                "visible": visible,
-                "active": is_active,
-            });
+            let mut entry = session_entry_json(
+                &project,
+                &agent_id,
+                mode.as_str(),
+                state.as_str(),
+                alive,
+                visible,
+                is_active,
+                busy,
+                tool_in_progress,
+                is_working,
+            );
             // Champs optionnels : absents si aucune activité enregistrée.
             if let Some(la) = last_activity {
                 entry["lastActivity"] = serde_json::Value::String(la);
@@ -1824,30 +1827,6 @@ impl AgentService {
             }
             if let Some(le) = last_event {
                 entry["lastEvent"] = serde_json::Value::String(le);
-            }
-            // busy : l'agent est-il en train d'exécuter une tâche (agent_start →
-            // true, agent_settled → false). Distingue « en cours de tâche » d'une
-            // session vivante mais inactive (settled) — utilisé par le frontend
-            // pour l'exclusivité des spécialités (run_agents).
-            if let Some(b) = busy {
-                entry["busy"] = serde_json::Value::Bool(b);
-            }
-            // toolInProgress : un OUTIL est en cours d'exécution (tool_execution_start
-            // → true, tool_execution_end/settled → false). Distinct de `busy` : pendant
-            // un outil long et SILENCIEUX (build, tests, installation) aucun événement
-            // n'est émis, et `busy` peut être faux (fin de tour pi, relance en attente)
-            // alors que l'agent travaille réellement. Sans ce champ, la sonde de
-            // vivacité du frontend (isSessionWorking) concluait « plus aucun agent ne
-            // travaille » et libérait la run en ÉCHEC au milieu du travail.
-            if let Some(t) = tool_in_progress {
-                entry["toolInProgress"] = serde_json::Value::Bool(t);
-            }
-            // isWorking : l'agent TRAVAILLE-t-il réellement à cet instant ? Champ
-            // ADDITIF, explicite, destiné au LLM : évite l'intoxication sémantique
-            // de `state`/`active` (qui décrivent l'ONGLET). Absent quand aucune
-            // activité n'a été enregistrée (aucune preuve de travail).
-            if let Some(w) = is_working {
-                entry["isWorking"] = serde_json::Value::Bool(w);
             }
             // prompt : DERNIER prompt réellement envoyé à cette session, déjà
             // tronqué (`record_prompt`). Sert à afficher les missions en cours
@@ -3302,6 +3281,64 @@ fn session_is_working(alive: bool, busy: bool, tool_in_progress: bool, idle_secs
     alive && (busy || tool_in_progress || idle_secs < WORKING_RECENT_WINDOW_SECS)
 }
 
+/// Construit l'entrée JSON de BASE d'une session pour `list_agent_sessions`.
+///
+/// CONTRAT DE FORME avec le frontend : ces noms de champs sont lus tels quels par
+/// `agents-bus.js` / `exclusivity-queue.js` / `dashboard.js` pour décider si un
+/// agent VIVANT travaille (sonde d'exclusivité, file d'attente, libération de
+/// run). La lecture JS est fail-open : un renommage Rust ferait conclure
+/// « personne ne travaille » et libérerait un agent vivant **en silence**. Le test
+/// `session_entry_json_keeps_frontend_contract_keys` verrouille donc ces clés.
+///
+/// `busy` / `toolInProgress` / `isWorking` sont ADDITIFS et optionnels : absents
+/// tant qu'aucune activité n'a été enregistrée pour la session.
+fn session_entry_json(
+    project: &str,
+    agent: &str,
+    mode: &str,
+    state: &str,
+    alive: bool,
+    visible: bool,
+    active: bool,
+    busy: Option<bool>,
+    tool_in_progress: Option<bool>,
+    is_working: Option<bool>,
+) -> Value {
+    let mut entry = serde_json::json!({
+        "project": project,
+        "agent": agent,
+        "mode": mode,
+        "state": state,
+        "alive": alive,
+        "visible": visible,
+        "active": active,
+    });
+    // busy : l'agent est-il en train d'exécuter une tâche (agent_start → true,
+    // agent_settled → false) ? Distingue « en cours de tâche » d'une session
+    // vivante mais inactive (settled) — utilisé par le frontend pour
+    // l'exclusivité des spécialités (run_agents).
+    if let Some(b) = busy {
+        entry["busy"] = Value::Bool(b);
+    }
+    // toolInProgress : un OUTIL est en cours d'exécution (tool_execution_start →
+    // true, tool_execution_end/settled → false). Distinct de `busy` : pendant un
+    // outil long et SILENCIEUX (build, tests, installation) aucun événement n'est
+    // émis, et `busy` peut être faux (fin de tour pi, relance en attente) alors
+    // que l'agent travaille réellement. Sans ce champ, la sonde de vivacité du
+    // frontend (isSessionWorking) concluait « plus aucun agent ne travaille » et
+    // libérait la run en ÉCHEC au milieu du travail.
+    if let Some(t) = tool_in_progress {
+        entry["toolInProgress"] = Value::Bool(t);
+    }
+    // isWorking : l'agent TRAVAILLE-t-il réellement à cet instant ? Champ
+    // ADDITIF, explicite, destiné au LLM : évite l'intoxication sémantique de
+    // `state`/`active` (qui décrivent l'ONGLET).
+    if let Some(w) = is_working {
+        entry["isWorking"] = Value::Bool(w);
+    }
+    entry
+}
+
 /// Extrait l'état brut de toutes les sessions du registre (P2) — pur, sans
 /// accès DB (testable). Retourne pour chaque session : (projet, agent, état,
 /// mode, vivacité, actif). La clé composite est "project\u{1f}agent".
@@ -4508,6 +4545,67 @@ mod tests {
         assert_eq!(proc.3, "agent_process");
         assert!(proc.4, "processus vivant");
         assert!(!proc.5, "agent multi-rôles → jamais actif");
+    }
+
+    /// Règle 5 (audit indépendant) : verrou de CONTRAT DE FORME avec le frontend.
+    /// `list_agent_sessions` est lu tel quel par `agents-bus.js` /
+    /// `exclusivity-queue.js` / `dashboard.js` pour décider si un agent VIVANT
+    /// travaille. Une lecture JS est fail-open : un renommage de champ côté Rust
+    /// ferait silencieusement conclure « personne ne travaille » et libérerait un
+    /// agent vivant (verrou de run, file d'attente). Ce test doit donc échouer sur
+    /// tout renommage, sans lancer de processus.
+    #[test]
+    fn session_entry_json_keeps_frontend_contract_keys() {
+        // Entrée « pleine » : une session vivante et active avec activité connue.
+        let entry = session_entry_json(
+            "/p/A",
+            "codeur",
+            "main",
+            "active",
+            true,
+            true,
+            false,
+            Some(true),
+            Some(true),
+            Some(true),
+        );
+        for key in [
+            "project",
+            "agent",
+            "mode",
+            "state",
+            "alive",
+            "visible",
+            "active",
+            "busy",
+            "toolInProgress",
+            "isWorking",
+        ] {
+            assert!(
+                entry.get(key).is_some(),
+                "champ `{}` consommé par le frontend (sonde d'exclusivité / file d'attente) : \
+                 le renommer libérerait un agent vivant en silence",
+                key
+            );
+        }
+        // Les valeurs doivent rester exploitables telles quelles (booléens / textes).
+        assert_eq!(entry["project"], serde_json::json!("/p/A"));
+        assert_eq!(entry["agent"], serde_json::json!("codeur"));
+        assert_eq!(entry["alive"], serde_json::json!(true));
+        assert_eq!(entry["busy"], serde_json::json!(true));
+        assert_eq!(entry["toolInProgress"], serde_json::json!(true));
+
+        // Entrée minimale (aucune activité enregistrée) : les clés de BASE restent
+        // présentes, les champs d'activité sont simplement absents (fail-open JS).
+        let minimal = session_entry_json("/p/B", "default", "main", "parked", false, false, false, None, None, None);
+        for key in ["project", "agent", "mode", "state", "alive", "visible", "active"] {
+            assert!(minimal.get(key).is_some(), "clé de base `{}` toujours présente", key);
+        }
+        assert!(minimal.get("busy").is_none(), "activité inconnue → `busy` absent");
+        assert!(
+            minimal.get("toolInProgress").is_none(),
+            "activité inconnue → `toolInProgress` absent"
+        );
     }
 
     /// Mission en cours (affichage) : un envoi de prompt est mémorisé comme

@@ -105,11 +105,12 @@ normalement** l'agent au lieu de rester en file derrière un couple
 - **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
   n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
   le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
-  exécution).
-- **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
-  n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
-  le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
-  exécution).
+  exécution). Une **opération longue en cours** (build, série de tests,
+  installation : aucune nouvelle de l'agent entre le début et la fin de
+  l'outil) n'est **pas** un blocage : tant qu'un outil tourne, l'alerte
+  « agent bloqué » **et** l'arrêt automatique sont suspendus. Seul un agent
+  **réellement figé** (aucun outil en cours et plus aucune activité) est
+  signalé.
 - **Verdict vérifié sur le disque** : avant de conclure qu'un agent n'a rien
   fait, Pilot regarde le travail réellement écrit pendant l'exécution (commits et
   fichiers modifiés) : du travail présent n'est **jamais** annoncé comme un
