@@ -17,7 +17,11 @@ import {
   detectRepeatedToolCalls,
   detectSemanticLoop,
   buildToolLoopFingerprint,
+  buildAgentStopRequest,
 } from "./loop-detection.js";
+// Journal disque du MOTIF des arrêts automatiques (correctif faux positif de
+// détection de boucle : la cause de l'arrêt doit survivre à la session).
+import { traceAutomaticAgentStop } from "./agent-stop-trace.js";
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 // Son de fin DIFFÉRÉ jusqu'à la fin réelle de l'affichage (le son ne doit plus
 // partir pendant que la réponse / le raisonnement s'écrit encore). L'émetteur
@@ -1200,7 +1204,7 @@ const SUPER_LOOP_BUFFER_MIN = 200;
 // Issue #135 : map des suivis d'agents invisibles indexée par clé
 // (agentId, projectPath) — deux agents invisibles peuvent tourner en parallèle
 // sur deux projets différents sans s'écraser (perte d'événements du premier).
-const invisibleAgents = new Map(); // key -> { agentId, projectPath, messagesEl, unlisten }
+const invisibleAgents = new Map(); // key -> { agentId, projectPath, messagesEl, unlisten, loop, sessionUid }
 const INVISIBLE_LOOP_CHECK_INTERVAL_MS = 500;
 const INVISIBLE_LOOP_BUFFER_MIN = 200;
 
@@ -3267,6 +3271,13 @@ function maybeDetectSuperAgentLoop(messagesEl) {
   if (detectRepeatedToolCalls(superLoopToolCalls)) {
     superLoopStopped = true;
     console.warn("[loop-detection] boucle d'outils détectée sur l'assistant, arrêt");
+    // Motif journalisé sur disque (fail-open) : l'arrêt automatique laisse une trace.
+    traceAutomaticAgentStop({
+      reason: "loop-detection",
+      detected: "tool-calls",
+      agentId: "assistant",
+      projectPath: window._pilotProjectPath || "",
+    }).catch(() => {});
     appendSystemMessage(
       messagesEl,
       "⚠️ L'assistant a tourné en boucle (répétition du même texte ou des mêmes appels d'outils). Génération arrêtée. Veuillez reformuler votre demande."
@@ -3287,6 +3298,12 @@ function maybeDetectSuperAgentLoop(messagesEl) {
   ) {
     superLoopStopped = true;
     console.warn("[loop-detection] boucle détectée sur l'assistant, arrêt");
+    traceAutomaticAgentStop({
+      reason: "loop-detection",
+      detected: "text",
+      agentId: "assistant",
+      projectPath: window._pilotProjectPath || "",
+    }).catch(() => {});
     appendSystemMessage(
       messagesEl,
       "⚠️ L'assistant a tourné en boucle (répétition du même texte ou des mêmes appels d'outils). Génération arrêtée. Veuillez reformuler votre demande."
@@ -5208,8 +5225,11 @@ function flushDelegationQueue(projectPath) {
  * @param {string} agentId - id résolu depuis l'objet (4.1).
  * @param {string|null} projectPath
  * @param {string} request - demande déléguée (contexte, pour le suivi).
+ * @param {object} [options]
+ * @param {number|null} [options.sessionUid] - uid de session si l'appelant le
+ *   connaît (garde de propriété à l'arrêt automatique).
  */
-async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, request) {
+async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, request, options = {}) {
   // Issue #135 : on ne coupe plus les suivis précédents — chaque agent invisible
   // a son propre suivi dans la map invisibleAgents (clé agentId+projectPath).
   //
@@ -5235,8 +5255,12 @@ async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, r
     }
   });
 
+  const sessionUid =
+    typeof (options && options.sessionUid) === "number" && Number.isFinite(options.sessionUid) && options.sessionUid > 0
+      ? options.sessionUid
+      : null;
   invisibleAgents.set(invisibleAgentKey(agentId, projectPath), {
-    agentId, projectPath, messagesEl, unlisten, loop,
+    agentId, projectPath, messagesEl, unlisten, loop, sessionUid,
   });
 }
 
@@ -5379,35 +5403,78 @@ function maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId, projectPath) {
   if (now - loop.lastChecked < INVISIBLE_LOOP_CHECK_INTERVAL_MS) return;
   loop.lastChecked = now;
   if (loop.buffer.length < INVISIBLE_LOOP_BUFFER_MIN) return;
-  if (
+  // Motif RÉELLEMENT déclenché : il est journalisé sur disque (agent-stops.log)
+  // pour ne plus confondre « répétition du même texte » et « boucle d'outils ».
+  const textLoop =
     detectRepeatedBlock(loop.buffer) ||
     detectRepeatedWord(loop.buffer) ||
-    detectSemanticLoop(loop.buffer) ||
-    detectRepeatedToolCalls(loop.toolCalls)
-  ) {
+    detectSemanticLoop(loop.buffer);
+  const toolLoop = !textLoop && detectRepeatedToolCalls(loop.toolCalls);
+  if (textLoop || toolLoop) {
     loop.stopped = true;
     console.warn(`[loop-detection] boucle détectée sur l'agent invisible ${agentId}, arrêt`);
     appendSystemMessage(
       messagesEl,
       "⚠️ L'agent a tourné en boucle (répétition du même texte ou des mêmes appels d'outils). Agent arrêté."
     );
-    stopInvisibleAgent(agentId, projectPath);
+    stopInvisibleAgent(agentId, projectPath, {
+      reason: "loop-detection",
+      detected: textLoop ? "text" : "tool-calls",
+    });
   }
 }
 
 /**
  * Arrête l'agent invisible (session + suivi). 4.1 : cible l'id RÉSOLU.
+ *
+ * Arrêt automatique : le MOTIF est journalisé sur disque, et l'uid de session
+ * suivi est transmis quand il est connu, pour que la garde de propriété de
+ * `stop_agent_process` protège ce chemin (ne jamais tuer la session d'une autre
+ * exécution).
+ * @param {string} agentId
+ * @param {string|null} projectPath
+ * @param {object} [options]
+ * @param {string} [options.reason="loop-detection"] - cause de l'arrêt
+ * @param {string} [options.detected="unknown"] - détecteur déclenché
+ * @param {number|null} [options.sessionUid] - uid de session connu de l'appelant
  */
-function stopInvisibleAgent(agentId, projectPath) {
+async function stopInvisibleAgent(agentId, projectPath, options = {}) {
   const key = invisibleAgentKey(agentId, projectPath);
   const t = invisibleAgents.get(key);
   const messagesEl = t ? t.messagesEl : null;
-  invoke("stop_agent_session", { agentId: agentId || null, projectPath }).catch((e) =>
-    console.error("Erreur stop_agent_session (agent invisible):", e)
-  );
+  const reason = options.reason || "loop-detection";
+  const detected = options.detected || "unknown";
+  // uid : celui fourni par l'appelant, sinon celui mémorisé au démarrage du suivi.
+  const candidates = [options.sessionUid, t ? t.sessionUid : null];
+  const uid = candidates.find((v) => typeof v === "number" && Number.isFinite(v) && v > 0) || null;
+  // Trace disque du motif (fail-open : jamais bloquant).
+  traceAutomaticAgentStop({ reason, detected, agentId, projectPath, uid }).catch(() => {});
+  const req = buildAgentStopRequest({ agentId, projectPath, uid });
+  let stopped = false;
+  try {
+    await invoke(req.cmd, req.args);
+    stopped = true;
+    if (req.guarded) {
+      // `stop_agent_session` est le SEUL chemin qui libère l'activité du projet
+      // (issue #13 / tâche 335) : après un arrêt gardé, on repasse par lui
+      // (idempotent — la session est déjà arrêtée).
+      await invoke("stop_agent_session", { agentId: agentId || null, projectPath }).catch(() => {});
+    }
+  } catch (e) {
+    if (req.guarded) {
+      // Garde de propriété : la session suivie a été remplacée depuis son
+      // lancement → on NE tue PAS la session en place.
+      console.warn("[loop-detection] arrêt refusé (session remplacée):", e);
+    } else {
+      console.error("Erreur stop_agent_session (agent invisible):", e);
+    }
+  }
   stopInvisibleAgentMonitoring(agentId, projectPath);
   if (messagesEl) {
-    appendSystemMessage(messagesEl, "🛑 Agent en arrière-plan arrêté.");
+    appendSystemMessage(
+      messagesEl,
+      stopped ? "🛑 Agent en arrière-plan arrêté." : "🛑 Session suivie déjà remplacée : rien à arrêter."
+    );
   }
 }
 

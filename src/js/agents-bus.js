@@ -45,6 +45,8 @@ import {
   buildLoopCorrectionPrompt,
   MAX_LOOP_ESCALATION,
 } from "./loop-detection.js";
+// Journal disque du MOTIF des arrêts automatiques (la cause survit à la session).
+import { traceAutomaticAgentStop } from "./agent-stop-trace.js";
 import {
   enqueueExclusivity,
   dequeueExclusivity,
@@ -1827,6 +1829,15 @@ function maybeDetectAgentLoop(agentId, ctx) {
     // Bug : propager la cause réelle (boucle d'outils) au résultat agrégé —
     // l'abort qui suit tue le process et le process_exit serait muet sinon.
     ctx.loopAbortReason[agentId] = "boucle d'outils détectée (appels identiques répétés)";
+    // Motif journalisé sur disque (fail-open) : la cause de l'arrêt automatique
+    // ne reste plus en mémoire seulement.
+    traceAutomaticAgentStop({
+      reason: "loop-detection",
+      detected: "tool-calls",
+      agentId,
+      projectPath: ctx.agentProject[agentId] || ctx.project || "",
+      uid: expectedSessionUid(ctx, agentId),
+    }).catch(() => {});
     emit("notify", { agentId, message: `Boucle d'outils détectée pour l'agent ${agentId} (appels identiques répétés). Correction automatique…` });
     invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }).catch(() => {});
     return;
@@ -1845,6 +1856,13 @@ function maybeDetectAgentLoop(agentId, ctx) {
     console.warn("[agents-bus] boucle détectée", agentId);
     // Bug : propager la cause réelle (boucle de réflexion) au résultat agrégé.
     ctx.loopAbortReason[agentId] = "boucle de réflexion détectée (texte répété)";
+    traceAutomaticAgentStop({
+      reason: "loop-detection",
+      detected: "text",
+      agentId,
+      projectPath: ctx.agentProject[agentId] || ctx.project || "",
+      uid: expectedSessionUid(ctx, agentId),
+    }).catch(() => {});
     emit("notify", { agentId, message: `Boucle détectée dans la réflexion de l'agent ${agentId}. Correction automatique…` });
     invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }).catch(() => {});
   }
@@ -2078,6 +2096,13 @@ export function handleAgentEvent(ev) {
       } else {
         ctx.loopAbandoned[agentId] = true;
         emit("notify", { agentId, message: `⚠️ L'agent ${agentId} a tourné en boucle plusieurs fois. Tâche abandonnée.` });
+        traceAutomaticAgentStop({
+          reason: "loop-detection",
+          detected: "text-escalation-exhausted",
+          agentId,
+          projectPath: ctx.agentProject[agentId] || ctx.project || "",
+          uid: expectedSessionUid(ctx, agentId),
+        }).catch(() => {});
         failAgentTurn(agentId, "Boucle de réflexion persistante (toutes les stratégies d'escalade épuisées).", ctx);
       }
       return;
@@ -2087,6 +2112,13 @@ export function handleAgentEvent(ev) {
     console.log("[agents-bus] agent_end turn=" + ctx.turnCount, agentId);
     if (ctx.turnCount > MAX_TURNS) {
       emit("error", { message: `Boucle détectée : ${ctx.turnCount} tours (max ${MAX_TURNS}). Arrêt forcé.` });
+      traceAutomaticAgentStop({
+        reason: "loop-detection",
+        detected: "turn-cap",
+        agentId,
+        projectPath: ctx.agentProject[agentId] || ctx.project || "",
+        uid: expectedSessionUid(ctx, agentId),
+      }).catch(() => {});
       stopAgentsRun({ silent: true, runKey: ctx.runKey });
       return;
     }

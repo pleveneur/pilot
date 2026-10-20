@@ -224,6 +224,21 @@ export function buildToolLoopFingerprint(toolName, args) {
     // recherches au même endroit avec des requêtes différentes ne sont pas une
     // boucle. Sans cela, deux recherches à la même racine produisaient la MÊME
     // empreinte (path seul) et déclenchaient un faux positif.
+    // Correctif faux positif (session codeur tuée ~12 ms après le 3ᵉ `edit`) :
+    // un `edit` (et tout outil d'écriture : write/create/patch…) n'était clé QUE
+    // sur son chemin — le CONTENU écrit (oldText/newText) n'entrait pas dans
+    // l'empreinte. Trois modifications DIFFÉRENTES du même fichier produisaient
+    // donc trois empreintes IDENTIQUES → detectRepeatedToolCalls (minRepeat=3)
+    // → arrêt automatique de l'agent en plein travail normal. On ajoute une
+    // empreinte du contenu : trois écritures différentes ne sont plus une boucle,
+    // trois écritures identiques le restent (vraie boucle).
+    const writeContent = collectWriteContent(a);
+    if (writeContent !== null) {
+      return (
+        "tool::" + toolName + "::" + path +
+        "::content=" + writeContent.length + ":" + hashLoopContent(writeContent)
+      );
+    }
     const query = a.query || a.pattern || a.search || a.regex || "";
     if (query) {
       return "tool::" + toolName + "::" + path + "::query=" + query;
@@ -235,6 +250,78 @@ export function buildToolLoopFingerprint(toolName, args) {
   } catch (_) {
     return "tool::" + toolName;
   }
+}
+
+// ── Empreinte de CONTENU des écritures (correctif faux positif de boucle) ──
+//
+// Un outil d'écriture (`edit`, `write`, `create`, `patch`…) reçoit le contenu
+// qu'il écrit dans des champs dont les noms varient selon l'outil. On ne code
+// donc AUCUNE liste d'outils en dur : la présence d'un de ces champs suffit à
+// considérer l'appel comme une écriture (aucun outil de lecture/recherche ne
+// porte ces champs).
+const WRITE_CONTENT_KEYS = [
+  "edits",
+  "content",
+  "newContent",
+  "new_content",
+  "newText",
+  "new_text",
+  "new_string",
+  "oldText",
+  "old_string",
+  "patch",
+  "diff",
+  "text",
+];
+// Champs lus à l'intérieur d'un objet d'édition (`{oldText, newText}`,
+// `{old_string, new_string}`…).
+const WRITE_EDIT_VALUE_KEYS = ["oldText", "newText", "old_string", "new_string", "content", "text"];
+
+/**
+ * Extrait le contenu d'écriture d'un appel d'outil, sous forme d'une chaîne
+ * stable (même appel → même chaîne, quel que soit le chemin qui la produit).
+ * @param {object} args - arguments du tool call
+ * @returns {string|null} null si l'appel ne porte aucun contenu d'écriture
+ */
+export function collectWriteContent(args) {
+  const a = args || {};
+  const parts = [];
+  const push = (value) => {
+    if (value === undefined || value === null) return;
+    if (typeof value === "string") { parts.push(value); return; }
+    if (typeof value === "number" || typeof value === "boolean") { parts.push(String(value)); return; }
+    if (Array.isArray(value)) { for (const item of value) push(item); return; }
+    if (typeof value === "object") {
+      for (const key of WRITE_EDIT_VALUE_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) push(value[key]);
+      }
+    }
+  };
+  for (const key of WRITE_CONTENT_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(a, key)) push(a[key]);
+  }
+  return parts.length ? parts.join("\u0000") : null;
+}
+
+/**
+ * Empreinte compacte (16 caractères hexadécimaux = deux lanes 32 bits) d'un
+ * contenu. Déterministe, sans dépendance externe : deux contenus différents
+ * produisent deux empreintes différentes (collision négligeable), deux contenus
+ * identiques la même.
+ * @param {string} text
+ * @returns {string}
+ */
+export function hashLoopContent(text) {
+  const s = typeof text === "string" ? text : String(text ?? "");
+  let h1 = 0x811c9dc5 >>> 0;
+  let h2 = 0xc2b2ae35 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ ((c << 8) | (i & 0xff)), 0x85ebca6b) >>> 0;
+    h2 = (h2 ^ (h2 >>> 13)) >>> 0;
+  }
+  return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
 }
 
 /**
@@ -528,4 +615,114 @@ export function buildActionLoopCorrectionPrompt(level, options = {}) {
     default:
       return base + "Arrête ce schéma, change d'approche et continue le travail.";
   }
+}
+
+// ── Journal disque des arrêts AUTOMATIQUES d'agents (motif de l'arrêt) ──
+//
+// Un arrêt automatique (boucle détectée) n'était tracé que dans la console : le
+// motif réel (« boucle d'outils » vs « boucle de réflexion ») était perdu, et
+// aucune trace ne survivait à la session. Ces fonctions (PURES) produisent la
+// ligne de journal ; l'écriture disque est faite par l'appelant (super-agent.js,
+// agents-bus.js) avec les commandes IPC existantes — même emplacement que le
+// journal des actions écran (`.pilot/screen-actions.log`).
+export const AGENT_STOP_TRACE_RELATIVE_PATH = ".pilot/agent-stops.log";
+export const AGENT_STOP_TRACE_MAX_CHARS = 256 * 1024;
+
+/**
+ * Assainit une valeur de champ : une seule ligne, espaces compactés, longueur
+ * bornée (le journal doit rester lisible et parser sans ambiguïté).
+ * @param {unknown} value
+ * @param {number} [max=200]
+ * @returns {string}
+ */
+function sanitizeTraceValue(value, max = 200) {
+  const s = String(value === undefined || value === null ? "" : value)
+    .replace(/\s+/g, " ")
+    .trim();
+  return s.length > max ? s.slice(0, max - 3) + "..." : s;
+}
+
+/**
+ * Construit une ligne du journal des arrêts automatiques (pure).
+ * Format : `<RFC3339>  op=auto-stop  reason=…  detected=…  agent=…  project=…  uid=…`
+ * (deux espaces entre champs, comme le journal des actions écran).
+ * @param {object} entry
+ * @param {string} entry.reason - cause de l'arrêt (ex: "loop-detection")
+ * @param {string} [entry.detected] - détecteur déclenché (ex: "tool-calls", "text")
+ * @param {string} [entry.agentId]
+ * @param {string} [entry.projectPath]
+ * @param {number|null} [entry.uid] - uid de session transmis à l'arrêt
+ * @param {string} [entry.timestamp] - horodatage (défaut : maintenant)
+ * @returns {string}
+ */
+export function buildAgentStopTraceLine(entry = {}) {
+  const e = entry || {};
+  const at = e.timestamp || new Date().toISOString();
+  const uid = typeof e.uid === "number" && Number.isFinite(e.uid) && e.uid > 0 ? String(e.uid) : "none";
+  const fields = [
+    "op=auto-stop",
+    "reason=" + (sanitizeTraceValue(e.reason, 60) || "unknown"),
+    "detected=" + (sanitizeTraceValue(e.detected, 60) || "unknown"),
+    "agent=" + (sanitizeTraceValue(e.agentId, 80) || "none"),
+    "project=" + (sanitizeTraceValue(e.projectPath, 240) || "none"),
+    "uid=" + uid,
+  ];
+  return at + "  " + fields.join("  ");
+}
+
+/**
+ * Ajoute une ligne à un journal existant et applique la rotation (cap en
+ * caractères, on garde la FIN du journal — les arrêts les plus récents).
+ * @param {string} existing - contenu actuel du journal ("" si absent)
+ * @param {string} line - ligne à ajouter (sans saut de ligne)
+ * @param {object} [options]
+ * @param {number} [options.maxChars]
+ * @returns {string} nouveau contenu du journal
+ */
+export function appendAgentStopTrace(existing, line, options = {}) {
+  const maxChars = options.maxChars ?? AGENT_STOP_TRACE_MAX_CHARS;
+  const prev = typeof existing === "string" ? existing : "";
+  // La ligne est déjà assainie par `buildAgentStopTraceLine` (une seule ligne,
+  // champs séparés par DEUX espaces — on ne collapse donc PAS les espaces ici).
+  const entry = (typeof line === "string" ? line : "").replace(/[\r\n]+/g, " ").trim();
+  if (!entry) return prev;
+  const separator = prev && !prev.endsWith("\n") ? "\n" : "";
+  let next = prev + separator + entry + "\n";
+  if (next.length > maxChars) {
+    const tail = next.slice(next.length - maxChars);
+    const firstNewline = tail.indexOf("\n");
+    next = firstNewline >= 0 ? tail.slice(firstNewline + 1) : tail;
+  }
+  return next;
+}
+
+/**
+ * Construit la commande IPC d'arrêt d'un agent pour un arrêt AUTOMATIQUE (pure).
+ *
+ * - uid de session connu → `stop_agent_process` avec `expectedUid` : c'est la
+ *   commande dont la garde de propriété empêche de tuer la session d'une autre
+ *   exécution (une session remplacée depuis le lancement est REFUSÉE) ;
+ * - uid inconnu → `stop_agent_session` (chemin historique : il libère aussi
+ *   l'activité du projet, issue #13 / tâche 335).
+ *
+ * @param {object} target
+ * @param {string} [target.agentId]
+ * @param {string|null} [target.projectPath]
+ * @param {number|null} [target.uid]
+ * @returns {{cmd: string, args: object, guarded: boolean}}
+ */
+export function buildAgentStopRequest({ agentId, projectPath, uid } = {}) {
+  const valid = typeof uid === "number" && Number.isFinite(uid) && uid > 0;
+  if (valid) {
+    return {
+      cmd: "stop_agent_process",
+      args: { agentId, project: projectPath || null, expectedUid: uid },
+      guarded: true,
+    };
+  }
+  return {
+    cmd: "stop_agent_session",
+    args: { agentId: agentId || null, projectPath },
+    guarded: false,
+  };
 }
