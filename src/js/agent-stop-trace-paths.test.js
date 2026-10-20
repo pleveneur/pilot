@@ -366,6 +366,27 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     src.slice(Math.max(0, site - 700), site).includes(EXCEPTION_MARKER);
 
   /**
+   * Commentaire ACCOLÉ à une instruction : les lignes `//` contiguës qui la
+   * précèdent immédiatement. Sert à exiger qu'un site porte SON marqueur, et
+   * pas celui d'un site voisin du même bloc (le regard de 700 caractères de
+   * `precedences` pourrait sinon blanchir deux sites avec un seul marqueur).
+   * @param {string} src
+   * @param {number} site
+   * @returns {string}
+   */
+  function adjacentComment(src, site) {
+    const lines = src.slice(0, site).split("\n");
+    lines.pop(); // la ligne du site elle-même (partie avant le site)
+    const kept = [];
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line.startsWith("//")) break;
+      kept.unshift(line);
+    }
+    return kept.join("\n");
+  }
+
+  /**
    * Vérifie la PRÉCÉDENCE À PORTÉE DE BLOC LEXICALE : pour chaque site terminal,
    * une trace de motif doit exister DANS LA FONCTION ENGLOBANTE, avant le site
    * (optionnellement à moins de `maxDistance` caractères).
@@ -435,7 +456,7 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     }
   });
 
-  it("agent-pi.js : les arrêts de SESSION sont tracés, les arrêts de TOUR sont comptés", () => {
+  it("agent-pi.js : les arrêts de SESSION sont tracés, les arrêts de TOUR sont NOMMÉS", () => {
     // Famille « session » = les deux arrêts sur boucle détectée (réflexion et
     // actions). Ce sont les seuls sites de ce fichier qui terminent la run sans
     // action de l'utilisateur.
@@ -457,6 +478,36 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     // change ce nombre → il faut décider sa famille et le tracer s'il termine
     // une session.
     expect(aborts, "un arrêt a été ajouté/retiré dans l'onglet agent sans décision de famille").toHaveLength(13);
+
+    // PRÉCÉDENCE NOMMÉE (et non plus un simple COMPTE) : chaque arrêt de TOUR ou
+    // manuel doit porter le marqueur explicite `R3-EXCEPTION-MANUEL`, avec une
+    // raison courte et lisible. Sans cela, un arrêt AUTOMATIQUE ajouté et un
+    // arrêt MANUEL retiré laissaient le compte à 13 : le site suspect se cachait
+    // derrière le compteur et le diagnostic d'un agent coupé partait sur une
+    // fausse piste. Ici, un site muet (ni trace de session, ni marqueur) fait
+    // rougir le test, et le nombre d'exceptions est épinglé séparément.
+    const res = precedences(SRC_PI, /invoke\("abort_agent"\)/g, "abort_agent");
+    expect(res.sites, "sites `abort_agent` de l'onglet agent : cardinalité changée").toBe(13);
+    expect(
+      res.untraced,
+      "arrêt de TOUR ou manuel MUET dans l'onglet agent (ni trace, ni marqueur R3-EXCEPTION-MANUEL)",
+    ).toEqual([]);
+    // 2 arrêts de SESSION tracés (boucles réflexion + actions), 11 déclarés en
+    // exception nommée.
+    expect(res.traced, "arrêts de SESSION tracés de l'onglet agent").toBe(2);
+    expect(
+      res.exceptions,
+      "arrêts de TOUR/manuels : le NOMBRE d'exceptions nommées a changé",
+    ).toHaveLength(11);
+    // Chaque exception porte SON marqueur, dans le commentaire accolé à l'appel
+    // (et non hérité d'un site voisin du même bloc).
+    expect((SRC_PI.match(/R3-EXCEPTION-MANUEL/g) || []).length, "un marqueur a été retiré").toBe(11);
+    for (const site of res.exceptions) {
+      expect(
+        adjacentComment(SRC_PI, site),
+        `l'arrêt de la ligne ${SRC_PI.slice(0, site).split("\n").length} n'a pas son PROPRE marqueur accolé`,
+      ).toContain(EXCEPTION_MARKER);
+    }
   });
 
   it("super-agent.js : les deux arrêts sur boucle sont tracés (outils ET texte)", () => {

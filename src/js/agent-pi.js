@@ -1843,6 +1843,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
         break;
       case "abort":
         try {
+          // R3-EXCEPTION-MANUEL : arrêt demandé par l'utilisateur (bouton Stop de
+          // l'onglet agent) — ce n'est pas un arrêt automatique, donc aucune
+          // trace d'arrêt automatique n'est écrite ici (exception assumée).
           await invoke("abort_agent");
           // Arrêt manuel de l'agent : le flux peut s'interrompre sans signaler
           // son repos → remise à zéro du son différé (son suivant immédiat).
@@ -2618,6 +2621,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       settled = true;
       if (timer) { clearTimeout(timer); timer = null; }
       if (unlistenTest) { try { unlistenTest(); } catch (_) {} unlistenTest = null; }
+      // R3-EXCEPTION-MANUEL : fin du TEST de modèle — arrêt de tour décidé par
+      // Pilot (nettoyage du processus de test), pas une fin de session : aucune
+      // trace d'arrêt automatique n'est écrite.
       invoke("abort_agent").catch(() => {});
       setTimeout(() => {
         state.modelTestActive = false;
@@ -3722,6 +3728,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     // et reprendre le flux normal (non-bloquant).
     if (st.orchestrationExtractingMemory) {
       appendSystemMessage(messagesEl, `⏰ Timeout pendant l'extraction mémoire projet — abandon, reprise du plan.`);
+      // R3-EXCEPTION-MANUEL : arrêt de TOUR demandé par Pilot (timeout pendant
+      // l'extraction mémoire) — le plan reprend juste après, la session n'est
+      // pas terminée : aucune trace d'arrêt automatique n'est écrite.
       try { await invoke("abort_agent"); } catch (_) {}
       st.orchestrationExtractingMemory = null;
       await executeNextTask(messagesEl, st, statusEl);
@@ -3730,6 +3739,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
 
     if (st.orchestrationRevising) {
       appendSystemMessage(messagesEl, `⏰ Timeout pendant la révision. On continue avec le plan actuel.`);
+      // R3-EXCEPTION-MANUEL : arrêt de TOUR demandé par Pilot (timeout pendant la
+      // révision) — la session continue avec le plan actuel : pas de trace.
       try { await invoke("abort_agent"); } catch (_) {}
       st.orchestrationRevising = false;
       await executeNextTask(messagesEl, st, statusEl);
@@ -3739,6 +3750,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     if (st.orchestrationSubdividing) {
       const failedTaskId = st.orchestrationSubdividingTaskId;
       appendSystemMessage(messagesEl, `⏰ Timeout pendant la subdivision de la tâche ${failedTaskId}. Escalade directe...`);
+      // R3-EXCEPTION-MANUEL : arrêt de TOUR demandé par Pilot (timeout pendant la
+      // subdivision) — escalade vers la tâche suivante, pas une fin de session.
       try { await invoke("abort_agent"); } catch (_) {}
       st.orchestrationSubdividing = false;
       st.orchestrationSubdividingTaskId = null;
@@ -3757,6 +3770,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     const secs = Math.round((st.orchestrationIdleTimeoutMs || 120000) / 1000);
     appendSystemMessage(messagesEl, `⏰ Timeout d'inactivité sur la tâche ${currentTaskId} (pas d'activité pendant ${secs}s).`);
 
+    // R3-EXCEPTION-MANUEL : arrêt de TOUR demandé par Pilot (inactivité sur la
+    // tâche courante) — l'échec de la tâche est traité juste après, la session
+    // n'est pas terminée : aucune trace d'arrêt automatique.
     try { await invoke("abort_agent"); } catch (_) {}
     await handleTaskFailure(st, messagesEl, statusEl, currentTask, `Timeout d'inactivité (pas d'activité pendant ${secs}s)`);
   }
@@ -7372,6 +7388,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             if (!state.orchestrationRunning || state.orchestrationPaused || !state.orchestrationPlan) return;
             appendSystemMessage(messagesEl, "🔁 Reprise du plan après compaction (pi n'a pas relancé automatiquement)...");
             // Couper un éventuel tour zombie, puis relancer la tâche courante.
+            // R3-EXCEPTION-MANUEL : reprise du plan après compaction — arrêt de
+            // TOUR demandé par Pilot avant de relancer la tâche (la session
+            // continue) : aucune trace d'arrêt automatique n'est écrite.
             invoke("abort_agent").catch(() => {}).finally(() => {
               state.isStreaming = false;
               orchFns.executeNextTask(messagesEl, state, statusEl);
@@ -7382,6 +7401,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             // directement (pas sendPrompt) pour ne PAS ré-afficher le message
             // utilisateur ni ré-injecter le contexte (déjà compacté côté pi).
             appendSystemMessage(messagesEl, "🔁 Reprise du chat après compaction (pi n'a pas relancé automatiquement)...");
+            // R3-EXCEPTION-MANUEL : reprise du chat après compaction — arrêt de
+            // TOUR demandé par Pilot avant de ré-émettre le dernier prompt (la
+            // session continue) : aucune trace d'arrêt automatique n'est écrite.
             invoke("abort_agent").catch(() => {}).finally(() => {
               state.isStreaming = false;
               const resumePayload = { message: state.lastUserPrompt };
@@ -7435,12 +7457,18 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           if (isOrchActive) {
             if (!state.orchestrationRunning || state.orchestrationPaused || !state.orchestrationPlan) return;
             appendSystemMessage(messagesEl, "🔁 Reprise du plan après compaction (pi n'a pas relancé automatiquement)...");
+            // R3-EXCEPTION-MANUEL : reprise du plan après compaction (ancien
+            // format d'événement) — arrêt de TOUR demandé par Pilot avant de
+            // relancer la tâche (la session continue) : pas de trace ici.
             invoke("abort_agent").catch(() => {}).finally(() => {
               state.isStreaming = false;
               orchFns.executeNextTask(messagesEl, state, statusEl);
             });
           } else if (!state.orchestrationEnabled && state.lastUserPrompt) {
             appendSystemMessage(messagesEl, "🔁 Reprise du chat après compaction (pi n'a pas relancé automatiquement)...");
+            // R3-EXCEPTION-MANUEL : reprise du chat après compaction (ancien
+            // format d'événement) — arrêt de TOUR demandé par Pilot avant de
+            // ré-émettre le dernier prompt (la session continue) : pas de trace.
             invoke("abort_agent").catch(() => {}).finally(() => {
               state.isStreaming = false;
               const resumePayload = { message: state.lastUserPrompt };
@@ -7579,6 +7607,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         if (!state.orchestrationConnErrorSeen) {
           state.orchestrationConnErrorSeen = true;
           // Stopper les retries automatiques de pi (sinon ça boucle pendant maxAttempts×)
+          // R3-EXCEPTION-MANUEL : arrêt de TOUR demandé par Pilot (modèle
+          // injoignable) — le flux bascule en pause/erreur explicite, la session
+          // n'est pas terminée : aucune trace d'arrêt automatique n'est écrite.
           try { await invoke("abort_agent"); } catch (_) {}
           if (state.orchestrationRunning) {
             // Exécution d'une tâche → pause (option 1)
