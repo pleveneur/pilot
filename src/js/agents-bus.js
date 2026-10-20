@@ -46,7 +46,12 @@ import {
   MAX_LOOP_ESCALATION,
 } from "./loop-detection.js";
 // Journal disque du MOTIF des arrêts automatiques (la cause survit à la session).
-import { traceAutomaticAgentStop } from "./agent-stop-trace.js";
+// `setAgentStopTraceFailureReporter` rend VISIBLE une trace non écrite (règle 3 :
+// aucune session ne disparaît sans trace, et une trace manquante se dit).
+import {
+  traceAutomaticAgentStop,
+  setAgentStopTraceFailureReporter,
+} from "./agent-stop-trace.js";
 import {
   enqueueExclusivity,
   dequeueExclusivity,
@@ -228,6 +233,10 @@ async function workOnDiskDuringRun(ctx) {
  * @returns {Promise<string>} message instrumenté
  */
 async function settleWatchdogRelease(ctx, door, idleSince) {
+  // RÈGLE 3 : libérer un verrou au motif que « plus personne ne travaille » est
+  // un arrêt AUTOMATIQUE de la session — le motif (et la PORTE qui a tiré) est
+  // écrit AVANT l'arrêt effectif, jamais après.
+  await traceAutomaticAgentStopForRun(ctx, { reason: "watchdog-release", detected: door });
   const message = buildWatchdogReleaseMessage({
     door,
     agents: Array.from(ctx.activeAgents),
@@ -900,6 +909,12 @@ export async function sweepOrphanRunLocks(now = Date.now()) {
           continue;
         }
         const generation = ctx.generation;
+        // RÈGLE 3 : la run restée « stopping » est libérée automatiquement —
+        // le motif est écrit AVANT la libération (l'arrêt n'est jamais muet).
+        await traceAutomaticAgentStopForRun(ctx, {
+          reason: "sweep-stopping-release",
+          detected: "sweep",
+        });
         settleMission(ctx.runKey, "stop", {});
         endRun(key, generation);
         released.push(key);
@@ -1034,6 +1049,10 @@ export async function forceReleaseProjectRunLock(project) {
     const ctx = busState.runs[key];
     if (!ctx) continue;
     queued += pendingExclusivityCount(ctx);
+    // RÈGLE 3 : une libération de verrou ne fait pas disparaître une session
+    // sans trace écrite — même demandée explicitement, la raison reste au
+    // disque (op=auto-stop, reason=force-release, detected=user-command).
+    await traceAutomaticAgentStopForRun(ctx, { reason: "force-release", detected: "user-command" });
     settleMission(ctx.runKey, "stop", {});
     endRun(key, ctx.generation);
     released.push(key);
@@ -1122,6 +1141,33 @@ async function projectHasWorkingSession(project) {
 function emit(event, data) {
   const cb = busState.callbacks[event];
   if (cb) cb(data);
+}
+
+/**
+ * RÈGLE 3 (aucun arrêt automatique sans trace écrite) : journalise le motif pour
+ * TOUS les agents de la run, AVANT l'arrêt effectif. Une ligne par agent actif ;
+ * si la run n'a plus d'agent actif (verrou orphelin, run fantôme), une ligne
+ * `agent=none` garde la raison de l'arrêt de la run elle-même. Le repli global
+ * (`<app_data_dir>/agent-stops.log`) est assuré par `traceAutomaticAgentStop`
+ * quand le projet est inconnu.
+ * @param {object} ctx - contexte de run
+ * @param {{reason:string, detected?:string}} entry - motif (reason LITTÉRAL au site)
+ * @returns {Promise<void>}
+ */
+async function traceAutomaticAgentStopForRun(ctx, entry = {}) {
+  const ids = Array.from((ctx && ctx.activeAgents) || []);
+  const targets = ids.length > 0 ? ids : [null];
+  for (const agentId of targets) {
+    const projectPath =
+      (agentId && ctx && ctx.agentProject && ctx.agentProject[agentId]) || (ctx && ctx.project) || "";
+    await traceAutomaticAgentStop({
+      reason: entry.reason,
+      detected: entry.detected,
+      agentId: agentId || "",
+      projectPath,
+      uid: agentId ? expectedSessionUid(ctx, agentId) : null,
+    }).catch(() => {});
+  }
 }
 
 /**
@@ -1406,7 +1452,9 @@ function resetTimeout(ctx) {
     }).catch(() => {});
     // Portée CIBLÉE : le timeout d'inactivité de CETTE run ne doit jamais
     // arrêter les agents d'une autre run (autre projet, autre mission).
-    stopAgentsRun({ silent: true, runKey: ctx.runKey });
+    // RÈGLE 3 : le motif (idle-timeout / aucune activité) est transmis par
+    // l'appelant et journalisé par stopAgentsRun AVANT l'arrêt effectif.
+    stopAgentsRun({ silent: true, runKey: ctx.runKey, reason: "idle-timeout", detected: "no-event" });
   }, busState.timeoutMs);
 }
 
@@ -1434,6 +1482,10 @@ function detectCycle(agentId, ctx) {
 
 export async function initAgentsBus(options = {}) {
   busState.callbacks = options;
+  // RÈGLE 3 : une trace d'arrêt automatique qui n'a PAS pu être écrite doit être
+  // DITE (jamais de fail-open silencieux) — le rapporteur branche l'événement de
+  // notification de l'interface sur le module de trace.
+  setAgentStopTraceFailureReporter((message) => emit("notify", { message }));
   busState.config = await invoke("get_config").catch(() => ({}));
 
   busState.registry = await loadAgentRegistry();
@@ -1482,7 +1534,7 @@ export async function initAgentsBus(options = {}) {
     busState.autoStopListener();
     busState.autoStopListener = null;
   }
-  busState.autoStopListener = await listen("agent-auto-stopped", (ev) => {
+  busState.autoStopListener = await listen("agent-auto-stopped", async (ev) => {
     const p = ev.payload || {};
     const agentId = p.agent;
     if (!agentId) return;
@@ -1491,9 +1543,31 @@ export async function initAgentsBus(options = {}) {
     for (const key of Object.keys(busState.runs)) {
       if (busState.runs[key].activeAgents.has(agentId)) { ctx = busState.runs[key]; break; }
     }
-    if (!ctx || ctx.runState !== "running") return;
+    if (!ctx || ctx.runState !== "running") {
+      // RÈGLE 3 : même quand la run n'est plus retrouvée (ctx introuvable ou run
+      // déjà arrêtée), l'arrêt AUTOMATIQUE ne disparaît pas en silence : sa
+      // raison est écrite au disque (repli global si le projet est inconnu).
+      console.warn("[agents-bus] arrêt automatique hors run active :", agentId, p.reason || "");
+      traceAutomaticAgentStop({
+        reason: "auto-stop-rust",
+        detected: "anomaly-monitor",
+        agentId,
+        projectPath: p.project || "",
+        uid: null,
+      }).catch(() => {});
+      return;
+    }
     const reason = p.reason || "arrêt automatique (bloqué sans progression)";
     console.warn("[agents-bus] arrêt automatique de l'agent", agentId, reason);
+    // RÈGLE 3 : la raison de l'arrêt automatique est écrite AVANT l'arrêt
+    // effectif (failAgentTurn libère le créneau).
+    await traceAutomaticAgentStop({
+      reason: "auto-stop-rust",
+      detected: "anomaly-monitor",
+      agentId,
+      projectPath: ctx.agentProject[agentId] || ctx.project || "",
+      uid: expectedSessionUid(ctx, agentId),
+    }).catch(() => {});
     emit("notify", {
       agentId,
       message: `⏱️ L'agent ${agentId} a été arrêté automatiquement : ${reason}. Un agent en file d'attente peut prendre le relais.`,
@@ -1513,7 +1587,7 @@ export async function initAgentsBus(options = {}) {
     busState.staleBusyListener();
     busState.staleBusyListener = null;
   }
-  busState.staleBusyListener = await listen("agent-stale-busy-released", (ev) => {
+  busState.staleBusyListener = await listen("agent-stale-busy-released", async (ev) => {
     const p = ev.payload || {};
     const agentId = p.agent;
     if (!agentId) return;
@@ -1521,8 +1595,28 @@ export async function initAgentsBus(options = {}) {
     for (const key of Object.keys(busState.runs)) {
       if (busState.runs[key].activeAgents.has(agentId)) { ctx = busState.runs[key]; break; }
     }
-    if (!ctx || ctx.runState !== "running") return;
+    if (!ctx || ctx.runState !== "running") {
+      // RÈGLE 3 : libération busy-stale hors run active → le motif reste au
+      // disque (aucun arrêt automatique ne disparaît sans trace).
+      console.warn("[agents-bus] busy-stale hors run active pour l'agent", agentId);
+      traceAutomaticAgentStop({
+        reason: "busy-stale-release",
+        detected: "stale-busy",
+        agentId,
+        projectPath: p.project || "",
+        uid: null,
+      }).catch(() => {});
+      return;
+    }
     console.warn("[agents-bus] busy-stale libéré pour l'agent", agentId);
+    // RÈGLE 3 : le motif est écrit AVANT la libération effective du créneau.
+    await traceAutomaticAgentStop({
+      reason: "busy-stale-release",
+      detected: "stale-busy",
+      agentId,
+      projectPath: ctx.agentProject[agentId] || ctx.project || "",
+      uid: expectedSessionUid(ctx, agentId),
+    }).catch(() => {});
     emit("notify", {
       agentId,
       message: `🧹 L'agent ${agentId} était marqué actif sans progression (process figé). Le créneau et les demandes en file ont été libérés.`,
@@ -1969,7 +2063,9 @@ export function handleAgentEvent(ev) {
     if (count > maxTurns) {
       console.error("[agents-bus] MAX_PI_TURNS exceeded", agentId, count, "max", maxTurns);
       emit("error", { message: `L'agent ${agentId} a fait ${count} tours pi sans terminer (max ${maxTurns}). Arrêt forcé.` });
-      stopAgentsRun({ silent: true, runKey: ctx.runKey });
+      // RÈGLE 3 : motif transmis (plafond de tours pi / détecté par le compteur
+      // de tours), journalisé par stopAgentsRun AVANT l'arrêt effectif.
+      stopAgentsRun({ silent: true, runKey: ctx.runKey, reason: "turn-cap", detected: "pi-turns" });
       return;
     }
   }
@@ -2738,6 +2834,16 @@ export async function stopAgentsRun(options = {}) {
   // (autre projet, autre mission), sinon une run voisine qui se termine coupe un
   // agent qui vient de démarrer — « l'agent commence et s'arrête ».
   const onlyKey = typeof options.runKey === "string" && options.runKey ? options.runKey : null;
+  // RÈGLE 3 : motif de l'arrêt AUTOMATIQUE, transmis par l'appelant
+  // (`options.reason`). Écrit au disque AVANT l'arrêt effectif ci-dessous. Un
+  // arrêt MANUEL (raison absente — bouton « tout arrêter ») reste volontaire :
+  // il n'est pas journalisé comme arrêt automatique.
+  const autoStopReason = typeof options.reason === "string" ? options.reason.trim() : "";
+  // Détecteur à l'origine de l'arrêt : celui de l'appelant (ex: « no-event » pour
+  // le timeout d'inactivité, « pi-turns » pour le plafond de tours), sinon
+  // « stop-run » (arrêt de la run demandé par le mécanisme d'arrêt lui-même).
+  const autoStopDetected =
+    typeof options.detected === "string" && options.detected.trim() ? options.detected.trim() : "stop-run";
   const runningKeys = Object.keys(busState.runs).filter((k) => {
     if (onlyKey && k !== onlyKey) return false;
     const s = busState.runs[k].runState;
@@ -2752,6 +2858,12 @@ export async function stopAgentsRun(options = {}) {
   for (const key of runningKeys) {
     const ctx = busState.runs[key];
     if (!ctx) continue;
+    // RÈGLE 3 : la trace est écrite AVANT l'arrêt effectif (jamais après) — une
+    // ligne par agent actif, une ligne `agent=none` si la run n'a plus d'agent
+    // actif mais s'arrête quand même (arrêt de la run = fait à tracer).
+    if (autoStopReason) {
+      await traceAutomaticAgentStopForRun(ctx, { reason: autoStopReason, detected: autoStopDetected });
+    }
     ctx.runState = "stopping";
     // Livraison du rapport : chaque mission arrêtée reçoit SON arrêt (et non
     // celui d'une autre mission, comme avec l'ancien état global écrasé).

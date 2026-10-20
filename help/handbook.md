@@ -2133,7 +2133,7 @@ contenu reconnu : `edits`, `content`, `newContent`, `newText`, `patch`, `diff`�
 
 **Motif journalisé sur disque** : chaque arrêt AUTOMATIQUE d'agent écrit une
 ligne dans `<projet>/.pilot/agent-stops.log` (append logique via les commandes
-IPC existantes, rotation 256 Ko, fail-open) :
+IPC existantes, rotation 256 Ko, fail-open côté arrêt) :
 
 ```
 2026-10-20T03:30:00.123Z  op=auto-stop  reason=loop-detection  detected=tool-calls  agent=codeur  project=<projet>  uid=none
@@ -2150,6 +2150,43 @@ Modules : `loop-detection.js` (pures : `collectWriteContent`,
 `buildAgentStopRequest`), `agent-stop-trace.js` (I/O du journal),
 `super-agent.js` / `agents-bus.js` (points d'arrêt).
 
+### Règle 3 — aucun arrêt automatique sans trace écrite (tous les chemins)
+
+**Principe** : une session d'agent ne peut pas disparaître sans une trace écrite
+de sa raison d'arrêt. Tous les chemins d'arrêt **automatique** du bus écrivent
+donc une ligne AVANT l'arrêt effectif (jamais après) :
+
+| Chemin d'arrêt | `reason` | `detected` |
+|---|---|---|
+| Boucle d'outils / de réflexion | `loop-detection` | `tool-calls`, `text`, `text-escalation-exhausted` |
+| Plafond de tours de la run | `loop-detection` | `turn-cap` |
+| Timeout d'inactivité (`resetTimeout`) | `idle-timeout` | `no-event` |
+| Plafond de tours pi par agent | `turn-cap` | `pi-turns` |
+| Arrêt automatique émis par Rust (moniteur d'anomalie) | `auto-stop-rust` | `anomaly-monitor` |
+| Session restée busy sans progression | `busy-stale-release` | `stale-busy` |
+| Libération de verrou par le watchdog | `watchdog-release` | porte (`timeGuard`, …) |
+| Run restée « stopping » (balayage) | `sweep-stopping-release` | `sweep` |
+| Libération forcée du verrou du projet | `force-release` | `user-command` |
+| Arrêt de run demandé par un appelant automatique (`stopAgentsRun({reason})`) | motif transmis | `stop-run` (défaut) |
+
+- **Arrêt manuel** (bouton « tout arrêter ») : pas de ligne — il est volontaire et
+  ne doit pas être présenté comme un arrêt automatique.
+- Le cas **`ctx` introuvable** (arrêt automatique reçu pour un agent qui n'est
+  plus dans une run vivante) est journalisé aussi : l'information ne disparaît
+  plus par un `return` muet.
+- **Repli GLOBAL** : quand aucun chemin de projet n'est disponible (agent sans
+  projet) ou que l'écriture dans le projet échoue, la ligne part dans
+  `<app_data_dir>/agent-stops.log` (même forme de ligne, même rotation).
+- **Non-silence** : si même le journal global est inaccessible, l'échec est
+  **dit** (`console.warn` + notification branchée par le bus via
+  `setAgentStopTraceFailureReporter`, à défaut événement global
+  `pilot-agent-stop-trace-failed`) — jamais un fail-open muet.
+- **Verrou anti-régression** : `agent-stop-trace-paths.test.js` énumère les sites
+  terminaux (`abort_agent_process`, `stopAgentsRun`, `settleWatchdogRelease`,
+  `settleMission(..., "stop")`) et exige une trace à motif littéral avant
+  chacun ; la **liste est épinglée** → un nouveau site d'arrêt muet fait échouer
+  le test.
+
 <!-- HELP:loop-detection-writes -->
 ### Détection de boucle : modifier plusieurs fois le même fichier n'est pas une boucle
 Pilot arrête automatiquement un agent qui **répète exactement** la même chose
@@ -2163,7 +2200,12 @@ comme une boucle.
 Chaque **arrêt automatique** laisse une ligne dans le fichier
 **`.pilot/agent-stops.log`** du projet (cause de l'arrêt, type de détection,
 agent, session) : utile pour comprendre après coup pourquoi un agent s'est
-arrêté.
+arrêté. **Tous** les arrêts automatiques sont concernés (boucle, inactivité,
+plafond de tours, agent bloqué repéré par le moniteur, libération d'un verrou) —
+plus aucun ne se produit sans laisser de trace. Si le projet n'est pas connu (ou
+si le fichier du projet ne peut pas être écrit), la ligne est écrite dans le
+journal global de l'application (`agent-stops.log` du répertoire de données) ;
+et si même cela échoue, Pilot le **signale** au lieu de rester silencieux.
 <!-- /HELP:loop-detection-writes -->
 
 ### Mode « Assistant seul » (A19, maquette ASS_Only_V4)
