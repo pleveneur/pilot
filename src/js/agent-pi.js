@@ -6432,6 +6432,10 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
   switch (type) {
     case "agent_start":
       state.isStreaming = true;
+      // Le tour commence RÉELLEMENT : la surface de rendu de l'onglet est occupée
+      // dès le premier instant (sans attendre le premier delta). Un son de fin
+      // armé pendant ce tour ne doit pas être joué à sa fin (cf. sound-deferred.js).
+      noteSoundRenderActivity("agent");
       // Mission 385 : la tâche en cours change → le bloc de la file se met à jour.
       refreshQueueBlock();
       state.lastStopReason = "";  // réinit pour la détection de troncation (length) à l'agent_end

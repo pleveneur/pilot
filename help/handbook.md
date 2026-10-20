@@ -1283,11 +1283,13 @@ apprend et répond.
   **important** : une **tâche déléguée** à un agent du projet **est terminée**, ou
   une **anomalie** de suivi (ex: connexion au super-agent perdue).
 - **Fin de run : avis garanti, succès OU échec** : à la fin d'une run d'agents
-  délégués, la notification desktop et le **son « fin »** sont émis **en premier
-  et une seule fois** — même si la consignation du compte rendu dans le suivi
-  échoue (celle-ci est *fail-open* : son échec n'enlève jamais l'avis). Une run
-  dont **un seul agent a échoué** est annoncée comme un **échec** (« ❌ Tâche
-  terminée en ÉCHEC… »), jamais comme un succès.
+  délégués, la notification desktop est émise **en premier et une seule fois** —
+  même si la consignation du compte rendu dans le suivi échoue (celle-ci est
+  *fail-open* : son échec n'enlève jamais l'avis). Le **son « fin »** est **armé**
+  au même instant mais n'est joué qu'à la **fin réelle de l'affichage** du
+  compte rendu (cf. § Son de notification). Une run dont **un seul agent a
+  échoué** est annoncée comme un **échec** (« ❌ Tâche terminée en ÉCHEC… »),
+  jamais comme un succès.
 - **Désactivé par défaut** pour éviter la sur-notification : les réponses
   banales de l'Assistant ne déclenchent **aucune** notification.
 
@@ -1300,9 +1302,19 @@ apprend et répond.
 - **Son « fin » joué à la fin réelle de l'affichage** : il n'est plus émis au
   moment où la tâche se termine, mais une fois que le texte a **entièrement fini
   de s'afficher** à l'écran (flux terminé, y compris le raisonnement lorsqu'il
-  est affiché) — plus de son pendant que la réponse s'écrit encore. Un seul son
-  par fin de mission ; si la fin d'affichage n'est jamais signalée, un délai de
-  sécurité borné finit par le jouer (jamais de silence complet).
+  est affiché) — plus de son pendant que la réponse s'écrit encore.
+- **Jamais de son au milieu d'un tour** : un tour d'agent comporte des **étapes
+  silencieuses** (appel d'outil long : build, série de tests, recherche ;
+  réflexion non streamée ; attente du premier mot). Un **silence n'est jamais
+  une fin de tour** : le son attend que le tour ait **réellement** rendu son
+  dernier élément, et une reprise (nouvelle tentative, compaction) ne sonne pas.
+- **Un son pour le tour qui AFFICHE le sujet** : si le compte rendu d'une tâche
+  déléguée ne peut pas être affiché tout de suite (l'Assistant est en train de
+  vous répondre → remise différée), le son n'est pas joué à la fin de votre tour
+  mais à la fin du tour qui affiche le compte rendu.
+- **Un seul son par fin de mission** ; si la fin d'affichage n'est jamais
+  signalée (agent interrompu), un délai de sécurité borné finit par le jouer —
+  sauf tant qu'un rendu est encore en cours (aucun son pendant le travail).
 - **Installation automatique** : le script est **créé tout seul** au premier
   usage (dossier `~/.pilot/assistant/` créé si besoin). Aucune intervention
   manuelle n'est requise : le bouton « Tester » fonctionne dès l'installation.

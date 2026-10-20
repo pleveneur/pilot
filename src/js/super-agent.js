@@ -1183,8 +1183,16 @@ let superSetReflecting = () => {};
  * On attend que la frame soit peinte, puis on déclare le rendu au repos — c'est
  * à cet instant (et pas à la réception du signal de fin) que le son de fin armé
  * est joué. Repli setTimeout hors navigateur (tests).
+ *
+ * RÈGLE : seul un `agent_end` VRAIMENT terminal clôt le tour. `agent_end` peut
+ * être émis avec `willRetry: true` (erreur transitoire, troncature, compaction,
+ * continuation) et la session REPART : déclarer le rendu au repos ferait sonner
+ * le bip alors que l'assistant reprend sa réflexion (`agent-hardening.js`
+ * `shouldFinalizeOnAgentEnd`, déjà appliqué au suivi des agents délégués).
+ * @param {object} [event] - payload de l'événement `agent_end`.
  */
-function flushSuperRenderThenSoundIdle() {
+function flushSuperRenderThenSoundIdle(event) {
+  if (!shouldFinalizeOnAgentEnd(event)) return;
   const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (cb) => setTimeout(cb, 0);
   raf(() => raf(() => markSoundRenderIdle("superagent")));
 }
@@ -3828,6 +3836,11 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // l'assistant occupé immédiatement (même si la garde locale isStreaming est
     // en retard), pour que `send()` ne l'accepte puis perde une saisie.
     backendBusy = true;
+    // Le tour commence RÉELLEMENT : la surface de rendu est occupée dès le
+    // premier instant, sans attendre le premier delta. Un son de fin armé
+    // pendant ce tour (compte rendu différé) ne doit pas être joué à sa fin :
+    // il appartient au tour suivant (cf. sound-deferred.js).
+    noteSoundRenderActivity("superagent");
     statusEl.textContent = "Réfléchit…";
     superSetReflecting(true);
     return;
@@ -3853,7 +3866,8 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     if (!spokenToTelegram) flushRawTelegramAvis();
     // Fin de flux : une fois la dernière frame de rendu peinte, le rendu est au
     // repos → le son de fin armé (délégation / run d'agents) peut être joué.
-    flushSuperRenderThenSoundIdle();
+    // Ignoré si cet agent_end n'est pas terminal (la session reprend).
+    flushSuperRenderThenSoundIdle(payload);
     if (respBubble && respBase && respText && String(respText).trim()) {
       extendResponseBubbleBadges(respBubble, respBase, respText).catch((e) => console.error("extendResponseBubbleBadges erreur:", e));
     }

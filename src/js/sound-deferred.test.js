@@ -175,9 +175,17 @@ describe("createDeferredSoundPlayer — attendre la fin de l'affichage", () => {
     player.arm("fin");
     clock.advance(80);
     player.activity("superagent");
+    // Une écriture repousse l'échéance : rien tant que la surface est active.
     clock.advance(80);
     expect(play).toHaveBeenCalledTimes(0);
-    clock.advance(20); // 100 ms depuis la dernière activité
+    // L'échéance tombe alors que la surface écrit TOUJOURS → elle ne sonne pas
+    // (re-vérification), elle se replanifie.
+    clock.advance(20);
+    expect(play).toHaveBeenCalledTimes(0);
+    clock.advance(100);
+    expect(play).toHaveBeenCalledTimes(0);
+    // Le repos est signalé pour de bon → le son part, une seule fois.
+    expect(player.idle("superagent")).toBe(true);
     expect(play).toHaveBeenCalledTimes(1);
   });
 
@@ -207,6 +215,92 @@ describe("createDeferredSoundPlayer — attendre la fin de l'affichage", () => {
     });
     throwing.arm("fin");
     expect(() => throwing.idle("superagent")).not.toThrow();
+  });
+});
+
+describe("règle « la fin, pas le milieu » — aucun son sur un événement intermédiaire", () => {
+  it("un long silence au milieu du tour (outil long, réflexion muette) ne joue AUCUN son", () => {
+    const { play, clock, player } = setup();
+    player.arm("fin"); // signal de fin reçu par l'Assistant
+    player.activity("superagent"); // le tour écrit (contenu partiel)
+    // Étape muette : appel d'outil de 10 s, aucun delta de texte ni de réflexion.
+    clock.advance(10 * 100);
+    expect(play).toHaveBeenCalledTimes(0);
+    // Le tour reprend puis redevient muet (second appel d'outil).
+    player.activity("superagent");
+    clock.advance(5 * 100);
+    expect(play).toHaveBeenCalledTimes(0);
+    // Fin RÉELLE du tour (flux terminé, dernière frame peinte) → un seul son.
+    expect(player.idle("superagent")).toBe(true);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalledWith("fin");
+  });
+
+  it("un signal de fin pendant un tour en cours ne sonne ni à sa fin ni au silence suivant", () => {
+    const { play, clock, player } = setup();
+    player.activity("superagent"); // l'Assistant répond à l'utilisateur (tour en cours)
+    player.arm("fin"); // un compte rendu arrive : sa remise sera DIFFÉRÉE
+    expect(player.pendingPhase()).toBe("awaitRunEnd");
+    // Fin du tour en cours : ce n'est pas le tour du sujet → aucun son.
+    expect(player.idle("superagent")).toBe(false);
+    expect(play).toHaveBeenCalledTimes(0);
+    // Long silence avant le rejeu : le silence n'est pas une fin de tour.
+    clock.advance(5 * 100);
+    expect(play).toHaveBeenCalledTimes(0);
+    // Rejeu : le tour qui AFFICHE le compte rendu démarre, puis se termine.
+    player.activity("superagent");
+    expect(player.pendingPhase()).toBe("awaitIdle");
+    expect(player.idle("superagent")).toBe(true);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("un tour relancé (agent_end non terminal) ne sonne pas ; la fin réelle sonne une fois", () => {
+    const { play, clock, player } = setup();
+    player.arm("fin");
+    player.activity("superagent");
+    // Reprise (willRetry / compaction) : la surface ne signale PAS son repos,
+    // elle continue d'écrire — aucun son ne doit partir.
+    clock.advance(4 * 100);
+    player.activity("superagent");
+    clock.advance(4 * 100);
+    expect(play).toHaveBeenCalledTimes(0);
+    expect(player.idle("superagent")).toBe(true);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("fin de tour d'un autre onglet : un seul son, jamais de doublon", () => {
+    const { play, player } = setup();
+    player.arm("fin");
+    player.activity("agent");
+    expect(player.idle("agent")).toBe(true);
+    expect(player.idle("agent")).toBe(false);
+    player.idle("agent");
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("branchement de l'activité de début de tour (agent_start)", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  // Lecture normalisée (worktree CRLF côté CI Windows) : la règle qualité impose
+  // ce repli pour tout test qui lit le source.
+  const read = (name) => readFileSync(resolve(here, name), "utf8").replace(/\r\n/g, "\n");
+
+  it("super-agent.js : agent_start marque la surface occupée et l'agent_end non terminal ne la libère pas", () => {
+    const src = read("super-agent.js");
+    const start = src.indexOf('if (type === "agent_start") {');
+    expect(start).toBeGreaterThan(-1);
+    expect(src.slice(start, start + 900)).toContain('noteSoundRenderActivity("superagent")');
+    expect(src).toContain("if (!shouldFinalizeOnAgentEnd(event)) return;");
+    expect(src).toContain("flushSuperRenderThenSoundIdle(payload)");
+  });
+
+  it("agent-pi.js : agent_start marque la surface occupée", () => {
+    const src = read("agent-pi.js");
+    // lastIndexOf : le premier `case "agent_start"` est celui de la complétion
+    // inline (session séparée, sans rapport avec le son de fin).
+    const start = src.lastIndexOf('case "agent_start"');
+    expect(start).toBeGreaterThan(-1);
+    expect(src.slice(start, start + 900)).toContain('noteSoundRenderActivity("agent")');
   });
 });
 

@@ -13,12 +13,20 @@
 // ET qu'un son est armé.
 //
 // Garde-fous :
-//   - aucun son tant que du texte arrive encore (chaque activité repousse le
-//     délai de sécurité) ;
+//   - aucun son tant qu'une surface de rendu écrit encore — un SILENCE ne prouve
+//     JAMAIS la fin du tour : un tour comporte des étapes muettes (appel d'outil
+//     long, réflexion non streamée, attente du premier token). Le délai de
+//     sécurité ne joue donc le son que si PLUS AUCUNE surface n'est active ;
+//     sinon il re-vérifie (cf. `restartSafety`) ;
+//   - un son armé alors qu'un tour écrit déjà appartient au tour SUIVANT (le
+//     sujet — un compte rendu, un résultat de run — ne sera affiché qu'après la
+//     fin du tour en cours : remise différée). Il n'est donc jamais joué à la fin
+//     du tour pendant lequel il a été armé ;
 //   - un seul son par fin de mission (armement coalescé : un second armement
 //     pendant l'attente, ou juste après l'émission, est ignoré) ;
-//   - aucun silence complet (délai de sécurité borné : si la fin d'affichage
-//     n'est jamais signalée, le son est joué après `safetyMs` sans activité).
+//   - aucun silence complet (délai de sécurité : si rien n'est en cours
+//     d'écriture et que la fin d'affichage n'est jamais signalée, le son est joué
+//     après `safetyMs`).
 //   - son jamais retardé par une interruption : un arrêt MANUEL de l'agent /
 //     assistant, un ÉCHEC de processus ou une ANNULATION de run peuvent
 //     interrompre le flux sans que la surface signale son repos. Ces sites
@@ -53,6 +61,13 @@ export function createDeferredSoundPlayer({
   let coalesceTimer = null; // fenêtre anti-doublon après émission.
   let coalescing = false; // un son vient d'être joué.
   const activeSources = new Set(); // surfaces de rendu en train d'écrire.
+  // Phase d'attente du son armé (cf. en-tête) :
+  //   "awaitRunEnd"   : un tour écrit déjà à l'armement → on attend qu'il finisse,
+  //                     SANS jouer (ce tour n'affiche pas le sujet) ;
+  //   "awaitRunStart" : ce tour est fini, le tour qui affichera le sujet n'a pas
+  //                     encore commencé → on attend sa première écriture ;
+  //   "awaitIdle"     : le tour du sujet a commencé → on joue à son repos.
+  let phase = "awaitIdle";
 
   const clearSafety = () => {
     if (safetyTimer !== null) {
@@ -87,12 +102,31 @@ export function createDeferredSoundPlayer({
     return true;
   }
 
-  /** (Re)démarre le délai de sécurité tant qu'un son est armé. */
+  /**
+   * (Re)démarre le délai de sécurité tant qu'un son est armé.
+   *
+   * RÈGLE : le silence n'est pas une fin de tour. Tant qu'une surface de rendu se
+   * déclare en écriture, ou tant que le tour qui doit afficher le sujet n'a pas
+   * commencé, le minuteur ne joue RIEN : il re-vérifie plus tard. Un tour d'agent
+   * passe en effet par des étapes muettes (appel d'outil long, réflexion non
+   * streamée) pendant lesquelles l'utilisateur voit encore l'agent travailler.
+   */
   function restartSafety() {
     clearSafety();
     safetyTimer = schedule(() => {
       safetyTimer = null;
-      if (armed) emit();
+      if (!armed) return;
+      // Du texte / de la réflexion arrive encore : ce n'est pas la fin du tour.
+      if (activeSources.size > 0) {
+        restartSafety();
+        return;
+      }
+      // Le tour en cours à l'armement n'est pas celui du sujet → on attend.
+      if (phase !== "awaitIdle") {
+        restartSafety();
+        return;
+      }
+      emit();
     }, safetyMs);
   }
 
@@ -108,6 +142,9 @@ export function createDeferredSoundPlayer({
       if (coalescing) return false;
       if (armed) return false;
       armed = type;
+      // Un tour écrit déjà ? Le sujet (compte rendu / fin de run) ne sera affiché
+      // qu'APRÈS ce tour (remise différée) : sa fin ne doit donc pas faire sonner.
+      phase = activeSources.size > 0 ? "awaitRunEnd" : "awaitIdle";
       restartSafety();
       return true;
     },
@@ -119,7 +156,11 @@ export function createDeferredSoundPlayer({
      */
     activity(source = "default") {
       activeSources.add(source);
-      if (armed) restartSafety();
+      if (armed) {
+        // Tour qui affiche le sujet : à son repos, le son partira.
+        if (phase === "awaitRunStart") phase = "awaitIdle";
+        restartSafety();
+      }
       return activeSources.size;
     },
     /**
@@ -131,12 +172,19 @@ export function createDeferredSoundPlayer({
     idle(source = "default") {
       activeSources.delete(source);
       if (!armed) return false;
+      // Fin du tour pendant lequel le son a été armé : il ne le concerne pas.
+      if (phase === "awaitRunEnd") {
+        if (activeSources.size === 0) phase = "awaitRunStart";
+        return false;
+      }
+      if (phase === "awaitRunStart") return false;
       if (activeSources.size > 0) return false;
       return emit();
     },
     /** Remet le lecteur à zéro (nouvelle session, purge de l'onglet). */
     reset() {
       armed = null;
+      phase = "awaitIdle";
       activeSources.clear();
       clearSafety();
       clearCoalesce();
@@ -145,6 +193,10 @@ export function createDeferredSoundPlayer({
     /** @returns {boolean} true si un son est en attente. */
     isArmed() {
       return armed !== null;
+    },
+    /** @returns {string|null} phase d'attente (introspection / tests). */
+    pendingPhase() {
+      return armed === null ? null : phase;
     },
     /** @returns {number} nombre de surfaces de rendu actives. */
     pendingCount() {
