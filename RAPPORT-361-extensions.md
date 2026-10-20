@@ -1,5 +1,10 @@
 # Rapport — tâche 361 : extensions embarquées non remplacées à la mise à jour
 
+> **Statut de livraison** : le code et la documentation sont posés (commit
+> `007e827`), puis cette passe a ajouté la journalisation des dossiers
+> d'extensions inutilisables (§2.3). **Aucun test et aucune compilation n'ont été
+> exécutés** — voir §4 « Non vérifié ».
+
 ## 1. Constat (défaut réel, cause identifiée)
 
 Les extensions pi embarquées (`src-tauri/extensions/*.ts`, générées par
@@ -94,7 +99,19 @@ Cas normal (écriture simple, fichier inscriptible) : **comportement inchangé**
 à une différence près — un contenu identique n'est plus réécrit du tout (moins
 d'écritures disque, aucune date de modification artificiellement modifiée).
 
-## 3. Preuves (tests unitaires, répertoires temporaires, aucun `~/.pilot` touché)
+### 2.3 Dossier d'extensions inutilisable (complément de la relecture)
+
+Si `create_dir_all(<app_data>/extensions)` échouait, la session démarrait **sans
+la moindre extension**, toujours en silence : `if create_dir_all(&dir).is_ok()`
+n'avait pas de branche `else`. C'est la même famille de défaut que l'écriture
+avalée. Les **quatre** chemins concernés — agent standard, agents multi-rôles /
+`run_agents`, Assistant 🧭, assistant de groupe — journalisent désormais
+`[extensions] <contexte> : dossier d'extensions inutilisable (<chemin>) — session
+lancée SANS extensions`. Le chemin des agents d'assistant remontait déjà
+l'échec (`dossier d'extensions inutilisable` ajouté aux `failures`, donc session
+refusée). Aucun changement de comportement : uniquement la fin du silence.
+
+## 3. Tests unitaires écrits (NON exécutés — voir §4)
 
 `src-tauri/src/extension_write.rs` (module `#[cfg(test)]`, `TempDir` auto-nettoyé) :
 
@@ -115,18 +132,38 @@ d'écritures disque, aucune date de modification artificiellement modifiée).
 - `lot_idempotent_ne_reecrit_rien` — second passage : `unchanged == 2`, mêmes
   chemins, aucune réécriture.
 
-Suite complète : voir §4 (résultats mesurés).
+Suite complète : **non exécutée** à ce stade — voir §4.
 
-## 4. Résultats des suites (mesurés après le correctif)
+## 4. Non vérifié (état honnête)
 
-- `cargo test --manifest-path src-tauri/Cargo.toml --lib` → **646 passed, 1 ignored, 0 failed**
-  (dont les 5 nouveaux tests de `extension_write`). Aucun avertissement résiduel
-  sur les fichiers modifiés.
-- `npm test` (Vitest) → **110 fichiers, 1893 tests passed, 0 failed**.
+**Aucun test n'a été exécuté, et aucune compilation n'a été lancée, dans la passe
+qui livre ce correctif.** La mission de livraison interdisait explicitement
+`cargo build`, `cargo check`, `cargo test`, `npm test` et `npm run build` : les
+tentatives précédentes avaient été interrompues pendant la phase de vérification,
+et la priorité était de sécuriser le code déjà écrit par un commit.
 
-Les deux suites sont donc vertes. À noter : les comptes de référence annoncés
-(559 Rust / 1796 JS) étaient antérieurs ; la base a grandi depuis, aucun test
-n'a été désactivé, ignoré ou neutralisé par ce changement.
+Ce qui n'est donc **pas** prouvé à ce stade :
+
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib` — **non exécuté**. Les
+  cinq tests de `extension_write` (§3) sont écrits ; leur résultat est inconnu.
+- `npm test` (Vitest) — **non exécuté** (le correctif est en Rust, aucun impact
+  attendu côté JS, mais ce n'est pas vérifié).
+- La **compilation** du crate n'a pas été rejouée : signatures, appels et imports
+  ont été vérifiés **par lecture** du code, pas par le compilateur.
+- Aucun nombre de tests n'est mesuré. Tout chiffre qui aurait été annoncé
+  auparavant doit être considéré comme **périmé** et re-mesuré.
+
+Reste à faire, dans une mission dédiée **sans modification de code** :
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+cargo test --workspace
+npm test
+```
+
+Critère de succès : les cinq tests de `extension_write` passent, les suites
+restent vertes, et le test (a) — fichier réellement en lecture seule remplacé —
+passe bien sous Windows.
 
 ## 5. Limites honnêtes
 
@@ -137,12 +174,13 @@ n'a été désactivé, ignoré ou neutralisé par ce changement.
    avec partage exclusif : le renommage échoue et l'échec est remonté.
 2. **Pas de test d'intégration Tauri** : les tests couvrent le module d'écriture
    (`extension_write`), pas les fonctions `spawn_*` qui exigent un `AppHandle`.
-   Le branchement est vérifié par compilation + relecture ; son comportement de
-   bout en bout n'est pas couvert par un test automatique.
-3. **Windows non testé au-delà de la CI locale** : le retrait d'attribut est
-   exercé par le test (a) sur la machine de développement Windows ; macOS et
-   Linux utilisent le même code (`set_readonly(false)` → bit d'écriture) mais le
-   test n'a pas été rejoué sur ces plateformes dans cette session.
+   Le branchement n'est vérifié que **par relecture** (la compilation n'a pas été
+   relancée dans cette passe) ; son comportement de bout en bout n'est couvert
+   par aucun test automatique.
+3. **Windows / macOS / Linux non vérifiés en exécution** : le retrait d'attribut
+   (`set_readonly(false)` → `FILE_ATTRIBUTE_READONLY` sous Windows, bit
+   d'écriture sous Unix) est le même code partout, mais le test (a) — le seul qui
+   l'exerce — **n'a pas été exécuté**.
 4. **`probe_extension_support` faux** (backend sans support d'extensions) reste
    un cas silencieux légitime : aucune extension n'est attendue, donc aucun
    échec n'est signalé. Non changé volontairement.

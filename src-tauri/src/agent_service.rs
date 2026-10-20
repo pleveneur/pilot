@@ -2297,6 +2297,15 @@ impl AgentService {
                     );
                     Self::log_extension_failures("assistant de groupe", &report);
                     extensions = report.paths;
+                } else {
+                    // Tâche 361 : un dossier d'extensions inutilisable laissait la
+                    // session démarrer SANS aucune extension, en silence. L'échec est
+                    // désormais visible dans les journaux (même famille de défaut que
+                    // l'écriture avalée).
+                    eprintln!(
+                        "[extensions] assistant de groupe : dossier d'extensions inutilisable ({}) — session lancée SANS extensions",
+                        dir.display()
+                    );
                 }
             }
         }
@@ -2777,6 +2786,12 @@ impl AgentService {
                     }
                     Self::log_extension_failures("super-agent", &report);
                     extensions = report.paths;
+                } else {
+                    // Tâche 361 : dossier inutilisable ⇒ plus aucun échec silencieux.
+                    eprintln!(
+                        "[extensions] super-agent : dossier d'extensions inutilisable ({}) — session lancée SANS extensions",
+                        dir.display()
+                    );
                 }
             }
         }
@@ -2914,6 +2929,12 @@ impl AgentService {
                     }
                     Self::log_extension_failures("agent multi-rôles", &report);
                     extensions = report.paths;
+                } else {
+                    // Tâche 361 : dossier inutilisable ⇒ plus aucun échec silencieux.
+                    eprintln!(
+                        "[extensions] agent multi-rôles : dossier d'extensions inutilisable ({}) — session lancée SANS extensions",
+                        dir.display()
+                    );
                 }
             }
         }
@@ -3117,6 +3138,12 @@ impl AgentService {
                     }
                     Self::log_extension_failures("session d'agent", &report);
                     extensions = report.paths;
+                } else {
+                    // Tâche 361 : dossier inutilisable ⇒ plus aucun échec silencieux.
+                    eprintln!(
+                        "[extensions] session d'agent : dossier d'extensions inutilisable ({}) — session lancée SANS extensions",
+                        dir.display()
+                    );
                 }
             }
         }
