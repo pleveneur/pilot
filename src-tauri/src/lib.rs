@@ -162,6 +162,14 @@ struct ProjectState {
 /// `agent_settled`/`agent_end` → busy=false (fin d'une exécution / d'un tour).
 struct SessionActivity {
     busy: bool,
+    /// Une OPÉRATION D'OUTIL est-elle en cours (`tool_execution_start` reçu,
+    /// `tool_execution_end` pas encore) ? Posé/levé par l'observateur combiné
+    /// (`anomaly::make_observer`), avec les mêmes règles anti-fuite que
+    /// `AgentAnomalyState::tool_in_progress` (effacé sur fin de tour et sur mort
+    /// du process). Permet aux sondes d'ADMISSION de ne jamais conclure « projet
+    /// libre » pendant un build, une campagne de tests ou une installation
+    /// silencieuse (correction 1 bis, même règle que `should_release_stale_busy`).
+    tool_in_progress: bool,
     updated: std::time::Instant,
 }
 

@@ -245,6 +245,11 @@ pub(crate) fn reset_project_activity(state: &AppState, project_key: &str) {
     let mut m = state.agent_activity.lock().unwrap();
     if let Some(e) = m.get_mut(project_key) {
         e.busy = false;
+        // Un agent arrêté explicitement n'exécute plus aucun outil : sans cette
+        // remise à zéro, un `tool_execution_end` perdu (arrêt en pleine opération)
+        // laisserait le projet « occupé » à vie, l'activité « outil en cours » étant
+        // désormais autoritaire (correction 1 bis).
+        e.tool_in_progress = false;
         // Mettre `updated` dans le passé pour sortir aussi de la fenêtre de grâce :
         // un agent réellement stoppé/fermé doit passer « en attente » immédiatement.
         e.updated = std::time::Instant::now()
@@ -263,10 +268,21 @@ pub(crate) fn reset_project_activity(state: &AppState, project_key: &str) {
 ///    cf. `rapport-file-attente-bloquee.md`) ;
 ///  - ou une activité RPC dans la **fenêtre de grâce** (`grace`) : évite que la
 ///    pastille oscille entre deux sous-tâches d'un plan d'orchestration encore
-///    en cours.
+///    en cours ;
+///  - ou une **opération d'outil en cours** (`tool_in_progress`) : build, campagne
+///    de tests, installation… Ces opérations sont SILENCIEUSES (aucun événement
+///    entre `tool_execution_start` et `tool_execution_end`) et peuvent durer bien
+///    plus que `stale_grace` : sans cette règle, un projet parfaitement occupé
+///    était conclu « libre » au bout de 25 min et une seconde mission pouvait
+///    démarrer (symptôme « outil long = agent cru figé »). Même exemption que
+///    `anomaly::should_release_stale_busy` (correction 1) : une seule vérité sur
+///    le travail en cours. Le filet « processus mort » reste indépendant :
+///    `project_busy_with_liveness` exige toujours une session vivante.
 ///
 /// Même politique de péremption que `anomaly::should_release_stale_busy` (moteur)
 /// et `isBusyStale` (JS) : une seule vérité sur le vieillissement d'un `busy`.
+/// L'exemption `tool_in_progress`, elle, n'est JAMAIS bornée par le temps (ni ici,
+/// ni dans `should_release_stale_busy`, ni dans `isSessionWorking` côté JS).
 pub(crate) fn project_activity_is_busy(
     activity: Option<&SessionActivity>,
     grace: std::time::Duration,
@@ -274,6 +290,11 @@ pub(crate) fn project_activity_is_busy(
     now: std::time::Instant,
 ) -> bool {
     let Some(a) = activity else { return false };
+    // Outil en cours = travail qui avance : jamais « libre », quel que soit le
+    // temps d'exécution (la vivacité reste vérifiée par l'appelant).
+    if a.tool_in_progress {
+        return true;
+    }
     let age = now.duration_since(a.updated);
     (a.busy && age <= stale_grace) || age < grace
 }
@@ -1155,9 +1176,23 @@ mod tests {
     /// uptime < 3 h). Avancer l'instant de référence produit exactement le même âge
     /// sans dépendre de l'uptime.
     fn activity(busy: bool, age_secs: u64) -> (SessionActivity, Instant) {
+        activity_with_tool(busy, false, age_secs)
+    }
+
+    /// Même fabrique, avec l'indicateur « opération d'outil en cours » paramétrable
+    /// (correction 1 bis). L'âge suit la même précaution (on AVANCE l'instant de
+    /// référence).
+    fn activity_with_tool(busy: bool, tool_in_progress: bool, age_secs: u64) -> (SessionActivity, Instant) {
         let updated = Instant::now();
         let now = updated + Duration::from_secs(age_secs);
-        (SessionActivity { busy, updated }, now)
+        (
+            SessionActivity {
+                busy,
+                tool_in_progress,
+                updated,
+            },
+            now,
+        )
     }
 
     // Tâche 335 — lecture de l'occupation d'un projet : le `busy` DOIT être borné
@@ -1188,6 +1223,51 @@ mod tests {
         assert!(!project_activity_is_busy(Some(&a), grace, stale, now));
         let (a, now) = activity(true, 3 * 3600);
         assert!(!project_activity_is_busy(Some(&a), grace, stale, now));
+    }
+
+    /// CORRECTION 1 bis — un OUTIL EN COURS n'est JAMAIS conclu « libre ».
+    ///
+    /// Un build, une campagne de tests ou une installation sont SILENCIEUX : aucun
+    /// événement n'est émis entre `tool_execution_start` et `tool_execution_end`.
+    /// `project_activity_is_busy` ne connaissait que `busy` + la fenêtre de grâce, si
+    /// bien qu'après 25 min d'outil le projet était déclaré « libre » alors que
+    /// l'agent travaillait encore (un second lancement pouvait démarrer). Même
+    /// exemption que `should_release_stale_busy` (correction 1).
+    ///
+    /// Contre-preuve : sans outil en cours, la même entrée très ancienne reste
+    /// LIBRE — le filet anti-verrou « busy périmé » est conservé.
+    #[test]
+    fn project_activity_busy_during_long_tool_is_never_free() {
+        let grace = Duration::from_secs(15);
+        let stale = Duration::from_secs(25 * 60);
+
+        // Outil en cours, dernière activité très ancienne (1 h de build silencieux) :
+        // le projet est OCCUPÉ — aucun plafond de durée ne s'applique.
+        let (a, now) = activity_with_tool(true, true, 3600);
+        assert!(
+            project_activity_is_busy(Some(&a), grace, stale, now),
+            "outil en cours depuis 1 h → projet occupé, jamais conclu libre"
+        );
+        // Même au-delà de plusieurs heures, et même si `busy` est retombé (fin de tour
+        // pi avant relance) : l'outil en cours suffit.
+        let (a, now) = activity_with_tool(false, true, 6 * 3600);
+        assert!(
+            project_activity_is_busy(Some(&a), grace, stale, now),
+            "outil en cours (busy=false, 6 h) → toujours occupé"
+        );
+
+        // Contre-preuve — comportement d'aujourd'hui CONSERVÉ : sans outil en cours,
+        // un busy périmé est libéré (le verrou fantôme ne revient pas).
+        let (a, now) = activity_with_tool(true, false, 3600);
+        assert!(
+            !project_activity_is_busy(Some(&a), grace, stale, now),
+            "busy périmé sans outil en cours → libéré (comportement conservé)"
+        );
+        let (a, now) = activity_with_tool(false, false, 6 * 3600);
+        assert!(
+            !project_activity_is_busy(Some(&a), grace, stale, now),
+            "session au repos sans outil en cours → libérée (comportement conservé)"
+        );
     }
 
     #[test]

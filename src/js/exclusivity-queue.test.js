@@ -182,9 +182,31 @@ describe("isSessionWorking — « vraiment en activité » (chantier 6/6)", () =
     expect(isSessionWorking(running, NOW)).toBe(true);
   });
 
-  it("mission 310 : outil « en cours » depuis plus de la fenêtre busy-stale → PAS de verrou (process figé)", () => {
-    const frozen = { alive: true, busy: false, toolInProgress: true, lastActivity: iso(STALE_BUSY_WINDOW_MS + 60_000) };
-    expect(isSessionWorking(frozen, NOW)).toBe(false);
+  it("CORRECTION 1 bis : outil en cours depuis PLUS de la fenêtre busy-stale → TOUJOURS un travail (aucun plafond)", () => {
+    // Symptôme « outil long = agent cru figé au bout de 25 minutes » : un build,
+    // une campagne de tests ou une installation peut être silencieux bien plus de
+    // 25 min. Borner la branche `toolInProgress` par la fenêtre busy-stale faisait
+    // conclure que la session ne travaillait plus (verrou de run libéré, tour mis
+    // en échec) alors que l'outil tournait encore.
+    const longTool = { alive: true, busy: false, toolInProgress: true, lastActivity: iso(STALE_BUSY_WINDOW_MS + 60_000) };
+    expect(isSessionWorking(longTool, NOW)).toBe(true);
+    // Très au-delà (3 h de build) : toujours un travail, toujours pas de plafond.
+    const veryLongTool = { alive: true, busy: false, toolInProgress: true, lastActivity: iso(3 * 3600_000) };
+    expect(isSessionWorking(veryLongTool, NOW)).toBe(true);
+    // Sans aucune donnée d'activité : un outil en cours suffit (fail-open déjà en
+    // vigueur pour `busy`).
+    expect(isSessionWorking({ alive: true, toolInProgress: true }, NOW)).toBe(true);
+  });
+
+  it("CORRECTION 1 bis — contre-preuve : sans outil en cours, le busy-stale reste libéré", () => {
+    // Le comportement d'aujourd'hui doit être CONSERVÉ quand aucun outil ne
+    // tourne : un `busy` vieux de plus de la fenêtre reste une session au repos
+    // (process pi figé) → pas de verrou. Sans cette contre-preuve, l'exemption
+    // `toolInProgress` pourrait masquer une régression (verrou oublié à vie).
+    const staleBusy = { alive: true, busy: true, toolInProgress: false, lastActivity: iso(STALE_BUSY_WINDOW_MS + 60_000) };
+    expect(isSessionWorking(staleBusy, NOW)).toBe(false);
+    const parked = { alive: true, busy: false, toolInProgress: false, lastActivity: iso(STALE_BUSY_WINDOW_MS + 60_000) };
+    expect(isSessionWorking(parked, NOW)).toBe(false);
   });
 
   it("mission 310 : champ toolInProgress absent (backend antérieur) → comportement inchangé", () => {

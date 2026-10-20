@@ -135,7 +135,15 @@ export function isBusyStale(session, now = Date.now(), staleWindowMs = STALE_BUS
  *    plusieurs minutes) et `busy` peut être faux (fin de tour pi, relance en
  *    attente) : sans ce signal, la sonde concluait « plus aucun agent ne
  *    travaille » et libérait la run en ÉCHEC au milieu du travail (mission 310).
- *    Borné par la même fenêtre busy-stale (process figé), OU
+ *    SANS plafond de durée (correction 1 bis) : un outil en cours est un travail
+ *    qui avance, quel que soit son temps d'exécution — un build, une campagne de
+ *    tests ou une installation peuvent légitimement durer des heures sans émettre
+ *    le moindre événement. Le borner par la fenêtre busy-stale faisait conclure à
+ *    tort qu'une session ne travaillait plus au-delà de 25 min (symptôme « outil
+ *    long = agent cru figé », même famille que `should_release_stale_busy` côté
+ *    Rust). Seule la MORT de la session (`alive !== true`) lève ce verrou ; le
+ *    filet « processus mort » (`has_dead_agent_process`) reste le juge des cas
+ *    réellement figés, OU
  *  - sa dernière activité (lastActivity ISO) date de moins de `windowMs`.
  * Une session « vivante mais inactive » (parkée après agent_settled, oubliée)
  * ne compte PAS : un processus vivant ≠ travail en cours.
@@ -153,7 +161,13 @@ export function isBusyStale(session, now = Date.now(), staleWindowMs = STALE_BUS
  */
 export function isSessionWorking(session, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS, staleWindowMs = STALE_BUSY_WINDOW_MS) {
   if (!session || session.alive !== true) return false;
-  if (session.busy === true || session.toolInProgress === true) {
+  // CORRECTION 1 bis : un OUTIL EN COURS est un travail qui avance, SANS plafond
+  // de durée (cf. docstring). Le borner par la fenêtre busy-stale — comme le fait
+  // le `busy` ci-dessous — traitait un build silencieux de 26 min comme une
+  // session au repos : verrou de run libéré et tour mis en échec au milieu du
+  // travail. La mort de la session reste éliminatoire (garde `alive` ci-dessus).
+  if (session.toolInProgress === true) return true;
+  if (session.busy === true) {
     // busy-stale : un busy VIEUX de plus de la fenêtre n'est plus un travail.
     // Fail-open : sans lastActivity exploitable, on ne peut pas prouver la
     // staleness → on retombe sur l'historique (busy === vrai travail).

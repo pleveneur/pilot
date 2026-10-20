@@ -187,15 +187,22 @@ pub fn make_observer(
                 // Process mort : l'agent ne peut plus être « occupé ».
                 if let Some(entry) = m.get_mut(&project_key) {
                     entry.busy = false;
+                    // Mort du process : aucun outil ne tourne plus (anti-fuite).
+                    entry.tool_in_progress = false;
                     entry.updated = now;
                 }
             } else {
                 let entry = m.entry(project_key.clone()).or_insert(SessionActivity {
                     busy: false,
+                    // Un événement fondateur peut déjà être un démarrage d'outil.
+                    tool_in_progress: t == "tool_execution_start",
                     updated: now,
                 });
                 if t == "agent_start" {
                     entry.busy = true;
+                    // Nouvelle exécution : aucun outil en cours (anti-fuite si un
+                    // `tool_execution_end` de la run précédente a été perdu).
+                    entry.tool_in_progress = false;
                 } else if t == "agent_settled" || t == "agent_end" {
                     // `agent_end` marque la fin d'un tour (le frontend considère
                     // l'agent « au repos » dès cet événement). On repasse busy=false
@@ -210,7 +217,16 @@ pub fn make_observer(
                     // agent relancé à tort au milieu de son travail.
                     if t == "agent_settled" || !will_retry(value) {
                         entry.busy = false;
+                        // Fin de tour : plus aucun outil en cours (anti-fuite).
+                        entry.tool_in_progress = false;
                     }
+                } else if t == "tool_execution_start" {
+                    // Opération d'outil EN COURS : build, campagne de tests,
+                    // installation… Aucun événement n'est émis avant le
+                    // `tool_execution_end` correspondant.
+                    entry.tool_in_progress = true;
+                } else if t == "tool_execution_end" {
+                    entry.tool_in_progress = false;
                 }
                 entry.updated = now;
             }
@@ -1201,6 +1217,57 @@ mod tests {
             let act = activity.lock().unwrap();
             assert!(!act.get("/proj").unwrap().busy);
         }
+    }
+
+    /// CORRECTION 1 bis — BRANCHEMENT : l'observateur doit propager l'état
+    /// « opération d'outil en cours » dans la map d'activité par projet, sinon
+    /// `rpc::project_activity_is_busy` (qui lit cet indicateur) ne pourrait
+    /// jamais l'observer et le correctif resterait mort en production.
+    ///
+    /// Règles vérifiées, identiques à `AgentAnomalyState::tool_in_progress` :
+    /// posé sur `tool_execution_start`, levé sur `tool_execution_end`, levé sur
+    /// fin de tour (`agent_end`/`agent_settled`) et sur mort du process
+    /// (anti-fuite : un `tool_execution_end` perdu ne doit pas figer le projet
+    /// « occupé » à vie).
+    #[test]
+    fn observer_propagates_tool_in_progress_to_project_activity() {
+        let activity: Arc<Mutex<HashMap<String, SessionActivity>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let anomaly: Arc<Mutex<HashMap<String, AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let obs = make_observer(&activity, &anomaly, "/proj", "/proj\u{1f}codeur");
+
+        let act_tool = |activity: &Arc<Mutex<HashMap<String, SessionActivity>>>| -> bool {
+            activity
+                .lock()
+                .unwrap()
+                .get("/proj")
+                .map(|a| a.tool_in_progress)
+                .unwrap_or(false)
+        };
+
+        // agent_start seul → aucun outil en cours.
+        obs(&ev("agent_start"));
+        assert!(!act_tool(&activity), "agent_start : aucun outil en cours");
+
+        // tool_execution_start → outil en cours (build/tests silencieux).
+        obs(&ev("tool_execution_start"));
+        assert!(act_tool(&activity), "tool_execution_start doit poser l'indicateur");
+
+        // tool_execution_end → outil terminé.
+        obs(&ev("tool_execution_end"));
+        assert!(!act_tool(&activity), "tool_execution_end doit lever l'indicateur");
+
+        // Anti-fuite : fin de tour pendant un outil → indicateur levé.
+        obs(&ev("tool_execution_start"));
+        obs(&ev("agent_end"));
+        assert!(!act_tool(&activity), "fin de tour : plus aucun outil en cours");
+
+        // Anti-fuite : mort du process pendant un outil → indicateur levé.
+        obs(&ev("agent_start"));
+        obs(&ev("tool_execution_start"));
+        obs(&ev("process_exit"));
+        assert!(!act_tool(&activity), "mort du process : plus aucun outil en cours");
     }
 
     /// `process_exit`/`process_error` (mort du process) effacent `busy` même
