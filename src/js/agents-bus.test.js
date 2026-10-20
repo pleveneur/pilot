@@ -1454,3 +1454,110 @@ describe("chemins de LANCEMENT : plancher d'inactivité obligatoire (jamais de k
     expect(bare(readSrc("super-agent.js")), "super-agent : watchdog + 2 chemins d'arrêt").toBe(3);
   });
 });
+
+// ── RÈGLE 2 (audit « verrous règles 1-4-2 ») : exclusion des outils de LECTURE ─
+// P0-2 : les outils de LECTURE PURE (read/search/grep/list/ls/find/glob…) sont
+// EXCLUS du comptage de boucle principal (`toolCallsByAgent`) et suivis dans un
+// historique SÉPARÉ, avec un seuil PLUS ÉLEVÉ (`detectRepeatedActions`,
+// minRepeat 8 sur une fenêtre de 20) : un agent qui EXPLORE (relit un fichier,
+// refait une recherche) ne doit JAMAIS être arrêté, mais une boucle SOUTENUE de
+// lectures identiques doit toujours être détectée — la protection ne doit pas
+// neutraliser le détecteur.
+// Échec du test = l'exclusion des lectures a disparu (faux positifs sur
+// l'exploration) OU le détecteur de lectures a été neutralisé (boucle réelle
+// laissée passer).
+describe("boucle d'outils — les outils de LECTURE sont exclus du comptage (règle 2)", () => {
+  const PROJECT = "projetLectures";
+  const AGENT = "lecteur";
+  let nowSpy;
+  let clock;
+
+  // Le throttle de détection (AGENT_LOOP_CHECK_INTERVAL_MS = 500 ms) ferait
+  // tomber toute la rafale d'un test dans la même fenêtre : on avance une
+  // horloge VIRTUELLE à chaque lecture, sans toucher aux timers réels.
+  beforeEach(() => {
+    endRun(PROJECT);
+    // Implémentation neutre EXPLICITE : ce bloc ne dépend pas de ce qu'un autre
+    // describe a laissé sur le mock partagé (les arrêts d'agents sont des
+    // promesses : `invoke(...).catch(...)` ne supporte pas `undefined`).
+    vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "file_exists" ? true : undefined));
+    clock = Date.now();
+    nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (clock += 600));
+  });
+
+  afterEach(() => {
+    nowSpy.mockRestore();
+    endRun(PROJECT);
+    vi.mocked(invoke).mockClear();
+  });
+
+  /** Pose une run en cours avec UN agent actif (pattern du fichier). */
+  const beginReadRun = () => {
+    const ctx = beginRun(PROJECT);
+    ctx.activeAgents.add(AGENT);
+    ctx.agentProject[AGENT] = PROJECT;
+    return ctx;
+  };
+
+  const toolEvent = (toolName, args) => ({
+    payload: {
+      project: PROJECT,
+      agent_id: AGENT,
+      event: { type: "tool_execution_start", toolName, args },
+    },
+  });
+
+  /** Rafale de N lectures STRICTEMENT identiques (même chemin, mêmes options). */
+  const reads = (n, path = "src/js/super-agent.js") => {
+    for (let i = 0; i < n; i++) handleAgentEvent(toolEvent("read", { path }));
+  };
+
+  /** Tous les appels d'ARRÊT effectivement émis vers le backend. */
+  const stopCalls = () =>
+    vi.mocked(invoke).mock.calls.filter(([cmd]) =>
+      /^(abort_agent_process|stop_agent_process|stop_agent_processes)$/.test(String(cmd)),
+    );
+
+  it("6 lectures identiques : aucun arrêt, et les lectures restent HORS de l'historique principal", () => {
+    const ctx = beginReadRun();
+    reads(6);
+    // Les lectures sont suivies à part…
+    expect(ctx.readOnlyToolCallsByAgent[AGENT]).toHaveLength(6);
+    // … et JAMAIS comptées dans l'historique principal : sinon, avec le seuil 5
+    // de `detectRepeatedActions`, 6 lectures d'exploration arrêteraient l'agent.
+    expect(ctx.toolCallsByAgent[AGENT] || []).toEqual([]);
+    expect(stopCalls(), "une exploration légitime ne doit jamais être coupée").toEqual([]);
+    expect(ctx.loopCorrectionPending[AGENT]).toBeFalsy();
+    expect(getRunState(PROJECT)).toBe("running");
+  });
+
+  it("seuil PLUS ÉLEVÉ pour les lectures : 7 + 7 lectures identiques (deux fichiers) ne coupent rien", () => {
+    // 7 occurrences de chaque empreinte : sous le seuil 8 des lectures, mais
+    // AU-DESSUS du seuil 5 par défaut — preuve que le seuil dédié est bien
+    // appliqué ET que les lectures ne comptent pas dans l'historique principal
+    // (où 7 identiques suffiraient à arrêter l'agent).
+    const ctx = beginReadRun();
+    reads(7, "src/a.js");
+    reads(7, "src/b.js");
+    expect(stopCalls()).toEqual([]);
+    expect(ctx.loopCorrectionPending[AGENT]).toBeFalsy();
+    expect(ctx.readOnlyToolCallsByAgent[AGENT]).toHaveLength(14);
+  });
+
+  it("9 lectures strictement identiques : la boucle SOUTENUE est détectée (le détecteur n'est pas neutralisé)", () => {
+    const ctx = beginReadRun();
+    reads(9);
+    const abort = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === "abort_agent_process");
+    expect(abort, "une boucle de lectures identiques doit être arrêtée").toBeTruthy();
+    expect(abort[1].agentId).toBe(AGENT);
+    expect(ctx.loopCorrectionPending[AGENT]).toBe(true);
+  });
+
+  it("les outils qui MODIFIENT restent comptés dans l'historique principal (5 bash identiques → boucle)", () => {
+    const ctx = beginReadRun();
+    for (let i = 0; i < 5; i++) handleAgentEvent(toolEvent("bash", { command: "cargo test --lib" }));
+    expect(ctx.toolCallsByAgent[AGENT]).toHaveLength(5);
+    expect(ctx.readOnlyToolCallsByAgent[AGENT] || []).toEqual([]);
+    expect(ctx.loopCorrectionPending[AGENT]).toBe(true);
+  });
+});
