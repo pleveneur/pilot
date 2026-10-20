@@ -499,8 +499,23 @@ fn is_super_agent_key(project: &str, agent: &str) -> bool {
 /// plus ancienne que `grace_minutes` (STALE_BUSY_GRACE, défaut 25), la session
 /// n'est plus un travail en cours → on libère la marque busy SANS tuer le
 /// process (le kill relève de l'arrêt auto T2). Pure et testable.
+///
+/// CORRECTION 1 : une OPÉRATION D'OUTIL EN COURS (`tool_in_progress`) exclut la
+/// libération, exactement comme pour `should_report_anomaly` et
+/// `should_auto_stop_on_progress`. Un build ou une campagne de tests silencieuse
+/// de plus de 25 min n'émet aucun événement : sans cette exemption, le créneau
+/// d'un agent PARFAITEMENT VIVANT était libéré (tour mis en échec côté bus) et
+/// un second lancement pouvait démarrer sur le même projet. Le filet
+/// « processus mort » (`has_dead_agent_process`, moniteur) reste le SEUL juge des
+/// cas réellement figés : il est indépendant de cette fonction.
 pub(crate) fn should_release_stale_busy(entry: &AgentAnomalyState, grace_minutes: u32, now: Instant) -> bool {
     if !entry.busy || awaiting_user_suspends(entry, now) {
+        return false;
+    }
+    // Outil en cours (build, série de tests, longue analyse) = travail qui
+    // avance : aucun événement n'est émis entre `tool_execution_start` et
+    // `tool_execution_end`. Ne jamais libérer le créneau pendant ce temps.
+    if entry.tool_in_progress {
         return false;
     }
     let idle_secs = now.duration_since(entry.last_activity).as_secs();
@@ -1634,6 +1649,46 @@ mod tests {
             ..state(false)
         };
         assert!(!should_report_anomaly(&fresh, true, timeout_secs, now));
+    }
+
+    /// CORRECTION 1 (audit, comportement le plus grave) : le verrou fantôme ne
+    /// doit JAMAIS libérer le créneau d'un agent dont une OPÉRATION D'OUTIL est
+    /// en cours — un build ou une campagne de tests silencieuse de plus de 25 min
+    /// n'émet aucun événement et faisait croire à un agent figé (tour mis en
+    /// échec, créneau libéré, second lancement possible sur le même projet).
+    /// La contre-preuve (même entrée, `tool_in_progress: false`) garantit que le
+    /// test ne peut pas être vacuux : le filet continue de libérer un busy
+    /// réellement périmé.
+    #[test]
+    fn should_release_stale_busy_does_not_fire_during_long_tool() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        // Fixture COMPLÈTE : busy, aucune attente utilisateur, dernière activité
+        // il y a 60 min (> grâce de 25 min utilisée ici).
+        let state = |tool_in_progress: bool| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(3600),
+            last_progress: now - Duration::from_secs(3600),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "tool_execution_start".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress,
+            produced_output: true,
+        };
+
+        // Outil en cours (build / tests silencieux) → le créneau N'EST PAS libéré.
+        assert!(
+            !should_release_stale_busy(&state(true), 25, now),
+            "opération d'outil en cours → le créneau d'un agent vivant n'est pas libéré"
+        );
+
+        // Contre-preuve : même entrée SANS outil en cours → busy réellement
+        // périmé (process figé) → libération conservée.
+        assert!(
+            should_release_stale_busy(&state(false), 25, now),
+            "agent réellement figé (aucun outil en cours) → libération conservée"
+        );
     }
 
     /// Verrou fantôme (busy-stale) : `should_release_stale_busy` libère la marque
