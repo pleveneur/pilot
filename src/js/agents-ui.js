@@ -25,6 +25,17 @@ import {
 import { initAgentsBus, destroyAgentsBus, stopAgentsRun } from "./agents-bus.js";
 // Socle pur des niveaux de réflexion (T1) : contenu des sélecteurs (T7).
 import { thinkingLevelOptions, THINKING_LEVEL_HINT } from "./thinking-levels.js";
+// Visibilité du travail SANS ONGLET (règle 1) : le panneau « Activité » de cet
+// écran ne se limite plus aux runs du bus (qui supposent un onglet ou une run
+// lancée depuis ici). Il s'abonne au store partagé déjà utilisé par le cercle
+// d'activité et par le volet « En cours » du panneau de la cloche, et affiche
+// toute session qui TRAVAILLE sans onglet ouvert, avec l'agent, le projet et sa
+// mission. Aucune logique de vivacité n'est dupliquée, aucun onglet ouvert.
+import {
+  subscribeAgentActivity,
+  buildBackgroundWorkMissions,
+  renderBackgroundWorkersHtml,
+} from "./agent-activity.js";
 
 export async function createAgents(container) {
   const wrapper = document.createElement("div");
@@ -65,6 +76,11 @@ export async function createAgents(container) {
   let isRunning = false;
   let agentStates = new Map(); // agentId -> { order, status, detail, model, run }
   let agentOrder = 0;
+  // Sessions qui TRAVAILLENT sans onglet ouvert (store partagé, rafraîchi
+  // toutes les 2 s et sur `agent-state-changed`) : {agentId, kind, agent,
+  // project, mission}. Vide tant qu'aucune session ne travaille sans onglet.
+  let backgroundMissions = [];
+  let activityUnsub = null;
 
   let currentEditorModal = null;
 
@@ -164,6 +180,17 @@ export async function createAgents(container) {
 
   await initAgentsBus(busCallbacks);
 
+  // ── Travail SANS ONGLET (règle 1) ──
+  // Abonnement au store d'activité partagé (même source que le cercle du haut
+  // d'écran et le volet « En cours ») : une session qui travaille en
+  // arrière-plan apparaît ici même si aucun onglet n'est ouvert et même si la
+  // run n'a pas été lancée depuis cet écran. Purement informatif : aucune
+  // ouverture d'onglet, aucun changement d'onglet actif, aucun vol de focus.
+  activityUnsub = subscribeAgentActivity((list) => {
+    backgroundMissions = buildBackgroundWorkMissions(list);
+    updateActivity();
+  });
+
   function finishRun() {
     isRunning = false;
     // Conserver le tableau d'activité final (issue #9) : on bascule simplement
@@ -193,8 +220,9 @@ export async function createAgents(container) {
 
   function updateActivity() {
     stopBtn.style.display = isRunning ? "" : "none";
+    const backgroundHtml = renderBackgroundWorkersHtml(backgroundMissions);
     // Rien à afficher : message neutre plutôt qu'un tableau vide « Run terminée ».
-    if (!isRunning && agentStates.size === 0) {
+    if (!isRunning && agentStates.size === 0 && !backgroundHtml) {
       activityEl.innerHTML =
         '<div class="muted">Aucune run en cours.<br>Les lancements se font depuis l\'onglet 🧭 Assistant ou depuis les onglets d\'agents.</div>';
       return;
@@ -207,8 +235,12 @@ export async function createAgents(container) {
       ? stack.map((s) => agentIcon(s.agentId) + " " + agentName(s.agentId)).join(" → ")
       : "coordinateur";
 
-    const statusLabel = isRunning ? "▶ Run en cours" : "Run terminée";
-    const statusCls = isRunning ? "running" : "";
+    const statusLabel = isRunning
+      ? "▶ Run en cours"
+      : backgroundHtml
+        ? "▶ Travail en arrière-plan"
+        : "Run terminée";
+    const statusCls = isRunning || backgroundHtml ? "running" : "";
 
     const board = Array.from(agentStates.entries())
       .sort((a, b) => a[1].order - b[1].order)
@@ -244,6 +276,7 @@ export async function createAgents(container) {
       <div class="agents-chain">${chain}</div>
       <div class="agents-board-title">Équipe</div>
       <div class="agents-board">${board || '<div class="muted">En attente de la première action…</div>'}</div>
+      ${backgroundHtml}
     `;
   }
 
@@ -617,6 +650,10 @@ export async function createAgents(container) {
   // ── Cleanup ──
   function cleanup() {
     closeEditorModal();
+    if (activityUnsub) {
+      activityUnsub();
+      activityUnsub = null;
+    }
     destroyAgentsBus();
   }
 

@@ -11,6 +11,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Colonne de gauche : l'équipe.** Chaque carte montre le nom, l'identifiant, les **modèles demandés** (`π` = pi, `ℓ` = plh ; « non réglé » si le champ est vide), et des badges : **lecture seule** et le **nombre de compétences**. Le **niveau de réflexion demandé** (`π` / `ℓ`) est affiché sur la carte dès qu'un niveau est réglé.
   - Attention : les modèles affichés sont **demandés**, pas **employés**. Au démarrage d'une session, Pilot applique le modèle du **backend actif**, sinon celui de l'**autre backend** (repli croisé), sinon le **modèle par défaut** du registre de modèles — et une session **déjà lancée** garde le modèle qu'elle utilise (modifier la carte ne la change pas). L'infobulle de la carte le rappelle.
 - **Colonne de droite : l'activité.** Tableau de bord des runs en cours : qui travaille, sur quel outil, la **chaîne des appels**, le **budget restant** et la **profondeur**. L'agent en cours est surligné. Le bilan reste visible après la fin de la run.
+  - **Un agent qui travaille sans onglet ouvert** (lancé en arrière-plan, ou dont vous avez fermé l'onglet) y apparaît quand même, dans un bloc **« Travail en arrière-plan (aucun onglet ouvert) »** : nom de l'agent, projet et tâche en cours. Ce bloc est purement informatif : **aucun onglet ne s'ouvre** tout seul.
 - **➕ Ajouter** crée un agent ; **✏️ Modifier** ouvre l'éditeur ; **🗑️ Supprimer** retire un agent.
 - **🔄 Réinitialiser** restaure les **7 agents fournis** (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker). **Vos agents personnalisés sont conservés.**
 
@@ -36,6 +37,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Chaque arrêt automatique laisse une trace** dans `.pilot/agent-stops.log` du projet (cause, type de détection, agent, session) : boucle, inactivité, plafond de tours, agent bloqué, libération de verrou. Rien ne s'arrête sans motif écrit.
 - **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (5 min par défaut), la run s'arrête et un message le signale. Réglable dans **Paramètres → Agents**.
 - **⏹ Arrêter** arrête tous les processus d'agents. Fermer l'onglet les arrête aussi.
+- **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau de la cloche, une session qui travaille sans onglet ouvert porte le repère **« arrière-plan »** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
 
 ### Conseils
 - Donnez un modèle puissant au coordinateur : c'est lui qui route les tâches.

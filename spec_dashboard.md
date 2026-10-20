@@ -166,19 +166,25 @@ projet (ouverture, fermeture, bascule).
 - **Indicateur circulaire (haut droite)** (`src/js/agent-activity.js`) :
   cercle d'activité respirant dès qu'un agent travaille + liste déroulante au
   clic (poll 2 s de `get_agent_supervision` + push `agent-state-changed`),
-  avec fiche et bouton « Afficher l'onglet ». **Filtrage de la liste** : un
-  agent de projet dont l'onglet a été fermé (`visible = false`) et qui est au
-  repos (ni `running` ni `compacting`) n'apparaît pas dans la liste — il n'est
-  qu'une entrée du registre. Un agent **en travail en arrière-plan** reste
-  listé même sans onglet (cas d'un agent « parké » lors d'une bascule de
-  projet). Un **agent délégué par l'assistant** (`run_agents`, mode
-  `agent_process` ou `assistant_agent`) **vivant reste listé même au repos** :
-  entre son lancement et son premier tour, puis entre ses tours, il est vivant
-  mais inactif — le masquer donnait l'impression que les listes (standard et
-  résumé repliable du mode assistant seul) ne se rafraîchissaient pas. À
-  l'arrêt du process (fin de run / échec), il disparaît à nouveau. Le
-  superagent (assistant) et les agents d'assistant ne sont jamais filtrés ;
-  un `visible` absent (backend ancien) est traité comme visible.
+  avec fiche et bouton « Afficher l'onglet ». **Filtrage de la liste** : la
+  vérité est « la session **travaille** », jamais « un onglet est ouvert ».
+  Une session qui **travaille** (`busy`, ou `toolInProgress`, ou `isWorking`
+  annoncé par le backend — fonction pure `isAgentWorking`) est **toujours
+  listée**, onglet ou non, et porte le repère **« arrière-plan »** quand son
+  onglet est fermé (`isWorkingWithoutTab`) : l'entrée dit d'un coup d'œil
+  l'agent, son projet et le fait qu'il travaille sans onglet. Une session qui
+  ne travaille pas n'apparaît que si son onglet est ouvert (`visible`) ou si
+  son processus pi est **encore vivant** (`alive`, agent « parké » lors d'une
+  bascule de projet, agent **délégué par l'assistant** entre deux tours) ;
+  morte et sans onglet, elle est écartée (aucune entrée fantôme) et elle n'est
+  jamais présentée comme travaillante. `flattenAgents` propage `working` et
+  `visible` pour que l'affichage ne recalcule rien. Le même socle
+  (`isAgentWorking`, `isWorkingWithoutTab`, `buildBackgroundWorkMissions`,
+  `renderBackgroundWorkersHtml`) alimente le panneau **Activité** de l'onglet
+  🎭 Agents (bloc « Travail en arrière-plan », purement informatif, aucun
+  onglet ouvert, aucun focus volé). Le superagent (assistant) et les agents
+  d'assistant ne sont jamais filtrés ; un `visible` absent (backend ancien) est
+  traité comme visible et n'entraîne aucun badge.
 - **Frontend** (`src/js/dashboard.js`) : carte « Supervision des agents »
   rendue dans la grille dès qu'au moins une session d'agent existe. Tableau
   (projet, agent, état, mode) + ligne d'insight (nombre d'agents en cours).

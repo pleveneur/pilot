@@ -20,6 +20,10 @@ import {
   formatLastActivity,
   shortMission,
   buildRunningMissions,
+  isAgentWorking,
+  isWorkingWithoutTab,
+  buildBackgroundWorkMissions,
+  renderBackgroundWorkersHtml,
 } from "./agent-activity.js";
 
 // Mocks Tauri : le store partagé démarre listen/poll à l'abonnement —
@@ -891,5 +895,191 @@ describe("buildRunningMissions — missions réellement en cours", () => {
   it("tolère une liste absente ou vide", () => {
     expect(buildRunningMissions(null, null)).toEqual([]);
     expect(buildRunningMissions([], [])).toEqual([]);
+  });
+});
+
+// ── Regle 1/2 : « travaille sans onglet » visible dans la LISTE DES AGENTS ──
+// Un agent qui travaille sans onglet ouvert (lance en arriere-plan, ou dont
+// l'onglet a ete ferme) doit apparaitre dans la liste, et l'entree doit DIRE
+// qu'il travaille en arriere-plan. La verite est « il travaille », jamais
+// « un onglet est ouvert ».
+
+/** Session de projet telle que flattenAgents la recoit (supervision). */
+function session(over) {
+  return { path: "C:/proj/pilot", name: "pilot", agents: [{ agent: "codeur", alive: true, ...over }] };
+}
+
+describe("isAgentWorking / isWorkingWithoutTab — travail effectif", () => {
+  it("un agent qui produit, ou dont un outil est en cours, travaille", () => {
+    expect(isAgentWorking({ busy: true })).toBe(true);
+    expect(isAgentWorking({ busy: false, toolInProgress: true })).toBe(true);
+    expect(isAgentWorking({ busy: false, isWorking: true })).toBe(true);
+    expect(isAgentWorking({ working: true })).toBe(true);
+  });
+
+  it("un agent vivant AU REPOS ne travaille pas", () => {
+    expect(isAgentWorking({ busy: false, state: "idle", alive: true, visible: true })).toBe(false);
+    expect(isAgentWorking(null)).toBe(false);
+    expect(isAgentWorking(undefined)).toBe(false);
+  });
+
+  it("« travaille sans onglet » exige un travail effectif ET aucun onglet", () => {
+    expect(isWorkingWithoutTab({ busy: true, visible: false })).toBe(true);
+    expect(isWorkingWithoutTab({ busy: true, visible: true })).toBe(false);
+    expect(isWorkingWithoutTab({ busy: false, visible: false })).toBe(false);
+    // Visibilite inconnue (backend ancien) : on n'affirme rien.
+    expect(isWorkingWithoutTab({ busy: true })).toBe(false);
+  });
+});
+
+describe("flattenAgents — travail effectif et visibilite d'onglet propages", () => {
+  it("propage working / visible pour une session qui travaille sans onglet", () => {
+    const list = flattenAgents(makeSupervision([session({ state: "running", visible: false, alive: true })]));
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ working: true, visible: false, busy: true });
+    expect(isWorkingWithoutTab(list[0])).toBe(true);
+  });
+
+  it("un outil long silencieux reste du TRAVAIL, meme sans onglet", () => {
+    const list = flattenAgents(
+      makeSupervision([session({ state: "idle", visible: false, alive: true, toolInProgress: true })])
+    );
+    expect(list).toHaveLength(1);
+    expect(list[0].working).toBe(true);
+    expect(isWorkingWithoutTab(list[0])).toBe(true);
+  });
+
+  it("une session qui TRAVAILLE est listee meme si `alive` est momentanement faux (demarrage)", () => {
+    // Discriminant : outil long en cours, `busy` faux et processus pas encore
+    // vu vivant. L'ancienne regle (filtre sur `busy` puis sur `alive`) ecartait
+    // cette session alors qu'elle travaille.
+    const list = flattenAgents(
+      makeSupervision([session({ state: "idle", visible: false, alive: false, toolInProgress: true })])
+    );
+    expect(list).toHaveLength(1);
+    expect(list[0].working).toBe(true);
+  });
+
+  it("une session VIVANTE mais AU REPOS n'est pas presentee comme travaillante", () => {
+    const list = flattenAgents(makeSupervision([session({ state: "idle", visible: false, alive: true })]));
+    expect(list).toHaveLength(1);
+    expect(list[0].working).toBe(false);
+    expect(anyBusy(list)).toBe(false);
+    expect(isWorkingWithoutTab(list[0])).toBe(false);
+  });
+
+  it("une session MORTE sans onglet ne laisse aucune entree fantome", () => {
+    const list = flattenAgents(makeSupervision([session({ state: "stopped", visible: false, alive: false })]));
+    expect(list).toEqual([]);
+    expect(buildBackgroundWorkMissions(list)).toEqual([]);
+  });
+});
+
+describe("renderDropdown — l'entree dit « travaille en arriere-plan »", () => {
+  it("affiche le badge arriere-plan pour une session qui travaille sans onglet", () => {
+    const list = flattenAgents(makeSupervision([session({ state: "running", visible: false, alive: true, prompt: "Corriger la recherche" })]));
+    const html = renderDropdown(list);
+    // Badge DEDIE (element), pas seulement une mention dans le tooltip.
+    expect(html).toContain('class="agent-activity-item-bg"');
+    expect(html).toMatch(/agent-activity-item-bg[^>]*>arrière-plan</);
+    expect(html).toContain("working-background");
+    expect(html).toContain("codeur");
+    expect(html).toContain("pilot");
+    // La pastille respire : la session travaille, onglet ou non.
+    expect(html).toMatch(/agent-activity-item-dot\s*breathing/);
+  });
+
+  it("n'affiche AUCUN badge arriere-plan pour un agent avec onglet ouvert", () => {
+    const list = flattenAgents(makeSupervision([session({ state: "running", visible: true, alive: true })]));
+    const html = renderDropdown(list);
+    expect(html).not.toContain("agent-activity-item-bg");
+    expect(html).not.toContain("working-background");
+    expect(html).not.toContain("arrière-plan");
+  });
+
+  it("n'affiche AUCUN badge arriere-plan pour une session vivante au repos", () => {
+    const list = flattenAgents(makeSupervision([session({ state: "idle", visible: false, alive: true })]));
+    const html = renderDropdown(list);
+    expect(html).toContain("agent-activity-item-label");
+    expect(html).not.toContain("agent-activity-item-bg");
+    expect(html).not.toContain("arrière-plan");
+    expect(html).not.toMatch(/agent-activity-item-dot\s*breathing/);
+  });
+});
+
+describe("renderCard — fiche d'une session qui travaille sans onglet", () => {
+  it("dit « Travail (arriere-plan) » et « Onglet : Aucun »", () => {
+    const html = renderCard({
+      agentId: "codeur|C:/proj/pilot",
+      label: "codeur",
+      project: "pilot",
+      busy: true,
+      visible: false,
+      lastActivity: "12:00",
+      kind: "agent",
+    });
+    expect(html).toContain("Travail (arrière-plan)");
+    expect(html).toContain("Aucun (arrière-plan)");
+    expect(html).toContain("Afficher l'onglet"); // ouverture MANUELLE seulement
+  });
+
+  it("dit « Repos » et « Onglet : Ouvert » pour un agent au repos avec onglet", () => {
+    const html = renderCard({
+      agentId: "codeur|C:/proj/pilot",
+      label: "codeur",
+      project: "pilot",
+      busy: false,
+      visible: true,
+      lastActivity: null,
+      kind: "agent",
+    });
+    expect(html).toContain("Repos");
+    expect(html).toContain("Ouvert");
+    expect(html).not.toContain("arrière-plan");
+  });
+});
+
+describe("buildBackgroundWorkMissions / renderBackgroundWorkersHtml — panneau Activite", () => {
+  it("liste la session qui travaille sans onglet (agent, projet, mission)", () => {
+    const list = flattenAgents(
+      makeSupervision([
+        {
+          path: "C:/proj/pilot",
+          name: "pilot",
+          agents: [{ agent: "codeur", state: "running", visible: false, alive: true, prompt: "Corriger la recherche globale" }],
+        },
+      ])
+    );
+    const missions = buildBackgroundWorkMissions(list);
+    expect(missions).toEqual([
+      {
+        agentId: "codeur|C:/proj/pilot",
+        kind: "agent",
+        agent: "codeur",
+        project: "pilot",
+        mission: "Corriger la recherche globale",
+      },
+    ]);
+    const html = renderBackgroundWorkersHtml(missions);
+    expect(html).toContain("Travail en arrière-plan");
+    expect(html).toContain("codeur");
+    expect(html).toContain("pilot");
+    expect(html).toContain("Corriger la recherche globale");
+    // Aucun bouton, aucun appel : le bloc est purement informatif.
+    expect(html).not.toContain("<button");
+  });
+
+  it("ne liste NI une session vivante au repos, NI une session morte", () => {
+    const repos = flattenAgents(makeSupervision([session({ state: "idle", visible: false, alive: true })]));
+    const morte = flattenAgents(makeSupervision([session({ state: "stopped", visible: false, alive: false })]));
+    expect(buildBackgroundWorkMissions(repos)).toEqual([]);
+    expect(buildBackgroundWorkMissions(morte)).toEqual([]);
+    expect(renderBackgroundWorkersHtml([])).toBe("");
+    expect(renderBackgroundWorkersHtml(null)).toBe("");
+  });
+
+  it("ignore un agent qui travaille AVEC un onglet ouvert (deja visible autrement)", () => {
+    const list = flattenAgents(makeSupervision([session({ state: "running", visible: true, alive: true })]));
+    expect(buildBackgroundWorkMissions(list)).toEqual([]);
   });
 });

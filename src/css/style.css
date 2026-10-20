@@ -1405,6 +1405,21 @@ body.theme-light.theme-tokyo-day {
   text-overflow: ellipsis;
   max-width: 70px;
 }
+/* Travail SANS ONGLET (regle 1) : la liste dit en un coup d'oeil que l'agent
+   travaille en arriere-plan (aucun onglet ouvert). Style discret, coherent
+   avec les badges d'etat du theme. */
+.agent-activity-item-bg {
+  flex-shrink: 0;
+  font-size: var(--font-xs);
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.agent-activity-item.working-background .agent-activity-item-label {
+  font-weight: 600;
+}
 .agent-activity-empty {
   padding: 8px;
   color: var(--text-muted);
@@ -7000,6 +7015,11 @@ body.pilot-loading *::after {
 .agent-status-card .asc-chip.running { color: var(--accent); background: var(--accent-soft); }
 .agent-status-card .asc-chip.tool { color: var(--warning); background: color-mix(in srgb, var(--warning) 13%, transparent); }
 .agent-status-card .asc-chip.done { color: var(--success); background: color-mix(in srgb, var(--success) 20%, transparent); }
+/* Carte « travail en arriere-plan » (panneau « Activite » de l'onglet Agents) :
+   une session qui travaille sans onglet ouvert, avec agent, projet, mission. */
+.agent-status-card.working-background {
+  border-left-color: var(--accent);
+}
 .agent-status-card .asc-chip.error,
 .agent-status-card .asc-chip.stop { color: var(--danger); background: color-mix(in srgb, var(--danger) 20%, transparent); }
 

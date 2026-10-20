@@ -84,20 +84,27 @@ export function flattenAgents(supervision, lastActivityMap) {
       const label = a.agent || "";
       const state = a.state || "stopped";
       const busy = state === "running" || state === "compacting";
-      // Owner requirement: the list must show EVERY live agent, whatever the
-      // launch mode. The assistant's discreet delegation (startAgentInvisible
-      // → set_agent_visible(false) + start_agent_session) creates a `main`
-      // session, so restricting the exception to agent_process/assistant_agent
-      // hid the most common delegate whenever it was idle (between two turns).
-      // Any ALIVE process without a tab stays listed, even at rest, and remains
-      // recoverable via "Afficher l'onglet". A stopped agent (alive=false, pi
-      // process gone) is filtered as before — no lingering false positive.
-      // Missing `visible` (old backend payload) is treated as visible. The
-      // superagent (project "") and the assistant agents (ASSISTANT_SPACE) are
-      // never filtered.
-      if (!isSuper && !isAssistant && a.visible === false && !busy) {
-        const aliveBackground = a.alive; // pi process alive, all modes (main / agent_process / assistant_agent)
-        if (!aliveBackground) continue;
+      // Travail EFFECTIF de la session : soit l'agent produit (busy), soit un
+      // outil long est en cours (compilation, tests : silencieux mais reel),
+      // soit le backend l'annonce (isWorking, champ additif optionnel).
+      // C'est la SEULE verite de « il travaille » : jamais « un onglet est
+      // ouvert ». Fonction pure partagee (isAgentWorking).
+      const toolInProgress = a.toolInProgress === true;
+      const isWorkingFlag = a.isWorking === true;
+      const working = busy || toolInProgress || isWorkingFlag;
+      // Regle 1 : une session qui TRAVAILLE est TOUJOURS listee, qu'elle ait un
+      // onglet ouvert ou non (agent lance en arriere-plan, onglet ferme).
+      // Une session qui NE travaille pas n'apparait que si elle a un onglet
+      // ouvert (`visible`) ou si son processus pi est encore vivant (agent
+      // recuperable au repos entre deux tours, tous modes de lancement : main /
+      // agent_process / assistant_agent). Un agent au repos dont le processus
+      // est mort est ecarte : aucune entree fantome. `visible` absent (backend
+      // ancien) est traite comme « onglet ouvert ». L'assistant (projet "") et
+      // les agents d'assistant (ASSISTANT_SPACE) ne sont jamais filtres.
+      if (!isSuper && !isAssistant && !working) {
+        const hasTab = a.visible !== false;
+        const aliveBackground = a.alive === true; // pi process alive, all modes
+        if (!hasTab && !aliveBackground) continue;
       }
       // Identité UNIQUE par agent : deux agents peuvent porter le même nom
       // (« codeur ») sur des PROJETS différents. Pour l'assistant (projet ""),
@@ -119,13 +126,17 @@ export function flattenAgents(supervision, lastActivityMap) {
         projectPath: isAssistant ? ASSISTANT_SPACE : (isSuper ? "" : project),
         state,
         busy,
+        // Travail effectif et visibilite d'onglet (regle 1) : l'affichage s'en
+        // sert pour dire « travaille en arriere-plan (aucun onglet) ».
+        working,
+        visible: typeof a.visible === "boolean" ? a.visible : undefined,
         // Mission en cours (affichage « missions en cours » du panneau de la
         // cloche) : dernier prompt réellement envoyé à la session — déjà tronqué
         // côté Rust — et outil long éventuellement en cours. Champs ADDITIFS :
         // les consommateurs existants (indicateur d'activité, résumé immersif,
         // onglet agent, assistant web) les ignorent.
         prompt: typeof a.prompt === "string" ? a.prompt : "",
-        toolInProgress: a.toolInProgress === true,
+        toolInProgress,
         lastActivity: lastActivityMap ? formatLastActivity(lastActivityMap.get(rawId)) : null,
         kind: isSuper ? "superagent" : (isAssistant ? "assistant" : "agent"),
       });
@@ -137,6 +148,64 @@ export function flattenAgents(supervision, lastActivityMap) {
 /** true si au moins un agent est occupé (travail en cours). */
 export function anyBusy(list) {
   return list.some((a) => a.busy);
+}
+
+// ── Travail effectif et travail SANS ONGLET (regle 1) ──
+// Une seule source de verite pour « cet agent travaille-t-il ? », partagee par
+// la liste deroulante (cercle en haut a droite), la fiche d'agent, le volet
+// « En cours » du panneau de la cloche et le panneau « Activite » de l'onglet
+// Agents : aucune logique de vivacite n'est dupliquee.
+
+/**
+ * true si la session TRAVAILLE reellement a cet instant. Fonction PURE.
+ *  - `busy` : l'agent produit une reponse (ou compacte) ;
+ *  - `toolInProgress` : un outil long est en cours (build, tests, install) ;
+ *  - `isWorking` : travail effectif annonce par le backend (champ additif
+ *    optionnel, absent des charges anciennes) ;
+ *  - `working` : resultat deja calcule par flattenAgents.
+ * Un agent vivant mais AU REPOS n'est jamais « travaillant ».
+ * @param {object} agent entree de liste (flattenAgents) ou objet partiel.
+ * @returns {boolean}
+ */
+export function isAgentWorking(agent) {
+  if (!agent) return false;
+  return (
+    agent.working === true ||
+    agent.busy === true ||
+    agent.toolInProgress === true ||
+    agent.isWorking === true
+  );
+}
+
+/**
+ * true si la session travaille SANS ONGLET ouvert (travail en arriere-plan).
+ * Fonction PURE. Exige `visible === false` (aucun onglet) : quand la
+ * visibilite est inconnue (backend ancien) on n'affirme rien (aucun badge
+ * errone).
+ * @param {object} agent entree de liste (flattenAgents).
+ * @returns {boolean}
+ */
+export function isWorkingWithoutTab(agent) {
+  return isAgentWorking(agent) && agent.visible === false;
+}
+
+/**
+ * Missions des sessions qui travaillent SANS ONGLET, pretes a afficher
+ * (panneau « Activite » de l'onglet Agents). Fonction PURE : elle ne fait que
+ * filtrer la liste issue du store partage (aucun appel, aucun polling propre).
+ * @param {Array} list liste aplatie (flattenAgents).
+ * @returns {Array<{agentId, kind, agent, project, mission}>}
+ */
+export function buildBackgroundWorkMissions(list) {
+  return (list || [])
+    .filter((a) => isWorkingWithoutTab(a))
+    .map((a) => ({
+      agentId: a.agentId || "",
+      kind: a.kind || "agent",
+      agent: a.label || "",
+      project: a.project || "Assistant",
+      mission: shortMission(a.prompt),
+    }));
 }
 
 // ── Missions en cours (affichage du panneau de la cloche) ──
@@ -278,7 +347,7 @@ export function shortMission(text) {
 export function buildRunningMissions(list, queued) {
   const out = [];
   for (const a of list || []) {
-    if (!a || (!a.busy && !a.toolInProgress)) continue;
+    if (!isAgentWorking(a)) continue;
     out.push({
       agent: a.label || "",
       project: a.project || "Assistant",
@@ -437,10 +506,11 @@ export function renderDropdown(list) {
   return list
     .map(
       (a) => `
-    <button class="agent-activity-item" data-agent-id="${esc(a.agentId)}" data-kind="${esc(a.kind)}" title="${esc(a.label)}${a.project ? " — " + esc(a.project) : ""}">
-      <span class="agent-activity-item-dot ${a.busy ? "breathing" : ""} ${a.kind === "superagent" ? "superagent" : ""}"></span>
+    <button class="agent-activity-item${isWorkingWithoutTab(a) ? " working-background" : ""}" data-agent-id="${esc(a.agentId)}" data-kind="${esc(a.kind)}" title="${esc(a.label)}${a.project ? " — " + esc(a.project) : ""}${isWorkingWithoutTab(a) ? " — travaille en arrière-plan (aucun onglet ouvert)" : ""}">
+      <span class="agent-activity-item-dot ${isAgentWorking(a) ? "breathing" : ""} ${a.kind === "superagent" ? "superagent" : ""}"></span>
       <span class="agent-activity-item-label">${esc(a.label)}</span>
       ${a.project ? `<span class="agent-activity-item-project">${esc(a.project)}</span>` : ""}
+      ${isWorkingWithoutTab(a) ? '<span class="agent-activity-item-bg" title="Travaille en arrière-plan : aucun onglet ouvert">arrière-plan</span>' : ""}
     </button>`
     )
     .join("");
@@ -448,17 +518,53 @@ export function renderDropdown(list) {
 
 /** Rendu HTML de la fiche d'un agent (nom, état, projet, dernière activité). */
 export function renderCard(agent) {
-  const stateLabel = agent.busy ? "Travail" : "Repos";
+  const working = isAgentWorking(agent);
+  const withoutTab = isWorkingWithoutTab(agent);
+  // Regle 2 : l'entree dit en un coup d'oeil l'agent, son projet, et le fait
+  // qu'il travaille en ARRIERE-PLAN (aucun onglet ouvert).
+  const stateLabel = working ? (withoutTab ? "Travail (arrière-plan)" : "Travail") : "Repos";
   return `
     <div class="agent-activity-card-head">
-      <span class="agent-activity-item-dot ${agent.busy ? "breathing" : ""} ${agent.kind === "superagent" ? "superagent" : ""}"></span>
+      <span class="agent-activity-item-dot ${working ? "breathing" : ""} ${agent.kind === "superagent" ? "superagent" : ""}"></span>
       <span class="agent-activity-card-name">${esc(agent.label)}</span>
     </div>
     <div class="agent-activity-card-row"><span>État</span><span>${stateLabel}</span></div>
     <div class="agent-activity-card-row"><span>Projet</span><span>${esc(agent.project || "—")}</span></div>
+    <div class="agent-activity-card-row"><span>Onglet</span><span>${withoutTab ? "Aucun (arrière-plan)" : "Ouvert"}</span></div>
     <div class="agent-activity-card-row"><span>Dernière activité</span><span>${esc(agent.lastActivity || "—")}</span></div>
     <button class="agent-activity-card-open" data-agent-id="${esc(agent.agentId)}" data-kind="${esc(agent.kind)}">Afficher l'onglet</button>
   `;
+}
+
+/**
+ * Rendu HTML du bloc « travail en arrière-plan » du panneau « Activité » de
+ * l'onglet Agents : une carte par session qui TRAVAILLE sans onglet ouvert
+ * (agent + projet + mission + mention « arrière-plan »). Fonction PURE,
+ * reutilise les classes de cartes existantes (.agents-board /
+ * .agent-status-card) : aucun nouveau composant. Aucun onglet n'est ouvert par
+ * ce rendu (purement informatif).
+ * @param {Array} missions sortie de buildBackgroundWorkMissions.
+ * @returns {string} HTML (chaine vide si aucune session en arriere-plan).
+ */
+export function renderBackgroundWorkersHtml(missions) {
+  const list = missions || [];
+  if (!list.length) return "";
+  const cards = list
+    .map(
+      (m) => `
+        <div class="agent-status-card running working-background" data-agent-id="${esc(m.agentId)}">
+          <span class="asc-icon">🤖</span>
+          <div class="asc-info">
+            <div class="asc-name">${esc(m.agent)}${m.project ? ` — ${esc(m.project)}` : ""}</div>
+            <div class="asc-detail">${esc(m.mission)}</div>
+          </div>
+          <span class="asc-chip running">arrière-plan</span>
+        </div>`
+    )
+    .join("");
+  return `
+      <div class="agents-board-title">Travail en arrière-plan (aucun onglet ouvert)</div>
+      <div class="agents-board">${cards}</div>`;
 }
 
 /**
