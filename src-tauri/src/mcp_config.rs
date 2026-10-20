@@ -1761,42 +1761,57 @@ mod tests {
 
     // ── E4 : bout en bout HORS LIGNE du test distant ──
 
+    /// Délai MAXIMAL d'acceptation d'une connexion dans le faux serveur local.
+    /// Il ne sert qu'à garantir que le thread serveur rend la main si le client
+    /// ouvre MOINS de connexions que prévu : il ne conditionne jamais la
+    /// réussite du test (aucune attente « devinée » avant d'envoyer).
+    const REQUEST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Lit UNE requête HTTP (ligne de requête + en-têtes + corps annoncé par
+    /// `content-length`) et renvoie le texte brut reçu.
+    fn read_one_http_request<R: std::io::Read>(sock: &mut R) -> String {
+        let mut raw: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 512];
+        loop {
+            let n = sock.read(&mut buf).expect("lecture de la requête");
+            if n == 0 {
+                break;
+            }
+            raw.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&raw).into_owned();
+            if let Some(pos) = text.find("\r\n\r\n") {
+                let len = text[..pos]
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if raw.len() >= pos + 4 + len {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&raw).into_owned()
+    }
+
     /// Sert UNE requête HTTP minimale sur `listener` et renvoie la requête brute
-    /// reçue (en-têtes + corps). `content_type` choisit JSON direct ou flux
-    /// d'événements (`data:` sur une ligne). Aucun serveur externe, aucune clé
-    /// réelle : la boucle locale suffit à vérifier l'envoi et la lecture.
+    /// reçue (en-têtes + corps). Aucun serveur externe, aucune clé réelle : la
+    /// boucle locale suffit à vérifier l'envoi et la lecture.
+    ///
+    /// ⚠️ À n'utiliser que pour UNE requête : deux appels concurrents sur le
+    /// même listener se disputeraient `accept()` dans un ordre non garanti. Pour
+    /// plusieurs requêtes, utiliser `serve_in_order`.
     fn serve_once_raw(
         listener: std::net::TcpListener,
         response: String,
     ) -> (std::thread::JoinHandle<()>, std::sync::mpsc::Receiver<String>) {
-        use std::io::{Read, Write};
+        use std::io::Write;
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
             let (mut sock, _) = listener.accept().expect("connexion du client test");
-            let mut raw: Vec<u8> = Vec::new();
-            let mut buf = [0u8; 512];
-            loop {
-                let n = sock.read(&mut buf).expect("lecture de la requête");
-                if n == 0 {
-                    break;
-                }
-                raw.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&raw).into_owned();
-                if let Some(pos) = text.find("\r\n\r\n") {
-                    let len = text[..pos]
-                        .lines()
-                        .find_map(|l| {
-                            l.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .and_then(|v| v.trim().parse::<usize>().ok())
-                        })
-                        .unwrap_or(0);
-                    if raw.len() >= pos + 4 + len {
-                        break;
-                    }
-                }
-            }
-            let request = String::from_utf8_lossy(&raw).into_owned();
+            let request = read_one_http_request(&mut sock);
             let _ = sock.write_all(response.as_bytes());
             let _ = sock.flush();
             let _ = tx.send(request);
@@ -1804,13 +1819,64 @@ mod tests {
         (handle, rx)
     }
 
-    /// Sert UNE requête en `200 OK` (JSON direct ou flux d'événements).
-    fn serve_once(
+    /// Sert `responses.len()` requêtes sur `listener` et renvoie les requêtes
+    /// brutes reçues DANS L'ORDRE d'arrivée (index 0 = première requête du
+    /// client), avec la réponse de même index.
+    ///
+    /// L'ordre est imposé par construction : chaque connexion est ACCEPTÉE puis
+    /// SERVie avant d'accepter la suivante, sur un seul thread. C'est le point
+    /// corrigé de l'incident CI v0.4.34 (Linux seulement) : lancer un thread par
+    /// requête sur le même listener ne garantit rien — le noyau réveille un
+    /// thread en attente de `accept()` sans ordre défini, si bien que le thread
+    /// « outils » pouvait accepter le `initialize` et le thread « handshake »
+    /// recevoir le `tools/list` (échec de l'assertion `method: initialize`).
+    ///
+    /// Le serveur est DÉJÀ en écoute au moment du `bind` : il n'y a aucune course
+    /// entre son démarrage et la première requête, donc aucune temporisation à
+    /// deviner avant d'envoyer. L'acceptation est seulement BORNÉE par
+    /// `REQUEST_WAIT` pour que `join()` ne puisse jamais rester bloqué si le
+    /// client ouvre moins de connexions que prévu.
+    fn serve_in_order(
         listener: std::net::TcpListener,
-        content_type: &'static str,
-        json: &'static str,
-    ) -> (std::thread::JoinHandle<()>, std::sync::mpsc::Receiver<String>) {
-        let response = if content_type == "text/event-stream" {
+        responses: Vec<String>,
+    ) -> std::thread::JoinHandle<Vec<String>> {
+        use std::io::Write;
+        std::thread::spawn(move || {
+            let expected = responses.len();
+            let mut requests: Vec<String> = Vec::with_capacity(expected);
+            listener
+                .set_nonblocking(true)
+                .expect("mode non bloquant du faux serveur");
+            let deadline = std::time::Instant::now() + REQUEST_WAIT;
+            while requests.len() < expected && std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut sock, _)) => {
+                        // Le mode non bloquant de l'écoute n'est PAS garanti de
+                        // façon identique sur les trois plateformes pour le
+                        // socket accepté (Linux le rend bloquant, Windows et
+                        // macOS peuvent hériter) : on l'impose explicitement
+                        // pour lire la requête en entier partout.
+                        sock.set_nonblocking(false).expect("socket bloquant");
+                        let request = read_one_http_request(&mut sock);
+                        let response = &responses[requests.len()];
+                        let _ = sock.write_all(response.as_bytes());
+                        let _ = sock.flush();
+                        requests.push(request);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+            requests
+        })
+    }
+
+    /// Réponse `200 OK` complète, prête à être écrite. `content_type` choisit
+    /// JSON direct ou flux d'événements (`event: message` + une ligne `data:`).
+    fn http_ok_response(content_type: &str, json: &str) -> String {
+        if content_type == "text/event-stream" {
             format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: {}\r\nconnection: close\r\n\r\nevent: message\ndata: {}\n\n",
                 content_type, json
@@ -1822,8 +1888,7 @@ mod tests {
                 json.len(),
                 json
             )
-        };
-        serve_once_raw(listener, response)
+        }
     }
 
     /// Réponse HTTP brute avec un statut arbitraire (preuve des échecs).
@@ -1853,20 +1918,30 @@ mod tests {
         };
 
         // 1) Réponse JSON directe, avec une clé FICTIVE → succès.
-        let (json_thread, sent) =
-            serve_once(listener.try_clone().unwrap(), "application/json", ok_json);
-        // Le test enchaîne désormais DEUX requêtes (handshake puis `tools/list`,
-        // tâche 309) : le faux serveur local doit en servir deux.
-        let (tools_thread, _tools_sent) =
-            serve_once(listener.try_clone().unwrap(), "application/json", ok_json);
+        // Le test enchaîne DEUX requêtes (handshake puis `tools/list`,
+        // tâche 309) : le faux serveur les sert l'une APRÈS l'autre, sur un
+        // seul thread, donc dans l'ordre du client (aucun aléa d'ordonnancement
+        // entre deux `accept()` concurrents — cause de l'échec CI Linux v0.4.34).
+        let json_thread = serve_in_order(
+            listener.try_clone().unwrap(),
+            vec![
+                http_ok_response("application/json", ok_json),
+                http_ok_response("application/json", ok_json),
+            ],
+        );
         let res = test_remote_connection(&server, "Distant", Some(FICTIONAL_KEY)).unwrap();
         assert_eq!(res["ok"], true, "résultat: {}", res);
         assert_eq!(res["protocolVersion"], "2024-11-05");
         assert!(!res.to_string().contains(FICTIONAL_KEY));
 
-        let request = sent
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("requête reçue par le serveur local");
+        let requests = json_thread.join().expect("serveur local JSON terminé");
+        assert_eq!(
+            requests.len(),
+            2,
+            "deux requêtes attendues (handshake puis tools/list), reçues : {:?}",
+            requests
+        );
+        let request = requests[0].as_str();
         let head = request.split("\r\n\r\n").next().unwrap_or_default();
         let request_line = head.lines().next().unwrap_or_default();
         // La clé ne fuit NI dans la ligne de requête (l'URL)…
@@ -1883,32 +1958,43 @@ mod tests {
             "le corps ne doit pas contenir la clé"
         );
         assert!(request.contains("\"method\":\"initialize\""), "requête: {}", request);
-        json_thread.join().expect("serveur local JSON terminé");
-        tools_thread.join().expect("serveur local JSON (outils) terminé");
+        // La SECONDE requête est bien la découverte d'outils (tâche 309) :
+        // l'ordre est désormais prouvé, plus seulement espéré.
+        assert!(
+            requests[1].contains("\"method\":\"tools/list\""),
+            "requête: {}",
+            requests[1]
+        );
 
         // 2) Même test avec une réponse en FLUX D'ÉVÉNEMENTS, SANS clé → succès.
-        let (sse_thread, sent) =
-            serve_once(listener.try_clone().unwrap(), "text/event-stream", ok_json);
-        let (sse_tools_thread, _tools_sent) =
-            serve_once(listener.try_clone().unwrap(), "text/event-stream", ok_json);
+        let sse_thread = serve_in_order(
+            listener.try_clone().unwrap(),
+            vec![
+                http_ok_response("text/event-stream", ok_json),
+                http_ok_response("text/event-stream", ok_json),
+            ],
+        );
         let res = test_remote_connection(&server, "Distant", None).unwrap();
         assert_eq!(res["ok"], true, "résultat: {}", res);
         assert_eq!(res["protocolVersion"], "2024-11-05");
-        let request = sent
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("requête reçue par le serveur local");
-        // Sans clé, aucun en-tête d'authentification n'est envoyé.
-        assert!(
-            !request.to_ascii_lowercase().contains("authorization:"),
-            "aucun en-tête d'authentification attendu: {}",
-            request
+        let sse_requests = sse_thread.join().expect("serveur local SSE terminé");
+        assert_eq!(
+            sse_requests.len(),
+            2,
+            "deux requêtes attendues (handshake puis tools/list), reçues : {:?}",
+            sse_requests
         );
+        // Sans clé, aucun en-tête d'authentification n'est envoyé — sur AUCUNE
+        // des deux requêtes (handshake et découverte d'outils).
+        for request in &sse_requests {
+            assert!(
+                !request.to_ascii_lowercase().contains("authorization:"),
+                "aucun en-tête d'authentification attendu: {}",
+                request
+            );
+        }
 
         // 3) Serveur injoignable → échec propre, message masqué, aucune panique.
-        sse_thread.join().expect("serveur local SSE terminé");
-        sse_tools_thread
-            .join()
-            .expect("serveur local SSE (outils) terminé");
         let dead_url = format!("http://127.0.0.1:{}/mcp", listener.local_addr().unwrap().port());
         // Le listener est fermé : la connexion échoue immédiatement.
         drop(listener);
