@@ -302,6 +302,95 @@ describe("flattenAgents — filtrage des agents de projet sans onglet (visible=f
   });
 });
 
+// ── Règle 6 : un agent QUI TRAVAILLE sans onglet ouvert reste VISIBLE dans la
+// liste d'activité (verrou anti-régression du filtre assoupli).
+// Ces tests ÉCHOUENT si on rétablit l'ancien filtre « visible=false → exclu
+// quand !busy, sans regarder `alive` » : le cas d'un agent lancé en
+// arrière-plan par `run_agents` (visible=false, sans onglet, au repos entre
+// deux tours) disparaissait alors de la liste.
+describe("flattenAgents — règle 6 : tout agent VIVANT reste listé (même sans onglet)", () => {
+  it("(a) garde un agent de projet VIVANT sans onglet au repos ({ alive: true, visible: false, state: 'idle' })", () => {
+    // Aucun `mode` : la règle ne dépend d'AUCUN mode de lancement (main /
+    // agent_process / assistant_agent), seulement de la vivacité du process.
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "idle", visible: false, alive: true }] },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      agentId: "codeur|C:/proj/a",
+      rawId: "codeur",
+      project: "a",
+      state: "idle",
+      busy: false,
+      kind: "agent",
+    });
+    // Le repos ne le fait pas « respirer » : le cercle reste éteint.
+    expect(anyBusy(list)).toBe(false);
+  });
+
+  it("(b) exclut un agent NON vivant sans onglet ({ alive: false, visible: false }) — pas de faux positif", () => {
+    const sup = makeSupervision([
+      {
+        path: "C:/proj/a",
+        name: "a",
+        agents: [
+          { agent: "codeur", state: "idle", visible: false, alive: false },
+          { agent: "docs", state: "stopped", visible: false, alive: false },
+        ],
+      },
+    ]);
+    expect(flattenAgents(sup)).toEqual([]);
+  });
+
+  it("(c) garde un agent invisible QUI TRAVAILLE, avec busy=true et toolInProgress propagé", () => {
+    const sup = makeSupervision([
+      {
+        path: "C:/proj/a",
+        name: "a",
+        agents: [
+          { agent: "codeur", state: "running", visible: false, alive: true, toolInProgress: true, prompt: "Corriger la recherche" },
+        ],
+      },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ rawId: "codeur", state: "running", busy: true, kind: "agent" });
+    expect(list[0].toolInProgress).toBe(true);
+    expect(list[0].prompt).toBe("Corriger la recherche");
+    // Le cercle « respire » : l'agent travaille, même sans onglet.
+    expect(anyBusy(list)).toBe(true);
+    // Mission visible dans le panneau des missions en cours (outil long inclus).
+    expect(buildRunningMissions(list).map((m) => m.mission)).toEqual(["Corriger la recherche"]);
+  });
+
+  it("(c bis) un outil long et silencieux (busy=false, toolInProgress=true) reste listé et visible", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "idle", visible: false, alive: true, toolInProgress: true }] },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ busy: false, toolInProgress: true });
+  });
+
+  it("(d) ne filtre JAMAIS un agent d'assistant (__assistant__) sans onglet, même au repos et non vivant", () => {
+    const sup = makeSupervision([
+      {
+        path: "__assistant__",
+        name: "Assistant",
+        agents: [
+          { agent: "analyseur", state: "idle", visible: false, alive: true },
+          { agent: "transcripteur", state: "stopped", visible: false, alive: false },
+        ],
+      },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list.map((a) => a.rawId)).toEqual(["analyseur", "transcripteur"]);
+    expect(list.every((a) => a.kind === "assistant")).toBe(true);
+    expect(list.every((a) => a.projectPath === "__assistant__")).toBe(true);
+  });
+});
+
 describe("anyBusy — true si au moins un agent travaille", () => {
   it("retourne false pour une liste vide", () => {
     expect(anyBusy([])).toBe(false);
