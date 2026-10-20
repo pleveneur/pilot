@@ -402,7 +402,12 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
    * @param {string} src
    * @param {RegExp} siteRe
    * @param {string} label
-   * @param {{maxDistance?:number}} [opts]
+   * @param {{maxDistance?:number, naiveCoverage?:boolean}} [opts]
+   *   `naiveCoverage` : variante HISTORIQUE du détecteur (une trace, n'importe
+   *   où avant le site dans le bloc, blanchissait TOUS les arrêts suivants).
+   *   Elle n'est utilisée QUE par le test de non-vacuité, qui prouve que la
+   *   règle resserrée est bien ce qui fait rougir la matrice sur les deux
+   *   fichiers d'agents. Jamais utilisée pour juger une source réelle.
    * @returns {{sites:number, traced:number, untraced:number[], exceptions:number[], label:string}}
    */
   function precedences(src, siteRe, label, opts = {}) {
@@ -422,7 +427,7 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       // La trace doit précéder l'arrêt SANS qu'un autre arrêt de la même famille
       // s'intercale : une trace ne couvre qu'un arrêt (le suivant immédiat).
       const previousSite = i > 0 ? sites[i - 1] : -1;
-      const owners = before.filter((t) => t > previousSite);
+      const owners = opts.naiveCoverage ? before : before.filter((t) => t > previousSite);
       if (owners.length > 0) traced++;
       else if (isDeclaredException(src, site)) exceptions.push(site);
       else untraced.push(site);
@@ -637,6 +642,12 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
   function injectSilentSiteAfterTrace(src, traceMarker, cmd) {
     const t = src.indexOf(traceMarker);
     expect(t, `trace de référence introuvable (le code a bougé) : ${traceMarker}`).toBeGreaterThan(-1);
+    // Ancre UNIQUE : sinon l'injection pourrait viser la mauvaise occurrence et
+    // le test ne prouverait plus ce qu'il annonce.
+    expect(
+      src.split(traceMarker).length - 1,
+      `trace de référence AMBIGUË (plusieurs occurrences) : ${traceMarker}`,
+    ).toBe(1);
     const site = src.indexOf(`invoke("${cmd}")`, t);
     expect(site, `arrêt réel introuvable après la trace (${traceMarker})`).toBeGreaterThan(-1);
     const end = src.indexOf(";", site);
@@ -751,6 +762,45 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       expect(res.traced, `${name} : un site réel n'est plus reconnu comme tracé`).toBe(expected.traced);
       expect(res.exceptions, `${name} : exceptions nommées modifiées`).toHaveLength(expected.exceptions);
       expect(res.untraced, `${name} : FAUX POSITIF — un site réel est signalé muet`).toEqual([]);
+    }
+  });
+
+  it("non-vacuité : sans la règle « une trace ne couvre qu'un arrêt », les sites muets injectés passeraient inaperçus", () => {
+    // Preuve que la règle resserrée est bien ce qui fait rougir la matrice sur
+    // les DEUX fichiers d'agents (et pas seulement des comptes épinglés). On
+    // rejoue les MÊMES sources injectées avec la variante HISTORIQUE du
+    // détecteur — une trace, où qu'elle soit avant le site dans le bloc,
+    // blanchissait tous les arrêts suivants — puis avec la règle actuelle :
+    //   • historique : AUCUN site muet vu (le contournement passe inaperçu) ;
+    //   • actuelle    : exactement le site injecté, et lui seul.
+    // Si la règle venait à être retirée (`owners = before`), `strict`
+    // redeviendrait aveugle : ce test rougirait.
+    const cases = [
+      [
+        "agent-pi.js",
+        SRC_PI,
+        'reason: "loop-detection",\n      detected: "text",\n      agentId: state.agentId || ""',
+        "abort_agent",
+      ],
+      ["agent-pi.js", SRC_PI, 'detected: "quality-gate-toggle"', "stop_agent_session"],
+      ["super-agent.js", SRC_SA, 'detected: "tool-calls"', "abort_super_agent"],
+      ["super-agent.js", SRC_SA, 'detected: "text",\n      agentId: "assistant"', "abort_super_agent"],
+    ];
+    for (const [name, src, traceMarker, cmd] of cases) {
+      const injected = injectSilentSiteAfterTrace(src, traceMarker, cmd);
+      const siteRe = new RegExp(`invoke\\("${cmd}"`, "g");
+      const strict = precedences(injected.src, siteRe, `${name}/${cmd} (règle actuelle)`);
+      const naive = precedences(injected.src, siteRe, `${name}/${cmd} (variante historique)`, {
+        naiveCoverage: true,
+      });
+      expect(
+        strict.untraced,
+        `la règle actuelle doit voir le site muet injecté (${name} / ${cmd})`,
+      ).toEqual([injected.siteAt]);
+      expect(
+        naive.untraced,
+        `la variante historique doit être AVEUGLE au site injecté (${name} / ${cmd}) — sinon ce test ne prouve rien`,
+      ).toEqual([]);
     }
   });
 });
