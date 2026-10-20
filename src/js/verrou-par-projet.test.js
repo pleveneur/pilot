@@ -594,7 +594,10 @@ describe("POINT F — l'arrêt d'un agent ne perd plus une mission d'ASSISTANT e
     const assistantKeyIdx = branch.indexOf("const assistantKey = ASSISTANT_SPACE;");
     expect(assistantKeyIdx).toBeGreaterThan(-1);
     expect(branch).toContain("runAgentsQueueByProject[assistantKey]");
-    expect(branch).toContain("delete runAgentsQueueByProject[assistantKey];");
+    // CONTRAT MODIFIÉ (règle 4) : plus de `delete` muet — la file est abandonnée
+    // par le chemin de PRODUCTION unique, qui NOMME les missions, journalise le
+    // motif (`agent-stops.log`) et prévient l'utilisateur.
+    expect(branch).toContain("abandonQueuedRunAgentsMissions(assistantKey");
     expect(branch).toContain("isRunInProgress(assistantKey)");
     // Traitement APRÈS celui du projet, et sur SA seule clé (pas de mélange).
     expect(assistantKeyIdx).toBeGreaterThan(branch.indexOf("const queueKey ="));
@@ -617,6 +620,9 @@ describe("POINT C — l'arrêt d'un agent libère la file de missions du projet"
     expect(branch).toContain("releaseStuckRunLock(queueKey)");
     expect(branch).toContain("runAgentsInFlightByProject[queueKey]");
     expect(branch).toContain("runAgentsQueueByProject[queueKey]");
+    // Règle 4 : l'abandon passe par le chemin de PRODUCTION unique (nommage +
+    // journal + notification), jamais par un vidage muet.
+    expect(branch).toContain("abandonQueuedRunAgentsMissions(queueKey");
     // La suite n'est jamais perdue en silence : un message est émis.
     expect(branch).toContain("mission(s) en attente annulée(s)");
   });

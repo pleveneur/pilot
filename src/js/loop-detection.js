@@ -786,6 +786,19 @@ const NPM_READ_ONLY_SUBCOMMANDS = new Set([
 ]);
 // Options de `find` qui écrivent ou exécutent une commande.
 const FIND_MUTATING_OPTIONS = /^-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/;
+// Options GLOBALES de `git` qui consomment la valeur SUIVANTE (`git -C <dir>
+// status`, `git -c clé=valeur log`, `git --git-dir <dir> log`). Sans les sauter,
+// le premier token non-option (`<dir>`, `clé=valeur`) était lu comme la
+// SOUS-COMMANDE : `git -C /repo status` passait pour un mutateur, donc une
+// consultation répétée pouvait fonder un arrêt automatique (règle 2 : une
+// lecture n'est jamais un motif d'arrêt).
+const GIT_OPTIONS_WITH_VALUE = new Set([
+  "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+  "--super-prefix", "--config-env", "--list-cmds", "--attr-source",
+]);
+// Forme COLLÉE de ces options (`-C/repo`, `-ccore.pager=cat`, `--git-dir=/d`).
+const GIT_ATTACHED_OPTION =
+  /^(?:-[Cc].|--(?:git-dir|work-tree|namespace|exec-path|super-prefix|config-env|list-cmds|attr-source)=.)/;
 
 /** Retire les guillemets englobants d'un token shell. */
 function unquoteToken(token) {
@@ -838,6 +851,31 @@ function sedIsReadOnly(args) {
 }
 
 /**
+ * Indice du premier token qui est la SOUS-COMMANDE de `git`, en sautant les
+ * options globales ET leur valeur (`git -C <dir> status` → indice de `status`).
+ * @param {string[]} rest - tokens après `git` (déjà dé-quotés)
+ * @returns {number} -1 si aucune sous-commande
+ */
+function gitSubcommandIndex(rest) {
+  let i = 0;
+  while (i < rest.length) {
+    const token = rest[i];
+    if (token === "--") return i + 1 < rest.length ? i + 1 : -1;
+    if (!token.startsWith("-")) return i;
+    if (GIT_OPTIONS_WITH_VALUE.has(token)) {
+      i += 2; // option + sa valeur
+      continue;
+    }
+    if (GIT_ATTACHED_OPTION.test(token)) {
+      i += 1; // option et valeur collées dans le même token
+      continue;
+    }
+    i += 1;
+  }
+  return -1;
+}
+
+/**
  * Analyse d'un segment `git …` (le premier token est `git`).
  * @param {string[]} tokens - tokens du segment, `git` inclus
  * @returns {boolean}
@@ -845,7 +883,7 @@ function sedIsReadOnly(args) {
 function gitSegmentIsReadOnly(tokens) {
   const rest = tokens.slice(1).map(unquoteToken);
   if (!rest.length) return false; // `git` seul : pas de commande
-  const subIndex = rest.findIndex((t) => !t.startsWith("-"));
+  const subIndex = gitSubcommandIndex(rest);
   if (subIndex < 0) {
     // `git --version`, `git --help` : consultatif. `git --no-pager` sans
     // sous-commande n'exécute rien d'utile → false (prudence).

@@ -628,6 +628,43 @@ describe("isReadOnlyShellCommand — commandes shell consultatives (lectures)", 
     expect(isReadOnlyShellCommand("git status | sed -i s/a/b/")).toBe(false);
   });
 
+  it("les options GLOBALES de git (avec valeur) ne font pas passer une lecture pour une écriture", () => {
+    // Régression : `git -C <dir> status`. L'ancien découpage lisait `<dir>` comme
+    // la SOUS-COMMANDE, ne la reconnaissait pas → segment classé MUTATEUR. Une
+    // consultation répétée (`git -C /repo status` entre deux corrections)
+    // devenait donc un motif d'arrêt automatique = violation de la règle 2.
+    const readOnlyWithGlobalOptions = [
+      "git -C /repo status --short",
+      "git -C /repo diff --stat",
+      "git -C /repo log --oneline -3",
+      "git -C/repo status",
+      "git --git-dir /repo/.git status",
+      "git --git-dir=/repo/.git status",
+      "git --work-tree=/repo status",
+      "git -c core.quotepath=false status",
+      "git -ccore.quotepath=false log -1",
+      "git --no-pager -C /repo log -5",
+      "git --no-pager status",
+    ];
+    for (const cmd of readOnlyWithGlobalOptions) {
+      expect(isReadOnlyShellCommand(cmd), `devrait être consultative : ${JSON.stringify(cmd)}`).toBe(true);
+    }
+    // …et une VRAIE écriture via les mêmes options reste mutatrice (on n'a pas
+    // rendu le classifieur plus permissif par accident).
+    const stillMutating = [
+      "git -C /repo commit -m x",
+      "git -C /repo push",
+      "git -C /repo checkout -b x",
+      "git --git-dir=/repo/.git rm -f a",
+      "git --work-tree=/repo add .",
+      "git -c core.pager=cat commit -m x",
+      "git -C /repo status && git -C /repo commit -m x",
+    ];
+    for (const cmd of stillMutating) {
+      expect(isReadOnlyShellCommand(cmd), `ne devrait PAS être consultative : ${JSON.stringify(cmd)}`).toBe(false);
+    }
+  });
+
   it("n'est pas consultative dès qu'une redirection écrit un fichier", () => {
     expect(isReadOnlyShellCommand("git status --short")).toBe(true);
     expect(isReadOnlyShellCommand("git status --short > log.txt")).toBe(false);

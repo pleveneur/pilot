@@ -27,6 +27,9 @@ import {
   buildToolLoopFingerprint,
   detectRepeatedActions,
   detectRepeatedToolCalls,
+  detectRepeatedBlock,
+  detectRepeatedWord,
+  detectSemanticLoop,
 } from "./loop-detection.js";
 import { beginRun, endRun, handleAgentEvent } from "./agents-bus.js";
 
@@ -246,5 +249,179 @@ describe("règle 2 — bus d'agents (`agents-bus.js`) : consultation shell", () 
     expect(ctx.toolCallsByAgent[AGENT] || [], "une consultation ne compte pas comme action").toEqual([]);
     expect(ctx.readOnlyToolCallsByAgent[AGENT], "elle reste tracée à part").toHaveLength(15);
     expect(ctx.loopCorrectionPending[AGENT], "aucune correction déclenchée").toBeFalsy();
+  });
+});
+
+// ── 4. Agent INVISIBLE de l'Assistant (`run_agents` : l'assistant délègue) ────
+// Deux garanties distinctes, verrouillées ici :
+//   • RÈGLE 2 : une consultation répétée (read, `git status`…) ne fait JAMAIS
+//     entrer le moindre appel dans la fenêtre d'arrêt ;
+//   • ANTI-BOUCLE VIVANTE : la détection de boucle d'OUTILS ne doit pas être
+//     muette tant que le modèle n'a pas streamé 200 caractères. La garde « buffer
+//     trop court » (anti-faux-positif du TEXTE) sortait de la fonction avant
+//     d'évaluer les appels : un agent invisible qui répétait le même `edit` sans
+//     écrire de texte n'était jamais arrêté.
+describe("règle 2 — agent invisible de l'Assistant (détection d'outils)", () => {
+  /** Extrait une DÉCLARATION de fonction complète du source (comptage d'accolades). */
+  function extractFunction(src, anchor) {
+    const start = src.indexOf(anchor);
+    if (start < 0) return "";
+    let depth = 0;
+    for (let i = src.indexOf("{", start); i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}") {
+        depth--;
+        if (depth === 0) return src.slice(start, i + 1);
+      }
+    }
+    return "";
+  }
+
+  const INVISIBLE_FN = "function maybeDetectInvisibleAgentLoop(";
+  const FN_BODY = extractFunction(SUPER_AGENT, INVISIBLE_FN);
+  // Le gestionnaire d'événements de l'agent INVISIBLE : c'est LUI qui porte le
+  // point de POUSSÉE. Le garde est cherché DANS cette fonction et non « quelque
+  // part dans le fichier » — sinon la disparition du garde au site invisible
+  // resterait verte, masquée par le garde du chemin visible de l'Assistant.
+  const INVISIBLE_HANDLER = extractFunction(SUPER_AGENT, "function handleInvisibleAgentEvent(");
+  const intervalMs = Number((SUPER_AGENT.match(/const INVISIBLE_LOOP_CHECK_INTERVAL_MS = (\d+);/) || [])[1]);
+  const bufferMin = Number((SUPER_AGENT.match(/const INVISIBLE_LOOP_BUFFER_MIN = (\d+);/) || [])[1]);
+
+  /**
+   * Exécute la VRAIE fonction de production (extraite du source) sur une suite
+   * d'appels d'outils. La fenêtre d'appels est remplie EXACTEMENT comme en
+   * production : seuls les appels que le classifieur partagé ne classe pas en
+   * lecture pure entrent dans la fenêtre (le garde est au point de POUSSÉE,
+   * pas dans le détecteur).
+   * @param {Array<[string, object]>} calls - [nom d'outil, arguments]
+   * @param {{buffer?:string}} [opts]
+   * @returns {{stops:object[], messages:string[], window:string[]}}
+   */
+  function runInvisibleLoop(calls, opts = {}) {
+    expect(FN_BODY, "la détection de boucle de l'agent invisible a disparu du source").not.toBe("");
+    const stops = [];
+    const messages = [];
+    expect(INVISIBLE_HANDLER, "le gestionnaire d'événements de l'agent invisible a disparu du source").not.toBe("");
+    const pushGuard = extractStatement(INVISIBLE_HANDLER, GUARD_SUPER_AGENT);
+    expect(
+      pushGuard,
+      "le garde de poussée de l'agent INVISIBLE a disparu de son gestionnaire d'événements",
+    ).not.toBe("");
+    const window = [];
+    // eslint-disable-next-line no-new-func
+    const push = new Function(
+      "isReadOnlyAgentToolCall",
+      "buildToolLoopFingerprint",
+      "superLoopToolCalls",
+      // Le garde extrait est celui du gestionnaire INVISIBLE : il pousse dans
+      // `loop.toolCalls`. On lie donc le `loop` de production à la fenêtre
+      // observée, pour exécuter l'instruction telle quelle (et non une copie).
+      `return function (payload) {
+        const loop = { toolCalls: superLoopToolCalls };
+        const toolName = payload.toolName || payload.tool || "outil";
+        ${pushGuard}
+      };`,
+    )(isReadOnlyAgentToolCall, buildToolLoopFingerprint, window);
+    for (const [name, args] of calls) push({ toolName: name, args });
+
+    // `new Function` : la fonction extraite est évaluée dans un scope qui NEUTRALISE
+    // l'affichage et l'arrêt (observés), en gardant la LOGIQUE de décision réelle.
+    const fn = new Function(
+      "INVISIBLE_LOOP_CHECK_INTERVAL_MS",
+      "INVISIBLE_LOOP_BUFFER_MIN",
+      "detectRepeatedToolCalls",
+      "detectRepeatedBlock",
+      "detectRepeatedWord",
+      "detectSemanticLoop",
+      "appendSystemMessage",
+      "stopInvisibleAgent",
+      `return ${FN_BODY};`,
+    )(
+      intervalMs,
+      bufferMin,
+      detectRepeatedToolCalls,
+      detectRepeatedBlock,
+      detectRepeatedWord,
+      detectSemanticLoop,
+      (_el, message) => messages.push(String(message)),
+      (agentId, projectPath, info) => stops.push({ agentId, projectPath, ...(info || {}) }),
+    );
+    fn(
+      null,
+      { buffer: opts.buffer || "", lastText: "", lastChecked: 0, stopped: false, toolCalls: window },
+      "agent-1",
+      "C:/p",
+    );
+    return { stops, messages, window };
+  }
+
+  it("le garde de lecture est au point de POUSSÉE du chemin invisible (et une seule fois)", () => {
+    // Contrat de POSITION : si le garde migrait (ou si le bloc de poussée perdait
+    // son `if`), le test de comportement ci-dessous ne verrait plus la règle 2.
+    const occurrences = INVISIBLE_HANDLER.split(GUARD_SUPER_AGENT).length - 1;
+    expect(occurrences, "un seul garde de poussée dans le gestionnaire invisible").toBe(1);
+    expect(INVISIBLE_HANDLER).toContain("loop.toolCalls.push(buildToolLoopFingerprint(toolName, payload.args));");
+  });
+
+  it("un `edit` répété SANS texte (buffer < 200) est quand même détecté (le mutisme d'origine)", () => {
+    const calls = Array.from({ length: 3 }, () => ["edit", { path: "src/a.js", oldText: "a", newText: "b" }]);
+    const { stops } = runInvisibleLoop(calls);
+    expect(stops, "une boucle d'outils sans texte streamé doit arrêter l'agent").toHaveLength(1);
+    expect(stops[0]).toMatchObject({ agentId: "agent-1", reason: "loop-detection", detected: "tool-calls" });
+  });
+
+  it("15 consultations `git status --short` (buffer vide) : AUCUN arrêt", () => {
+    const calls = Array.from({ length: 15 }, () => ["bash", { command: "git status --short" }]);
+    const { stops, window } = runInvisibleLoop(calls);
+    expect(window, "une consultation ne doit pas entrer dans la fenêtre d'arrêt").toEqual([]);
+    expect(stops, "une consultation répétée ne doit jamais arrêter un agent").toEqual([]);
+  });
+
+  it("15 `read` du même fichier (buffer vide) : AUCUN arrêt", () => {
+    const calls = Array.from({ length: 15 }, () => ["read", { path: "src/js/super-agent.js" }]);
+    const { stops, window } = runInvisibleLoop(calls);
+    expect(window).toEqual([]);
+    expect(stops).toEqual([]);
+  });
+
+  it("texte répété (buffer long) : arrêt avec detected=text, pas tool-calls", () => {
+    const repeated = "la même phrase encore et encore\n".repeat(40);
+    const { stops } = runInvisibleLoop([], { buffer: repeated });
+    expect(stops, "une répétition de texte doit rester détectée").toHaveLength(1);
+    expect(stops[0]).toMatchObject({ reason: "loop-detection", detected: "text" });
+  });
+
+  it("un intervalle de vérification non écoulé ne déclenche rien (pas d'arrêt prématuré)", () => {
+    // `lastChecked` frais : la fonction sort avant toute décision.
+    const fingerprint = buildToolLoopFingerprint("edit", { path: "a.js", oldText: "a", newText: "b" });
+    const stops = [];
+    const fn = new Function(
+      "INVISIBLE_LOOP_CHECK_INTERVAL_MS",
+      "INVISIBLE_LOOP_BUFFER_MIN",
+      "detectRepeatedToolCalls",
+      "detectRepeatedBlock",
+      "detectRepeatedWord",
+      "detectSemanticLoop",
+      "appendSystemMessage",
+      "stopInvisibleAgent",
+      `return ${FN_BODY};`,
+    )(
+      intervalMs,
+      bufferMin,
+      detectRepeatedToolCalls,
+      detectRepeatedBlock,
+      detectRepeatedWord,
+      detectSemanticLoop,
+      () => {},
+      (...args) => stops.push(args),
+    );
+    const loop = { buffer: "", lastText: "", lastChecked: Date.now(), stopped: false, toolCalls: [fingerprint, fingerprint, fingerprint] };
+    fn(null, loop, "agent-1", "C:/p");
+    expect(stops).toEqual([]);
+  });
+
+  it("seuils de production inchangés (intervalle et taille minimale du buffer)", () => {
+    expect(intervalMs).toBe(500);
+    expect(bufferMin).toBe(200);
   });
 });

@@ -29,6 +29,35 @@ import {
   listProjectLaunchedCommands,
   abandonProjectCommands,
 } from "./project-task-queue.js";
+import { traceAutomaticAgentStop } from "./agent-stop-trace.js";
+
+/**
+ * RÈGLE 4 — journalise (et rend visible par le texte annoncé à l'appelant)
+ * l'abandon d'UNE famille de demandes de la file.
+ *
+ * `/file vide` vidait trois familles (commandes manuelles, missions,
+ * délégations) par un simple `length = 0` : les demandes disparaissaient sans
+ * nom, sans motif et sans trace disque. Chaque famille abandonnée écrit donc sa
+ * ligne `reason=queue-abandoned` (avec ses libellés) dans le journal des arrêts
+ * du projet — la famille « agents », qui portait déjà sa journalisation, garde
+ * son propre chemin (et sa notification).
+ * @param {string} project - projet ciblé
+ * @param {string} family - libellé lisible de la famille ("commande", "mission"…)
+ * @param {string[]} labels - libellés des demandes abandonnées
+ */
+function journalAbandonedFamily(project, family, labels) {
+  const list = (labels || []).map((l) => String(l || "")).filter(Boolean);
+  if (list.length === 0) return;
+  // Fail-open : un journal impossible à écrire ne doit pas empêcher l'abandon
+  // (sa trace d'échec est déjà dite par `agent-stop-trace`).
+  traceAutomaticAgentStop({
+    reason: "queue-abandoned",
+    detected: "file-vide",
+    agentId: "",
+    projectPath: project || "",
+    detail: `${list.length} ${family}(s) en file : ${list.join(" · ")}`.slice(0, 300),
+  }).catch(() => {});
+}
 
 /**
  * Étiquettes des tâches réellement EN COURS sur le projet (source de vérité :
@@ -104,6 +133,17 @@ export function formatProjectQueueReport(project) {
 export function abandonProjectQueue(project) {
   const target = project || ".";
   const counts = { commands: 0, missions: 0, delegations: 0, agents: 0 };
+  // Nommer AVANT de vider (règle 4 : rien ne disparaît en silence).
+  const labelsOf = (read) => {
+    try {
+      return (read() || []).map((entry) => String((entry && entry.label) || "")).filter(Boolean);
+    } catch (_) {
+      return [];
+    }
+  };
+  const pendingCommands = labelsOf(() => listProjectCommands(target));
+  const pendingMissions = labelsOf(() => getProjectMissionQueue(target));
+  const pendingDelegations = labelsOf(() => getProjectDelegationQueue(target));
   try {
     counts.commands = abandonProjectCommands(target);
   } catch (_) {}
@@ -114,7 +154,12 @@ export function abandonProjectQueue(project) {
     counts.delegations = abandonProjectDelegationQueue(target);
   } catch (_) {}
   try {
+    // Famille « agents » : `abandonProjectExclusivityQueues` journalise et
+    // annonce déjà ses libellés (detected=user-abandon).
     counts.agents = abandonProjectExclusivityQueues(target);
   } catch (_) {}
+  journalAbandonedFamily(target, "commande", pendingCommands);
+  journalAbandonedFamily(target, "mission", pendingMissions);
+  journalAbandonedFamily(target, "délégation", pendingDelegations);
   return counts;
 }

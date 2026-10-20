@@ -1978,6 +1978,15 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
             : "Quality-gate (cliquez pour activer l'anti-régression avant modif. de code)";
         }
         try {
+          // RÈGLE 3 : la session précédente est DÉTRUITE ici (bascule du
+          // quality-gate) — le motif est journalisé, une session ne peut pas
+          // disparaître sans trace écrite de sa raison d'arrêt.
+          traceAutomaticAgentStop({
+            reason: "session-restart",
+            detected: "quality-gate-toggle",
+            agentId: state.agentId || "",
+            projectPath: window._pilotProjectPath,
+          }).catch(() => {});
           await invoke("stop_agent_session").catch(() => {});
           await invoke("start_agent_session");
           if (config.rpc_no_session) {
@@ -2114,6 +2123,13 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
         try {
           appendSystemMessage(messagesEl, "🔄 Reconnexion de l'agent en cours…");
           state.restarting = true;
+          // RÈGLE 3 : arrêt de la session avant redémarrage — motif journalisé.
+          traceAutomaticAgentStop({
+            reason: "session-restart",
+            detected: "reconnect",
+            agentId: state.agentId || "",
+            projectPath: window._pilotProjectPath,
+          }).catch(() => {});
           await invoke("stop_agent_session").catch(() => {});
           state.piDead = false;
           await invoke("start_agent_session");
@@ -5137,6 +5153,14 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     try {
       state.restarting = true;
       appendSystemMessage(messagesEl, "🔄 Redémarrage de l'agent en cours…");
+      // RÈGLE 3 : arrêt de la session avant redémarrage (configuration changée) —
+      // motif journalisé, jamais une session détruite en silence.
+      traceAutomaticAgentStop({
+        reason: "session-restart",
+        detected: "settings-restart",
+        agentId: state.agentId || "",
+        projectPath: window._pilotProjectPath,
+      }).catch(() => {});
       await invoke("stop_agent_session").catch(() => {});
       state.piDead = false;
       await invoke("start_agent_session");

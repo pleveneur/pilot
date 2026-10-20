@@ -622,6 +622,50 @@ export function abandonProjectDelegationQueue(projectPath) {
   return removed;
 }
 
+/**
+ * RÈGLE 4 — ABANDON EXPLICITE et TRACÉ d'une file de DÉLÉGATIONS.
+ *
+ * L'arrêt explicite d'un agent (`stop_agent`) vidait la file de délégations par
+ * `delegationState(projectPath).queue.length = 0` : les demandes encore en
+ * attente disparaissaient sans nom, sans motif et sans que l'utilisateur (ni
+ * l'assistant) sache lesquelles. Cette fonction est le SEUL chemin d'abandon
+ * d'une file de délégations : elle NOMME chaque demande, écrit le motif dans le
+ * journal des arrêts automatiques (`<projet>/.pilot/agent-stops.log`, repli
+ * global) et le rend visible (console + notification).
+ * @param {string} projectPath - projet des délégations
+ * @param {{reason?:string, detected?:string}} [opts]
+ * @returns {Promise<{count:number, labels:string[]}>}
+ */
+export async function abandonQueuedDelegations(projectPath, opts = {}) {
+  const target = projectPath || "";
+  const ds = delegationState(target);
+  const queue = ds.queue || [];
+  const count = queue.length;
+  if (count === 0) return { count: 0, labels: [] };
+  // Nommer AVANT de vider : c'est tout l'objet du correctif.
+  const labels = queue.map((item) => String((item && item.request) || "délégation").slice(0, 120));
+  queue.length = 0;
+  const reason = opts.reason || "queue-abandoned";
+  // Un espace réservé (`__assistant__`) n'est pas un projet : le journal prend
+  // alors son repli global (`<app_data_dir>/agent-stops.log`).
+  const project = target === ASSISTANT_SPACE ? "" : target;
+  await traceAutomaticAgentStop({
+    reason,
+    detected: opts.detected || "stop-agent",
+    agentId: "",
+    projectPath: project,
+    detail: `${count} délégation(s) en file : ${labels.join(" · ")}`.slice(0, 300),
+  }).catch(() => {});
+  const message = `⚠️ ${count} délégation(s) en file d'attente abandonnée(s) : ${labels.join(" · ")}. Le motif est consigné (${reason}).`;
+  console.warn("[super-agent] file de délégations :", message);
+  try {
+    await notifySuperAgentDone({ title: "Pilot — Assistant", body: message });
+  } catch (_) {
+    /* notification indisponible : la console porte déjà l'information */
+  }
+  return { count, labels };
+}
+
 // POINT G : déclencheur de rejeu GARANTI de la file de missions.
 // Une mission peut être mise en file derrière : une run du bus, une commande
 // MANUELLE (le bus ne la voit pas), un prompt distant, ou une run d'assistant.
@@ -2904,6 +2948,10 @@ export async function createSuperAgent(container) {
       // la surface « superagent » restée active ne retarde plus de 12 s le son
       // de la prochaine mission.
       resetDeferredSound();
+      // R3-EXCEPTION-MANUEL : arrêt demandé EXPLICITEMENT par un clic de
+      // l'utilisateur (bouton Stop) — ce n'est pas un arrêt automatique, donc
+      // aucune trace d'arrêt automatique n'est écrite ici (exception assumée,
+      // déclarée par le test des sites d'arrêt).
       await invoke("abort_super_agent").catch(() => {});
     } else if (action === "new-session") {
       await invoke("new_super_agent_session").catch(() => {});
@@ -5046,6 +5094,10 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       try {
         const projectPath = info.project || window._pilotProjectPath || null;
         const targetAgentId = info.agentId || await resolveDelegationAgentId(projectPath);
+        // R3-EXCEPTION-MANUEL : arrêt demandé EXPLICITEMENT (par l'assistant ou par
+        // l'utilisateur) — ce n'est pas un arrêt automatique, donc aucune trace
+        // d'arrêt automatique n'est écrite ici (le test des sites d'arrêt le
+        // déclare en exception assumée).
         await invoke("stop_agent_session", { agentId: targetAgentId || null, projectPath }).catch(() => {});
         // Nettoyer aussi le suivi de l'agent invisible (bandeau + écouteur).
         if (typeof stopInvisibleAgentMonitoring === "function") {
@@ -5054,11 +5106,13 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         // Issue #66 : l'arrêt annule les délégations en file d'attente — on ne
         // veut pas qu'elles soient (re)transmises automatiquement après un arrêt
         // explicite (l'utilisateur/assistant a décidé d'interrompre le travail).
+        // RÈGLE 4 : chaque demande abandonnée est NOMMÉE, journalisée et annoncée
+        // (auparavant le vidage était muet : les demandes disparaissaient).
         const stoppedDeleg = delegationState(projectPath);
         if (stoppedDeleg.queue.length > 0) {
-          appendSystemMessage(messagesEl, `📋 ${stoppedDeleg.queue.length} demande(s) en file d'attente annulée(s) par l'arrêt de l'agent.`);
+          const delegated = await abandonQueuedDelegations(projectPath, { detected: "stop-agent" });
+          appendSystemMessage(messagesEl, `📋 ${delegated.count} demande(s) en file d'attente annulée(s) par l'arrêt de l'agent : ${delegated.labels.join(" · ")} (motif consigné).`);
         }
-        stoppedDeleg.queue.length = 0;
         stoppedDeleg.busy = false;
         // POINT C : l'arrêt doit aussi libérer la place du PROJET pour la file
         // des MISSIONS (`runAgentsQueueByProject`, indexée par projet). Elle
@@ -5078,9 +5132,13 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
           const wd = runAgentsWatchdogByProject[queueKey];
           if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[queueKey]; }
           if (waitingMissions > 0) {
-            appendSystemMessage(messagesEl, `📋 ${waitingMissions} mission(s) en attente annulée(s) par l'arrêt de l'agent (le projet n'est plus occupé).`);
+            // RÈGLE 4 : nommer + journaliser + annoncer (le vidage muet perdait
+            // les missions en attente sans que personne ne sache lesquelles).
+            const abandoned = await abandonQueuedRunAgentsMissions(queueKey, { detected: "stop-agent" });
+            appendSystemMessage(messagesEl, `📋 ${abandoned.count} mission(s) en attente annulée(s) par l'arrêt de l'agent (le projet n'est plus occupé) : ${abandoned.labels.join(" · ")} (motif consigné).`);
+          } else {
+            delete runAgentsQueueByProject[queueKey];
           }
-          delete runAgentsQueueByProject[queueKey];
         } else if (waitingMissions > 0) {
           appendSystemMessage(messagesEl, `⏳ ${waitingMissions} mission(s) toujours en attente : une autre tâche tourne encore sur ce projet.`);
         }
@@ -5099,8 +5157,9 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
             runAgentsInFlightByProject[assistantKey] = false;
             const wdA = runAgentsWatchdogByProject[assistantKey];
             if (wdA) { clearTimeout(wdA); delete runAgentsWatchdogByProject[assistantKey]; }
-            appendSystemMessage(messagesEl, `📋 ${pendingAssistant} mission(s) d'assistant en attente annulée(s) par l'arrêt de l'agent (plus aucune run d'assistant ne tourne).`);
-            delete runAgentsQueueByProject[assistantKey];
+            // RÈGLE 4 : nommer + journaliser + annoncer (jamais un vidage muet).
+            const abandonedAssistant = await abandonQueuedRunAgentsMissions(assistantKey, { detected: "stop-agent" });
+            appendSystemMessage(messagesEl, `📋 ${abandonedAssistant.count} mission(s) d'assistant en attente annulée(s) par l'arrêt de l'agent (plus aucune run d'assistant ne tourne) : ${abandonedAssistant.labels.join(" · ")} (motif consigné).`);
           } else {
             appendSystemMessage(messagesEl, `⏳ ${pendingAssistant} mission(s) d'assistant toujours en attente : une autre tâche d'assistant tourne encore.`);
           }
@@ -5423,7 +5482,12 @@ function handleInvisibleAgentEvent(payload, messagesEl, agentId, projectPath, lo
     // Issue #55 : accumuler une empreinte du tool call (ex: commande bash) pour
     // détecter une boucle d'OUTILS identiques, même sans texte streamé répété.
     const toolName = payload.toolName || payload.tool || "outil";
-    loop.toolCalls.push(buildToolLoopFingerprint(toolName, payload.args));
+    // RÈGLE 2 : une LECTURE (outil de lecture pure, commande shell consultative)
+    // n'alimente JAMAIS l'historique d'actions — la répéter est de l'exploration
+    // légitime, pas une boucle. Seul un appel qui MODIFIE peut fonder un arrêt.
+    if (!isReadOnlyAgentToolCall(toolName, payload.args)) {
+      loop.toolCalls.push(buildToolLoopFingerprint(toolName, payload.args));
+    }
     maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId, projectPath);
     return;
   }
@@ -5526,14 +5590,20 @@ function maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId, projectPath) {
   const now = Date.now();
   if (now - loop.lastChecked < INVISIBLE_LOOP_CHECK_INTERVAL_MS) return;
   loop.lastChecked = now;
-  if (loop.buffer.length < INVISIBLE_LOOP_BUFFER_MIN) return;
+  // RÈGLE 2 (même correctif que l'Assistant, issue #10) : une boucle d'OUTILS se
+  // juge sur les APPELS, pas sur la longueur du texte streamé. La sortie anticipée
+  // « buffer trop court » (garde anti-faux-positif du texte) rendait la détection
+  // d'outils MUETTE tant que le modèle n'avait pas écrit 200 caractères : un agent
+  // invisible qui répétait le même `edit` sans texte n'était jamais arrêté.
+  const toolLoop = detectRepeatedToolCalls(loop.toolCalls);
   // Motif RÉELLEMENT déclenché : il est journalisé sur disque (agent-stops.log)
   // pour ne plus confondre « répétition du même texte » et « boucle d'outils ».
   const textLoop =
-    detectRepeatedBlock(loop.buffer) ||
-    detectRepeatedWord(loop.buffer) ||
-    detectSemanticLoop(loop.buffer);
-  const toolLoop = !textLoop && detectRepeatedToolCalls(loop.toolCalls);
+    !toolLoop &&
+    loop.buffer.length >= INVISIBLE_LOOP_BUFFER_MIN &&
+    (detectRepeatedBlock(loop.buffer) ||
+      detectRepeatedWord(loop.buffer) ||
+      detectSemanticLoop(loop.buffer));
   if (textLoop || toolLoop) {
     loop.stopped = true;
     console.warn(`[loop-detection] boucle détectée sur l'agent invisible ${agentId}, arrêt`);

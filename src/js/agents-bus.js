@@ -2434,6 +2434,15 @@ export function handleAgentEvent(ev) {
         const correction = buildLoopCorrectionPrompt(level, { repeatedTail });
         sendPromptToAgent(agentId, correction, ctx).catch((e) => {
           console.error("[agents-bus] erreur envoi correction boucle", agentId, e);
+          // RÈGLE 3 : une session qui s'éteint sur cette erreur laisse une trace
+          // de son motif (avant l'échec prononcé, jamais après).
+          traceAutomaticAgentStop({
+            reason: "session-error",
+            detected: "correction-send-error",
+            agentId,
+            projectPath: ctx.agentProject[agentId] || ctx.project || "",
+            uid: expectedSessionUid(ctx, agentId),
+          }).catch(() => {});
           failAgentTurn(agentId, String(e), ctx);
         });
       } else {
@@ -2512,11 +2521,28 @@ export function handleAgentEvent(ev) {
     if (loopReason) {
       delete ctx.loopAbortReason[agentId];
       console.warn("[agents-bus] process exit après boucle", agentId, loopReason);
+      // RÈGLE 3 : la session meurt ICI (processus tué par l'arrêt de boucle) —
+      // le motif de fin de session est journalisé, distinct de la détection.
+      traceAutomaticAgentStop({
+        reason: "session-error",
+        detected: "loop-process-exit",
+        agentId,
+        projectPath: ctx.agentProject[agentId] || ctx.project || "",
+        uid: expectedSessionUid(ctx, agentId),
+      }).catch(() => {});
       failAgentTurn(agentId, loopReason, ctx);
       return;
     }
     const reason = event.reason || event.message || event.error || "processus arrêté";
     console.log("[agents-bus] process error/exit", agentId, reason);
+    // RÈGLE 3 : fin de session sur processus mort — motif écrit AVANT l'échec.
+    traceAutomaticAgentStop({
+      reason: "session-error",
+      detected: "process-exit",
+      agentId,
+      projectPath: ctx.agentProject[agentId] || ctx.project || "",
+      uid: expectedSessionUid(ctx, agentId),
+    }).catch(() => {});
     failAgentTurn(agentId, reason, ctx);
   }
 }
@@ -2767,6 +2793,16 @@ function settleAgentTurn(agentId, ctx) {
   if (ctx.pendingErrorByAgent[agentId]) {
     const pendingError = String(ctx.pendingErrorByAgent[agentId]);
     ctx.pendingErrorByAgent[agentId] = undefined;
+    // RÈGLE 3 : erreur reçue en cours de tour (ex. message_end en erreur) — la
+    // session se termine ici, le motif est journalisé avant l'échec.
+    traceAutomaticAgentStop({
+      reason: "session-error",
+      detected: "message-error",
+      agentId,
+      projectPath: ctx.agentProject[agentId] || ctx.project || "",
+      uid: expectedSessionUid(ctx, agentId),
+      detail: pendingError.slice(0, 160),
+    }).catch(() => {});
     failAgentTurn(agentId, pendingError, ctx);
     return;
   }
@@ -3264,6 +3300,16 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
   if (!provider || !modelId) {
     const msg = `Aucun modèle pour l'agent « ${agent.id} » — définissez son modèle dans l'éditeur d'agents (onglet 🎭).`;
     console.error("[agents-bus]", msg);
+    // RÈGLE 3 : la session n'a pas pu DÉMARRER (modèle introuvable) — motif
+    // journalisé avant l'échec (auparavant mort silencieuse).
+    traceAutomaticAgentStop({
+      reason: "spawn-failed",
+      detected: "model-missing",
+      agentId: agent.id,
+      projectPath: cwd,
+      uid: null,
+      detail: msg.slice(0, 160),
+    }).catch(() => {});
     failAgentTurn(agent.id, msg, ctx);
     return;
   }
@@ -3440,6 +3486,17 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
         expectedUid: expectedSessionUid(ctx, agent.id),
       }).catch(() => {});
     }
+    // RÈGLE 3 : le tour échoue (exception non rattrapée) → la session se termine
+    // en erreur, le motif est journalisé AVANT l'échec prononcé (y compris quand
+    // aucun process orphelin n'a été arrêté : le cas serait sinon muet).
+    await traceAutomaticAgentStop({
+      reason: "run-exception",
+      detected: "run-agent-turn-error",
+      agentId: agent.id,
+      projectPath: cwd,
+      uid: expectedSessionUid(ctx, agent.id),
+      detail: String(err).slice(0, 160),
+    }).catch(() => {});
     failAgentTurn(agent.id, String(err), ctx);
   }
 }

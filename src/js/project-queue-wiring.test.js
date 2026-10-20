@@ -56,6 +56,10 @@ vi.hoisted(() => {
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+// Journal GLOBAL de repli (trace d'une file d'ASSISTANT, hors projet).
+vi.mock("@tauri-apps/api/path", () => ({
+  appDataDir: vi.fn(async () => "C:\\Users\\test\\AppData\\Roaming\\com.pilot.editor"),
+}));
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: vi.fn(async () => true),
   requestPermission: vi.fn(async () => "granted"),
@@ -76,7 +80,10 @@ import {
   delegationState,
   getProjectMissionQueue,
   getProjectDelegationQueue,
+  abandonQueuedRunAgentsMissions,
+  abandonQueuedDelegations,
 } from "./super-agent.js";
+import { invoke } from "@tauri-apps/api/core";
 import { enqueueProjectCommand, listProjectCommands, __resetProjectQueueForTest } from "./project-task-queue.js";
 import { readProjectQueueView, abandonProjectQueue, formatProjectQueueReport } from "./project-queue-view.js";
 
@@ -91,10 +98,22 @@ beforeEach(() => {
   delete runAgentsQueueByProject[PROJECT];
   delete runAgentsQueueByProject[OTHER];
   delegationState(PROJECT).queue.length = 0;
+  vi.mocked(invoke).mockClear();
   // Libérer un éventuel verrou laissé par un test précédent.
   const info = getProjectRunLockInfo(PROJECT);
   for (const key of info.keys) endRun(PROJECT);
 });
+
+/** Laisse les écritures de journal (fire-and-forget) se terminer. */
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** Lignes du journal des arrêts réellement écrites (`agent-stops.log`). */
+function journalWrites() {
+  return vi
+    .mocked(invoke)
+    .mock.calls.filter(([cmd, args]) => cmd === "write_file_content" && args && /agent-stops\.log$/.test(String(args.path || "")))
+    .map(([, args]) => ({ path: String(args.path), content: String(args.content || "") }));
+}
 
 describe("1. la file visible compose les files réelles du projet", () => {
   it("aucune demande : la file est vide", () => {
@@ -180,6 +199,81 @@ describe("1. la file visible compose les files réelles du projet", () => {
     // file a été abandonnée).
     expect(isRunInProgress(PROJECT)).toBe(true);
     endRun(PROJECT, ctx && ctx.generation);
+  });
+});
+
+describe("1 bis. `/file vide` ne perd RIEN en silence (règle 4)", () => {
+  it("chaque famille abandonnée écrit une ligne NOMMÉE dans agent-stops.log", async () => {
+    runAgentsQueueByProject[PROJECT] = [{ launch: async () => {}, label: "mission perdue ?" }];
+    enqueueProjectCommand({ project: PROJECT, text: "commande à ne pas oublier", launch: async () => true });
+    delegationState(PROJECT).queue.push({ request: "délégation à nommer", projectPath: PROJECT, agentId: "codeur" });
+
+    const counts = abandonProjectQueue(PROJECT);
+    expect(counts).toEqual({ commands: 1, missions: 1, delegations: 1, agents: 0 });
+    await flush();
+
+    const writes = journalWrites();
+    expect(writes, "un vidage muet du journal (familles perdues sans trace)").toHaveLength(3);
+    // Le journal du PROJET est visé (pas le repli global) et chaque ligne porte
+    // le motif d'abandon ET les libellés des demandes abandonnées.
+    expect(writes.every((w) => w.path.startsWith(PROJECT))).toBe(true);
+    const content = writes.map((w) => w.content).join("\n");
+    expect(content).toContain("reason=queue-abandoned");
+    expect(content).toContain("detected=file-vide");
+    for (const label of ["commande à ne pas oublier", "mission perdue ?", "délégation à nommer"]) {
+      expect(content, `libellé non consigné : ${label}`).toContain(label);
+    }
+    // Une ligne par FAMILLE (le motif dit de quelle file il s'agit).
+    for (const family of ["commande", "mission", "délégation"]) {
+      expect(content).toContain(`1 ${family}(s) en file`);
+    }
+  });
+
+  it("`/file vide` sur une file déjà VIDE n'écrit aucune ligne parasite", async () => {
+    expect(abandonProjectQueue(PROJECT)).toEqual({ commands: 0, missions: 0, delegations: 0, agents: 0 });
+    await flush();
+    expect(journalWrites()).toHaveLength(0);
+  });
+
+  it("l'abandon d'une file de DÉLÉGATIONS nomme et journalise (plus de vidage muet)", async () => {
+    delegationState(PROJECT).queue.push(
+      { request: "première demande", projectPath: PROJECT, agentId: "codeur" },
+      { request: "deuxième demande", projectPath: PROJECT, agentId: "testeur" },
+    );
+    const res = await abandonQueuedDelegations(PROJECT, { detected: "stop-agent" });
+    expect(res.count).toBe(2);
+    expect(res.labels).toEqual(["première demande", "deuxième demande"]);
+    expect(delegationState(PROJECT).queue).toHaveLength(0);
+    const content = journalWrites().map((w) => w.content).join("\n");
+    expect(content).toContain("reason=queue-abandoned");
+    expect(content).toContain("detected=stop-agent");
+    expect(content).toContain("première demande");
+    expect(content).toContain("deuxième demande");
+  });
+
+  it("l'abandon d'une file de MISSIONS nomme et journalise, et coupe le rejeu", async () => {
+    runAgentsQueueByProject[PROJECT] = [
+      { launch: async () => {}, label: "mission 1" },
+      { launch: async () => {}, label: "mission 2" },
+    ];
+    const res = await abandonQueuedRunAgentsMissions(PROJECT, { detected: "stop-agent" });
+    expect(res.count).toBe(2);
+    expect(res.labels).toEqual(["mission 1", "mission 2"]);
+    expect(runAgentsQueueByProject[PROJECT]).toBeUndefined();
+    const content = journalWrites().map((w) => w.content).join("\n");
+    expect(content).toContain("detected=stop-agent");
+    expect(content).toContain("mission 1");
+  });
+
+  it("une file d'ASSISTANT (hors projet) part au journal GLOBAL, jamais dans un projet", async () => {
+    // `stop_agent` d'une mission d'assistant : la clé n'est pas un chemin.
+    runAgentsQueueByProject["__assistant__"] = [{ launch: async () => {}, label: "mission assistant" }];
+    await abandonQueuedRunAgentsMissions("__assistant__", { detected: "stop-agent" });
+    const writes = journalWrites();
+    expect(writes).toHaveLength(1);
+    expect(writes[0].path, "le journal d'un projet ne doit pas recevoir une trace d'assistant").not.toContain("__assistant__");
+    expect(writes[0].path).toMatch(/agent-stops\.log$/);
+    expect(writes[0].content).toContain("mission assistant");
   });
 });
 

@@ -66,6 +66,10 @@ export function globalAgentStopTracePath(appDataDirPath) {
 // donne donc la fonction, et à défaut on émet un événement global.
 let failureReporter = null;
 
+// Chaîne d'écriture du journal : une trace à la fois (le journal est lu puis
+// réécrit, deux écritures concurrentes perdraient une ligne).
+let traceWriteChain = Promise.resolve();
+
 /**
  * Branche le rapporteur d'échec de journalisation (idempotent, `null` pour
  * revenir au comportement par défaut). L'appelant (agents-bus.js) y branche son
@@ -139,6 +143,14 @@ async function writeAgentStopTraceFile(path, line) {
  * Lecture puis réécriture (pas de commande d'append côté IPC) : le journal est
  * petit (une ligne par arrêt, cap 256 Ko) et les arrêts automatiques sont rares.
  *
+ * SÉRIALISATION : le journal est LU puis RÉÉCRIT, donc deux traces concurrentes
+ * (par exemple l'abandon simultané de plusieurs files par `/file vide`, qui
+ * journalise une ligne par famille) lisaient la même version et la seconde
+ * écriture écrasait la ligne de la première — des lignes disparaissaient sans
+ * trace. Les écritures sont donc chaînées : chacune voit le journal laissé par
+ * la précédente. Aucun appelant n'attend plus longtemps qu'avant (l'ordre et le
+ * `await` sont conservés).
+ *
  * Repli GLOBAL : sans chemin de projet, ou si l'écriture dans le projet échoue,
  * la ligne part dans `<app_data_dir>/agent-stops.log` (jamais de perte muette).
  *
@@ -151,6 +163,21 @@ async function writeAgentStopTraceFile(path, line) {
  * @returns {Promise<boolean>} true si la ligne a été écrite (projet OU global)
  */
 export async function traceAutomaticAgentStop(entry = {}) {
+  const run = traceWriteChain.then(() => writeAgentStopTrace(entry));
+  // La chaîne ne doit jamais rester rejetée (une trace en échec est déjà dite).
+  traceWriteChain = run.then(
+    () => {},
+    () => {},
+  );
+  return run;
+}
+
+/**
+ * Écriture RÉELLE d'une trace (exécutée une à la fois, cf. `traceWriteChain`).
+ * @param {object} entry
+ * @returns {Promise<boolean>}
+ */
+async function writeAgentStopTrace(entry = {}) {
   const e = entry || {};
   const line = buildAgentStopTraceLine(e);
   const projectLogPath = agentStopTracePath(e.projectPath);

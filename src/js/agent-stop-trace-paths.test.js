@@ -274,25 +274,106 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
   };
 
   /**
-   * Vérifie la PRÉCÉDENCE À PORTÉE DE BLOC : pour chaque site terminal, une trace
-   * de motif doit exister ENTRE le site précédent (même type) et ce site. Une
-   * trace placée « ailleurs dans le fichier » ne compte pas.
+   * Paires d'accolades ouvrantes/fermantes de la source (`[[open, close], …]`).
+   * Sert à délimiter un bloc LEXICALEMENT (comptage d'accolades), au lieu de
+   * raisonner en distance dans le fichier.
+   * @param {string} src
+   * @returns {Array<[number, number]>}
+   */
+  function bracePairs(src) {
+    const stack = [];
+    const pairs = [];
+    for (let i = 0; i < src.length; i++) {
+      if (src[i] === "{") stack.push(i);
+      else if (src[i] === "}") {
+        const open = stack.pop();
+        if (open !== undefined) pairs.push([open, i]);
+      }
+    }
+    return pairs;
+  }
+
+  const FUNCTION_HEADER_RE = /^[ \t]*(?:export\s+)?(?:async\s+)?function[ \t]+[A-Za-z0-9_$]+/m;
+
+  /**
+   * L'accolade ouvrante `open` appartient-elle à un EN-TÊTE DE FONCTION ?
+   * Trois formes : en-tête sur une ligne (`function f(…) {`), fonction fléchée
+   * affectée (`const f = async (…) => {`), et signature sur PLUSIEURS lignes
+   * (l'accolade est seule sur sa ligne : on remonte chercher l'en-tête, sans
+   * `{`, `}` ni `;` entre les deux).
+   * @param {string} src
+   * @param {number} open
+   * @returns {boolean}
+   */
+  function isFunctionHeader(src, open) {
+    const lineStart = src.lastIndexOf("\n", open) + 1;
+    const header = src.slice(lineStart, open + 1).trim();
+    if (/^(?:export\s+)?(?:async\s+)?function\b/.test(header)) return true;
+    if (/=>\s*\{$/.test(header)) return true;
+    if (header === "{" || header === "") {
+      const back = src.slice(Math.max(0, open - 2000), open);
+      const idx = back.search(FUNCTION_HEADER_RE);
+      if (idx >= 0 && !/[;{}]/.test(back.slice(idx))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * BLOC LEXICAL ENGLOBANT d'un site : la fonction (la plus interne) qui contient
+   * le site, délimitée en comptant les accolades depuis son en-tête — même
+   * technique que `extractStatement` dans `regle-2-lectures-jamais-arret.test.js`.
+   * @param {string} src
+   * @param {Array<[number, number]>} pairs
+   * @param {number} site
+   * @returns {{start:number, end:number}|null}
+   */
+  function enclosingFunctionBlock(src, pairs, site) {
+    const candidates = pairs
+      .filter(([open, close]) => open < site && site < close && isFunctionHeader(src, open))
+      .sort((a, b) => (a[1] - a[0]) - (b[1] - b[0]));
+    if (!candidates.length) return null;
+    return { start: candidates[0][0], end: candidates[0][1] };
+  }
+
+  // Marqueur explicite des arrêts MANUELS (bouton Stop, action `stop_agent`) :
+  // ce ne sont pas des arrêts automatiques, ils n'ont donc pas de ligne de
+  // journal — et le test les déclare en exception NOMMÉE, jamais en silence.
+  const EXCEPTION_MARKER = "R3-EXCEPTION-MANUEL";
+  const isDeclaredException = (src, site) =>
+    src.slice(Math.max(0, site - 700), site).includes(EXCEPTION_MARKER);
+
+  /**
+   * Vérifie la PRÉCÉDENCE À PORTÉE DE BLOC LEXICALE : pour chaque site terminal,
+   * une trace de motif doit exister DANS LA FONCTION ENGLOBANTE, avant le site
+   * (optionnellement à moins de `maxDistance` caractères).
+   *
+   * L'ancienne version comparait le site au site PRÉCÉDENT DU MÊME TYPE : une
+   * trace lointaine suffisait, et un site muet injecté dans une fonction ne
+   * contenant aucune trace passait pour tracé.
    * @param {string} src
    * @param {RegExp} siteRe
    * @param {string} label
-   * @returns {{sites:number, traced:number, untraced:number[]}}
+   * @param {{maxDistance?:number}} [opts]
+   * @returns {{sites:number, traced:number, untraced:number[], exceptions:number[], label:string}}
    */
-  function precedences(src, siteRe, label) {
+  function precedences(src, siteRe, label, opts = {}) {
     const sites = positionsIn(src, siteRe);
     const traces = positionsIn(src, new RegExp(TRACE_SRC, "g"));
+    const pairs = bracePairs(src);
+    const max = typeof opts.maxDistance === "number" ? opts.maxDistance : Infinity;
     const untraced = [];
+    const exceptions = [];
     let traced = 0;
-    sites.forEach((site, i) => {
-      const from = i === 0 ? 0 : sites[i - 1];
-      if (traces.some((t) => t > from && t < site)) traced++;
+    for (const site of sites) {
+      const block = enclosingFunctionBlock(src, pairs, site);
+      const before = block
+        ? traces.filter((t) => t > block.start && t < site && site - t <= max)
+        : [];
+      if (before.length > 0) traced++;
+      else if (isDeclaredException(src, site)) exceptions.push(site);
       else untraced.push(site);
-    });
-    return { sites: sites.length, traced, untraced, label };
+    }
+    return { sites: sites.length, traced, untraced, exceptions, label };
   }
 
   it("agents-bus.js : TOUS les sites terminaux sont tracés dans leur bloc", () => {
@@ -307,6 +388,25 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       const res = precedences(SRC_BUS, re, label);
       expect(res.sites, `${label} : cardinalité changée`).toBe(expected);
       expect(res.untraced, `${label} : site terminal MUET (aucune trace dans son bloc)`).toEqual([]);
+    }
+  });
+
+  it("agents-bus.js : chaque FIN DE SESSION par erreur est tracée (les 5 `failAgentTurn`)", () => {
+    // `failAgentTurn` prononce la fin de la session d'un agent : un site qui
+    // l'appelle sans avoir rien écrit est une session qui s'éteint sans motif
+    // (auparavant : erreur d'envoi de correction, processus mort, erreur de
+    // message, modèle absent, exception du tour).
+    const res = precedences(SRC_BUS, /^[ \t]*(?:await )?failAgentTurn\(/gm, "failAgentTurn", {
+      // Le bloc est celui de `handleAgentEvent`/`runAgentTurn` (grand bloc) : la
+      // trace doit être CELLE du chemin, pas une trace lointaine du même bloc.
+      maxDistance: 800,
+    });
+    expect(res.sites, "un appel `failAgentTurn` a été ajouté/retiré").toBe(9);
+    expect(res.untraced, "fin de session par erreur restée MUETTE").toEqual([]);
+    expect(res.traced).toBe(9);
+    // Les quatre motifs de fin par erreur sont explicites (jamais un texte vide).
+    for (const motif of ["session-error", "spawn-failed", "model-missing", "run-exception"]) {
+      expect(SRC_BUS, `motif de fin de session absent : ${motif}`).toContain(`"${motif}"`);
     }
   });
 
@@ -343,6 +443,28 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     // Les deux motifs sont DISTINCTS (boucle d'outils vs boucle de texte).
     expect(SRC_SA).toContain('detected: "tool-calls"');
     expect(SRC_SA).toContain('detected: "text"');
+    // Le 3e arrêt est le bouton Stop (arrêt MANUEL) : déclaré en exception nommée.
+    const manual = precedences(SRC_SA, /invoke\("abort_super_agent"\)/g, "abort_super_agent");
+    expect(manual.exceptions, "l'arrêt manuel doit être déclaré en exception nommée").toHaveLength(1);
+    expect(manual.untraced).toEqual([]);
+  });
+
+  it("`stop_agent_session` : chaque destruction de SESSION laisse une trace (ou est une exception nommée)", () => {
+    // `stop_agent_session` détruit la session d'un agent. Les 3 sites de l'onglet
+    // agent principal (bascule quality-gate, reconnexion, redémarrage après
+    // changement de configuration) et le site de l'Assistant (arrêt automatique
+    // d'un agent invisible) doivent être tracés ; l'arrêt MANUEL demandé par
+    // l'Assistant est une exception explicite (marqueur R3-EXCEPTION-MANUEL).
+    const pi = precedences(SRC_PI, /invoke\("stop_agent_session"/g, "stop_agent_session (pi)");
+    expect(pi.sites, "sites `stop_agent_session` de l'onglet agent : cardinalité changée").toBe(3);
+    expect(pi.untraced, "destruction de session MUETTE dans l'onglet agent").toEqual([]);
+    expect(pi.traced).toBe(3);
+
+    const sa = precedences(SRC_SA, /invoke\("stop_agent_session"/g, "stop_agent_session (sa)");
+    expect(sa.sites, "sites `stop_agent_session` de l'Assistant : cardinalité changée").toBe(2);
+    expect(sa.untraced, "destruction de session muette dans l'Assistant (hors exception nommée)").toEqual([]);
+    expect(sa.traced).toBe(1);
+    expect(sa.exceptions, "l'arrêt `stop_agent` (manuel) doit être déclaré en exception").toHaveLength(1);
   });
 
   it("le nombre de traces par fichier est épinglé (dérive = rouge)", () => {
@@ -352,23 +474,36 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       pi: positionsIn(SRC_PI, traceRe()).length,
       sa: positionsIn(SRC_SA, traceRe()).length,
     };
-    expect(counts.pi, "l'onglet agent doit tracer ses deux arrêts automatiques").toBe(2);
-    expect(counts.sa, "traces de l'assistant").toBe(4);
-    expect(counts.bus, "traces du bus").toBeGreaterThanOrEqual(18);
+    // 2 arrêts sur boucle + 3 destructions de session (quality-gate, reconnexion,
+    // redémarrage après changement de configuration).
+    expect(counts.pi, "l'onglet agent doit tracer ses arrêts automatiques ET ses destructions de session").toBe(5);
+    // 4 arrêts automatiques (boucle outils, boucle texte, …) + l'abandon TRACÉ
+    // d'une file de délégations (`abandonQueuedDelegations`, règle 4).
+    expect(counts.sa, "traces de l'assistant").toBe(5);
+    // 18 traces existantes + 5 fins de session par erreur du bus.
+    expect(counts.bus, "traces du bus").toBeGreaterThanOrEqual(23);
   });
 
   it("un site terminal ajouté sans trace fait échouer la matrice (preuve du contrôle)", () => {
     // Contrôle NÉGATIF du test lui-même : on injecte un site terminal MUET dans
-    // une COPIE de la source et on vérifie que la détection le voit. Si ce test
+    // une COPIE de la source, à QUATRE positions différentes (dont une où une
+    // trace existe ailleurs dans le fichier, mais pas dans le bloc). Si ce test
     // passe au vert avec un site muet injecté, la matrice ne prouve plus rien.
-    const fake = SRC_BUS.replace(
+    const silentStop =
+      'async function fakeSilentStop() { await invoke("abort_agent_process", { agentId: "x" }); }\n';
+    for (const anchor of [
+      "async function runAgentTurn",
+      "export async function startAgentsRun",
+      "async function failAgentTurn",
       "async function forceStaleAgentProcessRestartIfNeeded",
-      'async function fakeSilentStop() { await invoke("abort_agent_process", { agentId: "x" }); }\nasync function forceStaleAgentProcessRestartIfNeeded',
-    );
-    expect(fake, "injection impossible : ancre introuvable").not.toBe(SRC_BUS);
-    const res = precedences(fake, /invoke\("abort_agent_process"/g, "fake");
-    expect(res.sites, "le site injecté n'est pas vu").toBe(4);
-    expect(res.untraced.length, "la matrice doit voir le site muet injecté").toBe(1);
+    ]) {
+      const fake = SRC_BUS.replace(anchor, silentStop + anchor);
+      expect(fake, `injection impossible : ancre introuvable (${anchor})`).not.toBe(SRC_BUS);
+      const res = precedences(fake, /invoke\("abort_agent_process"/g, `fake@${anchor}`);
+      expect(res.sites, `le site injecté avant ${anchor} n'est pas vu`).toBe(4);
+      expect(res.untraced.length, `la matrice doit voir le site muet injecté avant ${anchor}`).toBe(1);
+      expect(res.traced, `les 3 vrais sites doivent rester tracés (${anchor})`).toBe(3);
+    }
   });
 });
 
