@@ -1175,9 +1175,15 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
   explicitement par l'Assistant ou l'utilisateur) sont déclarés en **exception
   nommée** (marqueur `R3-EXCEPTION-MANUEL`), jamais en silence. Les arrêts de
   **TOUR** de l'onglet agent (orchestration : timeouts, subdivisions, reprise
-  après compaction, erreur de connexion ; arrêt manuel ; test de modèle) sont
-  **comptés et documentés** mais non tracés : ils n'interrompent pas la session,
-  qui reprend immédiatement. Un **contrôle négatif** intégré injecte un site
+  après compaction, erreur de connexion ; arrêt manuel ; test de modèle) ne sont
+  pas tracés — ils n'interrompent pas la session, qui reprend immédiatement —
+  mais **chacun d'eux porte son propre marqueur nommé** (`R3-EXCEPTION-MANUEL`,
+  commentaire **accolé à l'appel**, disant de quel arrêt il s'agit) : onze sites
+  à ce jour, au lieu d'un simple compteur. La règle est donc : **tout arrêt de
+  ce fichier est soit tracé avec son motif, soit déclaré manuel par son
+  marqueur** — un site muet fait échouer le contrôle, et un marqueur retiré
+  aussi (le nombre de marqueurs est épinglé séparément du nombre de sites). Un
+  **contrôle négatif** intégré injecte un site
   muet dans une copie de la source, à plusieurs positions, pour prouver que la
   détection le voit.
 - **Entonnoir unique (`agent-stop-funnel.js`)** : côté bus, les arrêts

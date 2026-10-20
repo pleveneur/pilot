@@ -30,13 +30,13 @@ l'Assistant ne sont **jamais** arrêtés automatiquement.
 
 **Opération longue en cours** (un outil démarré qui tourne encore : longue
 construction, longue série de tests, longue analyse) : tant qu'un outil
-s'exécute, l'agent est considéré comme en train de travailler et **l'arrêt
-automatique (T2) ne le coupe pas**, et son créneau de run n'est pas libéré non
-plus. Attention : cette protection est **bornée à 25 minutes** d'absence totale
-d'activité (au-delà, le process est considéré comme figé ; le délai d'inactivité
-côté interface peut alors mettre fin à la run **sans tuer l'agent**). Seul un
-agent **réellement figé** (aucun outil en cours, plus aucune progression) est
-arrêté par T2.
+s'exécute, l'agent est considéré comme en train de travailler — **un agent qui
+travaille n'est jamais arrêté au bout de 25 minutes, ni même au bout d'une
+heure**. L'alerte « agent bloqué » comme **l'arrêt automatique (T2)** sont
+suspendus, et son créneau de run n'est ni libéré ni pris par une autre demande.
+Les fenêtres de temps (25 minutes) ne concernent qu'un agent **sans aucun outil
+en cours et sans nouvelle** : c'est celui-là, réellement figé, qui est signalé et
+arrêté.
 
 Une **fin de tour partielle** de l'agent (reprise automatique après une erreur
 passagère ou une compaction) n'est **pas** un repos : l'agent reste considéré
@@ -58,9 +58,11 @@ confirmation, saisie), cette attente n'est pas un blocage. L'arrêt automatique
 longtemps.
 
 **Verrou de run fantôme (busy-stale)** : si un agent reste marqué actif (process
-pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
-(notification 🧹 avec la raison) pour que les demandes en file reprennent — sans
-réinitialiser son processus. Aucun réglage utilisateur.
+pi figé) **sans aucun outil en cours** et sans activité depuis **25 minutes**,
+Pilot libère son créneau (notification 🧹 avec la raison) pour que les demandes
+en file reprennent — sans réinitialiser son processus. Un agent dont un outil
+tourne n'est jamais concerné, quelle que soit la durée de l'opération. Aucun
+réglage utilisateur.
 
 **État d'exécution fantôme (issue #87)** : si un agent a été enregistré
 « en cours » alors que son processus n'existe plus (mort silencieuse), Pilot
@@ -243,20 +245,31 @@ l'outil) n'est plus arrêté à tort au bout du seuil. Un agent **réellement fi
 comme avant : le seuil, le réglage d'activation et la proposition de diagnostic
 restent inchangés.
 
-**Nuance — une opération longue et silencieuse n'est pas protégée partout** :
-cette pause ne concerne que **l'arrêt automatique du moteur (T2)**. Une opération
-longue qui n'émet **aucun** événement pendant plus de **10 minutes** reste
-exposée au **délai d'inactivité côté interface** (`agent_timeout_ms`, défaut
-10 min, agents-bus.js) qui termine la run **sans tuer l'agent** ; et au bout de
-**25 minutes** d'absence d'activité, le filet « occupé périmé » (busy-stale,
-§2.4) **libère le créneau mais ne tue pas l'agent**. Il est donc inexact de dire
-qu'une opération longue « n'est jamais coupée » : elle ne l'est jamais **par
-l'arrêt automatique T2** tant que l'outil tourne, mais elle reste soumise aux
-garde-fous d'inactivité décrits ci-dessus.
+**Nuance — le seul plafond restant est l'inactivité, jamais le travail** : les
+quatre garde-fous (alerte d'anomalie, arrêt automatique T2, filet « occupé
+périmé » busy-stale §2.4, signalement de session muette) et les deux sondes
+(`isSessionWorking` côté interface, `project_activity_is_busy` côté moteur)
+partagent la même exemption, **jamais bornée par le temps** : tant qu'une
+opération d'outil est en cours, l'agent travaille, quel que soit le temps
+écoulé. La fenêtre de **25 minutes** ne sert donc plus qu'à un agent **sans outil
+et sans nouvelle** — le seul cas où le figement est plausible (un `busy` périmé,
+ou un processus mort, que le filet « processus mort » juge indépendamment).
+Le délai d'inactivité côté interface (`agent_timeout_ms`, agents-bus.js) reste un
+garde-fou **distinct** : s'il se déclenche, le travail réellement écrit sur le
+disque est vérifié avant tout verdict d'échec (§2.4 ter).
 
 ### 2.4 Verrou de run fantôme — filet busy-stale (STALE_BUSY_GRACE)
 
-Le même moniteur implémente un filet AUTORITAIRE (`should_release_stale_busy`)
+**Une opération d'outil EN COURS exclut la libération** : comme les trois
+garde-fous voisins, `should_release_stale_busy` renvoie `false` tant que
+`tool_in_progress` est posé. Un build ou une campagne de tests silencieuse de
+plus d'une heure n'émet aucun événement : sans cette exemption, le créneau d'un
+agent parfaitement vivant était libéré, son tour mis en échec, et une **seconde
+mission pouvait démarrer** sur le même projet. Le filet « processus mort »
+(`has_dead_agent_process`, §2.4 bis) reste le SEUL juge des cas réellement
+figés ; il est indépendant et inchangé.
+
+Le même moniteur implémente ce filet AUTORITAIRE (`should_release_stale_busy`)
 INDÉPENDANT de l'arrêt auto T2 : un process pi **figé** (vivant, ni settled ni
 exit) laisse `busy` à true sans jamais l'effacer. Dès qu'une entrée non-super
 reste `busy` avec une dernière activité plus ancienne que
@@ -348,8 +361,15 @@ d'événements, avec deux angles morts :
    (déjà maintenu par l'observateur Rust et déjà exempté par l'arrêt auto T2)
    n'était pas exposé par `list_agent_sessions` ; `isSessionWorking` concluait
    donc « plus aucun agent ne travaille » au milieu du travail. Le champ est
-   désormais exposé (`toolInProgress`) et traité comme du travail, **borné** par
-   la fenêtre busy-stale (25 min : process figé).
+   désormais exposé (`toolInProgress`) et traité comme du travail, **sans aucune
+   borne de durée** : le borner par la fenêtre busy-stale faisait conclure qu'une
+   session ne travaillait plus au-delà de 25 minutes (même symptôme que la
+   correction 1 côté Rust). Seule la **mort** de la session lève ce constat.
+   Le même signal existe côté moteur : `SessionActivity` porte `tool_in_progress`
+   (posé et levé par l'unique écrivain de la map d'activité, remis à zéro à
+   l'arrêt) et `project_activity_is_busy` conclut « occupé » dès qu'un outil
+   tourne, sans borne de temps — sans quoi le projet était déclaré « libre » au
+   bout de 25 minutes et une seconde mission pouvait démarrer.
 2. **Aucune vérification du disque avant l'échec** : la porte `ghosts` est scopée
    aux agents **déclarés** dans la run ; un agent inconnu de la sonde (id/projet
    non concordant) la faisait tirer alors qu'une session du **projet** produisait
@@ -489,9 +509,12 @@ callback de notification du bus (message ⏱️).
   verrou maintenu », « fenêtre de grâce » et « sonde indisponible » dans
   `agents-bus.test.js`, plus l'accusé de lancement honnête dans
   `super-agent-launch-verdict.test.js`.
-- Correctif « opération longue » couvert par les tests : tant qu'un outil est EN
-  COURS (`tool_in_progress`), `should_auto_stop_on_progress` renvoie `false` ;
-  un agent figé (aucun outil, plus de progression) est arrêté comme avant.
+- Correctif « opération longue » couvert par les tests, sur les chemins
+  concernés : tant qu'un outil est EN COURS (`tool_in_progress`),
+  `should_auto_stop_on_progress` **et** `should_release_stale_busy` renvoient
+  `false`, et les sondes `isSessionWorking` (JS) / `project_activity_is_busy`
+  (Rust) concluent « au travail » **sans borne de temps** ; un agent figé (aucun
+  outil, plus de progression) est arrêté comme avant.
 - Pause « attente de réponse utilisateur » couverte par les tests : tant que
   `awaiting_user` est posé, l'arrêt T2, le plafond de l'Assistant et la
   libération du créneau fantôme ne se déclenchent pas ; dès que le marqueur est
@@ -508,4 +531,4 @@ callback de notification du bus (message ⏱️).
   diagnostic est lancé automatiquement.
 - **Ne casse pas** la surveillance existante (pastille d'activité par projet), ni
   le bouton manuel « 🔍 Diagnostiquer », ni la file d'attente d'exclusivité, ni
-  le filet busy-stale (25 min, sans kill).
+  le filet busy-stale (25 min, sans kill, jamais pendant un outil en cours).

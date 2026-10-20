@@ -244,11 +244,18 @@ struct AppState {
    - **Fenêtre de grâce anti-flicker** : en orchestration, chaque sous-tâche
      termine par un `agent_settled` (fin d'exécution) alors que le plan global
      continue. Pour éviter que la pastille n'oscille en « en attente » entre deux
-     sous-tâches, un projet reste **occupé** tant que `busy` OU qu'une activité RPC
-     récente (fenêtre de `ACTIVITY_GRACE_SECS`=15 s, basée sur `SessionActivity.updated`,
-     rafraîchie par `ACTIVITY_EVENTS`) — voir `make_project_activity_observer` et
-     `get_project_agent_states`. `reset_project_activity` (arrêt/fermeture) recule
-     `updated` dans le passé pour sortir immédiatement de la grâce → « en attente ».
+     sous-tâches, un projet reste **occupé** tant que `busy` (non périmé) OU
+     qu'une activité RPC récente (fenêtre de `ACTIVITY_GRACE_SECS`=15 s, basée sur
+     `SessionActivity.updated`, rafraîchie par `ACTIVITY_EVENTS`) OU qu'un **outil
+     est en cours** (`SessionActivity.tool_in_progress`, posé sur
+     `tool_execution_start`, levé sur `tool_execution_end` et à l'arrêt) — voir
+     l'observateur combiné (`anomaly::make_observer`, qui remplace l'ancien
+     `make_project_activity_observer`) et `get_project_agent_states`. Un build ou
+     une campagne de tests **silencieuse** garde donc la pastille allumée,
+     **sans borne de temps** : sans cette règle, le projet passait « en attente »
+     alors que l'agent travaillait encore. `reset_project_activity`
+     (arrêt/fermeture) recule `updated` dans le passé et efface `tool_in_progress`
+     pour sortir immédiatement de la grâce → « en attente ».
 8. **Fuite de processus `plh.exe` à la fermeture de projet (issue #14)** :
    - `close_project` arrête désormais **aussi** la session reviewer (`rpc_reviewer`,
      `pi`/`plh.exe` séparé `--no-session`) en plus de la session principale et des

@@ -2284,9 +2284,15 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
   explicitement par l'Assistant ou l'utilisateur) sont déclarés en **exception
   nommée** (marqueur `R3-EXCEPTION-MANUEL`), jamais en silence. Les arrêts de
   **TOUR** de l'onglet agent (orchestration : timeouts, subdivisions, reprise
-  après compaction, erreur de connexion ; arrêt manuel ; test de modèle) sont
-  **comptés et documentés** mais non tracés : ils n'interrompent pas la session,
-  qui reprend immédiatement. Un **contrôle négatif** intégré injecte un site
+  après compaction, erreur de connexion ; arrêt manuel ; test de modèle) ne sont
+  pas tracés — ils n'interrompent pas la session, qui reprend immédiatement —
+  mais **chacun d'eux porte son propre marqueur nommé** (`R3-EXCEPTION-MANUEL`,
+  commentaire **accolé à l'appel**, disant de quel arrêt il s'agit) : onze sites
+  à ce jour, au lieu d'un simple compteur. La règle est donc : **tout arrêt de
+  ce fichier est soit tracé avec son motif, soit déclaré manuel par son
+  marqueur** — un site muet fait échouer le contrôle, et un marqueur retiré
+  aussi (le nombre de marqueurs est épinglé séparément du nombre de sites). Un
+  **contrôle négatif** intégré injecte un site
   muet dans une copie de la source, à plusieurs positions, pour prouver que la
   détection le voit.
 - **Entonnoir unique (`agent-stop-funnel.js`)** : côté bus, les arrêts
@@ -2756,13 +2762,13 @@ l'Assistant ne sont **jamais** arrêtés automatiquement.
 
 **Opération longue en cours** (un outil démarré qui tourne encore : longue
 construction, longue série de tests, longue analyse) : tant qu'un outil
-s'exécute, l'agent est considéré comme en train de travailler et **l'arrêt
-automatique (T2) ne le coupe pas**, et son créneau de run n'est pas libéré non
-plus. Attention : cette protection est **bornée à 25 minutes** d'absence totale
-d'activité (au-delà, le process est considéré comme figé ; le délai d'inactivité
-côté interface peut alors mettre fin à la run **sans tuer l'agent**). Seul un
-agent **réellement figé** (aucun outil en cours, plus aucune progression) est
-arrêté par T2.
+s'exécute, l'agent est considéré comme en train de travailler — **un agent qui
+travaille n'est jamais arrêté au bout de 25 minutes, ni même au bout d'une
+heure**. L'alerte « agent bloqué » comme **l'arrêt automatique (T2)** sont
+suspendus, et son créneau de run n'est ni libéré ni pris par une autre demande.
+Les fenêtres de temps (25 minutes) ne concernent qu'un agent **sans aucun outil
+en cours et sans nouvelle** : c'est celui-là, réellement figé, qui est signalé et
+arrêté.
 
 Une **fin de tour partielle** de l'agent (reprise automatique après une erreur
 passagère ou une compaction) n'est **pas** un repos : l'agent reste considéré
@@ -2784,9 +2790,11 @@ confirmation, saisie), cette attente n'est pas un blocage. L'arrêt automatique
 longtemps.
 
 **Verrou de run fantôme (busy-stale)** : si un agent reste marqué actif (process
-pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
-(notification 🧹 avec la raison) pour que les demandes en file reprennent — sans
-réinitialiser son processus. Aucun réglage utilisateur.
+pi figé) **sans aucun outil en cours** et sans activité depuis **25 minutes**,
+Pilot libère son créneau (notification 🧹 avec la raison) pour que les demandes
+en file reprennent — sans réinitialiser son processus. Un agent dont un outil
+tourne n'est jamais concerné, quelle que soit la durée de l'opération. Aucun
+réglage utilisateur.
 
 **État d'exécution fantôme (issue #87)** : si un agent a été enregistré
 « en cours » alors que son processus n'existe plus (mort silencieuse), Pilot
