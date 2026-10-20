@@ -2286,10 +2286,17 @@ impl AgentService {
             if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("extensions");
                 if std::fs::create_dir_all(&dir).is_ok() {
-                    let ext = dir.join("pilot-group-assistant.ts");
-                    if std::fs::write(&ext, include_str!("../extensions/pilot-group-assistant.ts")).is_ok() {
-                        extensions.push(ext.to_string_lossy().to_string());
-                    }
+                    // Écriture FIABLE (tâche 361) : jamais de fichier périmé passé
+                    // en --extension, échec journalisé.
+                    let report = crate::extension_write::write_embedded_batch(
+                        &dir,
+                        &[(
+                            "pilot-group-assistant.ts",
+                            include_str!("../extensions/pilot-group-assistant.ts"),
+                        )],
+                    );
+                    Self::log_extension_failures("assistant de groupe", &report);
+                    extensions = report.paths;
                 }
             }
         }
@@ -2486,18 +2493,31 @@ impl AgentService {
     /// chemins. Réutilisé par `spawn_assistant_session` (les agents d'assistant
     /// tournent dans `~/.pilot/assistant/`, pas dans un projet). Retourne la
     /// liste des chemins d'extensions construits (vide si non supporté).
-    fn write_assistant_extensions(app: &AppHandle, pi_path: &str, want_mcp: bool) -> Vec<String> {
+    ///
+    /// Tâche 361 : l'échec d'écriture n'est plus avalé. Le rapport contient les
+    /// chemins RÉELLEMENT à jour et la liste des échecs (journalisés) ; un
+    /// fichier périmé n'est jamais retourné comme chemin d'extension.
+    fn write_assistant_extensions(
+        app: &AppHandle,
+        pi_path: &str,
+        want_mcp: bool,
+    ) -> crate::extension_write::BatchReport {
         let state = app.state::<AppState>();
-        let mut extensions: Vec<String> = Vec::new();
+        let mut report = crate::extension_write::BatchReport::default();
         if !probe_extension_support(&state, pi_path) {
-            return extensions;
+            return report;
         }
         let Ok(data_dir) = app.path().app_data_dir() else {
-            return extensions;
+            return report;
         };
         let dir = data_dir.join("extensions");
         if std::fs::create_dir_all(&dir).is_err() {
-            return extensions;
+            // Un dossier inutilisable n'est pas un succès : l'échec est remonté.
+            report.failures.push(format!(
+                "dossier d'extensions inutilisable : {}",
+                dir.display()
+            ));
+            return report;
         }
         let mut files: Vec<(&str, &str)> = vec![
             ("pilot-assistant-files.ts", include_str!("../extensions/pilot-assistant-files.ts")),
@@ -2522,26 +2542,41 @@ impl AgentService {
                 include_str!("../extensions/pilot-mcp-client.ts"),
             ));
         }
-        for (name, content) in files {
-            let file = dir.join(name);
-            if std::fs::write(&file, content).is_ok() {
-                extensions.push(file.to_string_lossy().to_string());
-            }
-        }
+        // Écriture FIABLE (tâche 361) : un fichier resté en lecture seule est
+        // remplacé, un contenu déjà à jour n'est pas réécrit, et un échec est
+        // remonté (rapport + journal) au lieu d'être avalé.
+        report = crate::extension_write::write_embedded_batch(&dir, &files);
         // Cœur de la passerelle du visage : module importé par pilot-face.ts
         // (`./face-gateway.js`). Écrit à côté MAIS pas passé en --extension
         // (ce n'est pas une extension, seulement un module résolu par import).
-        let _ = std::fs::write(
-            dir.join("face-gateway.js"),
+        if let Err(e) = crate::extension_write::write_embedded(
+            &dir.join("face-gateway.js"),
             include_str!("../../src/js/face-gateway.js"),
-        );
+        ) {
+            eprintln!("[extensions] face-gateway.js non écrit : {}", e);
+        }
         // Service Laya : l'outil `laya_classify` doit aussi être disponible pour
         // les agents d'assistant (tâche #140), qui tournent dans
         // `~/.pilot/assistant/` et non dans un projet.
-        if let Some(laya_file) = Self::write_laya_extension(&dir) {
-            extensions.push(laya_file);
+        match Self::write_laya_extension(&dir) {
+            Ok(laya_file) => report.paths.push(laya_file),
+            Err(e) => report.failures.push(e),
         }
-        extensions
+        report
+    }
+
+    /// Journalise les échecs d'écriture d'un lot d'extensions SANS interrompre le
+    /// lancement (chemins autres que les agents d'assistant : la session peut
+    /// démarrer avec MOINS d'outils, mais jamais avec un fichier périmé, et
+    /// l'échec reste visible dans les journaux — jamais avalé). Tâche 361.
+    fn log_extension_failures(context: &str, report: &crate::extension_write::BatchReport) {
+        if !report.is_complete() {
+            eprintln!(
+                "[extensions] {} : écriture incomplète, session lancée SANS les fichiers périmés — {}",
+                context,
+                report.failure_summary()
+            );
+        }
     }
 
     /// Chaîne du secret (E2) : complète les variables d'environnement MCP d'une
@@ -2596,7 +2631,18 @@ impl AgentService {
         // serveur cible est désigné, on écrit l'extension client MCP en plus des
         // extensions assistant standards. Jamais au démarrage (à la demande).
         let want_mcp = mcp_enabled && mcp_server.as_deref().map(str::trim).unwrap_or("") != "";
-        let extensions = Self::write_assistant_extensions(app, pi_path, want_mcp);
+        let ext_report = Self::write_assistant_extensions(app, pi_path, want_mcp);
+        // Tâche 361 : ne JAMAIS lancer une session avec des outils périmés ou
+        // incomplets. Un échec d'écriture est remonté à l'appelant (l'assistant
+        // voit une erreur explicite qui nomme les fichiers) au lieu d'être avalé.
+        if !ext_report.is_complete() {
+            return Err(format!(
+                "Extensions de l'assistant non écrites — session NON lancée pour éviter \
+                 des outils périmés : {}",
+                ext_report.failure_summary()
+            ));
+        }
+        let extensions = ext_report.paths;
         let session_dir_resolved = if let Ok(cfg_path) = config_path(app) {
             cfg_path
                 .with_file_name("agent")
@@ -2687,77 +2733,50 @@ impl AgentService {
             if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("extensions");
                 if std::fs::create_dir_all(&dir).is_ok() {
-                    let files = dir.join("pilot-assistant-files.ts");
-                    if std::fs::write(&files, include_str!("../extensions/pilot-assistant-files.ts")).is_ok() {
-                        extensions.push(files.to_string_lossy().to_string());
-                    }
-                    let choices = dir.join("pilot-choices.ts");
-                    if std::fs::write(&choices, include_str!("../extensions/pilot-choices.ts")).is_ok() {
-                        extensions.push(choices.to_string_lossy().to_string());
-                    }
-                    let actions = dir.join("pilot-assistant-actions.ts");
-                    if std::fs::write(&actions, include_str!("../extensions/pilot-assistant-actions.ts")).is_ok() {
-                        extensions.push(actions.to_string_lossy().to_string());
-                    }
-                    let db = dir.join("pilot-assistant-db.ts");
-                    if std::fs::write(&db, include_str!("../extensions/pilot-assistant-db.ts")).is_ok() {
-                        extensions.push(db.to_string_lossy().to_string());
-                    }
-                    let prompt = dir.join("pilot-assistant-prompt.ts");
-                    if std::fs::write(&prompt, include_str!("../extensions/pilot-assistant-prompt.ts")).is_ok() {
-                        extensions.push(prompt.to_string_lossy().to_string());
-                    }
-                    let sessions = dir.join("pilot-assistant-sessions.ts");
-                    if std::fs::write(&sessions, include_str!("../extensions/pilot-assistant-sessions.ts")).is_ok() {
-                        extensions.push(sessions.to_string_lossy().to_string());
-                    }
-                    let delegation = dir.join("pilot-assistant-delegation.ts");
-                    if std::fs::write(&delegation, include_str!("../extensions/pilot-assistant-delegation.ts")).is_ok() {
-                        extensions.push(delegation.to_string_lossy().to_string());
-                    }
-                    let schedule = dir.join("pilot-assistant-schedule.ts");
-                    if std::fs::write(
-                        &schedule,
-                        include_str!("../extensions/pilot-assistant-schedule.ts"),
-                    )
-                    .is_ok()
-                    {
-                        extensions.push(schedule.to_string_lossy().to_string());
-                    }
-                    let tools = dir.join("pilot-assistant-tools.ts");
-                    if std::fs::write(&tools, include_str!("../extensions/pilot-assistant-tools.ts")).is_ok() {
-                        extensions.push(tools.to_string_lossy().to_string());
-                    }
-                    let session_memory = dir.join("pilot-assistant-session-memory.ts");
-                    if std::fs::write(&session_memory, include_str!("../extensions/pilot-assistant-session-memory.ts")).is_ok() {
-                        extensions.push(session_memory.to_string_lossy().to_string());
-                    }
-                    // Passerelle du visage : outils de pilotage de PLface fournis
-                    // par Pilot (aucun processus externe, ni Node ni MCP). Le
-                    // module `face-gateway.js` (cœur pur) est écrit à côté mais
-                    // n'est PAS passé en --extension (ce n'est pas une extension).
-                    let face = dir.join("pilot-face.ts");
-                    if std::fs::write(&face, include_str!("../extensions/pilot-face.ts")).is_ok() {
-                        extensions.push(face.to_string_lossy().to_string());
-                    }
-                    let _ = std::fs::write(
-                        dir.join("face-gateway.js"),
-                        include_str!("../../src/js/face-gateway.js"),
-                    );
-                    // Service Laya : l'outil `laya_classify` doit être disponible
-                    // pour la session de l'assistant comme pour tout autre agent.
-                    if let Some(laya_file) = Self::write_laya_extension(&dir) {
-                        extensions.push(laya_file);
-                    }
+                    let mut files: Vec<(&str, &str)> = vec![
+                        ("pilot-assistant-files.ts", include_str!("../extensions/pilot-assistant-files.ts")),
+                        ("pilot-choices.ts", include_str!("../extensions/pilot-choices.ts")),
+                        ("pilot-assistant-actions.ts", include_str!("../extensions/pilot-assistant-actions.ts")),
+                        ("pilot-assistant-db.ts", include_str!("../extensions/pilot-assistant-db.ts")),
+                        ("pilot-assistant-prompt.ts", include_str!("../extensions/pilot-assistant-prompt.ts")),
+                        ("pilot-assistant-sessions.ts", include_str!("../extensions/pilot-assistant-sessions.ts")),
+                        ("pilot-assistant-delegation.ts", include_str!("../extensions/pilot-assistant-delegation.ts")),
+                        ("pilot-assistant-schedule.ts", include_str!("../extensions/pilot-assistant-schedule.ts")),
+                        ("pilot-assistant-tools.ts", include_str!("../extensions/pilot-assistant-tools.ts")),
+                        ("pilot-assistant-session-memory.ts", include_str!("../extensions/pilot-assistant-session-memory.ts")),
+                        // Passerelle du visage : outils de pilotage de PLface fournis
+                        // par Pilot (aucun processus externe, ni Node ni MCP).
+                        ("pilot-face.ts", include_str!("../extensions/pilot-face.ts")),
+                    ];
                     // Assistant piloté MCP (brique A) : si MCP est activé, l'assistant
                     // charge l'extension client MCP (comme l'agent standard) pour
                     // découvrir les serveurs avec ses outils mcp_<serveur>_<outil>.
                     if mcp_enabled {
-                        let mcp_file = dir.join("pilot-mcp-client.ts");
-                        if std::fs::write(&mcp_file, include_str!("../extensions/pilot-mcp-client.ts")).is_ok() {
-                            extensions.push(mcp_file.to_string_lossy().to_string());
-                        }
+                        files.push((
+                            "pilot-mcp-client.ts",
+                            include_str!("../extensions/pilot-mcp-client.ts"),
+                        ));
                     }
+                    // Écriture FIABLE (tâche 361) : un fichier resté en lecture seule
+                    // est remplacé, un contenu déjà à jour n'est pas réécrit, un échec
+                    // est journalisé et le fichier concerné n'est PAS transmis.
+                    let mut report = crate::extension_write::write_embedded_batch(&dir, &files);
+                    // Le module `face-gateway.js` (cœur pur) est écrit à côté mais
+                    // n'est PAS passé en --extension (ce n'est pas une extension).
+                    if let Err(e) = crate::extension_write::write_embedded(
+                        &dir.join("face-gateway.js"),
+                        include_str!("../../src/js/face-gateway.js"),
+                    ) {
+                        eprintln!("[extensions] face-gateway.js non écrit : {}", e);
+                    }
+                    // Service Laya : l'outil `laya_classify` doit être disponible
+                    // pour la session de l'assistant comme pour tout autre agent.
+                    match Self::write_laya_extension(&dir) {
+                        Ok(laya_file) => report.paths.push(laya_file),
+                        Err(e) => report.failures.push(e),
+                    }
+                    Self::log_extension_failures("super-agent", &report);
+                    extensions = report.paths;
                 }
             }
         }
@@ -2856,49 +2875,45 @@ impl AgentService {
                     // bloque les écritures sur les fichiers réservés au codeur pour
                     // les autres spécialistes (pilot-reserve-gate). Le codeur n'est
                     // pas bloqué (l'extension compare l'agent_id via PILOT_AGENT_ID).
-                    let gate_file = dir.join("pilot-reserve-gate.ts");
-                    if std::fs::write(&gate_file, include_str!("../extensions/pilot-reserve-gate.ts")).is_ok() {
-                        extensions.push(gate_file.to_string_lossy().to_string());
-                    }
                     // Outils navigateur (pi-chrome) : autorise les outils chrome_*
                     // pour cette session d'agent (cf. extensions/pilot-chrome.ts).
-                    let chrome_file = dir.join("pilot-chrome.ts");
-                    if std::fs::write(&chrome_file, include_str!("../extensions/pilot-chrome.ts")).is_ok() {
-                        extensions.push(chrome_file.to_string_lossy().to_string());
-                    }
-                    // Service Laya : l'outil `laya_classify` doit être disponible
-                    // pour TOUTE session d'agent, y compris celles lancées par
-                    // l'assistant (`run_agents`) et les agents multi-rôles — qui
-                    // passent par ce chemin, pas par `spawn_session`.
-                    if let Some(laya_file) = Self::write_laya_extension(&dir) {
-                        extensions.push(laya_file);
-                    }
+                    let mut files: Vec<(&str, &str)> = vec![
+                        ("pilot-reserve-gate.ts", include_str!("../extensions/pilot-reserve-gate.ts")),
+                        ("pilot-chrome.ts", include_str!("../extensions/pilot-chrome.ts")),
+                        // Filtrage STRICT des compétences (D6) : TOUJOURS chargé (jamais
+                        // conditionné à `inherit_context`, sinon les compétences
+                        // auto-découvertes fuiteraient dans les agents sans héritage).
+                        ("pilot-skills.ts", include_str!("../extensions/pilot-skills.ts")),
+                    ];
                     // #21 : quand l'assistant active l'héritage de contexte, les
                     // agents spécifiques chargent aussi pilot-context.ts (comme
                     // l'agent standard) pour hériter du contexte projet.
                     if inherit_context {
-                        let ctx_file = dir.join("pilot-context.ts");
-                        if std::fs::write(&ctx_file, include_str!("../extensions/pilot-context.ts")).is_ok() {
-                            extensions.push(ctx_file.to_string_lossy().to_string());
-                        }
-                    }
-                    // Filtrage STRICT des compétences (D6) : TOUJOURS chargé (jamais
-                    // conditionné à `inherit_context`, sinon les compétences
-                    // auto-découvertes fuiteraient dans les agents sans héritage).
-                    let skills_file = dir.join("pilot-skills.ts");
-                    if std::fs::write(&skills_file, include_str!("../extensions/pilot-skills.ts")).is_ok() {
-                        extensions.push(skills_file.to_string_lossy().to_string());
+                        files.push(("pilot-context.ts", include_str!("../extensions/pilot-context.ts")));
                     }
                     // Agent piloté MCP (brique B) : si l'assistant a désigné un
                     // serveur MCP cible via run_agents (mcp_server) ET que MCP est
                     // activé, on charge l'extension client MCP à la volée pour CET
                     // agent. Jamais au démarrage (MCP ne s'ajoute qu'à la demande).
                     if mcp_enabled && mcp_server.as_deref().map(str::trim).unwrap_or("") != "" {
-                        let mcp_file = dir.join("pilot-mcp-client.ts");
-                        if std::fs::write(&mcp_file, include_str!("../extensions/pilot-mcp-client.ts")).is_ok() {
-                            extensions.push(mcp_file.to_string_lossy().to_string());
-                        }
+                        files.push((
+                            "pilot-mcp-client.ts",
+                            include_str!("../extensions/pilot-mcp-client.ts"),
+                        ));
                     }
+                    // Écriture FIABLE (tâche 361) : jamais de fichier périmé passé
+                    // en --extension ; un échec est journalisé, jamais avalé.
+                    let mut report = crate::extension_write::write_embedded_batch(&dir, &files);
+                    // Service Laya : l'outil `laya_classify` doit être disponible
+                    // pour TOUTE session d'agent, y compris celles lancées par
+                    // l'assistant (`run_agents`) et les agents multi-rôles — qui
+                    // passent par ce chemin, pas par `spawn_session`.
+                    match Self::write_laya_extension(&dir) {
+                        Ok(laya_file) => report.paths.push(laya_file),
+                        Err(e) => report.failures.push(e),
+                    }
+                    Self::log_extension_failures("agent multi-rôles", &report);
+                    extensions = report.paths;
                 }
             }
         }
@@ -2984,12 +2999,22 @@ impl AgentService {
     /// (`spawn_session` pour le chat principal, `spawn_agent_process` pour les
     /// agents lancés par l'assistant et les agents multi-rôles) : sans cela, un
     /// agent ne reçoit pas l'outil. Retourne le chemin du `.ts` si tout est écrit.
-    fn write_laya_extension(dir: &std::path::Path) -> Option<String> {
+    ///
+    /// Tâche 361 : l'écriture passe par l'écriture fiabilisée
+    /// ([`crate::extension_write`]) et un échec est REMONTÉ. Avant, `?.ok()`
+    /// avalait l'échec : la session tournait sans `laya_classify`, sans que rien
+    /// ne le signale, et un fichier périmé restait sur disque.
+    fn write_laya_extension(dir: &std::path::Path) -> Result<String, String> {
         let gateway_file = dir.join("laya-gateway.js");
-        std::fs::write(&gateway_file, include_str!("../../src/js/laya-gateway.js")).ok()?;
+        crate::extension_write::write_embedded(
+            &gateway_file,
+            include_str!("../../src/js/laya-gateway.js"),
+        )
+        .map_err(|e| format!("laya-gateway.js : {}", e))?;
         let laya_file = dir.join("pilot-laya.ts");
-        std::fs::write(&laya_file, include_str!("../extensions/pilot-laya.ts")).ok()?;
-        Some(laya_file.to_string_lossy().to_string())
+        crate::extension_write::write_embedded(&laya_file, include_str!("../extensions/pilot-laya.ts"))
+            .map_err(|e| format!("pilot-laya.ts : {}", e))?;
+        Ok(laya_file.to_string_lossy().to_string())
     }
 
     fn spawn_session(app: &AppHandle, project: &str, agent_id: &str) -> Result<rpc_manager::RpcSession, String> {
@@ -3027,10 +3052,15 @@ impl AgentService {
                 let skill_file = data_dir.join("skills").join("quality-gate").join("SKILL.md");
                 if std::fs::create_dir_all(skill_file.parent().unwrap_or(&data_dir)).is_ok() {
                     let content: &str = include_str!("../skills/quality-gate/SKILL.md");
-                    if std::fs::write(&skill_file, content).is_ok() {
-                        Some(skill_file.to_string_lossy().to_string())
-                    } else {
-                        None
+                    // Écriture fiabilisée (tâche 361) : un fichier resté en lecture
+                    // seule est remplacé, un contenu déjà à jour n'est pas réécrit,
+                    // et un échec est journalisé au lieu d'être avalé.
+                    match crate::extension_write::write_embedded(&skill_file, content) {
+                        Ok(_) => Some(skill_file.to_string_lossy().to_string()),
+                        Err(e) => {
+                            eprintln!("[quality-gate] SKILL.md non écrit : {}", e);
+                            None
+                        }
                     }
                 } else {
                     None
@@ -3049,46 +3079,44 @@ impl AgentService {
             if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("extensions");
                 if std::fs::create_dir_all(&dir).is_ok() {
+                    // Extensions pi (porte pré-écriture, contexte, choix, navigateur).
+                    let mut files: Vec<(&str, &str)> = vec![
+                        ("pilot-context.ts", include_str!("../extensions/pilot-context.ts")),
+                        // Filtrage STRICT des compétences (D6) : TOUJOURS chargé, quel
+                        // que soit `inherit_context` — sans lui, un agent verrait les
+                        // compétences auto-découvertes de toutes les autres sessions.
+                        ("pilot-skills.ts", include_str!("../extensions/pilot-skills.ts")),
+                        ("pilot-choices.ts", include_str!("../extensions/pilot-choices.ts")),
+                        // Outils navigateur (pi-chrome) : autorise les outils chrome_*
+                        // dans la session principale de l'agent (cf. extensions/pilot-chrome.ts).
+                        ("pilot-chrome.ts", include_str!("../extensions/pilot-chrome.ts")),
+                    ];
                     if confirm_file_edits {
-                        let ext_file = dir.join("pilot-edit-gate.ts");
-                        if std::fs::write(&ext_file, include_str!("../extensions/pilot-edit-gate.ts")).is_ok() {
-                            extensions.push(ext_file.to_string_lossy().to_string());
-                        }
-                    }
-                    let ctx_file = dir.join("pilot-context.ts");
-                    if std::fs::write(&ctx_file, include_str!("../extensions/pilot-context.ts")).is_ok() {
-                        extensions.push(ctx_file.to_string_lossy().to_string());
-                    }
-                    // Filtrage STRICT des compétences (D6) : TOUJOURS chargé, quel
-                    // que soit `inherit_context` — sans lui, un agent verrait les
-                    // compétences auto-découvertes de toutes les autres sessions.
-                    let skills_file = dir.join("pilot-skills.ts");
-                    if std::fs::write(&skills_file, include_str!("../extensions/pilot-skills.ts")).is_ok() {
-                        extensions.push(skills_file.to_string_lossy().to_string());
-                    }
-                    let choices_file = dir.join("pilot-choices.ts");
-                    if std::fs::write(&choices_file, include_str!("../extensions/pilot-choices.ts")).is_ok() {
-                        extensions.push(choices_file.to_string_lossy().to_string());
-                    }
-                    // Outils navigateur (pi-chrome) : autorise les outils chrome_*
-                    // dans la session principale de l'agent (cf. extensions/pilot-chrome.ts).
-                    let chrome_file = dir.join("pilot-chrome.ts");
-                    if std::fs::write(&chrome_file, include_str!("../extensions/pilot-chrome.ts")).is_ok() {
-                        extensions.push(chrome_file.to_string_lossy().to_string());
-                    }
-                    // Service Laya : classement local (choix parmi des libellés,
-                    // note sur une échelle, oui/non) par le service UNIQUE lancé et
-                    // surveillé par Pilot — aucun modèle chargé par la session.
-                    if let Some(laya_file) = Self::write_laya_extension(&dir) {
-                        extensions.push(laya_file);
+                        files.push((
+                            "pilot-edit-gate.ts",
+                            include_str!("../extensions/pilot-edit-gate.ts"),
+                        ));
                     }
                     // POC MCP : extension client MCP (SDK bundlé) si activé.
                     if mcp_enabled {
-                        let mcp_file = dir.join("pilot-mcp-client.ts");
-                        if std::fs::write(&mcp_file, include_str!("../extensions/pilot-mcp-client.ts")).is_ok() {
-                            extensions.push(mcp_file.to_string_lossy().to_string());
-                        }
+                        files.push((
+                            "pilot-mcp-client.ts",
+                            include_str!("../extensions/pilot-mcp-client.ts"),
+                        ));
                     }
+                    // Écriture FIABLE (tâche 361) : un fichier resté en lecture seule
+                    // est remplacé, un contenu déjà à jour n'est pas réécrit, un échec
+                    // est journalisé et le fichier concerné n'est PAS transmis.
+                    let mut report = crate::extension_write::write_embedded_batch(&dir, &files);
+                    // Service Laya : classement local (choix parmi des libellés,
+                    // note sur une échelle, oui/non) par le service UNIQUE lancé et
+                    // surveillé par Pilot — aucun modèle chargé par la session.
+                    match Self::write_laya_extension(&dir) {
+                        Ok(laya_file) => report.paths.push(laya_file),
+                        Err(e) => report.failures.push(e),
+                    }
+                    Self::log_extension_failures("session d'agent", &report);
+                    extensions = report.paths;
                 }
             }
         }

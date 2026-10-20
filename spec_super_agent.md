@@ -1875,6 +1875,24 @@ plutôt que de les laisser peser sur l'assistant de suivi.
   `pilot-assistant-prompt.ts` (update_my_prompt) et
   `pilot-assistant-sessions.ts` (list_agent_sessions), chargées dans la session
   super-agent dès que le backend supporte `--extension`.
+
+<!-- HELP:super-agent-extensions-fiables -->
+### Extensions d'agent : écriture fiable
+
+Les extensions de Pilot (les outils qu'un agent reçoit) sont réécrites sur le
+disque à chaque lancement de session.
+
+- Un fichier resté **en lecture seule** (copie de sauvegarde, outil de
+  synchronisation, antivirus) est **remplacé automatiquement** : l'attribut est
+  retiré, puis le fichier réécrit et **relu pour vérification**.
+- Un fichier **déjà à jour** n'est pas réécrit (aucune écriture inutile).
+- Si le remplacement est **impossible**, l'échec est **affiché et journalisé** :
+  un agent ne démarre **jamais** avec une version périmée de ses outils. Pour un
+  agent de l'Assistant, le lancement est **refusé** avec un message qui nomme le
+  fichier en cause ; les autres sessions démarrent sans l'outil concerné, avec
+  l'échec journalisé.
+
+<!-- /HELP:super-agent-extensions-fiables -->
 - Commandes Tauri (esquisse) :
   - `get_super_agent_config()` / `set_super_agent_config(config)`
   - `start_super_agent_session()` / `stop_super_agent_session()`

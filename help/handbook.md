@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-19 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-20 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -2359,6 +2359,23 @@ plutôt que de les laisser peser sur l'assistant de suivi.
   (suivi multi-projets)**, décochez **« Détecter les tâches longues et proposer
   un agent »** (activé par défaut). Décocher n'efface aucune donnée et ne change
   rien d'autre.
+
+---
+
+### Extensions d'agent : écriture fiable
+
+Les extensions de Pilot (les outils qu'un agent reçoit) sont réécrites sur le
+disque à chaque lancement de session.
+
+- Un fichier resté **en lecture seule** (copie de sauvegarde, outil de
+  synchronisation, antivirus) est **remplacé automatiquement** : l'attribut est
+  retiré, puis le fichier réécrit et **relu pour vérification**.
+- Un fichier **déjà à jour** n'est pas réécrit (aucune écriture inutile).
+- Si le remplacement est **impossible**, l'échec est **affiché et journalisé** :
+  un agent ne démarre **jamais** avec une version périmée de ses outils. Pour un
+  agent de l'Assistant, le lancement est **refusé** avec un message qui nomme le
+  fichier en cause ; les autres sessions démarrent sans l'outil concerné, avec
+  l'échec journalisé.
 
 ---
 

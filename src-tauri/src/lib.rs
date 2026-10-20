@@ -87,6 +87,10 @@ mod db;
 mod mcp_config;
 mod agent;
 mod agent_service;
+// Écriture fiable des extensions embarquées (tâche 361) : ne réécrit rien si
+// le contenu est déjà à jour, remplace un fichier resté en lecture seule, et
+// remonte tout échec au lieu de le laisser en silence.
+mod extension_write;
 mod anomaly;
 mod telegram;
 mod gds;
