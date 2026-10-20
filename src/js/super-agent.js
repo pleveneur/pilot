@@ -550,19 +550,71 @@ export function getProjectMissionQueue(projectPath) {
 }
 
 /**
+ * RÈGLE 4 — POINT UNIQUE d'écriture de la trace d'abandon d'une file.
+ *
+ * Une file vidée laisse TOUJOURS une ligne dans le journal des arrêts
+ * automatiques (`<projet>/.pilot/agent-stops.log`, repli global pour un espace
+ * réservé comme `__assistant__`) : motif nommé (`reason`), contexte d'abandon
+ * (`detected`) et libellés des demandes réellement abandonnées — une ligne par
+ * FAMILLE de file.
+ *
+ * C'est le SEUL endroit qui journalise un abandon de file : les quatre chemins
+ * d'abandon (`abandonProjectMissionQueue`, `abandonQueuedRunAgentsMissions`,
+ * `abandonProjectDelegationQueue`, `abandonQueuedDelegations`) y passent. Aucun
+ * appelant ne peut donc oublier la trace (règle « une file ne se perd jamais
+ * sans trace »), et aucune famille n'est journalisée deux fois.
+ * @param {{project:string, family:string, labels:string[], reason?:string, detected?:string}} params
+ * @returns {Promise<void>|undefined} promesse d'écriture (fire-and-forget pour
+ *   les appels synchrones)
+ */
+function traceQueueAbandon({ project, family, labels, reason, detected }) {
+  const list = (labels || []).map((label) => String(label || "")).filter(Boolean);
+  if (list.length === 0) return undefined;
+  // Un espace réservé (`__assistant__`) n'est pas un projet : le journal prend
+  // alors son repli global (`<app_data_dir>/agent-stops.log`).
+  const projectPath = project === ASSISTANT_SPACE ? "" : project || "";
+  // Fail-open : un journal impossible à écrire ne bloque jamais un abandon (sa
+  // trace d'échec est déjà dite par `agent-stop-trace`).
+  return traceAutomaticAgentStop({
+    reason: reason || "queue-abandoned",
+    detected: detected || "queue-abandoned",
+    agentId: "",
+    projectPath,
+    detail: `${list.length} ${family}(s) en file : ${list.join(" · ")}`.slice(0, 300),
+  }).catch(() => {});
+}
+
+/**
  * Abandonne les missions de l'assistant en attente d'un projet (mission 385).
  * Le nombre abandonné est retourné (toujours annoncé à l'utilisateur).
+ *
+ * RÈGLE 4 : la trace est écrite ICI, pas par l'appelant. Un nouveau chemin
+ * d'appel (chien de garde, arrêt, vue distante) ne peut donc pas perdre des
+ * demandes en silence. L'écriture du journal suit en tâche de fond pour que la
+ * fonction reste synchrone (le décompte est affiché immédiatement).
  * @param {string} projectPath
- * @returns {number}
+ * @param {{reason?:string, detected?:string}} [opts] - motif et contexte d'abandon
+ * @returns {number} nombre de missions abandonnées
  */
-export function abandonProjectMissionQueue(projectPath) {
+export function abandonProjectMissionQueue(projectPath, opts = {}) {
   const target = projectPath || "";
   const queue = runAgentsQueueByProject[target];
   const removed = queue ? queue.length : 0;
-  if (removed > 0) {
-    queue.length = 0;
+  if (removed === 0) {
     delete runAgentsQueueByProject[target];
+    return 0;
   }
+  // Nommer AVANT de vider : c'est tout l'objet du correctif.
+  const labels = queue.map((entry) => missionQueueLabel(entry));
+  queue.length = 0;
+  delete runAgentsQueueByProject[target];
+  traceQueueAbandon({
+    project: target,
+    family: "mission",
+    labels,
+    reason: opts.reason,
+    detected: opts.detected,
+  });
   return removed;
 }
 
@@ -600,16 +652,14 @@ export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
   queue.length = 0;
   delete runAgentsQueueByProject[key];
   const reason = opts.reason || "queue-abandoned";
-  // Un espace réservé (`__assistant__`) n'est pas un projet : le journal prend
-  // alors son repli global (`<app_data_dir>/agent-stops.log`).
-  const projectPath = key === ASSISTANT_SPACE ? "" : key;
-  await traceAutomaticAgentStop({
+  // Trace écrite par le point UNIQUE d'abandon de file (règle 4).
+  await traceQueueAbandon({
+    project: key,
+    family: "mission",
+    labels,
     reason,
     detected: opts.detected || "watchdog",
-    agentId: "",
-    projectPath,
-    detail: labels.join(" | "),
-  }).catch(() => {});
+  });
   const message = `⚠️ ${count} demande(s) en file d'attente abandonnée(s) : ${labels.join(" · ")}. Le motif est consigné (${reason}).`;
   console.warn("[super-agent] file de missions :", message);
   try {
@@ -632,13 +682,30 @@ export function getProjectDelegationQueue(projectPath) {
 
 /**
  * Abandonne les délégations en attente d'un projet (mission 385).
+ *
+ * RÈGLE 4 : la trace est écrite ICI, pas par l'appelant (même garantie que pour
+ * les missions). L'écriture du journal suit en tâche de fond pour que la
+ * fonction reste synchrone.
  * @param {string} projectPath
- * @returns {number}
+ * @param {{reason?:string, detected?:string}} [opts] - motif et contexte d'abandon
+ * @returns {number} nombre de délégations abandonnées
  */
-export function abandonProjectDelegationQueue(projectPath) {
-  const ds = delegationState(projectPath);
-  const removed = ds.queue.length;
-  if (removed > 0) ds.queue.length = 0;
+export function abandonProjectDelegationQueue(projectPath, opts = {}) {
+  const target = projectPath || "";
+  const ds = delegationState(target);
+  const queue = ds.queue || [];
+  const removed = queue.length;
+  if (removed === 0) return 0;
+  // Nommer AVANT de vider : c'est tout l'objet du correctif.
+  const labels = queue.map((item) => String((item && item.request) || "délégation").slice(0, 120));
+  queue.length = 0;
+  traceQueueAbandon({
+    project: target,
+    family: "délégation",
+    labels,
+    reason: opts.reason,
+    detected: opts.detected,
+  });
   return removed;
 }
 
@@ -666,16 +733,14 @@ export async function abandonQueuedDelegations(projectPath, opts = {}) {
   const labels = queue.map((item) => String((item && item.request) || "délégation").slice(0, 120));
   queue.length = 0;
   const reason = opts.reason || "queue-abandoned";
-  // Un espace réservé (`__assistant__`) n'est pas un projet : le journal prend
-  // alors son repli global (`<app_data_dir>/agent-stops.log`).
-  const project = target === ASSISTANT_SPACE ? "" : target;
-  await traceAutomaticAgentStop({
+  // Trace écrite par le point UNIQUE d'abandon de file (règle 4).
+  await traceQueueAbandon({
+    project: target,
+    family: "délégation",
+    labels,
     reason,
     detected: opts.detected || "stop-agent",
-    agentId: "",
-    projectPath: project,
-    detail: `${count} délégation(s) en file : ${labels.join(" · ")}`.slice(0, 300),
-  }).catch(() => {});
+  });
   const message = `⚠️ ${count} délégation(s) en file d'attente abandonnée(s) : ${labels.join(" · ")}. Le motif est consigné (${reason}).`;
   console.warn("[super-agent] file de délégations :", message);
   try {

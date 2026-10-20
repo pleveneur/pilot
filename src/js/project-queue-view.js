@@ -32,17 +32,17 @@ import {
 import { traceAutomaticAgentStop } from "./agent-stop-trace.js";
 
 /**
- * RÈGLE 4 — journalise (et rend visible par le texte annoncé à l'appelant)
- * l'abandon d'UNE famille de demandes de la file.
+ * RÈGLE 4 — journalise l'abandon des familles dont l'abandon est PILOTÉ ICI
+ * (commandes manuelles).
  *
- * `/file vide` vidait trois familles (commandes manuelles, missions,
- * délégations) par un simple `length = 0` : les demandes disparaissaient sans
- * nom, sans motif et sans trace disque. Chaque famille abandonnée écrit donc sa
- * ligne `reason=queue-abandoned` (avec ses libellés) dans le journal des arrêts
- * du projet — la famille « agents », qui portait déjà sa journalisation, garde
- * son propre chemin (et sa notification).
+ * Les deux autres familles de `super-agent.js` (missions de l'assistant,
+ * délégations) écrivent désormais leur propre trace DANS la fonction d'abandon
+ * (`abandonProjectMissionQueue` / `abandonProjectDelegationQueue`) : elles ne
+ * sont donc plus journalisées ici, sinon la même demande laisserait deux lignes
+ * (double écriture). La famille « agents » porte elle aussi sa propre trace
+ * (`abandonProjectExclusivityQueues`, detected=user-abandon).
  * @param {string} project - projet ciblé
- * @param {string} family - libellé lisible de la famille ("commande", "mission"…)
+ * @param {string} family - libellé lisible de la famille ("commande", …)
  * @param {string[]} labels - libellés des demandes abandonnées
  */
 function journalAbandonedFamily(project, family, labels) {
@@ -142,16 +142,17 @@ export function abandonProjectQueue(project) {
     }
   };
   const pendingCommands = labelsOf(() => listProjectCommands(target));
-  const pendingMissions = labelsOf(() => getProjectMissionQueue(target));
-  const pendingDelegations = labelsOf(() => getProjectDelegationQueue(target));
   try {
     counts.commands = abandonProjectCommands(target);
   } catch (_) {}
   try {
-    counts.missions = abandonProjectMissionQueue(target);
+    // `abandonProjectMissionQueue` journalise ELLE-MÊME l'abandon (règle 4) :
+    // aucune trace n'est écrite ici, sous peine de double écriture.
+    counts.missions = abandonProjectMissionQueue(target, { detected: "file-vide" });
   } catch (_) {}
   try {
-    counts.delegations = abandonProjectDelegationQueue(target);
+    // Idem pour les délégations : la trace appartient à la fonction d'abandon.
+    counts.delegations = abandonProjectDelegationQueue(target, { detected: "file-vide" });
   } catch (_) {}
   try {
     // Famille « agents » : `abandonProjectExclusivityQueues` journalise et
@@ -159,7 +160,5 @@ export function abandonProjectQueue(project) {
     counts.agents = abandonProjectExclusivityQueues(target);
   } catch (_) {}
   journalAbandonedFamily(target, "commande", pendingCommands);
-  journalAbandonedFamily(target, "mission", pendingMissions);
-  journalAbandonedFamily(target, "délégation", pendingDelegations);
   return counts;
 }

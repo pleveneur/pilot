@@ -82,6 +82,8 @@ import {
   getProjectDelegationQueue,
   abandonQueuedRunAgentsMissions,
   abandonQueuedDelegations,
+  abandonProjectMissionQueue,
+  abandonProjectDelegationQueue,
 } from "./super-agent.js";
 import { invoke } from "@tauri-apps/api/core";
 import { enqueueProjectCommand, listProjectCommands, __resetProjectQueueForTest } from "./project-task-queue.js";
@@ -274,6 +276,52 @@ describe("1 bis. `/file vide` ne perd RIEN en silence (règle 4)", () => {
     expect(writes[0].path, "le journal d'un projet ne doit pas recevoir une trace d'assistant").not.toContain("__assistant__");
     expect(writes[0].path).toMatch(/agent-stops\.log$/);
     expect(writes[0].content).toContain("mission assistant");
+  });
+});
+
+describe("1 ter. une file vidée laisse sa trace SANS son appelant habituel (règle 4)", () => {
+  it("une MISSION orpheline abandonnée directement est nommée dans le journal", async () => {
+    // Aucun appelant de la vue de file : on appelle l'abandon comme le ferait
+    // un futur chemin (chien de garde, arrêt, vue distante).
+    runAgentsQueueByProject[PROJECT] = [{ launch: async () => {}, label: "mission orpheline" }];
+    expect(abandonProjectMissionQueue(PROJECT)).toBe(1);
+    expect(runAgentsQueueByProject[PROJECT], "la file doit être vidée immédiatement").toBeUndefined();
+    await flush();
+
+    const writes = journalWrites();
+    expect(writes, "file de missions vidée SANS trace (l'appelant n'est plus le garant)").toHaveLength(1);
+    expect(writes[0].path.startsWith(PROJECT)).toBe(true);
+    expect(writes[0].content).toContain("reason=queue-abandoned");
+    // Le libellé de la demande abandonnée est consigné (rien d'anonyme).
+    expect(writes[0].content).toContain("mission orpheline");
+  });
+
+  it("une DÉLÉGATION orpheline abandonnée directement est nommée dans le journal", async () => {
+    delegationState(PROJECT).queue.push({ request: "délégation orpheline", projectPath: PROJECT, agentId: "codeur" });
+    expect(abandonProjectDelegationQueue(PROJECT)).toBe(1);
+    expect(delegationState(PROJECT).queue, "la file doit être vidée immédiatement").toHaveLength(0);
+    await flush();
+
+    const writes = journalWrites();
+    expect(writes, "file de délégations vidée SANS trace").toHaveLength(1);
+    expect(writes[0].path.startsWith(PROJECT)).toBe(true);
+    expect(writes[0].content).toContain("reason=queue-abandoned");
+    expect(writes[0].content).toContain("délégation orpheline");
+  });
+
+  it("aucune DOUBLE écriture : une seule ligne par famille abandonnée", async () => {
+    // Une seule famille peuplée : si l'appelant journalisait encore EN PLUS de
+    // la fonction, on compterait 2 lignes au lieu de 1.
+    runAgentsQueueByProject[PROJECT] = [{ launch: async () => {}, label: "mission unique" }];
+    abandonProjectQueue(PROJECT);
+    await flush();
+    expect(journalWrites(), "double écriture de la trace d'abandon").toHaveLength(1);
+
+    // Et une famille sans demande n'écrit rien (pas de ligne parasite).
+    vi.mocked(invoke).mockClear();
+    abandonProjectQueue(PROJECT);
+    await flush();
+    expect(journalWrites()).toHaveLength(0);
   });
 });
 

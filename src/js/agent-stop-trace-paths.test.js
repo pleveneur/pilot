@@ -502,9 +502,12 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     // 2 arrêts sur boucle + 3 destructions de session (quality-gate, reconnexion,
     // redémarrage après changement de configuration).
     expect(counts.pi, "l'onglet agent doit tracer ses arrêts automatiques ET ses destructions de session").toBe(5);
-    // 4 arrêts automatiques (boucle outils, boucle texte, …) + l'abandon TRACÉ
-    // d'une file de délégations (`abandonQueuedDelegations`, règle 4).
-    expect(counts.sa, "traces de l'assistant").toBe(5);
+    // 3 arrêts automatiques restants (boucle outils, boucle texte, …) + le
+    // point UNIQUE d'écriture des abandons de file (`traceQueueAbandon`, règle
+    // 4) : les QUATRE chemins d'abandon de file (missions/délégations, variante
+    // synchrone / variante tracée) y passent, donc un nouveau chemin d'abandon
+    // ne peut ni oublier la trace ni journaliser en double.
+    expect(counts.sa, "traces de l'assistant").toBe(4);
     // 18 traces existantes + 5 fins de session par erreur du bus = 23, MOINS les
     // 5 traces absorbées par l'ENTONNOIR UNIQUE (2 boucles, 1 plafond MAX_TURNS,
     // 1 session périmée, 1 nettoyage post-spawn) = 18, PLUS 1 ajoutée depuis
