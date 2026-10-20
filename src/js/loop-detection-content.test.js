@@ -271,6 +271,12 @@ describe("(e) commande d'arrêt automatique (garde de propriété)", () => {
     }
   });
 
+  it("uid connu mais agent non identifié → chemin historique", () => {
+    const req = buildAgentStopRequest({ projectPath: "/p/A", uid: 7 });
+    expect(req.guarded).toBe(false);
+    expect(req.cmd).toBe("stop_agent_session");
+  });
+
   it("tolère un agent/projet absents", () => {
     const req = buildAgentStopRequest({});
     expect(req.cmd).toBe("stop_agent_session");

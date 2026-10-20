@@ -712,7 +712,11 @@ export function appendAgentStopTrace(existing, line, options = {}) {
  * @returns {{cmd: string, args: object, guarded: boolean}}
  */
 export function buildAgentStopRequest({ agentId, projectPath, uid } = {}) {
-  const valid = typeof uid === "number" && Number.isFinite(uid) && uid > 0;
+  // La garde exige un uid ET un agent identifié (`stop_agent_process` prend un
+  // `agent_id` obligatoire) : sans les deux, chemin historique.
+  const valid =
+    typeof uid === "number" && Number.isFinite(uid) && uid > 0 &&
+    typeof agentId === "string" && agentId.length > 0;
   if (valid) {
     return {
       cmd: "stop_agent_process",
