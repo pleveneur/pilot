@@ -2120,6 +2120,52 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   outil de suivi, pas un codeur. Reformulez simplement votre question pour
   relancer.
 
+**Faux positif corrigé (écritures successives)** : trois modifications
+DIFFÉRENTES du même fichier n'étaient pas distinguées (l'empreinte d'un `edit`
+ne portait que le CHEMIN) → trois empreintes identiques → boucle « détectée » →
+arrêt de la session en plein travail normal. L'empreinte porte désormais une
+empreinte du **contenu écrit** (`tool::edit::<chemin>::content=<longueur>:<hash>`,
+même principe que `offset`/`limit` pour `read` et `query` pour `search`) :
+plusieurs écritures différentes ne sont plus une boucle, plusieurs écritures
+identiques le restent. Correctif **strictement monotone** (il ne peut que retirer
+des détections) ; aucun seuil changé, aucun outil codé en dur (tout champ de
+contenu reconnu : `edits`, `content`, `newContent`, `newText`, `patch`, `diff`…).
+
+**Motif journalisé sur disque** : chaque arrêt AUTOMATIQUE d'agent écrit une
+ligne dans `<projet>/.pilot/agent-stops.log` (append logique via les commandes
+IPC existantes, rotation 256 Ko, fail-open) :
+
+```
+2026-10-20T03:30:00.123Z  op=auto-stop  reason=loop-detection  detected=tool-calls  agent=codeur  project=<projet>  uid=none
+```
+
+`detected` distingue « boucle d'outils » (`tool-calls`) de « boucle de
+réflexion » (`text`, `text-escalation-exhausted`, `turn-cap`) — la cause ne reste
+plus en mémoire seulement. Côté bus d'agents, l'arrêt automatique transmet aussi
+l'uid de session quand il est connu : `stop_agent_process` + `expectedUid`
+(garde de propriété : une session remplacée n'est pas tuée) ; uid inconnu →
+`stop_agent_session` (chemin historique, seul à libérer l'activité du projet).
+Modules : `loop-detection.js` (pures : `collectWriteContent`,
+`hashLoopContent`, `buildAgentStopTraceLine`, `appendAgentStopTrace`,
+`buildAgentStopRequest`), `agent-stop-trace.js` (I/O du journal),
+`super-agent.js` / `agents-bus.js` (points d'arrêt).
+
+<!-- HELP:loop-detection-writes -->
+### Détection de boucle : modifier plusieurs fois le même fichier n'est pas une boucle
+Pilot arrête automatiquement un agent qui **répète exactement** la même chose
+(même texte ou mêmes appels d'outils) sans avancer. Jusqu'ici, **modifier
+plusieurs fois le même fichier** pouvait être pris à tort pour une boucle et
+arrêter l'agent en plein travail : l'outil ne regardait que le **nom du
+fichier**, pas ce qui y était écrit. Désormais le **contenu** de chaque écriture
+est pris en compte : trois modifications différentes du même fichier se
+poursuivent normalement, seules des écritures **identiques** répétées comptent
+comme une boucle.
+Chaque **arrêt automatique** laisse une ligne dans le fichier
+**`.pilot/agent-stops.log`** du projet (cause de l'arrêt, type de détection,
+agent, session) : utile pour comprendre après coup pourquoi un agent s'est
+arrêté.
+<!-- /HELP:loop-detection-writes -->
+
 ### Mode « Assistant seul » (A19, maquette ASS_Only_V4)
 - Le bouton **⛶ (maximize-2)** de la barre d'outils de l'onglet 🧭 — ou le
   **raccourci Ctrl+Shift+A** (Cmd+Shift+A sur macOS, onglet 🧭 ouvert) — bascule

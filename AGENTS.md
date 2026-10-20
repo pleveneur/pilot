@@ -195,7 +195,8 @@ pilot/
 │       ├── diff-view.js       # Diff Review (A4) : diff inline + porte pré-écriture (renderEditGateDialog)
 │       ├── models-config.js  # Onglet « Fournisseurs » : édition UI models.json + model-switch.json (pi/plh)
 │       ├── conversation-export.js # Export conversation agent (F2 Markdown / F3 Copy HTML)
-│       ├── loop-detection.js # Détection de boucle dans la réflexion du modèle (issue #37) — pure, branchée chat + sous-agents + assistant (issue #55)
+│       ├── loop-detection.js # Détection de boucle dans la réflexion du modèle (issue #37) — pure, branchée chat + sous-agents + assistant (issue #55) ; empreinte de CONTENU des écritures (faux positif « même fichier modifié 3 fois ») + lignes du journal des arrêts automatiques
+│       ├── agent-stop-trace.js # Journal disque du MOTIF des arrêts automatiques d'agents : <projet>/.pilot/agent-stops.log (append + rotation, fail-open)
 │       ├── reservations.js # Orchestration multi-agents T6 : estimation préalable (plan-maker) + fichiers réservés .pilot/reservations.json (pures + I/O, fail-open)
 │       ├── backend-info.js   # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"
 │       ├── desktop-notify.js  # Notifications desktop natives (D1) — agent terminé à distance
