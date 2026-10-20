@@ -481,6 +481,26 @@ const RUN_AGENTS_WATCHDOG_MS = 15 * 60 * 1000; // 15 min
 // Aucune logique de lancement n'est modifiée ici : ce sont des accesseurs.
 
 /**
+ * RÈGLE 4 — ALLOUE l'identité de mission d'un LANCEMENT d'agents
+ * (`run_agents` / `run_assistant_agents`) : numéro monotone (`nextMissionId`)
+ * + agents réellement visés.
+ *
+ * Point UNIQUE d'allocation : les deux branches de lancement l'appellent, puis
+ * cette MÊME identité est (a) posée sur l'entrée de file par
+ * `enqueueMissionForProject` (via `stampQueuedMission`) et (b) portée jusqu'au
+ * compte rendu livré par `finishRunAgentsToSuperAgent`. Une identité n'est donc
+ * jamais fabriquée par l'appelant : un test qui prouve la RÈGLE 4 peut la
+ * relire sur l'entrée de file effectivement estampillée, jamais sur une
+ * constante de fixture (sinon neutraliser l'identité en production resterait
+ * invisible).
+ * @param {Array<string>|null|undefined} agentIds - agents réellement visés
+ * @returns {{id: number|null, agentIds: string[]}}
+ */
+export function allocateMissionIdentity(agentIds) {
+  return makeMissionIdentity(nextMissionId(), agentIds);
+}
+
+/**
  * RÈGLE 4 — MISE EN FILE d'une mission : chemin de PRODUCTION UNIQUE.
  *
  * Les trois chemins d'empilement de l'assistant (`run_agents` via
@@ -4286,7 +4306,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // Elle est posée sur l'entrée de file (si la demande y est mise) ET
         // portée jusqu'au compte rendu livré à l'assistant : une demande rejouée
         // depuis la file annonce donc SA demande, jamais celle d'une autre.
-        const missionIdentity = makeMissionIdentity(nextMissionId(), agentIds);
+        // Allocation par le point unique de production (voir
+        // `allocateMissionIdentity`).
+        const missionIdentity = allocateMissionIdentity(agentIds);
         // T5 : la file et le verrou de run sont indexés PAR PROJET (`target` =
         // projet cible de la run). Une run sur un AUTRE projet ne bloque pas.
         const settleRun = (ok, result) => {
@@ -4572,7 +4594,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         let runSettled = false;
         // RÈGLE 4 : identité de la mission d'assistant (même mécanisme que
         // `run_agents`) — posée sur l'entrée de file et portée au compte rendu.
-        const missionIdentity = makeMissionIdentity(nextMissionId(), agentIds);
+        // Allocation par le point unique de production.
+        const missionIdentity = allocateMissionIdentity(agentIds);
         const settleRun = (ok, result) => {
           if (runSettled) return;
           runSettled = true;
@@ -6297,7 +6320,11 @@ export async function injectRunAgentsResultToSuperAgent(result, projectPath, opt
  * @param {{id?:number, agentIds?:string[]}|null} [identity] - RÈGLE 4 : identité
  *   de la mission (numéro monotone + agents visés), jointe au compte rendu.
  */
-async function finishRunAgentsToSuperAgent(result, projectPath, ok, identity = null) {
+// Exporté pour PROUVER la RÈGLE 4 de bout en bout : c'est LE chemin de
+// production d'un compte rendu de fin de run (annotation de l'identité de
+// mission comprise). Un test doit passer par lui, avec l'identité réellement
+// allouée, plutôt que d'appeler l'annotation avec une constante de fixture.
+export async function finishRunAgentsToSuperAgent(result, projectPath, ok, identity = null) {
   // Issue #87 (2ᵉ moitié) : le groupe parallèle du bus signale sa fin par
   // « done » MÊME quand un agent a échoué (statut « error » agrégé dans le
   // texte). Une run dont un agent a échoué est donc un ÉCHEC, jamais un succès.

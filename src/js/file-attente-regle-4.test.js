@@ -83,14 +83,14 @@ import {
   replayQueuedMissionForProject,
   abandonQueuedRunAgentsMissions,
   enqueueMissionForProject,
-  injectRunAgentsResultToSuperAgent,
+  allocateMissionIdentity,
+  finishRunAgentsToSuperAgent,
   __superAgentQueueStateForTest,
 } from "./super-agent.js";
 import {
-  nextMissionId,
-  makeMissionIdentity,
   stampQueuedMission,
   missionQueueLabel,
+  missionTag,
   __resetMissionIdsForTest,
 } from "./mission-identity.js";
 
@@ -121,16 +121,25 @@ function deliveredSummaries() {
 }
 
 /** Pousse une mission dans la file de l'assistant par le CHEMIN DE PRODUCTION
- * de l'outil `run_agents` (`enqueueMissionForProject`) : push + `label` +
- * estampille d'identité, exactement comme la production. */
+ * de l'outil `run_agents` : identité ALLOUÉE par la production
+ * (`allocateMissionIdentity`, numéro monotone) puis ESTAMPILLÉE sur l'entrée de
+ * file par `enqueueMissionForProject` (`stampQueuedMission`).
+ *
+ * La fixture ne fabrique AUCUNE identité : elle relit celle que la production a
+ * réellement posée (`res.entry.id` / `res.entry.agentIds`). Neutraliser
+ * l'allocation ou l'estampille en production rend donc ces tests ROUGES.
+ * @returns {{id: number|null, agentIds: string[], missionIdentity: object, entry: object}}
+ */
 function queueMission(target, task, agentIds, launch) {
-  // RÈGLE 4 : mise en file par le CHEMIN DE PRODUCTION.
-  // Neutraliser cette fonction (ou son estampille) rend les tests de ce fichier
-  // ROUGES : la fixture ne peut plus simuler un mécanisme que la production
-  // n'appliquerait plus.
-  const identity = makeMissionIdentity(nextMissionId(), agentIds);
-  enqueueMissionForProject(target, launch, task, identity);
-  return identity;
+  const missionIdentity = allocateMissionIdentity(agentIds);
+  const res = enqueueMissionForProject(target, launch, task, missionIdentity);
+  return {
+    // Identité ESTAMPILLÉE par la production sur l'entrée de file.
+    id: res.entry.id,
+    agentIds: res.entry.agentIds.slice(),
+    missionIdentity,
+    entry: res.entry,
+  };
 }
 
 beforeEach(() => {
@@ -149,49 +158,61 @@ describe("RÈGLE 4 (a) — la demande rejouée exécute SA demande et son rappor
 
   it("A (codeur) puis B (testeur) : rejeu dans l'ordre, et le rapport de A reste celui de A", async () => {
     const executed = [];
-    let reportA = null;
-    let reportB = null;
-    const idA = queueMission(PROJECT, "mission A : corriger le parseur", ["codeur"], async () => {
-      const identity = makeMissionIdentity(idA.id, idA.agentIds);
-      executed.push({ id: identity.id, agents: identity.agentIds.join(",") });
-      reportA = identity;
+    const briefA = "mission A : corriger le parseur";
+    const briefB = "mission B : écrire les tests";
+    // Identités ALLOUÉES PAR LA PRODUCTION (compteur monotone de `mission-
+    // identity.js` via `super-agent.js`) : aucune constante de fixture. Chaque
+    // lancement capture SA propre identité, exactement comme la production.
+    const identityA = allocateMissionIdentity(["codeur"]);
+    const identityB = allocateMissionIdentity(["testeur"]);
+    const queuedA = enqueueMissionForProject(PROJECT, async () => {
+      executed.push({ identity: identityA, brief: briefA });
       return { started: true };
-    });
-    const idB = queueMission(PROJECT, "mission B : écrire les tests", ["testeur"], async () => {
-      const identity = makeMissionIdentity(idB.id, idB.agentIds);
-      executed.push({ id: identity.id, agents: identity.agentIds.join(",") });
-      reportB = identity;
+    }, briefA, identityA);
+    const queuedB = enqueueMissionForProject(PROJECT, async () => {
+      executed.push({ identity: identityB, brief: briefB });
       return { started: true };
-    });
+    }, briefB, identityB);
 
-    // Les deux missions portent une identité DISTINCTE et les agents de LEUR demande.
-    expect(idB.id).toBeGreaterThan(idA.id);
+    // 1) La PRODUCTION a réellement alloué l'identité ET l'a estampillée sur
+    //    l'entrée de file (numéro + agents de LEUR demande).
+    expect(typeof queuedA.entry.id, "la production doit allouer l'identité de mission").toBe("number");
+    expect(queuedA.entry.id).toBe(identityA.id);
+    expect(queuedA.entry.agentIds).toEqual(["codeur"]);
+    expect(queuedB.entry.id).toBe(identityB.id);
+    expect(queuedB.entry.agentIds).toEqual(["testeur"]);
+    expect(queuedB.entry.id).toBeGreaterThan(queuedA.entry.id);
     expect(runAgentsQueueByProject[PROJECT].map((e) => [e.id, e.agentIds])).toEqual([
-      [idA.id, ["codeur"]],
-      [idB.id, ["testeur"]],
+      [queuedA.entry.id, ["codeur"]],
+      [queuedB.entry.id, ["testeur"]],
     ]);
 
     // Rejeu de la tête : le projet est admis (sonde injectée) → A part, puis B.
     expect(await replayQueuedMissionForProject(PROJECT, { isAdmissionFree: async () => true })).toMatchObject({ replayed: true });
     expect(await replayQueuedMissionForProject(PROJECT, { isAdmissionFree: async () => true })).toMatchObject({ replayed: true });
 
-    // Le brief exécuté est celui de la mission rejouée, dans l'ordre de la file.
-    expect(executed).toEqual([
-      { id: idA.id, agents: "codeur" },
-      { id: idB.id, agents: "testeur" },
-    ]);
+    // 2) Le brief EXÉCUTÉ porte l'identité RÉELLEMENT allouée par la production
+    //    (celle estampillée sur l'entrée de file), dans l'ordre de la file.
+    expect(executed.map((x) => x.brief)).toEqual([briefA, briefB]);
+    expect(executed[0].identity).toMatchObject({ id: queuedA.entry.id, agentIds: ["codeur"] });
+    expect(executed[1].identity).toMatchObject({ id: queuedB.entry.id, agentIds: ["testeur"] });
 
-    // Le compte rendu LIVRÉ à l'assistant porte l'identité de la mission rejouée.
-    await injectRunAgentsResultToSuperAgent("[Codeur] parseur corrigé.", PROJECT, { remember: true, identity: reportA });
-    await injectRunAgentsResultToSuperAgent("[Testeur] 12 tests ajoutés.", PROJECT, { remember: true, identity: reportB });
+    // 3) Le compte rendu LIVRÉ passe par le chemin de PRODUCTION de fin de run
+    //    (`finishRunAgentsToSuperAgent` → `injectRunAgentsResultToSuperAgent` →
+    //    `annotateMissionReport`) avec l'identité du brief exécuté.
+    await finishRunAgentsToSuperAgent("[Codeur] parseur corrigé.", PROJECT, true, executed[0].identity);
+    await finishRunAgentsToSuperAgent("[Testeur] 12 tests ajoutés.", PROJECT, true, executed[1].identity);
     const summaries = deliveredSummaries();
     expect(summaries).toHaveLength(2);
+    const tagA = missionTag({ id: queuedA.entry.id, agentIds: queuedA.entry.agentIds });
+    const tagB = missionTag({ id: queuedB.entry.id, agentIds: queuedB.entry.agentIds });
+    expect(tagA, "sans identité allouée, l'étiquette de mission serait vide").not.toBe("");
     // Le rapport de A annonce la mission de A et SES agents (codeur) — jamais
     // ceux de B : une attribution croisée devient impossible.
-    expect(summaries[0]).toContain(`[mission #${idA.id} · agents : codeur]`);
+    expect(summaries[0]).toContain(tagA);
     expect(summaries[0]).toContain("parseur corrigé");
-    expect(summaries[0]).not.toContain(`#${idB.id}`);
-    expect(summaries[1]).toContain(`[mission #${idB.id} · agents : testeur]`);
+    expect(summaries[0]).not.toContain(`#${queuedB.entry.id}`);
+    expect(summaries[1]).toContain(tagB);
     expect(summaries[1]).not.toContain("codeur");
   });
 
@@ -203,7 +224,7 @@ describe("RÈGLE 4 (a) — la demande rejouée exécute SA demande et son rappor
     const queue = runAgentsQueueByProject[PROJECT];
     const duplicateEntry = { launch: async () => {} };
     queue.push(duplicateEntry);
-    const res = stampQueuedMission(queue, duplicateEntry, identity);
+    const res = stampQueuedMission(queue, duplicateEntry, identity.missionIdentity);
     expect(res.duplicate).toBe(true);
     expect(queue).toHaveLength(1);
     expect(queue[0].label).toBe("demande unique");
@@ -223,6 +244,18 @@ describe("RÈGLE 4 (a) — la demande rejouée exécute SA demande et son rappor
     );
     const stamps = superAgentSrc.match(/stampQueuedMission[(]/g) || [];
     expect(stamps, "l'identité de mission n'est plus allouée à un seul endroit").toHaveLength(1);
+    // L'identité est ALLOUÉE par la production, en UN point, aux DEUX branches
+    // de lancement : c'est cette identité qui part en file ET qui arrive au
+    // compte rendu. Une identité neutralisée (`missionIdentity = null`) ou
+    // fabriquée ailleurs fait tomber ces ancres.
+    const allocations = superAgentSrc.match(/const missionIdentity = allocateMissionIdentity\(agentIds\);/g) || [];
+    expect(allocations, "l'identité de mission n'est plus allouée par la production").toHaveLength(2);
+    expect(
+      (superAgentSrc.match(/makeMissionIdentity\(nextMissionId\(\)/g) || []).length,
+      "`makeMissionIdentity(nextMissionId()` doit exister EXACTEMENT une fois (dans allocateMissionIdentity)",
+    ).toBe(1);
+    expect(superAgentSrc).toContain("export function allocateMissionIdentity(agentIds) {");
+    expect(superAgentSrc).toContain("return makeMissionIdentity(nextMissionId(), agentIds);");
   });
 });
 
@@ -378,5 +411,12 @@ describe("RÈGLE 4 — invariants de câblage", () => {
   it("super-agent.js joint l'identité au compte rendu de fin de run", () => {
     expect(superAgentSrc).toContain("finishRunAgentsToSuperAgent(result, projectPath, ok, missionIdentity)");
     expect(superAgentSrc).toContain("annotateMissionReport(buildRunAgentsSummary(result), opts.identity)");
+    // Le chemin de fin de run est EXPORTÉ pour être prouvé par les tests : c'est
+    // lui qui consigne via `injectRunAgentsResultToSuperAgent` avec l'identité
+    // réellement allouée (jamais une constante de fixture).
+    expect(superAgentSrc).toContain("export async function finishRunAgentsToSuperAgent(");
+    expect(superAgentSrc).toContain(
+      "consign: (r) => injectRunAgentsResultToSuperAgent(r, projectPath, { remember: true, identity })",
+    );
   });
 });

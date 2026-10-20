@@ -81,9 +81,9 @@ import {
   getProjectMissionQueue,
   runAgentsQueueByProject,
   enqueueMissionForProject,
+  allocateMissionIdentity,
   __resetSuperAgentQueueForTest,
 } from "./super-agent.js";
-import { nextMissionId } from "./mission-identity.js";
 
 // Lecture du source en neutralisant les fins de ligne (worktree CRLF en CI
 // Windows : cf. AGENTS.md § Fins de ligne).
@@ -116,14 +116,24 @@ function enqueueCallSites(src) {
 
 /**
  * Met une demande en file par la FONCTION DE PRODUCTION (aucune reproduction du
- * mécanisme dans le test) : identité de mission allouée par la production.
+ * mécanisme dans le test) : identité de mission ALLOUÉE par la production
+ * (`allocateMissionIdentity`, numéro monotone) puis ESTAMPILLÉE sur l'entrée de
+ * file par `enqueueMissionForProject`. Le test relit ensuite l'identité que la
+ * production a réellement posée (`res.entry.id` / `res.entry.agentIds`) :
+ * neutraliser l'allocation ou l'estampille rend les tests ROUGES.
  * @param {Function} launch
  * @param {string} label
- * @returns {object} entrée de file
+ * @returns {{entry:object, identity:object, stampedId:number|null, stampedAgentIds:string[]}}
  */
 function enqueueForTest(launch, label) {
-  const res = enqueueMissionForProject(TARGET, launch, label, { id: nextMissionId(), agentIds: ["codeur"] });
-  return res.entry;
+  const identity = allocateMissionIdentity(["codeur"]);
+  const res = enqueueMissionForProject(TARGET, launch, label, identity);
+  return {
+    entry: res.entry,
+    identity,
+    stampedId: res.entry.id,
+    stampedAgentIds: res.entry.agentIds.slice(),
+  };
 }
 
 describe("règle 4a — missions de l'assistant : chaque entrée de file porte SA demande", () => {
@@ -143,11 +153,23 @@ describe("règle 4a — missions de l'assistant : chaque entrée de file porte S
     __resetSuperAgentQueueForTest();
     const launched = [];
     // Chaque demande porte SA fermeture : c'est le texte de SA demande qui part.
-    enqueueForTest(async () => { launched.push(A); return { started: true }; }, A);
-    enqueueForTest(async () => { launched.push(B); return { started: true }; }, B);
+    const a = enqueueForTest(async () => { launched.push(A); return { started: true }; }, A);
+    const b = enqueueForTest(async () => { launched.push(B); return { started: true }; }, B);
+
+    // Identité de mission : ALLOUÉE par la production (compteur monotone) et
+    // réellement ESTAMPILLÉE sur l'entrée de file — jamais une constante de
+    // fixture.
+    expect(typeof a.stampedId, "la production doit allouer l'identité de mission").toBe("number");
+    expect(a.stampedId).toBe(a.identity.id);
+    expect(b.stampedId).toBe(b.identity.id);
+    expect(b.stampedId).toBeGreaterThan(a.stampedId);
+    expect(a.stampedAgentIds).toEqual(["codeur"]);
 
     const queue = runAgentsQueueByProject[TARGET];
     expect(queue.map((e) => e.label)).toEqual([A, B]);
+    // L'accesseur d'interface expose la MÊME identité estampillée (les missions
+    // en attente sont nommables par leur numéro de production).
+    expect(getProjectMissionQueue(TARGET).map((e) => e.id)).toEqual([a.stampedId, b.stampedId]);
 
     // Rejeu de la tête : c'est A qui part, et il reste B en file — avec le
     // libellé de B.
