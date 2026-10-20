@@ -391,9 +391,14 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
    * une trace de motif doit exister DANS LA FONCTION ENGLOBANTE, avant le site
    * (optionnellement à moins de `maxDistance` caractères).
    *
-   * L'ancienne version comparait le site au site PRÉCÉDENT DU MÊME TYPE : une
-   * trace lointaine suffisait, et un site muet injecté dans une fonction ne
-   * contenant aucune trace passait pour tracé.
+   * Une trace ne couvre qu'UN SEUL arrêt : celui qui la suit IMMÉDIATEMENT dans
+   * le bloc (aucun autre arrêt de la même famille entre les deux). Sans cette
+   * règle, une trace valable « blanchissait » tous les arrêts suivants du même
+   * bloc : un site muet ajouté juste après un arrêt tracé — exactement la forme
+   * d'un contournement réel de la règle 3 — restait invisible pour la matrice.
+   * Le contrôle négatif étendu (`agent-stop-trace-paths.test.js`) l'a prouvé :
+   * sans elle, le détecteur ne voyait pas le site injecté dans un bloc déjà
+   * tracé de `agent-pi.js` ni de `super-agent.js`.
    * @param {string} src
    * @param {RegExp} siteRe
    * @param {string} label
@@ -408,12 +413,17 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     const untraced = [];
     const exceptions = [];
     let traced = 0;
-    for (const site of sites) {
+    for (let i = 0; i < sites.length; i++) {
+      const site = sites[i];
       const block = enclosingFunctionBlock(src, pairs, site);
       const before = block
         ? traces.filter((t) => t > block.start && t < site && site - t <= max)
         : [];
-      if (before.length > 0) traced++;
+      // La trace doit précéder l'arrêt SANS qu'un autre arrêt de la même famille
+      // s'intercale : une trace ne couvre qu'un arrêt (le suivant immédiat).
+      const previousSite = i > 0 ? sites[i - 1] : -1;
+      const owners = before.filter((t) => t > previousSite);
+      if (owners.length > 0) traced++;
       else if (isDeclaredException(src, site)) exceptions.push(site);
       else untraced.push(site);
     }
@@ -589,7 +599,158 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       const res = precedences(fake, /invoke\("abort_agent_process"/g, `fake@${anchor}`);
       expect(res.sites, `le site injecté avant ${anchor} n'est pas vu`).toBe(5);
       expect(res.untraced.length, `la matrice doit voir le site muet injecté avant ${anchor}`).toBe(1);
-      expect(res.traced, `les 4 vrais sites doivent rester tracés (${anchor})`).toBe(4);
+      // 3 vrais sites restent TRACÉS et 1 est une exception NOMMÉE (l'arrêt
+      // manuel « tout arrêter », marqueur R3-EXCEPTION-MANUEL). Avant le
+      // resserrement du détecteur (« une trace ne couvre qu'un arrêt »), cet
+      // arrêt manuel était compté comme tracé par simple proximité avec la
+      // trace de l'arrêt automatique du même bloc : le compte d'exceptions est
+      // désormais épinglé ici pour que cette distinction ne se reperde pas.
+      expect(res.traced, `les 3 vrais sites tracés doivent le rester (${anchor})`).toBe(3);
+      expect(res.exceptions, `l'arrêt manuel doit rester une exception nommée (${anchor})`).toHaveLength(1);
+    }
+  });
+
+  // ── Contrôle négatif ÉTENDU à `agent-pi.js` et `super-agent.js` ───────────
+  // Le contrôle négatif ci-dessus n'injecte un site muet que dans
+  // `agents-bus.js`, et TOUJOURS avant un en-tête de fonction : le site injecté
+  // tombe donc dans une fonction NEUVE, sans aucune trace. Pour l'onglet agent
+  // et l'Assistant, la non-vacuité de la matrice ne reposait que sur des
+  // COMPTES de sites épinglés : si la règle de portée de bloc se cassait pour
+  // ces deux fichiers, aucun test ne rougirait.
+  //
+  // Le cas RÉELLEMENT dangereux n'était éprouvé nulle part : un site muet
+  // ajouté À L'INTÉRIEUR d'un bloc qui contient DÉJÀ une trace (deux arrêts qui
+  // partagent une seule trace — la matrice pouvait croire l'arrêt couvert).
+  // Les injections ci-dessous se font dans une COPIE EN MÉMOIRE : rien n'est
+  // jamais écrit sur disque.
+  const SILENT_MARK = "SITE-MUET-INJECTE";
+
+  /**
+   * Injecte un site terminal MUET juste APRÈS l'instruction d'arrêt réelle qui
+   * suit `traceMarker` — donc DANS le bloc qui contient déjà la trace de cette
+   * instruction (le cas réellement dangereux).
+   * @param {string} src
+   * @param {string} traceMarker - fragment identifiant la trace existante
+   * @param {string} cmd - commande IPC d'arrêt à injecter
+   * @returns {{src: string, siteAt: number}}
+   */
+  function injectSilentSiteAfterTrace(src, traceMarker, cmd) {
+    const t = src.indexOf(traceMarker);
+    expect(t, `trace de référence introuvable (le code a bougé) : ${traceMarker}`).toBeGreaterThan(-1);
+    const site = src.indexOf(`invoke("${cmd}")`, t);
+    expect(site, `arrêt réel introuvable après la trace (${traceMarker})`).toBeGreaterThan(-1);
+    const end = src.indexOf(";", site);
+    expect(end, "fin d'instruction d'arrêt introuvable").toBeGreaterThan(site);
+    const cut = end + 1;
+    const code = `\n    invoke("${cmd}").catch(() => {}); // ${SILENT_MARK}`;
+    return {
+      src: src.slice(0, cut) + code + src.slice(cut),
+      siteAt: cut + code.indexOf(`invoke("${cmd}")`),
+    };
+  }
+
+  /**
+   * Éprouve le détecteur sur une source où un site muet a été injecté dans un
+   * bloc DÉJÀ tracé : le site injecté doit être le SEUL signalé, et les sites
+   * réels doivent conserver leur classement.
+   * @param {string} name
+   * @param {string} src
+   * @param {string} traceMarker
+   * @param {string} cmd
+   * @param {{sites:number, traced:number, exceptions?:number}} expected - sur la source RÉELLE
+   */
+  function expectSilentSiteDetected(name, src, traceMarker, cmd, expected) {
+    const siteRe = new RegExp(`invoke\\("${cmd}"`, "g");
+    const injected = injectSilentSiteAfterTrace(src, traceMarker, cmd);
+    expect(injected.src, `injection impossible (${name} / ${cmd})`).not.toBe(src);
+
+    // Preuve que le site injecté est bien DANS un bloc qui contient DÉJÀ une
+    // trace : sans cela, le test ne prouverait rien de neuf (ce serait le
+    // contrôle négatif d'origine, à fonction neuve).
+    const block = enclosingFunctionBlock(injected.src, bracePairs(injected.src), injected.siteAt);
+    expect(block, `le site injecté doit être dans un bloc de fonction (${name} / ${cmd})`).not.toBeNull();
+    const tracesInBlock = positionsIn(injected.src, new RegExp(TRACE_SRC, "g")).filter(
+      (t) => t > block.start && t < injected.siteAt,
+    );
+    expect(
+      tracesInBlock.length,
+      `le site injecté doit se trouver dans un bloc DÉJÀ tracé (${name} / ${cmd})`,
+    ).toBeGreaterThan(0);
+
+    const res = precedences(injected.src, siteRe, `muet-injecté@${name}/${cmd}`);
+    expect(res.sites, `le site injecté n'est pas vu (${name} / ${cmd})`).toBe(expected.sites + 1);
+    // Le SEUL site signalé est le site injecté : le détecteur nomme bien le
+    // contournement, et aucun site réel n'est accusé à tort.
+    expect(
+      res.untraced,
+      `le détecteur doit voir le site muet injecté DANS un bloc déjà tracé (${name} / ${cmd})`,
+    ).toEqual([injected.siteAt]);
+    expect(res.traced, `les sites réels doivent rester tracés (${name} / ${cmd})`).toBe(expected.traced);
+    if (typeof expected.exceptions === "number") {
+      expect(
+        res.exceptions,
+        `les sites réels déclarés en exception doivent le rester (${name} / ${cmd})`,
+      ).toHaveLength(expected.exceptions);
+    }
+  }
+
+  it("contrôle négatif étendu : un site muet injecté DANS un bloc déjà tracé est vu (agent-pi)", () => {
+    // Boucle de réflexion : la trace du motif est suivie de l'arrêt effectif ;
+    // un second arrêt muet glissé derrière ne doit pas se cacher derrière elle.
+    expectSilentSiteDetected(
+      "agent-pi.js",
+      SRC_PI,
+      'reason: "loop-detection",\n      detected: "text",\n      agentId: state.agentId || ""',
+      "abort_agent",
+      { sites: 13, traced: 2, exceptions: 11 },
+    );
+    // Destruction de session (bascule du quality-gate) : même exigence.
+    expectSilentSiteDetected(
+      "agent-pi.js",
+      SRC_PI,
+      'detected: "quality-gate-toggle"',
+      "stop_agent_session",
+      { sites: 3, traced: 3 },
+    );
+  });
+
+  it("contrôle négatif étendu : un site muet injecté DANS un bloc déjà tracé est vu (super-agent)", () => {
+    // Boucle d'OUTILS de l'Assistant.
+    expectSilentSiteDetected(
+      "super-agent.js",
+      SRC_SA,
+      'detected: "tool-calls"',
+      "abort_super_agent",
+      { sites: 3, traced: 2, exceptions: 1 },
+    );
+    // Boucle de TEXTE de l'Assistant (même bloc englobant, trace distincte).
+    expectSilentSiteDetected(
+      "super-agent.js",
+      SRC_SA,
+      'detected: "text",\n      agentId: "assistant"',
+      "abort_super_agent",
+      { sites: 3, traced: 2, exceptions: 1 },
+    );
+  });
+
+  it("contrôle négatif inverse : sur les sources RÉELLES, aucun site n'est accusé à tort", () => {
+    // Sans ce contrôle inverse, un détecteur « qui voit tout » (par exemple qui
+    // exigerait une trace dans la MÊME instruction) ferait passer les tests
+    // négatifs en cassant la matrice : les sites réels doivent rester classés
+    // exactement comme avant (tracés, ou exceptions nommées).
+    const checks = [
+      ["agent-pi.js", SRC_PI, /invoke\("abort_agent"\)/g, { sites: 13, traced: 2, exceptions: 11 }],
+      ["agent-pi.js", SRC_PI, /invoke\("stop_agent_session"/g, { sites: 3, traced: 3, exceptions: 0 }],
+      ["super-agent.js", SRC_SA, /invoke\("abort_super_agent"\)/g, { sites: 3, traced: 2, exceptions: 1 }],
+      ["super-agent.js", SRC_SA, /invoke\("stop_agent_session"/g, { sites: 2, traced: 1, exceptions: 1 }],
+      ["agents-bus.js", SRC_BUS, /invoke\("abort_agent_process"/g, { sites: 4, traced: 3, exceptions: 1 }],
+    ];
+    for (const [name, src, siteRe, expected] of checks) {
+      const res = precedences(src, siteRe, name);
+      expect(res.sites, `${name} : cardinalité changée`).toBe(expected.sites);
+      expect(res.traced, `${name} : un site réel n'est plus reconnu comme tracé`).toBe(expected.traced);
+      expect(res.exceptions, `${name} : exceptions nommées modifiées`).toHaveLength(expected.exceptions);
+      expect(res.untraced, `${name} : FAUX POSITIF — un site réel est signalé muet`).toEqual([]);
     }
   });
 });
