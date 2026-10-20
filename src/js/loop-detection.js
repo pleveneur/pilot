@@ -645,13 +645,17 @@ function sanitizeTraceValue(value, max = 200) {
 /**
  * Construit une ligne du journal des arrêts automatiques (pure).
  * Format : `<RFC3339>  op=auto-stop  reason=…  detected=…  agent=…  project=…  uid=…`
- * (deux espaces entre champs, comme le journal des actions écran).
+ * (deux espaces entre champs, comme le journal des actions écran), suivi d'un
+ * champ `detail=…` UNIQUEMENT quand l'appelant en fournit un (ex. libellés des
+ * demandes abandonnées par le watchdog de file, RÈGLE 4). Les lignes sans
+ * `detail` gardent exactement le format historique.
  * @param {object} entry
  * @param {string} entry.reason - cause de l'arrêt (ex: "loop-detection")
  * @param {string} [entry.detected] - détecteur déclenché (ex: "tool-calls", "text")
  * @param {string} [entry.agentId]
  * @param {string} [entry.projectPath]
  * @param {number|null} [entry.uid] - uid de session transmis à l'arrêt
+ * @param {string} [entry.detail] - ce qui a été abandonné, nommé (optionnel)
  * @param {string} [entry.timestamp] - horodatage (défaut : maintenant)
  * @returns {string}
  */
@@ -667,6 +671,10 @@ export function buildAgentStopTraceLine(entry = {}) {
     "project=" + (sanitizeTraceValue(e.projectPath, 240) || "none"),
     "uid=" + uid,
   ];
+  // `detail` (optionnel) : ce qui a été abandonné/perdu, nommé (libellés des
+  // demandes en file). Sans lui, aucune ligne existante ne change de format.
+  const detail = sanitizeTraceValue(e.detail, 400);
+  if (detail) fields.push("detail=" + detail);
   return at + "  " + fields.join("  ");
 }
 

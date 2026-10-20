@@ -44,6 +44,10 @@ import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
 import { shouldFinalizeOnAgentEnd } from "./agent-hardening.js";
 import { toastInfo } from "./toast.js";
 import { createReportDeliveryGate } from "./super-agent-reports.js";
+// RÈGLE 4 : identité de MISSION d'une demande mise en file (numéro monotone +
+// agents visés). Une demande rejouée porte TOUJOURS la sienne — le rapport livré
+// et le journal d'abandon la NOMMENT, donc une incohérence devient visible.
+import { nextMissionId, makeMissionIdentity, annotateMissionReport, stampQueuedMission, missionQueueLabel } from "./mission-identity.js";
 import {
   parseMemoryRemovePayload,
   parseMemoryRestorePayload,
@@ -480,6 +484,10 @@ export function getProjectMissionQueue(projectPath) {
   const target = projectPath || "";
   return (runAgentsQueueByProject[target] || []).map((entry) => ({
     label: String((entry && entry.label) || "mission de l'assistant"),
+    // RÈGLE 4 : identité de la mission (numéro monotone + agents visés), pour
+    // que l'interface puisse NOMMER la demande en attente.
+    id: entry && typeof entry.id === "number" ? entry.id : null,
+    agentIds: Array.isArray(entry && entry.agentIds) ? entry.agentIds.slice() : [],
   }));
 }
 
@@ -498,6 +506,60 @@ export function abandonProjectMissionQueue(projectPath) {
     delete runAgentsQueueByProject[target];
   }
   return removed;
+}
+
+/**
+ * RÈGLE 4 — ABANDON EXPLICITE et TRACÉ d'une file de missions.
+ *
+ * Le watchdog de run vidait la file par `runAgentsQueueByProject[target].length
+ * = 0` : les demandes encore en attente disparaissaient SANS laisser ni motif
+ * ni nom. Elles étaient donc perdues en silence (l'utilisateur et l'assistant ne
+ * savaient pas lesquelles, ni pourquoi). Cette fonction est le SEUL chemin
+ * d'abandon automatique d'une file de missions : elle nomme chaque demande
+ * abandonnée (mission #N « texte »), écrit le motif dans le journal des arrêts
+ * automatiques du projet (`<projet>/.pilot/agent-stops.log`, repli global) et
+ * le rend VISIBLE (console + notification).
+ * @param {string} target - projet (clé de file)
+ * @param {{reason?:string, detected?:string}} [opts]
+ * @returns {Promise<{count:number, labels:string[]}>}
+ */
+export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
+  const key = target || "";
+  const queue = runAgentsQueueByProject[key] || [];
+  const count = queue.length;
+  if (count === 0) {
+    delete runAgentsQueueByProject[key];
+    return { count: 0, labels: [] };
+  }
+  // Nommer AVANT de vider : c'est tout l'objet du correctif.
+  const labels = queue.map((entry) => missionQueueLabel(entry));
+  // Le rejeu périodique n'a plus rien à rejouer.
+  const replay = runAgentsQueueReplayByProject[key];
+  if (replay) {
+    clearTimeout(replay);
+    delete runAgentsQueueReplayByProject[key];
+  }
+  queue.length = 0;
+  delete runAgentsQueueByProject[key];
+  const reason = opts.reason || "queue-abandoned";
+  // Un espace réservé (`__assistant__`) n'est pas un projet : le journal prend
+  // alors son repli global (`<app_data_dir>/agent-stops.log`).
+  const projectPath = key === ASSISTANT_SPACE ? "" : key;
+  await traceAutomaticAgentStop({
+    reason,
+    detected: opts.detected || "watchdog",
+    agentId: "",
+    projectPath,
+    detail: labels.join(" | "),
+  }).catch(() => {});
+  const message = `⚠️ ${count} demande(s) en file d'attente abandonnée(s) : ${labels.join(" · ")}. Le motif est consigné (${reason}).`;
+  console.warn("[super-agent] file de missions :", message);
+  try {
+    await notifySuperAgentDone({ title: "Pilot — Assistant", body: message });
+  } catch (_) {
+    /* notification indisponible : la console porte déjà l'information */
+  }
+  return { count, labels };
 }
 
 /**
@@ -4128,6 +4190,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // d'échouer si une run est déjà en cours (bus agents : « Une run est
         // déjà en cours »).
         let runSettled = false;
+        // RÈGLE 4 : identité de CETTE mission (numéro monotone + agents visés).
+        // Elle est posée sur l'entrée de file (si la demande y est mise) ET
+        // portée jusqu'au compte rendu livré à l'assistant : une demande rejouée
+        // depuis la file annonce donc SA demande, jamais celle d'une autre.
+        const missionIdentity = makeMissionIdentity(nextMissionId(), agentIds);
         // T5 : la file et le verrou de run sont indexés PAR PROJET (`target` =
         // projet cible de la run). Une run sur un AUTRE projet ne bloque pas.
         const settleRun = (ok, result) => {
@@ -4142,7 +4209,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           }
           // Injection + notification desktop + son (survit à la fermeture de
           // l'onglet : fonctions module-level, persistance côté Rust).
-          finishRunAgentsToSuperAgent(result, projectPath, ok);
+          finishRunAgentsToSuperAgent(result, projectPath, ok, missionIdentity);
           // Lancer la run suivante mise en file pour CE projet, s'il y en a une.
           // Volet (c) : lancement PROTÉGÉ (voir `launchQueuedMission`).
           const queue = runAgentsQueueByProject[target] || [];
@@ -4236,6 +4303,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // « En cours ». Posé APRÈS le push pour ne pas modifier la ligne de mise
             // en file (invariant vérifié par les tests d'accusé de lancement #87).
             runAgentsQueueByProject[target].at(-1).label = task;
+            // RÈGLE 4 : la demande en file porte SON identité de mission. Elle
+            // refuse aussi le double empilement de la même demande.
+            const queued = stampQueuedMission(runAgentsQueueByProject[target], runAgentsQueueByProject[target].at(-1), missionIdentity);
+            if (queued.duplicate) {
+              appendSystemMessage(messagesEl, `ℹ️ Cette demande (mission #${queued.id}) est déjà en file : aucun doublon créé.`);
+            }
             // POINT G : la mise en file n'est plus confiée au seul `settleRun`. On
             // arme le déclencheur de rejeu du projet (sonde d'admission réelle),
             // sinon une mission mise en file derrière une commande MANUELLE (que le
@@ -4291,6 +4364,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchMission });
             runAgentsQueueByProject[target].at(-1).label = task;
+            // RÈGLE 4 : même identité de mission que la branche `launchOrQueue`
+            // (une seule mission, un seul numéro) + refus du double empilement.
+            const queued = stampQueuedMission(runAgentsQueueByProject[target], runAgentsQueueByProject[target].at(-1), missionIdentity);
+            if (queued.duplicate) {
+              appendSystemMessage(messagesEl, `ℹ️ Cette demande (mission #${queued.id}) est déjà en file : aucun doublon créé.`);
+            }
             // POINT G : même garantie que dans `launchOrQueue` — déclencheur de
             // rejeu armé sur le projet (voir `armQueueReplay`).
             armQueueReplay(target);
@@ -4332,13 +4411,19 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
               return;
             }
             // La run est réellement morte/inactive : comportement actuel.
-            console.warn("[super-agent] watchdog : run d'agents bloquée, réinitialisation du flag et vidage de la file.");
+            console.warn("[super-agent] watchdog : run d'agents bloquée, réinitialisation du flag et abandon TRACÉ de la file.");
             runAgentsInFlightByProject[target] = false;
             delete runAgentsWatchdogByProject[target];
-            if (runAgentsQueueByProject[target]) { runAgentsQueueByProject[target].length = 0; delete runAgentsQueueByProject[target]; }
+            // RÈGLE 4 : la file n'est JAMAIS vidée en silence. Chaque demande
+            // abandonnée est NOMMÉE, le motif est écrit au journal des arrêts
+            // automatiques du projet et l'abandon est notifié.
+            const abandoned = await abandonQueuedRunAgentsMissions(target);
             appendSystemMessage(
               messagesEl,
-              `⚠️ La run d'agents n'a pas abouti sous ${Math.round(RUN_AGENTS_WATCHDOG_MS / 60000)} min — le flag de run a été réinitialisé et la file d'attente vidée.`
+              `⚠️ La run d'agents n'a pas abouti sous ${Math.round(RUN_AGENTS_WATCHDOG_MS / 60000)} min — le flag de run a été réinitialisé.` +
+                (abandoned.count > 0
+                  ? ` ${abandoned.count} demande(s) en file abandonnée(s) et consignée(s) : ${abandoned.labels.join(" · ")}.`
+                  : "")
             );
           };
           runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
@@ -4402,6 +4487,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: target, mcp_server: mcpServer }));
         const projectPath = window._pilotProjectPath || null;
         let runSettled = false;
+        // RÈGLE 4 : identité de la mission d'assistant (même mécanisme que
+        // `run_agents`) — posée sur l'entrée de file et portée au compte rendu.
+        const missionIdentity = makeMissionIdentity(nextMissionId(), agentIds);
         const settleRun = (ok, result) => {
           if (runSettled) return;
           runSettled = true;
@@ -4411,7 +4499,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             clearTimeout(wd);
             delete runAgentsWatchdogByProject[target];
           }
-          finishRunAgentsToSuperAgent(result, projectPath, ok);
+          finishRunAgentsToSuperAgent(result, projectPath, ok, missionIdentity);
           // POINT E : rejouer la mission suivante RÉELLEMENT mise en file (même
           // file que `run_agents`). Sans ce vidage, un accusé « queued » restait
           // sans effet et la mission était perdue en silence.
@@ -4444,6 +4532,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // le projet marqué « run en vol » — voir `launchQueuedMission`.
             runAgentsQueueByProject[target].push({ launch: () => startRun() });
             runAgentsQueueByProject[target].at(-1).label = task;
+            // RÈGLE 4 : identité de la mission d'assistant en file (le numéro
+            // survit à la fermeture du chat : il est porté par la file, indexée
+            // par projet/espace).
+            stampQueuedMission(runAgentsQueueByProject[target], runAgentsQueueByProject[target].at(-1), missionIdentity);
             // POINT G : la file d'assistant est couverte par le MÊME déclencheur de
             // rejeu (aucune run d'assistant ne pose de watchdog : sans cela une
             // demande pouvait rester en vol sans suite).
@@ -6063,8 +6155,12 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath, opt
  * notification + son), utiliser `finishRunAgentsToSuperAgent`.
  * @param {string} result - texte agrégé de la run (ou message d'échec/info).
  * @param {string|null} projectPath - chemin du projet actif.
+ * @param {{remember?:boolean, identity?:{id?:number, agentIds?:string[]}|null}} [opts]
  */
-async function injectRunAgentsResultToSuperAgent(result, projectPath, opts = {}) {
+// Exporté pour PROUVER la RÈGLE 4 de bout en bout : le compte rendu livré est
+// étiqueté avec l'identité de SA mission (numéro + agents), jamais celle d'une
+// autre demande (voir `file-attente-regle-4.test.js`).
+export async function injectRunAgentsResultToSuperAgent(result, projectPath, opts = {}) {
   // Garde de curation (fil de mémoire) : un point d'avancement protocolaire
   // (« [Info run_agents] … » : mise en file, démarrage ▶️, arrêt auto ⏱️)
   // n'apporte aucun fait réutilisable → non mémorisé. Une FIN de run force la
@@ -6074,8 +6170,11 @@ async function injectRunAgentsResultToSuperAgent(result, projectPath, opts = {})
   if (!shouldDeliverAgentReport(memorable)) return;
   // P0-4 : borne la taille du compte-rendu agrégé (ne pas encombrer le contexte
   // de l'assistant). Porte d'accusé de lecture via superAgentReportGate.
+  // RÈGLE 4 : le compte rendu est ÉTIQUETÉ avec l'identité de la mission qui l'a
+  // produit (numéro monotone + agents visés). Un rapport rejoué depuis la file
+  // s'annonce donc avec SA demande — impossible de l'attribuer à une autre.
   await superAgentReportGate.deliver({
-    summary: buildRunAgentsSummary(result),
+    summary: annotateMissionReport(buildRunAgentsSummary(result), opts.identity),
     projectPath: projectPath || null,
     category: "runagents",
   });
@@ -6093,8 +6192,10 @@ async function injectRunAgentsResultToSuperAgent(result, projectPath, opts = {})
  * @param {string} result - compte-rendu de fin (résultat ou message d'échec).
  * @param {string|null} projectPath - chemin du projet actif.
  * @param {boolean} ok - true si la run a abouti.
+ * @param {{id?:number, agentIds?:string[]}|null} [identity] - RÈGLE 4 : identité
+ *   de la mission (numéro monotone + agents visés), jointe au compte rendu.
  */
-async function finishRunAgentsToSuperAgent(result, projectPath, ok) {
+async function finishRunAgentsToSuperAgent(result, projectPath, ok, identity = null) {
   // Issue #87 (2ᵉ moitié) : le groupe parallèle du bus signale sa fin par
   // « done » MÊME quand un agent a échoué (statut « error » agrégé dans le
   // texte). Une run dont un agent a échoué est donc un ÉCHEC, jamais un succès.
@@ -6110,7 +6211,7 @@ async function finishRunAgentsToSuperAgent(result, projectPath, ok) {
     // Fin de run : son ARMÉ (pas joué) — il partira à la fin de l'affichage du
     // compte rendu injecté à l'assistant (cf. `armDoneSound`).
     playSound: armDoneSound,
-    consign: (r) => injectRunAgentsResultToSuperAgent(r, projectPath, { remember: true }),
+    consign: (r) => injectRunAgentsResultToSuperAgent(r, projectPath, { remember: true, identity }),
   });
   return effectiveOk;
 }

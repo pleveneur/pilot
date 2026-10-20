@@ -55,6 +55,7 @@ import {
 import {
   enqueueExclusivity,
   dequeueExclusivity,
+  exclusivityKey,
   isAgentActiveOnProject as isAgentActiveOnProjectSessions,
   isAnyAgentWorking,
   isProjectWorking,
@@ -330,6 +331,74 @@ export function nextReadRunKey(project) {
   return `${runKey(project)}${READ_KEY_SEP}${++readRunSeq}`;
 }
 
+// ── RÈGLE 4 : la file d'exclusivité ne meurt plus avec la run qui l'a créée ──
+// La file vivait DANS le contexte de run (`ctx.exclusivityQueue`) : `endRun`
+// supprimait le contexte et, avec lui, les demandes encore en attente. Une
+// demande mise en file pouvait donc disparaître en silence dès que la run qui
+// l'hébergeait se terminait (fin de run, libération par le watchdog, arrêt
+// ciblé). La file est désormais portée par une map MODULE indexée par PROJET
+// RÉEL : tous les contextes d'un projet (clé par défaut et clés de lecture)
+// partagent la MÊME file, et la fin d'une run ne l'emporte plus.
+const projectExclusivityQueues = {};
+
+/**
+ * File d'exclusivité PARTAGÉE d'un projet (créée au besoin), partagée par tous
+ * les contextes de run du projet. Mutable (cf. exclusivity-queue.js).
+ * @param {string} project - projet réel (chemin)
+ * @returns {object} map `clé (projet\u{1f}agent) → assignment[]`
+ */
+export function exclusivityQueueOfProject(project) {
+  const key = runKey(project || ".");
+  if (!projectExclusivityQueues[key]) projectExclusivityQueues[key] = {};
+  return projectExclusivityQueues[key];
+}
+
+/**
+ * Retire les entrées de file dont la CLÉ est inexploitable (sans séparateur
+ * projet ↔ agent) : `drainExclusivityQueues` ne peut pas les relancer, elles
+ * resteraient à vie dans la file partagée et empêcheraient le verrou d'être
+ * libéré (« verrou conservé pour ne rien perdre » alors que rien ne peut
+ * repartir). Signalé, jamais silencieux.
+ * @param {string} project
+ * @returns {number} nombre d'entrées retirées
+ */
+function pruneUnreplayableExclusivityEntries(project) {
+  const queue = projectExclusivityQueues[runKey(project || ".")];
+  if (!queue) return 0;
+  let removed = 0;
+  for (const key of Object.keys(queue)) {
+    if (key.indexOf("\u{1f}") >= 0) continue;
+    removed += (queue[key] || []).length;
+    delete queue[key];
+  }
+  if (removed > 0) {
+    const message = `⚠️ ${removed} demande(s) en file d'attente portaient une clé projet/agent invalide : elles ne peuvent pas être relancées et ont été retirées de la file.`;
+    console.warn("[agents-bus] file d'attente :", message);
+    try {
+      emit("notify", { agentId: null, message });
+    } catch (_) {
+      /* aucun écouteur : la console a déjà l'information */
+    }
+  }
+  return removed;
+}
+
+/**
+ * Vide la file d'exclusivité d'un projet (destruction du bus, arrêt global
+ * « tout arrêter »). Une demande encore en file est alors PERDUE : on le dit.
+ * @param {string} project
+ * @returns {number} nombre d'entrées perdues
+ */
+function dropProjectExclusivityQueue(project) {
+  const key = runKey(project || ".");
+  const queue = projectExclusivityQueues[key];
+  if (!queue) return 0;
+  let lost = 0;
+  for (const qk of Object.keys(queue)) lost += (queue[qk] || []).length;
+  delete projectExclusivityQueues[key];
+  return lost;
+}
+
 function newRunCtx(key, project) {
   return {
     project,
@@ -419,11 +488,10 @@ function newRunCtx(key, project) {
     // Utilisé par le watchdog releaseStuckRunLock comme garde de temps : si le
     // verrou est "running" sans activité depuis trop longtemps, on le libère.
     lastActivityAt: null,
-    // T5 : file d'attente d'exclusivité des spécialités par projet. Clé
-    // `project\u{1f}agent_id` → file d'assignments en attente. Quand un agent de
-    // même agent_id est déjà actif sur le même projet, la demande est mise en
-    // attente et lancée automatiquement à la fin de la tâche en cours.
-    exclusivityQueue: {},
+    // T5 : file d'attente d'exclusivité des spécialités par projet, PARTAGÉE par
+    // tous les contextes de run du projet réel (RÈGLE 4 : elle survit à la run
+    // qui l'a créée). Clé `project\u{1f}agent_id` → assignments en attente.
+    exclusivityQueue: exclusivityQueueOfProject(project),
     // Filet de sécurité par run : nombre de tours agent (détection boucle).
     turnCount: 0,
     // Modèle de secours (defaultModel du model-switch.json) résolu UNE fois par
@@ -506,6 +574,9 @@ export function beginRun(project, options) {
   // un contexte distinct : deux lectures sur un même projet ne s'écrasent plus.
   const readOnly = !!(options && options.readOnly);
   const key = readOnly ? nextReadRunKey(project) : runKey(project);
+  // Démarrage d'une run : les entrées de file à clé inexploitable (impossibles
+  // à relancer) sont retirées, sinon elles bloqueraient ce verrou à vie.
+  pruneUnreplayableExclusivityEntries(project);
   const fresh = newRunCtx(key, project);
   const ctx = getRunCtxByKey(key);
   for (const k of Object.keys(fresh)) if (k !== "project") ctx[k] = fresh[k];
@@ -564,6 +635,13 @@ function clearAllRuns() {
     if (ctx.watchdogRecheckId) clearTimeout(ctx.watchdogRecheckId);
   }
   busState.runs = {};
+  // Arrêt GLOBAL (« tout arrêter » / destruction du bus) : les files partagées
+  // des projets ne peuvent plus être rejouées, on les vide en le disant.
+  let lost = 0;
+  for (const project of Object.keys(projectExclusivityQueues)) lost += dropProjectExclusivityQueue(project);
+  if (lost > 0) {
+    console.warn("[agents-bus] arrêt global :", `${lost} demande(s) en file abandonnée(s) (aucune run ne peut les relancer).`);
+  }
 }
 
 // Bug #9 : watchdog de sécurité du verrou de run, SCOpÉ au projet. Si la run
@@ -1386,7 +1464,9 @@ export function setBusNotifyCallback(fn) {
  * projet au lieu de la perdre (log + notify). Preuve : `verrou-par-projet.test.js`,
  * « C1 (reste) — sans événement de fin, le watchdog relance la demande en file ».
  */
-async function launchNextQueuedForProject(agentId, project, ownRunKey) {
+// Exporté pour les PREUVES de la RÈGLE 4 (`file-attente-regle-4.test.js`) : le
+// rejeu d'une demande en file doit être déclenchable de façon déterministe.
+export async function launchNextQueuedForProject(agentId, project, ownRunKey) {
   const keys = [];
   if (ownRunKey) keys.push(ownRunKey);
   for (const k of runKeysOfProject(project)) if (!keys.includes(k)) keys.push(k);
@@ -1403,23 +1483,63 @@ async function launchNextQueuedForProject(agentId, project, ownRunKey) {
 
 async function launchNextQueued(agentId, project, runKeyOverride) {
   // `project` = projet RÉEL (clé de la file d'exclusivité) ; `runKeyOverride` =
-  // clé de run propriétaire de la file (différente du projet pour une lecture).
-  const ctx = runKeyOverride ? getRunCtxByKey(runKeyOverride) : getRunCtx(project);
-  const next = dequeueExclusivity(ctx.exclusivityQueue, agentId, project);
+  // clé de run appelante (celle qui vient de libérer son tour).
+  const callerKey = runKeyOverride || runKey(project);
+  const callerCtx = busState.runs[callerKey] || null;
+  // File réellement inspectée par l'appelant (partagée dans tous les cas
+  // normaux ; un contexte dont la file a été remplacée garde SA file).
+  const queue = (callerCtx && callerCtx.exclusivityQueue) || exclusivityQueueOfProject(project);
+  const qk = exclusivityKey(project, agentId);
+  const head = (queue[qk] || [])[0];
+  if (!head) return;
+  // RÈGLE 4 : une entrée porte la clé de la run QUI L'A MISE EN FILE
+  // (`ownerRunKey`). Sans propriétaire identifié (entrée héritée), c'est la run
+  // appelante qui l'a mise en file.
+  const ownerKey = head.ownerRunKey || callerKey;
+  const ownerCtx = busState.runs[ownerKey];
+  if (!ownerCtx) {
+    // Le contexte propriétaire n'existe plus. Lancer la demande dans un AUTRE
+    // contexte la ferait exécuter POUR UNE AUTRE MISSION (rapport livré à la
+    // mauvaise mission, `pending` décrémenté au mauvais endroit, sink absent) :
+    // c'est exactement la perte silencieuse interdite. On CONSERVE l'entrée en
+    // file, on écrit le motif au journal des arrêts et on le DIT à l'utilisateur.
+    if (!head.ownerMissingReported) {
+      head.ownerMissingReported = true;
+      const message = `⏸️ Une demande en file d'attente (agent ${agentId}) ne peut pas être relancée : la run qui l'avait mise en file n'existe plus. Elle est CONSERVÉE en file (jamais exécutée pour une autre mission).`;
+      console.warn("[agents-bus] file d'attente :", message);
+      traceAutomaticAgentStop({
+        reason: "queue-replay-no-owner",
+        detected: "queue-owner-gone",
+        agentId,
+        projectPath: projectOfRunKey(project),
+        detail: String((head && (head.brief || head.task)) || "").slice(0, 300),
+      }).catch(() => {});
+      try {
+        emit("notify", { agentId, message });
+      } catch (_) {
+        /* aucun écouteur : la console a déjà l'information */
+      }
+    }
+    return;
+  }
+  const next = dequeueExclusivity(queue, agentId, project);
   if (!next) return;
   const id = next.agentId || agentId;
   const agent = busState.agents.get(id);
   if (!agent) {
     // Agent introuvable : enregistrer un résultat d'erreur dans le groupe
     // parallèle afin que la run ne reste pas bloquée (pending conservé).
-    if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === id)) {
-      ctx.parallelGroup.results[id] = { status: "error", text: `Agent "${id}" introuvable.` };
-      ctx.parallelGroup.pending--;
+    if (ownerCtx.parallelGroup && ownerCtx.parallelGroup.assignments.some((a) => a.agentId === id)) {
+      ownerCtx.parallelGroup.results[id] = { status: "error", text: `Agent "${id}" introuvable.` };
+      ownerCtx.parallelGroup.pending--;
     }
     return;
   }
   emit("notify", { agentId: id, message: `▶️ L'agent ${id} démarre sa tâche en file d'attente sur ce projet.` });
-  await runAgentTurn(agent, next.brief, "", next.project || project, undefined, next.mcp_server || null, ctx);
+  // Le tour est exécuté dans le contexte PROPRIÉTAIRE de la file (celui de la
+  // mission qui a mis la demande en attente) : son sink, son groupe parallèle
+  // et sa génération restent les siens.
+  await runAgentTurn(agent, next.brief, "", next.project || project, undefined, next.mcp_server || null, ownerCtx);
 }
 
 function resetTimeout(ctx) {
@@ -3222,7 +3342,12 @@ async function dispatchParallel(assignments, onComplete, options, runProject, ct
     // que la run ne se termine pas avant son exécution.
     const project = a.project || window._pilotProjectPath || ".";
     if (await isAgentActiveOnProject(a.agentId, project)) {
+      // RÈGLE 4 : la demande garde la trace de la run QUI L'A MISE EN FILE. Un
+      // rejeu ne doit jamais l'exécuter dans un autre contexte que le sien.
       enqueueExclusivity(ctx.exclusivityQueue, a.agentId, project, a);
+      const enqueued = ctx.exclusivityQueue[exclusivityKey(project, a.agentId)];
+      const entry = enqueued && enqueued[enqueued.length - 1];
+      if (entry) entry.ownerRunKey = ctx.runKey;
       ctx.parallelGroup.results[a.agentId] = {
         status: "queued",
         text: `⏳ Demande mise en file d'attente : l'agent ${a.agentId} est déjà actif sur ce projet. Elle se lancera automatiquement à la fin de la tâche en cours.`,

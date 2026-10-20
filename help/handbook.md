@@ -1701,6 +1701,44 @@ uniquement un bloc d'instructions dans le prompt système.
   `ok = launched || queued || preparing`, et la branche de mise en file de
   `startRun` renvoie un objet `{queued:true,...}` au lieu du booléen `true`
   (qui était lu comme un objet → tous champs falsy).
+- **RÈGLE 4 — une demande mise en file est TOUJOURS rejouée avec SA PROPRE
+  demande, jamais perdue en silence** :
+  - chaque demande mise en file porte une **identité de mission** (numéro
+    monotone + agents visés) ; le compte rendu livré à l'Assistant est étiqueté
+    avec cette identité (`[mission #7 · agents : codeur]`), donc un rapport de
+    la mission A ne peut plus être attribué à la mission B ;
+  - l'entrée de file retient la **run qui l'a mise en file** (`ownerRunKey`) ; si
+    cette run n'existe plus, la demande est **CONSERVÉE** en file et le motif est
+    **journalisé** (`queue-replay-no-owner`) + notifié — elle n'est jamais
+    exécutée dans le contexte d'une autre mission ;
+  - la file d'exclusivité vit au niveau du **projet** (et non de la run) : la fin
+    d'une run ne détruit plus les demandes en attente ;
+  - le watchdog ne vide **jamais** une file en silence : chaque mission
+    abandonnée est **nommée**, le motif est écrit au journal des arrêts
+    automatiques du projet (`queue-abandoned`) et l'abandon est notifié.
+  Modules : `mission-identity.js` (identité pure), `agents-bus.js` (file par
+  projet + garde de propriétaire), `super-agent.js` (estampille des 3 sites de
+  mise en file, étiquetage du compte rendu, abandon tracé).
+
+<!-- HELP:file-attente-identite-mission -->
+### Une demande en attente garde son identité (jamais perdue en silence)
+Quand l'Assistant met une demande en **file d'attente** (un agent travaille déjà
+sur le projet), cette demande n'est plus une simple ligne anonyme :
+
+- elle reçoit un **numéro de mission** et les **agents visés** ; le compte rendu
+  qui vous revient est **étiqueté** avec cette identité
+  (`[mission #7 · agents : codeur]`). Vous voyez donc toujours **quelle**
+  demande a produit **quel** résultat ;
+- la demande appartient à la **file du projet** : la fin d'une tâche ne fait plus
+  disparaître les demandes encore en attente ;
+- une demande n'est **jamais** exécutée à la place d'une autre : si la tâche qui
+  l'avait mise en attente a disparu, elle **reste en file** et le motif est
+  **consigné** (journal des arrêts automatiques du projet) et signalé ;
+- si une file doit être **abandonnée** (tâche jugée bloquée), chaque demande
+  abandonnée est **nommée** dans le message et le motif est **consigné** : plus
+  d'abandon silencieux.
+<!-- /HELP:file-attente-identite-mission -->
+
 - **Un agent ne s'arrête plus tout seul juste après son lancement** : les
   arrêts automatiques (inactivité d'une tâche, garde-fou anti-boucle, plafond de
   tours) ne concernent plus que **la tâche qui les a déclenchés** — ils ne
