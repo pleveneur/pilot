@@ -2287,6 +2287,32 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
   qui reprend immédiatement. Un **contrôle négatif** intégré injecte un site
   muet dans une copie de la source, à plusieurs positions, pour prouver que la
   détection le voit.
+- **Entonnoir unique (`agent-stop-funnel.js`)** : côté bus, les arrêts
+  automatiques ne choisissent plus « trace ou pas trace ». Ils passent par
+  `stopAgentWithTrace({ reason, detected, agentId, projectPath, uid, stop })`,
+  qui écrit le motif (même journal, repli global, même mécanique de
+  `agent-stop-trace.js`) **PUIS** exécute l'action d'arrêt — la trace est
+  **attendue** avant l'arrêt. Les gardes de propriété (`expectedUid`) et la
+  portée de run (`runKey`) sont fournies telles quelles par le site : le
+  comportement d'arrêt est inchangé. Conséquence : un **nouveau** site d'arrêt
+  automatique ajouté dans le bus ne peut plus être muet par oubli — il n'a pas
+  d'autre voie que l'entonnoir. Les traces historiques des sites concernés ont
+  été **remplacées** par celle de l'entonnoir (jamais de double ligne) ; le
+  mécanisme `stopAgentsRun` trace une ligne **par agent actif** (avec son uid),
+  et une ligne `agent=none` seulement si la run n'a plus d'agent actif.
+  **Fail-open côté arrêt** : si la journalisation échoue (ou si le motif est
+  incomplet), l'arrêt a quand même lieu et l'échec reste **dit** par
+  `traceAutomaticAgentStop` (rapporteur → notification). Le détecteur pur
+  `scanAutomaticStopSites` (même module) recense les sites d'arrêt automatique
+  d'une source et pointe ceux qui contournent l'entonnoir : un site n'est
+  reconnu couvert que s'il est dans la **même instruction** qu'un appel
+  d'entonnoir, dans sa **fonction englobante** (la simple proximité ne suffit
+  pas, sinon un site muet ajouté quelques lignes après un arrêt tracé passerait
+  pour couvert). Seul l'arrêt **volontaire** (bouton « tout arrêter ») reste hors
+  entonnoir, avec le marqueur `R3-EXCEPTION-MANUEL`. Verrou :
+  `agent-stop-funnel.test.js` (ordre trace→arrêt observé sur un faux `invoke`,
+  liste des sites du bus épinglée, contrôle négatif par injection d'un site
+  muet en mémoire).
 
 <!-- HELP:loop-detection-writes -->
 ### Détection de boucle : une lecture n'est jamais une boucle
@@ -2330,6 +2356,10 @@ délégations (vidées par `/file vide`, qui écrit une ligne **par famille** av
 les libellés) et agents ; l'arrêt explicite d'un agent (`stop_agent`) nomme, lui
 aussi, les délégations et les missions qu'il abandonne. Le journal est écrit de
 façon **sérialisée** : deux abandons simultanés ne s'effacent plus l'un l'autre.
+Côté bus d'agents, **tous** les arrêts automatiques passent par un **point de
+passage unique** qui écrit le motif **avant** d'arrêter : un nouveau chemin
+d'arrêt ne peut donc plus oublier de laisser une trace. Si la trace ne peut pas
+être écrite, l'arrêt a quand même lieu — et l'échec est **signalé**, jamais tu.
 <!-- /HELP:loop-detection-writes -->
 
 ### Mode « Assistant seul » (A19, maquette ASS_Only_V4)

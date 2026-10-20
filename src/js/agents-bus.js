@@ -57,6 +57,11 @@ import {
   traceAutomaticAgentStop,
   setAgentStopTraceFailureReporter,
 } from "./agent-stop-trace.js";
+// ENTONNOIR UNIQUE des arrêts AUTOMATIQUES (règle 3) : un seul point de passage
+// écrit le motif AVANT d'arrêter. Les sites d'arrêt automatique de ce fichier ne
+// choisissent donc plus « trace ou pas trace » : ils décrivent leur motif et
+// fournissent l'action d'arrêt (gardes `expectedUid` / portée `runKey` intactes).
+import { stopAgentWithTrace } from "./agent-stop-funnel.js";
 import {
   enqueueExclusivity,
   dequeueExclusivity,
@@ -1705,9 +1710,16 @@ function resetTimeout(ctx) {
     }).catch(() => {});
     // Portée CIBLÉE : le timeout d'inactivité de CETTE run ne doit jamais
     // arrêter les agents d'une autre run (autre projet, autre mission).
-    // RÈGLE 3 : le motif (idle-timeout / aucune activité) est transmis par
-    // l'appelant et journalisé par stopAgentsRun AVANT l'arrêt effectif.
-    stopAgentsRun({ silent: true, runKey: ctx.runKey, reason: "idle-timeout", detected: "no-event" });
+    // RÈGLE 3 : le motif (idle-timeout / aucune activité) est journalisé par
+    // l'ENTONNOIR UNIQUE AVANT l'arrêt effectif de la run.
+    stopAgentWithTrace({
+      reason: "idle-timeout",
+      detected: "no-event",
+      agentId: agentId || "",
+      projectPath: ctx.agentProject[agentId] || ctx.project || "",
+      uid: expectedSessionUid(ctx, agentId),
+      stop: () => stopAgentsRun({ silent: true, runKey: ctx.runKey }),
+    }).catch(() => {});
   }, busState.timeoutMs);
 }
 
@@ -2178,15 +2190,17 @@ function maybeDetectAgentLoop(agentId, ctx) {
     ctx.loopAbortReason[agentId] = "boucle d'outils détectée (appels identiques répétés)";
     // Motif journalisé sur disque (fail-open) : la cause de l'arrêt automatique
     // ne reste plus en mémoire seulement.
-    traceAutomaticAgentStop({
+    emit("notify", { agentId, message: `Boucle d'outils détectée pour l'agent ${agentId} (appels identiques répétés). Correction automatique…` });
+    // ENTONNOIR UNIQUE : le motif est journalisé AVANT l'arrêt (même garde
+    // `expectedUid` que l'arrêt historique, portée identique).
+    stopAgentWithTrace({
       reason: "loop-detection",
       detected: "tool-calls",
       agentId,
       projectPath: ctx.agentProject[agentId] || ctx.project || "",
       uid: expectedSessionUid(ctx, agentId),
+      stop: () => invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }),
     }).catch(() => {});
-    emit("notify", { agentId, message: `Boucle d'outils détectée pour l'agent ${agentId} (appels identiques répétés). Correction automatique…` });
-    invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }).catch(() => {});
     return;
   }
 
@@ -2203,15 +2217,16 @@ function maybeDetectAgentLoop(agentId, ctx) {
     console.warn("[agents-bus] boucle détectée", agentId);
     // Bug : propager la cause réelle (boucle de réflexion) au résultat agrégé.
     ctx.loopAbortReason[agentId] = "boucle de réflexion détectée (texte répété)";
-    traceAutomaticAgentStop({
+    emit("notify", { agentId, message: `Boucle détectée dans la réflexion de l'agent ${agentId}. Correction automatique…` });
+    // ENTONNOIR UNIQUE : motif journalisé AVANT l'arrêt (règle 3).
+    stopAgentWithTrace({
       reason: "loop-detection",
       detected: "text",
       agentId,
       projectPath: ctx.agentProject[agentId] || ctx.project || "",
       uid: expectedSessionUid(ctx, agentId),
+      stop: () => invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }),
     }).catch(() => {});
-    emit("notify", { agentId, message: `Boucle détectée dans la réflexion de l'agent ${agentId}. Correction automatique…` });
-    invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }).catch(() => {});
   }
 }
 
@@ -2316,9 +2331,16 @@ export function handleAgentEvent(ev) {
     if (count > maxTurns) {
       console.error("[agents-bus] MAX_PI_TURNS exceeded", agentId, count, "max", maxTurns);
       emit("error", { message: `L'agent ${agentId} a fait ${count} tours pi sans terminer (max ${maxTurns}). Arrêt forcé.` });
-      // RÈGLE 3 : motif transmis (plafond de tours pi / détecté par le compteur
-      // de tours), journalisé par stopAgentsRun AVANT l'arrêt effectif.
-      stopAgentsRun({ silent: true, runKey: ctx.runKey, reason: "turn-cap", detected: "pi-turns" });
+      // RÈGLE 3 : motif tracé par l'ENTONNOIR UNIQUE (plafond de tours pi,
+      // détecté par le compteur de tours) AVANT l'arrêt effectif.
+      stopAgentWithTrace({
+        reason: "turn-cap",
+        detected: "pi-turns",
+        agentId,
+        projectPath: ctx.agentProject[agentId] || ctx.project || "",
+        uid: expectedSessionUid(ctx, agentId),
+        stop: () => stopAgentsRun({ silent: true, runKey: ctx.runKey }),
+      }).catch(() => {});
       return;
     }
   }
@@ -2464,14 +2486,16 @@ export function handleAgentEvent(ev) {
     console.log("[agents-bus] agent_end turn=" + ctx.turnCount, agentId);
     if (ctx.turnCount > MAX_TURNS) {
       emit("error", { message: `Boucle détectée : ${ctx.turnCount} tours (max ${MAX_TURNS}). Arrêt forcé.` });
-      traceAutomaticAgentStop({
+      // ENTONNOIR UNIQUE : une seule ligne (motif + arrêt de la run), jamais de
+      // double trace (l'ancienne trace locale est remplacée par celle-ci).
+      stopAgentWithTrace({
         reason: "loop-detection",
         detected: "turn-cap",
         agentId,
         projectPath: ctx.agentProject[agentId] || ctx.project || "",
         uid: expectedSessionUid(ctx, agentId),
+        stop: () => stopAgentsRun({ silent: true, runKey: ctx.runKey }),
       }).catch(() => {});
-      stopAgentsRun({ silent: true, runKey: ctx.runKey });
       return;
     }
     // Restitution fiable : `agent_end` est un événement PAR RUN BAS NIVEAU —
@@ -3141,10 +3165,11 @@ export async function stopAgentsRun(options = {}) {
   for (const key of runningKeys) {
     const ctx = busState.runs[key];
     if (!ctx) continue;
-    // RÈGLE 3 : la trace est écrite AVANT l'arrêt effectif (jamais après) — une
-    // ligne par agent actif, une ligne `agent=none` si la run n'a plus d'agent
-    // actif mais s'arrête quand même (arrêt de la run = fait à tracer).
-    if (autoStopReason) {
+    // RÈGLE 3 : le motif est écrit AVANT l'arrêt effectif (jamais après). Les
+    // agents ACTIFS reçoivent leur ligne par l'ENTONNOIR UNIQUE (une par agent,
+    // avec son uid) ; une run sans agent actif (verrou orphelin, run fantôme)
+    // garde une ligne `agent=none` — l'arrêt de la run est un fait à tracer.
+    if (autoStopReason && ctx.activeAgents.size === 0) {
       await traceAutomaticAgentStopForRun(ctx, { reason: autoStopReason, detected: autoStopDetected });
     }
     ctx.runState = "stopping";
@@ -3153,7 +3178,24 @@ export async function stopAgentsRun(options = {}) {
     settleMission(ctx.runKey, "stop", {});
     // H2 V2 parallèle : abort tous les agents actifs (pas seulement le dernier).
     for (const agentId of ctx.activeAgents) {
-      invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }).catch(() => {});
+      const agentProject = ctx.agentProject[agentId] || ctx.project || null;
+      const agentUid = expectedSessionUid(ctx, agentId);
+      if (autoStopReason) {
+        // ENTONNOIR UNIQUE : motif journalisé (attendu) PUIS arrêt de l'agent,
+        // avec la même garde de propriété et la même portée de run.
+        await stopAgentWithTrace({
+          reason: autoStopReason,
+          detected: autoStopDetected,
+          agentId,
+          projectPath: agentProject || "",
+          uid: agentUid,
+          stop: () => invoke("abort_agent_process", { agentId, project: agentProject, expectedUid: agentUid }),
+        });
+      } else {
+        // R3-EXCEPTION-MANUEL : arrêt VOLONTAIRE (bouton « tout arrêter ») — ce
+        // n'est pas un arrêt automatique, il n'a donc pas de ligne de journal.
+        invoke("abort_agent_process", { agentId, project: agentProject, expectedUid: agentUid }).catch(() => {});
+      }
     }
     stopped.push({ project: ctx.project || key, generation: ctx.generation });
   }
@@ -3236,16 +3278,16 @@ async function forceStaleAgentProcessRestartIfNeeded(agent, project) {
     );
     if (!existing) return;
     // RÈGLE 3 : ce `stop_agent_process` est un ARRÊT AUTOMATIQUE (personne ne l'a
-    // demandé : il précède un respawn à contexte vierge). Il est donc journalisé
-    // AVANT l'arrêt, avec son motif propre, au lieu de disparaître en silence.
-    await traceAutomaticAgentStop({
+    // demandé : il précède un respawn à contexte vierge). Il passe donc par
+    // l'ENTONNOIR UNIQUE, avec son motif propre, avant l'arrêt effectif.
+    await stopAgentWithTrace({
       reason: "stale-session-restart",
       detected: "fresh-context",
       agentId: agent.id,
       projectPath: project,
       detail: "Session agent_process d'une run précédente arrêtée pour forcer un contexte vierge.",
-    }).catch(() => {});
-    await invoke("stop_agent_process", { agentId: agent.id, project }).catch(() => {});
+      stop: () => invoke("stop_agent_process", { agentId: agent.id, project }),
+    });
   } catch (_) {
     // fail-open : inoffensif, le spawn suivant créera de toute façon une session.
   }
@@ -3470,21 +3512,22 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     // Uniquement pour les agents de projet (run_agents) : les agents d'assistant
     // n'ont pas de commande stop dédiée.
     if (spawned && !isAssistant) {
-      // RÈGLE 3 : arrêt automatique d'un process orphelin (échec post-spawn). On
-      // journalise le motif AVANT l'arrêt : sans cela le process disparaîssait
-      // sans trace (mort silencieuse).
-      await traceAutomaticAgentStop({
+      // RÈGLE 3 : arrêt automatique d'un process orphelin (échec post-spawn). Le
+      // motif est journalisé AVANT l'arrêt par l'ENTONNOIR UNIQUE — sans cela le
+      // process disparaissait sans trace (mort silencieuse).
+      await stopAgentWithTrace({
         reason: "spawn-failure-cleanup",
         detected: "run-agent-turn-error",
         agentId: agent.id,
         projectPath: cwd,
         detail: `Process orphelin arrêté après échec du tour : ${String(err).slice(0, 160)}`,
-      }).catch(() => {});
-      await invoke("stop_agent_process", {
-        agentId: agent.id,
-        project: cwd,
-        expectedUid: expectedSessionUid(ctx, agent.id),
-      }).catch(() => {});
+        stop: () =>
+          invoke("stop_agent_process", {
+            agentId: agent.id,
+            project: cwd,
+            expectedUid: expectedSessionUid(ctx, agent.id),
+          }),
+      });
     }
     // RÈGLE 3 : le tour échoue (exception non rattrapée) → la session se termine
     // en erreur, le motif est journalisé AVANT l'échec prononcé (y compris quand

@@ -1590,7 +1590,12 @@ describe("boucle d'outils — une répétition de LECTURE n'arrête jamais l'age
   let nowSpy;
   let clock;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Les arrêts passent par l'ENTONNOIR UNIQUE : la trace est écrite (et
+    // ATTENDUE) avant l'appel IPC d'arrêt. On laisse donc se terminer une
+    // éventuelle chaîne du test précédent AVANT de remettre les compteurs à zéro
+    // — sinon un abort différé viendrait polluer le test suivant.
+    await flush();
     endRun(PROJECT);
     vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "file_exists" ? true : undefined));
     clock = Date.now();
@@ -1622,8 +1627,18 @@ describe("boucle d'outils — une répétition de LECTURE n'arrête jamais l'age
     vi.mocked(invoke).mock.calls.filter(([cmd]) =>
       /^(abort_agent_process|stop_agent_process|stop_agent_processes)$/.test(String(cmd)),
     );
+  // Arrêts visant CE projet : un arrêt différé d'un test précédent (autre
+  // projet) ne doit pas faire croire à une boucle détectée ici.
+  const stopCallsHere = () =>
+    stopCalls().filter(([, args]) => !args || !args.project || args.project === PROJECT);
+  // Le motif est journalisé AVANT l'arrêt (règle 3) : l'appel IPC d'arrêt arrive
+  // donc une microtâche plus tard. `flush()` laisse la chaîne se terminer avant
+  // d'observer les appels — l'ORDRE exigé (trace puis arrêt) est inchangé.
+  const flush = async () => {
+    for (let i = 0; i < 6; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
 
-  it("12 `git status --short` entrecoupés de 12 `edit` DIFFÉRENTS : AUCUN arrêt", () => {
+  it("12 `git status --short` entrecoupés de 12 `edit` DIFFÉRENTS : AUCUN arrêt", async () => {
     const ctx = beginLoopRun();
     for (let i = 0; i < 12; i++) {
       handleAgentEvent(toolEvent("bash", { command: "git status --short" }));
@@ -1634,7 +1649,8 @@ describe("boucle d'outils — une répétition de LECTURE n'arrête jamais l'age
         }),
       );
     }
-    expect(stopCalls(), "relancer la même consultation n'est pas une boucle").toEqual([]);
+    await flush();
+    expect(stopCallsHere(), "relancer la même consultation n'est pas une boucle").toEqual([]);
     expect(ctx.loopCorrectionPending[AGENT]).toBeFalsy();
     // Les consultations restent tracées dans l'historique de LECTURE…
     expect(ctx.readOnlyToolCallsByAgent[AGENT]).toHaveLength(12);
@@ -1644,15 +1660,16 @@ describe("boucle d'outils — une répétition de LECTURE n'arrête jamais l'age
     expect(getRunState(PROJECT)).toBe("running");
   });
 
-  it("12 consultations identiques sans aucune écriture : AUCUN arrêt (observabilité seulement)", () => {
+  it("12 consultations identiques sans aucune écriture : AUCUN arrêt (observabilité seulement)", async () => {
     const ctx = beginLoopRun();
     for (let i = 0; i < 12; i++) handleAgentEvent(toolEvent("bash", { command: "git diff --stat" }));
-    expect(stopCalls()).toEqual([]);
+    await flush();
+    expect(stopCallsHere()).toEqual([]);
     expect(ctx.readOnlyToolCallsByAgent[AGENT]).toHaveLength(12);
     expect(ctx.toolCallsByAgent[AGENT] || []).toEqual([]);
   });
 
-  it("NON-RÉGRESSION : 3 `edit` au MÊME contenu → toujours détecté et arrêté", () => {
+  it("NON-RÉGRESSION : 3 `edit` au MÊME contenu → toujours détecté et arrêté", async () => {
     const ctx = beginLoopRun();
     for (let i = 0; i < 3; i++) {
       handleAgentEvent(
@@ -1662,15 +1679,17 @@ describe("boucle d'outils — une répétition de LECTURE n'arrête jamais l'age
         }),
       );
     }
+    await flush();
     const abort = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === "abort_agent_process");
     expect(abort, "trois écritures IDENTIQUES restent une boucle").toBeTruthy();
     expect(abort[1].agentId).toBe(AGENT);
     expect(ctx.loopCorrectionPending[AGENT]).toBe(true);
   });
 
-  it("NON-RÉGRESSION : 9 `bash` MUTATEURS identiques → toujours détecté et arrêté", () => {
+  it("NON-RÉGRESSION : 9 `bash` MUTATEURS identiques → toujours détecté et arrêté", async () => {
     const ctx = beginLoopRun();
     for (let i = 0; i < 9; i++) handleAgentEvent(toolEvent("bash", { command: "rm -rf build && npm run build" }));
+    await flush();
     const abort = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === "abort_agent_process");
     expect(abort, "une commande mutatrice répétée reste une boucle").toBeTruthy();
     expect(abort[1].agentId).toBe(AGENT);

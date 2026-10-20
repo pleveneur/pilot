@@ -63,6 +63,10 @@ import {
   agentStopTracePath,
   globalAgentStopTracePath,
 } from "./agent-stop-trace.js";
+// Détecteur pur de l'ENTONNOIR UNIQUE : il vérifie, site par site, qu'aucun
+// arrêt automatique n'invoque les commandes d'arrêt hors d'un appel
+// `stopAgentWithTrace` (même instruction, même fonction englobante).
+import { scanAutomaticStopSites } from "./agent-stop-funnel.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -119,6 +123,12 @@ describe("matrice des sites d'arrêt — aucun chemin automatique muet", () => {
   const TRACE_LITERAL = /traceAutomaticAgentStop[A-Za-z]*\(\s*(?:ctx,\s*)?\{[^}]{0,400}?reason:\s*"[^"]+"/;
   const TRACE_ANY = /traceAutomaticAgentStop[A-Za-z]*\(\s*(?:ctx,\s*)?\{[^}]{0,400}?reason:\s*[A-Za-z_$][\w$.]*/;
   const CALL_LITERAL_REASON = /reason:\s*"[a-z][a-z0-9-]+"/;
+  // ENTONNOIR UNIQUE (`agent-stop-funnel.js`) : la trace et l'arrêt sont désormais
+  // la MÊME instruction — `stopAgentWithTrace({ reason: "…", stop: () => invoke(…) })`.
+  // Un appel d'entonnoir à motif littéral est donc une preuve de trace, au même
+  // titre qu'un `traceAutomaticAgentStop` posé juste avant l'arrêt.
+  const FUNNEL_LITERAL = /stopAgentWithTrace\(\{[\s\S]{0,600}?reason:\s*"[^"]+"/;
+  const MANUAL_MARKER = "R3-EXCEPTION-MANUEL";
 
   /** Toutes les positions d'un motif dans la source (définitions exclues). */
   const positions = (re, definitionMarker) => {
@@ -181,7 +191,10 @@ describe("matrice des sites d'arrêt — aucun chemin automatique muet", () => {
     // Cardinalité ÉPINGLÉE : un nouveau site d'arrêt (donc potentiellement muet)
     // fait échouer ce test — il faut alors lui ajouter sa trace et mettre à jour
     // ces nombres, jamais ajouter un arrêt silencieux.
-    expect(abortSites).toHaveLength(3);
+    // 4 = 2 détections de boucle + l'arrêt automatique de run (dans
+    // `stopAgentsRun`, via l'entonnoir) + l'arrêt MANUEL du même mécanisme
+    // (bouton « tout arrêter », exception déclarée, non journalisée).
+    expect(abortSites).toHaveLength(4);
     expect(stopRunSites).toHaveLength(3);
     expect(watchdogSites).toHaveLength(2);
     expect(settleStopSites).toHaveLength(3);
@@ -192,15 +205,18 @@ describe("matrice des sites d'arrêt — aucun chemin automatique muet", () => {
     expect(watchdogTracesInsideCallee, "le watchdog ne trace pas son motif").toBe(true);
 
     const check = (site, kind) => {
+      // Arrêt VOLONTAIRE déclaré (bouton Stop) : hors du périmètre de la règle 3.
+      if (SRC.slice(Math.max(0, site - 400), site).includes(MANUAL_MARKER)) return;
       const window = SRC.slice(Math.max(0, site - 1600), site);
       const call = SRC.slice(site, site + 220);
       const literalTrace = TRACE_LITERAL.test(window);
+      const funnelTrace = FUNNEL_LITERAL.test(window);
       const callerReason = CALL_LITERAL_REASON.test(call) && stopRunBody.includes("await traceAutomaticAgentStop");
       const internalTrace =
         insideStopRun(site) && TRACE_ANY.test(window) && stopRunBody.includes("await traceAutomaticAgentStopForRun");
       const calleeTrace = kind === "settleWatchdogRelease" && watchdogTracesInsideCallee;
       expect(
-        literalTrace || callerReason || internalTrace || calleeTrace,
+        literalTrace || funnelTrace || callerReason || internalTrace || calleeTrace,
         `${kind} muet à la position ${site} : aucune trace de motif avant l'arrêt`,
       ).toBe(true);
     };
@@ -228,9 +244,14 @@ describe("matrice des sites d'arrêt — aucun chemin automatique muet", () => {
       const found = (SRC.match(new RegExp(`reason: "${reason}"`, "g")) || []).length;
       expect(found, `motif "${reason}" attendu ${count} fois, trouvé ${found}`).toBe(count);
     }
-    // Détecteurs attendus pour les deux chemins automatiques explicites.
-    expect(SRC).toContain('reason: "idle-timeout", detected: "no-event"');
-    expect(SRC).toContain('reason: "turn-cap", detected: "pi-turns"');
+    // Détecteurs attendus pour les deux chemins automatiques explicites (le
+    // motif est désormais porté par l'ENTONNOIR : même paire, autre forme).
+    expect(SRC).toMatch(/reason: "idle-timeout",\s*\n\s*detected: "no-event"/);
+    expect(SRC).toMatch(/reason: "turn-cap",\s*\n\s*detected: "pi-turns"/);
+    // Aucun site d'arrêt automatique ne doit plus invoquer un IPC d'arrêt HORS
+    // entonnoir : le détecteur de l'entonnoir le prouve (liste épinglée).
+    const funnelScan = scanAutomaticStopSites(SRC);
+    expect(funnelScan.untraced.map((s) => `${s.kind}@${s.line}`)).toEqual([]);
   });
 
   it("le module de trace ne renonce plus en silence quand le chemin est vide", () => {
@@ -262,7 +283,9 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
   const SRC_BUS = readFileSync(new URL("./agents-bus.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
   /** Motif d'appel de trace (forme littérale ET forme transmise à la run). */
-  const TRACE_SRC = "traceAutomaticAgentStop[A-Za-z]*[(]";
+  // Les arrêts passent désormais par l'ENTONNOIR UNIQUE : `stopAgentWithTrace({…})`
+  // est un point de trace à part entière (il écrit AVANT d'appeler l'arrêt).
+  const TRACE_SRC = "(?:traceAutomaticAgentStop[A-Za-z]*|stopAgentWithTrace)[(]";
 
   /** Positions d'un motif dans une source. */
   const positionsIn = (src, re) => {
@@ -378,7 +401,9 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
 
   it("agents-bus.js : TOUS les sites terminaux sont tracés dans leur bloc", () => {
     const kinds = [
-      [/invoke\("abort_agent_process"/g, "abort_agent_process", 3],
+      // 2 boucles + 1 arrêt automatique de run (entonnoir) + 1 arrêt MANUEL
+      // déclaré (R3-EXCEPTION-MANUEL : bouton « tout arrêter »).
+      [/invoke\("abort_agent_process"/g, "abort_agent_process", 4],
       // Les deux arrêts de processus ajoutés par la fermeture des faux verrous
       // (session périmée → redémarrage ; échec de lancement → nettoyage).
       [/invoke\("stop_agent_process"/g, "stop_agent_process", 2],
@@ -480,8 +505,16 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     // 4 arrêts automatiques (boucle outils, boucle texte, …) + l'abandon TRACÉ
     // d'une file de délégations (`abandonQueuedDelegations`, règle 4).
     expect(counts.sa, "traces de l'assistant").toBe(5);
-    // 18 traces existantes + 5 fins de session par erreur du bus.
-    expect(counts.bus, "traces du bus").toBeGreaterThanOrEqual(23);
+    // 18 traces existantes + 5 fins de session par erreur du bus = 23, MOINS les
+    // 5 traces absorbées par l'ENTONNOIR UNIQUE (2 boucles, 1 plafond MAX_TURNS,
+    // 1 session périmée, 1 nettoyage post-spawn) = 18, PLUS 1 ajoutée depuis
+    // (arrêt auto de run devenu tracé dans le mécanisme) = 19 traces explicites.
+    expect(positionsIn(SRC_BUS, /traceAutomaticAgentStop[A-Za-z]*[(]/g).length, "traces explicites du bus").toBe(19);
+    // Points de trace de l'entonnoir : 2 boucles + 1 timeout + 1 plafond pi +
+    // 1 plafond MAX_TURNS + 1 arrêt auto de run + 1 session périmée + 1 nettoyage.
+    expect(positionsIn(SRC_BUS, /stopAgentWithTrace[(]/g).length, "appels d'entonnoir du bus").toBe(8);
+    // Total des points de trace du bus (traces explicites + entonnoir) : épinglé.
+    expect(counts.bus, "points de trace du bus").toBe(27);
   });
 
   it("un site terminal ajouté sans trace fait échouer la matrice (preuve du contrôle)", () => {
@@ -500,9 +533,9 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       const fake = SRC_BUS.replace(anchor, silentStop + anchor);
       expect(fake, `injection impossible : ancre introuvable (${anchor})`).not.toBe(SRC_BUS);
       const res = precedences(fake, /invoke\("abort_agent_process"/g, `fake@${anchor}`);
-      expect(res.sites, `le site injecté avant ${anchor} n'est pas vu`).toBe(4);
+      expect(res.sites, `le site injecté avant ${anchor} n'est pas vu`).toBe(5);
       expect(res.untraced.length, `la matrice doit voir le site muet injecté avant ${anchor}`).toBe(1);
-      expect(res.traced, `les 3 vrais sites doivent rester tracés (${anchor})`).toBe(3);
+      expect(res.traced, `les 4 vrais sites doivent rester tracés (${anchor})`).toBe(4);
     }
   });
 });
