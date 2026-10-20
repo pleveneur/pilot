@@ -1065,6 +1065,25 @@ identiques le restent. Correctif **strictement monotone** (il ne peut que retire
 des détections) ; aucun seuil changé, aucun outil codé en dur (tout champ de
 contenu reconnu : `edits`, `content`, `newContent`, `newText`, `patch`, `diff`…).
 
+**Faux positif corrigé (lectures et consultations)** : une répétition en
+**LECTURE SEULE** n'est **jamais** un motif d'arrêt automatique. Deux runs de
+codeur ont été tuées par un `abort_agent_process` ciblé alors qu'elles
+relançaient la même consultation (`git status --short`, `git diff`, `sed -n`,
+`rg`) entre deux corrections légitimes. Le bus route désormais les outils de
+lecture **et** les commandes shell consultatives vers l'historique de lecture
+(`ctx.readOnlyToolCallsByAgent`), qui reste alimenté pour l'**observabilité**
+mais n'est **plus jamais examiné** par la détection de boucle. Classifieur pur
+`isReadOnlyShellCommand(command)` (loop-detection.js) : il ne retire un arrêt que
+si la commande est **prouvée** consultative — chaque segment d'un enchaînement
+(`&&`, `||`, `;`, `|`) doit l'être, aucune redirection d'écriture (`>`, `>>`,
+`tee`), pas de `sed -i`, pas de sous-commande `git` mutatrice
+(`commit|push|checkout|restore|reset|add|rm|mv|stash push|apply`, `branch nom`…),
+pas de `rm|mv|cp|mkdir|touch`, `npm install|run`, `cargo fmt|fix`. Cas par
+défaut : **false** (prudence). Les empreintes **mutatrices** (`edit`/`write`,
+`bash` mutateur, outil inconnu) gardent le comportement historique et les mêmes
+seuils ; les autres filets restent inchangés (inactivité, plafond de tours pi,
+moniteur d'anomalie Rust, boucle de texte).
+
 **Motif journalisé sur disque** : chaque arrêt AUTOMATIQUE d'agent écrit une
 ligne dans `<projet>/.pilot/agent-stops.log` (append logique via les commandes
 IPC existantes, rotation 256 Ko, fail-open côté arrêt) :
@@ -1122,15 +1141,22 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
   le test.
 
 <!-- HELP:loop-detection-writes -->
-### Détection de boucle : modifier plusieurs fois le même fichier n'est pas une boucle
+### Détection de boucle : une lecture n'est jamais une boucle
 Pilot arrête automatiquement un agent qui **répète exactement** la même chose
-(même texte ou mêmes appels d'outils) sans avancer. Jusqu'ici, **modifier
-plusieurs fois le même fichier** pouvait être pris à tort pour une boucle et
-arrêter l'agent en plein travail : l'outil ne regardait que le **nom du
-fichier**, pas ce qui y était écrit. Désormais le **contenu** de chaque écriture
-est pris en compte : trois modifications différentes du même fichier se
-poursuivent normalement, seules des écritures **identiques** répétées comptent
-comme une boucle.
+sans avancer. Deux règles le limitent désormais pour ne plus couper un agent qui
+travaille :
+- **Consulter n'est jamais une boucle.** Relancer `git status`, `git diff`,
+  `git log`, `ls`, `cat`, `grep`/`rg`, `sed -n`, `wc`, `npm ls`… entre deux
+  corrections est un travail normal : ces lectures peuvent être répétées autant
+  que nécessaire, elles **ne déclenchent aucun arrêt automatique** (elles
+  restent enregistrées pour le diagnostic). Seules les actions qui **modifient**
+  (écriture d'un fichier, commande qui écrit ou exécute) peuvent fonder un
+  arrêt, ainsi qu'une répétition de **texte**.
+- **Modifier plusieurs fois le même fichier n'est pas une boucle** : le
+  **contenu** de chaque écriture est pris en compte ; seules des écritures
+  **identiques** répétées comptent comme une boucle.
+Les **autres filets de sécurité** restent actifs : inactivité prolongée, plafond
+de tours, agent bloqué repéré par le moniteur, boucle de texte.
 Chaque **arrêt automatique** laisse une ligne dans le fichier
 **`.pilot/agent-stops.log`** du projet (cause de l'arrêt, type de détection,
 agent, session) : utile pour comprendre après coup pourquoi un agent s'est

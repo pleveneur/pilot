@@ -13,6 +13,7 @@ import {
   MAX_LOOP_ESCALATION,
   LOOP_ESCALATION_LEVELS,
   normalizeLoopLine,
+  isReadOnlyShellCommand,
 } from "./loop-detection.js";
 
 describe("normalizeLoopLine", () => {
@@ -497,5 +498,141 @@ describe("buildActionLoopCorrectionPrompt", () => {
 
   it("expose la constante de relances max", () => {
     expect(ACTION_LOOP_MAX_ESCALATION).toBe(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Décision « une lecture n'est JAMAIS un motif d'arrêt automatique ».
+// `isReadOnlyShellCommand` classe une ligne de commande shell comme CONSULTATIVE
+// (aucun effet de bord). Il est branché sur le bus d'agents : une commande
+// consultative répétée rejoint l'historique de LECTURE, qui ne peut plus arrêter
+// un agent. Le cas par défaut est false (prudence) : on ne retire un arrêt que
+// sur preuve que la commande ne modifie rien.
+// Échec du test = une commande mutatrice est classée consultative (arrêt
+// injustifié supprimé = risque de boucle infinie) OU une consultation évidente
+// est classée mutatrice (le faux positif terrain revient).
+describe("isReadOnlyShellCommand — commandes shell consultatives (lectures)", () => {
+  const readOnly = [
+    "git status",
+    "git status --short",
+    "git log --oneline -5",
+    "git diff",
+    "git diff --stat",
+    "git show HEAD",
+    "git branch",
+    "git branch -a",
+    "git rev-parse HEAD",
+    "git ls-files",
+    "git blame src/js/main.js",
+    "git stash list",
+    "ls",
+    "ls -la src/js",
+    "dir",
+    "cat package.json",
+    "head -20 src/js/main.js",
+    "tail -5 src/js/main.js",
+    "wc -l src/js/main.js",
+    "rg TODO src",
+    "grep -n functions src/js/main.js",
+    "findstr foo src/js/main.js",
+    "find . -name *.js",
+    "pwd",
+    "type package.json",
+    "sed -n 1,20p src/js/main.js",
+    "sort package.json",
+    "uniq /tmp/in.txt",
+    "cut -d, -f1 data.csv",
+    "node -v",
+    "npm ls",
+    "cargo --version",
+    // Enchaînements : TOUS les segments consultatifs.
+    "cd x && git status",
+    "git status --short; git diff --stat",
+    "git log --oneline | head -5",
+    "git --version",
+    "npm --version",
+    "sed -n 1,5p f 2>&1",
+    "  git   status  ",
+  ];
+
+  const notReadOnly = [
+    // Mutateurs git explicites.
+    "git commit -am x",
+    "git push",
+    "git checkout main",
+    "git restore src/js/main.js",
+    "git reset --hard",
+    "git add .",
+    "git rm fichier",
+    "git mv a b",
+    "git stash push",
+    "git stash apply",
+    "git branch nouvelle-branche",
+    "git tag v1.0.0",
+    // Redirections d'écriture.
+    "echo x > f",
+    "cat a >> f",
+    "git log > out.txt",
+    "rg TODO src | tee out.txt",
+    // sed en place.
+    "sed -i s/a/b/ f",
+    "sed -i.bak s/a/b/ f",
+    // Mutateurs de fichiers.
+    "rm -f fichier",
+    "mv a b",
+    "cp a b",
+    "mkdir dossier",
+    "touch fichier",
+    "find . -delete",
+    "sort -o out.txt f",
+    "uniq in.txt out.txt",
+    // npm / cargo qui exécutent ou installent.
+    "npm install",
+    "npm run build",
+    "npm test",
+    "cargo fmt",
+    "cargo fix --allow-dirty",
+    "cargo test --lib",
+    "node script.js",
+    // Enchaînement contenant une commande mutatrice.
+    "git status && rm -f x",
+    "git status; npm install",
+    "cat f | tee out.txt",
+    "git status && echo x > f",
+    // Outil inconnu / cas dégénérés : prudence (false par défaut).
+    "commandeInconnue --flag",
+    "",
+    "   ",
+    null,
+    undefined,
+    42,
+    {},
+  ];
+
+  it("classe comme consultatives les commandes de LECTURE prouvées", () => {
+    for (const cmd of readOnly) {
+      expect(isReadOnlyShellCommand(cmd), `devrait être consultative : ${JSON.stringify(cmd)}`).toBe(true);
+    }
+  });
+
+  it("refuse toute commande qui MODIFIE, redirige ou exécute du code", () => {
+    for (const cmd of notReadOnly) {
+      expect(isReadOnlyShellCommand(cmd), `ne devrait PAS être consultative : ${JSON.stringify(cmd)}`).toBe(false);
+    }
+  });
+
+  it("est consultative seulement si CHAQUE segment de l'enchaînement l'est", () => {
+    expect(isReadOnlyShellCommand("cd x && git status")).toBe(true);
+    expect(isReadOnlyShellCommand("cd x && git status && npm install")).toBe(false);
+    expect(isReadOnlyShellCommand("git status | head -3")).toBe(true);
+    expect(isReadOnlyShellCommand("git status | sed -i s/a/b/")).toBe(false);
+  });
+
+  it("n'est pas consultative dès qu'une redirection écrit un fichier", () => {
+    expect(isReadOnlyShellCommand("git status --short")).toBe(true);
+    expect(isReadOnlyShellCommand("git status --short > log.txt")).toBe(false);
+    expect(isReadOnlyShellCommand("git status --short >> log.txt")).toBe(false);
+    // La duplication de descripteur n'écrit PAS de fichier.
+    expect(isReadOnlyShellCommand("git status --short 2>&1")).toBe(true);
   });
 });

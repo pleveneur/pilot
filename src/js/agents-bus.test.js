@@ -1456,16 +1456,17 @@ describe("chemins de LANCEMENT : plancher d'inactivité obligatoire (jamais de k
 });
 
 // ── RÈGLE 2 (audit « verrous règles 1-4-2 ») : exclusion des outils de LECTURE ─
-// P0-2 : les outils de LECTURE PURE (read/search/grep/list/ls/find/glob…) sont
-// EXCLUS du comptage de boucle principal (`toolCallsByAgent`) et suivis dans un
-// historique SÉPARÉ, avec un seuil PLUS ÉLEVÉ (`detectRepeatedActions`,
-// minRepeat 8 sur une fenêtre de 20) : un agent qui EXPLORE (relit un fichier,
-// refait une recherche) ne doit JAMAIS être arrêté, mais une boucle SOUTENUE de
-// lectures identiques doit toujours être détectée — la protection ne doit pas
-// neutraliser le détecteur.
+// P0-2 : les outils de LECTURE PURE (read/search/grep/list/ls/find/glob…) et les
+// commandes shell CONSULTATIVES (git status/diff/log, ls, cat, rg, sed -n, npm ls…)
+// sont EXCLUS du comptage de boucle principal (`toolCallsByAgent`) et suivis dans
+// un historique SÉPARÉ (`readOnlyToolCallsByAgent`) qui ne peut plus fonder AUCUN
+// arrêt automatique : une répétition de lecture est une exploration légitime, pas
+// une boucle (deux runs de codeur ont été tuées pour avoir relancé `git status
+// --short` entre deux corrections — décision : une lecture n'arrête jamais un
+// agent). Seules les actions qui MODIFIENT (edit/write/patch, bash mutateur,
+// outil inconnu) peuvent encore déclencher un arrêt.
 // Échec du test = l'exclusion des lectures a disparu (faux positifs sur
-// l'exploration) OU le détecteur de lectures a été neutralisé (boucle réelle
-// laissée passer).
+// l'exploration rétablis) OU une lecture est redevenue un motif d'arrêt.
 describe("boucle d'outils — les outils de LECTURE sont exclus du comptage (règle 2)", () => {
   const PROJECT = "projetLectures";
   const AGENT = "lecteur";
@@ -1531,11 +1532,12 @@ describe("boucle d'outils — les outils de LECTURE sont exclus du comptage (rè
     expect(getRunState(PROJECT)).toBe("running");
   });
 
-  it("seuil PLUS ÉLEVÉ pour les lectures : 7 + 7 lectures identiques (deux fichiers) ne coupent rien", () => {
-    // 7 occurrences de chaque empreinte : sous le seuil 8 des lectures, mais
-    // AU-DESSUS du seuil 5 par défaut — preuve que le seuil dédié est bien
-    // appliqué ET que les lectures ne comptent pas dans l'historique principal
-    // (où 7 identiques suffiraient à arrêter l'agent).
+  it("7 + 7 lectures identiques (deux fichiers) ne coupent rien", () => {
+    // 14 lectures au total, dont 7 occurrences de chaque empreinte : au-dessus
+    // de tous les seuils historiques — preuve que les lectures ne comptent pas
+    // dans l'historique principal (où 7 identiques suffiraient à arrêter un
+    // agent) et qu'aucun seuil de lectures ne subsiste (décision : une lecture
+    // n'arrête jamais un agent). Assertions inchangées.
     const ctx = beginReadRun();
     reads(7, "src/a.js");
     reads(7, "src/b.js");
@@ -1544,13 +1546,23 @@ describe("boucle d'outils — les outils de LECTURE sont exclus du comptage (rè
     expect(ctx.readOnlyToolCallsByAgent[AGENT]).toHaveLength(14);
   });
 
-  it("9 lectures strictement identiques : la boucle SOUTENUE est détectée (le détecteur n'est pas neutralisé)", () => {
+  // ADAPTATION AUTORISÉE (une seule, documentée dans
+  // RAPPORT-boucle-lectures-jamais-arret.md) : ce cas exigeait l'inverse
+  // (9 lectures identiques → boucle soutenue détectée → arrêt). La décision est
+  // désormais explicite : une répétition d'opération en LECTURE SEULE n'est
+  // JAMAIS un motif d'arrêt automatique. Seules les actions qui MODIFIENT
+  // peuvent fonder un arrêt.
+  it("9 lectures strictement identiques : AUCUN arrêt (une lecture n'est jamais une boucle)", () => {
     const ctx = beginReadRun();
     reads(9);
-    const abort = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === "abort_agent_process");
-    expect(abort, "une boucle de lectures identiques doit être arrêtée").toBeTruthy();
-    expect(abort[1].agentId).toBe(AGENT);
-    expect(ctx.loopCorrectionPending[AGENT]).toBe(true);
+    expect(
+      stopCalls(),
+      "une répétition de lectures ne doit jamais arrêter un agent",
+    ).toEqual([]);
+    expect(ctx.loopCorrectionPending[AGENT]).toBeFalsy();
+    // Elles restent tracées dans l'historique de lecture (observabilité).
+    expect(ctx.readOnlyToolCallsByAgent[AGENT]).toHaveLength(9);
+    expect(getRunState(PROJECT)).toBe("running");
   });
 
   it("les outils qui MODIFIENT restent comptés dans l'historique principal (5 bash identiques → boucle)", () => {
@@ -1559,5 +1571,110 @@ describe("boucle d'outils — les outils de LECTURE sont exclus du comptage (rè
     expect(ctx.toolCallsByAgent[AGENT]).toHaveLength(5);
     expect(ctx.readOnlyToolCallsByAgent[AGENT] || []).toEqual([]);
     expect(ctx.loopCorrectionPending[AGENT]).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DÉCISION « une lecture n'est JAMAIS un motif d'arrêt automatique »
+// Cause racine (agent-ops.log) : deux runs `codeur` tuées par un
+// `abort_agent_process` CIBLÉ émis par la détection de boucle du bus, alors que
+// l'agent travaillait normalement (fichiers écrits 1 s avant) : il relançait la
+// même CONSULTATION (`git status --short`, `git diff`, `sed -n`, `rg`) entre deux
+// corrections légitimes et atteignait le seuil.
+// Correctif : une commande shell CONSULTATIVE est routée vers l'historique de
+// LECTURE, lequel ne fonde plus aucun arrêt (il reste alimenté pour
+// l'observabilité). Les actions qui MODIFIENT gardent le comportement historique.
+describe("boucle d'outils — une répétition de LECTURE n'arrête jamais l'agent (décision)", () => {
+  const PROJECT = "projetLecturesShell";
+  const AGENT = "codeur";
+  let nowSpy;
+  let clock;
+
+  beforeEach(() => {
+    endRun(PROJECT);
+    vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "file_exists" ? true : undefined));
+    clock = Date.now();
+    nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (clock += 600));
+  });
+
+  afterEach(() => {
+    nowSpy.mockRestore();
+    endRun(PROJECT);
+    vi.mocked(invoke).mockClear();
+  });
+
+  const beginLoopRun = () => {
+    const ctx = beginRun(PROJECT);
+    ctx.activeAgents.add(AGENT);
+    ctx.agentProject[AGENT] = PROJECT;
+    return ctx;
+  };
+
+  const toolEvent = (toolName, args) => ({
+    payload: {
+      project: PROJECT,
+      agent_id: AGENT,
+      event: { type: "tool_execution_start", toolName, args },
+    },
+  });
+
+  const stopCalls = () =>
+    vi.mocked(invoke).mock.calls.filter(([cmd]) =>
+      /^(abort_agent_process|stop_agent_process|stop_agent_processes)$/.test(String(cmd)),
+    );
+
+  it("12 `git status --short` entrecoupés de 12 `edit` DIFFÉRENTS : AUCUN arrêt", () => {
+    const ctx = beginLoopRun();
+    for (let i = 0; i < 12; i++) {
+      handleAgentEvent(toolEvent("bash", { command: "git status --short" }));
+      handleAgentEvent(
+        toolEvent("edit", {
+          path: "src/js/main.js",
+          edits: [{ oldText: `const a${i} = 1;`, newText: `const a${i} = 2;` }],
+        }),
+      );
+    }
+    expect(stopCalls(), "relancer la même consultation n'est pas une boucle").toEqual([]);
+    expect(ctx.loopCorrectionPending[AGENT]).toBeFalsy();
+    // Les consultations restent tracées dans l'historique de LECTURE…
+    expect(ctx.readOnlyToolCallsByAgent[AGENT]).toHaveLength(12);
+    // … et JAMAIS dans l'historique qui peut fonder un arrêt.
+    expect(ctx.toolCallsByAgent[AGENT]).toHaveLength(12);
+    expect(ctx.toolCallsByAgent[AGENT].every((fp) => fp.includes("::edit::"))).toBe(true);
+    expect(getRunState(PROJECT)).toBe("running");
+  });
+
+  it("12 consultations identiques sans aucune écriture : AUCUN arrêt (observabilité seulement)", () => {
+    const ctx = beginLoopRun();
+    for (let i = 0; i < 12; i++) handleAgentEvent(toolEvent("bash", { command: "git diff --stat" }));
+    expect(stopCalls()).toEqual([]);
+    expect(ctx.readOnlyToolCallsByAgent[AGENT]).toHaveLength(12);
+    expect(ctx.toolCallsByAgent[AGENT] || []).toEqual([]);
+  });
+
+  it("NON-RÉGRESSION : 3 `edit` au MÊME contenu → toujours détecté et arrêté", () => {
+    const ctx = beginLoopRun();
+    for (let i = 0; i < 3; i++) {
+      handleAgentEvent(
+        toolEvent("edit", {
+          path: "src/js/main.js",
+          edits: [{ oldText: "const x = 1;", newText: "const x = 2;" }],
+        }),
+      );
+    }
+    const abort = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === "abort_agent_process");
+    expect(abort, "trois écritures IDENTIQUES restent une boucle").toBeTruthy();
+    expect(abort[1].agentId).toBe(AGENT);
+    expect(ctx.loopCorrectionPending[AGENT]).toBe(true);
+  });
+
+  it("NON-RÉGRESSION : 9 `bash` MUTATEURS identiques → toujours détecté et arrêté", () => {
+    const ctx = beginLoopRun();
+    for (let i = 0; i < 9; i++) handleAgentEvent(toolEvent("bash", { command: "rm -rf build && npm run build" }));
+    const abort = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === "abort_agent_process");
+    expect(abort, "une commande mutatrice répétée reste une boucle").toBeTruthy();
+    expect(abort[1].agentId).toBe(AGENT);
+    expect(ctx.loopCorrectionPending[AGENT]).toBe(true);
+    expect(ctx.readOnlyToolCallsByAgent[AGENT] || []).toEqual([]);
   });
 });

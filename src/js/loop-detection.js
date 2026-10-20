@@ -738,3 +738,230 @@ export function buildAgentStopRequest({ agentId, projectPath, uid } = {}) {
     guarded: false,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Classement des commandes shell CONSULTATIVES (décision : une lecture n'est
+// JAMAIS un motif d'arrêt automatique)
+//
+// Constat terrain (`agent-ops.log`) : deux runs de codeur ont été tuées par un
+// `abort_agent_process` CIBLÉ émis par le détecteur de boucle du bus alors que
+// l'agent travaillait normalement — il relançait simplement la même CONSULTATION
+// (`git status --short`, `git diff`, `sed -n`, `rg`) entre deux corrections
+// légitimes. Une répétition de LECTURE n'est pas une boucle : c'est du travail.
+//
+// Règle : seules les actions qui MODIFIENT (edit/write/patch, bash MUTATEUR,
+// outil inconnu) peuvent fonder un arrêt pour boucle. Les autres filets de
+// sécurité restent inchangés (timeout d'inactivité, plafond de tours pi,
+// moniteur d'anomalie Rust, détection de boucle de TEXTE).
+//
+// `isReadOnlyShellCommand` est le classifieur (PUR, sans dépendance) : il ne
+// retire un arrêt que si la commande est PROUVÉE consultative. Cas par défaut :
+// false (prudence — on ne supprime un arrêt que sur preuve).
+
+// Commandes (ou sous-commandes) strictement consultatives.
+const SHELL_READ_ONLY_COMMANDS = new Set([
+  "ls", "dir", "cat", "head", "tail", "wc", "rg", "grep", "findstr", "find",
+  "pwd", "type", "sort", "uniq", "cut", "cd", "diff", "stat", "du", "df",
+]);
+// Commandes qui MODIFIENT : jamais consultatives (liste nommée pour que la
+// règle soit lisible ; elles seraient de toute façon « inconnues » → false).
+const SHELL_FORBIDDEN_COMMANDS = new Set([
+  "rm", "mv", "cp", "mkdir", "touch", "tee", "rmdir", "chmod", "chown",
+  "ln", "dd", "truncate", "install", "patch",
+]);
+// Préfixes neutres : la commande réellement exécutée est celle qui les suit.
+const SHELL_NEUTRAL_PREFIXES = new Set(["time", "command"]);
+// Sous-commandes `git` consultatives.
+const GIT_READ_ONLY_SUBCOMMANDS = new Set([
+  "status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree",
+  "blame", "describe", "shortlog", "grep", "cat-file", "name-rev",
+  "reflog", "whatchanged", "version", "help",
+]);
+// Sous-commandes `git` consultatives SEULEMENT sans argument positionnel
+// (`git branch` liste, `git branch nom` CRÉE une branche → mutateur).
+const GIT_FLAG_ONLY_SUBCOMMANDS = new Set(["branch", "tag", "remote"]);
+// Sous-commandes `npm` consultatives (`npm ls` OUI, `npm run`/`npm install` NON).
+const NPM_READ_ONLY_SUBCOMMANDS = new Set([
+  "ls", "list", "view", "info", "show", "outdated", "why",
+]);
+// Options de `find` qui écrivent ou exécutent une commande.
+const FIND_MUTATING_OPTIONS = /^-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/;
+
+/** Retire les guillemets englobants d'un token shell. */
+function unquoteToken(token) {
+  if (typeof token !== "string") return "";
+  const t = token.trim();
+  if (t.length >= 2 && ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+/**
+ * Nom de commande normalisé d'un token shell : minuscules, sans chemin, sans
+ * suffixe d'exécutable Windows (`git.exe` → `git`).
+ * @param {string} token
+ * @returns {string}
+ */
+function baseCommandName(token) {
+  const raw = unquoteToken(token);
+  if (!raw) return "";
+  const last = raw.split(/[\\/]/).pop() || raw;
+  return last.toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/i, "");
+}
+
+/**
+ * Vrai si le segment contient une redirection d'ÉCRITURE de fichier (`>`, `>>`).
+ * Les duplications de descripteur (`2>&1`, `1>&2`) ne sont PAS des écritures :
+ * elles sont neutralisées avant l'examen.
+ * @param {string} segment
+ * @returns {boolean}
+ */
+function hasWriteRedirection(segment) {
+  const withoutFdDup = segment.replace(/\d*>&\d*/g, " ");
+  return withoutFdDup.includes(">");
+}
+
+/**
+ * `sed` n'est consultatif que dans sa forme explicite de lecture `-n` et sans
+ * édition en place (`-i` / `--in-place`).
+ * @param {string[]} args
+ * @returns {boolean}
+ */
+function sedIsReadOnly(args) {
+  if (!args.length) return false;
+  const mutating = args.some(
+    (a) => /^-i/.test(a) || a === "--in-place" || a.startsWith("--in-place="),
+  );
+  if (mutating) return false;
+  return args.some((a) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(a) || a === "--quiet" || a === "--silent");
+}
+
+/**
+ * Analyse d'un segment `git …` (le premier token est `git`).
+ * @param {string[]} tokens - tokens du segment, `git` inclus
+ * @returns {boolean}
+ */
+function gitSegmentIsReadOnly(tokens) {
+  const rest = tokens.slice(1).map(unquoteToken);
+  if (!rest.length) return false; // `git` seul : pas de commande
+  const subIndex = rest.findIndex((t) => !t.startsWith("-"));
+  if (subIndex < 0) {
+    // `git --version`, `git --help` : consultatif. `git --no-pager` sans
+    // sous-commande n'exécute rien d'utile → false (prudence).
+    return rest.some((t) => t === "--version" || t === "-v" || t === "--help" || t === "-h");
+  }
+  const sub = rest[subIndex].toLowerCase();
+  const after = rest.slice(subIndex + 1);
+  if (sub === "stash") {
+    const action = after.find((t) => !t.startsWith("-"));
+    return action === "list" || action === "show";
+  }
+  if (GIT_FLAG_ONLY_SUBCOMMANDS.has(sub)) return after.every((t) => t.startsWith("-"));
+  return GIT_READ_ONLY_SUBCOMMANDS.has(sub);
+}
+
+/**
+ * Analyse d'un segment `npm …` : sous-commande consultative, ou option de
+ * version seule (`npm --version`).
+ * @param {string[]} args - arguments après `npm`
+ * @returns {boolean}
+ */
+function npmSegmentIsReadOnly(args) {
+  if (!args.length) return false;
+  const subIndex = args.findIndex((t) => !t.startsWith("-"));
+  if (subIndex < 0) return args.some((t) => t === "--version" || t === "-v");
+  if (NPM_READ_ONLY_SUBCOMMANDS.has(args[subIndex].toLowerCase())) return true;
+  // `npm ls -g` / `npm list --depth=0` : déjà couverts. Tout le reste
+  // (install, run, test, ci…) est mutateur ou exécute du code → false.
+  return false;
+}
+
+/**
+ * Analyse d'un SEGMENT de ligne de commande (déjà découpé sur `&&`, `||`, `;`,
+ * `|` et saut de ligne).
+ * @param {string} segment
+ * @returns {boolean}
+ */
+function shellSegmentIsReadOnly(segment) {
+  const tokens = segment.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+  if (!tokens.length) return false;
+  // `tee` écrit un fichier (ou alimente une commande qui écrit) : jamais
+  // consultatif, quel que soit son emplacement dans le segment.
+  if (tokens.some((t) => baseCommandName(t) === "tee")) return false;
+
+  let i = 0;
+  // Affectations d'environnement en tête (`FOO=bar git status`).
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+  // Préfixes neutres (`time git status`).
+  while (i < tokens.length && SHELL_NEUTRAL_PREFIXES.has(baseCommandName(tokens[i]))) i++;
+  if (i >= tokens.length) return false;
+
+  const cmd = baseCommandName(tokens[i]);
+  const args = tokens.slice(i + 1).map(unquoteToken);
+  if (!cmd) return false;
+  if (SHELL_FORBIDDEN_COMMANDS.has(cmd)) return false;
+
+  if (cmd === "git") return gitSegmentIsReadOnly(tokens.slice(i));
+  if (cmd === "sed") return sedIsReadOnly(args);
+  if (cmd === "npm") return npmSegmentIsReadOnly(args);
+  if (cmd === "node") {
+    return args.length > 0 && args.every((a) => a === "-v" || a === "--version");
+  }
+  if (cmd === "cargo") {
+    return args.length > 0 && args.every((a) => ["-V", "--version", "-h", "--help"].includes(a));
+  }
+  if (cmd === "find") return !args.some((a) => FIND_MUTATING_OPTIONS.test(a));
+  if (cmd === "sort") {
+    return !args.some((a) => a === "-o" || /^-o./.test(a) || a === "--output" || a.startsWith("--output="));
+  }
+  if (cmd === "uniq") {
+    // `uniq entree sortie` ÉCRIT `sortie` : au plus un argument positionnel.
+    return args.filter((a) => !a.startsWith("-")).length <= 1;
+  }
+  return SHELL_READ_ONLY_COMMANDS.has(cmd);
+}
+
+/**
+ * Classe une ligne de commande shell comme CONSULTATIVE (lecture seule) ou non.
+ *
+ * Renvoie `true` UNIQUEMENT quand la commande entière est prouvée consultative :
+ * chaque segment de l'enchaînement (`&&`, `||`, `;`, `|`, saut de ligne) est
+ * lui-même consultatif, et aucun segment ne redirige vers un fichier (`>`, `>>`,
+ * `tee`). Dès qu'un segment est mutateur ou inconnu, le résultat est `false`.
+ *
+ * Couverture : `git status|log|diff|show|branch|rev-parse|ls-files|blame|stash
+ * list`, `ls`, `dir`, `cat`, `head`, `tail`, `wc`, `rg`, `grep`, `findstr`,
+ * `find`, `pwd`, `type`, `sed -n` (sans `-i`), `sort`, `uniq`, `cut`,
+ * `node -v`, `npm ls`, `cargo --version`.
+ *
+ * Exemples :
+ *   `git diff --stat`        → true
+ *   `git commit -am x`       → false
+ *   `echo x > f`             → false (redirection)
+ *   `sed -i s/a/b/ f`        → false
+ *   `cd x && git status`     → true (les deux segments sont consultatifs)
+ *   `npm test`               → false
+ *
+ * @param {string} command - ligne de commande shell (`bash` de l'agent)
+ * @returns {boolean} true si la commande est PROUVÉE sans effet de bord
+ */
+export function isReadOnlyShellCommand(command) {
+  if (typeof command !== "string") return false;
+  const raw = command.trim();
+  if (!raw) return false;
+
+  // Découpage en segments : un enchaînement n'est consultatif que si TOUS ses
+  // segments le sont (analyse segment par segment). Le découpage ne tient pas
+  // compte des guillemets (`rg "a|b"` est donc traité prudemment → false).
+  const segments = raw.split(/&&|\|\||;|\n|\|/);
+  let checked = 0;
+  for (const segment of segments) {
+    const s = segment.trim();
+    if (!s) continue;
+    checked++;
+    if (hasWriteRedirection(s)) return false;
+    if (!shellSegmentIsReadOnly(s)) return false;
+  }
+  return checked > 0;
+}

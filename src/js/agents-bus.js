@@ -41,6 +41,9 @@ import {
   detectRepeatedToolCalls,
   detectRepeatedActions,
   buildToolLoopFingerprint,
+  // Décision « une lecture n'est jamais un motif d'arrêt » : classifie une ligne
+  // de commande shell comme CONSULTATIVE (git status/diff/log, ls, rg, sed -n…).
+  isReadOnlyShellCommand,
   findRepeatedTail,
   buildLoopCorrectionPrompt,
   MAX_LOOP_ESCALATION,
@@ -286,6 +289,27 @@ const AGENT_READ_ONLY_TOOLS = new Set([
   "read_project_file",
   "search_project",
 ]);
+
+// Outils shell : une commande shell CONSULTATIVE (prouvée par
+// `isReadOnlyShellCommand`) est routée vers l'historique de LECTURE, jamais vers
+// l'historique qui peut fonder un arrêt (cf. décision « une lecture n'est jamais
+// une boucle » : une run de codeur a été tuée pour avoir relancé `git status
+// --short` entre deux corrections légitimes).
+const AGENT_SHELL_TOOLS = new Set(["bash", "shell"]);
+
+/**
+ * Enregistre une empreinte dans l'historique de LECTURE d'un agent (borné à 40,
+ * comme l'historique principal). Cet historique sert à l'OBSERVABILITÉ : il ne
+ * peut plus fonder un arrêt automatique (voir maybeDetectAgentLoop).
+ * @param {string} agentId
+ * @param {object} ctx - contexte de run
+ * @param {string} fingerprint
+ */
+function pushReadOnlyToolCall(agentId, ctx, fingerprint) {
+  const arr = (ctx.readOnlyToolCallsByAgent[agentId] = ctx.readOnlyToolCallsByAgent[agentId] || []);
+  arr.push(fingerprint);
+  if (arr.length > 40) arr.splice(0, arr.length - 40);
+}
 
 // ── T1 : contexte de run PAR PROJET ─────────────────────────────────────────
 // Tout l'état mutable d'une run vit dans un `runCtx` indexé par projet dans
@@ -2022,20 +2046,20 @@ function maybeDetectAgentLoop(agentId, ctx) {
   // Issue #35 : on combine detectRepeatedToolCalls (3 appels IDENTIQUES
   // CONSÉCUTIFS) et detectRepeatedActions (fenêtre glissante : une même action
   // répétée, pas besoin de consécutivité) pour couvrir les deux formes de boucle
-  // d'outils. Un agent qui enchaîne la même commande bash est arrêté dès 5
-  // occurrences dans les 20 dernières actions.
+  // d'outils. Un agent qui enchaîne la même commande bash MUTATRICE est arrêté
+  // dès 5 occurrences dans les 20 dernières actions.
+  //
+  // DÉCISION « une lecture n'est JAMAIS un motif d'arrêt automatique » :
+  // l'historique de LECTURE (`ctx.readOnlyToolCallsByAgent` — lectures
+  // d'outils read/search/grep… ET commandes shell consultatives) n'est plus
+  // examiné ici. Il reste alimenté pour l'observabilité, mais aucune répétition
+  // de lecture ne peut plus arrêter un agent : deux runs de codeur ont été tuées
+  // par ce seuil alors qu'elles relançaient `git status --short` / `git diff`
+  // entre deux corrections légitimes. Seules les actions qui MODIFIENT
+  // (edit/write/patch, bash mutateur, outil inconnu) fondent encore un arrêt.
   if (
     detectRepeatedToolCalls(ctx.toolCallsByAgent[agentId]) ||
-    detectRepeatedActions(ctx.toolCallsByAgent[agentId]) ||
-    // Issue : boucle d'outils de LECTURE PURE (read/search/grep/list/glob/find).
-    // Ces outils sont exclus du comptage principal (P0-2, faux positifs sur
-    // l'exploration légitime), mais un agent qui répète la MÊME lecture/recherche
-    // en boucle (ex: architecte qui relit le même fichier) ne serait jamais
-    // détecté. On les suit dans un historique séparé avec un seuil PLUS ÉLEVÉ
-    // (minRepeat 8 dans une fenêtre de 20) pour ne déclencher que sur une boucle
-    // soutenue, pas sur une exploration normale (lectures à offsets différents,
-    // recherches à requêtes différentes → empreintes distinctes).
-    detectRepeatedActions(ctx.readOnlyToolCallsByAgent[agentId], { minRepeat: 8 })
+    detectRepeatedActions(ctx.toolCallsByAgent[agentId])
   ) {
     ctx.loopCorrectionPending[agentId] = true;
     ctx.loopCorrectionCount[agentId] = (ctx.loopCorrectionCount[agentId] || 0) + 1;
@@ -2262,12 +2286,21 @@ export function handleAgentEvent(ev) {
     if (AGENT_READ_ONLY_TOOLS.has(toolName)) {
       // P0-2 : les outils de lecture pure ne sont PAS comptés dans l'historique
       // principal (faux positifs sur l'exploration légitime). On les suit dans
-      // un historique SÉPARÉ avec un seuil plus élevé (voir maybeDetectAgentLoop)
-      // pour détecter une boucle soutenue de lectures/recherches identiques.
-      const roFp = buildToolLoopFingerprint(toolName, event.args || event.arguments || {});
-      const roArr = (ctx.readOnlyToolCallsByAgent[agentId] = ctx.readOnlyToolCallsByAgent[agentId] || []);
-      roArr.push(roFp);
-      if (roArr.length > 40) roArr.splice(0, roArr.length - 40);
+      // un historique SÉPARÉ, jamais utilisé pour arrêter l'agent (observabilité).
+      pushReadOnlyToolCall(agentId, ctx, buildToolLoopFingerprint(toolName, event.args || event.arguments || {}));
+      maybeDetectAgentLoop(agentId, ctx);
+      return;
+    }
+    // Décision « une lecture n'est jamais un motif d'arrêt » : une commande
+    // shell CONSULTATIVE (git status/diff/log, ls, cat, rg, sed -n, wc, npm ls…)
+    // est une LECTURE. Elle rejoint l'historique de lecture (observabilité) et
+    // ne peut plus fonder un arrêt automatique — un agent qui relance la même
+    // consultation entre deux corrections légitimes n'est pas en boucle.
+    if (
+      AGENT_SHELL_TOOLS.has(toolName) &&
+      isReadOnlyShellCommand((event.args || event.arguments || {}).command || (event.args || event.arguments || {}).cmd || "")
+    ) {
+      pushReadOnlyToolCall(agentId, ctx, buildToolLoopFingerprint(toolName, event.args || event.arguments || {}));
       maybeDetectAgentLoop(agentId, ctx);
       return;
     }
