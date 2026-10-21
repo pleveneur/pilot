@@ -20,13 +20,29 @@
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
-import { toastInfo, toastSuccess, toastError } from "./toast.js";
+import { showToast, toastError } from "./toast.js";
 import { renderMarkdown } from "./preview.js";
 
 let _checking = false;
 let _pendingUpdate = null; // objet Update en attente d'installation
 let _installedVersion = null; // version courante de Pilot (ex: "0.2.17")
 let _scheduled = false; // contrôles récurrents déjà programmés (idempotence)
+
+// Version REPORTÉE par l'utilisateur (« Plus tard » / ✕). Mémorisée pour la
+// version concernée : sans cela, le contrôle récurrent réaffichait la fenêtre à
+// chaque retour de Pilot au premier plan. Le refus tient jusqu'au prochain
+// démarrage (état en mémoire), et une version DIFFÉRENTE est toujours proposée.
+let _dismissedVersion = null;
+
+// Une seule installation à la fois : un contrôle de fond tombant pendant un
+// téléchargement ne doit ni réactiver le bouton, ni masquer la progression, ni
+// permettre une seconde installation en parallèle.
+let _installing = false;
+
+// Début du dernier contrôle (toutes origines) : borne les contrôles déclenchés
+// par un retour au premier plan pour ne pas marteler le réseau sur des
+// allers-retours de fenêtres répétés.
+let _lastCheckStartedAt = 0;
 
 // Dernier contrôle : QUAND il a eu lieu et COMMENT il s'est terminé. Sans cet
 // état, « Pilot est à jour » et « le contrôle a échoué » étaient indiscernables
@@ -39,6 +55,11 @@ const STARTUP_DELAY_MS = 10000;
 // doit être proposée sans redémarrage (avant, un seul contrôle ~10 s après le
 // démarrage : une publication ultérieure n'était jamais vue).
 export const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 h
+
+// Intervalle minimal entre deux contrôles déclenchés par un retour de Pilot au
+// premier plan (les autres déclencheurs — démarrage, 6 h, commande manuelle —
+// ne sont pas concernés).
+export const FOREGROUND_MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
 // Repo GitHub (même source que l'endpoint updater de tauri.conf.json).
 const REPO = "pleveneur/pilot";
@@ -137,20 +158,35 @@ function ensureModal() {
   progressLabelEl = document.getElementById("update-progress-label");
 
   installBtn?.addEventListener("click", () => {
+    // Une seule installation à la fois : un second clic n'en lance jamais une
+    // deuxième, il le dit à l'utilisateur.
+    if (_installing) {
+      showToast("Installation déjà en cours : laisse-la se terminer.", "info", 5000);
+      return;
+    }
     if (_pendingUpdate) installUpdate(_pendingUpdate);
   });
-  // « Plus tard » et ✕ ferment simplement la modale (la MAJ reste disponible
-  // via la commande palette « check-update » jusqu'au prochain démarrage).
-  laterBtn?.addEventListener("click", closeModal);
-  closeBtn?.addEventListener("click", closeModal);
+  // « Plus tard » et ✕ reportent la proposition. Le refus est MÉMORISÉ pour
+  // cette version (il tient jusqu'au prochain démarrage), sinon la fenêtre
+  // reviendrait à chaque retour au premier plan. Une nouvelle version, elle,
+  // est toujours proposée.
+  laterBtn?.addEventListener("click", dismissModal);
+  closeBtn?.addEventListener("click", dismissModal);
   modalEl.addEventListener("click", (e) => {
-    if (e.target === modalEl) closeModal();
+    if (e.target === modalEl) dismissModal();
   });
   _listenersBound = true;
   return modalEl;
 }
 
-function closeModal() {
+/**
+ * Mémorise le report (« Plus tard » / ✕) puis ferme la fenêtre.
+ * Pendant une installation, la fermeture est refusée : la progression reste
+ * visible et l'utilisateur ne peut pas croire l'opération interrompue.
+ */
+function dismissModal() {
+  if (_installing) return;
+  if (_pendingUpdate?.version) _dismissedVersion = _pendingUpdate.version;
   modalEl?.classList.add("hidden");
 }
 
@@ -161,6 +197,12 @@ function showUpdateModal(update) {
     installUpdate(update);
     return;
   }
+  // Un contrôle de fond peut tomber PENDANT une installation : ne jamais
+  // réinitialiser la fenêtre (bouton réactivé, progression masquée), sans quoi
+  // une seconde installation pourrait partir.
+  if (_installing) return;
+  // Version déjà reportée par l'utilisateur : on ne la repropose pas.
+  if (_dismissedVersion && update?.version === _dismissedVersion) return;
   _pendingUpdate = update;
 
   versionEl.textContent = `v${update.version}`;
@@ -205,6 +247,11 @@ function showUpdateModal(update) {
 /** Télécharge, installe puis relance l'application. */
 async function installUpdate(update) {
   if (!ensureModal()) return;
+  if (_installing) {
+    showToast("Installation déjà en cours : laisse-la se terminer.", "info", 5000);
+    return;
+  }
+  _installing = true;
   installBtn.disabled = true;
   laterBtn.disabled = true;
   progressEl.classList.remove("hidden");
@@ -234,12 +281,13 @@ async function installUpdate(update) {
           break;
       }
     });
-    toastSuccess("Mise à jour téléchargée. Redémarrage…", 5000);
+    showToast("Mise à jour téléchargée. Redémarrage…", "success", 5000);
     await relaunch();
   } catch (e) {
     console.error("Erreur installation MAJ:", e);
     toastError("Échec de l'installation de la mise à jour.");
     // On permet un nouvel essai.
+    _installing = false;
     installBtn.disabled = false;
     laterBtn.disabled = false;
     progressEl.classList.add("hidden");
@@ -311,8 +359,16 @@ export function formatLastCheckStatus(state = _lastCheck) {
  * @returns {Promise<void>}
  */
 export async function checkForUpdate(silent = true) {
-  if (_checking) return;
+  if (_checking) {
+    // Le dire au lieu de ne rien faire : la commande manuelle semblait cassée
+    // quand un contrôle silencieux était déjà en cours.
+    if (!silent) {
+      showToast("Un contrôle des mises à jour est déjà en cours…", "info", 5000);
+    }
+    return;
+  }
   _checking = true;
+  _lastCheckStartedAt = Date.now();
   try {
     if (!_installedVersion) {
       try { _installedVersion = await getVersion(); } catch { /* ignore */ }
@@ -334,7 +390,11 @@ export async function checkForUpdate(silent = true) {
         lastSuccessAt: new Date(),
       };
       if (!silent) {
-        toastInfo(`Pilot est à jour (contrôle effectué le ${formatDateTime(_lastCheck.at)}).`, 4000);
+        showToast(
+          `Pilot est à jour (contrôle effectué le ${formatDateTime(_lastCheck.at)}).`,
+          "info",
+          8000
+        );
       }
     }
   } catch (e) {
@@ -349,7 +409,11 @@ export async function checkForUpdate(silent = true) {
     if (!silent) {
       // Message explicite : on ne prétend jamais que Pilot est à jour quand le
       // contrôle a échoué, et on donne la date du dernier contrôle.
-      toastError(`Impossible de vérifier les mises à jour : ${detail}. ${formatLastCheckStatus()}`, 8000);
+      showToast(
+        `Impossible de vérifier les mises à jour : ${detail}. ${formatLastCheckStatus()}`,
+        "error",
+        12000
+      );
     }
   } finally {
     _checking = false;
@@ -376,9 +440,11 @@ export function initUpdater() {
   setInterval(checkSilently, REFRESH_INTERVAL_MS);
 
   // Retour au premier plan (fenêtre réactivée, onglet visible) : contrôle
-  // opportuniste, silencieux lui aussi.
+  // opportuniste, silencieux lui aussi, mais au plus un par intervalle minimal
+  // (des Alt+Tab répétés ne doivent pas produire N requêtes réseau).
   const refreshOnForeground = () => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    if (Date.now() - _lastCheckStartedAt < FOREGROUND_MIN_INTERVAL_MS) return;
     checkSilently();
   };
   if (typeof window !== "undefined" && window.addEventListener) {

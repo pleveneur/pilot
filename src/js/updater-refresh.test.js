@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/plugin-updater", () => ({ check: (...args) => checkMock(...
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn() }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "0.4.35" }));
 vi.mock("./toast.js", () => ({
+  showToast: vi.fn(),
   toastInfo: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
@@ -83,12 +84,18 @@ describe("initUpdater — plus d'un contrôle dans le temps", () => {
     await vi.advanceTimersByTimeAsync(10000);
     expect(checkMock).toHaveBeenCalledTimes(1);
 
+    // Le contrôle de premier plan est soumis à un intervalle minimal : on
+    // avance au-delà pour tester le déclenchement lui-même.
+    await vi.advanceTimersByTimeAsync(updater.FOREGROUND_MIN_INTERVAL_MS);
+    expect(checkMock).toHaveBeenCalledTimes(1);
+
     expect(typeof windowListeners.focus?.[0]).toBe("function");
     windowListeners.focus[0]();
     await vi.advanceTimersByTimeAsync(0);
     expect(checkMock).toHaveBeenCalledTimes(2);
 
     // Onglet caché : aucun contrôle inutile.
+    await vi.advanceTimersByTimeAsync(updater.FOREGROUND_MIN_INTERVAL_MS);
     globalThis.document.visibilityState = "hidden";
     docListeners.visibilitychange?.[0]?.();
     await vi.advanceTimersByTimeAsync(0);
@@ -111,7 +118,9 @@ describe("initUpdater — plus d'un contrôle dans le temps", () => {
     await vi.advanceTimersByTimeAsync(10000);
     expect(checkMock).toHaveBeenCalledTimes(1);
 
-    // Deux déclencheurs pendant que le contrôle est en cours.
+    // Au-delà de l'intervalle minimal, deux déclencheurs pendant que le
+    // contrôle est en cours ne doivent pas en lancer un second.
+    await vi.advanceTimersByTimeAsync(updater.FOREGROUND_MIN_INTERVAL_MS);
     windowListeners.focus[0]();
     windowListeners.focus[0]();
     await vi.advanceTimersByTimeAsync(0);

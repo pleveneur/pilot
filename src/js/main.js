@@ -8,7 +8,7 @@ import { initModelsConfig } from "./models-config.js";
 import { initSearchPanel } from "./search-panel.js";
 import { openRecentPopover } from "./recent-files.js";
 import { initOutline, closeOutline } from "./outline.js";
-import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
+import { initToasts, toastSuccess, toastError, toastWarning, toastInfo, showToast } from "./toast.js";
 import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus } from "./updater.js";
 import { initAnomalyDetection } from "./anomaly.js";
 // Étape 2 Telegram (lot 0) : écoute des messages entrants. Démarrée avec
@@ -233,8 +233,11 @@ async function executeCommand(id, tabs) {
       // confondus (une erreur n'est plus reléguée à la console).
       const status = getLastCheckStatus();
       const label = formatLastCheckStatus(status);
-      if (status && status.outcome === "error") toastError(label, 9000);
-      else toastInfo(label, 8000);
+      // Messages d'état LONGS (date + cause + dernier succès) : une durée
+      // explicite est nécessaire, `toastInfo`/`toastError` l'ignorent et
+      // retombaient sur 3 s / 6 s.
+      if (status && status.outcome === "error") showToast(label, "error", 12000);
+      else showToast(label, "info", 8000);
       break;
     }
     case "recent-files":

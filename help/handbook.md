@@ -227,8 +227,18 @@ travailles t'est donc proposée **sans redémarrer** l'application.
 
 - **Proposition** : une fenêtre affiche la version, la date et le récapitulatif
   des changements, avec **Installer maintenant** ou **Plus tard**.
+- **« Plus tard » est retenu** : une fois la fenêtre reportée (bouton ou ✕),
+  elle **ne revient plus** pour cette version, même à chaque retour sur Pilot —
+  jusqu'au prochain démarrage. Une version **plus récente** t'est en revanche
+  toujours proposée.
+- **Une seule installation à la fois** : pendant le téléchargement, le bouton
+  reste désactivé et la progression visible, quoi qu'il arrive ; si tu recliques,
+  Pilot te le dit au lieu de lancer une seconde installation.
 - **Vérifier tout de suite** : palette de commandes (`Ctrl+Shift+P`) →
-  **Vérifier les mises à jour**.
+  **Vérifier les mises à jour**. Si un contrôle est déjà en cours, Pilot te le
+  dit (plus de commande apparemment sans effet).
+- **Pas de sur-sollicitation du réseau** : les contrôles déclenchés par un retour
+  sur la fenêtre sont espacés d'au moins **5 minutes**.
 - **Savoir où on en est** : palette → **État des mises à jour** indique la date
   du dernier contrôle et son résultat, en clair : « Pilot est à jour » ou, si
   c'est le cas, « le contrôle a échoué » avec la raison (et la date du dernier
