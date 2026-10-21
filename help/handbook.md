@@ -1050,6 +1050,18 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **⏹ Arrêter** arrête tous les processus d'agents. Fermer l'onglet les arrête aussi.
 - **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau de la cloche, une session qui travaille sans onglet ouvert porte le repère **« arrière-plan »** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
 
+### Agent jetable (à la volée, jamais enregistré)
+- Pour un besoin **ponctuel**, nul besoin de créer un agent : le rôle peut être
+  décrit **dans la demande** elle-même. Cet agent est **jetable** — il existe
+  pendant la tâche, puis n'existe plus.
+- Il **n'entre pas** dans la liste des agents, **ne modifie rien** dans cette
+  liste et **ne survit pas** à la tâche : aucun enregistrement, avant comme
+  après.
+- Son **travail reste visible** (session et compte rendu) : vous pouvez relire
+  ce qu'il a fait après sa disparition.
+- Dans une même mission, agents du registre et agents jetables peuvent
+  cohabiter : seuls les jetables disparaissent ensuite.
+
 ### Conseils
 - Donnez un modèle puissant au coordinateur : c'est lui qui route les tâches.
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
@@ -1819,6 +1831,24 @@ uniquement un bloc d'instructions dans le prompt système.
   file, un ordre, une réservation ; échoue si une structure recomparait le
   chemin brut).
 
+<!-- HELP:super-agent-agent-jetable -->
+### Un agent jetable, juste pour une tâche
+- Vous pouvez demander un travail « comme le ferait un auditeur de sécurité »
+  sans créer d'agent : l'Assistant **décrit lui-même l'agent dans sa demande**
+  (un nom et un rôle). Cet agent **jetable** existe **seulement le temps de la
+  tâche**.
+- Il **n'apparaît jamais** dans votre liste d'agents, ne s'ajoute **pas** au
+  registre et **ne modifie aucun** agent existant : rien n'est enregistré, ni
+  avant ni après.
+- Son **travail reste visible** : sa session et son compte rendu sont lisibles
+  comme pour n'importe quel agent ; seule sa **définition** disparaît à la fin
+  de la tâche.
+- Il peut être **mêlé** à des agents du registre dans une même mission : seuls
+  les agents jetables disparaissent ensuite.
+- Un agent **réutilisable** (que vous voulez retrouver plus tard) se crée
+  toujours normalement : c'est l'agent « sur mesure » du registre.
+<!-- /HELP:super-agent-agent-jetable -->
+
 <!-- HELP:file-attente-identite-mission -->
 ### Une demande en attente garde son identité (jamais perdue en silence)
 Quand l'Assistant met une demande en **file d'attente** (un agent travaille déjà
@@ -2030,10 +2060,61 @@ agents du registre global (base SQLite). Il peut :
    agents disponibles (par leur id) qui lui semblent les plus adaptés et leur
    confie une tâche. Pilot les lance et renvoie le résultat agrégé
    à l'Assistant, qui continue son raisonnement.
+3. **Décrire un agent jetable à la volée** (même outil `run_agents`, paramètre
+   `agents`) : pour un besoin **ponctuel**, l'Assistant fournit la définition de
+   l'agent **dans la demande** (`name`, `role`, éventuellement `icon`,
+   `description`, `readonly`, `keep_context`, `model`). Cet agent **n'existe
+   qu'en mémoire**, le temps de la tâche : **aucune ligne n'est écrite** dans le
+   registre, il **n'apparaît pas** dans la liste des agents et sa définition
+   **disparaît** à la fin de la tâche — son travail (session, compte rendu)
+   reste visible. Voir § « Agent jetable (mémoire seule) ».
 
 Ainsi, au lieu de tout déléguer à l'agent standard, l'Assistant constitue
-l'équipe la plus adaptée à chaque demande (codeur, testeur, reviewer, ou un
-agent qu'il a lui-même créé).
+l'équipe la plus adaptée à chaque demande (codeur, testeur, reviewer, un agent
+qu'il a lui-même créé, ou un agent jetable fourni pour la tâche).
+
+### Agent jetable (mémoire seule)
+
+Un **agent jetable** est une définition d'agent fournie **dans la demande**
+de l'Assistant (`run_agents`, paramètre `agents` : objets
+`{ name, role, icon?, description?, readonly?, keep_context?, model? }`).
+Contrat de durée de vie et d'isolement :
+
+- **Aucune écriture en base** : l'agent vit dans `ephemeral_agents`
+  (`Mutex<HashMap<String, Agent>>`) de l'`AgentService`. Rien n'est écrit dans
+  les tables `agents` / `agent_views` — ni à la création, ni à la fin. C'est un
+  invariant de la mission : **le registre du propriétaire reste identique**.
+- **Identifiant réservé `eph-…`** (`makeEphemeralAgentId`, module
+  `src/js/ephemeral-agents.js`) : un agent jetable ne peut ni s'appeler comme un
+  agent du registre ni l'écraser (`mergeAgentsWithEphemeral` : le persistant
+  gagne toujours en cas de collision ; la purge ne vise **que** les `eph-…`).
+- **Anti-seed** : `AgentService::start` ne crée une ligne que lorsque
+  `get_agent` répond `None`. `get_agent` résout l'agent jetable **en mémoire**
+  (repli `ephemeral_agent`), avec une résolution de portée **tolérante**
+  (portée globale ⇄ n'importe quelle portée, pour qu'aucune variante de chemin
+  ne fasse retomber sur `None`) ; un agent jetable d'un **autre projet nommé**
+  reste refusé. `upsert_agent`, `set_visible`, `set_state` portent en outre un
+  garde éphémère (mise à jour mémoire seule).
+- **Visible comme session, invisible comme agent** : `visible = false` en
+  permanence (pas d'onglet), mais la session est listée parmi les sessions
+  actives tant qu'elle travaille — comme un agent en arrière-plan.
+- **Fin de tâche = disparition** : purge à la conclusion de la mission
+  (`settleRun`), à l'abandon d'une mission jamais lancée
+  (`abandonQueuedRunAgentsMissions`), à l'arrêt de la session (`stop_owned`),
+  et sur `stop_all_agent_processes` / `shutdown_all`. L'arrêt de session passe
+  par l'entonnoir `stopAgentWithTrace` (motif `ephemeral-task-ended`, tracé dans
+  `.pilot/agent-stops.log`). Le **travail** (session, compte rendu) survit à la
+  purge.
+- **Échec fermé côté préparation, ouvert côté purge** : si l'enregistrement
+  mémoire échoue, le lancement est **annulé** (jamais de repli silencieux vers
+  un seed en base) ; la purge, elle, ne fait jamais échouer la fin de tâche.
+- **Commandes Tauri** (`agents.rs`) : `register_ephemeral_agent`,
+  `clear_ephemeral_agent`, `list_ephemeral_agents`.
+- **Preuve d'exécution** : `src/js/agent-jetable.test.js` (lancement réel sans
+  aucune commande d'écriture de registre, purge des deux étages + trace
+  d'arrêt + travail visible, registre intact) et, côté Rust,
+  `agent_jetable_vit_en_memoire_et_disparait_a_la_purge` /
+  `etat_d_un_agent_jetable_reste_en_memoire` (`agent_service.rs`).
 
 ### Héritage du contexte projet pour les agents spécifiques (#21)
 Quand le paramètre **« Héritage du contexte projet pour les agents

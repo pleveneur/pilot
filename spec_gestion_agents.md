@@ -39,6 +39,18 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **⏹ Arrêter** arrête tous les processus d'agents. Fermer l'onglet les arrête aussi.
 - **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau de la cloche, une session qui travaille sans onglet ouvert porte le repère **« arrière-plan »** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
 
+### Agent jetable (à la volée, jamais enregistré)
+- Pour un besoin **ponctuel**, nul besoin de créer un agent : le rôle peut être
+  décrit **dans la demande** elle-même. Cet agent est **jetable** — il existe
+  pendant la tâche, puis n'existe plus.
+- Il **n'entre pas** dans la liste des agents, **ne modifie rien** dans cette
+  liste et **ne survit pas** à la tâche : aucun enregistrement, avant comme
+  après.
+- Son **travail reste visible** (session et compte rendu) : vous pouvez relire
+  ce qu'il a fait après sa disparition.
+- Dans une même mission, agents du registre et agents jetables peuvent
+  cohabiter : seuls les jetables disparaissent ensuite.
+
 ### Conseils
 - Donnez un modèle puissant au coordinateur : c'est lui qui route les tâches.
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
@@ -167,6 +179,38 @@ Le registre global vit dans la base SQLite de l'application (`pilot.db`, dossier
 - **Fail-open** : si `PILOT_AGENT_SKILLS` est absent (session non-agent), aucun filtrage n'a lieu.
 - Les agents **fournis** n'ont pas de compétence par défaut : la liste se remplit dans l'éditeur de l'onglet 🎭.
 
+### 3.2 Agent jetable (mémoire seule)
+
+Un agent peut être fourni **à la volée** par l'Assistant (`run_agents`, paramètre
+`agents`), sans passer par le registre :
+
+- `AgentService.ephemeral_agents` (`Mutex<HashMap<String, Agent>>`) porte la
+definition ; les commandes `register_ephemeral_agent`, `clear_ephemeral_agent`,
+`list_ephemeral_agents` (`agents.rs`) la manipulent. **Aucune ligne n'est écrite**
+in `agents` / `agent_views` — ni création ni suppression, donc aucune entrée
+existante ne peut être touchée.
+- `get_agent` résout l'agent jetable **en mémoire** (repli éphémère) : c'est ce
+qui empêche `AgentService::start` de « seeder » une ligne (`start` ne crée une
+ligne que si `get_agent` répond `None`). `upsert_agent`, `set_visible` et
+`set_state` court-circuitent la base pour un identifiant jetable.
+- **Résolution de portée tolérante** : l'agent jetable d'une mission est résolu
+quelle que soit la forme du chemin (`\` vs `/`, slash final, portée vide) et par
+une requête de portée globale ; un agent jetable d'un **autre projet nommé**
+reste refusé.
+- **Identifiant réservé `eph-`** : `isEphemeralAgentId`, `makeEphemeralAgentId`,
+`buildEphemeralAgent`, `mergeAgentsWithEphemeral` (le persistant gagne),
+`splitEphemeralIds`, `persistEphemeralAgent`, `disposeEphemeralAgent(s)`
+(`src/js/ephemeral-agents.js`).
+- **Fusion après chaque lecture du registre** : `mergeEphemeralAgentsIntoBus`
+(`agents-bus.js`) est appelée par `initAgentsBus` **et** par
+`reloadAgentsRegistry` — sinon l'agent serait « inconnu » au lancement.
+- **Durée de vie = la tâche** : purge à `settleRun`, à l'abandon de mission,
+à l'arrêt de session (entonnoir `stopAgentWithTrace`, motif
+`ephemeral-task-ended`), à `stop_all_agent_processes` et `shutdown_all`.
+- **Preuve** : `src/js/agent-jetable.test.js` (aucune commande
+`upsert_agent` / `replace_agents` / `delete_agent` appelée, purge des deux
+étages, arrêt tracé, registre inchangé) + tests Rust d'`agent_service.rs`.
+
 ### Commandes Tauri (compétences)
 
 - `list_common_skills() → [{ name, description }]` : inventaire de `~/.pilot/skills` pour le sélecteur de l'éditeur (lecture seule).
@@ -283,6 +327,7 @@ toucher une map `agent_sessions` d'`AppState` (champ retiré en phase 2).
 - `load_agent_registry()` / `save_agent_registry(registry)` : anciennes commandes fichier ; elles persistent désormais en base via `list_agents` / `replace_agents`.
 - `list_common_skills()` : inventaire des compétences de `~/.pilot/skills`.
 - `default_agent_ids()` : identifiants des agents fournis.
+- `register_ephemeral_agent(agent, project?)` / `clear_ephemeral_agent(agent_id)` / `list_ephemeral_agents()` : agents **jetables** en mémoire seule (aucune écriture en base).
 
 ### Dossier global
 

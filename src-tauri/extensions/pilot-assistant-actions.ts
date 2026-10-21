@@ -165,18 +165,30 @@ export default function (pi: ExtensionAPI) {
       "A single launch per task is enough. Never relaunch the same delegation, and never use stop_agent on an agent you have just launched: stopping the agent kills its work.",
       "Provide a clear, atomic task description.",
       "Prefer selecting the most appropriate agents rather than delegating everything to the standard coder. You are the coordinator: you choose the team.",
-      "If no suitable agent exists, create one first with create_agent, then run_agents.",
+      "If no suitable agent exists, prefer an AGENT JETABLE: pass `agents` (objects with `name` + `role`) instead of creating a permanent agent. A throwaway agent exists only for the duration of this task, is never written to the agents database, never appears in the user's agent list, and disappears when the task ends (its work — messages, report — stays visible). Use create_agent only when the role must be reused later.",
       "Pass the absolute path of the target project in `project` when the work must be done on a project that differs from the active one (e.g. the user is on 'pilot' but asks for changes on 'PLh'). If omitted, the active project is used.",
     ],
     parameters: Type.Object({
-      agent_ids: Type.Array(Type.String({ description: "Identifiants des agents à utiliser (au moins un)" })),
+      agent_ids: Type.Array(Type.String({ description: "Identifiants des agents à utiliser (au moins un, sauf si tu fournis `agents`)" })),
+      agents: Type.Optional(Type.Array(
+        Type.Object({
+          name: Type.String({ description: "Nom court de l'agent jetable" }),
+          role: Type.String({ description: "Rôle / instructions système de l'agent jetable (fourni à la volée, jamais enregistré)" }),
+          icon: Type.Optional(Type.String({ description: "Emoji/icône (optionnel)" })),
+          description: Type.Optional(Type.String({ description: "Description courte du rôle (optionnel)" })),
+          readonly: Type.Optional(Type.Boolean({ description: "true → l'agent jetable ne doit jamais modifier de fichiers" })),
+          keep_context: Type.Optional(Type.Boolean({ description: "true → conserver le contexte entre deux appels" })),
+          model: Type.Optional(Type.String({ description: "Modèle provider/modelId à utiliser (optionnel ; défaut = modèle de l'agent standard). Raccourci : équivaut à `models.pi`." })),
+        }),
+        { description: "Agents JETABLES définis dans la demande (aucune écriture en base, aucune entrée dans la liste des agents, durée de vie = cette tâche). Ajoutés aux `agent_ids` pour cette mission." }
+      )),
       task: Type.String({ description: "La tâche à confier aux agents sélectionnés" }),
       project: Type.Optional(Type.String({ description: "Chemin absolu du projet cible (optionnel, défaut = projet actif)" })),
       mcp_server: Type.Optional(Type.String({ description: "Identifiant d'un serveur MCP à connecter pour CET agent (optionnel). À utiliser quand la tâche nécessite les outils MCP d'un serveur que tu as découvert via mcp_state. Sans lui, l'agent ne charge pas MCP, sauf à être l'agent standard." })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, project: params.project || null, mcp_server: params.mcp_server || null });
+      const payload = JSON.stringify({ agent_ids: params.agent_ids, agents: params.agents || null, task: params.task, project: params.project || null, mcp_server: params.mcp_server || null });
       const result = await ctx.ui.input(RUN_AGENTS_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };

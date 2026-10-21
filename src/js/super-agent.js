@@ -53,6 +53,11 @@ import { createReportDeliveryGate } from "./super-agent-reports.js";
 // agents visés). Une demande rejouée porte TOUJOURS la sienne — le rapport livré
 // et le journal d'abandon la NOMMENT, donc une incohérence devient visible.
 import { nextMissionId, makeMissionIdentity, annotateMissionReport, stampQueuedMission, missionQueueLabel } from "./mission-identity.js";
+// AGENT JETABLE (décision propriétaire du 2026-10-21) : un rôle peut être fourni
+// DANS la demande (`run_agents` avec des objets agent) → agent éphémère gardé en
+// mémoire seule (aucune ligne dans la table `agents`), qui n'existe que le temps
+// de la tâche. Purge assurée à la fin de la mission (`settleRun`).
+import { buildEphemeralAgent, persistEphemeralAgent, disposeEphemeralAgents, isEphemeralAgentId } from "./ephemeral-agents.js";
 // MISSION P3 (défaut D3) : IDENTITÉ DE PROJET normalisée, SOURCE UNIQUE.
 // La file de missions, les états de délégation et les drapeaux de run étaient
 // indexés par le chemin BRUT : deux écritures du même dossier (« G:\IA_PL\pilot »
@@ -831,6 +836,18 @@ export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
   }
   // Nommer AVANT de vider : c'est tout l'objet du correctif.
   const labels = queue.map((entry) => missionQueueLabel(entry));
+  // AGENT JETABLE : les agents éphémères des missions abandonnées n'auront jamais
+  // de tâche — ils sont purgés avec elles (les entrées du registre, elles, ne
+  // sont jamais touchées : `disposeEphemeralAgents` ignore les identifiants
+  // persistants). Collecté AVANT `queue.length = 0`.
+  const abandonedEphemeralIds = [];
+  for (const entry of queue) {
+    if (entry && Array.isArray(entry.agentIds)) {
+      for (const aid of entry.agentIds) {
+        if (isEphemeralAgentId(aid)) abandonedEphemeralIds.push(aid);
+      }
+    }
+  }
   // Le rejeu périodique n'a plus rien à rejouer.
   const replay = runAgentsQueueReplayByProject[key];
   if (replay) {
@@ -840,6 +857,10 @@ export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
   queue.length = 0;
   delete runAgentsQueueByProject[key];
   const reason = opts.reason || "queue-abandoned";
+  // AGENT JETABLE : purge des définitions éphémères des missions abandonnées.
+  if (abandonedEphemeralIds.length > 0) {
+    await disposeEphemeralAgents(abandonedEphemeralIds, target || null).catch(() => {});
+  }
   // Trace écrite par le point UNIQUE d'abandon de file (règle 4).
   await traceQueueAbandon({
     // Chemin RÉEL pour le journal (le journal vit DANS le projet), la clé
@@ -4538,6 +4559,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         await respondSuperAgent(id, JSON.stringify({ error: "Payload run_agents invalide." }), false);
         return;
       }
+      // AGENT JETABLE : la demande peut décrire l'agent elle-même (`agents` :
+      // tableau d'objets `{ name, role, … }`) au lieu de nommer un agent du
+      // registre. Ces agents sont créés EN MÉMOIRE SEULE (aucune écriture en
+      // base) et ne vivent que le temps de cette tâche.
+      const inlineAgents = (Array.isArray(info.agents) ? info.agents : []).filter(
+        (s) => s && typeof s === "object" && !Array.isArray(s)
+      );
       const agentIds = Array.isArray(info.agent_ids) ? info.agent_ids.map(String) : [];
       const task = String(info.task || "").trim();
       // Ciblage de projet (run_agents) : chemin absolu du projet cible, ou null
@@ -4545,7 +4573,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       // serveur MCP cible (id) que les agents chargent à la demande.
       const targetProject = (info.project && String(info.project).trim()) || null;
       const mcpServer = (info.mcp_server && String(info.mcp_server).trim()) || null;
-      if (agentIds.length === 0 || !task) {
+      if ((agentIds.length === 0 && inlineAgents.length === 0) || !task) {
         await respondSuperAgent(id, JSON.stringify({ error: "run_agents : au moins un agent et une tâche requis." }), false);
         return;
       }
@@ -4565,6 +4593,41 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           await respondSuperAgent(id, JSON.stringify({ error: unknownAgentsError(missing, registry) }), false);
           return;
         }
+        // AGENT JETABLE : matérialiser les agents fournis à la volée, APRÈS la
+        // vérification des identifiants du registre (le garde ci-dessus reste
+        // inchangé et ne dépend d'aucun agent éphémère). Aucune ligne n'est
+        // écrite dans la table `agents` : l'enregistrement se fait côté cœur
+        // Rust en MÉMOIRE (repli de `get_agent`), et le magasin JS porte la
+        // définition pour le bus. Si l'enregistrement échoue, on RENONCE au
+        // lancement (sinon le spawn « seederait » une ligne en base : exactement
+        // ce que la mission interdit).
+        const ephemeralScope = targetProject || window._pilotProjectPath || null;
+        const ephemeralAgents = [];
+        for (const spec of inlineAgents) {
+          const built = buildEphemeralAgent(spec, { projectPath: ephemeralScope || null });
+          if (!built) {
+            await respondSuperAgent(
+              id,
+              JSON.stringify({ error: "run_agents : agent fourni à la volée invalide (un rôle ou un nom est requis)." }),
+              false
+            );
+            return;
+          }
+          try {
+            await persistEphemeralAgent(built, ephemeralScope || null);
+          } catch (e) {
+            await respondSuperAgent(
+              id,
+              JSON.stringify({ error: `run_agents : impossible de préparer l'agent jetable « ${built.name} » (${e}). Aucun agent n'a été lancé.` }),
+              false
+            );
+            return;
+          }
+          ephemeralAgents.push(built);
+        }
+        // Identifiants de la mission = agents du registre + agents jetables (ces
+        // derniers ne peuvent pas être « inconnus » : ils viennent d'être créés).
+        for (const built of ephemeralAgents) agentIds.push(built.id);
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche sur les agents : ${agentIds.join(", ")}…`);
         // Anti-boucle : l'enveloppe de brief STRUCTURÉ (contexte/objectif/
         // consignes/ce qu'il ne faut PAS faire) est appliquée ICI, côté
@@ -4586,7 +4649,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // le projet (verrou par projet à lecteurs partagés).
         const missionReadOnly = agentIds.every((aid) => {
           const ag = (registry.agents || []).find((a) => a && a.id === aid);
-          return !!(ag && ag.readonly === true);
+          if (ag) return ag.readonly === true;
+          // AGENT JETABLE : sa nature vient de la définition fournie à la volée.
+          const eph = ephemeralAgents.find((a) => a.id === aid);
+          return !!(eph && eph.readonly === true);
         });
         const missionNature = missionReadOnly ? "read" : "write";
         const projectPath = window._pilotProjectPath || null;
@@ -4673,6 +4739,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // Injection + notification desktop + son (survit à la fermeture de
           // l'onglet : fonctions module-level, persistance côté Rust).
           finishRunAgentsToSuperAgent(result, projectPath, ok, missionIdentity);
+          // AGENT JETABLE : la tâche est finie → la définition éphémère cesse
+          // d'exister (sessions arrêtées, magasins JS et Rust purgés). Le TRAVAIL
+          // reste visible : session indexée, compte rendu ci-dessus, journal
+          // d'arrêts automatiques. Purge limitée aux agents DE CETTE mission :
+          // les entrées du registre ne sont jamais touchées.
+          disposeEphemeralAgents(agentIds, targetProject || window._pilotProjectPath || null).catch(() => {});
           // Lancer la run suivante mise en file pour CE projet, s'il y en a une.
           // Volet (c) : lancement PROTÉGÉ (voir `launchQueuedMission`).
           const queue = runAgentsQueueByProject[missionQueueKey(target)] || [];

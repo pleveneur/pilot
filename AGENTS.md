@@ -165,6 +165,7 @@ pilot/
 │       ├── agent-model-selector.js # C4 : id DOM du sélecteur de modèle propres au couple (projet, agent) — pures
 │       ├── orchestration.js   # Mode Orchestration : prompts, parsing plan, validation (pures)
 │       ├── agents-bus.js      # Bus d'agents (orchestration) : contexte de run, verrou par projet, restitution fiable fin-de-run (willRetry/agent_settled, erreurs différées)
+│       ├── ephemeral-agents.js # Agent jetable (à la volée) : id réservé `eph-`, magasin mémoire, fusion dans le bus, purge en fin de tâche — aucune écriture en base
 │       ├── orchestration-reviewer.js # Reviewer indépendant (H2 V1) : buildReviewPrompt, parseReviewResult, glob matching (pures)
 │       ├── theme.js           # Gestion des thèmes dark/light
 │       ├── sidebar.js         # Barre latérale, explorateur, filtre, menus

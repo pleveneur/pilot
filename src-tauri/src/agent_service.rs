@@ -222,6 +222,16 @@ pub struct AgentService {
     // pouvait avorter la session flambant neuve du même agent — symptôme
     // « l'agent commence et s'arrête aussitôt ».
     session_uids: Mutex<HashMap<String, u64>>,
+    // AGENT JETABLE (agent éphémère) : définitions d'agents fournies À LA VOLÉE
+    // (rôle écrit dans la demande de l'assistant), gardées **en mémoire seule**.
+    // Aucune ligne n'est écrite dans la table `agents` : l'agent n'entre donc
+    // jamais dans le registre que l'utilisateur voit (`list_agents` lit la base)
+    // et cesse d'exister dès sa purge (fin de tâche).
+    //
+    // Consommateur unique : `get_agent`, qui RETOMBE sur cette map quand la base
+    // ne connaît pas l'identifiant. C'est ce repli qui empêche `start` de
+    // « seeder » une ligne en base pour un agent non persistant.
+    ephemeral_agents: Mutex<HashMap<String, Agent>>,
 }
 
 /// Séquence des identités de session (uid). Monotone sur toute la vie du
@@ -330,6 +340,75 @@ impl AgentService {
             anomaly_map: Mutex::new(None),
             last_prompts: Mutex::new(HashMap::new()),
             session_uids: Mutex::new(HashMap::new()),
+            ephemeral_agents: Mutex::new(HashMap::new()),
+        }
+    }
+
+    // ── Agents jetables (éphémères, en mémoire seule) ──
+
+    /// Enregistre un **agent jetable** : la définition vit en MÉMOIRE seule,
+    /// aucune écriture en base. Elle est consultable par `get_agent` (repli) et
+    /// n'apparaît jamais dans `list_agents` (qui lit la table `agents`).
+    ///
+    /// La durée de vie est celle de la tâche : l'appelant la purge à la fin
+    /// (`clear_ephemeral_agent`), et l'arrêt de sa session la purge aussi.
+    pub fn register_ephemeral_agent(&self, agent: Agent) -> Result<Agent, String> {
+        if agent.id.trim().is_empty() {
+            return Err("Agent jetable : identifiant requis".to_string());
+        }
+        // Un agent éphémère n'est jamais « visible » : il n'est pas un onglet du
+        // registre. (Il reste listé comme SESSION pendant qu'il travaille.)
+        let mut stored = agent;
+        stored.visible = false;
+        stored.loaded = false;
+        stored.busy = false;
+        self.ephemeral_agents
+            .lock()
+            .unwrap()
+            .insert(stored.id.clone(), stored.clone());
+        Ok(stored)
+    }
+
+    /// Vrai si l'identifiant désigne un agent jetable en mémoire.
+    pub fn is_ephemeral_agent(&self, agent_id: &str) -> bool {
+        self.ephemeral_agents.lock().unwrap().contains_key(agent_id)
+    }
+
+    /// Purge UN agent jetable (fin de tâche). Retourne `true` s'il existait.
+    pub fn clear_ephemeral_agent(&self, agent_id: &str) -> bool {
+        self.ephemeral_agents.lock().unwrap().remove(agent_id).is_some()
+    }
+
+    /// Purge TOUS les agents jetables. Retourne le nombre d'entrées retirées.
+    pub fn clear_ephemeral_agents(&self) -> usize {
+        let mut map = self.ephemeral_agents.lock().unwrap();
+        let n = map.len();
+        map.clear();
+        n
+    }
+
+    /// Liste les agents jetables en mémoire (diagnostic / tests).
+    pub fn list_ephemeral_agents(&self) -> Vec<Agent> {
+        let mut out: Vec<Agent> = self.ephemeral_agents.lock().unwrap().values().cloned().collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
+
+    /// Met à jour l'ENTRÉE MÉMOIRE d'un agent jetable (jamais la base) : état
+    /// logique (`loaded`/`busy`/`proc_state`) et visibilité. No-op pour un agent
+    /// du registre (retourne `false`).
+    fn update_ephemeral(
+        &self,
+        agent_id: &str,
+        apply: impl FnOnce(&mut Agent),
+    ) -> bool {
+        let mut map = self.ephemeral_agents.lock().unwrap();
+        match map.get_mut(agent_id) {
+            Some(a) => {
+                apply(a);
+                true
+            }
+            None => false,
         }
     }
 
@@ -792,12 +871,59 @@ impl AgentService {
         match rows.next() {
             Some(Ok(a)) => Ok(Some(a)),
             Some(Err(e)) => Err(format!("Erreur lecture agent: {}", e)),
-            None => Ok(None),
+            // AGENT JETABLE : la base ne connaît pas cet identifiant — on
+            // RETOMBE sur le magasin mémoire. Ce repli est la seule raison pour
+            // laquelle `start` ne crée pas de ligne : son seed n'a lieu que si
+            // `get_agent` répond `None`.
+            None => Ok(self.ephemeral_agent(agent_id, scope.as_deref())),
+        }
+    }
+
+    /// Agent jetable correspondant à (id, portée), s'il existe en mémoire.
+    ///
+    /// La portée est comparée sous forme CANONIQUE (même convention que la base) :
+    /// `None` = global. Un agent jetable de portée GLOBALE est résolu par toute
+    /// portée (il est propre à une mission, jamais partagé), et une requête
+    /// GLOBALE le résout aussi : c'est ce qui garantit qu'aucune variante de
+    /// chemin (`G:\x` vs `G:/x/`, projet vide `"."`) ne peut faire retomber
+    /// `get_agent` sur `None` — donc provoquer un « seed » en base.
+    fn ephemeral_agent(&self, agent_id: &str, scope: Option<&str>) -> Option<Agent> {
+        let map = self.ephemeral_agents.lock().unwrap();
+        let a = map.get(agent_id)?;
+        let stored_scope = normalize_scope(a.project_path.as_deref());
+        let wanted = scope.map(|s| s.to_string());
+        let matches = stored_scope == wanted || stored_scope.is_none() || wanted.is_none();
+        if matches {
+            Some(a.clone())
+        } else {
+            None
         }
     }
 
     /// Insère ou met à jour un agent. Retourne l'agent persisté.
+    ///
+    /// AGENT JETABLE : un agent éphémère n'est JAMAIS écrit en base — l'appel
+    /// met simplement à jour son entrée mémoire et la retourne.
     pub fn upsert_agent(&self, app: &AppHandle, agent: &Agent) -> Result<Agent, String> {
+        if self.is_ephemeral_agent(&agent.id) {
+            self.update_ephemeral(&agent.id, |a| {
+                a.name = agent.name.clone();
+                a.icon = agent.icon.clone();
+                a.description = agent.description.clone();
+                a.role = agent.role.clone();
+                a.models = agent.models.clone();
+                a.thinking = agent.thinking.clone();
+                a.capabilities = agent.capabilities.clone();
+                a.skills = agent.skills.clone();
+                a.readonly = agent.readonly;
+                a.keep_context = agent.keep_context;
+                a.max_calls_per_run = agent.max_calls_per_run;
+                a.call_depth = agent.call_depth;
+            });
+            return self
+                .ephemeral_agent(&agent.id, normalize_scope(agent.project_path.as_deref()).as_deref())
+                .ok_or_else(|| "Agent jetable non retrouvé après mise à jour".to_string());
+        }
         let conn = db::open_conn(app)?;
         upsert_agent_conn(&conn, agent)?;
         self.get_agent(app, &agent.id, agent.project_path.as_deref())?
@@ -876,6 +1002,13 @@ impl AgentService {
 
     /// Pose la visibilité d'un agent (0 = invisible, 1 = vue ouverte).
     pub fn set_visible(&self, app: &AppHandle, agent_id: &str, project_path: Option<&str>, visible: bool) -> Result<(), String> {
+        // AGENT JETABLE : jamais en base — on met à jour l'entrée mémoire et on
+        // émet la transition (même contrat d'événement que pour un agent du
+        // registre), sans aucune écriture dans la table `agents`.
+        if self.update_ephemeral(agent_id, |a| a.visible = visible) {
+            self.emit_state_changed(app, agent_id, project_path);
+            return Ok(());
+        }
         let conn = db::open_conn(app)?;
         // Tâche #345 : cible par clé canonique (cf. `get_agent`).
         let scope = normalize_scope(project_path);
@@ -905,6 +1038,15 @@ impl AgentService {
         busy: bool,
         state: &AgentProcessState,
     ) -> Result<(), String> {
+        // AGENT JETABLE : état logique gardé en MÉMOIRE (aucune ligne en base).
+        if self.update_ephemeral(agent_id, |a| {
+            a.loaded = loaded;
+            a.busy = busy;
+            a.state = state.clone();
+        }) {
+            self.emit_state_changed(app, agent_id, project_path);
+            return Ok(());
+        }
         let conn = db::open_conn(app)?;
         // Tâche #345 : cible par clé canonique (cf. `get_agent`).
         let scope = normalize_scope(project_path);
@@ -1008,7 +1150,12 @@ impl AgentService {
         // Valeurs par défaut : name dérivé de l'id, modèles depuis la config
         // (modèle codeur), visible=true. Porté par le projet courant (Some),
         // aligné sur la scope que ciblent `set_state`/`set_visible`.
-        if self.get_agent(app, agent_id, Some(project))?.is_none() {
+        //
+        // AGENT JETABLE : jamais de seed. Un agent éphémère est déjà résolu par
+        // `get_agent` (repli mémoire) et ne doit produire AUCUNE ligne en base —
+        // le garde explicite ci-dessous empêche qu'une évolution future du repli
+        // le fasse réapparaître dans le registre persistant.
+        if !self.is_ephemeral_agent(agent_id) && self.get_agent(app, agent_id, Some(project))?.is_none() {
             let state = app.state::<AppState>();
             let coder_model = {
                 let config = state.config_snapshot();
@@ -1361,6 +1508,10 @@ impl AgentService {
         if let Some(mode) = stopped_mode {
             self.maybe_index_agent_sessions(project, mode);
         }
+        // AGENT JETABLE : sa durée de vie est SA TÂCHE. La session arrêtée, la
+        // définition mémoire disparaît (son travail reste visible : messages de
+        // session, rapport de fin de run, journal d'arrêts automatiques).
+        self.clear_ephemeral_agent(agent_id);
         Ok(())
     }
 
@@ -1710,6 +1861,9 @@ impl AgentService {
         for k in &keys {
             self.purge_anomaly_busy_for_key(k);
         }
+        // AGENT JETABLE : « arrêter tous les agents » met aussi fin à leur durée
+        // de vie (aucune tâche en cours → plus aucune définition éphémère).
+        self.clear_ephemeral_agents();
     }
 
     /// Arrêt complet de toutes les sessions (issue #14). À la fermeture de Pilot.
@@ -1734,6 +1888,8 @@ impl AgentService {
         for k in &keys {
             self.purge_anomaly_busy_for_key(k);
         }
+        // AGENT JETABLE : fermeture de Pilot = plus aucun agent jetable vivant.
+        self.clear_ephemeral_agents();
     }
 
     /// Vue d'ensemble de TOUTES les sessions d'agents du registre (P2).
@@ -3598,7 +3754,7 @@ fn merge_env_vars(
 // ── Conversion Value ↔ Agent (IPC) ──
 
 /// Désérialise un Agent depuis une Value JSON (champs camelCase du frontend).
-fn agent_from_value(v: &Value) -> Result<Agent, String> {
+pub(crate) fn agent_from_value(v: &Value) -> Result<Agent, String> {
     serde_json::from_value::<Agent>(v.clone())
         .map_err(|e| format!("Agent invalide: {}", e))
 }
@@ -3855,6 +4011,87 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().expect("db mémoire");
         crate::db::init_db(&conn).expect("schéma pilot.db");
         conn
+    }
+
+    // ── AGENT JETABLE : magasin MÉMOIRE seule (aucune ligne en base) ──
+
+    /// Un agent jetable vit uniquement en mémoire : enregistré, résolu par la
+    /// portée, et purgé sans laisser de trace. C'est la condition (a)/(b) de la
+    /// mission côté Rust : aucun `upsert` n'est impliqué nulle part.
+    #[test]
+    fn agent_jetable_vit_en_memoire_et_disparait_a_la_purge() {
+        let svc = AgentService::new();
+        let mut a = sample_agent("eph-test-1");
+        a.role = "Tu es un agent jetable.".to_string();
+        a.project_path = Some("G:/IA_PL/pilot".to_string());
+        // `visible` demandé explicitement : un agent jetable reste INVISIBLE
+        // (il n'est pas un onglet du registre, même s'il travaille).
+        a.visible = true;
+
+        let stored = svc.register_ephemeral_agent(a).expect("enregistrement mémoire");
+        assert!(!stored.visible, "un agent jetable n'est jamais visible");
+        assert!(svc.is_ephemeral_agent("eph-test-1"));
+        assert_eq!(svc.list_ephemeral_agents().len(), 1);
+
+        // Le rôle est bien conservé en mémoire (rôle fourni à la volée).
+        let resolved = svc
+            .ephemeral_agent("eph-test-1", normalize_scope(Some("G:\\IA_PL\\pilot")).as_deref())
+            .expect("agent jetable résolu pour son projet");
+        assert_eq!(resolved.role, "Tu es un agent jetable.");
+        assert_eq!(resolved.name, "eph-test-1");
+
+        // Portée différente : jamais rendu (pas de fuite entre projets).
+        assert!(
+            svc.ephemeral_agent("eph-test-1", normalize_scope(Some("G:/autre/projet")).as_deref())
+                .is_none(),
+            "un agent jetable d'un autre projet ne doit jamais être résolu"
+        );
+        // Requête GLOBALE (`None`) : résolue aussi — aucune variante de chemin ne
+        // doit pouvoir retomber sur `None` et déclencher un « seed » en base.
+        assert!(
+            svc.ephemeral_agent("eph-test-1", None).is_some(),
+            "une requête globale doit résoudre l'agent jetable (anti-seed)"
+        );
+
+        // Fin de tâche : la définition n'existe plus.
+        assert!(svc.clear_ephemeral_agent("eph-test-1"));
+        assert!(!svc.is_ephemeral_agent("eph-test-1"));
+        assert!(svc.list_ephemeral_agents().is_empty());
+        assert!(
+            svc.ephemeral_agent("eph-test-1", normalize_scope(Some("G:/IA_PL/pilot")).as_deref())
+                .is_none(),
+            "après purge, l'agent jetable ne doit plus être résolu"
+        );
+        // Purge d'un identifiant inconnu : sans effet, jamais d'erreur.
+        assert!(!svc.clear_ephemeral_agent("eph-test-1"));
+    }
+
+    /// L'état logique d'un agent jetable est gardé EN MÉMOIRE (jamais en base) :
+    /// `set_state`/`set_visible` passent par `update_ephemeral`, qui n'écrit
+    /// rien et renvoie true (donc pas d'erreur « agent introuvable »).
+    #[test]
+    fn etat_d_un_agent_jetable_reste_en_memoire() {
+        let svc = AgentService::new();
+        let mut a = sample_agent("eph-test-2");
+        a.project_path = Some("G:/IA_PL/pilot".to_string());
+        svc.register_ephemeral_agent(a).expect("enregistrement mémoire");
+
+        assert!(svc.update_ephemeral("eph-test-2", |a| {
+            a.busy = true;
+            a.loaded = true;
+            a.state = AgentProcessState::Running;
+        }));
+        let got = svc.list_ephemeral_agents();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].busy && got[0].loaded);
+        assert_eq!(got[0].state, AgentProcessState::Running);
+
+        // Identifiant du registre persistant : `update_ephemeral` ne le touche pas.
+        assert!(!svc.update_ephemeral("codeur", |a| a.busy = true));
+
+        // Purge globale (fin de run, changement de projet…).
+        assert_eq!(svc.clear_ephemeral_agents(), 1);
+        assert!(svc.list_ephemeral_agents().is_empty());
     }
 
     // ── Tâche #345 : clé de projet canonique (fiches d'agent en double) ──

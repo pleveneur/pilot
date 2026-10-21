@@ -62,6 +62,10 @@ import {
 // choisissent donc plus « trace ou pas trace » : ils décrivent leur motif et
 // fournissent l'action d'arrêt (gardes `expectedUid` / portée `runKey` intactes).
 import { stopAgentWithTrace } from "./agent-stop-funnel.js";
+// AGENT JETABLE : agents éphémères (rôle fourni à la volée, aucune ligne en
+// base). Le bus doit les AJOUTER à sa map après chaque lecture du registre
+// persistant, sinon ils seraient « inconnus » au moment du lancement.
+import { listEphemeralAgents } from "./ephemeral-agents.js";
 import {
   enqueueExclusivity,
   dequeueExclusivity,
@@ -1820,6 +1824,9 @@ export async function initAgentsBus(options = {}) {
     const a = normalizeAgent(raw);
     if (a && a.id) busState.agents.set(a.id, a);
   }
+  // AGENT JETABLE : les agents éphémères (rôle fourni à la volée, aucune ligne
+  // en base) sont AJOUTÉS à la map après la lecture du registre persistant.
+  mergeEphemeralAgentsIntoBus();
 
   // Coordinateur : utiliser celui du registre s'il existe, sinon le défaut
   const regCoord = busState.agents.get("coordinateur");
@@ -1965,6 +1972,25 @@ export async function initAgentsBus(options = {}) {
 }
 
 /**
+ * AGENT JETABLE : ajoute les agents éphémères vivants à `busState.agents`.
+ *
+ * Appelée après CHAQUE lecture du registre persistant (init et rechargement) :
+ * sans elle, l'agent jetable enregistré pour la mission en cours disparaîtrait
+ * de la map et le bus le déclarerait « inconnu » avant même de le lancer.
+ * Les identifiants du registre ne sont jamais écrasés (préfixe `eph-` réservé).
+ */
+function mergeEphemeralAgentsIntoBus() {
+  const ephemeral = listEphemeralAgents();
+  if (!ephemeral.length || !busState.agents) return;
+  for (const raw of ephemeral) {
+    const a = normalizeAgent(raw);
+    if (a && a.id && !busState.agents.has(a.id)) {
+      busState.agents.set(a.id, { ...a, ephemeral: true, visible: false });
+    }
+  }
+}
+
+/**
  * Recharge la map des agents depuis le registre persistant (P4).
  * Le bus ne charge le registre qu'à l'init ; un agent créé entre-temps (ex:
  * create_agent de l'assistant) ne serait pas visible dans run_agents. On
@@ -1978,6 +2004,10 @@ async function reloadAgentsRegistry() {
     const a = normalizeAgent(raw);
     if (a && a.id) busState.agents.set(a.id, a);
   }
+  // AGENT JETABLE : une relecture du registre PERSISTANT ne doit pas faire
+  // disparaître un agent éphémère déjà enregistré pour la mission en cours
+  // (sinon `run_agents` le déclarerait « inconnu » juste avant de le lancer).
+  mergeEphemeralAgentsIntoBus();
   const regCoord = busState.agents.get("coordinateur");
   if (regCoord) {
     busState.coordinator = regCoord;

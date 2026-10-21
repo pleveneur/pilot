@@ -237,6 +237,50 @@ pub async fn start_agent_process(state: State<'_, AppState>, app: AppHandle, age
     .map_err(|e| format!("Erreur interne (join) start_agent_process: {}", e))?
 }
 
+// ── AGENT JETABLE (éphémère) : rôle fourni à la volée, SANS écriture en base ──
+//
+// Un agent jetable existe le temps d'UNE tâche : sa définition est gardée en
+// MÉMOIRE par l'`AgentService` (aucune ligne dans la table `agents`, donc aucune
+// trace dans le registre visible ni après la tâche). Il est résolu par
+// `get_agent` (repli mémoire), ce qui évite le « seed » automatique de `start`.
+//
+// Cycle complet côté assistant :
+//   1. `register_ephemeral_agent` (id éphémère + rôle lus dans la demande),
+//   2. `start_agent_process` (comme un agent du registre),
+//   3. `clear_ephemeral_agent` à la fin de la tâche (aussi purgé par l'arrêt de
+//      la session). Le travail produit reste visible (session, rapport, journal).
+
+/// Enregistre un agent jetable en mémoire (aucune écriture en base).
+/// `project` : projet de rattachement (`None` = périmètre global).
+#[tauri::command]
+pub fn register_ephemeral_agent(state: State<'_, AppState>, agent: Value, project: Option<String>) -> Result<Value, String> {
+    let mut parsed = crate::agent_service::agent_from_value(&agent)?;
+    // La portée vient de l'appel : un agent jetable appartient au projet de la
+    // tâche qui l'a demandé (il n'est résolu que là).
+    parsed.project_path = project;
+    parsed.visible = false;
+    let stored = state.agent_service.register_ephemeral_agent(parsed)?;
+    serde_json::to_value(&stored).map_err(|e| format!("Agent jetable non sérialisable: {}", e))
+}
+
+/// Purge un agent jetable (fin de tâche). Retourne `true` s'il existait.
+#[tauri::command]
+pub fn clear_ephemeral_agent(state: State<'_, AppState>, agent_id: String) -> bool {
+    state.agent_service.clear_ephemeral_agent(&agent_id)
+}
+
+/// Liste les agents jetables vivants (diagnostic ; ils ne sont PAS dans le registre).
+#[tauri::command]
+pub fn list_ephemeral_agents(state: State<'_, AppState>) -> Value {
+    let agents: Vec<Value> = state
+        .agent_service
+        .list_ephemeral_agents()
+        .iter()
+        .filter_map(|a| serde_json::to_value(a).ok())
+        .collect();
+    serde_json::json!({ "agents": agents })
+}
+
 /// Arrêt d'un agent sans garde de propriété (comportement historique). Conservé
 /// pour les chemins qui ne connaissent pas d'uid ; les appels automatiques du
 /// bus JS passent par `do_stop_agent_process_owned`.
