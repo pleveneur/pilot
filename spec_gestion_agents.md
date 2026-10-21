@@ -36,7 +36,8 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Consulter n'est jamais une boucle** : relire `git status`, `git diff`, `git log`, `ls`, `grep`/`rg`, `sed -n`… entre deux corrections est un travail normal — ces lectures **ne déclenchent aucun arrêt**, quel que soit l'écran d'où la tâche a été lancée (onglet d'agent, bus d'agents, Assistant). Seules les **modifications** (écriture d'un fichier, commande qui écrit ou exécute) et la répétition d'un même **texte** peuvent fonder un arrêt.
 - **Chaque arrêt automatique laisse une trace** dans `.pilot/agent-stops.log` du projet (cause, type de détection, agent, session) : boucle, inactivité, plafond de tours, agent bloqué, libération de verrou. Rien ne s'arrête sans motif écrit.
 - **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (**10 min par défaut**, soit 600 000 ms), la run s'arrête et un message le signale. Réglable dans **Paramètres → Agents** (champ « Timeout d'inactivité (ms) », de 10 s à 30 min) ; la nouvelle valeur est relue à l'ouverture de l'onglet Agents ou au redémarrage de Pilot.
-- **⏹ Arrêter** arrête tous les processus d'agents. Fermer l'onglet les arrête aussi.
+- **⏹ Arrêter** arrête les agents lancés depuis cet écran.
+- **Changer de projet, fermer un projet ou en ouvrir un autre n'arrête JAMAIS un agent en cours** — quel que soit l'écran (agent du projet, agents multi-rôles 🎭, Assistant). L'agent du projet quitté est simplement **mis en pause** et reprend là où il en était au retour sur ce projet ; les agents des autres projets ouverts continuent leur travail. Seul un agent **au repos** (qui ne travaille pas) est libéré à la fermeture de son projet.
 - **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau de la cloche, une session qui travaille sans onglet ouvert porte le repère **« arrière-plan »** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
 
 ### Agent jetable (à la volée, jamais enregistré)
@@ -454,7 +455,28 @@ Les identifiants `#ae-*` sont **inchangés** : l'enregistrement relit exactement
 
 ## 7. Cycle de vie
 
-- `stop_all_agent_processes()` à la fermeture de l'onglet Agents, au changement de projet et à la fermeture de l'application.
+- **Règle propriétaire (2026-10-21) — l'écran ne commande plus le travail** :
+  un **changement de projet**, une **fermeture de projet** ou l'**ouverture d'un
+  autre projet** n'arrête **JAMAIS** un agent en cours, quel que soit son mode
+  (chat du projet, agents multi-rôles 🎭, agent d'assistant hors projet).
+  - L'onglet 🎭 (`mode "agents"`) est **TRANSVERSE** (`GLOBAL_TAB_MODES`,
+    `src/js/tab-scoping.js`) : il n'est plus fermé par une bascule. Avant, sa
+    fermeture déclenchait le nettoyage ci-dessous → arrêt **GLOBAL** de tous les
+    processus (projet quitté, projet ouvert, troisième projet).
+  - Les deux appels `invoke("stop_all_agent_processes")` de `tabs.js` passent
+    sous la garde `skipAgentStop` : un **geste d'interface** (fermeture/
+    démontage d'onglet lié à une bascule) n'émet plus d'arrêt global.
+    `destroyAgentsBus()` ne fait plus que détacher le bus.
+  - Fermer un projet **parke** l'agent de chat (`close_project` → `pause`) et
+    libère seulement les sessions **oisives** du projet
+    (`stop_idle_project_sessions`) : un agent qui **travaille** continue.
+- `stop_all_agent_processes()` reste réservé à l'**arrêt explicite global**
+  (décision utilisateur) et à la fermeture de l'application ; il n'est plus
+  appelé par un changement/fermeture de projet.
+- Les **arrêts ciblés** sont protégés par l'identifiant de session
+  (`expectedUid` / `sessionUid`) : contrôle et action dans la même section
+  critique (`stop_owned`, `send_owned` côté `agent_service.rs`) — un arrêt
+  périmé ne peut plus emporter la session neuve du même couple (projet, agent).
 - Sous-agents avec `keep_context: false` reçoivent `new_session` avant chaque appel.
 - Le coordinateur garde son contexte pendant toute la run.
 

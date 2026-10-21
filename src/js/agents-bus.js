@@ -2218,7 +2218,13 @@ export function destroyAgentsBus() {
     busState.staleBusyListener();
     busState.staleBusyListener = null;
   }
-  stopAllAgentProcesses();
+  // Règle propriétaire (2026-10-21) : l'écran ne commande plus le travail.
+  // Démonter le bus (fermeture de l'onglet 🎭, bascule ou fermeture de projet)
+  // ne doit JAMAIS émettre d'arrêt global des processus d'agents — il tuait les
+  // agents du projet quitté, du projet ouvert ET d'un troisième projet. Les
+  // agents continuent en arrière-plan ; l'arrêt explicite reste `stopAgentsRun`
+  // (bouton ⏹) et l'export `stopAllAgentProcesses` (décision utilisateur
+  // explicite, plus appelé depuis aucun nettoyage d'interface).
   clearAllRuns();
 }
 
@@ -3322,6 +3328,22 @@ export async function stopAllAgentProcesses() {
 }
 
 /**
+ * Pure (testable) : identifiant de session à viser pour un arrêt CIBLÉ.
+ *
+ * Un arrêt visant le couple (projet, agent) sans identifiant de session peut
+ * tuer une AUTRE exécution du même couple relancée entre-temps (trou constaté
+ * dans la trace disque du 2026-10-20 : `propriete-ok expected=None` puis
+ * `abort`). On transmet donc toujours l'identifiant de la session réellement
+ * visée, lu dans `list_agent_sessions` (`sessionUid`).
+ * @param {object|undefined} session - entrée de `list_agent_sessions`.
+ * @returns {number|null} uid de session, ou `null` si inconnu (arrêt legacy).
+ */
+export function targetedSessionUid(session) {
+  const uid = session && session.sessionUid;
+  return typeof uid === "number" && Number.isFinite(uid) && uid > 0 ? uid : null;
+}
+
+/**
  * Pure (testable) : indique si un tour d'agent exige un contexte VIERGE.
  *
  * Restitution fiable (relance d'agents secondaires via `run_agents`) : un
@@ -3365,6 +3387,10 @@ async function forceStaleAgentProcessRestartIfNeeded(agent, project) {
       (s) => s.agent === agent.id && sameProject(s.project, project) && s.mode === "agent_process"
     );
     if (!existing) return;
+    // Arrêt CIBLÉ : on vise l'IDENTIFIANT de la session trouvée. Sans lui, un
+    // arrêt qui arrive après la relance du même couple (projet, agent) tuait la
+    // session neuve d'une autre exécution (second trou du diagnostic).
+    const expectedUid = targetedSessionUid(existing);
     // RÈGLE 3 : ce `stop_agent_process` est un ARRÊT AUTOMATIQUE (personne ne l'a
     // demandé : il précède un respawn à contexte vierge). Il passe donc par
     // l'ENTONNOIR UNIQUE, avec son motif propre, avant l'arrêt effectif.
@@ -3374,7 +3400,12 @@ async function forceStaleAgentProcessRestartIfNeeded(agent, project) {
       agentId: agent.id,
       projectPath: project,
       detail: "Session agent_process d'une run précédente arrêtée pour forcer un contexte vierge.",
-      stop: () => invoke("stop_agent_process", { agentId: agent.id, project }),
+      stop: () =>
+        invoke("stop_agent_process", {
+          agentId: agent.id,
+          project,
+          ...(expectedUid ? { expectedUid } : {}),
+        }),
     });
   } catch (_) {
     // fail-open : inoffensif, le spawn suivant créera de toute façon une session.

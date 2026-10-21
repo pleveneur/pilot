@@ -1935,7 +1935,14 @@ export class TabsManager {
     if (tab.mode === "agents" && tab.unlistenAgents) {
       tab.unlistenAgents();
       tab.unlistenAgents = null;
-      invoke("stop_all_agent_processes").catch(() => {});
+      // GARDE (règle propriétaire 2026-10-21) : retirer l'onglet 🎭 de l'écran
+      // n'arrête plus le travail. L'arrêt global des processus d'agents n'est
+      // émis que par un geste EXPLICITE (bouton ⏹) ; un retrait d'onglet lié à
+      // une bascule/fermeture de projet passe `skipAgentStop` (voir
+      // `_closeAllTabs` dans sidebar.js).
+      if (!options.skipAgentStop) {
+        invoke("stop_all_agent_processes").catch(() => {});
+      }
     }
     // Nettoyage onglet Graphe (📊) — spec_code_graph.md
     if (tab.mode === "code-graph" && tab.unlistenCodeGraph) {
@@ -1982,8 +1989,11 @@ export class TabsManager {
 
   /**
    * Ferme un onglet par chemin, sans sauvegarde (utilisé pour suppression)
+   * @param {string} path - chemin du fichier dont l'onglet doit être retiré
+   * @param {{skipAgentStop?: boolean}} [options] - `skipAgentStop` : ne pas
+   *   émettre d'arrêt global des processus d'agents (même garde que `closeTab`).
    */
-  closeTabByPath(path) {
+  closeTabByPath(path, options = {}) {
     const tab = this.tabs.find((t) => samePath(t.path, path));
     if (!tab) return;
     // Nettoyage split mode
@@ -2066,7 +2076,12 @@ export class TabsManager {
     if (tab.mode === "agents" && tab.unlistenAgents) {
       tab.unlistenAgents();
       tab.unlistenAgents = null;
-      invoke("stop_all_agent_processes").catch(() => {});
+      // GARDE (règle propriétaire 2026-10-21) : un retrait d'onglet lié à une
+      // suppression de fichier ne doit pas non plus émettre d'arrêt global
+      // d'agents (même garde que `closeTab`).
+      if (!options.skipAgentStop) {
+        invoke("stop_all_agent_processes").catch(() => {});
+      }
     }
     // Nettoyage onglet Graphe (📊) — spec_code_graph.md
     if (tab.mode === "code-graph" && tab.unlistenCodeGraph) {

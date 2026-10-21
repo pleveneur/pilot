@@ -1583,8 +1583,12 @@ class Sidebar {
     this.ddCloseProject.classList.add("hidden");
     this.ddCloseSeparator.classList.add("hidden");
     this._renderOpenProjectsBar();
-    // Fermer tous les onglets ouverts
-    await this._closeAllTabs();
+    // Fermer les onglets ouverts SANS arrêter les agents (règle propriétaire
+    // 2026-10-21) : l'agent de chat du projet est PARKÉ côté Rust
+    // (`close_project` appelle `pause`, le processus pi reste vivant et la
+    // session reprend à la réouverture) et `parked=true` → `skipAgentStop` :
+    // aucun arrêt n'est émis depuis un geste d'interface.
+    await this._closeAllTabs(true, false);
     // Réinitialiser le chemin du projet
     window._pilotProjectPath = null;
     // Notifier la fermeture du projet (badge 🔒 H7)

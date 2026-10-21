@@ -76,6 +76,16 @@ describe("shouldCloseTab (T2 — keepAgents)", () => {
     expect(shouldCloseTab({ mode: "gds-params" }, false)).toBe(false);
     expect(shouldCloseTab({ mode: "gds-params" }, true)).toBe(false);
   });
+  it("conserve l'onglet des agents multi-rôles (agents, 🎭) dans TOUS les cas", () => {
+    // Régression vérifiée : cet onglet n'était protégé par AUCUNE règle. Il était
+    // donc fermé à chaque bascule/fermeture de projet, ce qui déclenchait son
+    // nettoyage — un arrêt GLOBAL de tous les processus d'agents (agents du projet
+    // quitté, du projet ouvert et d'un troisième projet). Il est désormais
+    // TRANSVERSE comme 🧭, 📊 et les onglets GDS.
+    expect(shouldCloseTab({ mode: "agents" }, false)).toBe(false);
+    expect(shouldCloseTab({ mode: "agents" }, true)).toBe(false);
+    expect(shouldCloseTab({ mode: "agents", projectPath: "C:/projA" }, false)).toBe(false);
+  });
   it("ferme toujours les onglets edit même avec keepAgents=true", () => {
     expect(shouldCloseTab(editTab("a.md"), true)).toBe(true);
   });

@@ -1047,7 +1047,8 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Consulter n'est jamais une boucle** : relire `git status`, `git diff`, `git log`, `ls`, `grep`/`rg`, `sed -n`… entre deux corrections est un travail normal — ces lectures **ne déclenchent aucun arrêt**, quel que soit l'écran d'où la tâche a été lancée (onglet d'agent, bus d'agents, Assistant). Seules les **modifications** (écriture d'un fichier, commande qui écrit ou exécute) et la répétition d'un même **texte** peuvent fonder un arrêt.
 - **Chaque arrêt automatique laisse une trace** dans `.pilot/agent-stops.log` du projet (cause, type de détection, agent, session) : boucle, inactivité, plafond de tours, agent bloqué, libération de verrou. Rien ne s'arrête sans motif écrit.
 - **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (**10 min par défaut**, soit 600 000 ms), la run s'arrête et un message le signale. Réglable dans **Paramètres → Agents** (champ « Timeout d'inactivité (ms) », de 10 s à 30 min) ; la nouvelle valeur est relue à l'ouverture de l'onglet Agents ou au redémarrage de Pilot.
-- **⏹ Arrêter** arrête tous les processus d'agents. Fermer l'onglet les arrête aussi.
+- **⏹ Arrêter** arrête les agents lancés depuis cet écran.
+- **Changer de projet, fermer un projet ou en ouvrir un autre n'arrête JAMAIS un agent en cours** — quel que soit l'écran (agent du projet, agents multi-rôles 🎭, Assistant). L'agent du projet quitté est simplement **mis en pause** et reprend là où il en était au retour sur ce projet ; les agents des autres projets ouverts continuent leur travail. Seul un agent **au repos** (qui ne travaille pas) est libéré à la fermeture de son projet.
 - **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau de la cloche, une session qui travaille sans onglet ouvert porte le repère **« arrière-plan »** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
 
 ### Agent jetable (à la volée, jamais enregistré)
@@ -1109,7 +1110,10 @@ automatiquement avec le projet actif).
   un projet → Pilot
   sauvegarde les onglets du projet courant, bascule l'affichage, puis restaure les
   onglets et **la discussion en cours** du projet ciblé.
-- **Fermer** : bouton ✕ à droite d'un projet → son agent est arrêté proprement.
+- **Fermer** : bouton ✕ à droite d'un projet → son agent est **mis en pause**
+  (il n'est **pas tué**) et reprend en revenant sur le projet. Fermer un projet,
+  basculer ou en ouvrir un autre **n'arrête jamais un agent en cours** — y compris
+  les agents des autres projets ouverts (qui continuent en arrière-plan).
 - **Agent par projet** : chaque projet a **sa propre session d'agent** (processus
 pi/plh dédié, vivant en arrière-plan). En revenant sur un projet, l'agent reprend
 exactement là où il en était (contexte et historique préservés).

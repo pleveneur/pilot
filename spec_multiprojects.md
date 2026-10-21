@@ -38,9 +38,16 @@ Cette spec décrit la migration vers un **gestionnaire multi-projets** :
   la persistance existante `restoreTabs` / historique sessions).
 
 ### Fermeture d'un projet
-- Fermer un projet **arrête proprement son agent** (équivalent à la fermeture
-  manuelle de l'onglet agent : `stop_agent_session` + session sauvegardée), puis
-  supprime le watcher et retire le projet de la collection. Ne ferme pas l'app.
+- Fermer un projet **ne tue pas son agent** : l'agent de chat est **parké**
+  (`close_project` → `pause` ; processus pi vivant, session conservée) et reprend
+  à la réouverture. Seules les sessions **oisives** du projet sont libérées
+  (`stop_idle_project_sessions`) ; un agent qui **travaille** continue.
+- Un **changement de projet** ne ferme plus l'onglet 🎭 des agents multi-rôles
+  (onglet transverse) et n'émet plus d'**arrêt global** : les agents des autres
+  projets ouverts continuent en arrière-plan (règle propriétaire 2026-10-21,
+  détail : `spec_gestion_agents.md` § 7).
+- Le watcher est supprimé et le projet est retiré de la collection. Ne ferme pas
+  l'app.
 
 ### Web-remote
 - Nouvelle route `GET /api/projects` → liste des projets ouverts (et lequel est
@@ -413,7 +420,10 @@ automatiquement avec le projet actif).
   un projet → Pilot
   sauvegarde les onglets du projet courant, bascule l'affichage, puis restaure les
   onglets et **la discussion en cours** du projet ciblé.
-- **Fermer** : bouton ✕ à droite d'un projet → son agent est arrêté proprement.
+- **Fermer** : bouton ✕ à droite d'un projet → son agent est **mis en pause**
+  (il n'est **pas tué**) et reprend en revenant sur le projet. Fermer un projet,
+  basculer ou en ouvrir un autre **n'arrête jamais un agent en cours** — y compris
+  les agents des autres projets ouverts (qui continuent en arrière-plan).
 - **Agent par projet** : chaque projet a **sa propre session d'agent** (processus
 pi/plh dédié, vivant en arrière-plan). En revenant sur un projet, l'agent reprend
 exactement là où il en était (contexte et historique préservés).

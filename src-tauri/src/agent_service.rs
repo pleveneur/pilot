@@ -421,14 +421,21 @@ impl AgentService {
             .copied()
     }
 
-    /// Garde de PROPRIÉTÉ : un appelant ne peut arrêter (ou avorter) que la
-    /// session qu'il a lui-même lancée, identifiée par son uid.
+    /// Garde de PROPRIÉTÉ (contrôle SEUL) : un appelant ne peut arrêter (ou
+    /// avorter) que la session qu'il a lui-même lancée, identifiée par son uid.
+    ///
+    /// Conservée comme garde de LECTURE indépendante (diagnostic, tests) ; les
+    /// chemins d'arrêt réels utilisent la version ATOMIQUE (contrôle + retrait /
+    /// écriture dans la même section critique : `stop_owned`, `send_owned`), car
+    /// un contrôle séparé de l'action laisse une fenêtre où la session a pu être
+    /// remplacée entre-temps.
     ///
     /// `expected` à `None` conserve le comportement historique (aucun contrôle),
     /// pour les chemins qui ne connaissent pas d'uid (UI « arrêter », arrêt de
     /// projet, fermeture de l'application).
     ///
     /// Une session ABSENTE n'est jamais un conflit (il n'y a rien à arrêter).
+    #[allow(dead_code)]
     pub fn check_session_ownership(
         &self,
         project: &str,
@@ -1263,7 +1270,7 @@ impl AgentService {
             );
         }
         // Identité de la session qui vient de naître : tout arrêt/abandon
-        // ultérieur devra la nommer par cet uid (voir `check_session_ownership`).
+        // ultérieur devra la nommer par cet uid (voir `stop_owned` / `send_owned`).
         let uid = next_session_uid();
         self.session_uids.lock().unwrap().insert(key, uid);
         self.trace_session_op("spawn", project, agent_id, None, Some(uid));
@@ -1467,6 +1474,13 @@ impl AgentService {
     /// moniteur, relance) d'une session remplacée entre-temps : sans cette
     /// garde, un minuteur périmé tuait la session neuve du même couple
     /// (projet, agent), ce qui se voyait comme « l'agent commence et s'arrête ».
+    ///
+    /// ATOMICITÉ (trou du diagnostic 2026-10-21) : le contrôle de propriété et
+    /// le RETRAIT (uid + session) se font dans la MÊME section critique. Sans
+    /// cela, une session relancée entre le contrôle et le retrait pouvait être
+    /// enlevée par un arrêt visant l'ancienne — un arrêt périmé tuait une autre
+    /// exécution. Ordre de verrous : `session_uids` puis `sessions` (aucun
+    /// chemin existant ne prend `sessions` avant `session_uids`).
     pub fn stop_owned(
         &self,
         project: &str,
@@ -1474,15 +1488,31 @@ impl AgentService {
         expected_uid: Option<u64>,
     ) -> Result<(), String> {
         let key = Self::session_key(project, agent_id);
-        self.check_session_ownership(project, agent_id, expected_uid)?;
-        self.session_uids.lock().unwrap().remove(&key);
-        let mut stopped_mode: Option<SpawnMode> = None;
-        {
-            let mut sessions = self.sessions.lock().unwrap();
-            if let Some(mut entry) = sessions.remove(&key) {
-                stopped_mode = Some(entry.mode);
-                rpc_manager::stop_session(&mut entry.session);
+        // ── Réservation atomique de la session à arrêter ──
+        let taken = {
+            let mut uids = self.session_uids.lock().unwrap();
+            let current = uids.get(&key).copied();
+            let accepted = session_ownership_allows(expected_uid, current);
+            self.trace_session_op(
+                if accepted { "propriete-ok" } else { "propriete-refusee" },
+                project,
+                agent_id,
+                expected_uid,
+                current,
+            );
+            if !accepted {
+                return Err(format!(
+                    "Session remplacée depuis le lancement (uid attendu {:?}, session en place {:?}) : commande refusée pour ne pas arrêter la session d'une autre exécution.",
+                    expected_uid, current
+                ));
             }
+            uids.remove(&key);
+            self.sessions.lock().unwrap().remove(&key)
+        };
+        let mut stopped_mode: Option<SpawnMode> = None;
+        if let Some(mut entry) = taken {
+            stopped_mode = Some(entry.mode);
+            rpc_manager::stop_session(&mut entry.session);
         }
         // Défaut B : purger la marque d'occupation du couple (projet, agent)
         // dans la map d'anomalie AVANT de toucher au pointeur actif. Une
@@ -1570,6 +1600,60 @@ impl AgentService {
                 format!("Aucune session pour l'agent {} (projet {})", agent_id, project)
             })?;
             rpc_manager::send_command(&mut entry.session, &command)
+        };
+        if res.is_ok() {
+            self.record_prompt(key, snapshot);
+        }
+        res
+    }
+
+    /// Envoie une commande à une session **sous garde de PROPRIÉTÉ** :
+    /// le contrôle de l'uid attendu et l'ÉCRITURE de la commande se font dans la
+    /// MÊME section critique. Un abandon (`abort`) visant une session remplacée
+    /// entre-temps ne peut donc plus atteindre la session NEUVE du même couple
+    /// (projet, agent) — trou constaté dans la trace disque du 2026-10-20
+    /// (`propriete-ok expected=None` immédiatement suivi de `abort`).
+    ///
+    /// `expected_uid` à `None` conserve le comportement historique (aucun
+    /// contrôle) pour les chemins qui ne connaissent pas d'uid.
+    /// Ordre de verrous : `session_uids` puis `sessions` (voir `stop_owned`).
+    pub fn send_owned(
+        &self,
+        project: &str,
+        agent_id: &str,
+        expected_uid: Option<u64>,
+        command: Value,
+    ) -> Result<(), String> {
+        let key = Self::session_key(project, agent_id);
+        let snapshot = prompt_snapshot(&command);
+        let res = {
+            let uids = self.session_uids.lock().unwrap();
+            let current = uids.get(&key).copied();
+            let accepted = session_ownership_allows(expected_uid, current);
+            let res = if !accepted {
+                Err(format!(
+                    "Session remplacée depuis le lancement (uid attendu {:?}, session en place {:?}) : commande refusée pour ne pas toucher la session d'une autre exécution.",
+                    expected_uid, current
+                ))
+            } else {
+                let mut sessions = self.sessions.lock().unwrap();
+                match sessions.get_mut(&key) {
+                    Some(entry) => rpc_manager::send_command(&mut entry.session, &command),
+                    None => Err(format!(
+                        "Aucune session pour l'agent {} (projet {})",
+                        agent_id, project
+                    )),
+                }
+            };
+            drop(uids);
+            self.trace_session_op(
+                if accepted { "propriete-ok" } else { "propriete-refusee" },
+                project,
+                agent_id,
+                expected_uid,
+                current,
+            );
+            res
         };
         if res.is_ok() {
             self.record_prompt(key, snapshot);
@@ -1832,6 +1916,62 @@ impl AgentService {
         }
     }
 
+    /// Fermeture d'un projet (`close_project`) : libère les sessions du projet
+    /// qui NE TRAVAILLENT PAS, et LAISSE VIVANTES celles qui travaillent.
+    ///
+    /// Règle propriétaire (2026-10-21) : fermer un projet n'arrête plus un agent
+    /// EN COURS — son travail continue en arrière-plan et reprend à la
+    /// réouverture. `working(agent_id)` répond « travaille-t-il maintenant ? »
+    /// (même règle que `isWorking` : processus vivant ET [tâche/outil en cours
+    /// ou activité < 2 min]). Une session OISIVE est quand même libérée : aucun
+    /// travail n'est perdu et aucun `pi` oisif ne traîne en mémoire.
+    /// Retourne les clés effectivement arrêtées.
+    pub fn stop_idle_project_sessions<F>(&self, project: &str, working: F) -> Vec<String>
+    where
+        F: Fn(&str) -> bool,
+    {
+        // 1. Instantané SOUS verrou, puis libération : le prédicat `working` peut
+        //    consulter la map d'anomalie (verrou distinct, pris ailleurs AVANT un
+        //    arrêt par le moniteur) — on ne l'appelle jamais en tenant le registre,
+        //    pour ne pas créer un ordre de verrous nouveau (risque d'interblocage).
+        let candidates: Vec<(String, String)> = {
+            let sessions = self.sessions.lock().unwrap();
+            sessions
+                .iter()
+                .filter(|(_, e)| e.project == project)
+                // Clé composite `project\u{1f}agent` : l'agent est le suffixe.
+                .map(|(k, _)| (k.clone(), k.rsplit('\u{1f}').next().unwrap_or("").to_string()))
+                .collect()
+        };
+        let idle: Vec<String> = candidates
+            .into_iter()
+            .filter(|(_, agent_id)| !working(agent_id))
+            .map(|(k, _)| k)
+            .collect();
+        // 2. Retrait effectif (verrou tenu uniquement pour le retrait).
+        let keys: Vec<String> = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let mut keys: Vec<String> = Vec::new();
+            for k in idle {
+                if let Some(mut entry) = sessions.remove(&k) {
+                    rpc_manager::stop_session(&mut entry.session);
+                    keys.push(k);
+                }
+            }
+            keys
+        };
+        {
+            let mut uids = self.session_uids.lock().unwrap();
+            for k in &keys {
+                uids.remove(k);
+            }
+        }
+        for k in &keys {
+            self.purge_anomaly_busy_for_key(k);
+        }
+        keys
+    }
+
     /// Arrête toutes les sessions d'agents multi-rôles H2 V2 (tous projets).
     /// Utilisé par `stop_all_agent_processes` et à l'arrêt de l'app.
     pub fn stop_all_agent_processes(&self) {
@@ -1983,6 +2123,14 @@ impl AgentService {
             }
             if let Some(le) = last_event {
                 entry["lastEvent"] = serde_json::Value::String(le);
+            }
+            // sessionUid (trou d'arrêt ciblé, diagnostic 2026-10-21) : identifiant
+            // INTERNE de la session dans le registre du service. Un arrêt CIBLÉ doit
+            // le transmettre (`expectedUid`) : sans lui, un arrêt qui arrive après
+            // la relance du même couple (projet, agent) tue la session NEUVE d'une
+            // autre exécution. Champ ADDITIF (absent si aucune session).
+            if let Some(uid) = self.session_uid(&project, &agent_id) {
+                entry["sessionUid"] = serde_json::json!(uid);
             }
             // prompt : DERNIER prompt réellement envoyé à cette session, déjà
             // tronqué (`record_prompt`). Sert à afficher les missions en cours
@@ -3423,7 +3571,7 @@ fn default_agent_name(id: &str) -> String {
 /// celle du frontend (`RECENT_ACTIVITY_WINDOW_MS` = 2 min,
 /// exclusivity-queue.js) — un agent qui vient de produire un événement est
 /// considéré en travail, même entre deux tours.
-const WORKING_RECENT_WINDOW_SECS: u64 = 120;
+pub(crate) const WORKING_RECENT_WINDOW_SECS: u64 = 120;
 
 /// Sonde PURE de travail réel d'une session, exposée au LLM par le champ
 /// `isWorking` de `list_agent_sessions` (chantier « l'assistant relance des
@@ -4583,6 +4731,101 @@ mod tests {
         svc.shutdown_all();
         assert!(svc.session_of(proj_b, "default").is_err(), "tout est purgé à l'arrêt complet");
         assert_eq!(svc.active_agent(), None);
+    }
+
+    /// Règle propriétaire (2026-10-21) — FERMER UN PROJET N'ARRÊTE PLUS UN AGENT
+    /// EN COURS. `stop_idle_project_sessions` (utilisé par `close_project`)
+    /// libère les sessions OISIVES du projet et LAISSE VIVANTES celles qui
+    /// travaillent (elles reprennent à la réouverture), sans jamais toucher un
+    /// autre projet. ÉCHOUE sur le code d'avant, qui appelait
+    /// `stop_project_sessions` et tuait TOUTES les sessions du projet.
+    #[test]
+    fn close_project_keeps_working_agents_alive() {
+        let svc = AgentService::new();
+        let proj_a = "/p/A";
+        let proj_b = "/p/B";
+        for (proj, agent) in [(proj_a, "codeur"), (proj_a, "veilleur"), (proj_b, "codeur")] {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, agent),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Parked,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+        }
+        // « codeur » travaille (tâche/outil en cours) ; « veilleur » est au repos.
+        let stopped = svc.stop_idle_project_sessions(proj_a, |agent| agent == "codeur");
+        assert_eq!(
+            stopped,
+            vec![AgentService::session_key(proj_a, "veilleur")],
+            "seule la session OISIVE du projet fermé est libérée"
+        );
+        assert!(
+            svc.session_of(proj_a, "codeur").is_ok(),
+            "l'agent qui TRAVAILLE du projet fermé reste vivant (il reprend au retour)"
+        );
+        assert!(svc.session_of(proj_a, "veilleur").is_err(), "session oisive libérée");
+        assert!(
+            svc.session_of(proj_b, "codeur").is_ok(),
+            "aucun agent d'un autre projet n'est touché par la fermeture"
+        );
+        svc.shutdown_all();
+    }
+
+    /// Trou du diagnostic 2026-10-21 — un arrêt CIBLÉ doit être protégé par
+    /// l'IDENTIFIANT DE SESSION : un arrêt/abandon visant une session remplacée
+    /// entre-temps (uid périmé) est REFUSÉ et ne peut jamais emporter la session
+    /// neuve du même couple (projet, agent).
+    #[test]
+    fn targeted_stop_is_protected_by_session_uid() {
+        let svc = AgentService::new();
+        let proj = "/p/A";
+        let agent = "codeur";
+        let key = AgentService::session_key(proj, agent);
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                key.clone(),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Parked,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+        }
+        // Session née avec l'uid 1 (comme après `start_agent_process`).
+        svc.session_uids.lock().unwrap().insert(key.clone(), 1);
+        // Arrêt PÉRIMÉ (uid 2) : refusé, la session en place survit.
+        assert!(
+            svc.stop_owned(proj, agent, Some(2)).is_err(),
+            "un arrêt visant une autre session est refusé"
+        );
+        assert!(
+            svc.session_of(proj, agent).is_ok(),
+            "la session en place survit à un arrêt périmé"
+        );
+        assert_eq!(
+            svc.session_uid(proj, agent),
+            Some(1),
+            "un refus ne modifie pas l'uid en place"
+        );
+        // Abandon PÉRIMÉ : refusé de la même façon (aucune écriture dans la session).
+        assert!(
+            svc.send_owned(proj, agent, Some(2), serde_json::json!({"type": "abort"}))
+                .is_err()
+        );
+        assert!(
+            svc.session_of(proj, agent).is_ok(),
+            "l'abandon périmé ne touche pas la session"
+        );
+        // Arrêt du BON uid : accepté, uid purgé avec la session.
+        assert!(svc.stop_owned(proj, agent, Some(1)).is_ok());
+        assert!(svc.session_of(proj, agent).is_err());
+        assert_eq!(svc.session_uid(proj, agent), None, "uid purgé avec la session");
     }
 
     /// La session du super-agent (Assistant 🧭) vit dans le registre

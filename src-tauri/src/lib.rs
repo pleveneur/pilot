@@ -2684,18 +2684,24 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
 
     if is_active || path.is_none() {
         stop_watcher(&state);
-        // Arrêter la session active via l'AgentService (tue le processus pi et
-        // réinitialise le pointeur actif).
+        // Règle propriétaire (2026-10-21) : FERMER UN PROJET N'ARRÊTE PLUS AUCUN
+        // AGENT EN COURS. L'agent de chat du projet n'est plus tué : il est PARKÉ
+        // (processus pi/plh vivant, pointeur actif libéré) — son travail continue
+        // en arrière-plan et reprend à la réouverture du projet (restoreTabs →
+        // start_agent_session).
         if let Some(agent_id) = state.agent_service.active_agent() {
-            let _ = state.agent_service.stop(&target, &agent_id);
+            let _ = state.agent_service.pause(&target, &agent_id);
         }
         // Arrêter aussi la session reviewer (H2 V1) si elle tourne : c'est un
         // `pi`/`plh.exe` séparé (--no-session) qui ne meurt pas avec la session
         // principale → sans cet arrêt, il resterait en mémoire à la fermeture
         // du projet (fuite de processus issue #14).
         state.agent_service.stop_reviewer(&target);
-        // H2 V2 : arrêter tous les processus agents au changement/fermeture de projet.
-        agents::do_stop_all_agent_processes(&state);
+        // H2 V2 : plus AUCUN arrêt GLOBAL ici. `do_stop_all_agent_processes`
+        // était appelé à chaque fermeture de projet : il tuait TOUS les
+        // processus d'agents (sans filtre de projet ni d'état) — donc aussi ceux
+        // du projet qu'on venait d'ouvrir et d'un troisième projet (diagnostic
+        // du 2026-10-21). Les agents continuent en arrière-plan.
         *state.project_path.lock().unwrap() = None;
         *state.active_project.lock().unwrap() = None;
         // Réinitialiser le titre de la fenêtre
@@ -2704,12 +2710,27 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
         }
     }
 
-    // Retirer le projet de la collection multi-projets, en tuant proprement ses
-    // sessions parkées (multi-projets / multi-onglets agents) si elles existent —
-    // sinon fuite de processus pi. Les sessions parkées de CE projet
-    // vivent dans le registre unique de l'AgentService (clé composite
-    // (projet, agent)) et sont arrêtées via `stop_project_sessions`.
-    state.agent_service.stop_project_sessions(&target);
+    // Retirer le projet de la collection multi-projets. Ses sessions VIVANTES
+    // restent dans le registre unique de l'AgentService (clé composite
+    // (projet, agent)) : un agent qui TRAVAILLE continue, un agent OISIF est
+    // libéré (aucun processus pi oisif qui traîne).
+    {
+        let anomaly_map = state.agent_anomaly.clone();
+        let working = |agent_id: &str| {
+            let key = format!("{}\u{1f}{}", target, agent_id);
+            let m = anomaly_map.lock().unwrap();
+            match m.get(&key) {
+                Some(a) => {
+                    a.busy
+                        || a.tool_in_progress
+                        || a.last_activity.elapsed().as_secs()
+                            < crate::agent_service::WORKING_RECENT_WINDOW_SECS
+                }
+                None => false,
+            }
+        };
+        state.agent_service.stop_idle_project_sessions(&target, working);
+    }
     {
         let mut projects = state.projects.lock().unwrap();
         projects.remove(&normalize_project_path(&target));

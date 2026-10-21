@@ -570,11 +570,15 @@ pub fn get_agent_process_thinking_levels(state: State<AppState>, agent_id: Strin
 
 pub(crate) fn do_abort_agent_process(state: &AppState, agent_id: String, project: Option<String>, expected_uid: Option<u64>) -> Result<(), String> {
     let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
-    // Garde de propriété AVANT l'envoi : un abandon périmé (minuteur d'une run
-    // précédente, moniteur oublié) ne doit pas avorter la session neuve du même
-    // couple (projet, agent). L'uid vient de `start_agent_process`.
-    state.agent_service.check_session_ownership(&project, &agent_id, expected_uid)?;
-    let res = state.agent_service.send(&project, &agent_id, serde_json::json!({"type": "abort"}));
+    // Garde de propriété ATOMIQUE (`send_owned` contrôle l'uid et écrit la
+    // commande dans la MÊME section critique) : un abandon périmé (minuteur d'une
+    // run précédente, moniteur oublié, relance à contexte vierge) ne peut plus
+    // avorter la session NEUVE du même couple (projet, agent), même s'il arrive
+    // juste après son lancement. L'uid vient de `start_agent_process` ou de
+    // `list_agent_sessions` (`sessionUid`).
+    let res = state
+        .agent_service
+        .send_owned(&project, &agent_id, expected_uid, serde_json::json!({"type": "abort"}));
     state.agent_service.trace_session_op(
         if res.is_ok() { "abort" } else { "abort-echec" },
         &project,
