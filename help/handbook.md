@@ -1739,9 +1739,19 @@ uniquement un bloc d'instructions dans le prompt système.
     **libellés** des demandes abandonnées (`journalAbandonedFamily`,
     `project-queue-view.js`) — le vidage muet par `length = 0` n'existe plus ;
   - l'arrêt explicite d'un agent (`stop_agent`) abandonne la file de
-    **délégations** (`abandonQueuedDelegations`) et celle des **missions**
-    (`abandonQueuedRunAgentsMissions`) par le **même chemin de production**
+    **délégations** (`abandonQueuedDelegations`) par le **chemin de production**
     unique : nommage + ligne de journal + message à l'écran ;
+  - **P2 (D2) — une file de MISSIONS non vide n'est JAMAIS détruite par un arrêt
+    d'agent** : un verrou de run n'est pas une preuve de disponibilité (verrou
+    périmé, relance `stale-session-restart`, agent parqué). Les missions sont
+    **CONSERVÉES** dans leur ordre par `keepQueuedRunAgentsMissions`
+    (`super-agent.js`), **NOMMÉES** dans le journal des arrêts (`queue-kept`,
+    `detected=stop-agent`) et à l'écran, et leur **rejeu est armé** : il ne démarre
+    qu'une fois l'admission réellement libre, jugée sur les **sessions vivantes**
+    (`isRunStillActive`) — jamais sur un verrou. Même règle pour la file
+    `ASSISTANT_SPACE`. Défaut prouvé : trace du `2026-10-20T09:25:10.347Z`
+    (`queue-abandoned`, mission #14 détruite alors que la session `codeur` n°13
+    était encore vivante) ;
   Modules : `mission-identity.js` (identité pure), `agents-bus.js` (file par
   projet + garde de propriétaire), `super-agent.js` (estampille des 3 sites de
   mise en file, étiquetage du compte rendu, abandon tracé).
@@ -1760,6 +1770,12 @@ sur le projet), cette demande n'est plus une simple ligne anonyme :
 - une demande n'est **jamais** exécutée à la place d'une autre : si la tâche qui
   l'avait mise en attente a disparu, elle **reste en file** et le motif est
   **consigné** (journal des arrêts automatiques du projet) et signalé ;
+- **arrêter un agent ne perd plus les demandes en attente** : la file d'un
+  projet n'est **jamais vidée** par un arrêt d'agent. Les demandes sont
+  **conservées**, **nommées** dans le journal du projet et à l'écran, puis
+  **rejouées** dès que le projet est réellement libre — la disponibilité est
+  jugée sur les **sessions vivantes**, jamais sur une marque d'occupation
+  périmée ;
 - si une file doit être **abandonnée** (tâche jugée bloquée), chaque demande
   abandonnée est **nommée** dans le message et le motif est **consigné** : plus
   d'abandon silencieux ;

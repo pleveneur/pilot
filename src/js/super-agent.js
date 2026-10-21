@@ -671,6 +671,59 @@ export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
 }
 
 /**
+ * P2 — CONSERVATION (puis rejeu) d'une file de missions non vide à l'arrêt d'un
+ * agent.
+ *
+ * Défaut corrigé (D2 du rapport `rapport-file-attente-pertes-doublons.md`) :
+ * l'arrêt d'un agent concluait « le projet est libre » sur la seule foi du verrou
+ * de run (`isRunInProgress`), qui ne lit que les contextes du BUS d'agents. Un
+ * verrou périmé, une relance `stale-session-restart` ou un agent parqué
+ * suffisaient à le faire mentir : la file était alors VIDÉE
+ * (`abandonQueuedRunAgentsMissions`) et les missions en attente étaient
+ * définitivement perdues alors que des sessions étaient encore VIVANTES (trace
+ * `2026-10-20T09:25:10.347Z` : mission #14 détruite par `queue-abandoned`, session
+ * `codeur` n°13 arrêtée 17 s plus tard).
+ *
+ * Comportement par DÉFAUT désormais : la file est CONSERVÉE telle quelle (aucun
+ * `shift`, aucun `length = 0`), chaque mission est NOMMÉE dans le journal des
+ * arrêts (`queue-kept`) et à l'écran, et le rejeu périodique est ARMÉ. Ce rejeu
+ * ne lance la tête de file qu'une fois l'admission RÉELLEMENT libre — jugée sur
+ * les sessions vivantes (`isRunStillActive`, la même sonde que le rejeu), jamais
+ * sur un verrou.
+ * @param {string} target - projet (clé de file)
+ * @param {{reason?:string, detected?:string}} [opts]
+ * @returns {Promise<{count:number, labels:string[], replayArmed:boolean}>}
+ */
+export async function keepQueuedRunAgentsMissions(target, opts = {}) {
+  const key = target || "";
+  const queue = runAgentsQueueByProject[key] || [];
+  const count = queue.length;
+  if (count === 0) return { count: 0, labels: [], replayArmed: false };
+  // Nommer les missions CONSERVÉES : la trace doit dire lesquelles survivent.
+  const labels = queue.map((entry) => missionQueueLabel(entry));
+  const reason = opts.reason || "queue-kept";
+  await traceQueueAbandon({
+    project: key,
+    family: "mission",
+    labels,
+    reason,
+    detected: opts.detected || "stop-agent",
+  });
+  // La file reste EN PLACE, dans son ordre : le rejeu la reprendra. Le
+  // déclencheur est armé pour garantir ce rejeu même quand aucune fin de run du
+  // bus ne viendra le réveiller (arrêt manuel, commande manuelle, agent parqué).
+  armQueueReplay(key);
+  const message = `📋 ${count} mission(s) conservée(s) en file d'attente : ${labels.join(" · ")}. Elles seront rejouées dès que le projet est libre (motif consigné : ${reason}).`;
+  console.warn("[super-agent] file de missions :", message);
+  try {
+    await notifySuperAgentDone({ title: "Pilot — Assistant", body: message });
+  } catch (_) {
+    /* notification indisponible : la console porte déjà l'information */
+  }
+  return { count, labels, replayArmed: true };
+}
+
+/**
  * Délégations (issue #66) en attente pour un projet, dans l'ordre.
  * @param {string} projectPath
  * @returns {Array<{label:string}>}
@@ -5217,12 +5270,11 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         }
         stoppedDeleg.busy = false;
         // POINT C : l'arrêt doit aussi libérer la place du PROJET pour la file
-        // des MISSIONS (`runAgentsQueueByProject`, indexée par projet). Elle
-        // n'était PAS vidée ici : une mission mise en attente derrière la run
-        // arrêtée ne démarrait jamais et finissait perdue par le watchdog (5 min).
+        // des MISSIONS (`runAgentsQueueByProject`, indexée par projet).
         // Même traitement que la file de délégation : si plus aucune run ne
-        // tourne sur ce projet, on libère le créneau et on SIGNALE que les
-        // missions en attente ne démarreront pas — jamais perdues en silence.
+        // tourne sur ce projet, on libère le créneau — mais la file n'est PLUS
+        // vidée (P2) : les missions en attente sont CONSERVÉES, nommées et
+        // rejouées (le verrou de bus ne prouve pas que le projet est libre).
         // Si une autre tâche tourne encore sur le projet, la file reste posée
         // (visible) et se videra normalement à la fin de cette tâche.
         const queueKey = (info.project && String(info.project).trim()) || window._pilotProjectPath || ".";
@@ -5234,10 +5286,13 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
           const wd = runAgentsWatchdogByProject[queueKey];
           if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[queueKey]; }
           if (waitingMissions > 0) {
-            // RÈGLE 4 : nommer + journaliser + annoncer (le vidage muet perdait
-            // les missions en attente sans que personne ne sache lesquelles).
-            const abandoned = await abandonQueuedRunAgentsMissions(queueKey, { detected: "stop-agent" });
-            appendSystemMessage(messagesEl, `📋 ${abandoned.count} mission(s) en attente annulée(s) par l'arrêt de l'agent (le projet n'est plus occupé) : ${abandoned.labels.join(" · ")} (motif consigné).`);
+            // P2 : un arrêt d'agent ne DÉTRUIT PLUS une file non vide. Le verrou
+            // de run peut être périmé (relance, agent parqué, run terminée) : il
+            // ne prouve pas que le projet est libre. On CONSERVE les missions,
+            // on les NOMME (journal + écran) et on arme leur rejeu, qui jugera la
+            // disponibilité sur les sessions réellement vivantes.
+            const kept = await keepQueuedRunAgentsMissions(queueKey, { detected: "stop-agent" });
+            appendSystemMessage(messagesEl, `📋 ${kept.count} mission(s) conservée(s) en file d'attente par l'arrêt de l'agent : ${kept.labels.join(" · ")} — elles seront rejouées dès que le projet sera libre (motif consigné).`);
           } else {
             delete runAgentsQueueByProject[queueKey];
           }
@@ -5259,9 +5314,11 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
             runAgentsInFlightByProject[assistantKey] = false;
             const wdA = runAgentsWatchdogByProject[assistantKey];
             if (wdA) { clearTimeout(wdA); delete runAgentsWatchdogByProject[assistantKey]; }
-            // RÈGLE 4 : nommer + journaliser + annoncer (jamais un vidage muet).
-            const abandonedAssistant = await abandonQueuedRunAgentsMissions(assistantKey, { detected: "stop-agent" });
-            appendSystemMessage(messagesEl, `📋 ${abandonedAssistant.count} mission(s) d'assistant en attente annulée(s) par l'arrêt de l'agent (plus aucune run d'assistant ne tourne) : ${abandonedAssistant.labels.join(" · ")} (motif consigné).`);
+            // P2 : même règle que pour un projet — une file non vide est
+            // CONSERVÉE (jamais détruite sur la foi d'un verrou), chaque mission
+            // est nommée, et le rejeu est armé (jugé sur les sessions vivantes).
+            const keptAssistant = await keepQueuedRunAgentsMissions(assistantKey, { detected: "stop-agent" });
+            appendSystemMessage(messagesEl, `📋 ${keptAssistant.count} mission(s) d'assistant conservée(s) en file d'attente par l'arrêt de l'agent : ${keptAssistant.labels.join(" · ")} — elles seront rejouées dès que l'assistant sera libre (motif consigné).`);
           } else {
             appendSystemMessage(messagesEl, `⏳ ${pendingAssistant} mission(s) d'assistant toujours en attente : une autre tâche d'assistant tourne encore.`);
           }

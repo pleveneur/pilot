@@ -594,23 +594,27 @@ describe("POINT F — l'arrêt d'un agent ne perd plus une mission d'ASSISTANT e
     const assistantKeyIdx = branch.indexOf("const assistantKey = ASSISTANT_SPACE;");
     expect(assistantKeyIdx).toBeGreaterThan(-1);
     expect(branch).toContain("runAgentsQueueByProject[assistantKey]");
-    // CONTRAT MODIFIÉ (règle 4) : plus de `delete` muet — la file est abandonnée
-    // par le chemin de PRODUCTION unique, qui NOMME les missions, journalise le
-    // motif (`agent-stops.log`) et prévient l'utilisateur.
-    expect(branch).toContain("abandonQueuedRunAgentsMissions(assistantKey");
+    // P2 : un arrêt d'agent ne détruit PLUS la file non vide (le verrou de run
+    // n'est pas une preuve de disponibilité). La file est CONSERVÉE par le chemin
+    // de PRODUCTION unique `keepQueuedRunAgentsMissions` (nommage + journal
+    // `queue-kept` + rejeu armé), et l'abandon n'est plus appelé par ce chemin.
+    expect(branch).toContain("keepQueuedRunAgentsMissions(assistantKey");
+    expect(branch, "l'arrêt ne doit plus abandonner la file d'assistant").not.toContain(
+      "abandonQueuedRunAgentsMissions(assistantKey",
+    );
     expect(branch).toContain("isRunInProgress(assistantKey)");
     // Traitement APRÈS celui du projet, et sur SA seule clé (pas de mélange).
     expect(assistantKeyIdx).toBeGreaterThan(branch.indexOf("const queueKey ="));
     // Rien ne disparaît en silence : un message visible dans les DEUX cas.
-    expect(branch).toContain("mission(s) d'assistant en attente annulée(s)");
+    expect(branch).toContain("mission(s) d'assistant conservée(s) en file d'attente");
     expect(branch).toContain("mission(s) d'assistant toujours en attente");
     // Aucune purge globale des files (les projets restent intacts).
     expect(branch).not.toContain("runAgentsQueueByProject = {}");
   });
 });
 
-describe("POINT C — l'arrêt d'un agent libère la file de missions du projet", () => {
-  it("la branche stop_agent libère le créneau et vide la file de missions (avec message)", () => {
+describe("POINT C — l'arrêt d'un agent ne détruit plus la file de missions du projet", () => {
+  it("la branche stop_agent libère le créneau et CONSERVE la file de missions (nommée + rejouée)", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
     const stopIdx = src.indexOf('action === "stop_agent"');
     const nextIdx = src.indexOf('action === "create_agent"', stopIdx);
@@ -620,11 +624,14 @@ describe("POINT C — l'arrêt d'un agent libère la file de missions du projet"
     expect(branch).toContain("releaseStuckRunLock(queueKey)");
     expect(branch).toContain("runAgentsInFlightByProject[queueKey]");
     expect(branch).toContain("runAgentsQueueByProject[queueKey]");
-    // Règle 4 : l'abandon passe par le chemin de PRODUCTION unique (nommage +
-    // journal + notification), jamais par un vidage muet.
-    expect(branch).toContain("abandonQueuedRunAgentsMissions(queueKey");
+    // P2 (D2) : la file n'est plus vidée à l'arrêt — elle est CONSERVÉE par le
+    // chemin de PRODUCTION unique (nommage + journal + notification + rejeu armé).
+    expect(branch).toContain("keepQueuedRunAgentsMissions(queueKey");
+    expect(branch, "l'arrêt ne doit plus abandonner les missions en attente").not.toContain(
+      "abandonQueuedRunAgentsMissions(queueKey",
+    );
     // La suite n'est jamais perdue en silence : un message est émis.
-    expect(branch).toContain("mission(s) en attente annulée(s)");
+    expect(branch).toContain("mission(s) conservée(s) en file d'attente");
   });
 });
 
