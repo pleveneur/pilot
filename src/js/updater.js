@@ -1,6 +1,7 @@
 // updater.js — Vérification automatique des mises à jour (Tauri v2 updater plugin)
 //
-// Au démarrage de Pilot, on interroge l'endpoint configuré dans
+// Au démarrage de Pilot (puis PÉRIODIQUEMENT toutes les 6 h et au retour au
+// premier plan), on interroge l'endpoint configuré dans
 // tauri.conf.json (plugins.updater.endpoints). Si une mise à jour est
 // disponible, on affiche une modale présentant le changelog et proposant de
 // la télécharger et de l'installer. L'installation relance l'application
@@ -25,6 +26,19 @@ import { renderMarkdown } from "./preview.js";
 let _checking = false;
 let _pendingUpdate = null; // objet Update en attente d'installation
 let _installedVersion = null; // version courante de Pilot (ex: "0.2.17")
+let _scheduled = false; // contrôles récurrents déjà programmés (idempotence)
+
+// Dernier contrôle : QUAND il a eu lieu et COMMENT il s'est terminé. Sans cet
+// état, « Pilot est à jour » et « le contrôle a échoué » étaient indiscernables
+// (une erreur ne partait que dans la console, invisible pour l'utilisateur).
+let _lastCheck = null; // { at: Date, outcome: "up-to-date"|"update-available"|"error", detail, lastSuccessAt }
+
+// Délai du premier contrôle après le démarrage (ne pas ralentir l'ouverture).
+const STARTUP_DELAY_MS = 10000;
+// Reprise SILENCIEUSE du contrôle : une version publiée pendant que Pilot tourne
+// doit être proposée sans redémarrage (avant, un seul contrôle ~10 s après le
+// démarrage : une publication ultérieure n'était jamais vue).
+export const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 h
 
 // Repo GitHub (même source que l'endpoint updater de tauri.conf.json).
 const REPO = "pleveneur/pilot";
@@ -232,6 +246,65 @@ async function installUpdate(update) {
   }
 }
 
+/** Récupère l'état du dernier contrôle des mises à jour (lecture seule). */
+export function getLastCheckStatus() {
+  return _lastCheck;
+}
+
+// Date + heure lisibles (« 21/10/2026 à 10:32 »), sans dépendre d'un format
+// imposé : toLocaleString peut échouer selon les données ICU disponibles.
+function formatDateTime(d) {
+  try {
+    const date = d.toLocaleDateString("fr-FR");
+    const time = d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    return `${date} à ${time}`;
+  } catch {
+    return d.toISOString();
+  }
+}
+
+// Traduit une erreur de contrôle en cause en langage clair (jamais un code
+// technique seul). Utilisé dans les messages affichés à l'utilisateur.
+function describeCheckError(e) {
+  const msg = String((e && (e.message || e)) || "").trim();
+  if (/network|fetch|connect|offline|dns|timed? ?out|econn|enotfound|socket/i.test(msg)) {
+    return "pas de connexion au serveur de mises à jour";
+  }
+  if (/40[13]|rate limit|forbidden|unauthori[sz]ed/i.test(msg)) {
+    return "accès refusé par le serveur de mises à jour";
+  }
+  if (/signature|decrypt|verify/i.test(msg)) {
+    return "mise à jour refusée : signature invalide";
+  }
+  return msg ? `erreur technique : ${msg.slice(0, 120)}` : "cause inconnue";
+}
+
+/**
+ * Résume le dernier contrôle en une phrase claire : quand il a eu lieu et
+ * comment il s'est terminé (« Pilot est à jour » ≠ « échec du contrôle »).
+ * @param {object|null} state état renvoyé par getLastCheckStatus()
+ * @returns {string}
+ */
+export function formatLastCheckStatus(state = _lastCheck) {
+  if (!state || !state.at) {
+    return "Contrôle des mises à jour : aucun contrôle effectué depuis le démarrage de Pilot.";
+  }
+  const when = formatDateTime(state.at);
+  if (state.outcome === "error") {
+    const lastOk = state.lastSuccessAt
+      ? ` Dernier contrôle réussi : le ${formatDateTime(state.lastSuccessAt)}.`
+      : " Aucun contrôle n'a encore réussi depuis le démarrage.";
+    return (
+      `Contrôle des mises à jour : échec le ${when} (${state.detail || "cause inconnue"}) — ` +
+      `Pilot n'a donc PAS pu savoir si une nouvelle version existe.${lastOk}`
+    );
+  }
+  if (state.outcome === "update-available") {
+    return `Contrôle des mises à jour : le ${when} — une mise à jour est disponible.`;
+  }
+  return `Contrôle des mises à jour : le ${when} — Pilot est à jour.`;
+}
+
 /**
  * Vérifie les mises à jour et, si disponible, affiche la modale de changelog.
  * @param {boolean} silent — si true, n'affiche rien quand aucune MAJ n'est disponible
@@ -246,14 +319,37 @@ export async function checkForUpdate(silent = true) {
     }
     const update = await check();
     if (update?.available) {
+      _lastCheck = {
+        at: new Date(),
+        outcome: "update-available",
+        detail: "",
+        lastSuccessAt: new Date(),
+      };
       showUpdateModal(update);
-    } else if (!silent) {
-      toastInfo("Pilot est à jour.", 4000);
+    } else {
+      _lastCheck = {
+        at: new Date(),
+        outcome: "up-to-date",
+        detail: "",
+        lastSuccessAt: new Date(),
+      };
+      if (!silent) {
+        toastInfo(`Pilot est à jour (contrôle effectué le ${formatDateTime(_lastCheck.at)}).`, 4000);
+      }
     }
   } catch (e) {
-    console.error("Erreur vérification MAJ:", e);
+    const detail = describeCheckError(e);
+    _lastCheck = {
+      at: new Date(),
+      outcome: "error",
+      detail,
+      lastSuccessAt: _lastCheck?.lastSuccessAt || null,
+    };
+    console.error("Erreur vérification MAJ:", e, "—", formatLastCheckStatus());
     if (!silent) {
-      toastError("Impossible de vérifier les mises à jour.");
+      // Message explicite : on ne prétend jamais que Pilot est à jour quand le
+      // contrôle a échoué, et on donne la date du dernier contrôle.
+      toastError(`Impossible de vérifier les mises à jour : ${detail}. ${formatLastCheckStatus()}`, 8000);
     }
   } finally {
     _checking = false;
@@ -261,12 +357,34 @@ export async function checkForUpdate(silent = true) {
 }
 
 /**
- * Initialise la vérification automatique au démarrage.
- * Attend quelques secondes pour ne pas bloquer le démarrage de l'app.
+ * Initialise la vérification automatique : un premier contrôle différé au
+ * démarrage, puis une reprise SILENCIEUSE dans le temps (toutes les 6 h) et au
+ * retour de Pilot au premier plan. `_checking` sert d'anti-rebond : deux
+ * contrôles ne peuvent jamais se chevaucher.
  */
 export function initUpdater() {
-  // Vérification différée (10s) pour ne pas ralentir le démarrage.
-  setTimeout(() => {
+  if (_scheduled) return; // idempotent : un seul jeu de contrôles programmé
+  _scheduled = true;
+
+  const checkSilently = () => {
     checkForUpdate(true).catch(() => {});
-  }, 10000);
+  };
+
+  // Vérification différée (10 s) pour ne pas ralentir le démarrage.
+  setTimeout(checkSilently, STARTUP_DELAY_MS);
+  // Reprise périodique : couvre une version publiée APRÈS le démarrage.
+  setInterval(checkSilently, REFRESH_INTERVAL_MS);
+
+  // Retour au premier plan (fenêtre réactivée, onglet visible) : contrôle
+  // opportuniste, silencieux lui aussi.
+  const refreshOnForeground = () => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    checkSilently();
+  };
+  if (typeof window !== "undefined" && window.addEventListener) {
+    window.addEventListener("focus", refreshOnForeground);
+  }
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("visibilitychange", refreshOnForeground);
+  }
 }

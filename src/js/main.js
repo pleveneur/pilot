@@ -9,7 +9,7 @@ import { initSearchPanel } from "./search-panel.js";
 import { openRecentPopover } from "./recent-files.js";
 import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
-import { initUpdater, checkForUpdate } from "./updater.js";
+import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus } from "./updater.js";
 import { initAnomalyDetection } from "./anomaly.js";
 // Étape 2 Telegram (lot 0) : écoute des messages entrants. Démarrée avec
 // l'application, INDÉPENDAMMENT de l'ouverture de l'onglet 🧭 Assistant.
@@ -47,6 +47,7 @@ const COMMANDS = [
   { id: "scratchpad", label: "Ouvrir le brouillon", key: "Ctrl+Shift+N", icon: "📝" },
   { id: "toggle-word-wrap", label: "Renvoi à la ligne automatique", key: "Alt+Z", icon: "↩" },
   { id: "check-update", label: "Vérifier les mises à jour", key: "", icon: "⬆" },
+  { id: "update-status", label: "État des mises à jour", key: "", icon: "🕓" },
   { id: "recent-files", label: "Fichiers récents…", key: "Ctrl+Alt+R", icon: "🕘" },
   { id: "feedback", label: "Envoyer une remarque…", key: "", icon: "💬" },
 ];
@@ -226,6 +227,16 @@ async function executeCommand(id, tabs) {
     case "check-update":
       await checkForUpdate(false);
       break;
+    case "update-status": {
+      // Dire QUAND le dernier contrôle a eu lieu et COMMENT il s'est terminé :
+      // « Pilot est à jour » et « le contrôle a échoué » ne sont jamais
+      // confondus (une erreur n'est plus reléguée à la console).
+      const status = getLastCheckStatus();
+      const label = formatLastCheckStatus(status);
+      if (status && status.outcome === "error") toastError(label, 9000);
+      else toastInfo(label, 8000);
+      break;
+    }
     case "recent-files":
       openRecentPopover(tabs);
       break;

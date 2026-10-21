@@ -145,7 +145,8 @@ pilot/
 │   ├── build-mcp-extension.js # Bundles esbuild de l'extension MCP (SDK embarqué) → pilot-mcp-client.ts
 │   ├── mcp-test-server.js     # Serveur MCP stdio de test (outil `echo`) pour le POC MCP
 │   ├── create-release.js      # Crée la GitHub Release (idempotent) avant les builds
-│   └── gen-latest-json.js     # Génère latest.json (updater) depuis les assets + changelog (git ou release-notes/vX.Y.Z.md) + met à jour le body + upload
+│   ├── gen-latest-json.js     # Génère latest.json (updater) depuis les assets + changelog (git ou release-notes/vX.Y.Z.md) + met à jour le body + upload
+│   └── latest-json-platforms.js # Logique PURE de gen-latest-json.js : artefact → cible d'updater (NSIS retenu, MSI écarté pour `windows-x86_64`)
 ├── release-notes/            # Changelog utilisateur (vX.Y.Z.md) rédigé à chaque release (option A)
 ├── .github/workflows/
 │   └── release.yml            # Build + publication multi-plateforme (tag v*)

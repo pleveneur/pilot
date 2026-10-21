@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-21 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-21 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -215,6 +215,25 @@ cas, une modale te propose de la mettre à jour via la commande intégrée de Pi
 
 La vérification ne concerne que l'agent **Pi** (pas PLh) et n'est proposée que
 si une version plus récente existe réellement.
+
+---
+
+## Mise à jour de Pilot
+
+Pilot vérifie tout seul s'il existe une version plus récente : une première
+fois peu après l'ouverture, puis **régulièrement** (toutes les 6 heures) et à
+chaque **retour de Pilot au premier plan**. Une version publiée pendant que tu
+travailles t'est donc proposée **sans redémarrer** l'application.
+
+- **Proposition** : une fenêtre affiche la version, la date et le récapitulatif
+  des changements, avec **Installer maintenant** ou **Plus tard**.
+- **Vérifier tout de suite** : palette de commandes (`Ctrl+Shift+P`) →
+  **Vérifier les mises à jour**.
+- **Savoir où on en est** : palette → **État des mises à jour** indique la date
+  du dernier contrôle et son résultat, en clair : « Pilot est à jour » ou, si
+  c'est le cas, « le contrôle a échoué » avec la raison (et la date du dernier
+  contrôle réussi). Un échec n'est jamais présenté comme une absence de mise à
+  jour.
 
 ---
 

@@ -222,6 +222,25 @@ La vérification ne concerne que l'agent **Pi** (pas PLh) et n'est proposée que
 si une version plus récente existe réellement.
 <!-- /HELP:pi-update -->
 
+<!-- HELP:pilot-update -->
+## Mise à jour de Pilot
+
+Pilot vérifie tout seul s'il existe une version plus récente : une première
+fois peu après l'ouverture, puis **régulièrement** (toutes les 6 heures) et à
+chaque **retour de Pilot au premier plan**. Une version publiée pendant que tu
+travailles t'est donc proposée **sans redémarrer** l'application.
+
+- **Proposition** : une fenêtre affiche la version, la date et le récapitulatif
+  des changements, avec **Installer maintenant** ou **Plus tard**.
+- **Vérifier tout de suite** : palette de commandes (`Ctrl+Shift+P`) →
+  **Vérifier les mises à jour**.
+- **Savoir où on en est** : palette → **État des mises à jour** indique la date
+  du dernier contrôle et son résultat, en clair : « Pilot est à jour » ou, si
+  c'est le cas, « le contrôle a échoué » avec la raison (et la date du dernier
+  contrôle réussi). Un échec n'est jamais présenté comme une absence de mise à
+  jour.
+<!-- /HELP:pilot-update -->
+
 <!-- HELP:multi-agents -->
 ## Plusieurs agents sur un même projet (multi-onglets)
 

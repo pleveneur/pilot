@@ -24,6 +24,11 @@
 
 import fs from "fs";
 import { execSync } from "child_process";
+import {
+  WINDOWS_UPDATER_FAMILY,
+  isExcludedWindowsInstaller,
+  platformFromBinaryName,
+} from "./latest-json-platforms.js";
 
 const TAG = process.argv[2];
 const REPO = process.argv[3];
@@ -257,22 +262,9 @@ async function fetchSig(url) {
   return (await res.text()).trim();
 }
 
-// Map un nom de binaire vers la clé plateforme Tauri attendue par l'updater.
-// Retourne null si le fichier n'est pas un artefact d'updater reconnu.
-function platformFromBinaryName(name) {
-  const n = name.toLowerCase();
-  if (n.endsWith("-setup.exe") || n.endsWith(".msi")) return "windows-x86_64";
-  if (n.endsWith(".app.tar.gz")) {
-    if (n.includes("aarch64")) return "darwin-aarch64";
-    if (n.includes("x64")) return "darwin-x86_64";
-    return null;
-  }
-  if (n.endsWith(".appimage")) {
-    if (n.includes("aarch64")) return "linux-aarch64";
-    return "linux-x86_64";
-  }
-  return null;
-}
+// Map un nom de binaire vers sa cible d'updater : logique PURE déplacée dans
+// `latest-json-platforms.js` (testable sans réseau). Voir ce fichier pour la
+// raison du choix exclusif NSIS vs MSI sur `windows-x86_64`.
 
 // Les cibles que la matrice de build du workflow release prévoit (4 cibles :
 // Windows x64, macOS arm64, macOS x64, Linux x64). Sert UNIQUEMENT à SIGNALER
@@ -311,6 +303,18 @@ const EXPECTED_PLATFORMS = [
     const binAsset = byName.get(binName);
     if (!binAsset) {
       console.warn(`⚠ Binaire manquant pour la signature: ${sigAsset.name}`);
+      nbSkipped++;
+      continue;
+    }
+    if (isExcludedWindowsInstaller(binName)) {
+      // Installateur Windows d'une famille non retenue (le MSI) : l'index doit
+      // proposer l'installateur réellement utilisé (NSIS `-setup.exe`). Sans ce
+      // garde-fou, la dernière signature lue l'emportait et l'updater
+      // téléchargeait le MSI → seconde installation, ancienne version relancée.
+      console.log(
+        `↷ ${binName} écarté (famille non retenue) : l'index propose ` +
+          `l'installateur ${WINDOWS_UPDATER_FAMILY} de l'installation réelle.`
+      );
       nbSkipped++;
       continue;
     }
