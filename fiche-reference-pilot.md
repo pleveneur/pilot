@@ -16,6 +16,13 @@
   (mise en cohérence de la documentation). **Un point du premier rapport est faux** et corrigé ici
   (§5, ligne C4).
 
+> **Mise à jour du 2026-10-21 — publication de la 0.4.36.** La version **0.4.36** a été
+> publiée (tag `v0.4.36` = `e151a1e`, release en ligne, `latest.json` en 0.4.36). Tout ce qui
+> suit décrit l'état **avant** cette publication : les mentions « 0.4.36 non commencée »,
+> « version 0.4.35 dans les quatre fichiers » et « 5 commits non poussés » sont donc
+> **périmées**. Détail des étapes et réserve connue (aucun installateur Linux) :
+> `rapport-publication-0.4.36.md`.
+
 ---
 
 ## 0. VERDICT (à lire en premier)
