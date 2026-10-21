@@ -161,3 +161,51 @@ missions n'existe pas côté Rust).
    observée en conditions réelles (il faudrait provoquer un arrêt d'agent avec
    une mission en file sur un projet dont une session travaille encore). La ligne
    `reason=queue-kept` sera la signature à chercher dans `.pilot/agent-stops.log`.
+
+---
+
+## 5. Re-vérification indépendante (2026-10-21, après `13f7552`)
+
+La mission P2 a été déposée en croyant qu'aucun correctif n'avait été produit :
+le rapport de relecture (`rapport-relecture-file.md`) date du **2026-10-20**,
+antérieur au commit. État réel vérifié sur disque, code relu, tests relancés :
+
+| Vérification | Résultat |
+|---|---|
+| `stop_agent` (branche projet) appelle `keepQueuedRunAgentsMissions(queueKey…)`, plus jamais `abandonQueuedRunAgentsMissions` | `src/js/super-agent.js:5293-5295` |
+| idem pour l'espace assistant (`ASSISTANT_SPACE`) | `src/js/super-agent.js:5319-5321` |
+| le seul `delete runAgentsQueueByProject[queueKey]` du chemin d'arrêt est protégé par `waitingMissions === 0` | `src/js/super-agent.js:5296-5297` |
+| dans la branche « verrou encore tenu », la file conserve son déclencheur de rejeu armé à l'empaquetage (POINT G), réarmé par `armQueueReplay` | `src/js/super-agent.js:4556`, `:4777`, `:916-928` |
+| tests POINT C / POINT F réécrits (jamais supprimés) | `src/js/verrou-par-projet.test.js:613-628`, `:595-612` |
+
+### 5.1 Chiffres exacts (relancés, worktree propre)
+
+```
+# Zone touchée (9 fichiers)
+npx vitest run src/js/file-attente-arret-conserve.test.js src/js/verrou-par-projet.test.js \
+  src/js/file-attente-regle-4.test.js src/js/project-queue-wiring.test.js \
+  src/js/regle-4-file-jamais-perdue.test.js src/js/agent-stop-funnel.test.js \
+  src/js/agent-stop-trace-paths.test.js src/js/agent-stop-trace-concurrency.test.js \
+  src/js/file-attente-identite-demande.test.js
+PASS (125) FAIL (0)
+
+# Suite frontend complète
+npx vitest run
+PASS (2077) FAIL (0)
+```
+
+### 5.2 Non-vacuité du test de non-régression (mutations rejouées)
+
+| Mutation appliquée à `src/js/super-agent.js` | Résultat |
+|---|---|
+| M1 : `keepQueuedRunAgentsMissions` vide la file (`queue.length = 0; delete runAgentsQueueByProject[key];`) | **2 échecs** (`file-attente-arret-conserve` + garde de corps de fonction) |
+| M2 : la branche `stop_agent` rappelle `abandonQueuedRunAgentsMissions(queueKey…)` | **2 échecs** (POINT C + `P2 (c)`) |
+
+Fichier restauré après chaque mutation (`git diff` vide), puis suites relancées :
+`PASS (45) FAIL (0)` sur les deux fichiers de tests concernés.
+
+### 5.3 Limites maintenues
+
+Les points 1 à 6 du §4 restent vrais : **P1** (ordre d'arrivée à l'admission) et
+**P3** (clé de projet non normalisée) ne sont pas traités ici, et la preuve
+terrain (`reason=queue-kept`) reste à observer.
