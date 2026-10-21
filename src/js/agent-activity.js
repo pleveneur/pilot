@@ -210,32 +210,60 @@ export function buildBackgroundWorkMissions(list) {
 
 // ── Missions en cours (affichage du panneau de la cloche) ──
 
-/** Longueur maximale affichée du texte d'une mission. */
-export const MISSION_MAX_CHARS = 80;
+/** Longueur maximale affichée du texte d'une mission (une phrase courte). */
+export const MISSION_MAX_CHARS = 120;
 
-/** Tronque un texte à `MISSION_MAX_CHARS` caractères, suffixé « … » si coupé. */
+/**
+ * Tronque un texte à `MISSION_MAX_CHARS` caractères, suffixé « … » si coupé.
+ * Coupe PROPRE : on recule jusqu'à une frontière de mot (jamais au milieu d'un
+ * mot), sauf si cela amputait plus de la moitié du texte.
+ */
 function clipMission(text) {
   const chars = Array.from(text);
   if (chars.length <= MISSION_MAX_CHARS) return text;
-  return chars.slice(0, MISSION_MAX_CHARS).join("") + "…";
+  const minKeep = Math.floor(MISSION_MAX_CHARS / 2);
+  let end = MISSION_MAX_CHARS;
+  for (let i = MISSION_MAX_CHARS - 1; i >= minKeep; i--) {
+    if (/\s/.test(chars[i])) {
+      end = i;
+      break;
+    }
+  }
+  const cut = chars.slice(0, end).join("").trim().replace(/[\s,;:.!?\-–—]+$/u, "");
+  const kept = cut || chars.slice(0, MISSION_MAX_CHARS).join("").trim();
+  return kept + "…";
 }
 
 /**
- * Repli explicite affiché quand le texte enregistré est le RÔLE de l'agent
- * (« Tu es un planificateur logiciel… ») et non une tâche : un rôle n'est JAMAIS
- * une mission. Cas réel : un processus démarré sans tâche (ex. `plan-maker`).
+ * Repli explicite affiché quand AUCUN résumé utilisable n'existe (le texte
+ * enregistré n'est que le RÔLE de l'agent, « Tu es un planificateur logiciel… »).
+ * Un rôle n'est JAMAIS une tâche, et ce libellé ne prétend rien : il est
+ * HONNÊTE et court. Jamais « en préparation », qui ne dit rien de la tâche
+ * (défaut corrigé : ce repli s'affichait à la place de la mission réelle).
  */
-export const MISSION_ROLE_FALLBACK = "en préparation";
+export const MISSION_ROLE_FALLBACK = "mission non communiquée";
 
 // En-têtes MÉCANIQUES d'un prompt de délégation : ils décrivent la STRUCTURE du
 // prompt (« ## Contexte », « ## Objectif », « ## Consignes », « ## Ce qu'il ne
 // faut PAS faire »), pas la tâche. Les afficher n'apprend rien à l'utilisateur :
 // on les saute pour prendre la première ligne de CONTENU réel.
+// Les étiquettes du prompt de délégation (`buildAgentPrompt` : bandeaux de
+// spécialité, de rôle, « MISSION », contexte de suivi de l'assistant) en font
+// partie : ce sont des ÉTIQUETTES, jamais une tâche.
 const MECHANICAL_HEADERS = new Set([
   "contexte",
   "objectif",
   "consignes",
   "ce qu il ne faut pas faire",
+  "specialite",
+  "role",
+  "capacites",
+  "mission",
+  "protocole",
+  "contexte de suivi assistant",
+  "arborescence du projet",
+  "taches precedentes terminees",
+  "fin contexte",
 ]);
 
 /** Normalise une ligne (minuscules, sans accents ni ponctuation) pour comparaison. */
@@ -281,18 +309,98 @@ function stripLeadingMarkdown(line) {
 }
 
 /**
- * Réduit le texte d'une demande d'agent à une ligne courte et LISIBLE pour
- * l'affichage. Fonction PURE et déterministe :
+ * true si la ligne est un BANDEAU de structure de prompt (« === MISSION === »,
+ * « === SPÉCIALITÉ === », « === FIN CONTEXTE === ») : jamais une tâche.
+ */
+export function isPromptBanner(line) {
+  return /^={2,}\s*\S.*={2,}$/.test(String(line == null ? "" : line).trim());
+}
+
+// Étiquettes de STRUCTURE d'un prompt (titre markdown, gras, bandeau).
+const STRUCTURE_LABELS =
+  /^(?:contexte|objectif|consignes|mission|protocole|specialite|role|capacites|fichiers|taches|arborescence|ce qu il ne faut pas faire|objectif global|fin contexte)\b/;
+
+/**
+ * true si la ligne est un EN-TÊTE de structure (titre markdown « ## Objectif »,
+ * gras « **Objectif** », bandeau « === MISSION === »). Un titre peut porter la
+ * tâche elle-même (« # Corriger le zoom ») : seuls les titres dont le libellé est
+ * une étiquette de structure connue sont sautés.
+ */
+export function isStructuralHeading(line) {
+  const raw = String(line == null ? "" : line).trim();
+  if (isPromptBanner(raw)) return true;
+  const heading = /^#{1,6}\s/.test(raw) || /^\*{1,2}[^*].*\*{1,2}$/.test(raw);
+  if (!heading) return false;
+  return STRUCTURE_LABELS.test(normalizeHeading(raw));
+}
+
+// Préambule TECHNIQUE d'une demande (« Contexte : version 0.4.37… »,
+// « Version : … ») : ce n'est pas la tâche demandée.
+const PREAMBLE_KEYS = /^(?:contexte|rappel|version|depot|branche|prerequis|etat)\b/;
+
+/**
+ * true si la ligne ne peut PAS être la tâche : vide, en-tête de structure,
+ * bandeau, rôle d'agent (« Tu es un … ») ou préambule de spécialité
+ * (« Rôle : … », « Capacités : … »).
+ */
+function isNonMissionLine(line) {
+  const trimmed = String(line == null ? "" : line).trim();
+  if (!trimmed) return true;
+  if (isStructuralHeading(trimmed) || isMechanicalHeader(trimmed)) return true;
+  const clean = stripLeadingMarkdown(trimmed);
+  if (!clean) return true;
+  if (looksLikeAgentRole(clean)) return true;
+  if (/^(?:r[ôo]le|capacit[ée]s|sp[ée]cialit[ée])\s*:/i.test(clean)) return true;
+  return false;
+}
+
+// Phrase d'OBJECTIF écrite sur une seule ligne : « Objectif : … », « But : … ».
+const OBJECTIVE_INLINE_RE =
+  /^(?:l['’]\s*)?(?:objectif|but)\s*:\s*(.+?)\s*$/i;
+
+/** true si la ligne ouvre la section « Objectif » (« ## Objectif », « **Objectif** »). */
+function isObjectiveHeading(line) {
+  return normalizeHeading(stripLeadingMarkdown(line)) === "objectif";
+}
+
+/**
+ * Contenu de la section « Objectif » : les lignes qui suivent son en-tête,
+ * jusqu'au prochain en-tête de structure. Sert à trouver la phrase de la tâche
+ * quand elle n'est pas écrite sur une ligne « Objectif : … ».
+ */
+function objectiveSectionBody(lines) {
+  const idx = lines.findIndex((l) => isObjectiveHeading(l));
+  if (idx < 0) return [];
+  const out = [];
+  for (let i = idx + 1; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    if (isStructuralHeading(trimmed) || isMechanicalHeader(trimmed)) break;
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Réduit le texte d'une demande d'agent à UNE PHRASE COURTE et LISIBLE pour
+ * l'affichage du panneau. Fonction PURE et déterministe :
  *  1. si le texte contient une ligne `Tâche : <titre>` (prompts d'orchestration,
  *     y compris retries) → ce `<titre>` (PRIORITAIRE) ;
- *  2. sinon la première ligne de CONTENU réel : fences de code ignorées, en-têtes
- *     mécaniques de délégation (« ## Contexte », « **Objectif** »…) sautés et
- *     markdown de tête retiré ; coupée à `MISSION_MAX_CHARS` caractères avec « … » ;
- *  3. si seule une ligne de RÔLE d'agent est trouvée (processus sans tâche) →
- *     « en préparation » (repli explicite) : jamais le rôle ;
- *  4. si le texte est vide ou inconnu → « (demande non précisée) » : JAMAIS une
- *     ligne vide, JAMAIS un texte inventé.
- * @param {string} text — prompt brut (déjà tronqué côté Rust) ou valeur absente.
+ *  2. sinon la phrase de l'OBJECTIF écrite en ligne (« Objectif : … »,
+ *     « But : … ») — c'est la tâche réelle d'une demande de délégation ;
+ *  3. sinon la section « Objectif » (« ## Objectif ») : sa première ligne de
+ *     contenu réel, préambule technique sauté ;
+ *  4. sinon la première ligne de CONTENU réel du prompt, en sautant le préambule
+ *     de RÔLE (« Tu es un développeur… »), le bloc de spécialité (« Rôle : … »,
+ *     « Capacités : … »), les bandeaux `=== … ===`, les en-têtes mécaniques et
+ *     les fences de code ;
+ *  5. sans résumé utilisable (texte réduit au rôle) → « mission non
+ *     communiquée » : jamais le rôle, jamais « en préparation » ;
+ *  6. texte vide ou inconnu → « (demande non précisée) » : JAMAIS une ligne
+ *     vide, JAMAIS un texte inventé.
+ * Le résultat est plafonné à `MISSION_MAX_CHARS` caractères, coupé proprement
+ * sur un mot, avec points de suspension.
+ * @param {string} text — prompt brut (déjà réduit côté Rust) ou valeur absente.
  * @returns {string} libellé de mission, toujours non vide.
  */
 export function shortMission(text) {
@@ -303,8 +411,21 @@ export function shortMission(text) {
     const m = line.match(/^\s*(?:[-*>]\s*)*(?:\*\*)?T[âa]che\s*:\s*(?:\*\*)?\s*(.+?)\s*(?:\*\*)?\s*$/);
     if (m && m[1].trim()) return clipMission(m[1].trim());
   }
-  // 2. Première ligne de CONTENU réel, hors fences, hors en-têtes mécaniques et
-  //    hors markdown de tête. Un RÔLE est sauté (jamais affiché comme mission).
+  // 2. Phrase d'OBJECTIF en ligne : la tâche réellement demandée.
+  for (const line of lines) {
+    const m = stripLeadingMarkdown(line).match(OBJECTIVE_INLINE_RE);
+    if (m && m[1].trim()) return clipMission(m[1].trim());
+  }
+  // 3. Section « Objectif » : première ligne de contenu réel (hors préambule).
+  for (const line of objectiveSectionBody(lines)) {
+    if (isNonMissionLine(line)) continue;
+    const clean = stripLeadingMarkdown(line);
+    if (!clean) continue;
+    if (PREAMBLE_KEYS.test(normalizeHeading(clean))) continue;
+    return clipMission(clean);
+  }
+  // 4. Première ligne de CONTENU réel, hors fences, préambule de rôle et
+  //    en-têtes de structure. Un RÔLE est sauté (jamais affiché comme mission).
   let inFence = false;
   let sawRoleLine = false;
   for (const line of lines) {
@@ -314,18 +435,16 @@ export function shortMission(text) {
       continue;
     }
     if (inFence) continue;
-    if (isMechanicalHeader(trimmed)) continue;
+    if (looksLikeAgentRole(stripLeadingMarkdown(trimmed))) sawRoleLine = true;
+    if (isNonMissionLine(trimmed)) continue;
     const clean = stripLeadingMarkdown(trimmed);
     if (!clean) continue;
-    if (looksLikeAgentRole(clean)) {
-      sawRoleLine = true;
-      continue;
-    }
     return clipMission(clean);
   }
-  // 3. Repli explicite : le rôle n'est JAMAIS affiché.
+  // 5. Repli explicite : le rôle n'est JAMAIS affiché, et « en préparation »
+  //    n'est plus jamais présenté comme la tâche.
   if (sawRoleLine) return MISSION_ROLE_FALLBACK;
-  // 4. Repli explicite (texte vide ou inconnu).
+  // 6. Repli explicite (texte vide ou inconnu).
   return "(demande non précisée)";
 }
 
@@ -365,6 +484,66 @@ export function buildRunningMissions(list, queued) {
     });
   }
   return out;
+}
+
+/**
+ * Répartit les missions en deux groupes ORDONNÉS : celles qui TOURNENT
+ * (`waiting: false`) et celles qui ATTENDENT dans la file (`waiting: true`).
+ * L'ordre d'origine — donc l'ordre de la file — est conservé. Fonction PURE.
+ * @param {Array<{agent, project, mission, waiting}>} missions
+ * @returns {{running: Array, waiting: Array}}
+ */
+export function splitMissions(missions) {
+  const running = [];
+  const waiting = [];
+  for (const m of missions || []) {
+    if (!m) continue;
+    (m.waiting ? waiting : running).push(m);
+  }
+  return { running, waiting };
+}
+
+/** Libellé « agent — projet » d'une mission (au moins l'un des deux). */
+function missionWho(m) {
+  const agent = m.agent || "";
+  const project = m.project || "";
+  if (agent && project) return `${agent} — ${project}`;
+  return agent || project || "Assistant";
+}
+
+/**
+ * Rendu HTML du volet « En cours » du panneau (bas à droite). Fonction PURE.
+ *
+ * Deux groupes EXPLICITES et NUMÉROTÉS — « En cours (n) » puis « En attente (n) » —
+ * pour que l'on voie d'un coup d'œil ce qui tourne ET dans quel ordre la file
+ * attend. Chaque ligne porte son RANG, l'AGENT et le PROJET concernés, puis la
+ * phrase de mission (plafonnée à `MISSION_MAX_CHARS`). Aucune mission → message
+ * explicite, jamais une liste vide trompeuse.
+ * @param {Array<{agent, project, mission, waiting}>} missions — buildRunningMissions.
+ * @returns {string} HTML du volet.
+ */
+export function renderMissionsPanelHtml(missions) {
+  const { running, waiting } = splitMissions(missions);
+  if (!running.length && !waiting.length) {
+    return '<div class="dash-muted">Aucune mission en cours.</div>';
+  }
+  const group = (title, list, isWaiting) => {
+    if (!list.length) return "";
+    const items = list
+      .map(
+        (m, i) => `
+        <div class="sa-task-item${isWaiting ? " waiting" : " running"}">
+          <div class="sa-task-head">
+            <span class="sa-task-title"><span class="sa-missions-rank">${i + 1}.</span>${esc(missionWho(m))}</span>
+            <span class="sa-task-status ${isWaiting ? "tone-todo" : "tone-progress"}">${isWaiting ? "en attente" : "en cours"}</span>
+          </div>
+          <div class="sa-task-meta">${esc(m.mission)}</div>
+        </div>`
+      )
+      .join("");
+    return `<div class="sa-task-client sa-missions-group ${isWaiting ? "waiting" : "running"}">${esc(title)} (${list.length})</div>${items}`;
+  };
+  return `${group("En cours", running, false)}${group("En attente", waiting, true)}`;
 }
 
 // ── Store partagé (supervision, plusieurs consommateurs) ──

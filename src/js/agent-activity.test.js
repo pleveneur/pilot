@@ -20,6 +20,9 @@ import {
   formatLastActivity,
   shortMission,
   buildRunningMissions,
+  splitMissions,
+  renderMissionsPanelHtml,
+  MISSION_ROLE_FALLBACK,
   isAgentWorking,
   isWorkingWithoutTab,
   buildBackgroundWorkMissions,
@@ -747,11 +750,23 @@ describe("shortMission — texte de mission court et lisible", () => {
     expect(shortMission("Corriger la recherche globale")).toBe("Corriger la recherche globale");
   });
 
-  it("tronque un texte long à 80 caractères avec « … »", () => {
+  it("tronque un texte long à 120 caractères avec « … »", () => {
     const long = "x".repeat(200);
     const got = shortMission(long);
-    expect(got).toBe("x".repeat(80) + "…");
-    expect(Array.from(got).length).toBe(81);
+    expect(got).toBe("x".repeat(120) + "…");
+    expect(Array.from(got).length).toBe(121);
+  });
+
+  it("coupe PROPREMENT sur un mot (jamais au milieu) et signale la coupe", () => {
+    const long =
+      "Corriger la recherche globale dans tous les fichiers du projet sans rien casser et sans perdre la selection courante de l'utilisateur";
+    const got = shortMission(long);
+    expect(got.endsWith("…")).toBe(true);
+    expect(Array.from(got).length).toBeLessThanOrEqual(121);
+    // Aucun mot tronqué : le texte conservé est un préfixe complet du texte.
+    const kept = got.slice(0, -1);
+    expect(long.startsWith(kept)).toBe(true);
+    expect(long[kept.length]).toBe(" ");
   });
 
   it("extrait le titre d'une ligne « Tâche : » (orchestration, y compris retries)", () => {
@@ -769,7 +784,7 @@ describe("shortMission — texte de mission court et lisible", () => {
     expect(shortMission("**Tâche :** Réparer le diff inline")).toBe("Réparer le diff inline");
   });
 
-  it("ignore les en-têtes MÉCANIQUES d'un prompt de délégation (« ## Contexte »)", () => {
+  it("ignore les en-têtes MÉCANIQUES et prend la phrase de la section « Objectif »", () => {
     const text = [
       "## Contexte",
       "Pilot est un editeur de texte pour agents IA.",
@@ -777,8 +792,8 @@ describe("shortMission — texte de mission court et lisible", () => {
       "## Objectif",
       "Corriger la cloche.",
     ].join("\n");
-    // Jamais « Contexte » (le titre de structure), mais la première ligne utile.
-    expect(shortMission(text)).toBe("Pilot est un editeur de texte pour agents IA.");
+    // Ni « Contexte » (titre de structure) ni son contenu : la TÂCHE demandée.
+    expect(shortMission(text)).toBe("Corriger la cloche.");
   });
 
   it("ignore aussi les en-têtes mécaniques en GRAS (## Contexte / **Objectif**)", () => {
@@ -795,7 +810,7 @@ describe("shortMission — texte de mission court et lisible", () => {
       "## Ce qu'il ne faut PAS faire",
       "Tout casser.",
     ].join("\n");
-    expect(shortMission(text)).toBe("Reprendre le panneau de la cloche.");
+    expect(shortMission(text)).toBe("Afficher la tache en cours.");
   });
 
   it("garde « Tâche : » PRIORITAIRE même après des en-têtes mécaniques", () => {
@@ -807,15 +822,56 @@ describe("shortMission — texte de mission court et lisible", () => {
     expect(shortMission(text)).toBe("Afficher la tache en cours sous l'agent");
   });
 
-  it("n'affiche JAMAIS le RÔLE d'un agent sans tâche : repli « en préparation »", () => {
+  it("n'affiche JAMAIS le RÔLE d'un agent sans tâche : repli honnête « mission non communiquée »", () => {
     const role =
       "Tu es un planificateur logiciel. Tu recois une demande de modification et tu produis un PLAN STRUCTURE en JSON.";
-    expect(shortMission(role)).toBe("en préparation");
-    expect(shortMission("Vous etes une equipe de testeurs.")).toBe("en préparation");
+    // Plus jamais « en préparation » (libellé qui ne dit rien de la tâche).
+    expect(shortMission(role)).toBe("mission non communiquée");
+    expect(shortMission("Vous etes une equipe de testeurs.")).toBe("mission non communiquée");
+    expect(MISSION_ROLE_FALLBACK).not.toBe("en préparation");
   });
 
-  it("après une ligne de RÔLE, prend la première ligne de tâche réelle", () => {
-    expect(shortMission("Tu es un codeur.\nCorriger la cloche")).toBe("Corriger la cloche");
+  it("sur un VRAI prompt de délégation, affiche la phrase de l'OBJECTIF (pas le rôle, pas « en préparation »)", () => {
+    // Forme EXACTE produite par `buildAgentPrompt` (agents.js) : rôle, bloc de
+    // spécialité, bloc de rôle, contexte projet, puis `=== MISSION ===` avec les
+    // sections `## Contexte` / `## Objectif` / `## Consignes`. Le texte est la
+    // fenêtre de 600 caractères conservée par le cœur (agent_service.rs).
+    const real = [
+      "Tu es un développeur. Tu exécutes la micro-tâche reçue. Tu lis les fichiers avec les outils à ta disposition. Tu modifies UNIQUEMENT les fichiers nécessaires. Termine par DONE: <résumé>.",
+      "",
+      "=== SPÉCIALITÉ ===",
+      "Rôle : Tu es un développeur. Tu exécutes la micro-tâche reçue. Tu lis les fichiers…",
+      "Capacités : write, edit",
+      "",
+      "=== RÔLE ===",
+      "Tu es le CODEUR (agent principal) de ce projet : tu es autorisé à MODIFIER les fichiers de code.",
+      "",
+      "=== MISSION ===",
+      "## Contexte de suivi (assistant)",
+      "- Projet : G:\\IA_PL\\pilot",
+      "- Taches suivies : 23 en cours, 247 terminees",
+      "",
+      "## Contexte",
+      "Le texte d'indication du panneau est faux dans la plupart des cas.",
+      "",
+      "## Objectif",
+      "Contexte : version en cours 0.4.37.",
+      "Objectif : faire que la ligne d indication dise en UNE PHRASE COURTE la tache reelle.",
+      "",
+      "## Consignes",
+      "1. Ecris d abord un rapport court sur disque.",
+    ].join("\n");
+    const got = shortMission(real);
+    expect(got).toBe("faire que la ligne d indication dise en UNE PHRASE COURTE la tache reelle.");
+    expect(got).not.toContain("Tu es");
+    expect(got).not.toBe("en préparation");
+    expect(got).not.toBe("mission non communiquée");
+  });
+
+  it("après un préambule de rôle et des bandeaux, prend la première ligne de tâche réelle", () => {
+    expect(
+      shortMission("Tu es un codeur.\n\n=== RÔLE ===\nTu es le CODEUR.\n\nCorriger la cloche")
+    ).toBe("Corriger la cloche");
   });
 
   it("prend la première ligne significative en sautant fences et markdown", () => {
@@ -895,6 +951,66 @@ describe("buildRunningMissions — missions réellement en cours", () => {
   it("tolère une liste absente ou vide", () => {
     expect(buildRunningMissions(null, null)).toEqual([]);
     expect(buildRunningMissions([], [])).toEqual([]);
+  });
+});
+
+// ── Panneau (bas à droite) : deux groupes explicites et numérotés ──
+// Règle du propriétaire : voir d'un coup d'œil ce qui est EN COURS et ce qui est
+// EN ATTENTE, dans l'ordre de la file, avec l'agent et le projet de chacune.
+describe("renderMissionsPanelHtml — en cours et en attente, séparés et numérotés", () => {
+  const running = { agent: "codeur", project: "pilot", mission: "Corriger la cloche", waiting: false };
+  const queuedA = { agent: "testeur", project: "pilot", mission: "Lancer les tests", waiting: true };
+  const queuedB = { agent: "reviewer", project: "gds", mission: "Relire le diff", waiting: true };
+
+  it("sépare les deux groupes et les numérote", () => {
+    expect(splitMissions([running, queuedA, queuedB])).toEqual({
+      running: [running],
+      waiting: [queuedA, queuedB],
+    });
+    const html = renderMissionsPanelHtml([running, queuedA, queuedB]);
+    // Deux titres de groupe EXPLICITES, avec leur compte.
+    expect(html).toContain("En cours (1)");
+    expect(html).toContain("En attente (2)");
+    // Ordre de la file rendu par les rangs.
+    expect(html).toContain('<span class="sa-missions-rank">1.</span>testeur — pilot');
+    expect(html).toContain('<span class="sa-missions-rank">2.</span>reviewer — gds');
+    // Groupe « en cours » AVANT le groupe « en attente ».
+    expect(html.indexOf("En cours (1)")).toBeLessThan(html.indexOf("En attente (2)"));
+    // Chaque ligne dit l'agent, le projet et la mission.
+    expect(html).toContain("codeur — pilot");
+    expect(html).toContain("Corriger la cloche");
+    expect(html).toContain("en attente");
+  });
+
+  it("affiche seulement le groupe qui a du contenu", () => {
+    const onlyWaiting = renderMissionsPanelHtml([queuedA]);
+    expect(onlyWaiting).toContain("En attente (1)");
+    expect(onlyWaiting).not.toContain("En cours (");
+    const onlyRunning = renderMissionsPanelHtml([running]);
+    expect(onlyRunning).toContain("En cours (1)");
+    expect(onlyRunning).not.toContain("En attente (");
+  });
+
+  it("message explicite quand il n'y a aucune mission (jamais une liste vide)", () => {
+    expect(renderMissionsPanelHtml([])).toContain("Aucune mission en cours");
+    expect(renderMissionsPanelHtml(null)).toContain("Aucune mission en cours");
+  });
+
+  it("affiche la mission réelle d'un agent (phrase de l'objectif), jamais « en préparation »", () => {
+    const missions = buildRunningMissions([
+      {
+        label: "codeur",
+        project: "pilot",
+        busy: true,
+        toolInProgress: false,
+        prompt:
+          "Tu es un développeur. Tu exécutes la micro-tâche reçue.\n\n=== SPÉCIALITÉ ===\nRôle : Tu es un développeur.\nCapacités : write, edit\n\n=== RÔLE ===\nTu es le CODEUR.\n\n=== MISSION ===\n## Objectif\nObjectif : afficher la tâche réelle dans le panneau.",
+      },
+    ]);
+    const html = renderMissionsPanelHtml(missions);
+    expect(html).toContain("afficher la tâche réelle dans le panneau.");
+    expect(html).not.toContain("en préparation");
+    expect(html).not.toContain("Tu es");
   });
 });
 

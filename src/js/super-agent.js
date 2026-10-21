@@ -39,7 +39,7 @@ import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, rele
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
-import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions } from "./agent-activity.js";
+import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml } from "./agent-activity.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames } from "./super-agent-badges.js";
@@ -2236,33 +2236,18 @@ function applySuperEventsTabsVisibility() {
  * Rendu du volet « En cours » : les MISSIONS RÉELLEMENT en cours de chaque agent
  * (source : store d'activité partagé, mêmes données que l'indicateur d'activité
  * du haut d'écran — aucun appel supplémentaire au moteur), plus les missions en
- * file d'attente (mention « en attente »). Un agent au repos n'y figure pas ;
- * un agent occupé silencieusement (outil long) y reste. Aucune mission → message
- * explicite, jamais une liste vide trompeuse.
+ * file d'attente. Deux groupes EXPLICITES et NUMÉROTÉS (« En cours (n) » puis
+ * « En attente (n) »), chaque ligne portant son rang, l'agent et le projet : on
+ * voit d'un coup d'œil ce qui tourne et l'ordre de la file. Un agent au repos
+ * n'y figure pas ; un agent occupé silencieusement (outil long) y reste. Aucune
+ * mission → message explicite, jamais une liste vide trompeuse. Le rendu est
+ * PUR (renderMissionsPanelHtml, agent-activity.js).
  */
 function renderSuperMissions() {
   if (!superTasksList) return;
   const snapshot = getAgentActivitySnapshot();
   const missions = buildRunningMissions(snapshot.list, collectQueuedMissions());
-  if (!missions.length) {
-    superTasksList.innerHTML = `<div class="dash-muted">Aucune mission en cours.</div>`;
-    return;
-  }
-  superTasksList.innerHTML = missions
-    .map(
-      (m) => `<div class="sa-task-item">
-        <div class="sa-task-head">
-          <span class="sa-task-title">${escapeHtmlForSuper(
-            // Ligne 1 : identité — `<agent> - <projet court>` (le projet est déjà
-            // réduit à son nom court par flattenAgents / missionProjectLabel).
-            m.agent ? (m.project ? `${m.agent} - ${m.project}` : m.agent) : m.project
-          )}</span>
-          ${m.waiting ? `<span class="sa-task-status tone-unqualified">en attente</span>` : ""}
-        </div>
-        <div class="sa-task-meta">${escapeHtmlForSuper(m.mission)}</div>
-      </div>`
-    )
-    .join("");
+  superTasksList.innerHTML = renderMissionsPanelHtml(missions);
   refreshIcons(superTasksList);
 }
 

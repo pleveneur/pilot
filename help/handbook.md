@@ -1277,11 +1277,14 @@ apprend et répond.
   panneau cloche propose un **second onglet « En cours »** (**Paramètres ⚙️ →
   onglet « Assistant » → « Onglet « En cours » dans le panneau de la cloche »**,
   **activé par défaut**). Il liste les **missions réellement en cours** de vos
-  agents : pour chacune, le **nom de l'agent**, son **projet** et le **texte de la
-  demande** qu'il traite. Un agent **au repos** n'y figure **pas** ; un agent
+  agents : pour chacune, le **nom de l'agent**, son **projet** et une **phrase
+  courte** qui dit la **tâche réelle**. Les missions sont présentées en **deux
+  groupes explicites et numérotés** — « **En cours (n)** » et « **En attente
+  (n)** » (l'ordre de la file est visible) — et non plus en une liste unique
+  indifférenciée. Un agent **au repos** n'y figure **pas** ; un agent
   **occupé** y figure **même s'il ne dit rien** (compilation, tests longs). Une
-  mission qui **attend** qu'un agent se libère apparaît avec la mention
-  **« en attente »**. La liste se **met à jour toute seule** tant qu'elle est
+  mission qui **attend** qu'un agent se libère apparaît dans le groupe « **En
+  attente** ». La liste se **met à jour toute seule** tant qu'elle est
   affichée (mêmes données que l'indicateur d'activité) et **défile** si elle est
   longue. Les **tâches** de votre suivi multi-projets restent dans leur onglet
   **Kanban** dédié (barre latérale).
@@ -1624,41 +1627,62 @@ uniquement un bloc d'instructions dans le prompt système.
   Événements), donc il se **met à jour en direct** avec le rafraîchissement léger
   existant. La commutation d'onglet reste purement visuelle.
 - **Contenu** : pour chaque agent **retenu** → `{ agent, projet, mission }`.
-  Filtre et mise en forme sont des **fonctions pures** (`buildRunningMissions`,
-  `shortMission` dans `agent-activity.js`, testées) :
+  Filtre, mise en forme et rendu sont des **fonctions pures**
+  (`buildRunningMissions`, `shortMission`, `splitMissions`,
+  `renderMissionsPanelHtml` dans `agent-activity.js`, testées) :
   - agent **retenu** si `busy` **ou** `toolInProgress` → un agent engagé dans un
     **outil long et silencieux** (compilation, tests) **ne disparaît jamais**
     (faux négatif interdit) ;
   - agent **au repos** (`idle`, `paused`, `stopped`) → **masqué** (une absence de
     travail n'est pas une mission) ;
-  - **affichage de chaque mission** (deux lignes) : **ligne 1 = identité**
-    « **<agent> - <nom de projet>** » (le nom de projet est **court** : le nom du
-    dossier) ; pour une mission **en attente** (sans agent), c'est le **nom du
-    projet** seul. **Ligne 2 = description courte de la tâche en cours**,
-    **sans** préfixe redondant « Projet X · » ;
+  - **deux groupes EXPLICITES et NUMÉROTÉS** : « **En cours (n)** » puis
+    « **En attente (n)** » — on voit d'un coup d'œil ce qui travaille et **dans
+    quel ordre la file attend** (rang `1.`, `2.`, … dans l'ordre d'origine) ; un
+    groupe vide n'est pas affiché. Aucune mission → message explicite
+    « Aucune mission en cours » (jamais une liste vide trompeuse) ;
+  - **affichage de chaque mission** (deux lignes) : **ligne 1 = rang +
+    identité** « **<agent> — <nom de projet>** » (le nom de projet est **court** :
+    le nom du dossier), avec le statut **« en cours »** / **« en attente »** ;
+    pour une mission **en attente** (sans agent), c'est le **nom du projet**
+    seul. **Ligne 2 = une PHRASE COURTE qui dit la tâche réelle**, **sans**
+    préfixe redondant « Projet X · » ;
   - **texte de la description** : c'est la **tâche réellement confiée** (le
     dernier prompt réellement envoyé à la session) qui est lue —
     1) la ligne « **Tâche : <titre>** » reste **prioritaire** (prompts
     d'orchestration) ;
-    2) sinon la **première ligne de contenu réel** : fences de code et préfixes
-    Markdown retirés, et les **en-têtes mécaniques de délégation**
-    (« ## Contexte », « ## Objectif », « ## Consignes »,
-    « ## Ce qu'il ne faut PAS faire », y compris en gras) sont **sautés** ;
-    3) la phrase est **coupée à 80 caractères** (suffixe « … ») ;
+    2) sinon la phrase de l'**objectif** écrite en ligne (« Objectif : … »,
+    « But : … ») — c'est la tâche réelle d'une demande de délégation ;
+    3) sinon le **contenu de la section « Objectif »** (« ## Objectif »), son
+    préambule technique sauté (« Contexte : version … ») ;
+    4) sinon la **première ligne de contenu réel** : fences de code, préambule de
+    **rôle** (« Tu es un … »), bloc de spécialité (« Rôle : … », « Capacités :
+    … »), bandeaux `=== … ===` et en-têtes mécaniques de délégation
+    (« ## Contexte », « ## Consignes », « ## Ce qu'il ne faut PAS faire », y
+    compris en gras) sont **sautés** ;
+    5) la phrase est **coupée à 120 caractères**, **proprement sur un mot**
+    (jamais au milieu d'un mot), avec le suffixe « … » ;
   - **replis explicites** : si le texte enregistré n'est que le **rôle** de
     l'agent (« Tu es un … » — un rôle n'est jamais une tâche, cas d'un processus
-    démarré sans tâche) → **« en préparation »** ; si le texte est introuvable →
-    **« (demande non précisée) »** : jamais une ligne vide ni un texte inventé ;
+    démarré sans tâche) → **« mission non communiquée »** (libellé honnête : plus
+    jamais « en préparation », qui ne dit rien de la tâche) ; si le texte est
+    introuvable → **« (demande non précisée) »** : jamais une ligne vide ni un
+    texte inventé ;
   - **missions en attente** : les demandes mises en file (délégations
-    inter-projets et files de `run_agents` / assistant) sont ajoutées avec la
-    mention **« en attente »** ; leur projet est affiché par son nom de dossier.
+    inter-projets et files de `run_agents` / assistant) sont ajoutées dans le
+    groupe « **En attente** » ; leur projet est affiché par son nom de dossier.
 - **Alimentation du texte de mission (Rust)** : `AgentService` mémorise, **au
   passage obligé de l'envoi d'un prompt** (`send` / `send_sync` /
   `send_sync_timeout`, donc `rpc_manager`), le **dernier prompt réellement
-  envoyé** à chaque session, **déjà tronqué** à 80 caractères
-  (`prompt_snapshot`, `PROMPT_SNAPSHOT_MAX_CHARS`). Une commande qui **n'est pas**
-  un prompt (`get_state`, `set_model`, …) **n'écrase jamais** la mission en cours.
-  L'information remonte par les champs **additifs** `prompt` (et
+  envoyé** à chaque session, **déjà tronqué** à 600 caractères
+  (`prompt_snapshot`, `PROMPT_SNAPSHOT_MAX_CHARS`). La fenêtre de 600 caractères
+  est **ancrée sur le premier marqueur de mission** du prompt (« ## Objectif »,
+  « Objectif : », « === MISSION === », « Tâche : ») : le préambule de rôle qui
+  précède ne consomme plus la fenêtre, donc **la mission est conservée même très
+  loin après le rôle** (défaut corrigé : 80 caractères ne contenaient que le
+  rôle). Un prompt plus court est conservé **tel quel** (aucune troncature
+  inutile). Le **prompt entier n'est jamais stocké**. Une commande qui **n'est
+  pas** un prompt (`get_state`, `set_model`, …) **n'écrase jamais** la mission en
+  cours. L'information remonte par les champs **additifs** `prompt` (et
   `toolInProgress`) de `list_agent_sessions` puis `get_agent_supervision` : les
   consommateurs existants les ignorent.
 - **Cliquer sur une mission** referme le panneau. Les **tâches** du suivi

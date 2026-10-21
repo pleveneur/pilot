@@ -4122,6 +4122,33 @@ body.zen-mode #project-footer {
   letter-spacing: 0.03em;
   color: var(--text-muted);
 }
+/* Volet « En cours » du panneau cloche : deux groupes EXPLICITES et colorés —
+   « En cours » (bleu, ce qui travaille) et « En attente » (ambre, la file, dans
+   l'ordre). Le rang de chaque ligne rend l'ordre lisible. */
+.sa-task-client.sa-missions-group {
+  margin-top: 6px;
+  border-left: 3px solid transparent;
+  padding-left: 6px;
+}
+.sa-task-client.sa-missions-group.running {
+  --sa-group-tone: #60a5fa;
+  color: var(--sa-group-tone, var(--accent));
+  border-left-color: var(--sa-group-tone, var(--accent));
+}
+.sa-task-client.sa-missions-group.waiting {
+  --sa-group-tone: #fbbf24;
+  color: var(--sa-group-tone, var(--accent));
+  border-left-color: var(--sa-group-tone, var(--accent));
+}
+.sa-missions-rank {
+  flex-shrink: 0;
+  margin-right: 6px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.sa-task-item.running { cursor: pointer; }
+.sa-task-item.waiting { border-left: 2px dotted var(--border-color, #334155); padding-left: 6px; }
 .sa-task-item {
   padding: 6px 8px;
   border-radius: var(--radius-sm);

@@ -290,13 +290,30 @@ fn project_extension_diag_hint(cwd: &str) -> Option<String> {
 
 /// Longueur maximale (en CARACTÈRES, jamais en octets) du texte de mission
 /// conservé par session pour l'affichage « missions en cours ».
-const PROMPT_SNAPSHOT_MAX_CHARS: usize = 80;
+///
+/// 600 (et non 80) : un prompt de délégation commence par le RÔLE, puis par les
+/// blocs `=== SPÉCIALITÉ ===` / `=== RÔLE ===` / `=== CONTEXTE PROJET ===` — la
+/// mission réelle n'apparaît qu'ensuite (souvent après 600 à 1 500 caractères).
+/// Une coupe à 80 ne contenait donc JAMAIS la mission (panneau affichant un
+/// repli inutile). On ne stocke pas le prompt entier pour autant.
+const PROMPT_SNAPSHOT_MAX_CHARS: usize = 600;
+
+/// Marqueurs de début de la MISSION dans un prompt de délégation, du plus
+/// précis au plus général. La fenêtre conservée est ANCRÉE sur le premier de ces
+/// marqueurs présent après le préambule de rôle : la mission est ainsi toujours
+/// dans le champ transmis au panneau, sans conserver le prompt entier.
+const MISSION_ANCHORS: [&str; 4] = ["## Objectif", "Objectif :", "=== MISSION ===", "Tâche :"];
 
 /// Extrait de quoi afficher la mission en cours d'un envoi vers une session.
 /// Retourne `None` pour toute commande qui n'est PAS un prompt (`get_state`,
 /// `set_model`, …) : le dernier prompt connu n'est alors jamais écrasé.
 /// Un prompt à texte vide reste un prompt (chaîne vide) : l'affichage applique
 /// alors son repli explicite — jamais une ancienne mission conservée à tort.
+///
+/// Un prompt plus long que `PROMPT_SNAPSHOT_MAX_CHARS` est réduit à une fenêtre
+/// de cette taille qui DÉMARRE sur la mission (cf. `MISSION_ANCHORS`) ; à défaut
+/// de marqueur, la fenêtre démarre au début du prompt. La coupe est signalée
+/// par « … ».
 fn prompt_snapshot(command: &Value) -> Option<String> {
     if command.get("type").and_then(|t| t.as_str()) != Some("prompt") {
         return None;
@@ -308,10 +325,19 @@ fn prompt_snapshot(command: &Value) -> Option<String> {
         .or_else(|| command.get("prompt").and_then(|m| m.as_str()))
         .unwrap_or("")
         .trim();
-    let mut out: String = text.chars().take(PROMPT_SNAPSHOT_MAX_CHARS).collect();
-    if text.chars().count() > PROMPT_SNAPSHOT_MAX_CHARS {
-        out.push('…');
+    let total = text.chars().count();
+    if total <= PROMPT_SNAPSHOT_MAX_CHARS {
+        return Some(text.to_string());
     }
+    // Ancrage sur la mission : position (en caractères) du marqueur le plus
+    // précis présent, sinon 0 (début du prompt).
+    let start = MISSION_ANCHORS
+        .iter()
+        .find_map(|anchor| text.find(anchor))
+        .map(|byte_idx| text[..byte_idx].chars().count())
+        .unwrap_or(0);
+    let mut out: String = text.chars().skip(start).take(PROMPT_SNAPSHOT_MAX_CHARS).collect();
+    out.push('…');
     Some(out)
 }
 
@@ -5123,8 +5149,10 @@ mod tests {
             .unwrap();
         assert_eq!(last(&svc).as_deref(), Some("Corriger la recherche globale"));
 
-        // Prompt très long : tronqué à 80 caractères + « … » (par caractères).
-        let long = "é".repeat(200);
+        // Prompt très long : réduit à une fenêtre de 600 caractères + « … »
+        // (par caractères). 600 et non 80 : la mission d'un prompt de
+        // délégation commence après le préambule de rôle.
+        let long = "é".repeat(2000);
         svc.send(
             "/p/A",
             "default",
@@ -5158,6 +5186,51 @@ mod tests {
         assert_eq!(
             prompt_snapshot(&serde_json::json!({ "type": "prompt", "message": "" })),
             Some(String::new())
+        );
+    }
+
+    /// Panneau (bas à droite) : la fenêtre conservée du prompt doit CONTENIR la
+    /// mission, même quand celle-ci commence loin après le préambule de rôle.
+    /// Régression corrigée : une coupe aux 80 premiers caractères ne gardait que
+    /// le rôle (« Tu es un développeur… ») et le panneau affichait un repli faux.
+    #[test]
+    fn prompt_snapshot_keeps_the_mission_even_far_after_the_role() {
+        // Prompt de la MÊME FORME que `buildAgentPrompt` : rôle, spécialité,
+        // rôle du codeur, contexte projet, puis `=== MISSION ===`.
+        let role = "Tu es un développeur. Tu exécutes la micro-tâche reçue. \
+                    Tu lis les fichiers avec les outils à ta disposition. \
+                    Tu modifies UNIQUEMENT les fichiers nécessaires.";
+        let prompt = format!(
+            "{role}\n\n=== SPÉCIALITÉ ===\nRôle : {role}\nCapacités : write, edit\n\n\
+             === RÔLE ===\nTu es le CODEUR (agent principal) de ce projet : tu es autorisé à \
+             MODIFIER les fichiers de code.\n\n\
+             === CONTEXTE PROJET (RAG auto-injecté par Pilot) ===\n\
+             ### src/js/agent-activity.js\n\
+             Module de l'indicateur d'activité des agents et du volet des missions du panneau.\n\
+             ### src-tauri/src/agent_service.rs\n\
+             Propriétaire unique des sessions d'agents, de leur état et de leur dernier prompt.\n\
+             === FIN CONTEXTE ===\n\n\
+             === MISSION ===\n## Contexte\nPilot est un éditeur de texte pour agents IA.\n\n\
+             ## Objectif\nObjectif : afficher la tâche réelle des agents dans le panneau.\n\n\
+             ## Consignes\nNe rien casser."
+        );
+        assert!(
+            prompt.chars().count() > PROMPT_SNAPSHOT_MAX_CHARS + 80,
+            "le prompt de test doit dépasser largement la fenêtre conservée"
+        );
+        let snap = prompt_snapshot(&serde_json::json!({ "type": "prompt", "message": prompt }))
+            .expect("prompt mémorisé");
+        // Borné (jamais le prompt entier)…
+        assert!(snap.chars().count() <= PROMPT_SNAPSHOT_MAX_CHARS + 1);
+        // …mais la MISSION est dedans : section Objectif ET sa phrase.
+        assert!(snap.contains("## Objectif"), "la section Objectif est conservée : {snap}");
+        assert!(
+            snap.contains("afficher la tâche réelle des agents dans le panneau"),
+            "la phrase de l'objectif est conservée : {snap}"
+        );
+        assert!(
+            !snap.starts_with("Tu es un développeur"),
+            "la fenêtre démarre sur la mission, pas sur le préambule de rôle : {snap}"
         );
     }
 
