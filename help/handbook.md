@@ -1647,11 +1647,12 @@ uniquement un bloc d'instructions dans le prompt système.
     quel ordre la file attend** (rang `1.`, `2.`, … dans l'ordre d'origine) ; un
     groupe vide n'est pas affiché. Aucune mission → message explicite
     « Aucune mission en cours » (jamais une liste vide trompeuse) ;
-  - **affichage de chaque mission** (deux lignes) : **ligne 1 = rang + la PHRASE
-    COURTE qui dit la tâche réelle** — elle est **en PREMIÈRE position**, avant
-    toute autre information (c'est ce que l'utilisateur veut lire en premier) —
-    avec le statut **« en cours »** / **« en attente »** ; **ligne 2 = l'identité
-    « <agent> — <nom de projet> »** (nom de projet **court** : le nom du dossier) ;
+  - **affichage de chaque mission** (deux lignes, position **FIXÉE**) : **ligne 1
+    = rang + l'identité « <agent> — <nom de projet> »** (nom de projet **court** :
+    le nom du dossier) avec le statut **« en cours »** / **« en attente »** ;
+    **ligne 2 = le texte d'indication de la tâche** — le **résumé court** fourni
+    avec la demande, sinon l'extrait de l'objectif — **EN DESSOUS**, à sa place
+    historique ;
     pour une mission **en attente** (sans agent), c'est le **nom du projet**
     seul. Aucun préfixe redondant « Projet X · » ;
   - **RÉSUMÉ COURT FOURNI AVEC LA DEMANDE (`resume`)** — le remède au libellé

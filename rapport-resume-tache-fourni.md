@@ -64,7 +64,7 @@ outil run_agents / run_assistant_agents (champ resume)
    → list_agent_sessions → get_agent_supervision (champ
      additif `resume`)                                   (agent_service.rs, dashboard.rs)
    → flattenAgents → buildRunningMissions                (agent-activity.js)
-   → renderMissionsPanelHtml : résumé en PREMIÈRE position
+   → renderMissionsPanelHtml : résumé SOUS l'agent et le projet (position d'origine)
 ```
 
 - `pilotResume` est un champ **de Pilot**, pas du protocole RPC : il est retiré
@@ -87,11 +87,13 @@ outil run_agents / run_assistant_agents (champ resume)
 
 ### 3.4 Affichage
 
-Dans le volet « En cours » du panneau de la cloche, la ligne de chaque mission
-porte désormais, **en première position**, le **résumé court**, puis le statut ;
-l'agent et le projet sont sur la ligne secondaire (« codeur — pilot »). Les deux
-groupes « En cours (n) » / « En attente (n) » et la numérotation de la file sont
-inchangés.
+Dans le volet « En cours » du panneau de la cloche, la **disposition d'origine
+est conservée** : la ligne de chaque mission porte, **au-dessus**, l'identité de
+l'agent et du projet (« codeur — pilot ») avec son statut ; le **résumé court**
+remplace seulement le contenu du **texte d'indication existant**, **EN DESSOUS**,
+à sa place actuelle. Les deux groupes « En cours (n) » / « En attente (n) » et la
+numérotation de la file sont inchangés. Cette position est **figée par un test**
+(un futur changement qui remettrait le résumé au-dessus fait rougir la suite).
 
 ## 4. Non-régression (existant à préserver)
 
@@ -108,7 +110,8 @@ inchangés.
   et le résumé fait au plus 120 caractères).
 - Les entrées de mission gardent **exactement** la même forme
   (`{ agent, project, mission, waiting }`) : seul le **contenu** de `mission`
-  change de source, et l'ordre d'affichage change.
+  change de source, et le contenu du texte d'indication change (sa position, elle,
+  ne bouge pas : sous l'agent et le projet).
 
 ## 5. Fichiers modifiés
 

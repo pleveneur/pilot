@@ -974,13 +974,13 @@ describe("renderMissionsPanelHtml — en cours et en attente, séparés et numé
     // Deux titres de groupe EXPLICITES, avec leur compte.
     expect(html).toContain("En cours (1)");
     expect(html).toContain("En attente (2)");
-    // Ordre de la file rendu par les rangs. La MISSION vient EN PREMIÈRE
-    // POSITION (c'est ce que l'utilisateur veut lire), l'agent et le projet
-    // suivent sur la ligne secondaire.
-    expect(html).toContain('<span class="sa-missions-rank">1.</span>Lancer les tests');
-    expect(html).toContain('<span class="sa-missions-rank">2.</span>Relire le diff');
-    expect(html).toContain('<div class="sa-task-meta">testeur — pilot</div>');
-    expect(html).toContain('<div class="sa-task-meta">reviewer — gds</div>');
+    // Ordre de la file rendu par les rangs. L'AGENT et le PROJET restent sur la
+    // ligne principale (disposition d'origine conservée) ; le texte
+    // d'indication de la tâche vient EN DESSOUS, sur la ligne secondaire.
+    expect(html).toContain('<span class="sa-missions-rank">1.</span>testeur — pilot');
+    expect(html).toContain('<span class="sa-missions-rank">2.</span>reviewer — gds');
+    expect(html).toContain('<div class="sa-task-meta">Lancer les tests</div>');
+    expect(html).toContain('<div class="sa-task-meta">Relire le diff</div>');
     // Groupe « en cours » AVANT le groupe « en attente ».
     expect(html.indexOf("En cours (1)")).toBeLessThan(html.indexOf("En attente (2)"));
     // Chaque ligne dit la mission, l'agent et le projet.
@@ -989,12 +989,19 @@ describe("renderMissionsPanelHtml — en cours et en attente, séparés et numé
     expect(html).toContain("en attente");
   });
 
-  it("affiche la MISSION en première position, avant l'agent et le projet", () => {
+  // POSITION FIGÉE (décision du propriétaire, disposition d'origine) : l'agent
+  // et le projet d'abord, le texte d'indication de la tâche EN DESSOUS. Un futur
+  // changement qui remettrait le résumé au-dessus doit faire rougir ces tests.
+  it("garde l'agent et le projet AU-DESSUS, le texte de mission EN DESSOUS", () => {
     const html = renderMissionsPanelHtml([running]);
-    // La phrase de mission apparaît AVANT l'agent dans le document.
-    expect(html.indexOf("Corriger la cloche")).toBeLessThan(html.indexOf("codeur — pilot"));
-    // Et elle est dans le titre de la ligne, pas dans la méta.
-    expect(html).toContain('<span class="sa-task-title"><span class="sa-missions-rank">1.</span>Corriger la cloche</span>');
+    // L'agent et le projet apparaissent AVANT la mission dans le document.
+    expect(html.indexOf("codeur — pilot")).toBeLessThan(html.indexOf("Corriger la cloche"));
+    // L'agent et le projet sont dans le TITRE de la ligne…
+    expect(html).toContain('<span class="sa-task-title"><span class="sa-missions-rank">1.</span>codeur — pilot</span>');
+    // …et la mission dans la MÉTA, c'est-à-dire la ligne du dessous.
+    expect(html).toContain('<div class="sa-task-meta">Corriger la cloche</div>');
+    // Le titre (agent/projet) précède la méta (mission) dans le balisage.
+    expect(html.indexOf('class="sa-task-title"')).toBeLessThan(html.indexOf('class="sa-task-meta"'));
   });
 
   it("affiche seulement le groupe qui a du contenu", () => {
@@ -1108,8 +1115,37 @@ describe("normalizeMissionResume / resolveMissionLabel — résumé fourni", () 
     expect(html).toContain("Corriger la cloche");
     expect(html).toContain("Relancer les tests");
     expect(html).not.toContain("texte technique long");
-    // La mission fournie est en PREMIÈRE position, avant l'agent.
-    expect(html.indexOf("Corriger la cloche")).toBeLessThan(html.indexOf("codeur — pilot"));
+    // Le résumé fourni est le texte d'indication, PLACÉ SOUS l'agent et le
+    // projet (position historique, décision du propriétaire).
+    expect(html.indexOf("codeur — pilot")).toBeLessThan(html.indexOf("Corriger la cloche"));
+    expect(html).toContain('<div class="sa-task-meta">Corriger la cloche</div>');
+    expect(html).toContain('<div class="sa-task-meta">Relancer les tests</div>');
+  });
+
+  it("garde le résumé SOUS l'agent et le projet, dans les DEUX groupes", () => {
+    // File de deux missions : une en cours, une en attente. Dans les deux cas,
+    // la ligne principale porte l'agent et le projet, le résumé vient dessous.
+    const missions = buildRunningMissions(
+      [
+        {
+          label: "codeur",
+          project: "pilot",
+          busy: true,
+          resume: "Corriger la cloche",
+          prompt: "## Objectif\nObjectif : texte technique long à ne pas afficher.",
+        },
+      ],
+      [{ agent: "testeur", project: "gds", mission: "libellé de file", resume: "Relancer les tests" }]
+    );
+    const html = renderMissionsPanelHtml(missions);
+    // Groupe « en cours » : agent d'abord, résumé ensuite.
+    expect(html.indexOf("codeur — pilot")).toBeLessThan(html.indexOf("Corriger la cloche"));
+    // Groupe « en attente » : agent d'abord, résumé ensuite.
+    expect(html.indexOf("testeur — gds")).toBeLessThan(html.indexOf("Relancer les tests"));
+    // Les deux résumés sont dans la ligne secondaire, jamais dans le titre.
+    expect(html).toContain('<div class="sa-task-meta">Corriger la cloche</div>');
+    expect(html).toContain('<div class="sa-task-meta">Relancer les tests</div>');
+    expect(html).not.toContain('<span class="sa-task-title"><span class="sa-missions-rank">1.</span>Corriger la cloche');
   });
 
   it("sans résumé, la mission en attente reprend son libellé (comportement inchangé)", () => {

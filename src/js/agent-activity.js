@@ -569,9 +569,12 @@ function missionWho(m) {
  *
  * Deux groupes EXPLICITES et NUMÉROTÉS — « En cours (n) » puis « En attente (n) » —
  * pour que l'on voie d'un coup d'œil ce qui tourne ET dans quel ordre la file
- * attend. Chaque ligne porte son RANG puis, **EN PREMIÈRE POSITION**, la phrase
- * de mission (résumé court fourni avec la demande, sinon extrait de l'objectif) ;
- * l'AGENT et le PROJET concernés viennent ensuite, sur la ligne secondaire.
+ * attend. Chaque ligne porte son RANG et, sur la ligne principale, l'identité
+ * « <agent> — <projet> » ; **EN DESSOUS**, sur la ligne secondaire (sa place
+ * historique, inchangée), le texte d'indication de la tâche : le résumé court
+ * fourni avec la demande, sinon l'extrait de l'objectif. Cet ordre visuel
+ * (agent et projet AU-DESSUS, résumé EN DESSOUS) est FIGÉ par un test : il ne
+ * doit pas être inversé (décision du propriétaire, disposition d'origine).
  * Aucune mission → message explicite, jamais une liste vide trompeuse.
  * @param {Array<{agent, project, mission, waiting}>} missions — buildRunningMissions.
  * @returns {string} HTML du volet.
@@ -588,10 +591,10 @@ export function renderMissionsPanelHtml(missions) {
         (m, i) => `
         <div class="sa-task-item${isWaiting ? " waiting" : " running"}">
           <div class="sa-task-head">
-            <span class="sa-task-title"><span class="sa-missions-rank">${i + 1}.</span>${esc(m.mission)}</span>
+            <span class="sa-task-title"><span class="sa-missions-rank">${i + 1}.</span>${esc(missionWho(m))}</span>
             <span class="sa-task-status ${isWaiting ? "tone-todo" : "tone-progress"}">${isWaiting ? "en attente" : "en cours"}</span>
           </div>
-          <div class="sa-task-meta">${esc(missionWho(m))}</div>
+          <div class="sa-task-meta">${esc(m.mission)}</div>
         </div>`
       )
       .join("");
