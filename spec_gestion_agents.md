@@ -35,7 +35,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Détection de cycle** : un agent déjà dans la chaîne ne peut pas être rappelé.
 - **Consulter n'est jamais une boucle** : relire `git status`, `git diff`, `git log`, `ls`, `grep`/`rg`, `sed -n`… entre deux corrections est un travail normal — ces lectures **ne déclenchent aucun arrêt**, quel que soit l'écran d'où la tâche a été lancée (onglet d'agent, bus d'agents, Assistant). Seules les **modifications** (écriture d'un fichier, commande qui écrit ou exécute) et la répétition d'un même **texte** peuvent fonder un arrêt.
 - **Chaque arrêt automatique laisse une trace** dans `.pilot/agent-stops.log` du projet (cause, type de détection, agent, session) : boucle, inactivité, plafond de tours, agent bloqué, libération de verrou. Rien ne s'arrête sans motif écrit.
-- **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (5 min par défaut), la run s'arrête et un message le signale. Réglable dans **Paramètres → Agents**.
+- **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (**10 min par défaut**, soit 600 000 ms), la run s'arrête et un message le signale. Réglable dans **Paramètres → Agents** (champ « Timeout d'inactivité (ms) », de 10 s à 30 min) ; la nouvelle valeur est relue à l'ouverture de l'onglet Agents ou au redémarrage de Pilot.
 - **⏹ Arrêter** arrête tous les processus d'agents. Fermer l'onglet les arrête aussi.
 - **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau de la cloche, une session qui travaille sans onglet ouvert porte le repère **« arrière-plan »** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
 
@@ -363,7 +363,7 @@ Les identifiants `#ae-*` sont **inchangés** : l'enregistrement relit exactement
 
 - Profondeur max d'appel : 3 (défaut).
 - Budget total d'appels : 30.
-- Timeout d'inactivité : 300 s (5 min, défaut). Relevé de 120 s → 300 s pour les agents faisant des outils longs (ex: codeur/builds). À l'échéance, un message d'erreur clair est affiché et la run s'arrête SANS message « arrêtée par l'utilisateur » (issue #10).
+- Timeout d'inactivité : **600 000 ms (10 min, défaut)** — `default_agent_timeout_ms()` (`src-tauri/src/lib.rs`), même valeur côté front (`DEFAULT_TIMEOUT_MS`, `src/js/agents-bus.js`), dans le champ de l'interface (`index.html`, `min="10000"`, `max="1800000"`) et au repli d'enregistrement (`src/js/settings.js`). Réglable par `agent_timeout_ms` ; relevé de 120 s → 300 s (issue #10) puis de 300 s → 600 s (issue #19, commit `31707a9`) parce que les agents enchaînent des outils longs (codeur/builds). À l'échéance, un message d'erreur clair est affiché et la run s'arrête SANS message « arrêtée par l'utilisateur » (issue #10). Garde-fou : `src/js/help-delai-inactivite.test.js` compare la valeur annoncée ici et dans l'aide intégrée à la valeur réelle du code.
 - Taille max résultat renvoyé : 4000 tokens.
 - Détection de cycle : interdit de rappeler un agent déjà dans la pile.
 
