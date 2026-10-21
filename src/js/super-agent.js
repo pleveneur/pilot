@@ -470,6 +470,21 @@ let superAgentStderrBuffer = "";
 // fermeture de l'onglet 🧭 (notification + injection du résultat).
 let runAgentsInFlightByProject = {}; // project (clé normalisée) → true (run en cours)
 export const runAgentsQueueByProject = {}; // project (clé normalisée) → [{ launch }]
+// P1 — FENÊTRE DE COURSE DU REJEU (angle mort de la relecture indépendante).
+// Une mission SORTIE de la file (`shift` de la tête) n'est pas encore une run
+// INSCRITE au bus : pendant cet instant la file paraît VIDE et le bus paraît
+// LIBRE. Une demande qui arrivait dans cette fenêtre ne voyait donc aucun
+// occupant et DÉMARRAIT devant la mission rejouée (doublon d'ordre, exactement
+// le défaut P1 par un autre chemin). La « réservation » ci-dessous est posée
+// SYNCHRONEMENT au retrait de la tête (aucun `await` ne peut s'intercaler) et
+// levée quand le lancement a été inscrit au bus — ou a échoué. Elle compte comme
+// une mission DEVANT toute demande qui arrive, jamais devant la mission
+// elle-même (`dequeue`), donc le rejeu ne se bloque pas lui-même.
+let runAgentsMissionClaimByProject = {}; // project (clé) → [{ label, at }]
+// Durée de vie MAXIMALE d'une réservation : une inscription au bus prend
+// quelques secondes ; au-delà, la réservation est considérée périmée et n'est
+// plus comptée (aucune attente fantôme possible).
+const MISSION_CLAIM_MAX_MS = 60 * 1000;
 
 // ── MISSION P3 : clés de projet NORMALISÉES des files/flags de l'assistant ──
 // Une seule écriture par dossier : la clé EXISTANTE si le projet est déjà
@@ -595,7 +610,78 @@ export function getProjectMissionQueue(projectPath) {
  */
 export function pendingMissionsAhead(projectPath, opts = {}) {
   if (opts && opts.dequeue) return 0;
-  return (runAgentsQueueByProject[missionQueueKey(projectPath)] || []).length;
+  const queued = (runAgentsQueueByProject[missionQueueKey(projectPath)] || []).length;
+  // P1 (fenêtre de course du rejeu) : une mission sortie de la file dont la run
+  // n'est pas encore inscrite au bus est TOUJOURS devant une demande qui arrive.
+  return queued + pendingMissionClaims(projectPath).length;
+}
+
+/**
+ * P1 — RÉSERVATIONS des missions SORTIES de la file mais pas encore inscrites au
+ * bus (voir `runAgentsMissionClaimByProject`).
+ *
+ * Une réservation périmée (lancement qui ne s'est jamais conclu : promesse
+ * perdue, backend figé) ne doit pas retenir indéfiniment les demandes ; la borne
+ * reste large devant une inscription au bus (quelques secondes) et le rejeu,
+ * lui, n'est jamais bloqué par une réservation.
+ * @param {string} projectPath - projet (clé de file)
+ * @param {number} [now] - horloge (injectée par les tests)
+ * @returns {Array<{label:string, at:number}>} réservations encore valides
+ */
+export function pendingMissionClaims(projectPath, now = Date.now()) {
+  const key = missionQueueKey(projectPath);
+  const claims = runAgentsMissionClaimByProject[key] || [];
+  if (claims.length === 0) return [];
+  const live = claims.filter((c) => c && Number.isFinite(c.at) && now - c.at < MISSION_CLAIM_MAX_MS);
+  if (live.length !== claims.length) {
+    if (live.length > 0) runAgentsMissionClaimByProject[key] = live;
+    else delete runAgentsMissionClaimByProject[key];
+  }
+  return live.map((c) => ({ label: c.label, at: c.at }));
+}
+
+/**
+ * P1 — RÉSERVE le créneau pour une mission SORTIE de la file.
+ *
+ * Appelée par le point UNIQUE de lancement d'une mission en file
+ * (`launchQueuedMission`), donc juste après le `shift` de l'appelant : aucun
+ * `await` ne s'intercale entre le retrait de la tête et la réservation, la
+ * fenêtre « file vide + bus libre » n'est donc jamais observable par une
+ * demande qui arrive.
+ * @param {string} projectPath - projet (clé de file)
+ * @param {string} label - libellé de la mission (nommée dans la trace)
+ * @param {number} [now] - horloge (injectée par les tests)
+ * @returns {() => void} libération IDEMPOTENTE de la réservation
+ */
+export function claimDequeuedMission(projectPath, label, now = Date.now()) {
+  const key = missionQueueKey(projectPath);
+  const claim = { label: String(label == null ? "" : label) || "(mission de l'assistant)", at: now };
+  if (!runAgentsMissionClaimByProject[key]) runAgentsMissionClaimByProject[key] = [];
+  runAgentsMissionClaimByProject[key].push(claim);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const claims = runAgentsMissionClaimByProject[key] || [];
+    const at = claims.indexOf(claim);
+    if (at >= 0) claims.splice(at, 1);
+    if (claims.length === 0) delete runAgentsMissionClaimByProject[key];
+  };
+}
+
+/**
+ * P1 — libellés des missions DÉJÀ devant une demande : file puis missions en
+ * cours d'inscription au bus (réservations). Sert à NOMMER ce qui n'est pas
+ * doublé, dans la trace comme à l'écran.
+ * @param {string} projectPath - projet (clé de file)
+ * @returns {string[]}
+ */
+export function pendingMissionAheadLabels(projectPath) {
+  const labels = (runAgentsQueueByProject[missionQueueKey(projectPath)] || []).map((entry) => missionQueueLabel(entry));
+  for (const claim of pendingMissionClaims(projectPath)) {
+    labels.push(`${claim.label} (en cours de démarrage)`);
+  }
+  return labels;
 }
 
 /**
@@ -1052,6 +1138,13 @@ export function armQueueReplay(target) {
  */
 function launchQueuedMission(target, entry) {
   if (!target || !entry) return;
+  // P1 — FENÊTRE DE COURSE : la mission vient d'être retirée de la file par
+  // l'appelant (`shift`) et n'est pas encore inscrite au bus. La réservation est
+  // posée ICI, synchronement (aucun `await` entre le shift et elle) : une
+  // demande qui arrive pendant l'inscription voit un occupant et s'empile
+  // DERRIÈRE, au lieu de démarrer devant la mission rejouée. Elle est levée dès
+  // que le lancement est conclu (inscrit au bus, ou en échec et remis en file).
+  const releaseClaim = claimDequeuedMission(target, missionQueueLabel(entry));
   runAgentsInFlightByProject[inFlightKey(target)] = true;
   const onFailure = (err) => {
     console.warn("[super-agent] lancement d'une mission en file en échec :", err);
@@ -1066,6 +1159,9 @@ function launchQueuedMission(target, entry) {
     if (!runAgentsQueueByProject[queueKey].includes(entry)) runAgentsQueueByProject[queueKey].unshift(entry);
     // Le rejeu périodique reprend la mission dès que le projet est libre.
     armQueueReplay(target);
+    // Réservation levée APRÈS la remise en file : la file porte alors la
+    // mission, donc aucune fenêtre vide ne s'ouvre entre les deux.
+    releaseClaim();
   };
   let result;
   try {
@@ -1077,20 +1173,29 @@ function launchQueuedMission(target, entry) {
     onFailure(e);
     return;
   }
-  if (result && typeof result.then === "function") result.catch(onFailure);
+  if (result && typeof result.then === "function") {
+    // Réservation levée quand le lancement est CONCLU (run inscrite au bus, ou
+    // échec traité ci-dessus) — jamais avant, sinon la fenêtre se rouvrirait.
+    result.then(() => releaseClaim(), onFailure);
+  } else {
+    releaseClaim();
+  }
 }
 
 // Point de suivi 344 (volet c) — points d'entrée de TEST (jamais utilisés en
 // production) : état observable de la file de missions d'un projet et remise à
 // zéro des timers/file, pour prouver la libération du verrou local, de la file
 // et du statut après une interruption.
-/** @param {string} target @returns {{inFlight:boolean,queueLength:number,replayArmed:boolean,watchdogArmed:boolean}} */
+/** @param {string} target @returns {{inFlight:boolean,queueLength:number,replayArmed:boolean,watchdogArmed:boolean,claims:number}} */
 export function __superAgentQueueStateForTest(target) {
   return {
     inFlight: !!runAgentsInFlightByProject[inFlightKey(target)],
     queueLength: (runAgentsQueueByProject[missionQueueKey(target)] || []).length,
     replayArmed: !!runAgentsQueueReplayByProject[missionReplayKey(target)],
     watchdogArmed: !!runAgentsWatchdogByProject[watchdogKey(target)],
+    // P1 (fenêtre de course du rejeu) : missions sorties de la file et pas encore
+    // inscrites au bus — elles comptent comme « devant » les demandes qui arrivent.
+    claims: pendingMissionClaims(target).length,
   };
 }
 
@@ -1110,6 +1215,7 @@ export function __resetSuperAgentQueueForTest() {
   }
   for (const t of Object.keys(runAgentsQueueByProject)) delete runAgentsQueueByProject[missionQueueKey(t)];
   for (const t of Object.keys(runAgentsInFlightByProject)) delete runAgentsInFlightByProject[inFlightKey(t)];
+  for (const t of Object.keys(runAgentsMissionClaimByProject)) delete runAgentsMissionClaimByProject[missionQueueKey(t)];
 }
 
 // POINT C (file de DÉLÉGATIONS, issue #66) — déclencheur de rejeu explicite,
@@ -4651,6 +4757,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // décider de démarrer (D1 du rapport
           // `rapport-file-attente-pertes-doublons.md`). Une mission déjà en
           // attente ne peut plus être doublée par une demande qui arrive.
+          // `runAgentsInFlightByProject` n'est pas sondé ici : ce drapeau est posé
+          // par la demande ELLE-MÊME avant son propre lancement (`startRun`), le
+          // lire ici la mettrait en file derrière elle-même. Ce qui manquait — la
+          // run issue de la file pas encore INSCRITE au bus — est porté par la
+          // réservation de `launchQueuedMission`, comptée par
+          // `pendingMissionsAhead` : la fenêtre de course du rejeu est fermée.
           const admission = decideMissionAdmission(target, {
             busy: isRunInProgress(target, { nature: missionNature }) || busyManual,
             dequeue: !!(launchOpts && launchOpts.dequeue),
@@ -4663,7 +4775,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             const wd = runAgentsWatchdogByProject[watchdogKey(target)];
             if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[watchdogKey(target)]; }
             // P1 : missions DÉJÀ en attente (nommées AVANT l'empilement).
-            const aheadLabels = (runAgentsQueueByProject[missionQueueKey(target)] || []).map((entry) => missionQueueLabel(entry));
+            const aheadLabels = pendingMissionAheadLabels(target);
             // RÈGLE 4 : mise en file par le chemin de PRODUCTION UNIQUE (libellé +
             // identité de mission + refus du double empilement).
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
@@ -4735,7 +4847,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           });
           if (admission.queue) {
             // P1 : missions DÉJÀ en attente (nommées AVANT l'empilement).
-            const aheadLabels = (runAgentsQueueByProject[missionQueueKey(target)] || []).map((entry) => missionQueueLabel(entry));
+            const aheadLabels = pendingMissionAheadLabels(target);
             // RÈGLE 4 : même chemin de mise en file que `launchOrQueue` (une seule
             // mission, un seul numéro) + refus du double empilement.
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
@@ -4909,7 +5021,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           });
           if (admission.queue) {
             // P1 : missions DÉJÀ en attente (nommées AVANT l'empilement).
-            const aheadLabels = (runAgentsQueueByProject[missionQueueKey(target)] || []).map((entry) => missionQueueLabel(entry));
+            const aheadLabels = pendingMissionAheadLabels(target);
             // POINT E : mise en file RÉELLE (même file que `run_agents`, rejouée
             // par `settleRun`). Auparavant ce chemin répondait « queued » sans
             // jamais pousser dans une file → mission perdue en silence.

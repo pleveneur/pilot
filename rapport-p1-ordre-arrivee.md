@@ -5,6 +5,11 @@
 `spec_gestion_agents.md` et `help/handbook.md`).
 **Correctif P2 conservé intact** · **P3 (normalisation des chemins) non touché**.
 
+> **MISE À JOUR — 2ᵉ passe P1 (§ 7)** : l'angle mort signalé par la relecture
+> indépendante (`rapport-relecture-file.md`), la **fenêtre de course du rejeu**,
+> est corrigé à son tour (réservation de créneau, `claimDequeuedMission`).
+> Sections 1 à 6 = première passe (4cf5356) ; § 7 = état courant.
+
 ---
 
 ## 1. Défaut corrigé (D1 du diagnostic)
@@ -180,3 +185,129 @@ la nouvelle signature, **l'intention et la force des assertions sont conservées
 3. **P3** (chemin de projet identique écrit différemment) reste à traiter : deux
    clés distinctes peuvent encore désigner le même projet ; ce correctif ne
    normalise rien.
+
+---
+
+## 7. Deuxième passe — l'ANGLE MORT : la fenêtre de course du rejeu
+
+**Mission P1 (correction bornée), commit local uniquement** · aucun push, aucun
+tag, aucune version touchée, aucune documentation modifiée (elle sera alignée
+dans une mission suivante).
+
+### 7.1 Défaut restant après la première passe
+
+La première passe consultait la **file**, ce qui ne suffit pas. Le rejeu
+(`replayQueuedMissionForProject`, et les deux `settleRun`) fait :
+
+```js
+const next = queue.shift();      // la tête SORT de la file
+if (next) launchQueuedMission(target, next);   // … puis on lance
+```
+
+Entre le `shift` et l'**inscription réelle de la run au bus**
+(`runAgentsForAssistantAsync` est asynchrone : `initAgentsBus`, registre,
+réservations…), la file est **VIDE** et `isRunInProgress` est **faux**. Une
+demande qui arrivait dans cet intervalle ne voyait donc **aucun occupant** :
+`pending = 0`, `busy = false` → **démarrage immédiat**, devant la mission rejouée.
+`launchOrQueue` ne sonde que `isRunInProgress` + l'activité manuelle : il ne
+pouvait pas voir cette run-là (le drapeau `runAgentsInFlightByProject` est, lui,
+posé par la demande **elle-même** avant son propre lancement — le sonder à
+l'admission mettrait chaque demande en file derrière elle-même).
+
+### 7.2 Correctif (minimal, ciblé, sans renommage ni reformatage)
+
+Un seul mécanisme ajouté : la **réservation du créneau** d'une mission sortie de
+file (`src/js/super-agent.js`).
+
+| Élément | Rôle |
+|---|---|
+| `runAgentsMissionClaimByProject` | `projet (clé) → [{ label, at }]` : missions sorties de la file, pas encore inscrites au bus |
+| `claimDequeuedMission(projet, label)` | pose la réservation et renvoie sa **libération idempotente** |
+| `pendingMissionClaims(projet, now)` | réservations encore valides (les périmées, > `MISSION_CLAIM_MAX_MS` = 60 s, ne comptent plus) |
+| `pendingMissionsAhead` | `file + réservations` — **le point unique d'admission juge donc la file ET les runs réellement en vol** |
+| `pendingMissionAheadLabels` | nomme ce qui n'est pas doublé : entrées de file **puis** missions en cours de démarrage |
+| `launchQueuedMission` | **seul** site de pose : réservation prise **synchronement** au retrait de la tête, libérée sur les trois issues (succès, échec traité, exception synchrone) |
+
+Propriétés qui ferment la fenêtre :
+
+1. **Aucun `await` entre le `shift` et la réservation** (JS mono-thread) : l'état
+   « file vide + bus libre » n'est **jamais** observable par une demande qui
+   arrive.
+2. **Anti-boucle** : la mission rejouée porte `dequeue`, donc `pendingMissionsAhead`
+   → 0 pour **elle** ; elle ne se remet jamais derrière elle-même.
+3. **Pas d'attente fantôme** : libération à la conclusion du lancement (le verdict
+   `onStart`/`onError` de `launchRun`), libération dans le chemin d'échec **après**
+   la remise en file (la file porte alors la mission), et borne de 60 s pour une
+   promesse qui ne se conclurait jamais. Le rejeu, lui, n'est **jamais** bloqué par
+   une réservation : il ne consulte que l'admission réelle du projet.
+
+Aucun autre comportement n'est modifié : même point de décision (`decideMissionAdmission`),
+même chemin d'empilement (`enqueueMissionForProject`, règle 4), même trace
+(`queue-order-respected` / `admission-fifo`), même affichage de file
+(`project-queue-view.js` : rangs « en attente (1er) / (2e) »), P2 et P3 intacts.
+
+### 7.3 Preuves (nouveau test, échoue sans le correctif)
+
+Nouveau fichier **`src/js/file-attente-fenetre-rejeu.test.js`** — **10 tests**.
+
+| Bloc | Ce qui est prouvé |
+|---|---|
+| (a) | pendant le rejeu, **file vide** : la demande qui arrive s'empile (`queue-ahead`, `pending: 1`), rien ne démarre en plus ; la trace **nomme** la mission en cours de démarrage ; **ordre d'exécution réel** `[mission rejouée, demande arrivée]` |
+| (b) | la réservation est levée dès l'inscription au bus (retour à `pending: 0`) ; un lancement **en échec** conserve la mission en file **et** ne laisse aucune réservation ; une réservation **périmée** ne retient plus personne |
+| (c) | `dequeue` ignore la réservation (aucune boucle de rejeu) |
+| (d) | câblage : **un seul** site de pose (`launchQueuedMission`, avant `entry.launch`), **trois** libérations, 3/3 points d'entrée nomment les missions devant, aucune admission revenue « verrou seul », lancement synchrone sans réservation résiduelle |
+
+**Non-vacuité (mutation)** — neutraliser la seule ligne qui compte la
+réservation (`return queued + pendingMissionClaims(projectPath).length;` →
+`return queued;`) rend **3 tests rouges** du nouveau fichier, dont la preuve
+centrale :
+
+```
+AssertionError: la mission rejouée n'est plus comptée comme occupant:
+  expected +0 to be 1
+Tests  3 failed | 7 passed (10)
+```
+
+puis `diff` identique après rétablissement.
+
+### 7.4 Tests exécutés (chiffres exacts)
+
+```
+$ npx vitest run src/js/file-attente-fenetre-rejeu.test.js
+PASS (10) FAIL (0)
+
+$ npx vitest run src/js/file-attente-fifo-admission.test.js \
+    src/js/file-attente-arret-conserve.test.js \
+    src/js/file-attente-regle-4.test.js \
+    src/js/file-attente-identite-demande.test.js \
+    src/js/verrou-par-projet.test.js src/js/project-cle-unicite.test.js \
+    src/js/agent-demande-exact.test.js \
+    src/js/super-agent-refus-avant-lancement.test.js
+PASS (94) FAIL (0)
+
+$ npm test
+Test Files  125 passed (125)
+     Tests  2101 passed (2101)        # 2091 avant cette passe (+10 = le nouveau fichier)
+
+$ npm run build                      # vite : OK (avertissements de découpage préexistants)
+```
+
+Aucun test existant n'a été modifié par cette passe (les 3 réalignements de
+§ 4.3 datent de la première passe).
+
+### 7.5 Limites qui restent (non masquées)
+
+1. **L1 — ré-empilement** : une mission rejouée qui retrouve le projet occupé est
+   remise **en queue** de file (comportement antérieur, hors périmètre) : aucune
+   perte ni doublon, mais inversion d'ordre possible. Inchangé.
+2. **Latence du drain** : entre la libération du projet et le lancement effectif,
+   il reste au plus un tick de rejeu (15 s). Inchangé.
+3. **Lancement DIRECT simultané** (deux `run_agents` admis dans la même fenêtre
+   d'inscription, aucun des deux ne venant de la file) : ce n'est pas cette
+   fenêtre-ci et ce n'est pas une file doublée — le bus refuse la seconde run,
+   qui est rapportée en **échec de lancement** (jamais annoncée « lancée »). Le
+   mécanisme de réservation ne le couvre pas et ce correctif n'y touche pas.
+4. **P3** (identité de projet) : mission séparée, rien de touché ici.
+5. **Documentation** : non modifiée dans cette passe (consigne de la mission) ;
+   `spec_gestion_agents.md` / `spec_super_agent.md` restent à aligner sur
+   « réservation de créneau au rejeu » dans une mission suivante.
