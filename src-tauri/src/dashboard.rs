@@ -1279,6 +1279,11 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
         // cours. Champs purement ADDITIFS — les autres consommateurs de
         // `get_agent_supervision` les ignorent.
         let prompt = s.get("prompt").and_then(|x| x.as_str()).unwrap_or("");
+        // RÉSUMÉ COURT fourni avec la demande (une phrase) : recopié tel quel,
+        // champ ADDITIF lui aussi. Il permet au panneau des tâches d'afficher en
+        // PREMIER ce que fait réellement la tâche ; absent → le panneau retombe
+        // sur l'extraction de l'objectif (aucun résumé inventé ici).
+        let resume = s.get("resume").and_then(|x| x.as_str()).unwrap_or("");
         let tool_in_progress = s
             .get("toolInProgress")
             .and_then(|x| x.as_bool())
@@ -1337,6 +1342,7 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             "visible": visible,
             "active": active,
             "prompt": prompt,
+            "resume": resume,
             "toolInProgress": tool_in_progress,
         });
 

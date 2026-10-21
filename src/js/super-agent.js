@@ -39,7 +39,7 @@ import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, rele
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
-import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml } from "./agent-activity.js";
+import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml, normalizeMissionResume } from "./agent-activity.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames } from "./super-agent-badges.js";
@@ -52,7 +52,7 @@ import { createReportDeliveryGate } from "./super-agent-reports.js";
 // RÈGLE 4 : identité de MISSION d'une demande mise en file (numéro monotone +
 // agents visés). Une demande rejouée porte TOUJOURS la sienne — le rapport livré
 // et le journal d'abandon la NOMMENT, donc une incohérence devient visible.
-import { nextMissionId, makeMissionIdentity, annotateMissionReport, stampQueuedMission, missionQueueLabel } from "./mission-identity.js";
+import { nextMissionId, makeMissionIdentity, annotateMissionReport, stampQueuedMission, stampQueuedMissionResume, missionQueueLabel } from "./mission-identity.js";
 // AGENT JETABLE (décision propriétaire du 2026-10-21) : un rôle peut être fourni
 // DANS la demande (`run_agents` avec des objets agent) → agent éphémère gardé en
 // mémoire seule (aucune ligne dans la table `agents`), qui n'existe que le temps
@@ -594,6 +594,8 @@ export function getProjectMissionQueue(projectPath) {
     // que l'interface puisse NOMMER la demande en attente.
     id: entry && typeof entry.id === "number" ? entry.id : null,
     agentIds: Array.isArray(entry && entry.agentIds) ? entry.agentIds.slice() : [],
+    // RÉSUMÉ COURT fourni avec la demande ("" s'il n'y en avait pas).
+    resume: entry && typeof entry.resume === "string" ? entry.resume : "",
   }));
 }
 
@@ -2267,7 +2269,10 @@ function collectQueuedMissions() {
   }
   for (const [project, queue] of Object.entries(runAgentsQueueByProject)) {
     for (const item of queue || []) {
-      out.push({ project: missionProjectLabel(project), mission: item.label || "" });
+      // Le RÉSUMÉ COURT fourni avec la demande (s'il y en a un) accompagne la
+      // mission en attente : le panneau affiche cette phrase, sinon il retombe
+      // sur l'extraction du libellé de la demande (comportement antérieur).
+      out.push({ project: missionProjectLabel(project), mission: item.label || "", resume: item.resume || "" });
     }
   }
   return out;
@@ -4555,6 +4560,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       );
       const agentIds = Array.isArray(info.agent_ids) ? info.agent_ids.map(String) : [];
       const task = String(info.task || "").trim();
+      // RÉSUMÉ COURT fourni avec la demande (facultatif) : une phrase qui dit la
+      // tâche réelle, plafonnée à 120 caractères. Il est conservé avec la
+      // mission (en cours ET en attente) et affiché EN PREMIER dans le panneau
+      // des tâches, au lieu d'être déduit du prompt après coup. Absent ou
+      // inutilisable → `""` : l'affichage retombe alors sur l'extraction de
+      // l'objectif (comportement antérieur, aucune régression).
+      const resume = normalizeMissionResume(info.resume);
       // Ciblage de projet (run_agents) : chemin absolu du projet cible, ou null
       // → projet actif par défaut (rétrocompatible). MCP piloté (brique B) :
       // serveur MCP cible (id) que les agents chargent à la demande.
@@ -4629,7 +4641,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           forceStructured: configCache.super_agent_force_structured_brief !== false,
           qualityGate: configCache.super_agent_quality_gate !== false,
         }), targetProject || window._pilotProjectPath || null, task);
-        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject, mcp_server: mcpServer }));
+        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject, mcp_server: mcpServer, resume }));
         // Nature de la mission : LECTURE seulement si TOUS les agents demandés
         // sont en lecture seule (registre des agents, champ `readonly`). Une
         // mission de LECTURE est partagée ; une MODIFICATION est exclusive sur
@@ -4838,6 +4850,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // RÈGLE 4 : mise en file par le chemin de PRODUCTION UNIQUE (libellé +
             // identité de mission + refus du double empilement).
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
+            // RÉSUMÉ COURT : conservé AVEC la mission en attente (facultatif).
+            stampQueuedMissionResume(queued.entry, resume);
             if (queued.duplicate) {
               appendSystemMessage(messagesEl, `ℹ️ Cette demande (mission #${queued.id}) est déjà en file : aucun doublon créé.`);
             }
@@ -4910,6 +4924,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // RÈGLE 4 : même chemin de mise en file que `launchOrQueue` (une seule
             // mission, un seul numéro) + refus du double empilement.
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
+            // RÉSUMÉ COURT : conservé AVEC la mission en attente (facultatif).
+            stampQueuedMissionResume(queued.entry, resume);
             if (queued.duplicate) {
               appendSystemMessage(messagesEl, `ℹ️ Cette demande (mission #${queued.id}) est déjà en file : aucun doublon créé.`);
             }
@@ -5008,6 +5024,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       const agentIds = Array.isArray(info.agent_ids) ? info.agent_ids.map(String) : [];
       const task = String(info.task || "").trim();
       const workspace = (info.workspace && String(info.workspace).trim()) || null;
+      // RÉSUMÉ COURT fourni avec la demande (facultatif) — MÊME contrat que
+      // `run_agents` : conservé avec la mission (en cours ET en attente),
+      // affiché en premier dans le panneau. Absent → repli sur l'extraction.
+      const resume = normalizeMissionResume(info.resume);
       // MCP piloté (brique B) : serveur MCP cible (id) pour les agents d'assistant.
       const mcpServer = (info.mcp_server && String(info.mcp_server).trim()) || null;
       if (agentIds.length === 0 || !task) {
@@ -5033,7 +5053,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         }), null, task);
         // Projet réservé : l'agent d'assistant n'est lié à aucun projet.
         const target = ASSISTANT_SPACE;
-        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: target, mcp_server: mcpServer }));
+        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: target, mcp_server: mcpServer, resume }));
         const projectPath = window._pilotProjectPath || null;
         let runSettled = false;
         // RÈGLE 4 : identité de la mission d'assistant (même mécanisme que
@@ -5091,6 +5111,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // survit à la fermeture du chat : il est porté par la file, indexée
             // par projet/espace) — même chemin de production unique.
             enqueueMissionForProject(target, (missionLaunchOpts) => startRun(missionLaunchOpts), task, missionIdentity);
+            // RÉSUMÉ COURT : conservé AVEC la mission en attente (facultatif).
+            stampQueuedMissionResume(
+              (runAgentsQueueByProject[missionQueueKey(target)] || []).at(-1),
+              resume
+            );
             // POINT G : la file d'assistant est couverte par le MÊME déclencheur de
             // rejeu (aucune run d'assistant ne pose de watchdog : sans cela une
             // demande pouvait rester en vol sans suite).

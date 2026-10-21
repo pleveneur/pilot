@@ -1739,7 +1739,7 @@ async function launchNextQueued(agentId, project, runKeyOverride) {
   // Le tour est exécuté dans le contexte PROPRIÉTAIRE de la file (celui de la
   // mission qui a mis la demande en attente) : son sink, son groupe parallèle
   // et sa génération restent les siens.
-  await runAgentTurn(agent, next.brief, "", next.project || project, undefined, next.mcp_server || null, ownerCtx);
+  await runAgentTurn(agent, next.brief, "", next.project || project, undefined, next.mcp_server || null, ownerCtx, next.resume || null);
 }
 
 function resetTimeout(ctx) {
@@ -3412,7 +3412,7 @@ async function forceStaleAgentProcessRestartIfNeeded(agent, project) {
   }
 }
 
-async function runAgentTurn(agent, brief, projectContext = "", project = null, options, mcpServer = null, runCtx = null) {
+async function runAgentTurn(agent, brief, projectContext = "", project = null, options, mcpServer = null, runCtx = null, resume = null) {
   if (!agent) {
     emit("error", { message: "Agent introuvable pour ce tour." });
     return;
@@ -3618,9 +3618,9 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     await applyAgentThinkingLevel(agent, backend, cwd, cfg.default_thinking_level, ctx);
 
     if (isAssistant) {
-      await sendPromptToAssistantAgent(agent.id, prompt);
+      await sendPromptToAssistantAgent(agent.id, prompt, resume);
     } else {
-      await sendPromptToAgent(agent.id, prompt, ctx);
+      await sendPromptToAgent(agent.id, prompt, ctx, resume);
     }
     resetTimeout(ctx);
     console.log("[agents-bus] prompt sent to", agent.id);
@@ -3663,14 +3663,17 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
   }
 }
 
-async function sendPromptToAgent(agentId, message, ctx) {
-  await invoke("send_agent_process_prompt", { agentId, message, project: ctx.agentProject[agentId] || ctx.project || null });
+async function sendPromptToAgent(agentId, message, ctx, resume = null) {
+  // RÉSUMÉ COURT fourni avec la demande (facultatif) : joint à la commande de
+  // prompt pour que le cœur le conserve AVEC la mission et l'expose au panneau
+  // des tâches. Une valeur absente n'ajoute rien (comportement antérieur).
+  await invoke("send_agent_process_prompt", { agentId, message, project: ctx.agentProject[agentId] || ctx.project || null, resume: resume || null });
 }
 
 // Envoie un prompt à un agent d'assistant (hors projet) : commande IPC dédiée,
 // session résolue par le service sous la clé ASSISTANT_SPACE (aucun projet).
-async function sendPromptToAssistantAgent(agentId, message) {
-  await invoke("send_assistant_agent_prompt", { agentId, message });
+async function sendPromptToAssistantAgent(agentId, message, resume = null) {
+  await invoke("send_assistant_agent_prompt", { agentId, message, resume: resume || null });
 }
 
 /**
@@ -3721,7 +3724,7 @@ async function dispatchParallel(assignments, onComplete, options, runProject, ct
       emit("notify", { agentId: a.agentId, message: `⏳ L'agent ${a.agentId} est déjà actif sur ce projet. La demande est mise en file d'attente et se lancera automatiquement à la fin de la tâche en cours.` });
       continue;
     }
-    await runAgentTurn(agent, a.brief, "", a.project, options, a.mcp_server || null, ctx);
+    await runAgentTurn(agent, a.brief, "", a.project, options, a.mcp_server || null, ctx, a.resume || null);
   }
   // Si tous les agents ont échoué au démarrage (inconnus / budget), on agrège
   // immédiatement sans attendre d'agent_end.

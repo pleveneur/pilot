@@ -119,6 +119,39 @@ export function stampQueuedMission(queue, entry, identity) {
 }
 
 /**
+ * Pose le RÉSUMÉ COURT **fourni avec la demande** (`resume`) sur une entrée de
+ * file d'attente : la mission en attente peut ainsi afficher SA phrase courte,
+ * et non le texte long de la demande. Le résumé est un champ ADDITIF :
+ *  - il n'est posé que s'il est **utilisable** (chaîne non vide après nettoyage) ;
+ *  - il n'est JAMAIS inventé (aucun résumé par défaut, aucune dérivation) ;
+ *  - sans résumé, l'entrée reste exactement comme avant (comportement
+ *    antérieur préservé : l'affichage retombe sur l'extraction de la demande).
+ * @param {object|null|undefined} entry - entrée de file (mutable)
+ * @param {unknown} resume - résumé court fourni par l'appelant
+ * @returns {object|null|undefined} l'entrée (pour enchaînement)
+ */
+export function stampQueuedMissionResume(entry, resume) {
+  const text = normalizeResumeText(resume);
+  if (entry && typeof entry === "object" && text) entry.resume = text;
+  return entry;
+}
+
+/**
+ * Nettoyage MINIMAL d'un résumé fourni : chaîne uniquement, espaces et retours à
+ * la ligne réduits à une espace. PURE, sans dépendance (ce module reste testable
+ * en Node). Le PLAFOND de 120 caractères n'est volontairement PAS appliqué ici :
+ * il vit à UN SEUL endroit (`normalizeMissionResume`, agent-activity.js), qui
+ * nettoie et plafonne à l'affichage — deux coupes différentes finiraient par
+ * diverger.
+ * @param {unknown} resume
+ * @returns {string} résumé utilisable, ou "" (jamais de valeur inventée)
+ */
+function normalizeResumeText(resume) {
+  if (typeof resume !== "string") return "";
+  return resume.replace(/\s+/g, " ").trim();
+}
+
+/**
  * Libellé d'une entrée de file pour le journal / l'interface : nomme la mission
  * (`#7 « texte de la demande »`) ou, à défaut d'identité, son texte seul.
  * @param {object|null|undefined} entry

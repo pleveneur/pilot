@@ -23,6 +23,9 @@ import {
   splitMissions,
   renderMissionsPanelHtml,
   MISSION_ROLE_FALLBACK,
+  MISSION_RESUME_MAX_CHARS,
+  normalizeMissionResume,
+  resolveMissionLabel,
   isAgentWorking,
   isWorkingWithoutTab,
   buildBackgroundWorkMissions,
@@ -971,15 +974,27 @@ describe("renderMissionsPanelHtml — en cours et en attente, séparés et numé
     // Deux titres de groupe EXPLICITES, avec leur compte.
     expect(html).toContain("En cours (1)");
     expect(html).toContain("En attente (2)");
-    // Ordre de la file rendu par les rangs.
-    expect(html).toContain('<span class="sa-missions-rank">1.</span>testeur — pilot');
-    expect(html).toContain('<span class="sa-missions-rank">2.</span>reviewer — gds');
+    // Ordre de la file rendu par les rangs. La MISSION vient EN PREMIÈRE
+    // POSITION (c'est ce que l'utilisateur veut lire), l'agent et le projet
+    // suivent sur la ligne secondaire.
+    expect(html).toContain('<span class="sa-missions-rank">1.</span>Lancer les tests');
+    expect(html).toContain('<span class="sa-missions-rank">2.</span>Relire le diff');
+    expect(html).toContain('<div class="sa-task-meta">testeur — pilot</div>');
+    expect(html).toContain('<div class="sa-task-meta">reviewer — gds</div>');
     // Groupe « en cours » AVANT le groupe « en attente ».
     expect(html.indexOf("En cours (1)")).toBeLessThan(html.indexOf("En attente (2)"));
-    // Chaque ligne dit l'agent, le projet et la mission.
+    // Chaque ligne dit la mission, l'agent et le projet.
     expect(html).toContain("codeur — pilot");
     expect(html).toContain("Corriger la cloche");
     expect(html).toContain("en attente");
+  });
+
+  it("affiche la MISSION en première position, avant l'agent et le projet", () => {
+    const html = renderMissionsPanelHtml([running]);
+    // La phrase de mission apparaît AVANT l'agent dans le document.
+    expect(html.indexOf("Corriger la cloche")).toBeLessThan(html.indexOf("codeur — pilot"));
+    // Et elle est dans le titre de la ligne, pas dans la méta.
+    expect(html).toContain('<span class="sa-task-title"><span class="sa-missions-rank">1.</span>Corriger la cloche</span>');
   });
 
   it("affiche seulement le groupe qui a du contenu", () => {
@@ -1011,6 +1026,97 @@ describe("renderMissionsPanelHtml — en cours et en attente, séparés et numé
     expect(html).toContain("afficher la tâche réelle dans le panneau.");
     expect(html).not.toContain("en préparation");
     expect(html).not.toContain("Tu es");
+  });
+});
+
+// ── RÉSUMÉ COURT FOURNI AVEC LA DEMANDE (`resume`) ──
+// Le remède à « le panneau affiche une phrase déduite du prompt » : la demande
+// porte elle-même son résumé court. Ordre de repli STRICT (jamais inventé) :
+// resume fourni → objectif extrait du prompt → libellé honnête.
+describe("normalizeMissionResume / resolveMissionLabel — résumé fourni", () => {
+  it("rend le résumé FOURNI tel quel (seulement nettoyé)", () => {
+    expect(normalizeMissionResume("  Corriger l'affichage   du panneau  ")).toBe(
+      "Corriger l'affichage du panneau"
+    );
+    expect(normalizeMissionResume("Ligne 1\nLigne 2\ttab")).toBe("Ligne 1 Ligne 2 tab");
+    // Un résumé fourni est affiché TEL QUEL, sans réécriture ni extraction.
+    expect(resolveMissionLabel("Corriger la cloche", "## Objectif\nObjectif : autre chose"))
+      .toBe("Corriger la cloche");
+  });
+
+  it("tronque proprement un résumé trop long (plafond 120, coupe sur un mot)", () => {
+    const long = "Mot " .repeat(60).trim(); // 239 caractères
+    const out = normalizeMissionResume(long);
+    expect(Array.from(out).length).toBeLessThanOrEqual(MISSION_RESUME_MAX_CHARS + 1); // « … »
+    expect(out.endsWith("…")).toBe(true);
+    expect(out.endsWith("Mo…")).toBe(false); // jamais au milieu d'un mot
+    expect(out.startsWith("Mot Mot")).toBe(true);
+    // Un texte pile à la limite n'est PAS coupé.
+    const exact = "a".repeat(MISSION_RESUME_MAX_CHARS);
+    expect(normalizeMissionResume(exact)).toBe(exact);
+  });
+
+  it("résumé absent → repli sur l'objectif extrait du prompt", () => {
+    expect(resolveMissionLabel("", "## Objectif\nObjectif : afficher la tâche réelle.")).toBe(
+      "afficher la tâche réelle."
+    );
+    expect(resolveMissionLabel(null, "## Objectif\nObjectif : afficher la tâche réelle.")).toBe(
+      "afficher la tâche réelle."
+    );
+    expect(resolveMissionLabel("   ", "## Objectif\nObjectif : afficher la tâche réelle.")).toBe(
+      "afficher la tâche réelle."
+    );
+  });
+
+  it("résumé absent ET objectif introuvable → libellé HONNÊTE", () => {
+    expect(resolveMissionLabel("", "Tu es le CODEUR.\nRôle : Tu es un développeur.")).toBe(
+      MISSION_ROLE_FALLBACK
+    );
+    expect(resolveMissionLabel("", "")).toBe("(demande non précisée)");
+  });
+
+  it("n'invente JAMAIS de résumé (aucune valeur par défaut, aucun texte généré)", () => {
+    expect(normalizeMissionResume(undefined)).toBe("");
+    expect(normalizeMissionResume(null)).toBe("");
+    expect(normalizeMissionResume(42)).toBe("");
+    expect(normalizeMissionResume({})).toBe("");
+    // Un repli qui ne trouve rien reste un libellé HONNÊTE (« mission non
+    // communiquée » ou « (demande non précisée) »), jamais une phrase fabriquée
+    // à partir du rôle.
+    expect([MISSION_ROLE_FALLBACK, "(demande non précisée)"]).toContain(
+      resolveMissionLabel(42, "Rôle : Tu es un développeur.")
+    );
+    expect(resolveMissionLabel(42, "")).toBe("(demande non précisée)");
+  });
+
+  it("le panneau affiche le résumé fourni, en cours comme EN ATTENTE", () => {
+    const missions = buildRunningMissions(
+      [
+        {
+          label: "codeur",
+          project: "pilot",
+          busy: true,
+          resume: "Corriger la cloche",
+          prompt: "## Objectif\nObjectif : texte technique long à ne pas afficher.",
+        },
+      ],
+      [{ project: "pilot", mission: "libellé de file", resume: "Relancer les tests" }]
+    );
+    expect(missions[0].mission).toBe("Corriger la cloche");
+    expect(missions[1].mission).toBe("Relancer les tests");
+    const html = renderMissionsPanelHtml(missions);
+    expect(html).toContain("Corriger la cloche");
+    expect(html).toContain("Relancer les tests");
+    expect(html).not.toContain("texte technique long");
+    // La mission fournie est en PREMIÈRE position, avant l'agent.
+    expect(html.indexOf("Corriger la cloche")).toBeLessThan(html.indexOf("codeur — pilot"));
+  });
+
+  it("sans résumé, la mission en attente reprend son libellé (comportement inchangé)", () => {
+    const missions = buildRunningMissions([], [{ project: "gds", mission: "Objectif : relire le diff" }]);
+    // Aucun résumé inventé : le libellé de la file est seulement raccourci comme
+    // avant (préfixe « Objectif : » retiré par shortMission).
+    expect(missions[0].mission).toBe("relire le diff");
   });
 });
 

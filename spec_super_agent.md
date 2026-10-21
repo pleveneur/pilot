@@ -122,8 +122,11 @@ apprend et répond.
   panneau cloche propose un **second onglet « En cours »** (**Paramètres ⚙️ →
   onglet « Assistant » → « Onglet « En cours » dans le panneau de la cloche »**,
   **activé par défaut**). Il liste les **missions réellement en cours** de vos
-  agents : pour chacune, le **nom de l'agent**, son **projet** et une **phrase
-  courte** qui dit la **tâche réelle**. Les missions sont présentées en **deux
+  agents : pour chacune, une **phrase courte** qui dit la **tâche réelle**,
+  affichée **en premier** (avant le nom de l'agent et le projet, qui suivent sur
+  la ligne secondaire). Cette phrase vient de la **demande elle-même** (résumé
+  court fourni par l'assistant ; à défaut, l'objectif de la demande). Les
+  missions sont présentées en **deux
   groupes explicites et numérotés** — « **En cours (n)** » et « **En attente
   (n)** » (l'ordre de la file est visible) — et non plus en une liste unique
   indifférenciée. Un agent **au repos** n'y figure **pas** ; un agent
@@ -259,12 +262,16 @@ apprend et répond.
   ordonner, arbitrer) ; (3) **reformuler** en langage clair le retour d'un agent.
 - **DEUX familles d'agents** (la consigne les nomme explicitement) :
   1. **Agents d'un projet** (le projet est le contexte) :
-     `run_agents(agent_ids, task, project)` — travail DANS un projet (code,
+     `run_agents(agent_ids, task, resume, project)` — travail DANS un projet (code,
      documentation, tests, état du dépôt) ; `project` omis = projet actif.
   2. **Agents hors projet** (créés pour l'Assistant, rattachés à aucun projet) :
-     `run_assistant_agents(agent_ids, task)` — travail qui ne dépend d'AUCUN
-     projet (recherche, analyse, rédaction interne), l'agent tourne dans
+     `run_assistant_agents(agent_ids, task, resume)` — travail qui ne dépend
+     d'AUCUN projet (recherche, analyse, rédaction interne), l'agent tourne dans
      `~/.pilot/assistant/`. Si aucun agent ne convient : `create_agent` d'abord.
+     `resume` (les deux outils, **facultatif**) : **phrase courte (≤ 120
+     caractères)** qui dit ce que la tâche fait réellement — c'est le texte lu
+     **en premier** dans le panneau des tâches ; à renseigner **toujours**, dans
+     la langue de l'utilisateur, sans recopier la tâche technique.
 - **Marche à suivre obligatoire** : choisir la famille ET les agents, annoncer
   en une ligne les étapes ET les agents, puis **lancer immédiatement** — sans
   mener le travail intellectuel soi-même.
@@ -485,13 +492,30 @@ uniquement un bloc d'instructions dans le prompt système.
     quel ordre la file attend** (rang `1.`, `2.`, … dans l'ordre d'origine) ; un
     groupe vide n'est pas affiché. Aucune mission → message explicite
     « Aucune mission en cours » (jamais une liste vide trompeuse) ;
-  - **affichage de chaque mission** (deux lignes) : **ligne 1 = rang +
-    identité** « **<agent> — <nom de projet>** » (le nom de projet est **court** :
-    le nom du dossier), avec le statut **« en cours »** / **« en attente »** ;
+  - **affichage de chaque mission** (deux lignes) : **ligne 1 = rang + la PHRASE
+    COURTE qui dit la tâche réelle** — elle est **en PREMIÈRE position**, avant
+    toute autre information (c'est ce que l'utilisateur veut lire en premier) —
+    avec le statut **« en cours »** / **« en attente »** ; **ligne 2 = l'identité
+    « <agent> — <nom de projet> »** (nom de projet **court** : le nom du dossier) ;
     pour une mission **en attente** (sans agent), c'est le **nom du projet**
-    seul. **Ligne 2 = une PHRASE COURTE qui dit la tâche réelle**, **sans**
-    préfixe redondant « Projet X · » ;
-  - **texte de la description** : c'est la **tâche réellement confiée** (le
+    seul. Aucun préfixe redondant « Projet X · » ;
+  - **RÉSUMÉ COURT FOURNI AVEC LA DEMANDE (`resume`)** — le remède au libellé
+    déduit après coup du prompt : les outils `run_agents` et
+    `run_assistant_agents` acceptent un champ **facultatif `resume`** (une phrase,
+    **plafonnée à 120 caractères**, aucun caractère obligatoire) ; l'assistant est
+    **invité à le renseigner systématiquement** (consigne de son prompt système +
+    description de l'outil) :
+    1. résumé **fourni** → **affiché tel quel** (seulement nettoyé : espaces et
+    retours à la ligne réduits, coupe propre sur un mot à 120 caractères) ;
+    2. **absent** → l'affichage **retombe** sur l'extraction de l'objectif de la
+    demande (`shortMission`, règles ci-dessous) — comportement **identique** à
+    avant ;
+    3. rien d'utilisable → le **libellé honnête** existant (« mission non
+    communiquée » / « (demande non précisée) ») : **aucun résumé n'est inventé** ;
+    le résumé est **conservé avec la tâche**, **en cours ET en attente** (entrée de
+    file), pour que la file affiche la même phrase que la mission lancée ;
+  - **texte de la description** (repli, quand aucun résumé n'est fourni) : c'est
+    la **tâche réellement confiée** (le
     dernier prompt réellement envoyé à la session) qui est lue —
     1) la ligne « **Tâche : <titre>** » reste **prioritaire** (prompts
     d'orchestration) ;
@@ -530,6 +554,15 @@ uniquement un bloc d'instructions dans le prompt système.
   cours. L'information remonte par les champs **additifs** `prompt` (et
   `toolInProgress`) de `list_agent_sessions` puis `get_agent_supervision` : les
   consommateurs existants les ignorent.
+- **Alimentation du RÉSUMÉ COURT (Rust)** : le résumé fourni voyage avec la
+  commande de prompt sous un champ **propre à Pilot** (`pilotResume`), que
+  `AgentService` **extrait** puis **retire** avant l'écriture vers pi (aucun champ
+  inconnu envoyé au moteur). Il est conservé **par session** (clé composite
+  (projet, agent), plafond 120 caractères) et remonte par le champ **additif**
+  `resume` (`list_agent_sessions` → `get_agent_supervision`). Un prompt **sans**
+  résumé **efface** l'entrée (jamais un résumé périmé attribué à une autre
+  mission) ; une commande qui **n'est pas** un prompt **n'y touche pas** ; un
+  renvoi du **même** prompt (reprise après blocage) **reporte** le résumé.
 - **Cliquer sur une mission** referme le panneau. Les **tâches** du suivi
   multi-projets (`get_super_agent_kanban`, statuts ouverts, filtre par projet,
   statut, échéance, case « À qualifier », idées) restent affichées **dans l'onglet Kanban

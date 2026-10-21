@@ -213,6 +213,13 @@ pub struct AgentService {
     // (`send` / `send_sync` / `send_sync_timeout`), lu par `list_agent_sessions`.
     // Purement informatif : n'influence aucune décision du service.
     last_prompts: Mutex<HashMap<String, String>>,
+    // RÉSUMÉ COURT de la mission en cours (affichage) : phrase fournie AVEC la
+    // demande (champ `pilotResume`, ≤ `MISSION_RESUME_MAX_CHARS`), clé composite
+    // identique à `sessions`. Il n'est jamais déduit du prompt : absent → entrée
+    // absente (le panneau retombe alors sur l'extraction de l'objectif). Un
+    // prompt SANS résumé efface l'entrée : aucun résumé périmé n'est attribué à
+    // une autre mission. Purement informatif, comme `last_prompts`.
+    last_resumes: Mutex<HashMap<String, String>>,
     // Identité de session (uid) : compteur monotone attribué à chaque NOUVEAU
     // spawn, clé composite identique à `sessions`. Sert aux commandes d'ARRÊT et
     // d'ABANDON : l'appelant fournit l'uid de la session qu'il a lui-même
@@ -304,6 +311,93 @@ const PROMPT_SNAPSHOT_MAX_CHARS: usize = 600;
 /// dans le champ transmis au panneau, sans conserver le prompt entier.
 const MISSION_ANCHORS: [&str; 4] = ["## Objectif", "Objectif :", "=== MISSION ===", "Tâche :"];
 
+/// Nom du champ ADDITIF par lequel l'appelant joint un **RÉSUMÉ COURT** à une
+/// demande (une phrase qui dit la tâche réelle, ≤ `MISSION_RESUME_MAX_CHARS`).
+///
+/// Ce champ est PROPRE À PILOT : il n'appartient pas au protocole RPC de pi et
+/// est donc **retiré de la commande** avant son écriture vers le moteur (voir
+/// `prompt_resume` / `strip_resume_field`). Il est conservé par session pour que
+/// le panneau des tâches l'affiche EN PREMIER, sans avoir à le déduire du prompt.
+pub const MISSION_RESUME_FIELD: &str = "pilotResume";
+
+/// Longueur maximale (en CARACTÈRES) du résumé court fourni avec une demande.
+/// Même plafond que l'affichage (JS `MISSION_MAX_CHARS` = 120) : une phrase.
+pub const MISSION_RESUME_MAX_CHARS: usize = 120;
+
+/// Construit une commande de prompt à partir du message et du RÉSUMÉ COURT
+/// facultatif fourni avec la demande.
+///
+/// Le résumé est normalisé (`normalize_mission_resume`) : espaces et retours à
+/// la ligne réduits à une espace, plafonné à `MISSION_RESUME_MAX_CHARS` et coupé
+/// proprement sur un mot. Un résumé **absent ou inutilisable** n'ajoute AUCUN
+/// champ : la commande est alors exactement celle d'avant (compatibilité
+/// totale des appels existants).
+pub fn prompt_command_with_resume(message: &str, resume: Option<&str>) -> Value {
+    let mut cmd = serde_json::json!({ "type": "prompt", "message": message });
+    if let Some(text) = resume.and_then(normalize_mission_resume) {
+        cmd[MISSION_RESUME_FIELD] = Value::String(text);
+    }
+    cmd
+}
+
+/// Normalise le résumé court FOURNI par l'appelant. `None` quand rien
+/// d'utilisable n'est fourni : on n'invente jamais de résumé.
+pub fn normalize_mission_resume(raw: &str) -> Option<String> {
+    let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return None;
+    }
+    let chars: Vec<char> = flat.chars().collect();
+    if chars.len() <= MISSION_RESUME_MAX_CHARS {
+        return Some(flat);
+    }
+    // Coupe PROPRE : on recule jusqu'à une frontière de mot (jamais au milieu
+    // d'un mot), sauf si cela amputait plus de la moitié du texte.
+    let min_keep = MISSION_RESUME_MAX_CHARS / 2;
+    let mut end = MISSION_RESUME_MAX_CHARS;
+    for i in (min_keep..MISSION_RESUME_MAX_CHARS).rev() {
+        if chars[i].is_whitespace() {
+            end = i;
+            break;
+        }
+    }
+    let kept: String = chars[..end].iter().collect();
+    let kept = kept.trim().trim_end_matches([' ', ',', ';', ':', '.', '!', '?', '-']).trim();
+    if kept.is_empty() {
+        let fallback: String = chars[..MISSION_RESUME_MAX_CHARS].iter().collect();
+        return Some(format!("{}…", fallback.trim()));
+    }
+    Some(format!("{}…", kept))
+}
+
+/// Résumé court porté par une commande de prompt.
+///
+/// - `None` : la commande n'est **pas** un prompt (`get_state`, `set_model`, …) →
+///   on ne touche à rien (le résumé conservé n'est pas écrasé) ;
+/// - `Some(None)` : c'est un prompt **sans** résumé → l'ancien résumé de la
+///   session est **effacé** (jamais un résumé périmé attribué à une autre
+///   mission) ;
+/// - `Some(Some(r))` : résumé fourni, nettoyé et plafonné.
+fn prompt_resume(command: &Value) -> Option<Option<String>> {
+    if command.get("type").and_then(|t| t.as_str()) != Some("prompt") {
+        return None;
+    }
+    let raw = command
+        .get(MISSION_RESUME_FIELD)
+        .and_then(|r| r.as_str())
+        .unwrap_or("");
+    Some(normalize_mission_resume(raw))
+}
+
+/// Retire le champ résumé de la commande AVANT son écriture vers pi : c'est un
+/// champ de PILOT, pas du protocole RPC. Sans cela, un moteur strict pourrait
+/// refuser une commande contenant un champ inconnu.
+fn strip_resume_field(command: &mut Value) {
+    if let Some(obj) = command.as_object_mut() {
+        obj.remove(MISSION_RESUME_FIELD);
+    }
+}
+
 /// Extrait de quoi afficher la mission en cours d'un envoi vers une session.
 /// Retourne `None` pour toute commande qui n'est PAS un prompt (`get_state`,
 /// `set_model`, …) : le dernier prompt connu n'est alors jamais écrasé.
@@ -365,6 +459,7 @@ impl AgentService {
             superagent_ext: Mutex::new(None),
             anomaly_map: Mutex::new(None),
             last_prompts: Mutex::new(HashMap::new()),
+            last_resumes: Mutex::new(HashMap::new()),
             session_uids: Mutex::new(HashMap::new()),
             ephemeral_agents: Mutex::new(HashMap::new()),
         }
@@ -1616,10 +1711,45 @@ impl AgentService {
         }
     }
 
+    /// Enregistre (ou efface) le RÉSUMÉ COURT de la mission en cours d'une
+    /// session. `None` = la commande n'est pas un prompt → rien n'est touché
+    /// (une consultation `get_state` ne détruit pas le résumé de la mission en
+    /// cours). `Some(None)` = prompt SANS résumé → l'entrée est EFFACÉE, pour
+    /// qu'un résumé d'une mission précédente ne soit jamais affiché pour la
+    /// suivante. `Some(Some(r))` = résumé fourni (déjà nettoyé et plafonné).
+    fn record_resume(&self, key: String, resume: Option<Option<String>>) {
+        match resume {
+            None => {}
+            Some(Some(r)) => {
+                self.last_resumes.lock().unwrap().insert(key, r);
+            }
+            Some(None) => {
+                self.last_resumes.lock().unwrap().remove(&key);
+            }
+        }
+    }
+
+    /// Résumé court conservé pour une session (`None` s'il n'y en a pas).
+    fn resume_of(&self, key: &str) -> Option<String> {
+        self.last_resumes.lock().unwrap().get(key).cloned()
+    }
+
+    /// Résumé court de la mission EN COURS d'un couple (projet, agent), pour
+    /// les chemins qui RENVOIENT le MÊME prompt (reprise après blocage,
+    /// correction) : le résumé de la mission est alors reporté tel quel au lieu
+    /// d'être effacé par un envoi qui n'en porte pas.
+    pub fn mission_resume(&self, project: &str, agent_id: &str) -> Option<String> {
+        self.resume_of(&Self::session_key(project, agent_id))
+    }
+
     /// Route une commande vers la session d'un agent (une seule indirection).
-    pub fn send(&self, project: &str, agent_id: &str, command: Value) -> Result<(), String> {
+    pub fn send(&self, project: &str, agent_id: &str, mut command: Value) -> Result<(), String> {
         let key = Self::session_key(project, agent_id);
         let snapshot = prompt_snapshot(&command);
+        // RÉSUMÉ COURT : lu AVANT le retrait du champ, puis le champ est retiré
+        // de la commande (il appartient à Pilot, pas au protocole de pi).
+        let resume = prompt_resume(&command);
+        strip_resume_field(&mut command);
         let res = {
             let mut sessions = self.sessions.lock().unwrap();
             let entry = sessions.get_mut(&key).ok_or_else(|| {
@@ -1628,7 +1758,8 @@ impl AgentService {
             rpc_manager::send_command(&mut entry.session, &command)
         };
         if res.is_ok() {
-            self.record_prompt(key, snapshot);
+            self.record_prompt(key.clone(), snapshot);
+            self.record_resume(key, resume);
         }
         res
     }
@@ -1648,10 +1779,13 @@ impl AgentService {
         project: &str,
         agent_id: &str,
         expected_uid: Option<u64>,
-        command: Value,
+        mut command: Value,
     ) -> Result<(), String> {
         let key = Self::session_key(project, agent_id);
         let snapshot = prompt_snapshot(&command);
+        // RÉSUMÉ COURT : même traitement que `send` (lu puis retiré avant écriture).
+        let resume = prompt_resume(&command);
+        strip_resume_field(&mut command);
         let res = {
             let uids = self.session_uids.lock().unwrap();
             let current = uids.get(&key).copied();
@@ -1682,7 +1816,8 @@ impl AgentService {
             res
         };
         if res.is_ok() {
-            self.record_prompt(key, snapshot);
+            self.record_prompt(key.clone(), snapshot);
+            self.record_resume(key, resume);
         }
         res
     }
@@ -1708,6 +1843,10 @@ impl AgentService {
     ) -> Result<Value, String> {
         let key = Self::session_key(project, agent_id);
         let snapshot = prompt_snapshot(&command);
+        // RÉSUMÉ COURT : lu puis retiré avant écriture (même contrat que `send`).
+        let resume = prompt_resume(&command);
+        let mut command = command;
+        strip_resume_field(&mut command);
         let rx = {
             let mut sessions = self.sessions.lock().unwrap();
             let entry = sessions.get_mut(&key).ok_or_else(|| {
@@ -1717,7 +1856,8 @@ impl AgentService {
         };
         let res = rpc_manager::wait_response(rx, timeout_secs);
         if res.is_ok() {
-            self.record_prompt(key, snapshot);
+            self.record_prompt(key.clone(), snapshot);
+            self.record_resume(key, resume);
         }
         res
     }
@@ -2169,6 +2309,13 @@ impl AgentService {
                 .get(&format!("{}\u{1f}{}", project, agent_id))
             {
                 entry["prompt"] = serde_json::Value::String(p.clone());
+            }
+            // resume : RÉSUMÉ COURT fourni AVEC la demande (une phrase). Champ
+            // ADDITIF : absent quand la demande n'en portait pas — le panneau
+            // retombe alors sur l'extraction de l'objectif. Sert à afficher, en
+            // PREMIER, ce que fait réellement la tâche, sans le déduire du prompt.
+            if let Some(r) = self.resume_of(&format!("{}\u{1f}{}", project, agent_id)) {
+                entry["resume"] = serde_json::Value::String(r);
             }
             // sessionId (chantier restitution fin-de-run) : identifiant de session
             // pi, exposé pour que l'assistant puisse cibler get_delegation_result
@@ -5172,6 +5319,135 @@ mod tests {
         )
         .unwrap();
         assert_eq!(last(&svc).as_deref(), Some(""));
+    }
+
+    /// `prompt_command_with_resume` : le RÉSUMÉ COURT facultatif est joint à la
+    /// commande de prompt sous un champ PROPRE À PILOT, et rien n'est ajouté
+    /// quand il est absent ou vide (commandes strictement identiques à avant).
+    #[test]
+    fn prompt_command_with_resume_is_additive_only() {
+        // Sans résumé : commande EXACTEMENT celle d'avant (rétrocompatibilité).
+        let plain = prompt_command_with_resume("Faire X", None);
+        assert_eq!(plain, serde_json::json!({ "type": "prompt", "message": "Faire X" }));
+        // Résumé vide / blancs seuls : aucune valeur inventée, aucun champ.
+        for empty in ["", "   ", "\n\t "] {
+            let cmd = prompt_command_with_resume("Faire X", Some(empty));
+            assert!(
+                cmd.get(MISSION_RESUME_FIELD).is_none(),
+                "un résumé inutilisable ne doit ajouter aucun champ"
+            );
+            assert_eq!(cmd["message"], serde_json::json!("Faire X"));
+        }
+        // Résumé fourni : nettoyé (espaces / retours à la ligne) et joint.
+        let cmd = prompt_command_with_resume("Faire X", Some("  Corriger\n la  cloche "));
+        assert_eq!(cmd[MISSION_RESUME_FIELD], serde_json::json!("Corriger la cloche"));
+        assert_eq!(cmd["type"], serde_json::json!("prompt"));
+        assert_eq!(cmd["message"], serde_json::json!("Faire X"));
+    }
+
+    /// Le résumé est PLAFONNÉ à `MISSION_RESUME_MAX_CHARS`, coupé proprement sur
+    /// un mot (jamais au milieu), comme l'affichage côté JS.
+    #[test]
+    fn normalize_mission_resume_caps_at_120_chars_on_a_word_boundary() {
+        let long = "Mot ".repeat(60);
+        let got = normalize_mission_resume(long.trim()).expect("résumé utilisable");
+        assert!(
+            got.chars().count() <= MISSION_RESUME_MAX_CHARS + 1,
+            "plafond 120 caractères (+ …) : {} caractères",
+            got.chars().count()
+        );
+        assert!(got.ends_with('…'), "troncature signalée par …");
+        assert!(got.starts_with("Mot Mot"), "le début du résumé est conservé");
+        // La coupe ne tombe jamais au milieu d'un mot (« Mo… »).
+        let before = got.trim_end_matches('…');
+        assert!(
+            before.ends_with("Mot"),
+            "coupe sur une frontière de mot, pas au milieu : {:?}",
+            before
+        );
+        // Un texte pile à la limite n'est pas coupé.
+        let exact = "a".repeat(MISSION_RESUME_MAX_CHARS);
+        assert_eq!(normalize_mission_resume(&exact), Some(exact.clone()));
+    }
+
+    /// `prompt_resume` : seule une commande `prompt` porte un résumé. Un prompt
+    /// SANS résumé est signalé (`Some(None)`) pour que l'ancien résumé soit
+    /// effacé ; une commande non-prompt (`get_state`, `set_model`) ne dit RIEN
+    /// (`None`) et ne doit pas toucher au résumé de la mission en cours.
+    #[test]
+    fn prompt_resume_distinguishes_absent_prompt_and_other_commands() {
+        assert_eq!(prompt_resume(&serde_json::json!({ "type": "get_state" })), None);
+        assert_eq!(prompt_resume(&serde_json::json!({ "type": "set_model" })), None);
+        assert_eq!(
+            prompt_resume(&serde_json::json!({ "type": "prompt", "message": "x" })),
+            Some(None)
+        );
+        assert_eq!(
+            prompt_resume(&serde_json::json!({
+                "type": "prompt",
+                "message": "x",
+                MISSION_RESUME_FIELD: "  Réparer   la file "
+            })),
+            Some(Some("Réparer la file".to_string()))
+        );
+    }
+
+    /// Le champ résumé est RETIRÉ de la commande avant l'écriture vers pi : il
+    /// appartient à Pilot, pas au protocole RPC (aucun octet inconnu envoyé au
+    /// moteur). La commande envoyée est alors exactement celle d'avant.
+    #[test]
+    fn strip_resume_field_leaves_the_rpc_command_untouched() {
+        let mut cmd = prompt_command_with_resume("Faire X", Some("Corriger la cloche"));
+        assert!(cmd.get(MISSION_RESUME_FIELD).is_some(), "champ présent avant retrait");
+        strip_resume_field(&mut cmd);
+        assert!(cmd.get(MISSION_RESUME_FIELD).is_none(), "champ retiré avant écriture");
+        assert_eq!(cmd, serde_json::json!({ "type": "prompt", "message": "Faire X" }));
+    }
+
+    /// Le résumé est conservé AVEC la mission de la session (`resume` du panneau
+    /// des tâches) : fourni → mémorisé nettoyé ; prompt sans résumé → EFFACÉ ;
+    /// commande non-prompt → inchangé (une consultation ne détruit rien).
+    #[test]
+    fn send_records_and_clears_the_mission_resume() {
+        let svc = AgentService::new();
+        let key = AgentService::session_key("/p/A", "default");
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                key.clone(),
+                SessionEntry {
+                    session: fake_session(),
+                    project: "/p/A".to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::MainSession,
+                },
+            );
+        }
+        let resume = |svc: &AgentService| svc.last_resumes.lock().unwrap().get(&key).cloned();
+
+        // Résumé fourni : conservé, nettoyé.
+        svc.send(
+            "/p/A",
+            "default",
+            prompt_command_with_resume("Faire X", Some("  Corriger\n la cloche ")),
+        )
+        .unwrap();
+        assert_eq!(resume(&svc).as_deref(), Some("Corriger la cloche"));
+
+        // Commande non-prompt : le résumé de la mission EN COURS reste lisible.
+        svc.send("/p/A", "default", serde_json::json!({ "type": "get_state" }))
+            .unwrap();
+        assert_eq!(resume(&svc).as_deref(), Some("Corriger la cloche"));
+
+        // Prompt SANS résumé : l'ancien résumé est EFFACÉ (jamais attribué à une
+        // autre mission que la sienne).
+        svc.send(
+            "/p/A",
+            "default",
+            serde_json::json!({ "type": "prompt", "message": "Autre tâche" }),
+        )
+        .unwrap();
+        assert_eq!(resume(&svc), None, "un prompt sans résumé efface le précédent");
     }
 
     /// `prompt_snapshot` : extraction PURE du texte de mission d'une commande.

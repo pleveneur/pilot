@@ -362,16 +362,20 @@ pub async fn start_assistant_agent_process(
 }
 
 /// Envoie un prompt à un agent d'assistant (session réservée ASSISTANT_SPACE).
+/// `resume` : RÉSUMÉ COURT facultatif fourni avec la demande (une phrase, ≤ 120
+/// caractères). Il n'est PAS transmis à pi : il est joint à la commande sous le
+/// champ `pilotResume`, que `AgentService` extrait puis retire.
 /// Commande **async** → spawn_blocking.
 #[tauri::command]
 pub async fn send_assistant_agent_prompt(
     state: State<'_, AppState>,
     agent_id: String,
     message: String,
+    resume: Option<String>,
 ) -> Result<(), String> {
     let agent_service = state.inner().agent_service.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let cmd = serde_json::json!({ "type": "prompt", "message": message });
+        let cmd = crate::agent_service::prompt_command_with_resume(&message, resume.as_deref());
         agent_service.send_assistant_agent(&agent_id, cmd)
     })
     .await
@@ -395,7 +399,12 @@ pub fn stop_assistant_agents(state: State<AppState>) -> Result<(), String> {
 pub(crate) fn do_send_agent_process_prompt(state: &AppState, agent_id: String, message: String, project: Option<String>) -> Result<(), String> {
     let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     ensure_agent_not_busy(&state.agent_service, &state.agent_anomaly, &project, &agent_id)?;
-    let cmd = serde_json::json!({ "type": "prompt", "message": message });
+    // RÉSUMÉ COURT : ce chemin RENVOIE le prompt de la mission EN COURS (reprise
+    // après blocage). On reporte le résumé déjà conservé, sinon cet envoi — qui
+    // n'en porte pas — effacerait à tort le libellé affiché dans le panneau des
+    // tâches alors que la mission est la même.
+    let resume = state.agent_service.mission_resume(&project, &agent_id);
+    let cmd = crate::agent_service::prompt_command_with_resume(&message, resume.as_deref());
     state.agent_service.send(&project, &agent_id, cmd)
 }
 
@@ -428,12 +437,17 @@ pub(crate) fn ensure_agent_not_busy(
 
 /// Envoie un prompt à un agent multi-rôles H2 V2.
 ///
+/// `resume` : RÉSUMÉ COURT facultatif fourni avec la demande (voir
+/// `prompt_command_with_resume`, agent_service.rs). Il voyage avec la commande
+/// jusqu'au service, qui le conserve avec la mission puis le RETIRE de la
+/// commande envoyée à pi.
+///
 /// Commande **async** : l'écriture stdin est rapide (non bloquante), mais on
 /// déporte tout de même le travail dans `spawn_blocking` pour rester cohérent
 /// avec le reste de la chaîne de démarrage d'un agent (et ne pas occuper le
 /// main thread pendant que d'autres commandes de la chaîne se sérialisent).
 #[tauri::command]
-pub async fn send_agent_process_prompt(state: State<'_, AppState>, agent_id: String, message: String, project: Option<String>) -> Result<(), String> {
+pub async fn send_agent_process_prompt(state: State<'_, AppState>, agent_id: String, message: String, project: Option<String>, resume: Option<String>) -> Result<(), String> {
     let agent_service = state.inner().agent_service.clone();
     let project = project
         .or_else(|| state.inner().project_path.lock().unwrap().clone())
@@ -442,7 +456,7 @@ pub async fn send_agent_process_prompt(state: State<'_, AppState>, agent_id: Str
     // `do_send_agent_process_prompt` (voir `ensure_agent_not_busy`).
     ensure_agent_not_busy(&agent_service, &state.inner().agent_anomaly, &project, &agent_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let cmd = serde_json::json!({ "type": "prompt", "message": message });
+        let cmd = crate::agent_service::prompt_command_with_resume(&message, resume.as_deref());
         agent_service.send(&project, &agent_id, cmd)
     })
     .await

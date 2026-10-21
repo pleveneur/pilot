@@ -136,6 +136,12 @@ export function flattenAgents(supervision, lastActivityMap) {
         // les consommateurs existants (indicateur d'activité, résumé immersif,
         // onglet agent, assistant web) les ignorent.
         prompt: typeof a.prompt === "string" ? a.prompt : "",
+        // RÉSUMÉ COURT de la mission FOURNI avec la demande (champ `resume` de
+        // `run_agents` / `run_assistant_agents`), conservé par le cœur avec la
+        // session. Champ ADDITIF : absent des charges anciennes, jamais inventé.
+        // Il est affiché EN PREMIER (avant l'agent et le projet) et prend le pas
+        // sur l'extraction du prompt (resolveMissionLabel).
+        resume: typeof a.resume === "string" ? a.resume : "",
         toolInProgress,
         lastActivity: lastActivityMap ? formatLastActivity(lastActivityMap.get(rawId)) : null,
         kind: isSuper ? "superagent" : (isAssistant ? "assistant" : "agent"),
@@ -204,7 +210,7 @@ export function buildBackgroundWorkMissions(list) {
       kind: a.kind || "agent",
       agent: a.label || "",
       project: a.project || "Assistant",
-      mission: shortMission(a.prompt),
+      mission: resolveMissionLabel(a.resume, a.prompt),
     }));
 }
 
@@ -212,6 +218,14 @@ export function buildBackgroundWorkMissions(list) {
 
 /** Longueur maximale affichée du texte d'une mission (une phrase courte). */
 export const MISSION_MAX_CHARS = 120;
+
+/**
+ * Longueur maximale du RÉSUMÉ COURT **fourni** avec une demande (« resume »).
+ * Même plafond que l'affichage : une phrase courte, pas un paragraphe. La valeur
+ * est identique côté Rust (`MISSION_RESUME_MAX_CHARS`, agent_service.rs), qui
+ * applique le plafond avant de conserver le résumé avec la session.
+ */
+export const MISSION_RESUME_MAX_CHARS = 120;
 
 /**
  * Tronque un texte à `MISSION_MAX_CHARS` caractères, suffixé « … » si coupé.
@@ -232,6 +246,42 @@ function clipMission(text) {
   const cut = chars.slice(0, end).join("").trim().replace(/[\s,;:.!?\-–—]+$/u, "");
   const kept = cut || chars.slice(0, MISSION_MAX_CHARS).join("").trim();
   return kept + "…";
+}
+
+/**
+ * Normalise le RÉSUMÉ COURT **fourni** avec une demande (`resume`) : espaces et
+ * retours à la ligne réduits à une seule espace, plafonné à
+ * `MISSION_RESUME_MAX_CHARS` et coupé **proprement sur un mot** (« … »).
+ * Fonction PURE : aucun caractère n'est obligatoire, aucun contenu n'est
+ * réécrit (le texte fourni est rendu tel quel, seulement nettoyé et plafonné).
+ * Retourne `""` quand rien d'utilisable n'est fourni → l'appelant applique son
+ * ordre de repli (jamais un résumé inventé).
+ * @param {unknown} value — valeur brute reçue (chaîne attendue).
+ * @returns {string} résumé utilisable, ou `""`.
+ */
+export function normalizeMissionResume(value) {
+  if (typeof value !== "string") return "";
+  const flat = value.replace(/\s+/g, " ").trim();
+  if (!flat) return "";
+  return clipMission(flat);
+}
+
+/**
+ * Libellé de mission selon l'ORDRE DE REPLI STRICT (aucun résumé inventé) :
+ *  1. le **résumé fourni** avec la demande (`resume`) — affiché tel quel ;
+ *  2. sinon l'**extrait de l'objectif** de la demande (`shortMission`, qui porte
+ *     déjà ses propres replis honnêtes : « mission non communiquée » quand le
+ *     texte n'est que le rôle, « (demande non précisée) » quand il n'y a rien).
+ * Fonction PURE : elle ne déduit jamais un résumé par approximation, elle
+ * choisit simplement la meilleure source DISPONIBLE.
+ * @param {unknown} resume — résumé court fourni avec la demande (facultatif).
+ * @param {string} prompt — texte du dernier prompt réellement envoyé.
+ * @returns {string} libellé de mission, toujours non vide.
+ */
+export function resolveMissionLabel(resume, prompt) {
+  const provided = normalizeMissionResume(resume);
+  if (provided) return provided;
+  return shortMission(prompt);
 }
 
 /**
@@ -460,7 +510,7 @@ export function shortMission(text) {
  *  - les missions EN ATTENTE (files d'attente de délégation / de run) sont
  *    ajoutées avec `waiting: true` (mention « en attente » à l'affichage).
  * @param {Array} list — liste aplatie (flattenAgents).
- * @param {Array<{project: string, mission: string}>} [queued] — missions en file.
+ * @param {Array<{project: string, mission: string, resume?: string}>} [queued] — missions en file.
  * @returns {Array<{agent: string, project: string, mission: string, waiting: boolean}>}
  */
 export function buildRunningMissions(list, queued) {
@@ -470,7 +520,10 @@ export function buildRunningMissions(list, queued) {
     out.push({
       agent: a.label || "",
       project: a.project || "Assistant",
-      mission: shortMission(a.prompt),
+      // Ordre de repli strict : résumé FOURNI avec la demande, sinon extrait de
+      // l'objectif du prompt, sinon libellé honnête (shortMission). La forme de
+      // l'entrée reste identique (`resume` n'est pas recopié).
+      mission: resolveMissionLabel(a.resume, a.prompt),
       waiting: false,
     });
   }
@@ -479,7 +532,7 @@ export function buildRunningMissions(list, queued) {
     out.push({
       agent: q.agent || "",
       project: q.project || "Assistant",
-      mission: shortMission(q.mission),
+      mission: resolveMissionLabel(q.resume, q.mission),
       waiting: true,
     });
   }
@@ -516,9 +569,10 @@ function missionWho(m) {
  *
  * Deux groupes EXPLICITES et NUMÉROTÉS — « En cours (n) » puis « En attente (n) » —
  * pour que l'on voie d'un coup d'œil ce qui tourne ET dans quel ordre la file
- * attend. Chaque ligne porte son RANG, l'AGENT et le PROJET concernés, puis la
- * phrase de mission (plafonnée à `MISSION_MAX_CHARS`). Aucune mission → message
- * explicite, jamais une liste vide trompeuse.
+ * attend. Chaque ligne porte son RANG puis, **EN PREMIÈRE POSITION**, la phrase
+ * de mission (résumé court fourni avec la demande, sinon extrait de l'objectif) ;
+ * l'AGENT et le PROJET concernés viennent ensuite, sur la ligne secondaire.
+ * Aucune mission → message explicite, jamais une liste vide trompeuse.
  * @param {Array<{agent, project, mission, waiting}>} missions — buildRunningMissions.
  * @returns {string} HTML du volet.
  */
@@ -534,10 +588,10 @@ export function renderMissionsPanelHtml(missions) {
         (m, i) => `
         <div class="sa-task-item${isWaiting ? " waiting" : " running"}">
           <div class="sa-task-head">
-            <span class="sa-task-title"><span class="sa-missions-rank">${i + 1}.</span>${esc(missionWho(m))}</span>
+            <span class="sa-task-title"><span class="sa-missions-rank">${i + 1}.</span>${esc(m.mission)}</span>
             <span class="sa-task-status ${isWaiting ? "tone-todo" : "tone-progress"}">${isWaiting ? "en attente" : "en cours"}</span>
           </div>
-          <div class="sa-task-meta">${esc(m.mission)}</div>
+          <div class="sa-task-meta">${esc(missionWho(m))}</div>
         </div>`
       )
       .join("");
