@@ -170,9 +170,12 @@ projet (ouverture, fermeture, bascule).
   vérité est « la session **travaille** », jamais « un onglet est ouvert ».
   Une session qui **travaille** (`busy`, ou `toolInProgress`, ou `isWorking`
   annoncé par le backend — fonction pure `isAgentWorking`) est **toujours
-  listée**, onglet ou non, et porte le repère **« arrière-plan »** quand son
-  onglet est fermé (`isWorkingWithoutTab`) : l'entrée dit d'un coup d'œil
-  l'agent, son projet et le fait qu'il travaille sans onglet. Une session qui
+  listée**, onglet ou non : l'entrée dit d'un coup d'œil l'agent et son projet
+  (pastille respirante + nom ; nom en gras quand la session travaille sans
+  onglet, `isWorkingWithoutTab`). **Aucune mention « arrière-plan »** n'est
+  affichée dans cette liste, ni en texte, ni en infobulle (décision du
+  propriétaire : information inutile ; le repère explicite reste dans la fiche
+  de l'agent et dans le panneau Activité de l'onglet 🎭 Agents). Une session qui
   ne travaille pas n'apparaît que si son onglet est ouvert (`visible`) ou si
   son processus pi est **encore vivant** (`alive`, agent « parké » lors d'une
   bascule de projet, agent **délégué par l'assistant** entre deux tours) ;

@@ -1233,21 +1233,23 @@ describe("flattenAgents — travail effectif et visibilite d'onglet propages", (
   });
 });
 
-describe("renderDropdown — l'entree dit « travaille en arriere-plan »", () => {
-  it("affiche le badge arriere-plan pour une session qui travaille sans onglet", () => {
+describe("renderDropdown — la liste des agents (haut droite) ne dit JAMAIS « arriere-plan »", () => {
+  it("une session qui travaille sans onglet garde son entree (agent, projet, nom en gras) SANS mention « arriere-plan »", () => {
     const list = flattenAgents(makeSupervision([session({ state: "running", visible: false, alive: true, prompt: "Corriger la recherche" })]));
     const html = renderDropdown(list);
-    // Badge DEDIE (element), pas seulement une mention dans le tooltip.
-    expect(html).toContain('class="agent-activity-item-bg"');
-    expect(html).toMatch(/agent-activity-item-bg[^>]*>arrière-plan</);
+    // Le signal « travaille sans onglet » reste porte, mais SILENCIEUSEMENT :
+    // classe de style + pastille respirante. Plus aucun chip, plus aucun texte.
     expect(html).toContain("working-background");
     expect(html).toContain("codeur");
     expect(html).toContain("pilot");
     // La pastille respire : la session travaille, onglet ou non.
     expect(html).toMatch(/agent-activity-item-dot\s*breathing/);
+    // Le mot a disparu de la liste, chip ET infobulle comprises.
+    expect(html).not.toContain("arrière-plan");
+    expect(html).not.toContain("agent-activity-item-bg");
   });
 
-  it("n'affiche AUCUN badge arriere-plan pour un agent avec onglet ouvert", () => {
+  it("n'affiche AUCUNE mention « arriere-plan » pour un agent avec onglet ouvert", () => {
     const list = flattenAgents(makeSupervision([session({ state: "running", visible: true, alive: true })]));
     const html = renderDropdown(list);
     expect(html).not.toContain("agent-activity-item-bg");
@@ -1255,13 +1257,45 @@ describe("renderDropdown — l'entree dit « travaille en arriere-plan »", () =
     expect(html).not.toContain("arrière-plan");
   });
 
-  it("n'affiche AUCUN badge arriere-plan pour une session vivante au repos", () => {
+  it("n'affiche AUCUNE mention « arriere-plan » pour une session vivante au repos", () => {
     const list = flattenAgents(makeSupervision([session({ state: "idle", visible: false, alive: true })]));
     const html = renderDropdown(list);
     expect(html).toContain("agent-activity-item-label");
     expect(html).not.toContain("agent-activity-item-bg");
     expect(html).not.toContain("arrière-plan");
     expect(html).not.toMatch(/agent-activity-item-dot\s*breathing/);
+  });
+
+  it("fige l'absence du mot pour TOUS les etats, y compris la liste en affichage seul (mode immersif)", () => {
+    // Discriminant : le rendu de la liste est PARTAGE entre la liste deroulante
+    // standard et le resume repliable du mode « Assistant Only » immersif
+    // (`renderStaticAgentList`). Les deux doivent etre muets.
+    const list = flattenAgents(
+      makeSupervision([
+        session({ state: "running", visible: false, alive: true }),
+        session({ agent: "reviewer", state: "running", visible: true, alive: true }),
+        session({ agent: "planificateur", state: "idle", visible: false, alive: true }),
+      ])
+    );
+    for (const html of [renderDropdown(list), renderStaticAgentList(list)]) {
+      expect(html).not.toContain("arrière-plan");
+      expect(html).not.toContain("arriere-plan");
+      expect(html).not.toContain("agent-activity-item-bg");
+      // Aucune trace laissee par le retrait : ni separateur orphelin, ni
+      // parentheses vides, ni double espace dans un libelle/infobulle, ni
+      // ponctuation isolee.
+      expect(html).not.toMatch(/—\s*[<|"]/);
+      expect(html).not.toContain("()");
+      expect(html).not.toMatch(/\s—\s*$/m);
+      // Infobulle = nom, et projet s'il existe : « nom — projet », rien de plus.
+      for (const title of html.match(/title="[^"]*"/g) || []) {
+        expect(title).not.toMatch(/\s{2,}/);
+        expect(title).not.toMatch(/—\s*"/);
+      }
+    }
+    // Les informations affichees restent identiques : agent + projet + pastille.
+    expect(renderDropdown(list)).toContain("agent-activity-item-project");
+    expect(renderDropdown(list)).toMatch(/agent-activity-item-dot\s*breathing/);
   });
 });
 

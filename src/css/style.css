@@ -1405,18 +1405,9 @@ body.theme-light.theme-tokyo-day {
   text-overflow: ellipsis;
   max-width: 70px;
 }
-/* Travail SANS ONGLET (regle 1) : la liste dit en un coup d'oeil que l'agent
-   travaille en arriere-plan (aucun onglet ouvert). Style discret, coherent
-   avec les badges d'etat du theme. */
-.agent-activity-item-bg {
-  flex-shrink: 0;
-  font-size: var(--font-xs);
-  padding: 1px 6px;
-  border-radius: 10px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  white-space: nowrap;
-}
+/* Travail SANS ONGLET (regle 1) : plus de chip « arriere-plan » dans la liste
+   (decision proprietaire : mention inutile). Le signal reste porte par le nom
+   en gras ci-dessous et par la pastille respirante. */
 .agent-activity-item.working-background .agent-activity-item-label {
   font-weight: 600;
 }

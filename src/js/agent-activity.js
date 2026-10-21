@@ -734,7 +734,14 @@ export function mountCollapsibleAgentList(host) {
 /** Rendu HTML de la liste déroulante (fond solide teinté violet, un item par agent).
  * Affiche la pastille (cercle) ainsi que le nom de l'agent, et son projet s'il
  * est présent. Le nom complet (avec projet) reste accessible au survol via un
- * tooltip (title) sur le bouton. */
+ * tooltip (title) sur le bouton.
+ *
+ * Décision propriétaire : plus AUCUNE mention « arrière-plan » dans cette liste
+ * (ni chip visible, ni suffixe d'infobulle) — le mot n'apportait rien et
+ * alourdissait la rangée. Le signal « travaille sans onglet » reste porté
+ * silencieusement par la classe `working-background` (nom en gras) et par la
+ * pastille respirante ; la fiche (`renderCard`) et le panneau Activité de
+ * l'onglet Agents gardent, eux, leur libellé explicite. */
 export function renderDropdown(list) {
   if (!list.length) {
     return '<div class="agent-activity-empty">Aucun agent actif</div>';
@@ -742,11 +749,10 @@ export function renderDropdown(list) {
   return list
     .map(
       (a) => `
-    <button class="agent-activity-item${isWorkingWithoutTab(a) ? " working-background" : ""}" data-agent-id="${esc(a.agentId)}" data-kind="${esc(a.kind)}" title="${esc(a.label)}${a.project ? " — " + esc(a.project) : ""}${isWorkingWithoutTab(a) ? " — travaille en arrière-plan (aucun onglet ouvert)" : ""}">
+    <button class="agent-activity-item${isWorkingWithoutTab(a) ? " working-background" : ""}" data-agent-id="${esc(a.agentId)}" data-kind="${esc(a.kind)}" title="${esc(a.label)}${a.project ? " — " + esc(a.project) : ""}">
       <span class="agent-activity-item-dot ${isAgentWorking(a) ? "breathing" : ""} ${a.kind === "superagent" ? "superagent" : ""}"></span>
       <span class="agent-activity-item-label">${esc(a.label)}</span>
       ${a.project ? `<span class="agent-activity-item-project">${esc(a.project)}</span>` : ""}
-      ${isWorkingWithoutTab(a) ? '<span class="agent-activity-item-bg" title="Travaille en arrière-plan : aucun onglet ouvert">arrière-plan</span>' : ""}
     </button>`
     )
     .join("");
