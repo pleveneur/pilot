@@ -1063,6 +1063,25 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - Dans une même mission, agents du registre et agents jetables peuvent
   cohabiter : seuls les jetables disparaissent ensuite.
 
+### Écrire un fichier : il faut un agent qui écrit
+- Un agent **lecture seule** ne modifie **aucun** fichier : il analyse, planifie
+  ou rend un avis. Si on lui demande **explicitement** d'écrire, de créer ou de
+  modifier un fichier, Pilot **refuse le lancement** : rien ne démarre et le
+  message nomme l'agent, rappelle qu'il ne modifie aucun fichier et indique la
+  sortie (désigner un agent qui écrit, par exemple le codeur).
+- Le refus ne vise **que** les demandes claires. Une demande de **lecture**
+  (« analyse », « vérifie », « relis »…) part normalement, et une demande
+  **ambiguë** aussi (dans le doute, l'agent est lancé comme avant). Une mission
+  qui contient **au moins un agent qui écrit** n'est jamais refusée.
+- **Fichiers attendus** : quand la demande **déclare** les fichiers réellement
+  attendus, Pilot vérifie **en fin de tâche** que **chacun existe**. Un fichier
+  déclaré **absent** fait **échouer** la tâche avec un message qui le nomme et
+  dit où il était attendu — jamais « terminé » sans le fichier. Présent (même
+  vide), la tâche se déroule comme avant, avec une confirmation.
+- **Sans fichier déclaré, rien ne change.** Ce contrôle s'applique aussi aux
+  **agents jetables** et aux demandes **mises en file** (vérification au moment
+  où la tâche se termine réellement).
+
 ### Conseils
 - Donnez un modèle puissant au coordinateur : c'est lui qui route les tâches.
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
@@ -1916,6 +1935,32 @@ uniquement un bloc d'instructions dans le prompt système.
 - Un agent **réutilisable** (que vous voulez retrouver plus tard) se crée
   toujours normalement : c'est l'agent « sur mesure » du registre.
 <!-- /HELP:super-agent-agent-jetable -->
+
+<!-- HELP:super-agent-livrable -->
+### Écrire un fichier : le bon agent, et une preuve à la fin
+- Un agent marqué **lecture seule** n'écrit **jamais** de fichier : il analyse,
+  planifie ou rend un avis. Si la demande lui demande **explicitement** d'écrire,
+  de créer ou de modifier un fichier, Pilot **refuse de lancer** : rien ne
+  démarre, et le message dit **quel agent** a été visé, **pourquoi** (il ne
+  modifie aucun fichier) et **quoi faire** (désigner un agent qui écrit, par
+  exemple le codeur).
+- Le refus ne concerne **que** les demandes claires : une demande de **lecture**
+  part normalement, une demande **ambiguë** aussi (dans le doute, l'agent est
+  lancé comme avant). Une mission qui contient **au moins un agent qui écrit**
+  n'est jamais refusée.
+- **La preuve du livrable** : quand la demande **déclare les fichiers attendus**,
+  Pilot vérifie **à la fin de la tâche** que chacun existe réellement sur le
+  disque. Un fichier déclaré **absent** fait **échouer** la tâche, avec un
+  message qui nomme le fichier manquant et le dossier où il était attendu — vous
+  n'obtiendrez jamais « terminé » sur un fichier qui n'existe pas. Un fichier
+  présent (même vide) donne le déroulement habituel, plus une confirmation.
+- **Sans fichier déclaré, rien ne change** : les demandes existantes se
+  comportent exactement comme avant.
+- Cela vaut pour les **deux écrans de lancement** (agents du projet, agents
+  d'assistant), pour la **délégation directe**, pour les **agents jetables** et
+  pour les demandes **mises en file** (la vérification a lieu quand la tâche se
+  termine réellement).
+<!-- /HELP:super-agent-livrable -->
 
 <!-- HELP:file-attente-identite-mission -->
 ### Une demande en attente garde son identité (jamais perdue en silence)

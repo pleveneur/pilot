@@ -762,6 +762,32 @@ uniquement un bloc d'instructions dans le prompt système.
   toujours normalement : c'est l'agent « sur mesure » du registre.
 <!-- /HELP:super-agent-agent-jetable -->
 
+<!-- HELP:super-agent-livrable -->
+### Écrire un fichier : le bon agent, et une preuve à la fin
+- Un agent marqué **lecture seule** n'écrit **jamais** de fichier : il analyse,
+  planifie ou rend un avis. Si la demande lui demande **explicitement** d'écrire,
+  de créer ou de modifier un fichier, Pilot **refuse de lancer** : rien ne
+  démarre, et le message dit **quel agent** a été visé, **pourquoi** (il ne
+  modifie aucun fichier) et **quoi faire** (désigner un agent qui écrit, par
+  exemple le codeur).
+- Le refus ne concerne **que** les demandes claires : une demande de **lecture**
+  part normalement, une demande **ambiguë** aussi (dans le doute, l'agent est
+  lancé comme avant). Une mission qui contient **au moins un agent qui écrit**
+  n'est jamais refusée.
+- **La preuve du livrable** : quand la demande **déclare les fichiers attendus**,
+  Pilot vérifie **à la fin de la tâche** que chacun existe réellement sur le
+  disque. Un fichier déclaré **absent** fait **échouer** la tâche, avec un
+  message qui nomme le fichier manquant et le dossier où il était attendu — vous
+  n'obtiendrez jamais « terminé » sur un fichier qui n'existe pas. Un fichier
+  présent (même vide) donne le déroulement habituel, plus une confirmation.
+- **Sans fichier déclaré, rien ne change** : les demandes existantes se
+  comportent exactement comme avant.
+- Cela vaut pour les **deux écrans de lancement** (agents du projet, agents
+  d'assistant), pour la **délégation directe**, pour les **agents jetables** et
+  pour les demandes **mises en file** (la vérification a lieu quand la tâche se
+  termine réellement).
+<!-- /HELP:super-agent-livrable -->
+
 <!-- HELP:file-attente-identite-mission -->
 ### Une demande en attente garde son identité (jamais perdue en silence)
 Quand l'Assistant met une demande en **file d'attente** (un agent travaille déjà
@@ -2158,6 +2184,28 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   garde-fou (`super_agent_fixed_prompt_stays_under_budget`) échoue si le total
   des textes fixes dépasse le plafond `SUPER_AGENT_FIXED_PROMPT_BUDGET`
   (5 550 caractères, mesuré à 5 497).
+- **Garde-fou du livrable (défaut « l'agent rend un plan »)** : deux verrous
+  ferment le trou où une demande d'écriture rendait un texte et Pilot annonçait
+  « terminé » sans fichier.
+  1. **Refus au lancement** : si **tous** les agents visés sont en **lecture
+     seule** (`readonly`) ET que la demande demande **explicitement** d'écrire
+     (`expected_files` fourni, ou verbe d'écriture **et** cible de fichier
+     identifiable), `run_agents`, `run_assistant_agents` et `delegate_to_coder`
+     renvoient une **erreur d'outil nommant l'agent, la raison et la sortie** —
+     aucun processus n'est démarré, aucun agent jetable ne subsiste. Détection
+     **conservatrice** (module pur `src/js/deliverable-guard.js` :
+     `detectExplicitWriteRequest`, négations neutralisées) : pas de cible de
+     fichier ⇒ aucune décision, la demande part comme avant.
+  2. **Preuve du livrable** : `run_agents` / `run_assistant_agents` acceptent un
+     champ **facultatif `expected_files`** (chemins relatifs au projet, ou à
+     l'espace `~/.pilot/assistant`, exposé par `get_assistant_workspace`). Le bus
+     (`agents-bus.js`, `verifyExpectedFiles`) vérifie **l'existence** de chaque
+     fichier en fin de mission : **absent ⇒ mission en ÉCHEC** (`settleMission`
+     `error`) avec un message factuel nommant le fichier et le dossier de
+     référence ; **présent ⇒ comportement inchangé + confirmation**. L'existence
+     seule compte (un fichier vide est conforme) et une sonde indisponible
+     n'échoue **jamais** la tâche. **Sans `expected_files`, rien ne change**
+     (rétrocompatibilité totale). Couverture : `garde-fou-livrable.test.js`.
 
 <!-- HELP:super-agent-mcp -->
 ### MCP piloté par l'Assistant

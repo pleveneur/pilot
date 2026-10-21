@@ -58,6 +58,11 @@ import { nextMissionId, makeMissionIdentity, annotateMissionReport, stampQueuedM
 // mémoire seule (aucune ligne dans la table `agents`), qui n'existe que le temps
 // de la tâche. Purge assurée à la fin de la mission (`settleRun`).
 import { buildEphemeralAgent, persistEphemeralAgent, disposeEphemeralAgents, isEphemeralAgentId } from "./ephemeral-agents.js";
+// GARDE-FOU DU LIVRABLE (défaut « l'agent rend un plan ») : refus au lancement
+// d'une demande d'ÉCRITURE adressée à un agent en LECTURE SEULE, et vérification
+// des fichiers réellement attendus sur disque (`expected_files`). Sans demande
+// d'écriture explicite ni fichier déclaré, RIEN ne change (rétrocompatibilité).
+import { normalizeExpectedFiles, readOnlyWriteRefusalMessage } from "./deliverable-guard.js";
 // MISSION P3 (défaut D3) : IDENTITÉ DE PROJET normalisée, SOURCE UNIQUE.
 // La file de missions, les états de délégation et les drapeaux de run étaient
 // indexés par le chemin BRUT : deux écritures du même dossier (« G:\IA_PL\pilot »
@@ -4627,6 +4632,33 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // Identifiants de la mission = agents du registre + agents jetables (ces
         // derniers ne peuvent pas être « inconnus » : ils viennent d'être créés).
         for (const built of ephemeralAgents) agentIds.push(built.id);
+        // GARDE-FOU LIVRABLE (1/2) — REFUS AU LANCEMENT. Une demande qui demande
+        // EXPLICITEMENT d'écrire/créer/modifier un fichier et qui ne vise QUE des
+        // agents en lecture seule est refusée AVANT tout démarrage : sinon Pilot
+        // annonce « tâche terminée » sur un fichier qui n'existera jamais (défaut
+        // du rapport rapport-diagnostic-agent-rend-un-plan.md). Le refus NOMME
+        // l'agent, la raison et la sortie, et remonte à l'assistant comme une
+        // erreur d'outil — il n'échoue pas en silence. Dans le doute (pas de verbe
+        // d'écriture, pas de cible de fichier) : aucune décision, on lance comme
+        // avant.
+        const expectedFiles = normalizeExpectedFiles(info.expected_files);
+        const requestedAgents = agentIds
+          .map((aid) => {
+            const ag = (registry.agents || []).find((a) => a && a.id === aid);
+            if (ag) return { id: ag.id, name: ag.name || ag.id, readonly: ag.readonly === true };
+            const eph = ephemeralAgents.find((a) => a.id === aid);
+            return eph ? { id: eph.id, name: eph.name || eph.id, readonly: eph.readonly === true } : null;
+          })
+          .filter(Boolean);
+        const readOnlyRefusal = readOnlyWriteRefusalMessage({ tool: "run_agents", agents: requestedAgents, task, expectedFiles });
+        if (readOnlyRefusal) {
+          // Aucun agent n'a été lancé : les agents jetables préparés pour cette
+          // demande n'ont plus lieu d'exister (aucune session, rien en base).
+          disposeEphemeralAgents(agentIds, ephemeralScope || null).catch(() => {});
+          appendSystemMessage(messagesEl, `⛔ ${readOnlyRefusal}`);
+          await respondSuperAgent(id, JSON.stringify({ error: readOnlyRefusal, launched: false }), false);
+          return;
+        }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche sur les agents : ${agentIds.join(", ")}…`);
         // Anti-boucle : l'enveloppe de brief STRUCTURÉ (contexte/objectif/
         // consignes/ce qu'il ne faut PAS faire) est appliquée ICI, côté
@@ -4641,7 +4673,19 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           forceStructured: configCache.super_agent_force_structured_brief !== false,
           qualityGate: configCache.super_agent_quality_gate !== false,
         }), targetProject || window._pilotProjectPath || null, task);
-        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject, mcp_server: mcpServer, resume }));
+        const assignments = agentIds.map((aid) => ({
+          agentId: aid,
+          brief,
+          project: targetProject,
+          mcp_server: mcpServer,
+          resume,
+          // GARDE-FOU LIVRABLE (2/2) : fichiers déclarés comme réellement
+          // attendus sur disque (chemins relatifs au projet) + dossier de
+          // référence où les chercher en fin de mission. Vides ⇒ comportement
+          // antérieur, inchangé.
+          expectedFiles,
+          expectedFilesBase: targetProject || window._pilotProjectPath || null,
+        }));
         // Nature de la mission : LECTURE seulement si TOUS les agents demandés
         // sont en lecture seule (registre des agents, champ `readonly`). Une
         // mission de LECTURE est partagée ; une MODIFICATION est exclusive sur
@@ -5042,6 +5086,36 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           await respondSuperAgent(id, JSON.stringify({ error: unknownAgentsError(missing, registry) }), false);
           return;
         }
+        // GARDE-FOU LIVRABLE (1/2) — REFUS AU LANCEMENT, mêmes règles que
+        // `run_agents` (les agents d'assistant sont soumis aux mêmes garanties) :
+        // une demande d'ÉCRITURE explicite visant uniquement des agents en
+        // lecture seule ne démarre rien et le dit, avec la sortie à suivre.
+        const expectedFiles = normalizeExpectedFiles(info.expected_files);
+        const requestedAgents = agentIds.map((aid) => {
+          const ag = (registry.agents || []).find((a) => a && a.id === aid);
+          return ag ? { id: ag.id, name: ag.name || ag.id, readonly: ag.readonly === true } : { id: aid, name: aid, readonly: false };
+        });
+        const readOnlyRefusal = readOnlyWriteRefusalMessage({
+          tool: "run_assistant_agents",
+          agents: requestedAgents,
+          task,
+          expectedFiles,
+        });
+        if (readOnlyRefusal) {
+          appendSystemMessage(messagesEl, `⛔ ${readOnlyRefusal}`);
+          await respondSuperAgent(id, JSON.stringify({ error: readOnlyRefusal, launched: false }), false);
+          return;
+        }
+        // GARDE-FOU LIVRABLE (2/2) : dossier de référence des livrables déclarés
+        // = espace fourni, sinon l'espace réservé des agents d'assistant.
+        let expectedFilesBase = workspace;
+        if (expectedFiles.length > 0 && !expectedFilesBase) {
+          try {
+            expectedFilesBase = await invoke("get_assistant_workspace");
+          } catch (_) {
+            expectedFilesBase = null; // vérification annoncée comme impossible, jamais un faux échec
+          }
+        }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche d'assistant sur les agents : ${agentIds.join(", ")}…`);
         // Enveloppe de brief STRUCTURÉ (même mécanisme que run_agents) pour que
         // l'agent d'assistant réussisse du premier coup. Aucun projet cible ici
@@ -5053,7 +5127,17 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         }), null, task);
         // Projet réservé : l'agent d'assistant n'est lié à aucun projet.
         const target = ASSISTANT_SPACE;
-        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: target, mcp_server: mcpServer, resume }));
+        const assignments = agentIds.map((aid) => ({
+          agentId: aid,
+          brief,
+          project: target,
+          mcp_server: mcpServer,
+          resume,
+          // GARDE-FOU LIVRABLE : mêmes règles que `run_agents` (fichiers
+          // déclarés vérifiés en fin de mission, échec explicite si absent).
+          expectedFiles,
+          expectedFilesBase: expectedFilesBase || null,
+        }));
         const projectPath = window._pilotProjectPath || null;
         let runSettled = false;
         // RÈGLE 4 : identité de la mission d'assistant (même mécanisme que
@@ -5509,6 +5593,20 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         // explicite (id demandé) et AUCUN lancement.
         const detail = target.error || "agent cible introuvable";
         appendSystemMessage(messagesEl, `❌ Délégation annulée : ${detail}. Aucun agent n'a été lancé.`);
+        await respondSuperAgentAction(id, false);
+        return;
+      }
+      // GARDE-FOU LIVRABLE (1/2) — MÊME refus au lancement que `run_agents` : une
+      // demande qui demande EXPLICITEMENT d'écrire un fichier ne part pas vers un
+      // agent en LECTURE SEULE (elle serait « terminée » sans aucun fichier).
+      // L'agent cible est déjà résolu : le refus le NOMME et ne lance rien.
+      const delegationRefusal = readOnlyWriteRefusalMessage({
+        tool: "delegate_to_coder",
+        agents: [{ id: target.id, name: target.name, readonly: target.readonly === true }],
+        task: String(info.request || ""),
+      });
+      if (delegationRefusal) {
+        appendSystemMessage(messagesEl, `⛔ ${delegationRefusal}`);
         await respondSuperAgentAction(id, false);
         return;
       }
@@ -6224,16 +6322,18 @@ export function resolveDelegationTargetDecision({ requestedAgentId, requested })
       ok: false,
       id: null,
       name: null,
+      readonly: false,
       error: "Aucun agent n'a été désigné pour cette tâche. Précise quel agent doit la faire",
     };
   }
   if (requested && requested.id) {
-    return { ok: true, id: requested.id, name: requested.name || requested.id, error: null };
+    return { ok: true, id: requested.id, name: requested.name || requested.id, readonly: requested.readonly === true, error: null };
   }
   return {
     ok: false,
     id: null,
     name: null,
+    readonly: false,
     error: `agent demandé introuvable : « ${requestedAgentId} »`,
   };
 }
@@ -6268,7 +6368,9 @@ async function lookupAgent(agentId, projectPath) {
   for (const scope of scopes) {
     try {
       const agent = await invoke("get_agent", { agentId, projectPath: scope });
-      if (agent && agent.id) return { id: agent.id, name: agent.name || agent.id };
+      if (agent && agent.id) {
+        return { id: agent.id, name: agent.name || agent.id, readonly: agent.readonly === true };
+      }
     } catch (_) {}
   }
   return null;

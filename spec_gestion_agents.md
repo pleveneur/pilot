@@ -52,6 +52,25 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - Dans une même mission, agents du registre et agents jetables peuvent
   cohabiter : seuls les jetables disparaissent ensuite.
 
+### Écrire un fichier : il faut un agent qui écrit
+- Un agent **lecture seule** ne modifie **aucun** fichier : il analyse, planifie
+  ou rend un avis. Si on lui demande **explicitement** d'écrire, de créer ou de
+  modifier un fichier, Pilot **refuse le lancement** : rien ne démarre et le
+  message nomme l'agent, rappelle qu'il ne modifie aucun fichier et indique la
+  sortie (désigner un agent qui écrit, par exemple le codeur).
+- Le refus ne vise **que** les demandes claires. Une demande de **lecture**
+  (« analyse », « vérifie », « relis »…) part normalement, et une demande
+  **ambiguë** aussi (dans le doute, l'agent est lancé comme avant). Une mission
+  qui contient **au moins un agent qui écrit** n'est jamais refusée.
+- **Fichiers attendus** : quand la demande **déclare** les fichiers réellement
+  attendus, Pilot vérifie **en fin de tâche** que **chacun existe**. Un fichier
+  déclaré **absent** fait **échouer** la tâche avec un message qui le nomme et
+  dit où il était attendu — jamais « terminé » sans le fichier. Présent (même
+  vide), la tâche se déroule comme avant, avec une confirmation.
+- **Sans fichier déclaré, rien ne change.** Ce contrôle s'applique aussi aux
+  **agents jetables** et aux demandes **mises en file** (vérification au moment
+  où la tâche se termine réellement).
+
 ### Conseils
 - Donnez un modèle puissant au coordinateur : c'est lui qui route les tâches.
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
@@ -211,6 +230,40 @@ reste refusé.
 - **Preuve** : `src/js/agent-jetable.test.js` (aucune commande
 `upsert_agent` / `replace_agents` / `delete_agent` appelée, purge des deux
 étages, arrêt tracé, registre inchangé) + tests Rust d'`agent_service.rs`.
+
+### 3.3 Garde-fou du livrable (lecture seule + fichiers attendus)
+
+Ferme le défaut « l'agent rend un plan » : `readonly` n'était qu'un texte de
+prompt et la fin de mission ne vérifiait aucun fichier.
+
+- **Module pur** `src/js/deliverable-guard.js` (aucune dépendance UI, testé
+  unitairement) :
+  - `detectExplicitWriteRequest(taskText, {expectedFiles})` →
+    `{explicit, verb, target, via}`. `via` ∈ `expected_files` | `file-path` |
+    `file-noun`. Un **verbe d'écriture sans cible de fichier** n'est pas une
+    preuve (`explicit: false`) ; les **négations** sont neutralisées avant
+    analyse (« sans rien modifier », « ne … pas », « without writing »).
+  - `readOnlyWriteRefusalMessage({tool, agents, task, expectedFiles})` →
+    message de refus **ou `null`** : refus seulement si **tous** les agents sont
+    `readonly: true` **et** la demande est explicitement une écriture.
+  - `normalizeExpectedFiles`, `verifyExpectedFiles({declared, base, invokeFn})`
+    (résolution via `resolvePath` d'`orchestration.js` + `file_exists`),
+    `deliverableFailed` (vrai **seulement** si `missing.length > 0`),
+    `deliverableVerdictText` / `appendDeliverableVerdict`.
+- **Branchement** : `super-agent.js` refuse **avant tout démarrage** dans
+  `run_agents`, `run_assistant_agents` et `delegate_to_coder` (jetons jetables
+  purgés, réponse `{error, launched:false}`) ; les assignments portent
+  `expectedFiles` + `expectedFilesBase` (projet cible, sinon projet actif, sinon
+  espace assistant). `agents-bus.js` (`startParallelRun`) vérifie les fichiers à
+  la fin et livre la mission en **échec** si l'un manque — la **file d'attente**
+  suit la même règle puisque la vérification a lieu à la fin réelle.
+- **Fail-open** : sonde `file_exists` en erreur → `unreadable` (jamais un
+  échec) ; base de référence inconnue → `skipped: true` annoncé.
+- **Rétrocompatibilité** : sans `expected_files`, aucun appel de vérification,
+  aucun texte ajouté.
+- **Preuve** : `src/js/garde-fou-livrable.test.js` (refus lecture seule,
+  lecture acceptée, fichier absent ⇒ échec, présent ⇒ succès, sans champ ⇒
+  inchangé, agent jetable, verrou de source sur les 3 chemins de lancement).
 
 ### Commandes Tauri (compétences)
 

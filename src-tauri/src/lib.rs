@@ -3374,6 +3374,9 @@ pub fn run() {
             rpc::set_agent_model,
             rpc::list_agent_models,
             rpc::list_agent_commands,
+            // GARDE-FOU DU LIVRABLE : espace de référence des agents d'assistant
+            // (vérification des fichiers déclarés d'une mission d'assistant).
+            rpc::get_assistant_workspace,
             agents::check_model_reachable,
             agents::execute_agent_bash,
             agents::compact_agent_context,

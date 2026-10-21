@@ -16,6 +16,11 @@ import { notifyAgentDone } from "./desktop-notify.js";
 import { resetDeferredSound } from "./sound-deferred.js";
 import { buildProjectContext } from "./context-engine.js";
 import { canStartMission } from "./run-policy.js";
+// GARDE-FOU DU LIVRABLE (défaut « l'agent rend un plan ») : les fichiers
+// RÉELLEMENT attendus sur disque, déclarés avec la mission, sont vérifiés en fin
+// de run. Un fichier déclaré ABSENT rend la mission en ÉCHEC explicite — jamais
+// « terminé » sur un simple texte. Sans fichiers déclarés : rien ne change.
+import { normalizeExpectedFiles, verifyExpectedFiles, deliverableFailed, appendDeliverableVerdict } from "./deliverable-guard.js";
 import { buildMemoryBlock } from "./project-memory.js";
 import { buildGraphBlock } from "./code-graph.js";
 // Niveaux de réflexion (T5) : socle pur de ramenage (T1), miroir Rust de T4.
@@ -3060,17 +3065,41 @@ export async function startParallelRun(assignments, projectContext = "", options
     }
   }
 
+  // GARDE-FOU DU LIVRABLE : fichiers déclarés par la mission (facultatif) et
+  // dossier de référence où les chercher (projet de la run, ou espace fourni
+  // par l'appelant pour une mission d'assistant).
+  const declaredDeliverables = normalizeExpectedFiles(
+    (Array.isArray(assignments) ? assignments : []).flatMap((a) => normalizeExpectedFiles(a && a.expectedFiles))
+  );
+  const deliverablesBase =
+    ((Array.isArray(assignments) && assignments.find((a) => a && a.expectedFilesBase)) || {}).expectedFilesBase ||
+    projectOfRunKey(runProject) ||
+    null;
+
   emit("start", { agentId: "parallel", prompt: assignments.map((a) => a.agentId).join(", ") });
   try {
     await dispatchParallel(assignments, async (results) => {
       const aggregated = aggregateParallelResults(results);
+      // GARDE-FOU DU LIVRABLE : l'existence des fichiers déclarés est vérifiée
+      // APRÈS le travail des agents, AVANT toute annonce de fin. Un fichier
+      // déclaré absent fait ÉCHOUER la mission (message factuel nommant le
+      // fichier manquant et le dossier où on l'attendait) ; présent, le
+      // comportement reste celui d'avant, avec une confirmation.
+      const deliverableCheck = declaredDeliverables.length
+        ? await verifyExpectedFiles({
+            declared: declaredDeliverables,
+            base: deliverablesBase,
+            invokeFn: invoke,
+          })
+        : null;
+      const finalText = appendDeliverableVerdict(aggregated, deliverableCheck);
       // Statut de la MISSION : une run dont AUCUNE part n'a produit de livrable
       // est un ÉCHEC, pas un succès avec du texte vide. C'est la voie par
       // laquelle le plan-maker « qui s'arrête sans plan » était rapporté comme
       // réussi à l'Assistant (mission 384).
-      const missionFailed = parallelMissionFailed(results);
-      emit("parallelDone", { results });
-      emit("done", { agentId: "parallel", text: aggregated });
+      const missionFailed = parallelMissionFailed(results) || deliverableFailed(deliverableCheck);
+      emit("parallelDone", { results, deliverableCheck });
+      emit("done", { agentId: "parallel", text: finalText });
       // Objectif 5 : les agents lancés (run_agents) ont fini leur mission —
       // remettre leur statut au repos (sinon « Running » à vie).
       await resetAgentsProcState(assignments.map((a) => a.agentId), runProject);
@@ -3090,9 +3119,9 @@ export async function startParallelRun(assignments, projectContext = "", options
       // (le planificateur, JAMAIS nommé pour cette mission) en avait exécuté le
       // texte à sa place : aucun fichier, aucun commit.
       if (missionFailed) {
-        settleMission(ctx.runKey, "error", { message: aggregated });
+        settleMission(ctx.runKey, "error", { message: finalText });
       } else {
-        settleMission(ctx.runKey, "done", { text: aggregated });
+        settleMission(ctx.runKey, "done", { text: finalText });
       }
     }, options, runProject, ctx);
   } catch (e) {

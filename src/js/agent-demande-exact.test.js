@@ -155,7 +155,10 @@ describe("(c) agent inconnu : refus explicite, liste des agents disponibles, auc
     expect(unknown.ok).toBe(false);
     expect(unknown.error).toContain("fantome");
     const ok = resolveDelegationTargetDecision({ requestedAgentId: "codeur", requested: { id: "codeur", name: "Codeur" } });
-    expect(ok).toEqual({ ok: true, id: "codeur", name: "Codeur", error: null });
+    // `readonly` est désormais PROPAGÉ avec la cible : c'est lui qui permet à
+    // `delegate_to_coder` de refuser une demande d'écriture adressée à un agent
+    // en lecture seule (garde-fou du livrable). Absent de l'agent ⇒ false.
+    expect(ok).toEqual({ ok: true, id: "codeur", name: "Codeur", readonly: false, error: null });
   });
 });
 

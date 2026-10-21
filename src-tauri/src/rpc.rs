@@ -547,6 +547,19 @@ pub fn stop_agent_session(state: State<AppState>, agent_id: Option<String>, proj
     Ok(())
 }
 
+/// GARDE-FOU DU LIVRABLE (défaut « l'agent rend un plan ») : dossier de travail
+/// réservé des agents d'assistant (`~/.pilot/assistant`).
+///
+/// Exposé à l'interface pour VÉRIFIER l'existence des fichiers déclarés d'une
+/// mission d'assistant (`expected_files`, chemins relatifs à cet espace) : les
+/// agents d'assistant ne sont rattachés à aucun projet réel, il n'y a donc pas
+/// d'autre dossier de référence. Lecture seule : ne modifie aucun contenu.
+#[tauri::command]
+pub fn get_assistant_workspace() -> Result<String, String> {
+    crate::agent_service::AgentService::assistant_workspace()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
 /// Arrêt COMPLET de TOUTES les sessions RPC à la fermeture de Pilot.
 /// Corrige l'issue #14 (processus `plh.exe`/`pi` qui restent en mémoire) :
 /// sur Windows un processus enfant ne meurt pas automatiquement quand son

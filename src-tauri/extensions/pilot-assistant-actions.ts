@@ -168,6 +168,8 @@ export default function (pi: ExtensionAPI) {
       "If no suitable agent exists, prefer an AGENT JETABLE: pass `agents` (objects with `name` + `role`) instead of creating a permanent agent. A throwaway agent exists only for the duration of this task, is never written to the agents database, never appears in the user's agent list, and disappears when the task ends (its work — messages, report — stays visible). Use create_agent only when the role must be reused later.",
       "Pass the absolute path of the target project in `project` when the work must be done on a project that differs from the active one (e.g. the user is on 'pilot' but asks for changes on 'PLh'). If omitted, the active project is used.",
       "ALWAYS pass `resume`: a SHORT phrase (max 120 characters, e.g. 'Corrige l'affichage du panneau des tâches') that says what the task really does. The user reads it FIRST in Pilot's task panel, so write it for a human, in the user's language, not as a copy of the technical task text. It must never be invented or vague ('traiter la demande').",
+      "If the task MUST produce a file, pass `expected_files` (paths relative to the project): Pilot checks at the end of the mission that each declared file exists, and reports an explicit FAILURE naming the missing file instead of a false 'done'. Never declare a file you are not sure is expected.",
+      "Do not ask a READ-ONLY agent (plan-maker, reviewer, architect…) to write a file: Pilot refuses the launch. Pick an agent that writes (e.g. codeur) or a throwaway agent without `readonly`.",
     ],
     parameters: Type.Object({
       agent_ids: Type.Array(Type.String({ description: "Identifiants des agents à utiliser (au moins un, sauf si tu fournis `agents`)" })),
@@ -186,11 +188,12 @@ export default function (pi: ExtensionAPI) {
       task: Type.String({ description: "La tâche à confier aux agents sélectionnés" }),
       resume: Type.Optional(Type.String({ description: "RÉSUMÉ COURT de la tâche pour le panneau des tâches de Pilot : une phrase (≤ 120 caractères) qui dit ce que la tâche fait réellement, dans la langue de l'utilisateur. Affiché EN PREMIER, avant l'agent et le projet. Ne pas recopier la tâche technique ; ne jamais inventer." })),
       project: Type.Optional(Type.String({ description: "Chemin absolu du projet cible (optionnel, défaut = projet actif)" })),
+      expected_files: Type.Optional(Type.Array(Type.String({ description: "Fichiers RÉELLEMENT attendus sur le disque à la fin de la tâche (chemins RELATIFS au projet). Pilot vérifie leur existence en fin de mission : un fichier déclaré ABSENT fait échouer la tâche avec un message qui le nomme (jamais « terminé » sans le fichier). À fournir dès que la demande exige de créer/écrire un fichier ; à omettre pour une tâche d'analyse." }))),
       mcp_server: Type.Optional(Type.String({ description: "Identifiant d'un serveur MCP à connecter pour CET agent (optionnel). À utiliser quand la tâche nécessite les outils MCP d'un serveur que tu as découvert via mcp_state. Sans lui, l'agent ne charge pas MCP, sauf à être l'agent standard." })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ agent_ids: params.agent_ids, agents: params.agents || null, task: params.task, resume: params.resume || null, project: params.project || null, mcp_server: params.mcp_server || null });
+      const payload = JSON.stringify({ agent_ids: params.agent_ids, agents: params.agents || null, task: params.task, resume: params.resume || null, project: params.project || null, mcp_server: params.mcp_server || null, expected_files: params.expected_files || null });
       const result = await ctx.ui.input(RUN_AGENTS_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
@@ -210,17 +213,19 @@ export default function (pi: ExtensionAPI) {
       "Select the agent ids that best fit the task (e.g. a custom agent you created for analysis). Provide a clear, atomic task description.",
       "Do NOT use this tool for work that must happen inside a project — use run_agents (with the project path) instead.",
       "ALWAYS pass `resume`: a SHORT phrase (max 120 characters) that says what the task really does. The user reads it FIRST in Pilot's task panel: write it for a human, in the user's language. Never invent it, never just repeat the technical task text.",
+      "If the task MUST produce a file in the assistant workspace, pass `expected_files` (paths relative to the workspace): Pilot verifies their existence at the end and reports an explicit FAILURE naming any missing file. Do not ask a READ-ONLY agent to write a file: Pilot refuses the launch.",
     ],
     parameters: Type.Object({
       agent_ids: Type.Array(Type.String({ description: "Identifiants des agents d'assistant à utiliser (au moins un)" })),
       task: Type.String({ description: "La tâche à confier aux agents sélectionnés" }),
       resume: Type.Optional(Type.String({ description: "RÉSUMÉ COURT de la tâche pour le panneau des tâches de Pilot : une phrase (≤ 120 caractères) qui dit ce que la tâche fait réellement, dans la langue de l'utilisateur. Affiché EN PREMIER. Ne jamais inventer." })),
       workspace: Type.Optional(Type.String({ description: "Dossier de travail assistant (optionnel, défaut ~/.pilot/assistant)" })),
+      expected_files: Type.Optional(Type.Array(Type.String({ description: "Fichiers RÉELLEMENT attendus sur le disque à la fin de la tâche (chemins RELATIFS à l'espace de travail assistant). Vérifiés en fin de mission : un fichier déclaré ABSENT fait échouer la tâche avec un message qui le nomme. À omettre pour une tâche d'analyse." }))),
       mcp_server: Type.Optional(Type.String({ description: "Identifiant d'un serveur MCP à connecter pour CET agent d'assistant (optionnel), découvert via mcp_state. Sans lui, l'agent ne charge pas MCP." })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, resume: params.resume || null, workspace: params.workspace || null, mcp_server: params.mcp_server || null });
+      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, resume: params.resume || null, workspace: params.workspace || null, mcp_server: params.mcp_server || null, expected_files: params.expected_files || null });
       const result = await ctx.ui.input(RUN_ASSISTANT_AGENTS_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche d'assistant annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
