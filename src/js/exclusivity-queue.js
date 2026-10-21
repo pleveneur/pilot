@@ -7,17 +7,47 @@
 // tâche en cours. Ce module expose la logique pure (clé, enqueue, dequeue,
 // détection de conflit) ; le bus d'agents (agents-bus.js) l'utilise et gère le
 // lancement effectif des runs.
+//
+// MISSION P3 (défaut D3) : l'identité de projet est NORMALISÉE (`project-key.js`,
+// source unique). Deux écritures du même dossier (séparateur Windows, barre
+// finale, casse, chemin relatif) désignent donc la MÊME file — et la même
+// exclusivité — au lieu de deux files jumelles dont l'une devenait invisible.
+
+import { projectKey, sameProject, queueKeyMatchesProject } from "./project-key.js";
 
 /**
  * Clé de file d'attente pour (project, agent_id). Le séparateur U+001F (unit
  * separator) ne peut pas apparaître dans un chemin de projet : il garantit
- * l'absence de collision entre projets.
+ * l'absence de collision entre projets. Le projet est normalisé (identité).
  * @param {string} project
  * @param {string} agentId
  * @returns {string}
  */
 export function exclusivityKey(project, agentId) {
-  return `${project}\u{1f}${agentId}`;
+  return `${projectKey(project)}\u{1f}${agentId}`;
+}
+
+/**
+ * Clé EXISTANTE de la file qui désigne (projet, agent), quelle que soit
+ * l'écriture du chemin de projet (entrée posée avec une autre écriture du même
+ * dossier, y compris par une version antérieure). `null` si aucune.
+ * @param {object} queue - map clé → array d'assignments
+ * @param {string} agentId
+ * @param {string} project
+ * @returns {string|null}
+ */
+export function findExclusivityKey(queue, agentId, project) {
+  if (!queue || typeof queue !== "object") return null;
+  const agent = String(agentId == null ? "" : agentId);
+  const canonical = exclusivityKey(project, agent);
+  if (Object.prototype.hasOwnProperty.call(queue, canonical)) return canonical;
+  for (const key of Object.keys(queue)) {
+    const idx = key.indexOf("\u{1f}");
+    if (idx < 0) continue;
+    if (key.slice(idx + 1) !== agent) continue;
+    if (queueKeyMatchesProject(key, project)) return key;
+  }
+  return null;
 }
 
 /**
@@ -28,7 +58,7 @@ export function exclusivityKey(project, agentId) {
  * @param {object} assignment - { agentId, brief, project }
  */
 export function enqueueExclusivity(queue, agentId, project, assignment) {
-  const key = exclusivityKey(project, agentId);
+  const key = findExclusivityKey(queue, agentId, project) || exclusivityKey(project, agentId);
   if (!queue[key]) queue[key] = [];
   queue[key].push(assignment);
 }
@@ -42,7 +72,7 @@ export function enqueueExclusivity(queue, agentId, project, assignment) {
  * @returns {object|null}
  */
 export function dequeueExclusivity(queue, agentId, project) {
-  const key = exclusivityKey(project, agentId);
+  const key = findExclusivityKey(queue, agentId, project) || exclusivityKey(project, agentId);
   const arr = queue[key];
   if (!arr || arr.length === 0) return null;
   const next = arr.shift();
@@ -79,7 +109,7 @@ export function isAgentActiveOnProject(sessions, agentId, project, now = Date.no
       s.busy &&
       s.alive &&
       s.mode === "agent_process" &&
-      s.project === project &&
+      sameProject(s.project, project) &&
       !isBusyStale(s, now, staleWindowMs)
   );
 }
@@ -201,7 +231,7 @@ export function isAnyAgentWorking(sessions, agentIds, getAgentProject, now = Dat
     // Priorité (agent, projet) : si une session dédiée existe, c'est elle qui
     // tranche seule. Sinon (projet inconnu ou sans session dédiée), on regarde
     // n'importe quelle session vivante de l'agent (prudence, pratique historique).
-    const byProject = proj ? alive.find((s) => s.agent === agentId && s.project === proj) : null;
+    const byProject = proj ? alive.find((s) => s.agent === agentId && sameProject(s.project, proj)) : null;
     const candidates = byProject ? [byProject] : alive.filter((s) => s.agent === agentId);
     if (candidates.some((s) => isSessionWorking(s, now, windowMs))) return true;
   }
@@ -245,6 +275,6 @@ export function classifyExclusivitySession(session, now = Date.now()) {
  * @returns {boolean}
  */
 export function isProjectWorking(sessions, project, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS) {
-  return (sessions || []).some((s) => s && s.project === project && isSessionWorking(s, now, windowMs));
+  return (sessions || []).some((s) => s && sameProject(s.project, project) && isSessionWorking(s, now, windowMs));
 }
 

@@ -80,6 +80,7 @@ import {
   replayQueuedMissionForProject,
   getProjectMissionQueue,
   runAgentsQueueByProject,
+  missionQueueKey,
   enqueueMissionForProject,
   allocateMissionIdentity,
   __resetSuperAgentQueueForTest,
@@ -165,7 +166,8 @@ describe("règle 4a — missions de l'assistant : chaque entrée de file porte S
     expect(b.stampedId).toBeGreaterThan(a.stampedId);
     expect(a.stampedAgentIds).toEqual(["codeur"]);
 
-    const queue = runAgentsQueueByProject[TARGET];
+    // D3 : la file est indexée par l'identité de projet (clé normalisée).
+    const queue = runAgentsQueueByProject[missionQueueKey(TARGET)];
     expect(queue.map((e) => e.label)).toEqual([A, B]);
     // L'accesseur d'interface expose la MÊME identité estampillée (les missions
     // en attente sont nommables par leur numéro de production).
@@ -176,10 +178,10 @@ describe("règle 4a — missions de l'assistant : chaque entrée de file porte S
     const first = queue.shift();
     await first.launch();
     expect(launched).toEqual([A]);
-    expect(runAgentsQueueByProject[TARGET].map((e) => e.label)).toEqual([B]);
+    expect(runAgentsQueueByProject[missionQueueKey(TARGET)].map((e) => e.label)).toEqual([B]);
 
     // Rejeu suivant : c'est B qui part (jamais A une deuxième fois).
-    const second = runAgentsQueueByProject[TARGET].shift();
+    const second = runAgentsQueueByProject[missionQueueKey(TARGET)].shift();
     await second.launch();
     expect(launched).toEqual([A, B]);
     __resetSuperAgentQueueForTest();

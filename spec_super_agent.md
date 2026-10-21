@@ -646,6 +646,26 @@ uniquement un bloc d'instructions dans le prompt système.
   Modules : `mission-identity.js` (identité pure), `agents-bus.js` (file par
   projet + garde de propriétaire), `super-agent.js` (estampille des 3 sites de
   mise en file, étiquetage du compte rendu, abandon tracé).
+- **D3 — une seule identité de projet pour toutes les files et tous les
+  verrous (corrigé)** : la clé d'un projet (index des files de missions, de
+  délégations, d'exclusivité, verrou de run du bus, réservations de fichiers)
+  venait du **chemin brut** à plusieurs endroits, alors qu'un autre module le
+  normalisait déjà. Deux écritures du **même** dossier (« `G:\IA_PL\pilot` »,
+  « `g:/ia_pl/pilot/` ») créaient donc deux files : l'une traitée, l'autre
+  **invisible** (jamais relue, jamais rejouée, jamais abandonnée nommément).
+  La normalisation vit désormais dans **un seul module pur**,
+  `src/js/project-key.js` (`projectKey`, `sameProject`, `projectScopedKey`,
+  `findProjectScopedKey`, `queueKeyMatchesProject`) : `super-agent.js`,
+  `agents-bus.js`, `exclusivity-queue.js` et `reservations.js` s'y réfèrent au
+  lieu de comparer des chaînes. Une **clé n'est jamais un chemin** : le chemin
+  réel reste transmis tel quel au backend et aux agents, et il est mémorisé
+  dans la file d'exclusivité (propriété **symbole**, invisible des itérations)
+  pour que la trace d'un abandon vise le bon dossier. **Aucune migration** :
+  les entrées posées avec une autre écriture du même chemin sont retrouvées
+  (`findExclusivityKey`, `findProjectScopedKey`). Preuve de non-régression :
+  `src/js/project-cle-unicite.test.js` (4 écritures d'un même dossier → **une**
+  file, un ordre, une réservation ; échoue si une structure recomparait le
+  chemin brut).
 
 <!-- HELP:file-attente-identite-mission -->
 ### Une demande en attente garde son identité (jamais perdue en silence)

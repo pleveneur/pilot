@@ -16,7 +16,15 @@ import {
 
 describe("exclusivityKey", () => {
   it("clé composite (project, agent_id) unique", () => {
-    expect(exclusivityKey("/p/A", "codeur")).toBe("/p/A\u{1f}codeur");
+    // D3 : la partie projet est l'identité canonique (`projectKey`), plus le
+    // chemin brut — le séparateur `\u{1f}` et l'identifiant d'agent sont
+    // inchangés.
+    expect(exclusivityKey("/p/A", "codeur")).toBe("/p/a\u{1f}codeur");
+    // Deux écritures du MÊME dossier → la MÊME clé (casse, séparateurs, barre
+    // finale et `./` ignorés) : une seule file, pas deux.
+    expect(exclusivityKey("/p/A", "codeur")).toBe(exclusivityKey("/p/A/", "codeur"));
+    expect(exclusivityKey("/p/A", "codeur")).toBe(exclusivityKey("/p//A/", "codeur"));
+    expect(exclusivityKey("/p/A", "codeur")).toBe(exclusivityKey("\\p\\A", "codeur"));
     // Deux projets différents avec le même agent → clés différentes.
     expect(exclusivityKey("/p/A", "codeur")).not.toBe(exclusivityKey("/p/B", "codeur"));
     // Deux agents du même projet → clés différentes.

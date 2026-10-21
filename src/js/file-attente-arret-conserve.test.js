@@ -75,6 +75,7 @@ vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(), exit: vi.fn() 
 import { invoke } from "@tauri-apps/api/core";
 import {
   runAgentsQueueByProject,
+  missionQueueKey,
   enqueueMissionForProject,
   allocateMissionIdentity,
   keepQueuedRunAgentsMissions,
@@ -85,6 +86,10 @@ import {
 import { __resetMissionIdsForTest } from "./mission-identity.js";
 
 const PROJECT = "G:\\IA_PL\\pilot";
+// D3 : la file des missions est indexée par l'identité de projet (clé
+// normalisée), jamais par le chemin brut — `missionQueueKey` est le seul moyen
+// d'y accéder.
+const queueOf = () => runAgentsQueueByProject[missionQueueKey(PROJECT)];
 const source = (rel) => readFileSync(new URL(rel, new URL("../../", import.meta.url)), "utf8").replace(/\r\n/g, "\n");
 const superAgentSrc = source("src/js/super-agent.js");
 
@@ -167,9 +172,9 @@ describe("P2 (a) — un arrêt d'agent CONSERVE la file non vide", () => {
     // 1) AUCUNE mission n'est détruite : même nombre, même ordre, même identité.
     expect(res.count).toBe(2);
     expect(res.labels).toEqual([`#${ids[0]} « ${labels[0]} »`, `#${ids[1]} « ${labels[1]} »`]);
-    expect(runAgentsQueueByProject[PROJECT]).toHaveLength(2);
-    expect(runAgentsQueueByProject[PROJECT].map((e) => e.id)).toEqual(ids);
-    expect(runAgentsQueueByProject[PROJECT].map((e) => e.label)).toEqual(labels);
+    expect(queueOf()).toHaveLength(2);
+    expect(queueOf().map((e) => e.id)).toEqual(ids);
+    expect(queueOf().map((e) => e.label)).toEqual(labels);
 
     // 2) La trace nomme les missions CONSERVÉES (motif `queue-kept`, jamais
     //    `queue-abandoned` : une conservation n'est pas un abandon).
@@ -207,13 +212,13 @@ describe("P2 (b) — le rejeu juge sur les sessions vivantes, jamais sur le verr
     // seule la session vivante doit faire dire « occupé ».
     const r = await replayQueuedMissionForProject(PROJECT);
     expect(r).toEqual({ replayed: false, reason: "busy" });
-    expect(runAgentsQueueByProject[PROJECT]).toHaveLength(2);
+    expect(queueOf()).toHaveLength(2);
   });
 
   it("session disparue → la mission conservée est REJOUÉE, la suivante reste en file", async () => {
     const launched = [];
     const { labels } = queueTwoMissions();
-    const queue = runAgentsQueueByProject[PROJECT];
+    const queue = queueOf();
     // Chaque entrée rejoue SA propre demande (chemin de production : `shift` +
     // `launchQueuedMission`).
     queue[0].launch = () => {
@@ -236,8 +241,8 @@ describe("P2 (b) — le rejeu juge sur les sessions vivantes, jamais sur le verr
     expect(launched).toEqual([labels[0]]);
     // La mission rejouée n'est plus en file, la SECONDE y est toujours : aucune
     // mission n'a été perdue à l'arrêt (l'ancien code vidait les deux).
-    expect(runAgentsQueueByProject[PROJECT]).toHaveLength(1);
-    expect(runAgentsQueueByProject[PROJECT][0].label).toBe(labels[1]);
+    expect(queueOf()).toHaveLength(1);
+    expect(queueOf()[0].label).toBe(labels[1]);
   });
 });
 

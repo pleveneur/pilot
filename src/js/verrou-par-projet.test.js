@@ -567,7 +567,9 @@ describe("POINT E — run_assistant_agents : file réelle, jamais un faux « que
     const settleIdx = branch.indexOf("const settleRun = (ok, result) => {");
     const startRunIdx = branch.indexOf("const startRun = async (launchOpts = {}) => {");
     const settleBody = branch.slice(settleIdx, startRunIdx);
-    expect(settleBody).toContain("runAgentsQueueByProject[target] || []");
+    // D3 : la file est indexée par l'identité de projet (`missionQueueKey`),
+    // plus par le chemin brut — même file, même vidage.
+    expect(settleBody).toMatch(/const queue = runAgentsQueueByProject\[[^\]]*target[^\]]*\] \|\| \[\];/);
     // Volet (c) du point de suivi 344 : la relance passe par le lancement
     // PROTÉGÉ (un échec ne perd plus la mission ni le verrou du projet).
     expect(settleBody).toContain("launchQueuedMission(target, next)");
@@ -595,7 +597,7 @@ describe("POINT F — l'arrêt d'un agent ne perd plus une mission d'ASSISTANT e
     // Même file et même principe que le point C : clé ASSISTANT_SPACE.
     const assistantKeyIdx = branch.indexOf("const assistantKey = ASSISTANT_SPACE;");
     expect(assistantKeyIdx).toBeGreaterThan(-1);
-    expect(branch).toContain("runAgentsQueueByProject[assistantKey]");
+    expect(branch).toMatch(/runAgentsQueueByProject\[[^\]]*assistantKey[^\]]*\]/);
     // P2 : un arrêt d'agent ne détruit PLUS la file non vide (le verrou de run
     // n'est pas une preuve de disponibilité). La file est CONSERVÉE par le chemin
     // de PRODUCTION unique `keepQueuedRunAgentsMissions` (nommage + journal
@@ -624,8 +626,8 @@ describe("POINT C — l'arrêt d'un agent ne détruit plus la file de missions d
     expect(nextIdx).toBeGreaterThan(stopIdx);
     const branch = src.slice(stopIdx, nextIdx);
     expect(branch).toContain("releaseStuckRunLock(queueKey)");
-    expect(branch).toContain("runAgentsInFlightByProject[queueKey]");
-    expect(branch).toContain("runAgentsQueueByProject[queueKey]");
+    expect(branch).toMatch(/runAgentsInFlightByProject\[[^\]]*queueKey[^\]]*\]/);
+    expect(branch).toMatch(/runAgentsQueueByProject\[[^\]]*queueKey[^\]]*\]/);
     // P2 (D2) : la file n'est plus vidée à l'arrêt — elle est CONSERVÉE par le
     // chemin de PRODUCTION unique (nommage + journal + notification + rejeu armé).
     expect(branch).toContain("keepQueuedRunAgentsMissions(queueKey");

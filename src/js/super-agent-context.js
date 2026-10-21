@@ -15,6 +15,12 @@
 // directe (`delegate_to_coder`). Le bloc est donc VISIBLE dans la conversation
 // de l'agent, separe de la demande elle-meme (elle suit le bloc).
 
+import { normalizeProjectPath } from "./project-key.js";
+
+// Identite de projet : SOURCE UNIQUE (mission P3, defaut D3). Re-exportee ici
+// pour ne pas casser les appelants historiques de ce module.
+export { normalizeProjectPath };
+
 /** Plafond du bloc de contexte joint a une demande deleguee (caracteres). */
 export const MAX_DELEGATION_CONTEXT_CHARS = 700;
 
@@ -27,21 +33,6 @@ export const DELEGATION_CONTEXT_TRUNCATION_NOTICE =
 
 /** Longueur maximale d'une valeur textuelle d'une ligne du bloc. */
 const MAX_VALUE_CHARS = 160;
-
-/**
- * Normalise un chemin de projet pour comparer deux ecritures du meme chemin
- * (separateurs Windows/Unix, casse, barre oblique finale) : le chemin stocke
- * dans la base de suivi et celui fourni par la delegation peuvent differer.
- * @param {string} path
- * @returns {string}
- */
-export function normalizeProjectPath(path) {
-  return String(path == null ? "" : path)
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/\/+$/, "")
-    .toLowerCase();
-}
 
 /**
  * Retrouve le projet SUIVI correspondant a un chemin de projet. Retourne

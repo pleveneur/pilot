@@ -28,6 +28,7 @@
 // run). Les agents HORS de la run restent bloqués sur les fichiers réservés.
 
 import { invoke } from "@tauri-apps/api/core";
+import { projectKey } from "./project-key.js";
 
 const RESERVATIONS_FILE = ".pilot/reservations.json";
 
@@ -137,7 +138,15 @@ export function buildReservations(coderId, files, participantIds = []) {
 // codeur (finishAgentTurn / failAgentTurn). Module-level : persiste tant que
 // l'app est ouverte. Associe chaque projet au coderId qui l'a réservé pour ne
 // libérer les réservations que lorsque le bon codeur termine (pas un autre).
-const reservedProjects = new Map(); // project → coderId
+//
+// D3 : la clé est l'identité de projet (`projectKey`, source UNIQUE de
+// `project-key.js`) et NON le chemin brut. Deux écritures du même dossier
+// (« G:\\IA_PL\\pilot », « g:/ia_pl/pilot », avec barre finale…) désignent donc
+// le MÊME projet : une seule réservation, un seul état. Le chemin RÉEL est
+// conservé dans la valeur (jamais normalisé) : c'est lui qui sert aux accès
+// disque (`reservationsPath`), la normalisation n'étant qu'une clé de
+// comparaison.
+const reservedProjects = new Map(); // projectKey → { coderId, project: chemin réel }
 
 // Battement de cœur des réservations : tant que la run détentrice vit, le
 // fichier est réécrit (`renewedAt`) toutes les 60 s. La porte pré-écriture s'en
@@ -151,13 +160,14 @@ const reservedProjects = new Map(); // project → coderId
 // porte ne pouvait alors JAMAIS libérer les fichiers (défaut constaté). Run
 // disparue → minuteur arrêté et réservation libérée immédiatement.
 const RESERVATION_HEARTBEAT_MS = 60000;
-const reservationHeartbeats = new Map(); // project → intervalId
+const reservationHeartbeats = new Map(); // projectKey → intervalId
 
 function stopReservationHeartbeat(project) {
-  const id = reservationHeartbeats.get(project);
+  const key = projectKey(project);
+  const id = reservationHeartbeats.get(key);
   if (id) {
     clearInterval(id);
-    reservationHeartbeats.delete(project);
+    reservationHeartbeats.delete(key);
   }
 }
 
@@ -180,23 +190,23 @@ function startReservationHeartbeat(project, buildPayload, isRunAlive) {
     invoke("write_file_content", { path: reservationsPath(project), content: buildPayload() }).catch(() => {});
   }, RESERVATION_HEARTBEAT_MS);
   id?.unref?.(); // ne pas maintenir le process Node en vie (tests)
-  reservationHeartbeats.set(project, id);
+  reservationHeartbeats.set(projectKey(project), id);
 }
 
 export function markProjectReserved(project, coderId) {
-  if (project) reservedProjects.set(project, String(coderId || ""));
+  if (project) reservedProjects.set(projectKey(project), { coderId: String(coderId || ""), project });
 }
 
 export function unmarkProjectReserved(project) {
   if (project) {
-    reservedProjects.delete(project);
+    reservedProjects.delete(projectKey(project));
     stopReservationHeartbeat(project);
   }
 }
 
 /** Indique si le projet a des réservations de fichiers actives (bail en cours). */
 export function isProjectReserved(project) {
-  return !!project && reservedProjects.has(project);
+  return !!project && reservedProjects.has(projectKey(project));
 }
 
 /**
@@ -205,7 +215,8 @@ export function isProjectReserved(project) {
  */
 export function isProjectReservedBy(project, agentId) {
   if (!project || !agentId) return false;
-  return reservedProjects.get(project) === String(agentId);
+  const entry = reservedProjects.get(projectKey(project));
+  return !!entry && entry.coderId === String(agentId);
 }
 
 /** Chemin absolu du fichier de réservations d'un projet. */
@@ -252,7 +263,9 @@ export async function writeReservations(project, coderId, files, participantIds 
  * @returns {Promise<void>}
  */
 export async function clearAllReservations() {
-  const projects = Array.from(reservedProjects.keys());
+  // Les clés de la map sont des identités normalisées : le fichier disque doit
+  // être purgé avec le chemin RÉEL mémorisé (la clé n'est pas un chemin).
+  const projects = Array.from(reservedProjects.values()).map((entry) => entry.project);
   for (const project of projects) {
     await deleteReservations(project);
   }

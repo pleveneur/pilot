@@ -53,6 +53,14 @@ import { createReportDeliveryGate } from "./super-agent-reports.js";
 // agents visés). Une demande rejouée porte TOUJOURS la sienne — le rapport livré
 // et le journal d'abandon la NOMMENT, donc une incohérence devient visible.
 import { nextMissionId, makeMissionIdentity, annotateMissionReport, stampQueuedMission, missionQueueLabel } from "./mission-identity.js";
+// MISSION P3 (défaut D3) : IDENTITÉ DE PROJET normalisée, SOURCE UNIQUE.
+// La file de missions, les états de délégation et les drapeaux de run étaient
+// indexés par le chemin BRUT : deux écritures du même dossier (« G:\IA_PL\pilot »
+// et « g:/ia_pl/pilot/ ») produisaient deux files jumelles, dont l'une devenait
+// invisible (jamais lue, jamais rejouée). Toutes les clés de ces maps passent
+// maintenant par `project-key.js`. Le chemin réel reste transmis tel quel au
+// backend : une clé n'est jamais utilisée comme chemin.
+import { projectKey, projectScopedKey, deleteProjectScoped, sameProject } from "./project-key.js";
 import {
   parseMemoryRemovePayload,
   parseMemoryRestorePayload,
@@ -411,9 +419,9 @@ let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: 
 // être étiquetée avec la demande du projet B. Vidée sur agent_end (visible via
 // injectSessionSummaryToSuperAgent, invisible via finalizeInvisibleAgent — les
 // deux appellent flushDelegationQueue avec le projet concerné).
-const delegationStates = new Map(); // clé projet → { busy, queue, pending }
+const delegationStates = new Map(); // clé projet (NORMALISÉE) → { busy, queue, pending }
 export function delegationState(projectPath) {
-  const key = projectPath || "";
+  const key = projectKey(projectPath);
   let st = delegationStates.get(key);
   if (!st) {
     st = { busy: false, queue: [], pending: null };
@@ -460,8 +468,29 @@ let superAgentStderrBuffer = "";
 // file quand l'une est déjà en cours. P1-5 : la finalisation (settleRun) est
 // module-level et passée par inject_session_summary (Rust) → elle survit à la
 // fermeture de l'onglet 🧭 (notification + injection du résultat).
-let runAgentsInFlightByProject = {}; // project → true (run en cours pour ce projet)
-export const runAgentsQueueByProject = {}; // project → [{ launch }]
+let runAgentsInFlightByProject = {}; // project (clé normalisée) → true (run en cours)
+export const runAgentsQueueByProject = {}; // project (clé normalisée) → [{ launch }]
+
+// ── MISSION P3 : clés de projet NORMALISÉES des files/flags de l'assistant ──
+// Une seule écriture par dossier : la clé EXISTANTE si le projet est déjà
+// présent (quelle que soit son écriture), sinon la clé canonique.
+// `missionQueueKey` est exportée pour les tests (et pour tout module qui doit
+// LIRE la file) : la clé n'est PAS un chemin, elle ne sert qu'à indexer.
+export function missionQueueKey(projectPath) {
+  return projectScopedKey(runAgentsQueueByProject, projectPath || "");
+}
+function inFlightKey(projectPath) {
+  return projectScopedKey(runAgentsInFlightByProject, projectPath || "");
+}
+function missionReplayKey(projectPath) {
+  return projectScopedKey(runAgentsQueueReplayByProject, projectPath || "");
+}
+function watchdogKey(projectPath) {
+  return projectScopedKey(runAgentsWatchdogByProject, projectPath || "");
+}
+function delegationReplayKey(projectPath) {
+  return projectScopedKey(delegationQueueReplayByProject, projectPath || "");
+}
 // Filet de sécurité (watchdog) PAR PROJET : si une run ne se termine pas sous
 // quelques minutes (ex: blocage du lancement, verrou graphe), on réinitialise
 // le flag du projet et on vide sa file pour empêcher le blocage permanent des
@@ -519,7 +548,7 @@ export function allocateMissionIdentity(agentIds) {
  * @returns {{entry:object, id:number|null, duplicate:boolean, count:number}}
  */
 export function enqueueMissionForProject(projectPath, launch, label, identity) {
-  const target = projectPath || "";
+  const target = missionQueueKey(projectPath);
   if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
   const queue = runAgentsQueueByProject[target];
   queue.push({ launch });
@@ -539,8 +568,7 @@ export function enqueueMissionForProject(projectPath, launch, label, identity) {
  * @returns {Array<{label:string}>}
  */
 export function getProjectMissionQueue(projectPath) {
-  const target = projectPath || "";
-  return (runAgentsQueueByProject[target] || []).map((entry) => ({
+  return (runAgentsQueueByProject[missionQueueKey(projectPath)] || []).map((entry) => ({
     label: String((entry && entry.label) || "mission de l'assistant"),
     // RÈGLE 4 : identité de la mission (numéro monotone + agents visés), pour
     // que l'interface puisse NOMMER la demande en attente.
@@ -567,7 +595,7 @@ export function getProjectMissionQueue(projectPath) {
  */
 export function pendingMissionsAhead(projectPath, opts = {}) {
   if (opts && opts.dequeue) return 0;
-  return (runAgentsQueueByProject[projectPath || ""] || []).length;
+  return (runAgentsQueueByProject[missionQueueKey(projectPath)] || []).length;
 }
 
 /**
@@ -669,7 +697,7 @@ function traceQueueAbandon({ project, family, labels, reason, detected }) {
  * @returns {number} nombre de missions abandonnées
  */
 export function abandonProjectMissionQueue(projectPath, opts = {}) {
-  const target = projectPath || "";
+  const target = missionQueueKey(projectPath);
   const queue = runAgentsQueueByProject[target];
   const removed = queue ? queue.length : 0;
   if (removed === 0) {
@@ -681,7 +709,9 @@ export function abandonProjectMissionQueue(projectPath, opts = {}) {
   queue.length = 0;
   delete runAgentsQueueByProject[target];
   traceQueueAbandon({
-    project: target,
+    // La trace garde le chemin RÉEL (`projectPath`) : le journal vit DANS le
+    // projet ; `target` n'est qu'une clé de file, jamais un chemin utilisable.
+    project: projectPath || "",
     family: "mission",
     labels,
     reason: opts.reason,
@@ -706,7 +736,7 @@ export function abandonProjectMissionQueue(projectPath, opts = {}) {
  * @returns {Promise<{count:number, labels:string[]}>}
  */
 export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
-  const key = target || "";
+  const key = missionQueueKey(target);
   const queue = runAgentsQueueByProject[key] || [];
   const count = queue.length;
   if (count === 0) {
@@ -726,7 +756,9 @@ export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
   const reason = opts.reason || "queue-abandoned";
   // Trace écrite par le point UNIQUE d'abandon de file (règle 4).
   await traceQueueAbandon({
-    project: key,
+    // Chemin RÉEL pour le journal (le journal vit DANS le projet), la clé
+    // `key` n'étant qu'un index de file.
+    project: target || "",
     family: "mission",
     labels,
     reason,
@@ -767,7 +799,7 @@ export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
  * @returns {Promise<{count:number, labels:string[], replayArmed:boolean}>}
  */
 export async function keepQueuedRunAgentsMissions(target, opts = {}) {
-  const key = target || "";
+  const key = missionQueueKey(target);
   const queue = runAgentsQueueByProject[key] || [];
   const count = queue.length;
   if (count === 0) return { count: 0, labels: [], replayArmed: false };
@@ -775,7 +807,7 @@ export async function keepQueuedRunAgentsMissions(target, opts = {}) {
   const labels = queue.map((entry) => missionQueueLabel(entry));
   const reason = opts.reason || "queue-kept";
   await traceQueueAbandon({
-    project: key,
+    project: target || "",
     family: "mission",
     labels,
     reason,
@@ -957,8 +989,9 @@ async function isRunStillActive(runProject) {
  */
 export async function replayQueuedMissionForProject(target, deps = {}) {
   if (!target) return { replayed: false, reason: "no_target" };
-  const queue = runAgentsQueueByProject[target] || [];
+  const queue = runAgentsQueueByProject[missionQueueKey(target)] || [];
   if (queue.length === 0) return { replayed: false, reason: "empty" };
+  // (la clé de file est résolue par `missionQueueKey` : une seule file par dossier)
   const isFree = deps.isAdmissionFree || (async (p) => !(await isRunStillActive(p)));
   let free;
   try {
@@ -969,7 +1002,7 @@ export async function replayQueuedMissionForProject(target, deps = {}) {
   if (!free) return { replayed: false, reason: "busy" };
   const next = queue.shift();
   if (!next) {
-    delete runAgentsQueueByProject[target];
+    deleteProjectScoped(runAgentsQueueByProject, target);
     return { replayed: false, reason: "empty" };
   }
   // Volet (c) : lancement PROTÉGÉ (voir `launchQueuedMission`) — un échec du
@@ -986,14 +1019,15 @@ export async function replayQueuedMissionForProject(target, deps = {}) {
  * @param {string} target
  */
 export function armQueueReplay(target) {
-  if (!target || runAgentsQueueReplayByProject[target]) return;
-  runAgentsQueueReplayByProject[target] = setTimeout(async () => {
-    delete runAgentsQueueReplayByProject[target];
+  const key = missionReplayKey(target);
+  if (!target || runAgentsQueueReplayByProject[key]) return;
+  runAgentsQueueReplayByProject[key] = setTimeout(async () => {
+    delete runAgentsQueueReplayByProject[key];
     await replayQueuedMissionForProject(target);
     // Une passe réussie ne retire QU'UNE mission de la file : on se réarme dès
     // qu'il en RESTE, succès ou échec — sinon la 2ᵉ mission perdrait tout
     // déclencheur (R1, relecture indépendante).
-    if ((runAgentsQueueByProject[target] || []).length > 0) {
+    if ((runAgentsQueueByProject[missionQueueKey(target)] || []).length > 0) {
       armQueueReplay(target); // encore des missions en file : on reste prêt
     }
   }, RUN_AGENTS_QUEUE_REPLAY_MS);
@@ -1018,17 +1052,18 @@ export function armQueueReplay(target) {
  */
 function launchQueuedMission(target, entry) {
   if (!target || !entry) return;
-  runAgentsInFlightByProject[target] = true;
+  runAgentsInFlightByProject[inFlightKey(target)] = true;
   const onFailure = (err) => {
     console.warn("[super-agent] lancement d'une mission en file en échec :", err);
     // Le projet ne doit pas rester marqué « run en vol » (attente fantôme pour
     // toutes les missions suivantes) ; la libération est immédiate.
-    runAgentsInFlightByProject[target] = false;
+    runAgentsInFlightByProject[inFlightKey(target)] = false;
     // La mission, déjà retirée de la file par le `shift` de l'appelant, y
     // retourne EN TÊTE : un lancement en échec n'a rien démarré, aucun doublon
     // possible (`includes` protège d'une remise en file déjà faite).
-    if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
-    if (!runAgentsQueueByProject[target].includes(entry)) runAgentsQueueByProject[target].unshift(entry);
+    const queueKey = missionQueueKey(target);
+    if (!runAgentsQueueByProject[queueKey]) runAgentsQueueByProject[queueKey] = [];
+    if (!runAgentsQueueByProject[queueKey].includes(entry)) runAgentsQueueByProject[queueKey].unshift(entry);
     // Le rejeu périodique reprend la mission dès que le projet est libre.
     armQueueReplay(target);
   };
@@ -1052,29 +1087,29 @@ function launchQueuedMission(target, entry) {
 /** @param {string} target @returns {{inFlight:boolean,queueLength:number,replayArmed:boolean,watchdogArmed:boolean}} */
 export function __superAgentQueueStateForTest(target) {
   return {
-    inFlight: !!runAgentsInFlightByProject[target],
-    queueLength: (runAgentsQueueByProject[target] || []).length,
-    replayArmed: !!runAgentsQueueReplayByProject[target],
-    watchdogArmed: !!runAgentsWatchdogByProject[target],
+    inFlight: !!runAgentsInFlightByProject[inFlightKey(target)],
+    queueLength: (runAgentsQueueByProject[missionQueueKey(target)] || []).length,
+    replayArmed: !!runAgentsQueueReplayByProject[missionReplayKey(target)],
+    watchdogArmed: !!runAgentsWatchdogByProject[watchdogKey(target)],
   };
 }
 
 /** Remet à zéro file, flag et timers de la file de missions (tests uniquement). */
 export function __resetSuperAgentQueueForTest() {
   for (const t of Object.keys(runAgentsQueueReplayByProject)) {
-    clearTimeout(runAgentsQueueReplayByProject[t]);
-    delete runAgentsQueueReplayByProject[t];
+    clearTimeout(runAgentsQueueReplayByProject[missionReplayKey(t)]);
+    delete runAgentsQueueReplayByProject[missionReplayKey(t)];
   }
   for (const t of Object.keys(delegationQueueReplayByProject)) {
-    clearTimeout(delegationQueueReplayByProject[t]);
-    delete delegationQueueReplayByProject[t];
+    clearTimeout(delegationQueueReplayByProject[delegationReplayKey(t)]);
+    delete delegationQueueReplayByProject[delegationReplayKey(t)];
   }
   for (const t of Object.keys(runAgentsWatchdogByProject)) {
-    clearTimeout(runAgentsWatchdogByProject[t]);
-    delete runAgentsWatchdogByProject[t];
+    clearTimeout(runAgentsWatchdogByProject[watchdogKey(t)]);
+    delete runAgentsWatchdogByProject[watchdogKey(t)];
   }
-  for (const t of Object.keys(runAgentsQueueByProject)) delete runAgentsQueueByProject[t];
-  for (const t of Object.keys(runAgentsInFlightByProject)) delete runAgentsInFlightByProject[t];
+  for (const t of Object.keys(runAgentsQueueByProject)) delete runAgentsQueueByProject[missionQueueKey(t)];
+  for (const t of Object.keys(runAgentsInFlightByProject)) delete runAgentsInFlightByProject[inFlightKey(t)];
 }
 
 // POINT C (file de DÉLÉGATIONS, issue #66) — déclencheur de rejeu explicite,
@@ -1126,9 +1161,10 @@ export async function replayDelegationQueueForProject(projectPath, deps = {}) {
  * @param {string} projectPath
  */
 export function armDelegationQueueReplay(projectPath) {
-  if (!projectPath || delegationQueueReplayByProject[projectPath]) return;
-  delegationQueueReplayByProject[projectPath] = setTimeout(async () => {
-    delete delegationQueueReplayByProject[projectPath];
+  const key = delegationReplayKey(projectPath);
+  if (!projectPath || delegationQueueReplayByProject[key]) return;
+  delegationQueueReplayByProject[key] = setTimeout(async () => {
+    delete delegationQueueReplayByProject[key];
     await replayDelegationQueueForProject(projectPath);
     // Même règle que la file de missions (R1) : on se réarme dès qu'il RESTE
     // des demandes, succès ou échec (une passe réussie n'en retire qu'une).
@@ -4462,7 +4498,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // `s.busy && mode==='agent_process'`, ce qui prévient l'assistant et met
           // la demande en file derrière un fantôme. Une session busy-stale n'est
           // plus exclusive (tâche 1) : on ne la compte PAS comme active.
-          const stale = sessions.some((s) => s.mode === "agent_process" && s.project === target && isBusyStale(s));
+          const stale = sessions.some((s) => s.mode === "agent_process" && sameProject(s.project, target) && isBusyStale(s));
           const staleProject = targetProject || window._pilotProjectPath || null;
           const staleDeleg = delegationState(staleProject);
           if (stale && (staleDeleg.busy || staleDeleg.queue.length > 0)) {
@@ -4478,7 +4514,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             flushDelegationQueue(staleProject);
           }
           const queuedIds = agentIds.filter((aid) =>
-            sessions.some((s) => s.agent === aid && s.busy && s.mode === "agent_process" && s.project === target && !isBusyStale(s))
+            sessions.some((s) => s.agent === aid && s.busy && s.mode === "agent_process" && sameProject(s.project, target) && !isBusyStale(s))
           );
           if (queuedIds.length > 0) {
             const msg = `⏳ L'agent${queuedIds.length > 1 ? "s" : ""} ${queuedIds.join(", ")} est déjà actif sur ce projet. La demande est mise en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.`;
@@ -4521,24 +4557,24 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         const settleRun = (ok, result) => {
           if (runSettled) return; // anti double-résolution (onDone + catch)
           runSettled = true;
-          runAgentsInFlightByProject[target] = false;
+          runAgentsInFlightByProject[inFlightKey(target)] = false;
           // Annule le watchdog du projet : la run s'est terminée normalement.
-          const wd = runAgentsWatchdogByProject[target];
+          const wd = runAgentsWatchdogByProject[watchdogKey(target)];
           if (wd) {
             clearTimeout(wd);
-            delete runAgentsWatchdogByProject[target];
+            delete runAgentsWatchdogByProject[watchdogKey(target)];
           }
           // Injection + notification desktop + son (survit à la fermeture de
           // l'onglet : fonctions module-level, persistance côté Rust).
           finishRunAgentsToSuperAgent(result, projectPath, ok, missionIdentity);
           // Lancer la run suivante mise en file pour CE projet, s'il y en a une.
           // Volet (c) : lancement PROTÉGÉ (voir `launchQueuedMission`).
-          const queue = runAgentsQueueByProject[target] || [];
+          const queue = runAgentsQueueByProject[missionQueueKey(target)] || [];
           const next = queue.shift();
           if (next) {
             launchQueuedMission(target, next);
           } else {
-            delete runAgentsQueueByProject[target];
+            deleteProjectScoped(runAgentsQueueByProject, target);
           }
         };
         // Renvoie une promesse résolue avec le RÉSULTAT DU DÉMARRAGE
@@ -4623,11 +4659,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // Verrou occupé par une AUTRE run : renoncer au flag in-flight de
             // CETTE demande (il repassera à true au vrai lancement depuis la
             // file) et désarmer son watchdog.
-            runAgentsInFlightByProject[target] = false;
-            const wd = runAgentsWatchdogByProject[target];
-            if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[target]; }
+            runAgentsInFlightByProject[inFlightKey(target)] = false;
+            const wd = runAgentsWatchdogByProject[watchdogKey(target)];
+            if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[watchdogKey(target)]; }
             // P1 : missions DÉJÀ en attente (nommées AVANT l'empilement).
-            const aheadLabels = (runAgentsQueueByProject[target] || []).map((entry) => missionQueueLabel(entry));
+            const aheadLabels = (runAgentsQueueByProject[missionQueueKey(target)] || []).map((entry) => missionQueueLabel(entry));
             // RÈGLE 4 : mise en file par le chemin de PRODUCTION UNIQUE (libellé +
             // identité de mission + refus du double empilement).
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
@@ -4684,13 +4720,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // réinitialiser pour ne pas mettre la demande en file derrière une
           // run morte.
           const blockedByBus = isRunInProgress(target, { nature: missionNature });
-          if (runAgentsInFlightByProject[target] && !isRunInProgress(target)) {
-            runAgentsInFlightByProject[target] = false;
+          if (runAgentsInFlightByProject[inFlightKey(target)] && !isRunInProgress(target)) {
+            runAgentsInFlightByProject[inFlightKey(target)] = false;
           }
           // Nature de la mission : une LECTURE partage le créneau avec d'autres
           // lectures et n'attend qu'une MODIFICATION réellement en cours ; une
           // MODIFICATION attend toute run en cours sur le projet.
-          const blockedByFlag = missionNature === "write" && runAgentsInFlightByProject[target];
+          const blockedByFlag = missionNature === "write" && runAgentsInFlightByProject[inFlightKey(target)];
           // P1 — ORDRE D'ARRIVÉE : même point de décision que `launchOrQueue`
           // (`decideMissionAdmission`) — la file est consultée AVANT de démarrer.
           const admission = decideMissionAdmission(target, {
@@ -4699,7 +4735,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           });
           if (admission.queue) {
             // P1 : missions DÉJÀ en attente (nommées AVANT l'empilement).
-            const aheadLabels = (runAgentsQueueByProject[target] || []).map((entry) => missionQueueLabel(entry));
+            const aheadLabels = (runAgentsQueueByProject[missionQueueKey(target)] || []).map((entry) => missionQueueLabel(entry));
             // RÈGLE 4 : même chemin de mise en file que `launchOrQueue` (une seule
             // mission, un seul numéro) + refus du double empilement.
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
@@ -4723,7 +4759,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // l'accusé prétendait qu'il ne s'était rien passé.
             return { queued: true, started: false, preparing: false, error: null };
           }
-          runAgentsInFlightByProject[target] = true;
+          runAgentsInFlightByProject[inFlightKey(target)] = true;
           // Filet de sécurité CONSCIENT DE L'ACTIVITÉ : si la run ne se termine
           // pas sous RUN_AGENTS_WATCHDOG_MS, on ne réinitialise PAS aveuglément.
           // On vérifie d'abord si la run est encore réellement active (bus en
@@ -4749,13 +4785,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             if (stillActive) {
               // La run progresse encore : repousser l'échéance, continuer
               // d'attendre. Jamais de coupe artificielle d'une tâche saine.
-              runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
+              runAgentsWatchdogByProject[watchdogKey(target)] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
               return;
             }
             // La run est réellement morte/inactive : comportement actuel.
             console.warn("[super-agent] watchdog : run d'agents bloquée, réinitialisation du flag et abandon TRACÉ de la file.");
-            runAgentsInFlightByProject[target] = false;
-            delete runAgentsWatchdogByProject[target];
+            runAgentsInFlightByProject[inFlightKey(target)] = false;
+            delete runAgentsWatchdogByProject[watchdogKey(target)];
             // RÈGLE 4 : la file n'est JAMAIS vidée en silence. Chaque demande
             // abandonnée est NOMMÉE, le motif est écrit au journal des arrêts
             // automatiques du projet et l'abandon est notifié.
@@ -4768,7 +4804,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
                   : "")
             );
           };
-          runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
+          runAgentsWatchdogByProject[watchdogKey(target)] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
           return await launchMission(); // { queued, started, error } : verdict du lancement réel
         };
         // Réponse à l'outil : verdict de lancement RÉEL (agent démarré ou
@@ -4836,23 +4872,23 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         const settleRun = (ok, result) => {
           if (runSettled) return;
           runSettled = true;
-          runAgentsInFlightByProject[target] = false;
-          const wd = runAgentsWatchdogByProject[target];
+          runAgentsInFlightByProject[inFlightKey(target)] = false;
+          const wd = runAgentsWatchdogByProject[watchdogKey(target)];
           if (wd) {
             clearTimeout(wd);
-            delete runAgentsWatchdogByProject[target];
+            delete runAgentsWatchdogByProject[watchdogKey(target)];
           }
           finishRunAgentsToSuperAgent(result, projectPath, ok, missionIdentity);
           // POINT E : rejouer la mission suivante RÉELLEMENT mise en file (même
           // file que `run_agents`). Sans ce vidage, un accusé « queued » restait
           // sans effet et la mission était perdue en silence.
           // Volet (c) : lancement PROTÉGÉ (voir `launchQueuedMission`).
-          const queue = runAgentsQueueByProject[target] || [];
+          const queue = runAgentsQueueByProject[missionQueueKey(target)] || [];
           const next = queue.shift();
           if (next) {
             launchQueuedMission(target, next);
           } else {
-            delete runAgentsQueueByProject[target];
+            deleteProjectScoped(runAgentsQueueByProject, target);
           }
         };
         const startRun = async (launchOpts = {}) => {
@@ -4862,18 +4898,18 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // en file derrière une run morte. Plancher : un verrou RÉCENT (agent qui
           // travaille) n'est pas libéré — mise en file au lieu d'un kill.
           await releaseStuckRunLock(target, { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS });
-          if (runAgentsInFlightByProject[target] && !isRunInProgress(target)) {
-            runAgentsInFlightByProject[target] = false;
+          if (runAgentsInFlightByProject[inFlightKey(target)] && !isRunInProgress(target)) {
+            runAgentsInFlightByProject[inFlightKey(target)] = false;
           }
           // P1 — ORDRE D'ARRIVÉE : la file est consultée AVANT de démarrer (même
           // point de décision que `run_agents`).
           const admission = decideMissionAdmission(target, {
-            busy: runAgentsInFlightByProject[target] || isRunInProgress(target),
+            busy: runAgentsInFlightByProject[inFlightKey(target)] || isRunInProgress(target),
             dequeue: !!(launchOpts && launchOpts.dequeue),
           });
           if (admission.queue) {
             // P1 : missions DÉJÀ en attente (nommées AVANT l'empilement).
-            const aheadLabels = (runAgentsQueueByProject[target] || []).map((entry) => missionQueueLabel(entry));
+            const aheadLabels = (runAgentsQueueByProject[missionQueueKey(target)] || []).map((entry) => missionQueueLabel(entry));
             // POINT E : mise en file RÉELLE (même file que `run_agents`, rejouée
             // par `settleRun`). Auparavant ce chemin répondait « queued » sans
             // jamais pousser dans une file → mission perdue en silence.
@@ -4897,7 +4933,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             }
             return false; // PAS lancée maintenant : RÉELLEMENT mise en file
           }
-          runAgentsInFlightByProject[target] = true;
+          runAgentsInFlightByProject[inFlightKey(target)] = true;
           runAgentsForAssistantAsync(
             assignments,
             (result) => {
@@ -5296,7 +5332,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       const invisible = (typeof info.background === "boolean")
         ? info.background
         : (configCache.super_agent_invisible_agent !== false);
-      const forceInvisible = !!info.project && projectPath !== (window._pilotProjectPath || null);
+      const forceInvisible = !!info.project && !sameProject(projectPath, window._pilotProjectPath || null);
       // #11 : si l'onglet agent du projet cible n'est PAS ouvert, on délègue en
       // arrière-plan (startAgentInvisible) même si background=false — on ne peut
       // pas ouvrir l'onglet d'un agent fermé. Si l'onglet est déjà ouvert, on
@@ -5399,11 +5435,11 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         const queueKey = (info.project && String(info.project).trim()) || window._pilotProjectPath || ".";
         await releaseStuckRunLock(queueKey);
         const stillRunning = isRunInProgress(queueKey);
-        const waitingMissions = (runAgentsQueueByProject[queueKey] || []).length;
+        const waitingMissions = (runAgentsQueueByProject[missionQueueKey(queueKey)] || []).length;
         if (!stillRunning) {
-          runAgentsInFlightByProject[queueKey] = false;
-          const wd = runAgentsWatchdogByProject[queueKey];
-          if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[queueKey]; }
+          runAgentsInFlightByProject[inFlightKey(queueKey)] = false;
+          const wd = runAgentsWatchdogByProject[watchdogKey(queueKey)];
+          if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[watchdogKey(queueKey)]; }
           if (waitingMissions > 0) {
             // P2 : un arrêt d'agent ne DÉTRUIT PLUS une file non vide. Le verrou
             // de run peut être périmé (relance, agent parqué, run terminée) : il
@@ -5413,7 +5449,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
             const kept = await keepQueuedRunAgentsMissions(queueKey, { detected: "stop-agent" });
             appendSystemMessage(messagesEl, `📋 ${kept.count} mission(s) conservée(s) en file d'attente par l'arrêt de l'agent : ${kept.labels.join(" · ")} — elles seront rejouées dès que le projet sera libre (motif consigné).`);
           } else {
-            delete runAgentsQueueByProject[queueKey];
+            delete runAgentsQueueByProject[missionQueueKey(queueKey)];
           }
         } else if (waitingMissions > 0) {
           appendSystemMessage(messagesEl, `⏳ ${waitingMissions} mission(s) toujours en attente : une autre tâche tourne encore sur ce projet.`);
@@ -5426,13 +5462,13 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         // sans un mot. MÊME traitement que pour un projet, sur la SEULE clé
         // ASSISTANT_SPACE (les files et verrous des projets ne sont pas touchés).
         const assistantKey = ASSISTANT_SPACE;
-        const pendingAssistant = (runAgentsQueueByProject[assistantKey] || []).length;
+        const pendingAssistant = (runAgentsQueueByProject[missionQueueKey(assistantKey)] || []).length;
         if (pendingAssistant > 0) {
           await releaseStuckRunLock(assistantKey);
           if (!isRunInProgress(assistantKey)) {
-            runAgentsInFlightByProject[assistantKey] = false;
-            const wdA = runAgentsWatchdogByProject[assistantKey];
-            if (wdA) { clearTimeout(wdA); delete runAgentsWatchdogByProject[assistantKey]; }
+            runAgentsInFlightByProject[inFlightKey(assistantKey)] = false;
+            const wdA = runAgentsWatchdogByProject[watchdogKey(assistantKey)];
+            if (wdA) { clearTimeout(wdA); delete runAgentsWatchdogByProject[watchdogKey(assistantKey)]; }
             // P2 : même règle que pour un projet — une file non vide est
             // CONSERVÉE (jamais détruite sur la foi d'un verrou), chaque mission
             // est nommée, et le rejeu est armé (jugé sur les sessions vivantes).
@@ -6428,7 +6464,7 @@ async function sendSuperAgentReport(entry, opts = {}) {
     // toujours le même marqueur : une délégation plus récente ne doit pas être
     // écrasée par une remise tardive). Le texte du marqueur est inclus dans le
     // compte rendu, donc persisté en base même si la remise est différée.
-    const delState = delegationStates.get(del.projectPath || "");
+    const delState = delegationStates.get(projectKey(del.projectPath));
     if (delState && delState.pending === del) delState.pending = null;
     const marker =
       `[Tâche déléguée terminée] Demande transmise à l'agent du projet ${del.projectPath || ""} : ${del.request}\n`;
@@ -6496,7 +6532,7 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath, opt
   // réelle (sendSuperAgentReport), pour ne pas le perdre si le compte rendu est
   // mis en attente (assistant occupé).
   // P0-4 : borne la taille du résumé avant injection.
-  const projectDelegationState = delegationStates.get(projectPath || "");
+  const projectDelegationState = delegationStates.get(projectKey(projectPath));
   const entry = {
     summary,
     projectPath: projectPath || null,

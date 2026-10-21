@@ -66,11 +66,18 @@ import {
   enqueueExclusivity,
   dequeueExclusivity,
   exclusivityKey,
+  findExclusivityKey,
   isAgentActiveOnProject as isAgentActiveOnProjectSessions,
   isAnyAgentWorking,
   isProjectWorking,
   classifyExclusivitySession,
 } from "./exclusivity-queue.js";
+// Identité de projet (mission P3, défaut D3) : SOURCE UNIQUE. Le bus comparait
+// le projet en chaîne BRUTE (verrou de run, files d'exclusivité) : deux
+// écritures du même dossier donnaient deux verrous et deux files, dont l'une
+// n'était jamais rejouée. Les comparaisons passent désormais par `sameProject`.
+// Le chemin RÉEL reste utilisé tel quel pour le backend (jamais la clé).
+import { sameProject, projectScopedKey, deleteProjectScoped, queueKeyMatchesProject } from "./project-key.js";
 import { isProjectReservedBy, deleteReservations, clearAllReservations } from "./reservations.js";
 
 const DEFAULT_MAX_DEPTH = 3;
@@ -318,7 +325,9 @@ let readRunSeq = 0;
 // d'un projet réel, TOUTES ses runs (par défaut + lectures parallèles).
 const READ_KEY_SEP = "#read:";
 
-/** Clé de run par défaut (mission qui MODIFIE) : le projet lui-même. */
+/** Clé de run par défaut (mission qui MODIFIE) : le projet lui-même.
+ * Le chemin RÉEL est conservé (il est transmis au backend) ; l'IDENTITÉ est
+ * comparée via `sameProject` / `resolveRunKey`. */
 function runKey(project) {
   return project || ".";
 }
@@ -329,12 +338,37 @@ function projectOfRunKey(key) {
   return i < 0 ? key : key.slice(0, i);
 }
 
+/**
+ * Clé de run EXISTANTE du projet (quelle que soit l'écriture de son chemin), ou
+ * la clé par défaut si aucune. Garantit qu'une même run est retrouvée même si
+ * l'appelant nomme le projet avec une autre écriture du même dossier.
+ * @param {string} project
+ * @returns {string}
+ */
+function resolveRunKey(project) {
+  const base = runKey(project);
+  if (busState.runs[base]) return base;
+  for (const k of Object.keys(busState.runs)) {
+    // Les clés de LECTURE (`projet#read:<n>`) ne sont jamais la clé par défaut :
+    // une mission qui MODIFIE ne doit pas réutiliser le contexte d'une lecture.
+    if (k.indexOf(READ_KEY_SEP) >= 0) continue;
+    if (sameProject(k, base)) return k;
+  }
+  return base;
+}
+
 /** Toutes les clés de run appartenant au projet donné (défaut + lectures). */
 function runKeysOfProject(project) {
   const base = runKey(project);
   const keys = [];
   for (const k of Object.keys(busState.runs)) {
-    if (k === base || k.startsWith(base + READ_KEY_SEP)) keys.push(k);
+    if (
+      k === base ||
+      k.startsWith(base + READ_KEY_SEP) ||
+      sameProject(projectOfRunKey(k), base)
+    ) {
+      keys.push(k);
+    }
   }
   return keys;
 }
@@ -354,6 +388,21 @@ export function nextReadRunKey(project) {
 // partagent la MÊME file, et la fin d'une run ne l'emporte plus.
 const projectExclusivityQueues = {};
 
+// D3 — les clés de `projectExclusivityQueues` sont des IDENTITÉS de projet
+// (clé normalisée, cf. `project-key.js`), jamais des chemins. Un chemin
+// normalisé ne peut pas servir à écrire un fichier (le journal des arrêts vit
+// DANS le projet) : la file mémorise donc le chemin RÉEL dans une propriété
+// SYMBOLE (invisible pour `Object.keys`, la sérialisation et les itérations de
+// clés de file), ce qui permet à toute trace d'abandon de viser le bon dossier
+// sans jamais ré-introduire le chemin brut comme clé.
+const QUEUE_REAL_PROJECT = Symbol("pilot.exclusivityQueue.project");
+
+/** Chemin RÉEL mémorisé par une file d'exclusivité ("" s'il est inconnu). */
+function realProjectOfExclusivityQueue(queue) {
+  const p = queue && queue[QUEUE_REAL_PROJECT];
+  return typeof p === "string" ? p : "";
+}
+
 /**
  * File d'exclusivité PARTAGÉE d'un projet (créée au besoin), partagée par tous
  * les contextes de run du projet. Mutable (cf. exclusivity-queue.js).
@@ -361,9 +410,14 @@ const projectExclusivityQueues = {};
  * @returns {object} map `clé (projet\u{1f}agent) → assignment[]`
  */
 export function exclusivityQueueOfProject(project) {
-  const key = runKey(project || ".");
+  // Clé EXISTANTE du projet (toute écriture du même chemin) sinon canonique :
+  // deux écritures du dossier ne créent jamais deux files.
+  const key = projectScopedKey(projectExclusivityQueues, project || ".");
   if (!projectExclusivityQueues[key]) projectExclusivityQueues[key] = {};
-  return projectExclusivityQueues[key];
+  const queue = projectExclusivityQueues[key];
+  // Chemin réel conservé pour les traces (jamais écrasé par une clé).
+  if (!realProjectOfExclusivityQueue(queue) && project) queue[QUEUE_REAL_PROJECT] = String(project);
+  return queue;
 }
 
 /**
@@ -376,7 +430,7 @@ export function exclusivityQueueOfProject(project) {
  * @returns {number} nombre d'entrées retirées
  */
 function pruneUnreplayableExclusivityEntries(project) {
-  const queue = projectExclusivityQueues[runKey(project || ".")];
+  const queue = projectExclusivityQueues[projectScopedKey(projectExclusivityQueues, project || ".")];
   if (!queue) return 0;
   let removed = 0;
   for (const key of Object.keys(queue)) {
@@ -403,7 +457,7 @@ function pruneUnreplayableExclusivityEntries(project) {
  * @returns {number} nombre d'entrées perdues
  */
 function dropProjectExclusivityQueue(project) {
-  const key = runKey(project || ".");
+  const key = projectScopedKey(projectExclusivityQueues, project || ".");
   const queue = projectExclusivityQueues[key];
   if (!queue) return 0;
   let lost = 0;
@@ -422,7 +476,7 @@ function dropProjectExclusivityQueue(project) {
  * @returns {Array<{agentId:string, label:string, queueKey:string}>}
  */
 function exclusivityQueueEntriesOf(project) {
-  const queue = projectExclusivityQueues[runKey(project || ".")];
+  const queue = projectExclusivityQueues[projectScopedKey(projectExclusivityQueues, project || ".")];
   const entries = [];
   if (!queue) return entries;
   for (const queueKey of Object.keys(queue)) {
@@ -458,11 +512,11 @@ function exclusivityQueuesOfProject(project) {
     seen.add(queue);
     queues.push(queue);
   };
-  add(projectExclusivityQueues[realProject]);
+  add(projectExclusivityQueues[projectScopedKey(projectExclusivityQueues, project || ".")]);
   for (const key of runKeysOfProject(project)) {
     const ctx = busState.runs[key];
     if (!ctx) continue;
-    if ((ctx.project || realProject) !== realProject) continue;
+    if (!sameProject(ctx.project || realProject, realProject)) continue;
     add(ctx.exclusivityQueue);
   }
   return queues;
@@ -645,7 +699,7 @@ function getRunCtxByKey(key) {
  * @returns {object} runCtx
  */
 function getRunCtx(project) {
-  return getRunCtxByKey(runKey(project));
+  return getRunCtxByKey(resolveRunKey(project));
 }
 
 /**
@@ -674,7 +728,7 @@ export function beginRun(project, options) {
   // Une mission de LECTURE (options.readOnly) reçoit une clé de run NEUVE, donc
   // un contexte distinct : deux lectures sur un même projet ne s'écrasent plus.
   const readOnly = !!(options && options.readOnly);
-  const key = readOnly ? nextReadRunKey(project) : runKey(project);
+  const key = readOnly ? nextReadRunKey(project) : resolveRunKey(project);
   // Démarrage d'une run : les entrées de file à clé inexploitable (impossibles
   // à relancer) sont retirées, sinon elles bloqueraient ce verrou à vie.
   pruneUnreplayableExclusivityEntries(project);
@@ -703,7 +757,7 @@ export function endRun(project, generation) {
   // `generation` omise (appel legacy / libération forcée) → uniquement la clé
   // par défaut du projet, comportement inchangé.
   if (generation === undefined) {
-    const key = runKey(project);
+    const key = resolveRunKey(project);
     const ctx = busState.runs[key];
     if (ctx) {
       if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
@@ -748,11 +802,14 @@ function clearAllRuns() {
   const lostByProject = [];
   for (const project of Object.keys(projectExclusivityQueues)) {
     const entries = exclusivityQueueEntriesOf(project);
+    // Chemin RÉEL capturé AVANT le vidage : c'est lui (et non la clé de file)
+    // qui désigne le dossier où écrire le journal des arrêts.
+    const realProject = realProjectOfExclusivityQueue(projectExclusivityQueues[project]);
     const lost = dropProjectExclusivityQueue(project);
-    if (lost > 0) lostByProject.push({ project, entries });
+    if (lost > 0) lostByProject.push({ project, realProject, entries });
   }
-  for (const { project, entries } of lostByProject) {
-    journalQueueAbandonment(projectOfRunKey(project), entries, {
+  for (const { project, realProject, entries } of lostByProject) {
+    journalQueueAbandonment(realProject || projectOfRunKey(project), entries, {
       detected: "clear-all-runs",
     });
   }
@@ -1176,7 +1233,7 @@ export function listProjectExclusivityEntries(project) {
     for (const queueKey of Object.keys(queue)) {
       const idx = queueKey.indexOf('\u{1f}');
       if (idx < 0) continue;
-      if (queueKey.slice(0, idx) !== realProject) continue;
+      if (!queueKeyMatchesProject(queueKey, realProject)) continue;
       const keyAgentId = queueKey.slice(idx + 1);
       for (const assignment of queue[queueKey] || []) {
         const brief = assignment && (assignment.brief || assignment.task);
@@ -1215,7 +1272,7 @@ export function abandonProjectExclusivityQueues(project, options = {}) {
     for (const queueKey of Object.keys(queue)) {
       const idx = queueKey.indexOf('\u{1f}');
       if (idx < 0) continue;
-      if (queueKey.slice(0, idx) !== realProject) continue;
+      if (!queueKeyMatchesProject(queueKey, realProject)) continue;
       const assignments = queue[queueKey] || [];
       for (const assignment of assignments) {
         const agentId = (assignment && assignment.agentId) || queueKey.slice(idx + 1);
@@ -1236,7 +1293,7 @@ export function abandonProjectExclusivityQueues(project, options = {}) {
   // (Les clés de la file module déjà vidées par la boucle ci-dessus ne sont donc
   // plus comptées : aucun doublon.)
   const moduleEntries = exclusivityQueueEntriesOf(project);
-  if (projectExclusivityQueues[realProject]) delete projectExclusivityQueues[realProject];
+  deleteProjectScoped(projectExclusivityQueues, realProject);
   if (moduleEntries.length > 0) abandoned.push(...moduleEntries);
   const removed = abandoned.length;
   if (removed > 0 && options.journal !== false) {
@@ -1322,7 +1379,7 @@ async function drainExclusivityQueues(ctx, runKeyValue) {
 // activité) restent, elles, traitées comme non-travailleuses (filet du verrou
 // fantôme conservé).
 async function anyActiveAgentWorking(project) {
-  const key = runKey(project);
+  const key = resolveRunKey(project);
   const ctx = busState.runs[key];
   if (!ctx) return false;
   try {
@@ -1481,7 +1538,7 @@ async function findAgentSession(agentId, ctx) {
     const res = await invoke("list_agent_sessions");
     const sessions = (res && res.sessions) || [];
     const proj = ctx.agentProject[agentId] || ctx.project || null;
-    const byProject = sessions.find((s) => s.agent === agentId && s.alive && (proj === null || s.project === proj));
+    const byProject = sessions.find((s) => s.agent === agentId && s.alive && (proj === null || sameProject(s.project, proj)));
     if (byProject) return byProject;
     return sessions.find((s) => s.agent === agentId && s.alive) || null;
   } catch (e) {
@@ -1535,7 +1592,7 @@ async function isAgentActiveOnProject(agentId, project) {
   // 1. Local : agent déjà actif dans une run en cours sur ce projet.
   for (const key of Object.keys(busState.runs)) {
     const ctx = busState.runs[key];
-    if (ctx.activeAgents.has(agentId) && ctx.project === project) {
+    if (ctx.activeAgents.has(agentId) && sameProject(ctx.project, project)) {
       const session = await findAgentSession(agentId, ctx);
       const status = classifyExclusivitySession(session);
       // Sonde indisponible : prudence, on ne libère pas (pas de double run).
@@ -1608,10 +1665,11 @@ export async function launchNextQueuedForProject(agentId, project, ownRunKey) {
   const keys = [];
   if (ownRunKey) keys.push(ownRunKey);
   for (const k of runKeysOfProject(project)) if (!keys.includes(k)) keys.push(k);
-  const qk = `${project}\u{1f}${agentId}`;
   for (const key of keys) {
     const c = busState.runs[key];
-    const q = c && c.exclusivityQueue && c.exclusivityQueue[qk];
+    if (!c || !c.exclusivityQueue) continue;
+    const existingKey = findExclusivityKey(c.exclusivityQueue, agentId, project);
+    const q = existingKey ? c.exclusivityQueue[existingKey] : null;
     if (q && q.length > 0) {
       await launchNextQueued(agentId, project, key);
       return;
@@ -1622,7 +1680,7 @@ export async function launchNextQueuedForProject(agentId, project, ownRunKey) {
 async function launchNextQueued(agentId, project, runKeyOverride) {
   // `project` = projet RÉEL (clé de la file d'exclusivité) ; `runKeyOverride` =
   // clé de run appelante (celle qui vient de libérer son tour).
-  const callerKey = runKeyOverride || runKey(project);
+  const callerKey = runKeyOverride || resolveRunKey(project);
   const callerCtx = busState.runs[callerKey] || null;
   // File réellement inspectée par l'appelant (partagée dans tous les cas
   // normaux ; un contexte dont la file a été remplacée garde SA file).
@@ -3274,7 +3332,7 @@ async function forceStaleAgentProcessRestartIfNeeded(agent, project) {
     const res = await invoke("list_agent_sessions");
     const sessions = (res && res.sessions) || [];
     const existing = sessions.find(
-      (s) => s.agent === agent.id && s.project === project && s.mode === "agent_process"
+      (s) => s.agent === agent.id && sameProject(s.project, project) && s.mode === "agent_process"
     );
     if (!existing) return;
     // RÈGLE 3 : ce `stop_agent_process` est un ARRÊT AUTOMATIQUE (personne ne l'a
