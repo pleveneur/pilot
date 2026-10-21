@@ -157,3 +157,101 @@ npm test                 # suite frontend complète (attendu : 2091 tests verts)
 npm run tauri dev        # vérification manuelle : deux écritures d'un même projet
                          # ne doivent produire qu'une seule file d'attente
 ```
+
+---
+
+## 8. Re-vérification (mission P3 rejouée après livraison)
+
+_Cette section a été ajoutée lors du **rejeu** de la mission P3 : le correctif
+était déjà committé (`275eb04`, relu indépendamment dans
+`rapport-relecture-finale.md`, verdict **PUBLIABLE**). Conformément à la
+consigne « si P3 est déjà fait, ne réécris rien : vérifie, mesure, consigne »,
+**aucune ligne de code n'a été modifiée** — seules des mesures ont été refaites
+sur l'état réel du dépôt._
+
+### 8.1 État constaté sur le disque (pas sur la foi du rapport)
+
+| Point de contrôle | Constat |
+|---|---|
+| Module unique `src/js/project-key.js` | présent, pur, exporte `normalizeProjectPath` / `projectKey` / `sameProject` / `projectScopedKey` / `findProjectScopedKey` / `queueKeyMatchesProject` |
+| `super-agent.js` | importe `projectKey, projectScopedKey, deleteProjectScoped, sameProject` (l. 63) |
+| `agents-bus.js` | importe `sameProject, projectScopedKey, deleteProjectScoped, queueKeyMatchesProject` (l. 80) ; verrou de run résolu par `resolveRunKey` (l. 348) qui compare via `sameProject` |
+| `exclusivity-queue.js` | `exclusivityKey` = `${projectKey(project)}\u{1f}${agentId}` (l. 26) ; import du module (l. 16) |
+| `reservations.js` | importe `projectKey` (l. 31), index par clé, chemin réel conservé pour l'I/O |
+| `super-agent-context.js` | plus de copie locale : import + ré-export (l. 18) |
+| `help/handbook.md` | le bloc D3 y est désormais **présent** (l. 1772) : la réserve R-C de la relecture est levée |
+
+Les emplacements cités par la mission (`super-agent.js` 4276/4328/5228,
+`agents-bus.js` 322, `exclusivity-queue.js` 19/247) ont bougé depuis le
+diagnostic — ils ne contiennent plus de comparaison de chemin brut ; ce sont
+les mêmes zones, désormais servies par la clé normalisée.
+
+### 8.2 Mesures refaites (chiffres exacts)
+
+```
+npx vitest run                       # suite frontend COMPLÈTE (src/js/** + scripts/**)
+→ PASS (2091) FAIL (0)
+```
+
+```
+npx vitest run src/js/project-cle-unicite.test.js
+→ PASS (6) FAIL (0)
+```
+
+(Le projet utilise un résumé de sortie `PASS (n) FAIL (n)` ; les 2091 tests
+portent sur les 120 fichiers `src/js/*.test.js` plus les tests de `scripts/`.)
+
+### 8.3 Preuve de non-vacuité — rejouée à la main
+
+Mutation appliquée temporairement (sauvegarde puis restauration intégrale ;
+`git diff` vide après coup, dépôt intact) :
+
+| Mutation | Résultat mesuré |
+|---|---|
+| `exclusivityKey` repasse au chemin brut (`return \`${project}\u{1f}${agentId}\``) | **FAIL (2)** sur `project-cle-unicite.test.js` — « `exclusivityQueueOfProject` renvoie le MÊME objet pour deux écritures » et la lecture croisée par l'autre écriture renvoie `undefined` |
+| Correctif restauré | **PASS (6) FAIL (0)** |
+
+Le test de non-régression **échoue donc bien** si deux écritures du même dossier
+redonnent deux files différentes : il n'est pas complaisant.
+
+### 8.4 Limite connue, non corrigée dans cette mission (à traiter séparément)
+
+**R-B — la file des commandes manuelles (`/file`) n'utilise pas encore la clé
+normalisée.** `src/js/project-task-queue.js` indexe `state.queues`,
+`state.launched` et `queueOf(project)` par le **chemin brut** (l. 209-210,
+262-268, 282-289, 315-341), et ce module est bien la file visible de `/file`
+(importé par `agent-pi.js` et `project-queue-view.js`). Deux écritures du même
+dossier y créent donc encore deux files de commandes manuelles.
+
+Pourquoi elle n'a pas été touchée ici :
+
+- **Hors du périmètre relevé par le diagnostic D3**, qui nomme les files de
+  missions et de délégations de l'assistant, le verrou de run du bus, la file
+  d'exclusivité et les réservations — et le paragraphe D3 de
+  `spec_super_agent.md` énumère exactement ces familles ;
+- elle est classée **Moyenne-faible** (aucune perte de code, aucune donnée
+touchée) par la relecture indépendante, qui la renvoie explicitement à un
+  correctif **ultérieur** ;
+- la consigne de cette mission rejouée est de **ne rien réécrire** quand P3 est
+  déjà livré. La traiter ici reviendrait à élargir une correction bornée,
+  contre la consigne explicite.
+
+Elle est donc **consignée, pas contournée** : le défaut résiduel est nommé,
+localisé et reproductible, à traiter dans une mission dédiée. Elle est déjà
+décrite côté spécifications sous **`spec_super_agent.md` § L2** (« La file des
+**commandes manuelles** reste indexée par chemin brut », l. 2308-2325), avec le
+correctif connu et non appliqué : faire passer `project-task-queue.js` par
+`projectKey` avec repli sur les clés existantes (aucune migration).
+
+**R-D (cosmétique) — libellé du volet Missions.** `missionProjectLabel`
+(`super-agent.js` l. 2143-2146) dérive le libellé du **nom de dossier** de la
+clé normalisée : un dossier écrit en majuscules peut s'afficher en minuscules.
+C'est un affichage, pas une comparaison ; aucune file ni aucun verrou n'est
+concerné. Non corrigé ici (même raison de périmètre borné).
+
+### 8.5 P1 et P2
+
+Non modifiés, non contournés. Leurs tests restent verts dans la suite complète
+(`file-attente-*`, `verrou-*`, `regle-4-*`). Aucun commit n'a été produit par
+cette re-vérification : `git status` ne montre **aucun** fichier de code
+modifié, seulement ce rapport.
