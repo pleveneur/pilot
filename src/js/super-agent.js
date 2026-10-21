@@ -1440,9 +1440,11 @@ function projectColor(projectName) {
 let currentBody = null;      // élément `.agent-message-assistant` du tour courant
 let currentFlow = null;      // sous-élément `.agent-stream-flow`
 // Badges projet de la bulle courante (chantier « badge par bulle ») : snapshot
-// capturé au moment où l'utilisateur envoie sa demande = projets explicitement
-// nommés dans le texte, puis le projet actif à cet instant (module pur
-// super-agent-badges.js). Les bulles du tour (réponse incluse) héritent du
+// capturé au moment où l'utilisateur envoie sa demande = UNIQUEMENT les projets
+// explicitement nommés dans le texte, dans l'ordre d'apparition (module pur
+// super-agent-badges.js). Aucun projet nommé → snapshot vide, donc AUCUNE
+// étiquette : le projet ouvert à l'écran n'est jamais utilisé par défaut. Les
+// bulles du tour (réponse incluse) héritent du
 // snapshot, qui est FIGÉ pour toujours : changer le projet actif ne modifie
 // plus jamais les badges déjà affichés. Null = aucun tour en cours. Les bulles
 // créées hors tour (question relais, widget) n'inventent plus de nom : elles
@@ -1758,7 +1760,7 @@ export function createSuperAgentBlock(messagesEl, explicitBadges = null) {
   const bubble = document.createElement("div");
   bubble.className = "agent-bubble agent-bubble-assistant";
   // Badges projet (snapshot) : la bulle de réponse hérite des badges de la
-  // demande qui l'a déclenchée (projet actif à l'envoi + projets nommés), ou de
+  // demande qui l'a déclenchée (projets réellement cités), ou de
   // badges explicites quand l'appelant connaît le projet (relais d'un agent).
   // Figés pour toujours : aucun recalcul ni rafraîchissement rétrospectif.
   // Information inconnue → AUCUN badge : on ne retombe plus sur le projet
@@ -1782,14 +1784,6 @@ export function createSuperAgentBlock(messagesEl, explicitBadges = null) {
   messagesEl.appendChild(el);
   scrollSuperToBottom(messagesEl);
   return el;
-}
-
-/** Retourne le nom du projet actif (dérivé de window._pilotProjectPath), ou null. */
-function getSuperActiveProjectName() {
-  const path = window._pilotProjectPath;
-  if (!path) return null;
-  const parts = String(path).split(/[\\/]/).filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : null;
 }
 
 /**
@@ -1841,9 +1835,9 @@ function withTimeout(promise, ms, fallback) {
   });
 }
 
-/** Garde de durée du snapshot projets (ms) : au-delà, fail-open (projet actif
- * seul) plutôt que retarder l'envoi. Les invokes sont locaux (DB/UI) et
- * répondent en quelques ms → marge large. */
+/** Garde de duree du snapshot projets (ms) : au-dela, fail-open (badges de
+ * base conserves) plutot que retarder l'envoi. Les invokes sont locaux (DB/UI)
+ * et repondent en quelques ms → marge large. */
 const BADGE_PROJECTS_COLLECT_TIMEOUT_MS = 800;
 
 /** Retire le suffixe « - (GDS) » d'un nom de badge (format d'affichage Pilot).
@@ -1858,19 +1852,25 @@ function stripGdsSuffix(name) {
  * connus/ouverts côtés UI dans le module pur (captureProjectBadgeNames).
  * Candidats = projets ouverts (list_open_projects, chemins) + projets suivis
  * connus (list_super_agent_projects, {path, name}) ; dédupliqués par chemin.
- * Fail-open : toute erreur ou lenteur → projet actif seul, jamais bloquant.
+ * AUCUN repli sur le projet actif : l'etiquette ne montre que les projets
+ * reellement cites, rien quand aucun n'est cite (un nom faux est pire que pas
+ * de nom). Fail-open : toute erreur ou lenteur → aucun badge a l'envoi, jamais
+ * bloquant.
  *
  * Si `baseBadges` est fourni (bulle de RÉPONSE, chantier #15), on part de ces
  * badges (snapshot de la demande) et on les étend avec les projets nommés dans
  * `text` (texte de la réponse) via extendBadgesWithText, au lieu de repartir
- * du projet actif. Les suffixes GDS sont retirés avant extension puis
- * ré-appliqués une seule fois sur le résultat.
+ * de zéro : les noms corrects de la demande ne sont jamais perdus. Les
+ * suffixes GDS sont retirés avant extension puis ré-appliqués une seule fois
+ * sur le résultat.
  * @param {string} text - texte à scanner (demande ou réponse de l'assistant).
  * @param {string[]|null} [baseBadges] - badges de base (null → snapshot classique).
- * @returns {Promise<string[]>} noms de badges (projet dont on parle en tête).
+ * @returns {Promise<string[]>} noms de badges (ordre d'apparition).
  */
 async function collectBubbleBadgeProjects(text, baseBadges = null) {
-  const fallback = (() => { const n = getSuperActiveProjectName(); return n ? [n] : []; })();
+  // Echec/lenteur : on conserve la base quand on en a une (noms corrects),
+  // sinon aucune etiquette. Jamais le projet ouvert a l'ecran.
+  const fallback = Array.isArray(baseBadges) ? baseBadges : [];
   try {
     const resolved = await withTimeout((async () => {
       const [opened, tracked] = await Promise.allSettled([
@@ -1898,7 +1898,7 @@ async function collectBubbleBadgeProjects(text, baseBadges = null) {
       // baseBadges fourni → on étend (réponse) ; sinon snapshot classique (demande).
       const names = baseBadges
         ? extendBadgesWithText((baseBadges || []).map(stripGdsSuffix), text, candidates)
-        : captureProjectBadgeNames(text, getSuperActiveProjectName(), candidates);
+        : captureProjectBadgeNames(text, null, candidates);
       // Indicateur « (GDS) » : suffixe ajouté au nom du badge si le projet est
       // branché sur un GDS (config .pilot/gds.json activée). Fail-open : non
       // branché. Les invokes sont locaux/rapides ; toute lenteur → fallback.
@@ -1934,11 +1934,12 @@ async function collectBubbleBadgeProjects(text, baseBadges = null) {
  * étendue. Fire-and-forget (jamais bloquant) : en cas d'échec ou de lenteur,
  * la bulle garde ses badges de la demande (fail-open).
  * @param {HTMLElement} bubble - bulle de réponse (élément .agent-message-assistant).
- * @param {string[]} baseBadges - badges du snapshot de la demande.
+ * @param {string[]} baseBadges - badges du snapshot de la demande (peut être une
+ *   liste vide : la réponse peut alors apporter des projets réellement cités).
  * @param {string} text - texte complet de la réponse de l'assistant.
  */
 async function extendResponseBubbleBadges(bubble, baseBadges, text) {
-  if (!bubble || !Array.isArray(baseBadges) || !baseBadges.length) return;
+  if (!bubble || !Array.isArray(baseBadges)) return;
   if (!text || !String(text).trim()) return;
   const extended = await collectBubbleBadgeProjects(String(text), baseBadges);
   if (!extended.length) return;
@@ -3420,8 +3421,9 @@ export async function createSuperAgent(container) {
     inputEl.style.height = "auto";
     const userBubble = appendMessage(messagesEl, "user", text);
     // Snapshot des badges projet (chantier badge-par-bulle) : capturé ICI, au
-    // moment de l'envoi = projet actif à cet instant + projets explicitement
-    // nommés dans la demande (détection sans IA, module pur).
+    // moment de l'envoi = UNIQUEMENT les projets explicitement nommés dans la
+    // demande (detection sans IA, module pur). Aucun repli sur le projet ouvert
+    // dans Pilot : sans projet cité, aucune étiquette.
     const badgeNames = await collectBubbleBadgeProjects(text);
     if (userBubble) renderProjectBadgesInto(userBubble, badgeNames);
     // Règle 1 : nouveau tour utilisateur → fermer la bulle assistant en cours

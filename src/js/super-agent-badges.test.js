@@ -1,10 +1,14 @@
 // Tests unitaires — super-agent-badges.js (chantier « badge projet par bulle »).
-// Snapshot des badges projet des bulles de l'Assistant : capturé à l'envoi de
-// la demande (projet actif + projets explicitement nommés), hérité par la
-// bulle de réponse, JAMAIS recalculé. Détection sans IA : correspondance
-// insensible à la casse sur le nom affiché OU la fin du chemin, avec
-// frontières de mots. Module 100 % pur → testable sans mock.
+// Snapshot des badges projet des bulles de l'Assistant : capture a l'envoi de
+// la demande = UNIQUEMENT les projets reellement cites dans le texte, dans
+// l'ordre d'apparition. AUCUN repli sur le projet ouvert a l'ecran : sans
+// projet cite, aucune etiquette (defaut corrige — l'etiquette affichait le
+// projet ouvert dans Pilot, donc un nom faux pour la discussion en cours).
+// Detection sans IA : correspondance insensible a la casse sur le nom affiche
+// OU la fin du chemin, avec frontieres de mots. Module 100 % pur → testable
+// sans mock.
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   findNamedProjects,
   captureProjectBadgeNames,
@@ -83,8 +87,12 @@ describe("findNamedProjects (détection sans IA)", () => {
     expect(findNamedProjects("Pilot", PROJECTS)).toEqual(["Pilot"]);
     expect(findNamedProjects("(Pilot)", PROJECTS)).toEqual(["Pilot"]);
   });
-  it("plusieurs matchs → dans l'ordre de la liste, dédupliqués", () => {
+  it("plusieurs matchs → dans l'ORDRE D'APPARITION dans le texte", () => {
     expect(findNamedProjects("compare PLh et Pilot", PROJECTS)).toEqual([
+      "PLh",
+      "Pilot",
+    ]);
+    expect(findNamedProjects("Pilot d'abord, puis PLh", PROJECTS)).toEqual([
       "Pilot",
       "PLh",
     ]);
@@ -130,33 +138,42 @@ describe("findNamedProjects (détection sans IA)", () => {
 });
 
 describe("captureProjectBadgeNames (snapshot d'un envoi)", () => {
-  it("projet actif seul si aucun projet nommé", () => {
-    expect(captureProjectBadgeNames("salut", "Pilot", PROJECTS)).toEqual(["Pilot"]);
+  // GARDE ANTI-REGRESSION (defaut corrige) : le repli automatique sur le projet
+  // ouvert dans Pilot. Ce test echoue si `push(activeProjectName)` revient dans
+  // la production : « salut » ne cite aucun projet, donc AUCUNE etiquette,
+  // quel que soit le projet affiche a l'ecran.
+  it("aucun projet cite → AUCUNE etiquette (jamais le projet actif)", () => {
+    expect(captureProjectBadgeNames("salut", "Pilot", PROJECTS)).toEqual([]);
+    // Cas exact du defaut signale par le proprietaire (projet ouvert Kodali,
+    // discussion sur un autre projet) : l'ancien test exigeait ["Kodali"].
+    expect(captureProjectBadgeNames("salut", "Kodali", TRACKED_FULLPATH)).toEqual([]);
+    expect(captureProjectBadgeNames("comment vas-tu ?", "MakeFilm", TRACKED_FULLPATH)).toEqual([]);
   });
-  it("projets nommés d'abord + projet actif ensuite (projet dont on parle en tête)", () => {
-    expect(captureProjectBadgeNames("compare PLh et Pilot", "PLh", PROJECTS)).toEqual([
+  it("le projet actif n'est jamais ajoute a un projet cite", () => {
+    expect(captureProjectBadgeNames("et MakeFilm ?", "Kodali", TRACKED_FULLPATH)).toEqual(["MakeFilm"]);
+  });
+  it("deux projets cites dans un meme message → les deux noms apparaissent", () => {
+    expect(captureProjectBadgeNames("compare PLh et Pilot", "Pilot", PROJECTS)).toEqual([
+      "PLh",
+      "Pilot",
+    ]);
+    expect(captureProjectBadgeNames("Pilot et PLh, meme combat", "Kodali", PROJECTS)).toEqual([
       "Pilot",
       "PLh",
     ]);
   });
-  it("le projet dont on parle passe devant le projet actif", () => {
-    expect(captureProjectBadgeNames("et MakeFilm ?", "Kodali", TRACKED_FULLPATH)).toEqual(["MakeFilm", "Kodali"]);
-  });
-  it("aucun projet évoqué → projet actif seul (inchangé)", () => {
-    expect(captureProjectBadgeNames("salut", "Kodali", TRACKED_FULLPATH)).toEqual(["Kodali"]);
-  });
-  it("le projet actif n'est pas dupliqué s'il est aussi nommé", () => {
+  it("le projet actif n'est pas duplique s'il est aussi nomme", () => {
     expect(captureProjectBadgeNames("on parle de PLh", "PLh", PROJECTS)).toEqual(["PLh"]);
   });
-  it("texte vide → projet actif seul", () => {
-    expect(captureProjectBadgeNames("", "Pilot", PROJECTS)).toEqual(["Pilot"]);
+  it("texte vide → aucune etiquette", () => {
+    expect(captureProjectBadgeNames("", "Pilot", PROJECTS)).toEqual([]);
   });
   it("aucun projet connu → vide (fail-open)", () => {
     expect(captureProjectBadgeNames("blabla", null, null)).toEqual([]);
   });
-  it("texte non-string → actif seul", () => {
-    expect(captureProjectBadgeNames(undefined, "Pilot", PROJECTS)).toEqual(["Pilot"]);
-    expect(captureProjectBadgeNames(42, "Pilot", PROJECTS)).toEqual(["Pilot"]);
+  it("texte non-string → aucune etiquette", () => {
+    expect(captureProjectBadgeNames(undefined, "Pilot", PROJECTS)).toEqual([]);
+    expect(captureProjectBadgeNames(42, "Pilot", PROJECTS)).toEqual([]);
   });
   it("null retourne aussi un tableau (jamais undefined)", () => {
     const out = captureProjectBadgeNames("", null, []);
@@ -166,17 +183,21 @@ describe("captureProjectBadgeNames (snapshot d'un envoi)", () => {
 });
 
 describe("extendBadgesWithText (bulle de réponse, chantier #15)", () => {
-  it("réponse évoquant plusieurs projets → tous ajoutés après la base", () => {
-    // Demande sans projet nommé → base = projet actif seul.
+  it("demande sans projet cite → la reponse peut apporter les projets reellement cites", () => {
+    // Demande sans projet nomme → base VIDE (plus de repli sur le projet actif).
     const base = captureProjectBadgeNames("parles moi des projets que tu connais", "Pilot", PROJECTS);
-    expect(base).toEqual(["Pilot"]);
-    // La réponse évoque PLh et Site Vitrine → étendue.
+    expect(base).toEqual([]);
+    // La reponse evoque PLh et Site Vitrine → ajoutes dans l'ordre du texte.
     const extended = extendBadgesWithText(
       base,
       "Voici les projets : PLh et le site vitrine d'Acme.",
       PROJECTS
     );
-    expect(extended).toEqual(["Pilot", "PLh", "Site Vitrine"]);
+    expect(extended).toEqual(["PLh", "Site Vitrine"]);
+  });
+  it("ajoute des projets cites sans jamais retirer un nom correct de base", () => {
+    const extended = extendBadgesWithText(["MakeFilm"], "et PLh avance aussi", TRACKED_FULLPATH);
+    expect(extended).toEqual(["MakeFilm", "PLh"]);
   });
   it("base en tête, ordre préservé, dédupliqué", () => {
     const extended = extendBadgesWithText(
@@ -204,5 +225,32 @@ describe("extendBadgesWithText (bulle de réponse, chantier #15)", () => {
     expect(extendBadgesWithText(["Pilot"], "PLh", null)).toEqual(["Pilot"]);
     expect(extendBadgesWithText([], "PLh", PROJECTS)).toEqual(["PLh"]);
     expect(extendBadgesWithText(undefined, undefined, undefined)).toEqual([]);
+  });
+});
+// GARDE ANTI-REGRESSION (lecture du source) : le repli sur le projet actif a
+// l'envoi d'un message ne doit JAMAIS revenir. Ces tests echouent si la
+// production re-introduit la lecture du projet ouvert pour etiqueter une bulle.
+describe("garde anti-regression : aucun repli sur le projet ouvert dans Pilot", () => {
+  const readSource = (rel) =>
+    readFileSync(new URL(rel, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+
+  it("super-agent.js ne lit plus le nom du projet actif pour les badges", () => {
+    const src = readSource("./super-agent.js");
+    // La fonction de repli a ete supprimee : sa reapparition = retour du defaut.
+    expect(src.includes("getSuperActiveProjectName")).toBe(false);
+    // L'envoi capture uniquement les projets cites (pas de nom de projet actif).
+    expect(src.includes("captureProjectBadgeNames(text, null,")).toBe(true);
+  });
+
+  it("super-agent-badges.js n'ajoute plus le projet actif a la liste des badges", () => {
+    const src = readSource("./super-agent-badges.js");
+    expect(src.includes("push(activeProjectName)")).toBe(false);
+  });
+
+  it("l'extension de la reponse ne s'arrete plus sur une base vide", () => {
+    const src = readSource("./super-agent.js");
+    // Une base vide doit rester etendable : sinon une reponse citant un projet
+    // ne porterait aucune etiquette quand la demande n'en citait aucun.
+    expect(src.includes("!Array.isArray(baseBadges) || !baseBadges.length")).toBe(false);
   });
 });

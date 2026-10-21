@@ -134,14 +134,20 @@ apprend et répond.
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
 - **Badges projet par bulle (snapshot à l'envoi)** : chaque demande et sa
-  réponse portent les badges des projets dont elles parlent, **étiquetés au
-  moment où vous envoyez la demande** = projet actif à cet instant + chaque
-  projet explicitement nommé dans le texte. La détection est **sans IA** :
+  réponse portent les badges des projets **réellement concernés par la
+  discussion**, étiquetés au moment où vous envoyez la demande = **uniquement
+  les projets explicitement nommés dans le texte**, dans leur **ordre
+  d'apparition**, sans doublon. **Aucun projet cité = aucune étiquette** : le
+  projet simplement **ouvert dans Pilot** n'est **jamais** affiché par défaut
+  (un nom faux fait croire à un travail sur le mauvais projet, ce qui est pire
+  que pas de nom). Plusieurs projets cités → plusieurs badges compacts sur la
+  même bulle. La détection est **sans IA** :
   correspondance insensible à la casse sur le **nom affiché** du projet (ex:
   « PLh ») ou la **fin de son chemin** (ex: « ia_pl/plh »), avec **frontières
   de mots** (une demande qui parle de « pilotage » n'étiquette pas le projet
-  « pilot »). Plusieurs badges compacts possibles sur une même bulle ; la
-  réponse hérite des badges de la demande qui l'a déclenchée. Les badges sont
+  « pilot »). La réponse hérite des badges de la demande qui l'a déclenchée et
+  peut y **ajouter** les projets réellement cités dans le texte de la réponse
+  (jamais en retirer un correct, jamais en inventer un). Les badges sont
   **figés pour toujours** : changer de projet actif (même via `open_project`
   pendant le tour) ne modifie **jamais** les badges déjà affichés, et aucune
   bulle n'est re-étiquetée rétrospectivement. La **bulle de continuation**

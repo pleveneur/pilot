@@ -1,10 +1,13 @@
 // super-agent-badges.js — Snapshot des badges projet des bulles de l'Assistant.
 //
 // Chantier « badge projet par bulle » : quand l'utilisateur envoie une demande
-// dans l'onglet 🧭 Assistant, on capture AU MOMENT DE L'ENVOI la liste des
-// projets concernés = projet actif à cet instant + chaque projet explicitement
-// nommé dans le texte. La bulle de demande ET la bulle de réponse portent ces
-// badges (figés pour toujours : aucun rafraîchissement rétrospectif).
+// dans l'onglet Assistant, on capture AU MOMENT DE L'ENVOI la liste des projets
+// REELLEMENT cites dans le texte. Aucun repli sur le projet ouvert a l'ecran :
+// sans projet cite, aucune etiquette (un nom faux fait croire a un travail sur
+// le mauvais projet, pire que pas de nom). Les noms suivent l'ordre
+// d'apparition dans le texte, sans doublon. La bulle de demande ET la bulle de
+// reponse portent ces badges (figes pour toujours : aucun rafraichissement
+// retrospectif).
 //
 // Chantier #15 : la bulle de RÉPONSE est en plus étendue avec les projets
 // nommés dans le texte de la réponse de l'assistant (extendBadgesWithText),
@@ -34,23 +37,25 @@ function isWordChar(ch) {
 }
 
 /**
- * Cherche une occurrence de `needle` dans `haystack` avec frontières de mots :
- * le caractère précédent et le caractère suivant ne doivent pas être des
- * caractères de mot. Insensible à la casse (deux chaînes déjà en minuscules).
- * @param {string} haystack - texte normalisé (minuscules).
- * @param {string} needle - motif (minuscule, déjà trimmé).
- * @returns {boolean}
+ * Position de la PREMIERE occurrence de `needle` dans `haystack` respectant les
+ * frontieres de mots : le caractere precedent et le caractere suivant ne
+ * doivent pas etre des caracteres de mot. Insensible a la casse (deux chaines
+ * deja en minuscules). Sert aussi a ordonner les etiquettes dans l'ordre
+ * d'apparition dans le texte.
+ * @param {string} haystack - texte normalise (minuscules).
+ * @param {string} needle - motif (minuscule, deja trimme).
+ * @returns {number} index de la premiere occurrence valide, ou -1.
  */
-function containsWholeWord(haystack, needle) {
-  if (!haystack || !needle) return false;
+function firstWholeWordIndex(haystack, needle) {
+  if (!haystack || !needle) return -1;
   let idx = haystack.indexOf(needle);
   while (idx >= 0) {
     const before = idx > 0 ? haystack[idx - 1] : "";
     const after = idx + needle.length < haystack.length ? haystack[idx + needle.length] : "";
-    if (!isWordChar(before) && !isWordChar(after)) return true;
+    if (!isWordChar(before) && !isWordChar(after)) return idx;
     idx = haystack.indexOf(needle, idx + 1);
   }
-  return false;
+  return -1;
 }
 
 /** Dernier segment non vide d'un chemin (séparateurs / ou \). */
@@ -93,15 +98,17 @@ function candidateDisplayName(p) {
  *
  * @param {string} text - texte de la demande de l'utilisateur.
  * @param {Array<{path?:string, name?:string}>} projects - projets connus/ouverts.
- * @returns {string[]} noms affichables des projets matchés (ordre de la liste,
- *   dédupliqués, sans doublon avec la casse différente).
+ * @returns {string[]} noms affichables des projets matches, dans l'ORDRE
+ *   d'apparition dans le texte, dedupliques (casse differente = un seul nom).
  */
 export function findNamedProjects(text, projects) {
   const hay = normalizeSeparators(text).toLowerCase();
   if (!hay) return [];
   const list = Array.isArray(projects) ? projects : [];
   const seen = new Set();
-  const out = [];
+  // matches = { nom, index } : l'index est la premiere apparition dans le texte
+  // (tous candidats du projet confondus). Le tri final donne l'ordre du texte.
+  const matches = [];
   for (const p of list) {
     if (!p || typeof p !== "object") continue;
     const display = candidateDisplayName(p);
@@ -122,63 +129,48 @@ export function findNamedProjects(text, projects) {
     for (const suffix of pathSearchSuffixes(path)) {
       candidates.push(suffix.toLowerCase());
     }
-    const matched = candidates.some((c) => containsWholeWord(hay, c));
-    if (matched) {
+    let bestIndex = -1;
+    for (const candidate of candidates) {
+      const idx = firstWholeWordIndex(hay, candidate);
+      if (idx < 0) continue;
+      if (bestIndex < 0 || idx < bestIndex) bestIndex = idx;
+    }
+    if (bestIndex >= 0) {
       seen.add(display.toLowerCase());
-      out.push(display);
+      matches.push({ name: display, index: bestIndex });
     }
   }
-  return out;
+  // Ordre d'apparition dans le texte (tri stable : a index egal, ordre de liste).
+  matches.sort((a, b) => a.index - b.index);
+  return matches.map((m) => m.name);
 }
 
 /**
- * Capture (pur, testable) des badges projet pour un envoi : projet actif à
- * cet instant + projets nommés détectés dans le texte, dédupliqués (les
- * projets nommés passent devant — c'est le projet dont la conversation parle ;
- * le projet actif vient ensuite, dans l'ordre de la liste).
- * Fail-open : texte vide → projet actif seul ; aucun projet → liste vide
- * (jamais bloquant, jamais d'exception).
+ * Capture (pur, testable) des badges projet pour un envoi : UNIQUEMENT les
+ * projets reellement cites dans le texte, dans l'ordre d'apparition, sans
+ * doublon. Aucun projet cite → liste VIDE (aucune etiquette).
+ *
+ * IMPORTANT (defaut corrige) : le projet ouvert a l'ecran n'est JAMAIS ajoute
+ * par defaut. Le parametre `_activeProjectName` est conserve pour la
+ * compatibilite des appels positionnels mais il est IGNORE : l'etiquette ne
+ * doit refleter que la discussion, pas ce qui est ouvert dans Pilot.
+ * Fail-open : texte vide ou projets invalides → liste vide, jamais d'exception.
  *
  * @param {string} text - texte de la demande.
- * @param {string|null} activeProjectName - nom du projet actif à l'envoi.
+ * @param {string|null} _activeProjectName - IGNORE (compatibilite d'appel).
  * @param {Array<{path?:string, name?:string}>} projects - projets connus/ouverts.
- * @returns {string[]} noms à afficher en badges (ordre stable).
+ * @returns {string[]} noms a afficher en badges (ordre d'apparition).
  */
-export function captureProjectBadgeNames(text, activeProjectName, projects) {
-  const out = [];
-  const seen = new Set();
-  const push = (name) => {
-    const key = String(name || "").trim().toLowerCase();
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    out.push(String(name).trim());
-  };
-  // L'étiquette du haut doit désigner le projet DONT LA CONVERSATION PARLE :
-  // les projets nommés dans le texte passent devant, le projet actif vient
-  // ensuite (défaut de la conversation). Aucun projet nommé → liste = projet
-  // actif seul, comportement historique conservé.
-  if (typeof text === "string" && text.trim()) {
-    for (const name of findNamedProjects(text, projects)) push(name);
-  }
-  push(activeProjectName);
-  return out;
+export function captureProjectBadgeNames(text, _activeProjectName, projects) {
+  return findNamedProjects(text, projects);
 }
 
 /**
  * Étend une liste de badges existants avec les projets nommés dans un texte
  * (pur, testable). Utilisé pour la bulle de RÉPONSE (chantier #15) : on part
- * des badges de la demande (projet actif + projets nommés) et on y ajoute les
- * projets évoqués dans le texte de la réponse de l'assistant. Les badges de
- * base restent en tête (ordre préservé) ; les nouveaux suivent dans l'ordre de
- * la liste des projets. Dédupliqués (insensible à la casse). Fail-open :
- * base/text/projets invalides → jamais d'exception, jamais de doublon.
- *
- * @param {string[]} baseBadges - badges déjà capturés (ex: snapshot de la demande).
- * @param {string} text - texte supplémentaire à scanner (ex: réponse de l'assistant).
- * @param {Array<{path?:string, name?:string}>} projects - projets connus/ouverts.
- * @returns {string[]} badges étendus (base en tête, dédupliqués).
- */
-/**
+ * des badges de la demande (projets réellement cités) et on y ajoute les
+ * projets évoqués dans le texte de la réponse de l'assistant (voir la
+ * description complète sur la fonction ci-dessous).
  * Choix des badges d'une bulle de l'Assistant (pur, testable) — PRIORITÉ, et
  * JAMAIS d'invention de nom :
  *   1. `explicitBadges` : fournis par l'appelant qui connaît le projet de
@@ -203,18 +195,21 @@ export function resolveBubbleBadgeNames(explicitBadges, turnBadges) {
 }
 
 /**
- * Étend une liste de badges existants avec les projets nommés dans un texte
- * (pur, testable). Utilisé pour la bulle de RÉPONSE (chantier #15) : on part
- * des badges de la demande (projet actif + projets nommés) et on y ajoute les
- * projets évoqués dans le texte de la réponse de l'assistant. Les badges de
- * base restent en tête (ordre préservé) ; les nouveaux suivent dans l'ordre de
- * la liste des projets. Dédupliqués (insensible à la casse). Fail-open :
- * base/text/projets invalides → jamais d'exception, jamais de doublon.
+ * Etend une liste de badges existants avec les projets nommes dans un texte
+ * (pur, testable). Utilise pour la bulle de REPONSE (chantier #15) : on part
+ * des badges de la demande (projets cites) et on y ajoute les projets evoques
+ * dans le texte de la reponse de l'assistant.
+ * Regle : on ne retire JAMAIS un nom de base (il est correct : le texte de la
+ * demande le citait) et on n'ajoute que des projets reellement cites dans le
+ * texte scanne. Les badges de base restent en tete (ordre preserve) ; les
+ * nouveaux suivent dans l'ordre d'apparition dans le texte. Dedupliques
+ * (insensible a la casse). Fail-open : base/text/projets invalides → jamais
+ * d'exception, jamais de doublon.
  *
- * @param {string[]} baseBadges - badges déjà capturés (ex: snapshot de la demande).
- * @param {string} text - texte supplémentaire à scanner (ex: réponse de l'assistant).
+ * @param {string[]} baseBadges - badges deja captures (ex: snapshot de la demande).
+ * @param {string} text - texte supplementaire a scanner (ex: reponse de l'assistant).
  * @param {Array<{path?:string, name?:string}>} projects - projets connus/ouverts.
- * @returns {string[]} badges étendus (base en tête, dédupliqués).
+ * @returns {string[]} badges etendus (base en tete, dedupliques).
  */
 export function extendBadgesWithText(baseBadges, text, projects) {
   const out = [];
