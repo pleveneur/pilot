@@ -45,7 +45,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 
 ### File d'attente du projet
 - Sur un projet, **une seule tâche tourne à la fois**. Les demandes suivantes ne sont **pas perdues** : elles **attendent leur tour** et démarrent **automatiquement** dès que la place se libère.
-- **L'ordre d'arrivée est respecté** : une demande déposée alors qu'une autre attend déjà ne passe **jamais devant** — elle se place **derrière** et démarre à son tour. L'écran vous le dit (« N demande(s) attendent déjà — votre demande est mise en file DERRIÈRE elles ») et la raison reste écrite dans `.pilot/agent-stops.log`.
+- **L'ordre d'arrivée est respecté à l'admission** : une demande déposée alors qu'une autre attend déjà ne passe **jamais devant** — elle se place **derrière** et démarre à son tour. Une seule nuance, écrite noir sur blanc dans les **limites connues** (aucune perte, aucun doublon) : une mission **déjà sortie de file** qui ne peut pas démarrer repart **derrière** les suivantes. L'écran vous le dit (« N demande(s) attendent déjà — votre demande est mise en file DERRIÈRE elles ») et la raison reste écrite dans `.pilot/agent-stops.log`.
 - Un **bloc discret** sous la barre d'outils de l'onglet de l'agent montre la file : la tâche **en cours**, puis les demandes **en attente** avec leur rang (« en attente (2e) »). Il n'apparaît que s'il y a quelque chose à dire.
 - La commande **`/file`** affiche la file complète du projet dans la discussion ; **`/file vide`** abandonne les demandes **en attente** et annonce **combien** ont été abandonnées (la tâche en cours n'est jamais arrêtée).
 - **Aucune demande ne disparaît en silence** : une demande en attente dont la tâche porteuse s'est arrêtée reste **visible** et **relançable** ; si elle est abandonnée (par vous, par le chien de garde ou par « tout arrêter »), son libellé est écrit dans `.pilot/agent-stops.log` et l'écran vous le signale.
@@ -370,6 +370,16 @@ missions déjà en attente, et affiche à l'écran le nombre de demandes devant.
 
 **Pas de boucle** : le lancement issu du rejeu (`launchQueuedMission` →
 `entry.launch({dequeue: true})`) ne se compte pas comme « une mission devant ».
+
+**Limite connue (L1), assumée en l'état** : la garantie d'ordre vaut à
+l'**admission**, pas sur le **rebouclage** d'une mission déjà sortie de file.
+Si le projet est encore occupé au moment du rejeu (mission de **lecture**,
+commande **manuelle**, run d'un autre agent), la mission est remise en file par
+`enqueueMissionForProject` — donc **en queue** (`push`) et non en tête : avec
+`[B, C]`, la file devient `[C, B]`. Aucune perte, aucun doublon (même mission,
+même numéro, rejeu réarmé) ; seul l'**ordre d'attente** peut changer. Détail et
+preuves : `spec_super_agent.md` § 13 « Limites connues » (L1). Tests : aucun ne
+couvre ce cas aujourd'hui (prouvé par lecture).
 
 **Tests** : `src/js/file-attente-fifo-admission.test.js` (décision, ordre
 d'exécution réel [A puis B], trace, câblage des trois points d'entrée, vue de la

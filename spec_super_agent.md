@@ -589,13 +589,26 @@ uniquement un bloc d'instructions dans le prompt système.
 - **#66 — Mise en file des délégations** : si vous déléguez une nouvelle
   demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
   elle est **mise en file** et transmise automatiquement dès la fin de la
-  tâche en cours. Un `stop_agent` **annule** la file d'attente.
-- **Rejeu garanti de la file de missions (POINT G)** : une mission
-  (`run_agents` / `run_assistant_agents`) mise en file est rejouée
-  automatiquement **dès que le projet est libre**, y compris quand l'occupation
-  vient d'une **commande manuelle** ou d'un **prompt distant** : l'admission
-  réelle (verrou du bus OU travail en cours) est surveillée périodiquement, donc
-  la file ne peut plus rester bloquée.
+  tâche en cours. Un `stop_agent` **abandonne la file des DÉLÉGATIONS**
+  (`abandonQueuedDelegations`) : chaque demande abandonnée est **nommée**,
+  consignée au journal du projet et annoncée. La file des **MISSIONS**
+  (`run_agents` / `run_assistant_agents`) suit une règle **différente** : un
+  arrêt d'agent ne la détruit **jamais** (voir la règle 4 ci-dessous).
+- **Rejeu de la file de missions, dans l'ordre d'arrivée (POINT G + P1)** : une
+  mission (`run_agents` / `run_assistant_agents`) mise en file est rejouée
+  automatiquement **dès que le projet est réellement libre**, y compris quand
+  l'occupation vient d'une **commande manuelle** ou d'un **prompt distant** : la
+  disponibilité est jugée sur les **sessions vivantes** (jamais sur un verrou),
+  et le rejeu reste **armé** à chaque empilement, après chaque arrêt d'agent (P2)
+  et tant qu'il reste des missions en file. Une demande qui arrive alors que
+  d'autres attendent déjà **se place derrière elles** (motif
+  `queue-order-respected` consigné). Deux **limites écrites** sont décrites plus
+  loin, dans la section « Deux limites connues, écrites noir sur blanc » : une
+  mission **déjà sortie de file** qui ne peut pas démarrer repart **derrière**
+  les suivantes (aucune perte, aucun doublon, ordre d'attente susceptible de
+  changer) ; une demande en file dont la **run propriétaire a disparu** est
+  **conservée** et signalée (`queue-replay-no-owner`) plutôt qu'exécutée pour
+  une autre mission.
 - **Issue #87 — Accusé de lancement honnête (plus de faux « ok »)** : quand
   l'Assistant lance une mission (`run_agents`), l'accusé retourné à l'Assistant
   distingue désormais trois situations au lieu d'un « ok » fourre-tout :
@@ -1184,7 +1197,8 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
 | Arrêt de run demandé par un appelant automatique (`stopAgentsRun({reason})`) | motif transmis | `stop-run` (défaut) |
 | Session périmée redémarrée avec un contexte vierge | `stale-session-restart` | `fresh-context` |
 | Nettoyage d'un processus orphelin après échec de lancement | `spawn-failure-cleanup` | `run-agent-turn-error` |
-| Demandes en file qui ne peuvent plus être rejouées / abandonnées | `queue-abandoned` | `watchdog`, `clear-all-runs`, `user-abandon`, `stop-agent`, `file-vide` |
+| Demandes en file qui ne peuvent plus être rejouées / abandonnées | `queue-abandoned` | `watchdog`, `clear-all-runs`, `user-abandon`, `stop-agent` (délégations uniquement), `file-vide` |
+| Missions **conservées** en file par un arrêt d'agent (P2 : aucune destruction) | `queue-kept` | `stop-agent` |
 | Boucle détectée dans l'onglet agent principal (`agent-pi.js`) | `loop-detection` | `text`, `actions` |
 | Fin de SESSION par erreur dans le bus (chaque `failAgentTurn`) | `session-error`, `spawn-failed`, `run-exception` | erreur d'envoi de correction, sortie de processus (boucle / mort), message en erreur, modèle absent, exception du tour |
 | Destruction de la session de l'onglet agent (`stop_agent_session`) | `session-restart` | `quality-gate-toggle`, `reconnect`, `settings-restart` |
@@ -1501,12 +1515,22 @@ Sessions d'agents (chat / orchestration)
   **File d'attente des délégations (issue #66)** : une délégation envoyée
   pendant que l'agent travaille n'est plus perdue — elle est mise en file et
   transmise automatiquement à la fin de la tâche en cours (à l'`agent_end`).
-  L'arrêt explicite (`stop_agent`) annule la file. **Rejeu garanti (POINT G)** :
-  une mission (`run_agents` / `run_assistant_agents`) mise en file est rejouée
-  automatiquement **dès que le projet est libre**, y compris quand l'occupation
-  vient d'une **commande manuelle** ou d'un **prompt distant** : l'admission réelle
-  (verrou du bus OU travail en cours) est surveillée périodiquement, donc la file
-  ne peut plus rester bloquée. **Reprise après arrêt
+  L'arrêt explicite (`stop_agent`) **abandonne la file des délégations**
+  (`abandonQueuedDelegations` : chaque demande est nommée, consignée au journal
+  des arrêts et annoncée) ; la file des **MISSIONS** suit la règle inverse —
+  conservée puis rejouée (P2). **Rejeu de la file de missions, dans l'ordre
+  d'arrivée (POINT G + P1)** : une mission (`run_agents` /
+  `run_assistant_agents`) mise en file est rejouée automatiquement **dès que le
+  projet est réellement libre**, y compris quand l'occupation vient d'une
+  **commande manuelle** ou d'un **prompt distant** — l'admission est décidée par
+  `decideMissionAdmission` (file consultée AVANT tout lancement), le rejeu est
+  réarmé à chaque empilement, après chaque arrêt d'agent et tant qu'il reste des
+  missions, et la disponibilité est jugée sur les **sessions vivantes**, jamais
+  sur un verrou. Deux limites connues sont écrites au **§ 13** (« Limites
+  connues ») : remise **en queue** d'une mission défilée qui ne peut pas démarrer
+  (inversion d'ordre possible, sans perte), et entrée en file dont la run
+  propriétaire a disparu (conservée, signalée, jamais exécutée pour une autre
+  mission). **Reprise après arrêt
   (issue #65)** : après un `stop_agent`, la session de l'agent du projet est
   recréée automatiquement à la prochaine délégation (et `purge_agent_conversation`
   se répare seul en recréant la session si nécessaire) — plus besoin de
@@ -2219,6 +2243,84 @@ disque à chaque lancement de session.
 - Lecture seule garantie techniquement (extension `pilot-assistant-files`).
 - Base interne isolée dans `~/.pilot/` + espace d'écriture `~/.pilot/assistant/`.
 - Ne pas modifier les modules existants d'agents ni `ask_pi_caged_timed`.
+
+---
+
+## 13. Limites connues (file d'attente et identité de projet)
+
+<!-- HELP:file-attente-limites -->
+### Deux limites connues, écrites noir sur blanc
+
+Après les correctifs d'**ordre d'arrivée**, de **file conservée à l'arrêt d'un
+agent** et d'**identité de projet**, **deux limites** subsistent. Aucune ne
+perd ni ne duplique une demande, et aucune ne masque un échec : elles sont
+écrites ici pour être **connues**, pas pour être cachées. Les correctifs
+correspondants sont **identifiés** dans la spécification technique ci-dessous et
+restent **non appliqués** (hors périmètre des correctifs déjà publiés).
+
+- **L'ordre d'attente peut changer, jamais la demande** : une mission **déjà
+  sortie de file** qui ne trouve pas le projet libre (mission de **lecture**,
+  **commande manuelle**, prompt d'un autre agent en cours) est **remise en file
+  DERRIÈRE** les suivantes — avec `[B, C]`, la file devient `[C, B]`. Même
+  mission, même numéro, rejeu réarmé : rien n'est perdu, rien n'est dupliqué,
+  l'attente supplémentaire est d'au plus un tour de rejeu (15 s).
+- **La file des commandes manuelles reste rangée par le chemin tel qu'écrit** :
+  si le **même dossier** est désigné avec deux écritures (« `G:\IA_PL\pilot` »
+  et « `g:/ia_pl/pilot/` »), deux files de commandes manuelles coexistent, et
+  `/file` peut ne pas voir — donc ne pas abandonner — les commandes posées sous
+  l'autre écriture. Chaque commande démarre quand même à son tour, rien n'est
+  perdu. Les **autres** files (missions, délégations, exclusivité, réservations)
+  sont, elles, bien **unifiées**.
+<!-- /HELP:file-attente-limites -->
+
+**Vérifié sur le disque le 2026-10-21** (lecture seule ; relecture indépendante :
+`rapport-relecture-finale.md` § 4.4 et § 9). Les deux limites sont **constatées**
+après les correctifs P1 (`4cf5356`, ordre d'arrivée respecté à l'admission),
+P2 (`13f7552`, un arrêt d'agent ne détruit plus une file de missions) et
+P3 (`275eb04`, une seule identité de projet).
+
+### L1 — Une mission déjà sortie de file repart **derrière** les suivantes
+
+- **Ce qui se passe** : le rejeu sort la **tête** de file (`queue.shift()`,
+  `super-agent.js:1003`), puis le lanceur décide de l'admission. Si le projet
+  est **encore occupé** à cet instant par autre chose que le bus (mission de
+  **lecture**, **commande manuelle**, prompt distant), la mission ne démarre
+  pas et est **remise en file** par `enqueueMissionForProject`, c'est-à-dire
+  **en queue** (`:4741` → `:554`), et non en tête. Avec une file `[B, C]`, elle
+  devient `[C, B]`.
+- **Effet pour vous** : l'**ordre d'attente** peut changer (C démarre avant B).
+  Rien n'est perdu, rien n'est dupliqué : même mission, même numéro, rejeu
+  réarmé (`:4747`), attente supplémentaire d'au plus un tour de rejeu (15 s,
+  `RUN_AGENTS_QUEUE_REPLAY_MS`, `:928`).
+- **Cause** : le rejeu juge la liberté sur les **sessions vivantes**
+  (`isRunStillActive`, `:959`) alors que l'admission juge sur le **bus**
+  (`isRunInProgress`, `agents-bus.js:3159`, appelée `:4722`) : deux juges
+  différents.
+- **Ce qui n'est pas couvert** : aucun test ne reproduit ce cas aujourd'hui. Le
+  chemin est prouvé par **lecture** : `launchQueuedMission` (`:1053`) →
+  `isRunInProgress` (`:4722`) → `decideMissionAdmission` (`:4732`) →
+  `enqueueMissionForProject` (`:4741`) → `queue.push` (`:554`). Le lancement qui
+  **échoue** techniquement, lui, remet bien la mission **en tête** (`:1066`).
+- **Correctif connu, non appliqué** : remettre **en tête** quand le lancement
+  est issu du rejeu (`atHead` / `unshift` dans `launchQueuedMission`), + un test
+  dédié « mission défilée qui ne peut pas démarrer revient en tête ».
+
+### L2 — La file des **commandes manuelles** reste indexée par chemin brut
+
+- **Ce qui se passe** : `src/js/project-task-queue.js` range ses files par la
+  chaîne de projet **telle quelle** (`queueOf`, `:262-266` ; lecture `:315`,
+  abandon `:333`, sonde `:443-448`). La normalisation d'identité de projet (P3,
+  `src/js/project-key.js`) n'a pas été appliquée à cette famille.
+- **Effet pour vous** : si le **même dossier** est désigné avec deux écritures
+  (« `G:\IA_PL\pilot` » et « `g:/ia_pl/pilot/` »), deux files de commandes
+  manuelles coexistent ; `/file` peut ne pas voir — donc ne pas abandonner — les
+  commandes posées sous l'autre écriture. **Aucune perte de code** : chaque
+  commande attend dans sa file et démarre à son tour.
+- **Portée** : les **autres** familles (missions, délégations, exclusivité,
+  réservations) sont bien normalisées — preuve : `project-cle-unicite.test.js`.
+- **Correctif connu, non appliqué** : faire passer `project-task-queue.js` par
+  `projectKey` (comme les autres familles), avec le test d'unicité de file
+  correspondant.
 
 ---
 

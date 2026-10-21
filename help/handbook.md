@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-21 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-21 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1027,7 +1027,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 
 ### File d'attente du projet
 - Sur un projet, **une seule tâche tourne à la fois**. Les demandes suivantes ne sont **pas perdues** : elles **attendent leur tour** et démarrent **automatiquement** dès que la place se libère.
-- **L'ordre d'arrivée est respecté** : une demande déposée alors qu'une autre attend déjà ne passe **jamais devant** — elle se place **derrière** et démarre à son tour. L'écran vous le dit (« N demande(s) attendent déjà — votre demande est mise en file DERRIÈRE elles ») et la raison reste écrite dans `.pilot/agent-stops.log`.
+- **L'ordre d'arrivée est respecté à l'admission** : une demande déposée alors qu'une autre attend déjà ne passe **jamais devant** — elle se place **derrière** et démarre à son tour. Une seule nuance, écrite noir sur blanc dans les **limites connues** (aucune perte, aucun doublon) : une mission **déjà sortie de file** qui ne peut pas démarrer repart **derrière** les suivantes. L'écran vous le dit (« N demande(s) attendent déjà — votre demande est mise en file DERRIÈRE elles ») et la raison reste écrite dans `.pilot/agent-stops.log`.
 - Un **bloc discret** sous la barre d'outils de l'onglet de l'agent montre la file : la tâche **en cours**, puis les demandes **en attente** avec leur rang (« en attente (2e) »). Il n'apparaît que s'il y a quelque chose à dire.
 - La commande **`/file`** affiche la file complète du projet dans la discussion ; **`/file vide`** abandonne les demandes **en attente** et annonce **combien** ont été abandonnées (la tâche en cours n'est jamais arrêtée).
 - **Aucune demande ne disparaît en silence** : une demande en attente dont la tâche porteuse s'est arrêtée reste **visible** et **relançable** ; si elle est abandonnée (par vous, par le chien de garde ou par « tout arrêter »), son libellé est écrit dans `.pilot/agent-stops.log` et l'écran vous le signale.
@@ -1699,13 +1699,26 @@ uniquement un bloc d'instructions dans le prompt système.
 - **#66 — Mise en file des délégations** : si vous déléguez une nouvelle
   demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
   elle est **mise en file** et transmise automatiquement dès la fin de la
-  tâche en cours. Un `stop_agent` **annule** la file d'attente.
-- **Rejeu garanti de la file de missions (POINT G)** : une mission
-  (`run_agents` / `run_assistant_agents`) mise en file est rejouée
-  automatiquement **dès que le projet est libre**, y compris quand l'occupation
-  vient d'une **commande manuelle** ou d'un **prompt distant** : l'admission
-  réelle (verrou du bus OU travail en cours) est surveillée périodiquement, donc
-  la file ne peut plus rester bloquée.
+  tâche en cours. Un `stop_agent` **abandonne la file des DÉLÉGATIONS**
+  (`abandonQueuedDelegations`) : chaque demande abandonnée est **nommée**,
+  consignée au journal du projet et annoncée. La file des **MISSIONS**
+  (`run_agents` / `run_assistant_agents`) suit une règle **différente** : un
+  arrêt d'agent ne la détruit **jamais** (voir la règle 4 ci-dessous).
+- **Rejeu de la file de missions, dans l'ordre d'arrivée (POINT G + P1)** : une
+  mission (`run_agents` / `run_assistant_agents`) mise en file est rejouée
+  automatiquement **dès que le projet est réellement libre**, y compris quand
+  l'occupation vient d'une **commande manuelle** ou d'un **prompt distant** : la
+  disponibilité est jugée sur les **sessions vivantes** (jamais sur un verrou),
+  et le rejeu reste **armé** à chaque empilement, après chaque arrêt d'agent (P2)
+  et tant qu'il reste des missions en file. Une demande qui arrive alors que
+  d'autres attendent déjà **se place derrière elles** (motif
+  `queue-order-respected` consigné). Deux **limites écrites** sont décrites plus
+  loin, dans la section « Deux limites connues, écrites noir sur blanc » : une
+  mission **déjà sortie de file** qui ne peut pas démarrer repart **derrière**
+  les suivantes (aucune perte, aucun doublon, ordre d'attente susceptible de
+  changer) ; une demande en file dont la **run propriétaire a disparu** est
+  **conservée** et signalée (`queue-replay-no-owner`) plutôt qu'exécutée pour
+  une autre mission.
 - **Issue #87 — Accusé de lancement honnête (plus de faux « ok »)** : quand
   l'Assistant lance une mission (`run_agents`), l'accusé retourné à l'Assistant
   distingue désormais trois situations au lieu d'un « ok » fourre-tout :
@@ -1756,6 +1769,26 @@ uniquement un bloc d'instructions dans le prompt système.
   Modules : `mission-identity.js` (identité pure), `agents-bus.js` (file par
   projet + garde de propriétaire), `super-agent.js` (estampille des 3 sites de
   mise en file, étiquetage du compte rendu, abandon tracé).
+- **D3 — une seule identité de projet pour toutes les files et tous les
+  verrous (corrigé)** : la clé d'un projet (index des files de missions, de
+  délégations, d'exclusivité, verrou de run du bus, réservations de fichiers)
+  venait du **chemin brut** à plusieurs endroits, alors qu'un autre module le
+  normalisait déjà. Deux écritures du **même** dossier (« `G:\IA_PL\pilot` »,
+  « `g:/ia_pl/pilot/` ») créaient donc deux files : l'une traitée, l'autre
+  **invisible** (jamais relue, jamais rejouée, jamais abandonnée nommément).
+  La normalisation vit désormais dans **un seul module pur**,
+  `src/js/project-key.js` (`projectKey`, `sameProject`, `projectScopedKey`,
+  `findProjectScopedKey`, `queueKeyMatchesProject`) : `super-agent.js`,
+  `agents-bus.js`, `exclusivity-queue.js` et `reservations.js` s'y réfèrent au
+  lieu de comparer des chaînes. Une **clé n'est jamais un chemin** : le chemin
+  réel reste transmis tel quel au backend et aux agents, et il est mémorisé
+  dans la file d'exclusivité (propriété **symbole**, invisible des itérations)
+  pour que la trace d'un abandon vise le bon dossier. **Aucune migration** :
+  les entrées posées avec une autre écriture du même chemin sont retrouvées
+  (`findExclusivityKey`, `findProjectScopedKey`). Preuve de non-régression :
+  `src/js/project-cle-unicite.test.js` (4 écritures d'un même dossier → **une**
+  file, un ordre, une réservation ; échoue si une structure recomparait le
+  chemin brut).
 
 <!-- HELP:file-attente-identite-mission -->
 ### Une demande en attente garde son identité (jamais perdue en silence)
@@ -2274,7 +2307,8 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
 | Arrêt de run demandé par un appelant automatique (`stopAgentsRun({reason})`) | motif transmis | `stop-run` (défaut) |
 | Session périmée redémarrée avec un contexte vierge | `stale-session-restart` | `fresh-context` |
 | Nettoyage d'un processus orphelin après échec de lancement | `spawn-failure-cleanup` | `run-agent-turn-error` |
-| Demandes en file qui ne peuvent plus être rejouées / abandonnées | `queue-abandoned` | `watchdog`, `clear-all-runs`, `user-abandon`, `stop-agent`, `file-vide` |
+| Demandes en file qui ne peuvent plus être rejouées / abandonnées | `queue-abandoned` | `watchdog`, `clear-all-runs`, `user-abandon`, `stop-agent` (délégations uniquement), `file-vide` |
+| Missions **conservées** en file par un arrêt d'agent (P2 : aucune destruction) | `queue-kept` | `stop-agent` |
 | Boucle détectée dans l'onglet agent principal (`agent-pi.js`) | `loop-detection` | `text`, `actions` |
 | Fin de SESSION par erreur dans le bus (chaque `failAgentTurn`) | `session-error`, `spawn-failed`, `run-exception` | erreur d'envoi de correction, sortie de processus (boucle / mort), message en erreur, modèle absent, exception du tour |
 | Destruction de la session de l'onglet agent (`stop_agent_session`) | `session-restart` | `quality-gate-toggle`, `reconnect`, `settings-restart` |
@@ -2655,6 +2689,31 @@ disque à chaque lancement de session.
   agent de l'Assistant, le lancement est **refusé** avec un message qui nomme le
   fichier en cause ; les autres sessions démarrent sans l'outil concerné, avec
   l'échec journalisé.
+
+---
+
+### Deux limites connues, écrites noir sur blanc
+
+Après les correctifs d'**ordre d'arrivée**, de **file conservée à l'arrêt d'un
+agent** et d'**identité de projet**, **deux limites** subsistent. Aucune ne
+perd ni ne duplique une demande, et aucune ne masque un échec : elles sont
+écrites ici pour être **connues**, pas pour être cachées. Les correctifs
+correspondants sont **identifiés** dans la spécification technique ci-dessous et
+restent **non appliqués** (hors périmètre des correctifs déjà publiés).
+
+- **L'ordre d'attente peut changer, jamais la demande** : une mission **déjà
+  sortie de file** qui ne trouve pas le projet libre (mission de **lecture**,
+  **commande manuelle**, prompt d'un autre agent en cours) est **remise en file
+  DERRIÈRE** les suivantes — avec `[B, C]`, la file devient `[C, B]`. Même
+  mission, même numéro, rejeu réarmé : rien n'est perdu, rien n'est dupliqué,
+  l'attente supplémentaire est d'au plus un tour de rejeu (15 s).
+- **La file des commandes manuelles reste rangée par le chemin tel qu'écrit** :
+  si le **même dossier** est désigné avec deux écritures (« `G:\IA_PL\pilot` »
+  et « `g:/ia_pl/pilot/` »), deux files de commandes manuelles coexistent, et
+  `/file` peut ne pas voir — donc ne pas abandonner — les commandes posées sous
+  l'autre écriture. Chaque commande démarre quand même à son tour, rien n'est
+  perdu. Les **autres** files (missions, délégations, exclusivité, réservations)
+  sont, elles, bien **unifiées**.
 
 ---
 
