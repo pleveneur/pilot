@@ -550,6 +550,78 @@ export function getProjectMissionQueue(projectPath) {
 }
 
 /**
+ * P1 — ORDRE D'ARRIVÉE : nombre de missions DÉJÀ EN ATTENTE devant une demande.
+ *
+ * Défaut corrigé (D1 du rapport `rapport-file-attente-pertes-doublons.md`) : à
+ * l'admission d'une demande, la file du projet n'était JAMAIS consultée — seul
+ * le verrou de run décidait. Dès que ce verrou paraissait libre, la demande qui
+ * arrivait démarrait DEVANT les missions déjà en attente (lancements directs
+ * horodatés 08:45:07Z, 09:15:07Z, 09:21:05Z, 09:25:28Z).
+ *
+ * `dequeue` : le lancement qui SORT de la file (rejeu, `launchQueuedMission`) ne
+ * se compte pas lui-même comme « devant » — sinon la mission rejouée se
+ * remettrait en file derrière elle-même, indéfiniment.
+ * @param {string} projectPath - projet (clé de file)
+ * @param {{dequeue?:boolean}} [opts]
+ * @returns {number} nombre de missions en attente devant cette demande
+ */
+export function pendingMissionsAhead(projectPath, opts = {}) {
+  if (opts && opts.dequeue) return 0;
+  return (runAgentsQueueByProject[projectPath || ""] || []).length;
+}
+
+/**
+ * P1 — DÉCISION D'ADMISSION d'une demande d'agents (point UNIQUE).
+ *
+ * Les trois points d'entrée (`run_agents` via `launchOrQueue`, `run_agents` via
+ * `startRun`, `run_assistant_agents`) décident par CETTE fonction, dans cet
+ * ordre :
+ *   1. des missions attendent déjà pour ce projet → la demande s'empile
+ *      DERRIÈRE elles (`reason: "queue-ahead"`) : l'ordre d'arrivée est
+ *      respecté, aucune mission en file n'est doublée ;
+ *   2. le projet est réellement occupé → la demande s'empile
+ *      (`reason: "busy"`, comportement historique) ;
+ *   3. sinon → démarrage immédiat (`queue: false`).
+ * @param {string} projectPath - projet (clé de file)
+ * @param {{busy?:boolean, dequeue?:boolean}} [opts] - projet occupé / lancement
+ *   issu du rejeu de la file
+ * @returns {{queue:boolean, pending:number, reason:string}}
+ */
+export function decideMissionAdmission(projectPath, opts = {}) {
+  const pending = pendingMissionsAhead(projectPath, opts);
+  if (pending > 0) return { queue: true, pending, reason: "queue-ahead" };
+  if (opts && opts.busy) return { queue: true, pending, reason: "busy" };
+  return { queue: false, pending, reason: "" };
+}
+
+/**
+ * P1 — TRACE de la décision « respecter l'ordre d'arrivée ».
+ *
+ * Un démarrage immédiat demandé alors qu'une mission attend est une décision
+ * EXPLICITE et TRACÉE : elle ne démarre pas, et le motif est écrit dans le
+ * journal des arrêts automatiques du projet (`<projet>/.pilot/agent-stops.log`,
+ * repli global) par le point unique (`traceQueueAbandon`) — la demande arrivée
+ * ne peut donc jamais écraser une mission en file sans laisser de trace.
+ * @param {string} project - projet (clé de file)
+ * @param {string[]} aheadLabels - missions DÉJÀ en attente (nommées)
+ * @param {string} arrivingLabel - demande qui arrive (nommée)
+ * @returns {Promise<void>|undefined}
+ */
+export function traceMissionQueuedBehindPending(project, aheadLabels, arrivingLabel) {
+  console.warn(
+    "[super-agent] admission FIFO :",
+    `${(aheadLabels || []).length} mission(s) déjà en file — « ${String(arrivingLabel || "").slice(0, 80)} » est mise en file DERRIÈRE elles.`
+  );
+  return traceQueueAbandon({
+    project,
+    family: "mission",
+    labels: aheadLabels,
+    reason: "queue-order-respected",
+    detected: "admission-fifo",
+  });
+}
+
+/**
  * RÈGLE 4 — POINT UNIQUE d'écriture de la trace d'abandon d'une file.
  *
  * Une file vidée laisse TOUJOURS une ligne dans le journal des arrêts
@@ -962,7 +1034,10 @@ function launchQueuedMission(target, entry) {
   };
   let result;
   try {
-    result = entry.launch();
+    // P1 : la mission qui SORT de la file est lancée en tant que telle
+    // (`dequeue`) — elle ne se compte donc pas comme « une mission devant » et
+    // ne se remet jamais derrière elle-même.
+    result = entry.launch({ dequeue: true });
   } catch (e) {
     onFailure(e);
     return;
@@ -4525,7 +4600,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // APRÈS que l'assistant ait répondu « lancé » (faux succès, lancement
         // perdu). On met alors la demande en FILE (mécanisme existant) — elle
         // démarrera dès la fin de la run en cours — au lieu de la perdre.
-        const launchOrQueue = async () => {
+        const launchOrQueue = async (launchOpts = {}) => {
           // Plancher : un verrou de run RÉCENT n'est jamais libéré ici — sinon le
           // lancement fermait la run d'un agent qui travaillait encore. On met
           // alors la demande en file.
@@ -4536,13 +4611,23 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // une mission d'ÉCRITURE : on met alors en file au lieu de modifier le
           // projet pendant qu'un agent y travaille. Une LECTURE reste légitime.
           const busyManual = missionNature === "write" && await isProjectAgentBusy(target);
-          if (isRunInProgress(target, { nature: missionNature }) || busyManual) {
+          // P1 — ORDRE D'ARRIVÉE : la FILE du projet est consultée AVANT de
+          // décider de démarrer (D1 du rapport
+          // `rapport-file-attente-pertes-doublons.md`). Une mission déjà en
+          // attente ne peut plus être doublée par une demande qui arrive.
+          const admission = decideMissionAdmission(target, {
+            busy: isRunInProgress(target, { nature: missionNature }) || busyManual,
+            dequeue: !!(launchOpts && launchOpts.dequeue),
+          });
+          if (admission.queue) {
             // Verrou occupé par une AUTRE run : renoncer au flag in-flight de
             // CETTE demande (il repassera à true au vrai lancement depuis la
             // file) et désarmer son watchdog.
             runAgentsInFlightByProject[target] = false;
             const wd = runAgentsWatchdogByProject[target];
             if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[target]; }
+            // P1 : missions DÉJÀ en attente (nommées AVANT l'empilement).
+            const aheadLabels = (runAgentsQueueByProject[target] || []).map((entry) => missionQueueLabel(entry));
             // RÈGLE 4 : mise en file par le chemin de PRODUCTION UNIQUE (libellé +
             // identité de mission + refus du double empilement).
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
@@ -4554,7 +4639,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // sinon une mission mise en file derrière une commande MANUELLE (que le
             // bus ne voit pas) reste bloquée pour toujours.
             armQueueReplay(target);
-            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.");
+            if (admission.reason === "queue-ahead") {
+              // Décision EXPLICITE et TRACÉE : la demande ne double pas la file.
+              traceMissionQueuedBehindPending(target, aheadLabels, task);
+              appendSystemMessage(messagesEl, `⏳ ${admission.pending} demande(s) attendent déjà sur ce projet — votre demande est mise en file DERRIÈRE elles ; elle démarrera à son tour, dans l'ordre d'arrivée.`);
+            } else {
+              appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.");
+            }
             return { queued: true, started: false, error: null }; // mise en file : PAS un lancement
           }
           const launched = await launchRun();
@@ -4565,7 +4656,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // Lancement de la mission : DIRECT. Aucune étape préalable, aucun accusé
         // de lancement différé — le verdict rendu à l'assistant reflète le
         // démarrage réel (`launched`) ou la mise en file (`queued`).
-        const launchMission = () => launchOrQueue();
+        const launchMission = (missionLaunchOpts) => launchOrQueue(missionLaunchOpts);
         // Garde anti-chevauchement (P1-6 + T5) — met en file si une run
         // est déjà en cours sur CE projet, sinon lance immédiatement. La détection
         // s'appuie sur le flag local du projet `runAgentsInFlightByProject[target]`
@@ -4575,7 +4666,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // watchdog ayant réinitialisé le flag alors que le bus est resté occupé) :
         // en vérifiant aussi le bus, une demande arrivant pendant une run en cours
         // sur CE projet est TOUJOURS mise en file, jamais un échec brutal.
-        const startRun = async () => {
+        const startRun = async (launchOpts = {}) => {
           // Bug : verrou de run fantôme. Si le bus d'agents est resté bloqué en
           // "running" (run précédente jamais finalisée — process pi lancé mais
           // jamais d'agent_start/agent_end, ou groupe parallèle dont pending ne
@@ -4600,7 +4691,15 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // lectures et n'attend qu'une MODIFICATION réellement en cours ; une
           // MODIFICATION attend toute run en cours sur le projet.
           const blockedByFlag = missionNature === "write" && runAgentsInFlightByProject[target];
-          if (blockedByFlag || blockedByBus) {
+          // P1 — ORDRE D'ARRIVÉE : même point de décision que `launchOrQueue`
+          // (`decideMissionAdmission`) — la file est consultée AVANT de démarrer.
+          const admission = decideMissionAdmission(target, {
+            busy: !!(blockedByFlag || blockedByBus),
+            dequeue: !!(launchOpts && launchOpts.dequeue),
+          });
+          if (admission.queue) {
+            // P1 : missions DÉJÀ en attente (nommées AVANT l'empilement).
+            const aheadLabels = (runAgentsQueueByProject[target] || []).map((entry) => missionQueueLabel(entry));
             // RÈGLE 4 : même chemin de mise en file que `launchOrQueue` (une seule
             // mission, un seul numéro) + refus du double empilement.
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
@@ -4610,7 +4709,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // POINT G : même garantie que dans `launchOrQueue` — déclencheur de
             // rejeu armé sur le projet (voir `armQueueReplay`).
             armQueueReplay(target);
-            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.");
+            if (admission.reason === "queue-ahead") {
+              // Décision EXPLICITE et TRACÉE : la demande ne double pas la file.
+              traceMissionQueuedBehindPending(target, aheadLabels, task);
+              appendSystemMessage(messagesEl, `⏳ ${admission.pending} demande(s) attendent déjà sur ce projet — votre demande est mise en file DERRIÈRE elles ; elle démarrera à son tour, dans l'ordre d'arrivée.`);
+            } else {
+              appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.");
+            }
             // Issue #87 : accusé de lancement structuré (même contrat que les
             // autres branches de lancement). Renvoyer `true` produisait
             // un accusé mensonger `{ok:true, launched:false, queued:false,
@@ -4750,7 +4855,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             delete runAgentsQueueByProject[target];
           }
         };
-        const startRun = async () => {
+        const startRun = async (launchOpts = {}) => {
           // Bug : verrou de run fantôme (même correctif que run_agents) —
           // libérer un verrou de bus bloqué MAIS INACTIF avant la garde pour
           // que la demande d'assistant démarre immédiatement au lieu de rester
@@ -4760,7 +4865,15 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           if (runAgentsInFlightByProject[target] && !isRunInProgress(target)) {
             runAgentsInFlightByProject[target] = false;
           }
-          if (runAgentsInFlightByProject[target] || isRunInProgress(target)) {
+          // P1 — ORDRE D'ARRIVÉE : la file est consultée AVANT de démarrer (même
+          // point de décision que `run_agents`).
+          const admission = decideMissionAdmission(target, {
+            busy: runAgentsInFlightByProject[target] || isRunInProgress(target),
+            dequeue: !!(launchOpts && launchOpts.dequeue),
+          });
+          if (admission.queue) {
+            // P1 : missions DÉJÀ en attente (nommées AVANT l'empilement).
+            const aheadLabels = (runAgentsQueueByProject[target] || []).map((entry) => missionQueueLabel(entry));
             // POINT E : mise en file RÉELLE (même file que `run_agents`, rejouée
             // par `settleRun`). Auparavant ce chemin répondait « queued » sans
             // jamais pousser dans une file → mission perdue en silence.
@@ -4770,12 +4883,18 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // RÈGLE 4 : identité de la mission d'assistant en file (le numéro
             // survit à la fermeture du chat : il est porté par la file, indexée
             // par projet/espace) — même chemin de production unique.
-            enqueueMissionForProject(target, () => startRun(), task, missionIdentity);
+            enqueueMissionForProject(target, (missionLaunchOpts) => startRun(missionLaunchOpts), task, missionIdentity);
             // POINT G : la file d'assistant est couverte par le MÊME déclencheur de
             // rejeu (aucune run d'assistant ne pose de watchdog : sans cela une
             // demande pouvait rester en vol sans suite).
             armQueueReplay(target);
-            appendSystemMessage(messagesEl, "⏳ Une run d'assistant est déjà en cours — la demande est mise en file ; elle démarrera automatiquement dès que le projet sera libre.");
+            if (admission.reason === "queue-ahead") {
+              // Décision EXPLICITE et TRACÉE : la demande ne double pas la file.
+              traceMissionQueuedBehindPending(target, aheadLabels, task);
+              appendSystemMessage(messagesEl, `⏳ ${admission.pending} demande(s) attendent déjà sur ce projet — votre demande est mise en file DERRIÈRE elles ; elle démarrera à son tour, dans l'ordre d'arrivée.`);
+            } else {
+              appendSystemMessage(messagesEl, "⏳ Une run d'assistant est déjà en cours — la demande est mise en file ; elle démarrera automatiquement dès que le projet sera libre.");
+            }
             return false; // PAS lancée maintenant : RÉELLEMENT mise en file
           }
           runAgentsInFlightByProject[target] = true;

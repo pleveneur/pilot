@@ -45,6 +45,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 
 ### File d'attente du projet
 - Sur un projet, **une seule tâche tourne à la fois**. Les demandes suivantes ne sont **pas perdues** : elles **attendent leur tour** et démarrent **automatiquement** dès que la place se libère.
+- **L'ordre d'arrivée est respecté** : une demande déposée alors qu'une autre attend déjà ne passe **jamais devant** — elle se place **derrière** et démarre à son tour. L'écran vous le dit (« N demande(s) attendent déjà — votre demande est mise en file DERRIÈRE elles ») et la raison reste écrite dans `.pilot/agent-stops.log`.
 - Un **bloc discret** sous la barre d'outils de l'onglet de l'agent montre la file : la tâche **en cours**, puis les demandes **en attente** avec leur rang (« en attente (2e) »). Il n'apparaît que s'il y a quelque chose à dire.
 - La commande **`/file`** affiche la file complète du projet dans la discussion ; **`/file vide`** abandonne les demandes **en attente** et annonce **combien** ont été abandonnées (la tâche en cours n'est jamais arrêtée).
 - **Aucune demande ne disparaît en silence** : une demande en attente dont la tâche porteuse s'est arrêtée reste **visible** et **relançable** ; si elle est abandonnée (par vous, par le chien de garde ou par « tout arrêter »), son libellé est écrit dans `.pilot/agent-stops.log` et l'écran vous le signale.
@@ -344,6 +345,35 @@ La file **n'invente aucune file parallèle** : elle compose celles qui existent
   démarre, la suivante démarre seule, place rendue, rien perdu) et
   `src/js/project-queue-wiring.test.js` (composition de la file visible,
   `/file vide`, câblage de l'onglet, style).
+
+#### Ordre d'arrivée à l'admission (P1)
+
+**Défaut corrigé** (cf. `rapport-file-attente-pertes-doublons.md` §4.1) : à
+l'admission d'une demande, la file du projet n'était **jamais consultée** — seul
+le verrou de run décidait. Dès qu'il paraissait libre, la demande qui arrivait
+démarrait **devant** les missions déjà en attente.
+
+**Règle** : les trois points d'entrée d'une demande d'agents (`run_agents` via
+`launchOrQueue`, `run_agents` via `startRun`, `run_assistant_agents`) décident
+par le **point unique** `decideMissionAdmission(target, {busy, dequeue})`
+(`super-agent.js`), dans cet ordre :
+
+1. des missions attendent déjà → la demande s'empile **derrière** elles
+   (`reason: "queue-ahead"`), même si le projet paraît libre ;
+2. le projet est réellement occupé → empilement (comportement historique) ;
+3. sinon → démarrage immédiat.
+
+**Décision explicite et tracée** : un cas `queue-ahead` écrit une ligne de
+journal (`reason=queue-order-respected`, `detected=admission-fifo`) nommant les
+missions déjà en attente, et affiche à l'écran le nombre de demandes devant.
+`armQueueReplay` est armé dans tous les cas : la file est drainée dans l'ordre.
+
+**Pas de boucle** : le lancement issu du rejeu (`launchQueuedMission` →
+`entry.launch({dequeue: true})`) ne se compte pas comme « une mission devant ».
+
+**Tests** : `src/js/file-attente-fifo-admission.test.js` (décision, ordre
+d'exécution réel [A puis B], trace, câblage des trois points d'entrée, vue de la
+file).
 
 #### Fiche d'agent (éditeur, deux colonnes)
 

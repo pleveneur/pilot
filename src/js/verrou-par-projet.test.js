@@ -524,8 +524,8 @@ describe("POINT B3 — popup de prompt /prompt (agent-pi.js applyPromptSelection
 describe("POINT D — le sens inverse : commande manuelle vs mission d'écriture", () => {
   it("run_agents sonde l'activité du projet en écriture et met en file", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
-    const fnIdx = src.indexOf("const launchOrQueue = async () => {");
-    const endIdx = src.indexOf("const reportDeferredLaunch", fnIdx);
+    const fnIdx = src.indexOf("const launchOrQueue = async (launchOpts = {}) => {");
+    const endIdx = src.indexOf("const launchMission =", fnIdx);
     expect(fnIdx).toBeGreaterThan(-1);
     const body = src.slice(fnIdx, endIdx);
     expect(body).toContain("isProjectAgentBusy(target)");
@@ -560,10 +560,12 @@ describe("POINT E — run_assistant_agents : file réelle, jamais un faux « que
     const branch = src.slice(startIdx, endIdx);
     // La branche occupée pousse réellement dans la file partagée…
     // CONTRAT MODIFIÉ (faux verrous 2-3-4) : via le chemin de PRODUCTION unique.
-    expect(branch).toContain("enqueueMissionForProject(target, () => startRun()");
+    // P1 : le lanceur reçoit les options du rejeu (`dequeue`), sans quoi la tête
+    // de file se compterait comme « devant » elle-même (boucle infinie).
+    expect(branch).toContain("enqueueMissionForProject(target, (missionLaunchOpts) => startRun(missionLaunchOpts)");
     // …et settleRun vide la file (rejeu automatique, comme run_agents).
     const settleIdx = branch.indexOf("const settleRun = (ok, result) => {");
-    const startRunIdx = branch.indexOf("const startRun = async () => {");
+    const startRunIdx = branch.indexOf("const startRun = async (launchOpts = {}) => {");
     const settleBody = branch.slice(settleIdx, startRunIdx);
     expect(settleBody).toContain("runAgentsQueueByProject[target] || []");
     // Volet (c) du point de suivi 344 : la relance passe par le lancement
@@ -771,19 +773,19 @@ describe("POINT G — rejeu garanti de la file de missions", () => {
   it("les trois chemins de mise en file arment le rejeu, et plus aucun message ne promet un faux délai", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
     // 1. run_agents — filet d'attente du lancement différé (launchOrQueue).
-    const loq = src.slice(src.indexOf("const launchOrQueue = async () => {"), src.indexOf("const reportDeferredLaunch"));
+    const loq = src.slice(src.indexOf("const launchOrQueue = async (launchOpts = {}) => {"), src.indexOf("const launchMission ="));
     expect(loq).toContain("enqueueMissionForProject(target, launchMission");
     expect(loq).toContain("armQueueReplay(target)");
     // 2. run_agents — garde de démarrage (startRun).
-    const srIdx = src.indexOf("const startRun = async () => {");
+    const srIdx = src.indexOf("const startRun = async (launchOpts = {}) => {");
     const sr = src.slice(srIdx, src.indexOf("const launchResult = await startRun();", srIdx));
     expect(sr).toContain("enqueueMissionForProject(target, launchMission");
     expect(sr).toContain("armQueueReplay(target)");
     // 3. run_assistant_agents — même déclencheur (aucun watchdog d'assistant).
     const aIdx = src.indexOf("const target = ASSISTANT_SPACE;");
-    const aSrIdx = src.indexOf("const startRun = async () => {", aIdx);
+    const aSrIdx = src.indexOf("const startRun = async (launchOpts = {}) => {", aIdx);
     const aSr = src.slice(aSrIdx, src.indexOf("const launchedNow = await startRun();", aSrIdx));
-    expect(aSr).toContain("enqueueMissionForProject(target, () => startRun()");
+    expect(aSr).toContain("enqueueMissionForProject(target, (missionLaunchOpts) => startRun(missionLaunchOpts)");
     expect(aSr).toContain("armQueueReplay(target)");
     // Plus de promesse de délai intenable (« à la fin de la tâche en cours »).
     expect(src).not.toContain("je la mets en file d'attente et la lancerai dès la fin de la tâche en cours");

@@ -181,13 +181,13 @@ describe("règle 1 — un agent inconnu est refusé ET la mission ne part pas", 
         name: "run_agents",
         start: "if (title.startsWith(RUN_AGENTS_SENTINEL)) {",
         end: "if (title.startsWith(RUN_ASSISTANT_AGENTS_SENTINEL)) {",
-        launch: "const launchMission = () => launchOrQueue();",
+        launch: "const launchMission = (missionLaunchOpts) => launchOrQueue(missionLaunchOpts);",
       },
       {
         name: "run_assistant_agents",
         start: "if (title.startsWith(RUN_ASSISTANT_AGENTS_SENTINEL)) {",
         end: "if (title.startsWith(SESSIONS_SENTINEL)) {",
-        launch: "const startRun = async () => {",
+        launch: "const startRun = async (launchOpts = {}) => {",
       },
     ];
 
