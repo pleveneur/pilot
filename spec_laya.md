@@ -260,6 +260,25 @@ front (`updater-arret-services-avant-maj.test.js`) verrouille l'ordre
 « télécharger → arrêter → installer » (l'arrêt est fail-open : il ne bloque
 jamais l'installation).
 
+**Arrêt raté = trace écrite, jamais de blocage** : quand un service refuse de
+mourir (droits insuffisants, fichier verrouillé), `arreter_services_pour_app`
+écrit une ligne par service dans `<app_data_dir>/services-arret.log` (ajout +
+rotation à 512 Ko, `service=… resultat=echec cause=…`) : la mise à jour
+échouait ensuite sans explication lisible, cette trace est le seul moyen de
+savoir POURQUOI. L'issue rendue à l'interface est inchangée (fail-open) ;
+`trace_services_stop` / `services_stop_failure_lines` sont pures et testées, et
+un garde-fou (`la_trace_est_branchee_sur_le_chemin_reel_darret`) échoue si
+l'appel disparaît.
+
+**Échec d'installation après un arrêt réussi** (front) : les services ne
+restent pas éteints en silence — un message non bloquant de la fenêtre de mise à
+jour dit quoi faire (« relance Pilot pour les redémarrer »), ou, si un service
+n'a pas pu être arrêté, de fermer puis relancer Pilot avant de réessayer. Aucun
+redémarrage automatique : après un échec de l'installateur les fichiers ont pu
+être remplacés en partie, et l'arrêt répond « ok » aussi bien pour « arrêté » que
+pour « il n'y avait rien à arrêter » — relancer d'office pourrait démarrer un
+service que la personne n'utilisait pas.
+
 **Démarrage à la demande** (`laya_service_start`, bouton « Démarrer le service
 maintenant ») : mêmes règles que le démarrage automatique, à une exception près —
 le réglage « au démarrage » ne s'y oppose pas (l'utilisateur l'a demandé). Un

@@ -20,11 +20,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 
-const { checkMock, invokeMock, relaunchMock, toastErrorMock } = vi.hoisted(() => ({
+const { checkMock, invokeMock, relaunchMock, toastErrorMock, showToastMock } = vi.hoisted(() => ({
   checkMock: vi.fn(),
   invokeMock: vi.fn(),
   relaunchMock: vi.fn(async () => {}),
   toastErrorMock: vi.fn(),
+  showToastMock: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: (...a) => checkMock(...a) }));
@@ -32,7 +33,7 @@ vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: () => relaunchMock() })
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "0.4.38" }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a) => invokeMock(...a) }));
 vi.mock("./toast.js", () => ({
-  showToast: vi.fn(),
+  showToast: (...a) => showToastMock(...a),
   toastInfo: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: (...a) => toastErrorMock(...a),
@@ -122,6 +123,7 @@ beforeEach(async () => {
   invokeMock.mockReset();
   relaunchMock.mockReset();
   toastErrorMock.mockReset();
+  showToastMock.mockReset();
   events = [];
   invokeMock.mockImplementation(async (cmd) => {
     events.push(`invoke:${cmd}`);
@@ -208,12 +210,141 @@ describe("c. Source — pas de retour à `downloadAndInstall`", () => {
     expect(debut).toBeGreaterThan(-1);
     const corps = SRC.slice(debut);
     const telechargement = corps.indexOf("await update.download(");
-    const arret = corps.indexOf("await arreterServicesAvantMaj();");
+    // L'arrêt peut être capturé (`arretServices = await …`) pour permettre le
+    // message d'échec de l'installation : seule la PRÉSENCE et l'ORDRE comptent.
+    const arret = corps.indexOf("arreterServicesAvantMaj(");
     const installation = corps.indexOf("await update.install()");
     expect(telechargement).toBeGreaterThan(-1);
     expect(arret).toBeGreaterThan(-1);
     expect(installation).toBeGreaterThan(-1);
     expect(telechargement).toBeLessThan(arret);
     expect(arret).toBeLessThan(installation);
+  });
+});
+
+// ── Point 1 : la réponse de l'arrêt n'est plus ignorée ──────────────────────
+// Avant : `await invoke(...)` sans lire la réponse → un service qui refuse de
+// mourir était invisible (et la mise à jour échouait ensuite sans explication).
+describe("d. La réponse de l'arrêt est lue, service par service", () => {
+  it("rend l'état des deux services quand tout a été arrêté", async () => {
+    const etat = await updater.arreterServicesAvantMaj();
+    expect(etat).toEqual({
+      ok: true,
+      plfaceStopped: true,
+      layaStopped: true,
+      attempted: true,
+    });
+  });
+
+  it("signale le service qui n'a pas pu être arrêté, sans bloquer l'installation", async () => {
+    invokeMock.mockImplementation(async (cmd) => {
+      events.push(`invoke:${cmd}`);
+      return { plfaceStopped: true, layaStopped: false };
+    });
+    const etat = await updater.arreterServicesAvantMaj();
+    expect(etat).toEqual({
+      ok: false,
+      plfaceStopped: true,
+      layaStopped: false,
+      attempted: true,
+    });
+    // Fail-open : l'installation continue malgré l'arrêt incomplet.
+    events = [];
+    await lancerInstallation();
+    expect(events).toEqual([
+      "download",
+      "invoke:stop_services_before_update",
+      "install",
+    ]);
+    expect(relaunchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("une commande indisponible n'invente pas un arrêt abouti", async () => {
+    invokeMock.mockImplementation(async () => {
+      throw new Error("commande inconnue");
+    });
+    const etat = await updater.arreterServicesAvantMaj();
+    expect(etat.ok).toBe(false);
+    expect(etat.attempted).toBe(false);
+  });
+
+  it("une réponse absente ou inattendue ne devient jamais un blocage", async () => {
+    expect(updater.lireArretServices(undefined)).toEqual({
+      ok: true,
+      plfaceStopped: true,
+      layaStopped: true,
+    });
+    expect(updater.lireArretServices({})).toEqual({
+      ok: true,
+      plfaceStopped: true,
+      layaStopped: true,
+    });
+  });
+});
+
+// ── Point 2 : après un échec d'installation, les services ne restent pas
+// éteints EN SILENCE ────────────────────────────────────────────────────────
+describe("e. Échec de l'installation après l'arrêt des services", () => {
+  /** Installe avec un installateur qui échoue (fichier verrouillé). */
+  async function lancerInstallationQuiEchoue() {
+    const update = makeUpdate();
+    update.install = vi.fn(async () => {
+      events.push("install");
+      throw new Error("erreur d'ouverture du fichier pour écriture");
+    });
+    checkMock.mockResolvedValue(update);
+    await updater.checkForUpdate(true);
+    els["btn-update-install"].__click();
+    await vi.waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalled();
+    });
+    return showToastMock.mock.calls.map((c) => String(c[0]));
+  }
+
+  it("dit au propriétaire quoi faire quand l'installation échoue après un arrêt réussi", async () => {
+    const messages = await lancerInstallationQuiEchoue();
+    expect(
+      messages.some((m) => /relance Pilot/i.test(m)),
+      `consigne attendue, reçue : ${JSON.stringify(messages)}`
+    ).toBe(true);
+    // Message non bloquant : aucune relance, aucune fenêtre d'alerte.
+    expect(relaunchMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prévient d'abord que le service n'a PAS pu être arrêté (cause réelle des fichiers verrouillés)", async () => {
+    invokeMock.mockImplementation(async (cmd) => {
+      events.push(`invoke:${cmd}`);
+      return { plfaceStopped: true, layaStopped: false };
+    });
+    const messages = await lancerInstallationQuiEchoue();
+    expect(
+      messages.some((m) => /n'a pas pu être arrêté/i.test(m)),
+      `consigne attendue, reçue : ${JSON.stringify(messages)}`
+    ).toBe(true);
+    expect(messages.some((m) => /relance Pilot/i.test(m))).toBe(false);
+  });
+
+  it("aucune consigne quand l'arrêt n'a même pas pu être tenté", async () => {
+    // Téléchargement en échec : rien n'a été arrêté, donc rien à redémarrer.
+    const update = makeUpdate();
+    update.download = vi.fn(async () => {
+      events.push("download");
+      throw new Error("réseau");
+    });
+    checkMock.mockResolvedValue(update);
+    await updater.checkForUpdate(true);
+    els["btn-update-install"].__click();
+    await vi.waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
+    expect(
+      showToastMock.mock.calls.map((c) => String(c[0])).filter((m) => /relance/i.test(m))
+    ).toEqual([]);
+  });
+
+  it("la consigne ne s'affiche pas quand l'installation réussit", async () => {
+    await lancerInstallation();
+    expect(
+      showToastMock.mock.calls.map((c) => String(c[0])).filter((m) => /relance Pilot/i.test(m))
+    ).toEqual([]);
   });
 });

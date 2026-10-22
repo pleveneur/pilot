@@ -263,15 +263,77 @@ function showUpdateModal(update) {
  *
  * Fail-open : un échec (service déjà arrêté, commande indisponible) ne bloque
  * JAMAIS l'installation de la mise à jour.
+ *
+ * La RÉPONSE de la commande n'est plus ignorée : elle dit, service par service,
+ * si l'arrêt a abouti. Un service qui refuse de mourir laisse désormais une
+ * trace exploitable dans le journal de l'application (`services-arret.log`, côté
+ * Rust) ; ici on ne fait que la relayer en console, sans jamais bloquer ni
+ * afficher de fenêtre.
  */
-async function arreterServicesAvantMaj() {
+export async function arreterServicesAvantMaj() {
   try {
-    await invoke("stop_services_before_update");
-    return true;
+    const reponse = await invoke("stop_services_before_update");
+    const etat = lireArretServices(reponse);
+    if (!etat.ok) {
+      console.warn(
+        "Arrêt des services incomplet avant mise à jour (trace dans le journal de l'application):",
+        etat
+      );
+    }
+    return { ...etat, attempted: true };
   } catch (e) {
     console.warn("Arrêt des services avant mise à jour impossible:", e);
-    return false;
+    // Commande indisponible ou en échec : on ne SAIT pas si un service a été
+    // arrêté. L'installation continue (fail-open, comportement d'origine) mais
+    // l'incertitude est conservée pour le message d'échec éventuel.
+    return { ok: false, plfaceStopped: false, layaStopped: false, attempted: false };
   }
+}
+
+/**
+ * Lit la réponse de `stop_services_before_update` (PURE, donc testable) :
+ * `plfaceStopped` / `layaStopped` à `true` = le service n'est plus en vie (déjà
+ * arrêté, refermé, ou rien à refermer). Une réponse absente ou inattendue est
+ * traitée comme un arrêt abouti : l'ancien comportement (aucune lecture de la
+ * réponse) ne doit jamais devenir un blocage.
+ * @param {unknown} reponse - réponse camelCase de la commande Rust
+ * @returns {{ok: boolean, plfaceStopped: boolean, layaStopped: boolean}}
+ */
+export function lireArretServices(reponse) {
+  const r = reponse && typeof reponse === "object" ? reponse : {};
+  const plfaceStopped = r.plfaceStopped !== false;
+  const layaStopped = r.layaStopped !== false;
+  return { ok: plfaceStopped && layaStopped, plfaceStopped, layaStopped };
+}
+
+/**
+ * Consigne lisible quand l'installation ÉCHOUE après l'étape d'arrêt (PURE).
+ *
+ * Pourquoi un message et pas un redémarrage automatique : après un échec de
+ * l'installateur, les fichiers ont pu être remplacés en partie — relancer
+ * maintenant le service pourrait démarrer un binaire incohérent. Et l'arrêt
+ * répond « true » aussi bien pour « arrêté » que pour « il n'y avait rien à
+ * arrêter » : redémarrer d'office pourrait LANCER un service que le
+ * propriétaire n'utilisait pas. La solution la plus sûre est donc de dire quoi
+ * faire — relancer Pilot, qui redémarre les services au lancement.
+ * @param {{ok?: boolean, attempted?: boolean}|null} arret - résultat de l'arrêt
+ * @returns {string} "" quand aucune consigne n'est utile
+ */
+export function consigneApresEchecInstallation(arret) {
+  if (!arret || !arret.attempted) {
+    // L'arrêt n'a même pas pu être tenté : Pilot n'a rien éteint lui-même.
+    return "";
+  }
+  if (!arret.ok) {
+    return (
+      "Un service (dictée ou classification) n'a pas pu être arrêté avant " +
+      "l'installation. Ferme Pilot, relance-le, puis réessaie la mise à jour."
+    );
+  }
+  return (
+    "La dictée ou la classification peuvent être arrêtées le temps de " +
+    "l'installation : relance Pilot pour les redémarrer."
+  );
 }
 
 /** Télécharge, installe puis relance l'application. */
@@ -286,6 +348,10 @@ async function installUpdate(update) {
   laterBtn.disabled = true;
   progressEl.classList.remove("hidden");
 
+  // Résultat de l'étape d'arrêt des services (`null` tant qu'elle n'a pas eu
+  // lieu : un échec du téléchargement ne doit produire aucune consigne). Déclaré
+  // AVANT le `try` : le bloc `catch` doit pouvoir le lire.
+  let arretServices = null;
   try {
     let contentLength = 0;
     let downloaded = 0;
@@ -318,13 +384,21 @@ async function installUpdate(update) {
     // 3. installer (l'installateur écrase les fichiers du dossier
     //    d'installation : un `node.exe` encore vivant les verrouille).
     await update.download(onEvent);
-    await arreterServicesAvantMaj();
+    arretServices = await arreterServicesAvantMaj();
     await update.install();
     showToast("Mise à jour téléchargée. Redémarrage…", "success", 5000);
     await relaunch();
   } catch (e) {
     console.error("Erreur installation MAJ:", e);
     toastError("Échec de l'installation de la mise à jour.");
+    // Point 2 : l'installation peut échouer APRÈS un arrêt RÉUSSI des services —
+    // ils resteraient alors éteints jusqu'au prochain démarrage de Pilot (dictée
+    // et classification perdues, sans aucun message). On ne redémarre pas
+    // automatiquement (fichiers possiblement remplacés en partie, risque de
+    // lancer un service que le propriétaire n'utilisait pas) : on DIT clairement
+    // quoi faire. Message non bloquant, en français, jamais un code technique.
+    const consigne = consigneApresEchecInstallation(arretServices);
+    if (consigne) showToast(consigne, "warning", 20000);
     // On permet un nouvel essai.
     _installing = false;
     installBtn.disabled = false;

@@ -244,6 +244,16 @@ travailles t'est donc proposée **sans redémarrer** l'application.
   c'est le cas, « le contrôle a échoué » avec la raison (et la date du dernier
   contrôle réussi). Un échec n'est jamais présenté comme une absence de mise à
   jour.
+- **Installation qui échoue** : Pilot t'explique quoi faire, sans fenêtre
+  bloquante. Si la dictée ou la classification ne répondent plus (elles sont
+  arrêtées le temps de l'installation), **relance Pilot** : les services
+  redémarrent au lancement. Si un service n'a pas pu être arrêté avant
+  l'installation, le message le dit et te demande de fermer puis relancer Pilot
+  avant de réessayer.
+- **Aucun arrêt de service ne se perd** : un service qui refuse de s'arrêter
+  laisse une trace écrite (quel service, et pourquoi) dans le journal de
+  l'application, dossier de données de Pilot, fichier `services-arret.log` — la
+  mise à jour, elle, n'est jamais bloquée.
 
 ---
 

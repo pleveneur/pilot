@@ -2272,10 +2272,96 @@ pub(crate) fn arreter_services_avant_maj(
     }
 }
 
+// ── Trace des arrêts de services qui n'aboutissent pas ────────────────────
+//
+// Un service qui refuse de mourir (droits insuffisants, fichier verrouillé) ne
+// laissait AUCUNE trace : l'interface ignorait la réponse de l'arrêt et la
+// fonction d'arrêt n'écrivait rien. La mise à jour échouait ensuite exactement
+// comme avant, sans que personne ne puisse savoir pourquoi. Ces lignes sont
+// donc écrites dans le **journal de l'application** (dossier de données), là où
+// le propriétaire et le développeur peuvent les lire — jamais dans une fenêtre
+// d'alerte : l'installation reste fail-open (elle n'est jamais bloquée).
+
+/// Journal des arrêts de services (racine des données de l'application).
+pub(crate) const SERVICES_STOP_LOG_FILE_NAME: &str = "services-arret.log";
+
+/// Rotation simple du journal (comme `agent-ops.log`) : au-delà de 512 Ko, le
+/// fichier est supprimé avant réécriture — il ne grossit jamais sans borne.
+pub(crate) const SERVICES_STOP_LOG_MAX_BYTES: u64 = 512 * 1024;
+
+/// Lignes de trace des services qui n'ont **pas** été arrêtés (PURE, donc
+/// testable sans système de fichiers) : une ligne par service, avec son NOM et
+/// la CAUSE lisible. Aucune ligne quand tout a été arrêté correctement (un
+/// journal bavard ne serait plus exploitable).
+pub(crate) fn services_stop_failure_lines(
+    at: &str,
+    outcome: &ServicesArretOutcome,
+) -> Vec<String> {
+    // Cause commune aux deux services : `stop_owned` rend `false`/`Failed`
+    // UNIQUEMENT quand le processus est encore vivant après l'arrêt forcé borné
+    // (2 s) — arrêt sans effet, donc droits insuffisants ou fichier verrouillé.
+    const CAUSE: &str = "processus toujours vivant apres l'arret force (droits insuffisants ou fichier verrouille)";
+    let mut lines = Vec::new();
+    if !outcome.plface_stopped {
+        lines.push(format!(
+            "{} op=arret-avant-maj service=plface resultat=echec cause={}\n",
+            at, CAUSE
+        ));
+    }
+    if !outcome.laya_stopped {
+        lines.push(format!(
+            "{} op=arret-avant-maj service=laya resultat=echec cause={}\n",
+            at, CAUSE
+        ));
+    }
+    lines
+}
+
+/// Écrit (ajout + rotation) la trace des arrêts non aboutis dans
+/// `<dir>/services-arret.log`. Rend les lignes réellement produites (vide si
+/// tout a été arrêté ou si le journal est inaccessible) : la trace est
+/// **exploitable** (quel service, pourquoi) et son absence est visible côté
+/// appelant. Fail-open intégral : jamais d'erreur, jamais de blocage.
+pub(crate) fn trace_services_stop(
+    dir: &std::path::Path,
+    outcome: &ServicesArretOutcome,
+) -> Vec<String> {
+    let lines = services_stop_failure_lines(&chrono::Utc::now().to_rfc3339(), outcome);
+    if lines.is_empty() {
+        return lines;
+    }
+    let path = dir.join(SERVICES_STOP_LOG_FILE_NAME);
+    if let Ok(md) = std::fs::metadata(&path) {
+        if md.len() > SERVICES_STOP_LOG_MAX_BYTES {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        for line in &lines {
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+    lines
+}
+
 /// Résout les deux traces (services lancés par CETTE copie de Pilot) puis
 /// applique la règle unique `arreter_services_avant_maj`.
 pub(crate) fn arreter_services_pour_app(app: &AppHandle) -> ServicesArretOutcome {
-    arreter_services_avant_maj(plface_pid_path(app).as_deref(), laya_pid_path(app).as_deref())
+    let outcome =
+        arreter_services_avant_maj(plface_pid_path(app).as_deref(), laya_pid_path(app).as_deref());
+    // Un arrêt qui n'aboutit pas laisse une TRACE exploitable dans le journal de
+    // l'application (quel service, et pourquoi) : sans elle, la mise à jour
+    // échouait ensuite sans explication lisible. La trace ne change JAMAIS
+    // l'issue rendue à l'appelant (l'installation reste fail-open).
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = trace_services_stop(&dir, &outcome);
+    }
+    outcome
 }
 
 /// Appelée par l'interface **juste avant** de lancer l'installateur d'une mise
@@ -4322,6 +4408,155 @@ mod tests {
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── TRACE D'UN ARRÊT QUI N'ABOUTIT PAS (journal de l'application) ──────
+    //
+    // Ces tests ÉCHOUENT sur le code d'avant : l'arrêt raté ne produisait
+    // aucune trace, donc la mise à jour échouait ensuite sans explication
+    // lisible (symptôme vécu par le propriétaire).
+
+    #[test]
+    fn un_arret_rate_produit_une_ligne_par_service_avec_la_cause() {
+        let at = "2026-10-23T10:00:00+00:00";
+        // Les deux services refusent de mourir → deux lignes nommées.
+        let lignes = super::services_stop_failure_lines(
+            at,
+            &super::ServicesArretOutcome {
+                plface_stopped: false,
+                laya_stopped: false,
+            },
+        );
+        assert_eq!(lignes.len(), 2, "une ligne par service non arrêté : {lignes:?}");
+        assert!(
+            lignes[0].contains("service=plface") && lignes[0].contains("resultat=echec"),
+            "le visage doit être nommé comme non arrêté : {}",
+            lignes[0]
+        );
+        assert!(
+            lignes[1].contains("service=laya") && lignes[1].contains("resultat=echec"),
+            "le service Laya doit être nommé comme non arrêté : {}",
+            lignes[1]
+        );
+        assert!(
+            lignes[0].contains("cause=processus toujours vivant"),
+            "la cause doit être lisible (pourquoi) : {}",
+            lignes[0]
+        );
+        assert!(lignes[0].starts_with(at), "la ligne est horodatée : {}", lignes[0]);
+
+        // Un seul service en échec : une seule ligne, l'autre n'est pas sali.
+        let une = super::services_stop_failure_lines(
+            at,
+            &super::ServicesArretOutcome {
+                plface_stopped: true,
+                laya_stopped: false,
+            },
+        );
+        assert_eq!(une.len(), 1);
+        assert!(une[0].contains("service=laya"));
+        assert!(!une[0].contains("service=plface"));
+    }
+
+    #[test]
+    fn un_arret_reussi_n_ecrit_aucune_ligne() {
+        // Journal bavard = journal inexploitable : un arrêt réussi (y compris
+        // « rien à arrêter ») n'écrit rien.
+        let at = "2026-10-23T10:00:00+00:00";
+        assert!(super::services_stop_failure_lines(
+            at,
+            &super::ServicesArretOutcome {
+                plface_stopped: true,
+                laya_stopped: true,
+            },
+        )
+        .is_empty());
+        let dir = dossier_temporaire("trace-aucune");
+        let ecrites = super::trace_services_stop(
+            &dir,
+            &super::ServicesArretOutcome {
+                plface_stopped: true,
+                laya_stopped: true,
+            },
+        );
+        assert!(ecrites.is_empty());
+        assert!(
+            !dir.join(super::SERVICES_STOP_LOG_FILE_NAME).exists(),
+            "aucun journal ne doit être créé quand tout va bien"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn la_trace_dun_arret_rate_est_ecrite_dans_le_journal_de_lapplication() {
+        // La preuve la plus directe : le fichier existe, est lisible, et dit
+        // QUEL service et POURQUOI.
+        let dir = dossier_temporaire("trace-echec");
+        let ecrites = super::trace_services_stop(
+            &dir,
+            &super::ServicesArretOutcome {
+                plface_stopped: false,
+                laya_stopped: false,
+            },
+        );
+        assert_eq!(ecrites.len(), 2);
+        let journal = dir.join(super::SERVICES_STOP_LOG_FILE_NAME);
+        assert!(journal.exists(), "le journal doit exister après un échec");
+        let contenu = std::fs::read_to_string(&journal).expect("journal lisible");
+        assert!(contenu.contains("service=plface"), "contenu : {contenu}");
+        assert!(contenu.contains("service=laya"), "contenu : {contenu}");
+        assert!(contenu.contains("resultat=echec"), "contenu : {contenu}");
+        assert!(
+            contenu.contains("cause=processus toujours vivant"),
+            "la cause doit être écrite : {contenu}"
+        );
+
+        // Ajout (jamais écrasement) : deux mises à jour ratées laissent deux
+        // traces, sinon la seconde effacerait la première.
+        let avant = contenu.lines().count();
+        let _ = super::trace_services_stop(
+            &dir,
+            &super::ServicesArretOutcome {
+                plface_stopped: false,
+                laya_stopped: false,
+            },
+        );
+        let apres = std::fs::read_to_string(&journal).expect("journal lisible");
+        assert!(
+            apres.lines().count() >= avant * 2,
+            "le journal doit être complété, pas écrasé"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn la_trace_est_branchee_sur_le_chemin_reel_darret() {
+        // GARDE-FOU : sans cet appel, la fonction de trace existerait mais ne
+        // serait jamais exécutée — c'est exactement le défaut corrigé ici.
+        //
+        // Les ancres sont reconstruites (`concat!`) pour que ce test ne compte
+        // pas lui-même dans les gardes-fous de source du module : il ne fausse
+        // donc aucune mesure d'occurrences.
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("lecture de lib.rs")
+            .replace("\r\n", "\n");
+        let ancre_debut = concat!("pub(crate) fn arreter_services", "_pour_app(");
+        let debut = src
+            .find(ancre_debut)
+            .expect("la surface applicative de l'arrêt doit exister");
+        let fin = src[debut..]
+            .find("\n/// Appelée par l'interface")
+            .map(|i| debut + i)
+            .expect("fin de la fonction");
+        let corps = &src[debut..fin];
+        assert!(
+            corps.contains("trace_services_stop("),
+            "l'arrêt réel doit écrire la trace des arrêts ratés : {corps}"
+        );
+        assert!(
+            corps.contains("app.path().app_data_dir()"),
+            "la trace doit aller dans le dossier de données de l'application : {corps}"
+        );
     }
 
     #[test]
