@@ -2,18 +2,26 @@
 //
 // Chantier « badge projet par bulle » : quand l'utilisateur envoie une demande
 // dans l'onglet Assistant, on capture AU MOMENT DE L'ENVOI la liste des projets
-// REELLEMENT cites dans le texte. Aucun repli sur le projet ouvert a l'ecran :
-// sans projet cite, aucune etiquette (un nom faux fait croire a un travail sur
-// le mauvais projet, pire que pas de nom). Les noms suivent l'ordre
-// d'apparition dans le texte, sans doublon. La bulle de demande ET la bulle de
-// reponse portent ces badges (figes pour toujours : aucun rafraichissement
-// retrospectif).
+// REELLEMENT cites dans le texte, dans leur ordre d'apparition. Les noms
+// suivent l'ordre d'apparition dans le texte, sans doublon. La bulle de demande
+// ET la bulle de reponse portent ces badges (figes pour toujours : aucun
+// rafraichissement retrospectif).
 //
 // Chantier #15 : la bulle de RÉPONSE est en plus étendue avec les projets
 // nommés dans le texte de la réponse de l'assistant (extendBadgesWithText),
 // pour refléter les projets réellement discutés même si la demande n'en nommait
 // aucun. Les badges de la demande restent en tête ; ceux détectés dans la
 // réponse s'ajoutent ensuite, dédupliqués.
+//
+// REGLE DE NOMMAGE (decision proprietaire 2026-10-22) : une bulle qui concerne
+// un projet porte son nom. Priorite, dans cet ordre :
+//   1. projets NOMMES dans le texte du message (ordre d'apparition) ;
+//   2. projet(s) REELLEMENT concerne(s) par l'echange (mission/agents lances,
+//      agent cible, projet transmis a un agent) — voir addConcernedBadge ;
+//   3. DERNIER RECOURS : le projet ouvert au moment ou la bulle est creee
+//      (snapshot fige a cet instant, jamais recalcule apres) ;
+//   4. sinon AUCUNE etiquette (jamais de nom invente).
+// La regle vit ICI, dans resolveBubbleBadgeNames, et nulle part ailleurs.
 //
 // Détection SANS IA : comparaison pure du texte à la liste des projets
 // connus/ouverts côté UI. Correspondance insensible à la casse sur
@@ -150,10 +158,11 @@ export function findNamedProjects(text, projects) {
  * projets reellement cites dans le texte, dans l'ordre d'apparition, sans
  * doublon. Aucun projet cite → liste VIDE (aucune etiquette).
  *
- * IMPORTANT (defaut corrige) : le projet ouvert a l'ecran n'est JAMAIS ajoute
- * par defaut. Le parametre `_activeProjectName` est conserve pour la
- * compatibilite des appels positionnels mais il est IGNORE : l'etiquette ne
- * doit refleter que la discussion, pas ce qui est ouvert dans Pilot.
+ * IMPORTANT : ce captureur ne realise QUE l'etape 1 de la regle (projets
+ * nommes dans le texte). Le repli sur le projet REELLEMENT concerne puis, en
+ * dernier recours, sur le projet ouvert fige a la creation de la bulle, est
+ * decide UNIQUEMENT par `resolveBubbleBadgeNames` (source de verite unique) :
+ * `_activeProjectName` reste donc IGNORE ici.
  * Fail-open : texte vide ou projets invalides → liste vide, jamais d'exception.
  *
  * @param {string} text - texte de la demande.
@@ -165,32 +174,84 @@ export function captureProjectBadgeNames(text, _activeProjectName, projects) {
   return findNamedProjects(text, projects);
 }
 
+/** Copie normalisee d'une liste de badges : chaines non vides, sans doublon
+ * (insensible a la casse), ordre conserve. Toute valeur invalide -> []. */
+function normalizeBadgeNames(badges) {
+  const out = [];
+  const seen = new Set();
+  if (!Array.isArray(badges)) return out;
+  for (const b of badges) {
+    const name = String(b == null ? "" : b).trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
+}
+
 /**
- * Étend une liste de badges existants avec les projets nommés dans un texte
- * (pur, testable). Utilisé pour la bulle de RÉPONSE (chantier #15) : on part
- * des badges de la demande (projets réellement cités) et on y ajoute les
- * projets évoqués dans le texte de la réponse de l'assistant (voir la
- * description complète sur la fonction ci-dessous).
- * Choix des badges d'une bulle de l'Assistant (pur, testable) — PRIORITÉ, et
- * JAMAIS d'invention de nom :
- *   1. `explicitBadges` : fournis par l'appelant qui connaît le projet de
- *      l'échange (ex: relais d'une question → projet de CET agent) ;
- *   2. `turnBadges` : snapshot figé du tour en cours (demande de l'utilisateur
- *      ou compte rendu injecté qui a déclenché la réponse) ;
- *   3. sinon liste VIDE : l'information est inconnue, la bulle n'affiche AUCUN
- *      badge. On ne retombe JAMAIS sur le projet simplement sélectionné à
- *      l'écran : une bulle parlant d'un autre projet afficherait alors un nom
- *      FAUX (défaut corrigé — un nom faux fait croire à un travail sur le
- *      mauvais projet, pire que pas de nom).
- * Fail-open : arguments invalides → liste vide.
- *
- * @param {string[]|null} explicitBadges - badges connus de l'appelant.
- * @param {string[]|null} turnBadges - snapshot du tour en cours.
+ * Nom affichable d'un badge a partir du chemin d'un projet (pur, testable).
+ * Chemin vide/invalide -> "" : on n'invente JAMAIS de nom (donc aucun badge).
+ * @param {string} path - chemin du projet (separateurs / ou \).
+ * @returns {string}
+ */
+export function badgeNameFromProjectPath(path) {
+  return pathTailName(String(path == null ? "" : path).trim());
+}
+
+/**
+ * Note un projet REELLEMENT concerne par un tour (pur, testable) : mission
+ * lancee, agent cible, projet transmis a un agent, projet ouvert par
+ * l'assistant. Accepte un chemin (-> dernier segment, jamais un chemin en
+ * badge) ou un nom deja affichable. Retourne une NOUVELLE liste (l'appelant
+ * remplace la sienne), sans doublon (insensible a la casse) et dans l'ordre
+ * d'arrivee. Valeur vide -> liste inchangee : aucun nom invente.
+ * @param {string[]} badges - liste courante des projets concernes.
+ * @param {string} pathOrName - chemin absolu ou nom du projet.
  * @returns {string[]}
  */
-export function resolveBubbleBadgeNames(explicitBadges, turnBadges) {
-  if (Array.isArray(explicitBadges) && explicitBadges.length) return explicitBadges;
-  if (Array.isArray(turnBadges) && turnBadges.length) return turnBadges;
+export function addConcernedBadge(badges, pathOrName) {
+  const out = normalizeBadgeNames(badges);
+  const raw = String(pathOrName == null ? "" : pathOrName).trim();
+  if (!raw) return out;
+  const name = /[\\/]/.test(raw) ? pathTailName(raw) : raw;
+  if (!name) return out;
+  const key = name.toLowerCase();
+  if (out.some((b) => b.toLowerCase() === key)) return out;
+  out.push(name);
+  return out;
+}
+
+/**
+ * Choix des badges d'une bulle de l'Assistant (pur, testable) — SOURCE DE
+ * VERITE UNIQUE de la regle de nommage (decision proprietaire 2026-10-22).
+ * Une bulle qui concerne un projet porte son nom ; jamais de nom invente.
+ * Priorite :
+ *   1. `explicitBadges` : fournis par l'appelant qui connait le projet de
+ *      l'echange (ex: relais d'une question -> projet de CET agent) ;
+ *   2. `turnBadges` : projets NOMMES dans le texte du message du tour
+ *      (snapshot fige a l'envoi), dans l'ordre d'apparition ;
+ *   3. `concernedBadges` : projet(s) REELLEMENT concerne(s) par l'echange
+ *      (mission/agents lances, agent cible, projet transmis a un agent).
+ *      Un projet VISE prime sur le projet ouvert : jamais un nom faux ;
+ *   4. `openProjectBadges` : DERNIER RECOURS, le projet ouvert au moment ou la
+ *      bulle est creee (snapshot fige a cet instant, jamais recalcule) ;
+ *   5. sinon liste VIDE (aucun projet connu ET aucun projet ouvert).
+ * Fail-open : arguments invalides -> liste vide.
+ *
+ * @param {string[]|null} explicitBadges - badges connus de l'appelant.
+ * @param {string[]|null} turnBadges - projets nommes dans le tour.
+ * @param {string[]|null} concernedBadges - projets reellement concernes.
+ * @param {string[]|null} openProjectBadges - projet ouvert (dernier recours).
+ * @returns {string[]}
+ */
+export function resolveBubbleBadgeNames(explicitBadges, turnBadges, concernedBadges, openProjectBadges) {
+  const candidates = [explicitBadges, turnBadges, concernedBadges, openProjectBadges];
+  for (const candidate of candidates) {
+    const names = normalizeBadgeNames(candidate);
+    if (names.length) return names;
+  }
   return [];
 }
 

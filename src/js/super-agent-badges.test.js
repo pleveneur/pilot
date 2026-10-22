@@ -227,9 +227,13 @@ describe("extendBadgesWithText (bulle de réponse, chantier #15)", () => {
     expect(extendBadgesWithText(undefined, undefined, undefined)).toEqual([]);
   });
 });
-// GARDE ANTI-REGRESSION (lecture du source) : le repli sur le projet actif a
-// l'envoi d'un message ne doit JAMAIS revenir. Ces tests echouent si la
-// production re-introduit la lecture du projet ouvert pour etiqueter une bulle.
+// GARDE ANTI-REGRESSION (lecture du source) : le captureur de texte ne doit
+// JAMAIS lire le projet ouvert (son 2e argument reste ignore) et l'ancienne
+// fonction de repli ne doit pas reapparaitre.
+// Depuis la decision proprietaire 2026-10-22, le repli sur le projet ouvert
+// existe bel et bien, mais UNIQUEMENT en dernier recours et UNIQUEMENT dans
+// `resolveBubbleBadgeNames` (module pur, source de verite unique) : il ne doit
+// pas etre recopie ici, ni applique a la capture des projets nommes.
 describe("garde anti-regression : aucun repli sur le projet ouvert dans Pilot", () => {
   const readSource = (rel) =>
     readFileSync(new URL(rel, import.meta.url), "utf8").replace(/\r\n/g, "\n");

@@ -1,15 +1,17 @@
 // Tests unitaires — badges projet des bulles de l'onglet 🧭 Assistant.
 //
-// DÉFAUT CORRIGÉ : `createSuperAgentBlock` retombait sur le nom du projet
-// ACTUELLEMENT SÉLECTIONNÉ dans l'interface (`getSuperActiveProjectName`)
-// quand la bulle n'était pas créée par un envoi de l'utilisateur. Une bulle
-// hors tour (relais d'une question d'agent, réponse à un compte rendu injecté…)
-// pouvait donc afficher un projet SANS RAPPORT avec l'échange → l'utilisateur
-// croyait à un travail sur le mauvais projet.
+// REGLE DE NOMMAGE (decision proprietaire 2026-10-22) verifiee ici : une bulle
+// qui concerne un projet porte son nom. Priorite : (1) badges explicites de
+// l'appelant, (2) projets nommes dans le texte du tour, (3) projet(s)
+// reellement concerne(s), (4) DERNIER RECOURS : projet ouvert au moment de la
+// creation de la bulle (snapshot fige, jamais recalcule). Aucun projet connu ni
+// ouvert → AUCUN badge (jamais de nom invente).
 //
-// Règle vérifiée ici : la bulle porte les badges explicites fournis par son
-// appelant (qui connaît le projet) OU le snapshot du tour en cours ; sinon
-// AUCUN badge. Jamais le projet simplement affiché à l'écran.
+// ANCIENNE REGLE (remplacee) : aucune etiquette si le texte ne nommait aucun
+// projet — le proprietaire ne voyait plus aucun nom de projet sur les bulles.
+// La surete est conservee : un projet vise par l'echange (regle 3) n'est jamais
+// remplace par le projet simplement affiche a l'ecran (voir le controle (c)
+// dans super-agent-badges-nom-projet.test.js).
 //
 // NB : super-agent.js importe de nombreuses dépendances (Tauri, CodeMirror via
 // agent-pi, markdown-it…). On les mocke et on fournit un DOM minimal pour
@@ -92,13 +94,12 @@ function badgeNamesOf(block) {
 }
 
 describe("createSuperAgentBlock — badges projet de la bulle", () => {
-  it("n'invente AUCUN nom : bulle hors tour sans badge explicite → aucun badge", () => {
-    // Le projet affiché dans l'interface est « AutreProjet » : il ne doit PAS
-    // apparaître (ancien comportement = bulle badgée « AutreProjet », donc un
-    // nom faux pour un échange qui ne le concernait pas).
+  it("dernier recours : projet ouvert fige a la creation de la bulle", () => {
+    // Aucun badge explicite, aucun projet nomme, aucun projet concerne : la
+    // bulle porte le projet OUVERT au moment de sa creation (regle 4).
     const messagesEl = globalThis.document.createElement("div");
     const block = createSuperAgentBlock(messagesEl);
-    expect(badgeNamesOf(block)).toEqual([]);
+    expect(badgeNamesOf(block)).toEqual(["AutreProjet"]);
   });
 
   it("badges explicites (relais d'une question d'agent) → projet de CET agent", () => {
@@ -109,9 +110,33 @@ describe("createSuperAgentBlock — badges projet de la bulle", () => {
     expect(badgeNamesOf(block)).not.toContain("AutreProjet");
   });
 
-  it("liste explicite vide → aucun badge (pas de repli sur le projet affiché)", () => {
+  it("badges explicites vides → dernier recours (projet ouvert au moment de la creation)", () => {
     const messagesEl = globalThis.document.createElement("div");
     const block = createSuperAgentBlock(messagesEl, []);
-    expect(badgeNamesOf(block)).toEqual([]);
+    expect(badgeNamesOf(block)).toEqual(["AutreProjet"]);
+  });
+
+  it("aucun projet ouvert ET aucun projet connu → AUCUN badge (jamais invente)", () => {
+    const previous = globalThis._pilotProjectPath;
+    globalThis._pilotProjectPath = "";
+    try {
+      const messagesEl = globalThis.document.createElement("div");
+      const block = createSuperAgentBlock(messagesEl);
+      expect(badgeNamesOf(block)).toEqual([]);
+    } finally {
+      globalThis._pilotProjectPath = previous;
+    }
+  });
+
+  it("l'etiquette d'une bulle deja creee ne change pas quand le projet ouvert change", () => {
+    const messagesEl = globalThis.document.createElement("div");
+    const block = createSuperAgentBlock(messagesEl, ["PLh"]);
+    const previous = globalThis._pilotProjectPath;
+    globalThis._pilotProjectPath = "C:/Travail/EncoreAutre";
+    try {
+      expect(badgeNamesOf(block)).toEqual(["PLh"]);
+    } finally {
+      globalThis._pilotProjectPath = previous;
+    }
   });
 });

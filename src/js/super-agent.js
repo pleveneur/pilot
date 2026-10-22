@@ -46,7 +46,7 @@ import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel
 import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility } from "./agent-activity.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
-import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames } from "./super-agent-badges.js";
+import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames, addConcernedBadge, badgeNameFromProjectPath } from "./super-agent-badges.js";
 import { periodBounds, periodKindLabel, formatPeriodReport, weekBounds } from "./period-report.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
@@ -1462,15 +1462,40 @@ let currentFlow = null;      // sous-élément `.agent-stream-flow`
 // Badges projet de la bulle courante (chantier « badge par bulle ») : snapshot
 // capturé au moment où l'utilisateur envoie sa demande = UNIQUEMENT les projets
 // explicitement nommés dans le texte, dans l'ordre d'apparition (module pur
-// super-agent-badges.js). Aucun projet nommé → snapshot vide, donc AUCUNE
-// étiquette : le projet ouvert à l'écran n'est jamais utilisé par défaut. Les
-// bulles du tour (réponse incluse) héritent du
+// super-agent-badges.js). Les bulles du tour (réponse incluse) héritent du
 // snapshot, qui est FIGÉ pour toujours : changer le projet actif ne modifie
 // plus jamais les badges déjà affichés. Null = aucun tour en cours. Les bulles
-// créées hors tour (question relais, widget) n'inventent plus de nom : elles
-// portent des badges EXPLICITES quand leur appelant connaît le projet, sinon
-// aucun badge (voir `resolveBubbleBadgeNames`).
+// créées hors tour (question relais, widget) portent des badges EXPLICITES
+// quand leur appelant connaît le projet. Quand le texte ne nomme aucun projet,
+// la regle de choix (source de verite unique : `resolveBubbleBadgeNames`) prend
+// le projet REELLEMENT concerne par l'echange, puis en DERNIER RECOURS le
+// projet ouvert au moment de la creation de la bulle.
 let currentTurnProjectBadges = null;
+// REGLE 2 (decision proprietaire 2026-10-22) : projets REELLEMENT concernes
+// par le tour en cours (mission/agents lances, agent cible, projet transmis a
+// un agent, projet ouvert par l'assistant). Notes au fil du tour, remis a zero
+// a chaque nouveau tour, puis FIGES pour la bulle. Un projet vise prime sur le
+// projet ouvert a l'ecran : jamais un nom faux.
+let currentTurnConcernedBadges = [];
+// Badges reellement choisis pour chaque bulle (cle = element de bulle) : permet
+// d'ETENDRE la bulle de reponse (#15) sans perdre les noms deja figes (nommes,
+// concernes, ou en dernier recours projet ouvert fige a la creation).
+const bubbleBadgeSnapshots = new WeakMap();
+
+/** Note un projet REELLEMENT concerne par le tour en cours (regle 2). La regle
+ * de normalisation (chemin -> nom, dedup) vit dans le module pur des badges. */
+function noteConcernedProject(pathOrName) {
+  currentTurnConcernedBadges = addConcernedBadge(currentTurnConcernedBadges, pathOrName);
+}
+
+/** Badge du projet ouvert A CET INSTANT (regle 3 : dernier recours). L'appelant
+ * le fige dans la bulle au moment de sa creation : jamais recalcule apres.
+ * Aucun projet ouvert -> liste vide (aucun nom invente). */
+function currentOpenProjectBadges() {
+  const path = (typeof window !== "undefined" && window._pilotProjectPath) || "";
+  const name = badgeNameFromProjectPath(path);
+  return name ? [name] : [];
+}
 let currentTextSection = null; // section texte non fermée
 let currentThinkingBlock = null; // bloc pensée courant
 let pendingText = "";
@@ -1779,15 +1804,24 @@ export function createSuperAgentBlock(messagesEl, explicitBadges = null) {
   el.className = "agent-message agent-message-assistant";
   const bubble = document.createElement("div");
   bubble.className = "agent-bubble agent-bubble-assistant";
-  // Badges projet (snapshot) : la bulle de réponse hérite des badges de la
-  // demande qui l'a déclenchée (projets réellement cités), ou de
-  // badges explicites quand l'appelant connaît le projet (relais d'un agent).
-  // Figés pour toujours : aucun recalcul ni rafraîchissement rétrospectif.
-  // Information inconnue → AUCUN badge : on ne retombe plus sur le projet
-  // sélectionné à l'écran, qui pouvait être un projet sans rapport avec
-  // l'échange (nom faux = l'utilisateur croit à un travail sur le mauvais
-  // projet).
-  const badgeNames = resolveBubbleBadgeNames(explicitBadges, currentTurnProjectBadges);
+  // Badges projet (snapshot) : la regle de choix est UNIQUE et vit dans
+  // `resolveBubbleBadgeNames` (module pur super-agent-badges.js) :
+  //   1. badges explicites (l'appelant connait le projet : relais d'un agent) ;
+  //   2. projets nommes dans le texte de la demande (ordre d'apparition) ;
+  //   3. projets REELLEMENT concernes par l'echange (mission/agents lances,
+  //      agent cible, projet transmis, projet ouvert par l'assistant) ;
+  //   4. DERNIER RECOURS : projet ouvert au moment de la creation de la bulle
+  //      (un nom utile vaut mieux qu'aucune etiquette) ;
+  //   5. rien de tout cela → AUCUNE etiquette (jamais de nom invente).
+  // Fige pour toujours : aucun recalcul ni rafraichissement retrospectif.
+  const badgeNames = resolveBubbleBadgeNames(
+    explicitBadges,
+    currentTurnProjectBadges,
+    currentTurnConcernedBadges,
+    currentOpenProjectBadges()
+  );
+  // Snapshot fige de la bulle (sert a l'etendre a agent_end sans rien perdre).
+  bubbleBadgeSnapshots.set(el, badgeNames);
   const color = projectColor(badgeNames[0]);
   renderProjectBadgesInto(bubble, badgeNames);
   if (color) {
@@ -3042,6 +3076,7 @@ export async function createSuperAgent(container) {
         // Fin de tour → snapshot consommé : les bulles affichées gardent leurs
         // badges figés ; le prochain envoi capturera un nouveau snapshot.
         currentTurnProjectBadges = null;
+        currentTurnConcernedBadges = [];
         // Issue #55 : fin de tour → reset du buffer de détection de boucle.
         superLoopBuffer = "";
         superLoopToolCalls = [];
@@ -3258,6 +3293,7 @@ export async function createSuperAgent(container) {
       pendingRender = false;
       lastAssistantRawText = "";
       currentTurnProjectBadges = null;
+      currentTurnConcernedBadges = [];
       // SOUCIS 1 : une nouvelle session réarme le suivi automatique du bas.
       superAtBottom = true;
       appendSystemMessage(messagesEl, "🆕 Nouvelle session.");
@@ -3345,6 +3381,9 @@ export async function createSuperAgent(container) {
     pendingRender = false;
     lastAssistantRawText = "";
     currentTurnProjectBadges = badgeNames;
+    // REGLE 2 : le nouveau tour repart sans projet « concerne » ; les projets
+    // reellement touches seront notes au fil du tour, puis figes dans la bulle.
+    currentTurnConcernedBadges = [];
     isStreaming = true;
     backendBusy = true;
     statusEl.textContent = "Réfléchit…";
@@ -4056,7 +4095,9 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // reset currentBody/currentTurnProjectBadges/lastAssistantRawText), puis on
     // met à jour la bulle en fire-and-forget (jamais bloquant, fail-open).
     const respBubble = currentBody;
-    const respBase = currentTurnProjectBadges;
+    // Badges FIGES de la bulle (nommes + concernes + dernier recours) : la
+    // reponse peut y AJOUTER les projets qu'elle nomme, jamais en retirer.
+    const respBase = (respBubble && bubbleBadgeSnapshots.get(respBubble)) || currentTurnProjectBadges;
     const respText = lastAssistantRawText;
     // Telegram (étape 2, lot 3) : l'Assistant « parle » — sa réponse finale est
     // reformulée en UNE phrase simple et transmise (les messages intermédiaires
@@ -4621,6 +4662,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // l'assistant immédiatement pour qu'il sache que la demande n'est pas
         // perdue mais différée.
         const target = targetProject || window._pilotProjectPath || ".";
+        // REGLE 2 (nommage des bulles) : le projet VISE par la mission est le
+        // projet reellement concerne par ce tour (il prime sur le projet ouvert).
+        noteConcernedProject(targetProject || window._pilotProjectPath || null);
         try {
           const sessionsRes = await invoke("list_agent_sessions");
           const sessions = (sessionsRes && sessionsRes.sessions) || [];
@@ -5476,6 +5520,9 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // actif) : si l'utilisateur change ensuite de projet, l'assistant saura
       // qu'il travaillait sur celui-ci et pourra continuer la discussion dessus.
       invoke("set_super_agent_working_project", { path }).catch(() => {});
+      // REGLE 2 (nommage des bulles) : le projet que l'assistant ouvre est un
+      // projet REELLEMENT concerne par ce tour — les bulles suivantes le portent.
+      noteConcernedProject(path);
       appendSystemMessage(messagesEl, `✅ Projet « ${path} » ouvert et rendu actif.`);
       await respondSuperAgentAction(id, true);
     } else if (action === "delegate_to_coder") {
@@ -5488,6 +5535,9 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // (invisible) sans ouvrir le projet ni l'onglet. Sinon, on retombe sur le
       // projet actif (comportement historique).
       const projectPath = info.project || window._pilotProjectPath || null;
+      // REGLE 2 (nommage des bulles) : le projet A QUI la demande est transmise
+      // est le projet reellement concerne — jamais le projet ouvert s'il differe.
+      noteConcernedProject(projectPath);
       // TÂCHE T1 : l'enveloppe de brief structuré (contexte/objectif/consignes/
       // ce qu'il ne faut PAS faire) est appliquée mécaniquement à la demande
       // déléguée, en plus de la consigne quality-gate (config). Ne duplique pas

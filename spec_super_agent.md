@@ -171,26 +171,32 @@ apprend et répond.
 - **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
-- **Badges projet par bulle (snapshot à l'envoi)** : chaque demande et sa
-  réponse portent les badges des projets **réellement concernés par la
-  discussion**, étiquetés au moment où vous envoyez la demande = **uniquement
-  les projets explicitement nommés dans le texte**, dans leur **ordre
-  d'apparition**, sans doublon. **Aucun projet cité = aucune étiquette** : le
-  projet simplement **ouvert dans Pilot** n'est **jamais** affiché par défaut
-  (un nom faux fait croire à un travail sur le mauvais projet, ce qui est pire
-  que pas de nom). Plusieurs projets cités → plusieurs badges compacts sur la
-  même bulle. La détection est **sans IA** :
-  correspondance insensible à la casse sur le **nom affiché** du projet (ex:
-  « PLh ») ou la **fin de son chemin** (ex: « ia_pl/plh »), avec **frontières
-  de mots** (une demande qui parle de « pilotage » n'étiquette pas le projet
-  « pilot »). La réponse hérite des badges de la demande qui l'a déclenchée et
-  peut y **ajouter** les projets réellement cités dans le texte de la réponse
-  (jamais en retirer un correct, jamais en inventer un). Les badges sont
-  **figés pour toujours** : changer de projet actif (même via `open_project`
-  pendant le tour) ne modifie **jamais** les badges déjà affichés, et aucune
-  bulle n'est re-étiquetée rétrospectivement. La **bulle de continuation**
-  après une question posée à l'utilisateur hérite des badges de la demande
-  initiale (la paire question/réponse porte les mêmes étiquettes).
+- **Badges projet par bulle (snapshot à l'envoi)** : chaque bulle de
+  l'Assistant porte le nom du/des projet(s) **concerné(s)**, choisi dans cet
+  ordre (règle unique : `resolveBubbleBadgeNames`, module pur
+  `super-agent-badges.js`) : **(1)** les projets **explicitement nommés dans le
+  texte**, dans leur **ordre d'apparition**, sans doublon ; **(2)** sinon, les
+  projets **réellement concernés par l'échange** (mission / agents lancés,
+  agent ciblé, projet transmis à un agent, projet ouvert par l'Assistant) ;
+  **(3)** sinon, **en dernier recours**, le **projet ouvert au moment de la
+  création de la bulle** (snapshot figé) ; **(4)** sinon **aucune étiquette** —
+  jamais de nom inventé. Un projet **visé** par l'échange prime donc toujours
+  sur le projet simplement affiché à l'écran (mission sur `PLh` alors que
+  `Pilot` est ouvert → badge « PLh »). Plusieurs projets cités → plusieurs
+  badges compacts sur la même bulle. Aucune étiquette sur les bulles de
+  l'**utilisateur**, les **messages système** et les **erreurs**. La détection
+  du texte est **sans IA** : correspondance insensible à la casse sur le **nom
+  affiché** du projet (ex: « PLh ») ou la **fin de son chemin** (ex:
+  « ia_pl/plh »), avec **frontières de mots** (une demande qui parle de
+  « pilotage » n'étiquette pas le projet « pilot »). La réponse hérite des
+  badges **figés** de la demande qui l'a déclenchée et peut y **ajouter** les
+  projets réellement cités dans le texte de la réponse (jamais en retirer un
+  correct, jamais en inventer un). Les badges sont **figés pour toujours** :
+  changer de projet actif (même via `open_project` pendant le tour) ne modifie
+  **jamais** les badges déjà affichés, et aucune bulle n'est re-étiquetée
+  rétrospectivement. La **bulle de continuation** après une question posée à
+  l'utilisateur hérite des badges de la demande initiale (la paire
+  question/réponse porte les mêmes étiquettes).
 - **Une bulle par tour d'agent par projet** : un « tour » = depuis que
   l'Assistant commence à répondre jusqu'à `agent_end` (fin du tour, c'est à
   l'utilisateur de parler). Pendant un tour, l'Assistant peut enchaîner
