@@ -201,10 +201,17 @@ Tu peux **développer Pilot avec Pilot** : lancer une version **dev** en parall�
 
 ## Mise à jour de l'agent Pi
 
-À l'ouverture de l'onglet agent, Pilot **vérifie automatiquement** si une
-nouvelle version de Pi est disponible (backend `pi` uniquement). Si c'est le
-cas, une modale te propose de la mettre à jour via la commande intégrée de Pi
-(`pi update --self`).
+**Au démarrage de Pilot** — et à l'ouverture de l'onglet agent — Pilot
+**vérifie automatiquement** si une nouvelle version de Pi est disponible
+(backend `pi` uniquement). C'est même la **toute première** chose qu'il fait :
+tant que cette vérification n'est pas finie, **aucun travail ne démarre** (ni
+commande, ni agent, ni mission, même déjà en attente) — et il en va de même
+pendant une installation de Pi. Ce n'est jamais un blocage : si la vérification
+échoue ou prend trop de temps, Pilot te le dit et le travail reprend
+normalement.
+
+Si une version plus récente existe, une modale te propose de la mettre à jour
+via la commande intégrée de Pi (`pi update --self`).
 
 - **Mettre à jour maintenant** : lance la mise à jour puis te confirme le
   résultat.

@@ -188,16 +188,19 @@ describe("j — source : tous les chemins d'admission/rejeu consultent la réser
   const src = source("src/js/super-agent.js");
 
   it("les DEUX admissions de mission et les DEUX rejeux portent le garde", () => {
-    const updateAdmissions = src.match(/busy:\s*[^\n]*isUpdateWindowReserved\(\)/g) || [];
+    // Le garde est celui du décideur UNIQUE (`run-policy.js` → `isTerrainReserved`),
+    // qui couvre les DEUX réservations globales : vérification/installation du
+    // moteur `pi` ET mise à jour de Pilot.
+    const updateAdmissions = src.match(/busy:\s*[^\n]*isTerrainReserved\(\)/g) || [];
     expect(updateAdmissions.length).toBe(2); // launchOrQueue + startRun
-    const replayGuards = src.match(/async \(p\) => !isUpdateWindowReserved\(\)/g) || [];
+    const replayGuards = src.match(/async \(p\) => !isTerrainReserved\(\)/g) || [];
     expect(replayGuards.length).toBe(2); // missions + délégations
   });
 
   it("la file de délégations ne se vide pas pendant la réservation", () => {
     expect(src).toContain("function flushDelegationQueue(projectPath) {");
     const body = src.slice(src.indexOf("function flushDelegationQueue(projectPath) {"));
-    const guardIdx = body.indexOf("if (isUpdateWindowReserved()) {");
+    const guardIdx = body.indexOf("if (isTerrainReserved()) {");
     const shiftIdx = body.indexOf("ds.queue.shift()");
     expect(guardIdx).toBeGreaterThan(-1);
     expect(shiftIdx).toBeGreaterThan(-1);
@@ -211,7 +214,7 @@ describe("j — source : tous les chemins d'admission/rejeu consultent la réser
     // couvrant ; le retirer réouvre le démarrage automatique pendant la mise à
     // jour.
     const body = src.slice(src.indexOf("function launchQueuedMission(target, entry) {"));
-    const guardIdx = body.indexOf("if (isUpdateWindowReserved()) {");
+    const guardIdx = body.indexOf("if (isTerrainReserved()) {");
     const launchIdx = body.indexOf("entry.launch({ dequeue: true })");
     expect(guardIdx).toBeGreaterThan(-1);
     expect(launchIdx).toBeGreaterThan(-1);
@@ -226,8 +229,10 @@ describe("j — source : tous les chemins d'admission/rejeu consultent la réser
     const bus = source("src/js/agents-bus.js");
     expect(bus).toContain("canStartWork(runProject, nature, isRunInProgress)");
     expect(bus).toContain("workBlockedMessage()");
-    // Aucun accès direct à l'état de la réservation dans le bus : la décision
-    // reste centralisée dans run-policy.js.
+    // Aucun accès direct à l'état des réservations (mise à jour de Pilot,
+    // vérification/installation du moteur) dans le bus : la décision reste
+    // centralisée dans run-policy.js.
     expect(bus.includes("isUpdateWindowReserved")).toBe(false);
+    expect(bus.includes("isPiStartupGateBlocking")).toBe(false);
   });
 });

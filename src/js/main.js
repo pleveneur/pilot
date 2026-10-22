@@ -22,7 +22,7 @@ import { initAnomalyDetection } from "./anomaly.js";
 import { initTelegramInbound } from "./telegram-inbound.js";
 import { loadTelegramDialogConfig } from "./telegram-dialog.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
-import { checkPiUpdate } from "./pi-update.js";
+import { checkPiUpdate, runPiStartupCheck } from "./pi-update.js";
 import { initInterproject } from "./interproject.js";
 import { initProjectCommands } from "./project-commands.js";
 import { initGroupAssistant } from "./group-assistant.js";
@@ -332,6 +332,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   }, 30000);
 
   try {
+  // 0. RÈGLE DE DÉMARRAGE (règle du propriétaire, non réinterprétée) : la
+  // TOUTE PREMIÈRE chose que fait Pilot est de vérifier la version du moteur
+  // `pi` (#334). `runPiStartupCheck` (pi-update.js) réserve le terrain de façon
+  // SYNCHRONE pour cette vérification : aucun agent, aucune mission (même en
+  // file), aucune commande manuelle, aucune délégation ne démarre tant qu'elle
+  // n'est pas finie — et tant qu'une installation de `pi` est en cours. La
+  // DÉCISION reste celle du gardien unique `run-policy.js` (`canStartWork`,
+  // `canSendManualCommand`, `canAssistantReflect`), qui consulte l'état détenu
+  // par `pi-startup-gate.js` : aucun second gardien, aucune règle recopiée.
+  // La promesse n'est pas attendue (elle ne retarde pas l'affichage) et le
+  // terrain est TOUJOURS rendu : si la vérification échoue ou traîne, le travail
+  // reprend normalement et l'utilisateur est informé avec la marche à suivre.
+  runPiStartupCheck();
+
   // 1. Initialiser le thème
   initTheme();
   // 2. Remplacer les balises <i data-lucide="..."> du HTML statique par des
@@ -432,16 +446,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   // l'utilisateur via un toast. La gate d'ouverture de l'onglet agent
   // (tabs.js _openAgent) affiche alors un écran guidé au lieu de planter.
   checkPiHealth().then((h) => { if (h && !h.ok) warnPiUnavailable(h); });
-
-  // 3d-sexies. Vérification de mise à jour du MOTEUR (pi) AU LANCEMENT (#334).
-  // Elle n'était déclenchée qu'à l'ouverture de l'onglet agent (tabs.js). On
-  // attend la fin de la sonde backend — `getBackendInfoSync()` est synchrone et
-  // vide avant la 1ʳᵉ sonde : `checkPiUpdate` sortirait aussitôt sans rien
-  // vérifier — puis on laisse le démarrage se terminer : la vérification est un
-  // appel réseau, elle ne doit ni retarder l'affichage ni bloquer la chaîne
-  // d'init. Tous les garde-fous (backend `plh`, « Ne plus demander »,
-  // vérification déjà en cours) restent dans `checkPiUpdate`.
-  setTimeout(() => { refreshBackendInfo().then(() => checkPiUpdate()); }, 2500);
 
   // 3d-ter. Afficher la version de l'app dans la barre de statut
   try {

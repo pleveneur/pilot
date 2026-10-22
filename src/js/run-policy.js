@@ -1,7 +1,9 @@
 // Politique d'admission des missions d'agents (lecture partagée / modification
 // exclusive). Aucune I/O : la décision est calculée à partir de la nature de la
-// mission, de ce qui tourne déjà SUR LE MÊME PROJET, et de la réservation du
-// terrain par la mise à jour (`update-window.js`, consulté et non dupliqué).
+// mission, de ce qui tourne déjà SUR LE MÊME PROJET, et de la réservation GLOBALE
+// du terrain (vérification/mise à jour du moteur `pi`, module
+// `pi-startup-gate.js` ; mise à jour de Pilot, module `update-window.js` —
+// consultés et jamais dupliqués).
 //
 // Règles (spécifiées par le propriétaire, non réinterprétées) :
 //   - des projets différents ne se bloquent jamais (le cadrage par projet est
@@ -12,12 +14,15 @@
 //   - toute mission qui MODIFIE est exclusive : elle ne démarre pas tant que
 //     quelque chose tourne sur le projet ;
 //   - rien ne démarre tant qu'une mission qui MODIFIE tourne sur le projet ;
-//   - rien ne démarre non plus pendant que la MISE À JOUR de Pilot occupe le
-//     terrain (écran de mise à jour ouvert ou installation en cours) : cette
-//     partie de la règle est portée par `update-window.js` (seul propriétaire
-//     de la réservation) et consultée ICI, dans le gardien déjà existant.
+//   - rien ne démarre non plus pendant que le TERRAIN est réservé par une
+//     opération GLOBALE : vérification de la version du moteur `pi` et son
+//     installation (`pi-startup-gate.js`), ou mise à jour de Pilot
+//     (`update-window.js`). Chacune de ces parties est portée par SON module
+//     (seul propriétaire de son état) et consultée ICI, dans le gardien déjà
+//     existant : une seule décision, un seul endroit.
 
 import { isUpdateWindowReserved, updateWindowBlockedMessage } from "./update-window.js";
+import { isPiStartupGateBlocking, piStartupGateMessage } from "./pi-startup-gate.js";
 
 /** Nature d'une mission d'après le drapeau `readonly` du registre des agents. */
 export function missionNature(readonly) {
@@ -38,6 +43,50 @@ export function canStartMission(nature, runningNatures) {
   if (nature === "write") return false;
   // Une lecture cohabite uniquement avec d'autres lectures.
   return running.every((n) => n === "read");
+}
+
+/**
+ * Le TERRAIN est-il réservé par une opération globale ? (décideur UNIQUE :
+ * aucun autre module ne recombine ces deux réservations)
+ *
+ *   1. vérification de la version du moteur `pi` en cours, ou son installation
+ *      (`pi-startup-gate.js`) — règle du propriétaire : le travail attend la fin
+ *      de la vérification, puis celle de l'installation ;
+ *   2. mise à jour de Pilot (écran ouvert ou installation en cours).
+ * @returns {boolean}
+ */
+export function isTerrainReserved() {
+  return isPiStartupGateBlocking() || isUpdateWindowReserved();
+}
+
+/**
+ * Motif EXACT d'un refus dû à une réservation du terrain (chaîne vide = aucune
+ * réservation : le refus, s'il y en a un, vient d'une autre cause).
+ * @returns {string}
+ */
+export function terrainReservedMessage() {
+  return piStartupGateMessage() || updateWindowBlockedMessage();
+}
+
+/**
+ * L'assistant peut-il ouvrir un tour de réflexion maintenant ? (décideur UNIQUE
+ * de la PREMIÈRE RÉFLEXION au démarrage)
+ *
+ * Tant que le moteur n'a pas été vérifié — et pendant son installation — Pilot
+ * ne commence pas à « réfléchir ». La même réservation vaut pour la mise à jour
+ * de Pilot (aucun agent ne démarre pendant qu'elle occupe le terrain).
+ * @returns {boolean}
+ */
+export function canAssistantReflect() {
+  return !isTerrainReserved();
+}
+
+/**
+ * Message affiché quand une première réflexion de l'assistant est refusée.
+ * @returns {string}
+ */
+export function assistantReflectionBlockedMessage() {
+  return terrainReservedMessage();
 }
 
 // ── Commande MANUELLE (prompt tapé dans l'interface) ───────────────────────
@@ -63,8 +112,9 @@ export const MANUAL_COMMAND_BLOCKED_MESSAGE =
  * Une seule fonction pour les deux familles de démarrages — mission d'agents
  * et commande manuelle — afin qu'aucun chemin ne puisse oublier une partie de
  * la règle :
- *   1. la mise à jour de Pilot occupe le terrain (écran ouvert ou installation
- *      en cours) → refus, quel que soit l'état du projet ;
+ *   1. le TERRAIN est réservé par une opération globale (vérification de la
+ *      version du moteur `pi` et son installation, ou mise à jour de Pilot) →
+ *      refus, quel que soit l'état du projet ;
  *   2. sinon, la politique d'admission du projet tranche (`canStartMission` :
  *      lecture partagée / modification exclusive).
  * @param {string} project - projet ciblé (le verrou est PAR PROJET)
@@ -75,19 +125,19 @@ export const MANUAL_COMMAND_BLOCKED_MESSAGE =
  * @returns {boolean} false si le travail ne doit pas démarrer maintenant
  */
 export function canStartWork(project, nature, isRunInProgress) {
-  if (isUpdateWindowReserved()) return false;
+  if (isTerrainReserved()) return false;
   if (typeof isRunInProgress !== "function") return true;
   return !isRunInProgress(project, { nature });
 }
 
 /**
  * Message de refus d'un travail refusé, MOTIF EXACT (une seule source) :
- * fenêtre de mise à jour ou installation en cours si la mise à jour occupe le
- * terrain, sinon le message d'occupation du projet.
+ * vérification/installation du moteur ou fenêtre de mise à jour si le terrain
+ * est réservé, sinon le message d'occupation du projet.
  * @returns {string}
  */
 export function workBlockedMessage() {
-  return updateWindowBlockedMessage() || MANUAL_COMMAND_BLOCKED_MESSAGE;
+  return terrainReservedMessage() || MANUAL_COMMAND_BLOCKED_MESSAGE;
 }
 
 /**
@@ -131,10 +181,10 @@ export function manualCommandBlockedMessage() {
  * @returns {Promise<boolean>}
  */
 export async function canSendManualCommandAsync(project, isRunInProgress, isAgentBusy, releaseStaleLock) {
-  // Fenêtre réservée de mise à jour : le refus est VOULU (écran ouvert ou
-  // installation en cours) — aucune levée de verrou orphelin n'est tentée, il
-  // n'y a pas de verrou en cause.
-  if (isUpdateWindowReserved()) return false;
+  // Terrain réservé (vérification/installation du moteur, ou mise à jour de
+  // Pilot) : le refus est VOULU — aucune levée de verrou orphelin n'est tentée,
+  // il n'y a pas de verrou en cause.
+  if (isTerrainReserved()) return false;
   if (!canSendManualCommand(project, isRunInProgress)) {
     // Mission 380 : un verrou resté fermé sans porteur ne doit pas condamner la
     // saisie de l'utilisateur jusqu'au redémarrage. On tente une levée CIBLÉE
