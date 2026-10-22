@@ -1338,7 +1338,8 @@ body.theme-light.theme-tokyo-day {
 /* --- Indicateur d'activité des agents (haut droite) ---
    Cercle flottant en haut à droite reflétant l'activité de TOUS les agents
    (assistant + codeurs). Le cercle « respire » dès qu'un agent travaille.
-   Au clic : liste déroulante (fond solide, teinté violet) + fiche agent. */
+   Au clic : liste déroulante (fond subtilement translucide, teinté violet) +
+   fiche agent. */
 #agent-activity {
   position: fixed;
   top: 8px;
@@ -1364,16 +1365,47 @@ body.theme-light.theme-tokyo-day {
   opacity: 1;
   animation: agent-pulse 1.5s ease-in-out infinite;
 }
+/* Reglages UNIQUES du fond de la liste des agents (aucune couleur en dur : la
+   teinte de l'assistant melangee a --surface-3 reste la source).
+     --agent-activity-panel-base  = la teinte du fond, inchangee ;
+     --agent-activity-panel-alpha = opacite de cette teinte. 94 % laisse deviner
+   la page derriere, sans jamais sacrifier la nettete du texte. Ne pas sortir de
+   la plage 92 % - 95 % : au-dessus le fond redevient opaque, en dessous le
+   contraste du texte peut passer sous le seuil AA dans le pire cas (page claire
+   derriere le theme sombre, page sombre derriere le theme clair).
+   Verrou : src/js/fond-liste-agents-translucide.test.js */
 #agent-activity-dropdown {
+  --agent-activity-panel-base: color-mix(in srgb, var(--superagent-accent) 16%, var(--surface-3));
+  --agent-activity-panel-alpha: 94%;
   position: absolute;
   top: 22px;
   right: 0;
   min-width: 150px;
-  background: color-mix(in srgb, var(--superagent-accent) 16%, var(--surface-3)); /* fond solide, teinté violet (assistant) */
+  /* Repli : fond OPAQUE (rendu historique). C'est ce que peignent les moteurs
+     qui ne savent pas flouter l'arriere-plan : jamais de fond translucide
+     sans flou, donc jamais de texte illisible par-dessus la page. */
+  background: var(--agent-activity-panel-base);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   border-radius: var(--radius-sm);
   padding: 4px;
   z-index: 10001;
+}
+/* Fond subtilement translucide : la translucidation se limite a l'opacite
+   (--agent-activity-panel-alpha), le flou d'arriere-plan est volontairement
+   tres faible (2 px) - on veut apercevoir la page, pas un effet de "verre depoli".
+   Ce bloc n'est applique que si le flou existe : sinon la regle ci-dessus
+   (fond opaque) reste seule en vigueur. Ni le cercle d'activite, ni les
+   pastilles, ni la fiche agent ne sont touches. */
+@supports (backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px)) {
+  #agent-activity-dropdown {
+    background: color-mix(
+      in srgb,
+      var(--agent-activity-panel-base) var(--agent-activity-panel-alpha),
+      transparent
+    );
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+  }
 }
 #agent-activity-dropdown.hidden { display: none; }
 .agent-activity-item {
