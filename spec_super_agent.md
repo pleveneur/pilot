@@ -1166,11 +1166,14 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   automatiquement à chaque ouverture de session.
 - Stockage : table `assistant_schedules` de la base `~/.pilot/super-agent.db`.
   Le rappel est injecté dans la conversation de l'assistant à l'échéance (pas de
-  notification OS). Une **bulle discrète** s'affiche alors dans le chat : une
-  seule ligne courte avec la **date et heure de déclenchement** au format local
-  français (ex. « ⏰ relance — 29/08 à 14:30 »). Le **prompt** du rappel (consigne
-  technique pour l'assistant) **n'est pas affiché** — il reste consultable au
-  survol de la bulle. Si la date est absente ou invalide, seul le marqueur
+  notification OS). Son **affichage ne passe pas par une bulle au milieu du
+  fil** (issue #36) : le rappel apparaît comme un **événement du panneau 🔔**
+  (en bas à droite de l'onglet 🧭), sur une **seule ligne courte** portant la
+  **date et heure de déclenchement** au format local français (ex. « ⏰ relance —
+  29/08 à 14:30 »), et un **toast discret** reprend ce même libellé. Le
+  **prompt** du rappel (consigne technique pour l'assistant) **n'est pas
+  affiché** : il reste consultable **au survol** de la ligne d'événement
+  (info-bulle). Si la date est absente ou invalide, seul le marqueur
   « ⏰ relance » s'affiche (jamais « Invalid Date »/« NaN »).
 
 ### Règle par défaut — fichier AGENTS.md des projets
