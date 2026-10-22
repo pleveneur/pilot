@@ -10,12 +10,15 @@
 //   [c] un évènement sans information utile ne produit AUCUN envoi ;
 //   [d] jamais deux messages pour la même information (rafale = un envoi) ;
 //   [e] le nom du projet est TOUJOURS en tête ;
-//   [f] les heures calmes (23 h → 7 h) sont respectées (sauf danger immédiat).
+//   [f] aucune HEURE dans un message (décision du propriétaire) ;
+//   [g] aucun RÉCAPITULATIF périodique (ni bilan du soir, ni minuteur répétitif) ;
+//   [h] les heures calmes (23 h → 7 h) sont respectées (sauf danger immédiat).
 //
 // Aucun accès réseau, aucune horloge réelle : l'horloge et l'envoyeur sont
 // INJECTÉS (`setTelegramGateDeps`), le module reste pur côté formatage.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   MAX_ALERT_CHARS,
   MAX_ASSISTANT_CHARS,
@@ -39,6 +42,7 @@ import {
   resetTelegramGate,
   setTelegramGateDeps,
   shouldDeliverNow,
+  stripTimeMentions,
 } from "./telegram-messages.js";
 
 // Deux projets suivis EN MÊME TEMPS (le cas qui posait problème).
@@ -86,6 +90,9 @@ const INTERDITS = [
   /\bbranche\s+\S/i, // nom de branche
   /\bcommit\s+\S/i, // commit
   /```|`/, // code
+  // HEURES : aucun message ne porte l'heure (décision du propriétaire).
+  /\b(?:[01]?\d|2[0-3])\s*[:hH]\s*[0-5]\d/, // 14:32, 9h15, 23 h 30
+  /\b(?:[01]?\d|2[0-3])\s*[hH](?:eures?)?\b/, // 14h, 14 h, 9 heures
 ];
 
 /** Aucun des motifs interdits ne doit apparaître dans `message`. */
@@ -415,8 +422,101 @@ describe("CONTRÔLE [e] — le nom du projet est TOUJOURS en tête", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-describe("CONTRÔLE [f] — heures calmes 23 h → 7 h", () => {
-  it("[f] la plage est reconnue (23 h, minuit, 6 h 59) et pas le reste", () => {
+describe("CONTRÔLE [f] — aucune heure dans un message", () => {
+  // Décision du propriétaire : pas d'heure dans les messages. On teste les formes
+  // qu'un texte réel produit (après nettoyage du code et des chemins).
+  const AVEC_HEURE = [
+    "correction de l'autotest lancée à 14:32",
+    "Terminé à 9h15",
+    "livré à 18h",
+    "reprise vers 23 h 30",
+    "correction depuis 8 heures",
+    "envoyé le 2026-10-22T14:32:00",
+  ];
+
+  it("[f] le retrait enlève l'heure ET la préposition qui la précédait", () => {
+    expect(stripTimeMentions("correction à 14:32 lancée")).toBe("correction lancée");
+    expect(stripTimeMentions("livré à 18h")).toBe("livré");
+    expect(stripTimeMentions("reprise depuis 8 heures")).toBe("reprise");
+    expect(stripTimeMentions("envoyé le 2026-10-22T14:32:00")).toBe("envoyé le");
+    // Ce qui n'est PAS une heure reste intact (ratio, version, durée en heures).
+    expect(stripTimeMentions("ratio 16:9 et version 1.2.3")).toBe("ratio 16:9 et version 1.2.3");
+    expect(stripTimeMentions("100 h de travail")).toBe("100 h de travail");
+  });
+
+  it("[f] aucun des quatre gabarits ne laisse passer une heure", () => {
+    for (const heure of AVEC_HEURE) {
+      const messages = [
+        buildStartMessage({ project: PROJET_A, action: `travail ${heure}` }),
+        buildEndMessage({ project: PROJET_B, ok: true, result: heure, testable: heure }),
+        buildAlertMessage({ project: PROJET_A, problem: heure, decision: heure }),
+        buildAssistantMessage({ project: PROJET_B, text: heure }),
+      ];
+      for (const message of messages) {
+        // INTERDITS contient les motifs d'heure : l'assertion mord si l'heure reste.
+        expectAucunDetailTechnique(message);
+      }
+    }
+  });
+
+  it("[f] la porte de publication ne laisse jamais partir une heure", () => {
+    publishOwnerEvent({
+      type: TELEGRAM_MESSAGE_TYPES.END,
+      project: PROJET_A,
+      ok: true,
+      result: "livré à 14:32",
+    });
+    expect(envoyes).toHaveLength(1);
+    expectAucunDetailTechnique(envoyes[0]);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe("CONTRÔLE [g] — aucun récapitulatif périodique", () => {
+  // Un récapitulatif (bilan du soir, message à heure fixe) n'a plus de type : le
+  // propriétaire ne veut que des messages de changement réel.
+  const TYPES_PERIODIQUES = ["recap", "récapitulatif", "digest", "summary", "bilan", "periode", "journal"];
+
+  it("[g] la liste des types est FERMÉE (aucun type de récapitulatif)", () => {
+    expect(Object.values(TELEGRAM_MESSAGE_TYPES).sort()).toEqual([
+      "alert",
+      "assistant",
+      "end",
+      "start",
+    ]);
+  });
+
+  it("[g] un évènement de récapitulatif ne produit ni message ni envoi", () => {
+    for (const type of TYPES_PERIODIQUES) {
+      expect(
+        buildOwnerMessage({ type, project: PROJET_A, text: "bilan du soir", result: "bilan" }),
+        `type ${type}`,
+      ).toBe("");
+      expect(
+        publishOwnerEvent({ type, project: PROJET_A, text: "bilan du soir" }).status,
+        `type ${type}`,
+      ).toBe("empty");
+    }
+    expect(envoyes).toEqual([]);
+  });
+
+  it("[g] aucun minuteur répétitif dans le branchement (pas de message à heure fixe)", () => {
+    // Un récapitulatif périodique exige un minuteur qui se répète : sans
+    // `setInterval`, aucun bilan ne peut réapparaître (les heures calmes
+    // n'utilisent qu'un `setTimeout` unique, non répétitif).
+    for (const fichier of ["telegram-messages.js", "desktop-notify.js", "telegram-dialog.js"]) {
+      const src = readFileSync(new URL(`./${fichier}`, import.meta.url), "utf8").replace(
+        /\r\n/g,
+        "\n",
+      );
+      expect(src, `${fichier} : aucun setInterval`).not.toMatch(/\bsetInterval\s*\(/);
+    }
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe("CONTRÔLE [h] — heures calmes 23 h → 7 h", () => {
+  it("[h] la plage est reconnue (23 h, minuit, 6 h 59) et pas le reste", () => {
     expect(isQuietHours(NUIT)).toBe(true);
     expect(isQuietHours(PETIT_MATIN)).toBe(true);
     expect(isQuietHours(Date.parse("2026-05-06T06:59:00"))).toBe(true);
@@ -426,7 +526,7 @@ describe("CONTRÔLE [f] — heures calmes 23 h → 7 h", () => {
     expect(msUntilQuietEnd(NUIT)).toBeGreaterThan(0);
   });
 
-  it("[f] rien n'est envoyé pendant les heures calmes, mais rien n'est perdu", () => {
+  it("[h] rien n'est envoyé pendant les heures calmes, mais rien n'est perdu", () => {
     const etat = publishOwnerEvent({
       type: TELEGRAM_MESSAGE_TYPES.END,
       project: PROJET_B,
@@ -450,7 +550,7 @@ describe("CONTRÔLE [f] — heures calmes 23 h → 7 h", () => {
     expect(envoyes).toHaveLength(2);
   });
 
-  it("[f] un danger IMMÉDIAT franchit les heures calmes", () => {
+  it("[h] un danger IMMÉDIAT franchit les heures calmes", () => {
     horloge = PETIT_MATIN;
     expect(shouldDeliverNow({ danger: true }, horloge)).toBe(true);
     const etat = publishOwnerEvent({
@@ -464,7 +564,7 @@ describe("CONTRÔLE [f] — heures calmes 23 h → 7 h", () => {
     expect(envoyes).toHaveLength(1);
   });
 
-  it("[f] la réserve des messages retenus est bornée", () => {
+  it("[h] la réserve des messages retenus est bornée", () => {
     horloge = NUIT;
     for (let i = 0; i < MAX_HELD_MESSAGES + 5; i += 1) {
       publishOwnerEvent({

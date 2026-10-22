@@ -82,6 +82,10 @@ Décocher le réglage suffit à tout arrêter.
 - **pas de détails techniques** : ni chemin de fichier, ni nom de fonction, ni
   numéro de session, ni compte de tests (juste « tests OK » ou « tests KO »),
   ni branche ni commit ;
+- **aucune heure dans les messages** : un message dit **ce qui se passe**, pas
+  quand ; vous êtes prévenu à l'instant, l'heure n'apporte rien ;
+- **aucun récapitulatif périodique** : pas de bilan du soir, pas de message à
+  heure fixe — uniquement des messages pour un changement réel ;
 - **un seul message par changement réel** : une rafale d'évènements produit un
   seul envoi, et un évènement sans information utile ne produit **aucun**
   message ;
@@ -794,7 +798,10 @@ absence.
 - **Nettoyage** `sanitizeOwnerText` : retire le code, les chemins, les noms de
   fichiers/modules/fonctions, les identifiants `snake_case`, les **numéros de
   session/mission**, les **empreintes** hexadécimales/UUID, les **branches** et
-  **commits**, le balisage Markdown. `normalizeTestMentions` réduit tout compte
+  **commits**, le balisage Markdown, et les **heures** (`stripTimeMentions` :
+  `14:32`, `9h15`, `23 h 30`, `depuis 8 heures`, horodatage ISO — la préposition
+  qui précédait part avec l'heure ; un ratio `16:9`, une version `1.2.3` ou une
+  durée `100 h` restent intacts). `normalizeTestMentions` réduit tout compte
   de tests à « tests OK » / « tests KO ».
 - **Bornes** : 110 car. (début, résultat, à tester), 150 (alerte), 200
   (assistant). Une pastille d'état en tête (`⚠️`, `✅`, `🔴`…) est retirée : le
@@ -826,12 +833,14 @@ absence.
 | accusés de réception, « tout va bien », résumés périodiques | aucun message inutile |
 | numéros de session/mission, chemins, fichiers, fonctions, modules | illisibles sur un téléphone, et fuite de détail interne |
 | comptes de tests, empreintes, branches, commits | remplacés par « tests OK » / « tests KO » |
+| **heures** (« à 14:32 », « 9h15 », horodatage) | décision du propriétaire : le message dit **ce qui se passe**, pas **quand** — il est prévenu à l'instant |
+| **récapitulatifs périodiques** (bilan du soir, message à heure fixe) | aucun intérêt : la liste des types est **fermée** à quatre, et le branchement n'a **aucun minuteur répétitif** |
 | file de missions **conservée**, échec d'injection d'un compte-rendu | évènements **internes** (`telegram: false`, filtrés à la source) |
 
 ### 13.4 Tests et contrôles
 
-`src/js/telegram-messages.test.js` (32 tests, horloge et envoyeur **injectés**)
-contient **six contrôles** qui échouent si la règle casse :
+`src/js/telegram-messages.test.js` (38 tests, horloge et envoyeur **injectés**)
+contient **huit contrôles** qui échouent si la règle casse :
 
 | Contrôle | Ce qu'il interdit |
 |---|---|
@@ -840,11 +849,14 @@ contient **six contrôles** qui échouent si la règle casse :
 | **[c]** | évènement **sans information utile** produisant un envoi |
 | **[d]** | deux messages pour la **même information** (rafale) |
 | **[e]** | message **sans nom de projet en tête** |
-| **[f]** | envoi pendant les **heures calmes** (hors danger immédiat) |
+| **[f]** | une **heure** dans un message (quatre gabarits + porte d'envoi) |
+| **[g]** | un **récapitulatif périodique** (type inconnu accepté, ou minuteur répétitif) |
+| **[h]** | envoi pendant les **heures calmes** (hors danger immédiat) |
 
 **Preuve par neutralisation** (chaque contrôle rougit quand on retire la règle,
 puis fichier restauré à l'identique — même empreinte SHA-256) :
-`[a]` 2 rouges, `[b]` 4, `[c]` 1, `[d]` 2, `[e]` 1, `[f]` 2.
+`[a]` 2 rouges, `[b]` 4, `[c]` 1, `[d]` 2, `[e]` 1, `[f]` 2, `[g]` 2 + 1
+(minuteur), `[h]` 2.
 
 Les tests d'intégration du branchement restent dans
 `src/js/telegram-notify.test.js` et `src/js/telegram-dialog.test.js` (mêmes

@@ -17,7 +17,12 @@
 //      « mission relancée », accusés de réception, numéros de session/mission,
 //      chemins de fichiers, noms de fonctions/modules, détails de tests (on garde
 //      « tests OK » / « tests KO »), comptes de tests, empreintes, branches et
-//      commits. Tout passe par `sanitizeOwnerText`.
+//      commits, et **aucune heure** (décision du propriétaire : un message dit ce
+//      qui se passe, pas quand). Tout passe par `sanitizeOwnerText`.
+//   3 bis. Aucun RÉCAPITULATIF périodique : ni bilan du soir, ni message à heure
+//      fixe. Un message n'existe que pour un changement réel — garanti par la
+//      liste FERMÉE des types (`TELEGRAM_MESSAGE_TYPES`) et par l'ABSENCE de
+//      minuteur répétitif (`setInterval`) dans le branchement.
 //   4. Un seul message par changement réel : une rafale d'évènements rapprochés
 //      pour la même information donne UN envoi (`publishOwnerEvent`, fenêtre
 //      `TELEGRAM_BURST_WINDOW_MS`).
@@ -95,6 +100,37 @@ export function projectShortName(projectPath) {
 const CODE_EXTENSIONS =
   "js|mjs|cjs|ts|tsx|jsx|rs|json|jsonl|md|css|html|htm|py|toml|lock|yml|yaml|txt|sh|bat|ps1|sql|vue|svelte|go|java|kt|c|h|cpp|hpp|cs|rb|php|log|db|sqlite|sqlite3|ini|cfg|conf|env";
 
+/** Forme d'une HEURE (source commune : retrait ET contrôles). */
+const TIME_PATTERN_SOURCE =
+  // 14:32, 9:15, 14:32:05, 9h15, 23 h 30
+  "\\b(?:[01]?\\d|2[0-3])(?:\\s*[:hH]\\s*[0-5]\\d(?:\\s*[:hH]\\s*[0-5]\\d)?" +
+  // 14h, 14 h, 9 heures, 9 heures 30, 9 h et demie
+  "|\\s*[hH](?:eures?)?(?:\\s*(?:[0-5]\\d|et demie))?)";
+
+/**
+ * Retire toute HEURE d'un texte (« à 14:32 », « vers 9 h 15 », « livré à 18h »,
+ * horodatage ISO). Décision du propriétaire : aucun message ne porte l'heure —
+ * il est prévenu à l'instant, l'heure n'ajoute rien et alourdit la ligne. La
+ * préposition qui précédait (« à », « vers », « depuis »…) part avec l'heure,
+ * sinon la phrase resterait bancale. Fonction PURE.
+ * @param {string} raw
+ * @returns {string}
+ */
+export function stripTimeMentions(raw) {
+  let t = String(raw ?? "");
+  if (!t) return "";
+  // Horodatage complet (2026-05-05T12:00:00) : il ne doit pas laisser « …T ».
+  t = t.replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?\b/g, " ");
+  // Heure précédée d'une préposition : la préposition part avec elle.
+  t = t.replace(
+    new RegExp(`(^|[\\s(])(?:[àa]|vers|d[èe]s|depuis|avant|apr[èe]s)\\s+${TIME_PATTERN_SOURCE}`, "gi"),
+    "$1",
+  );
+  // Heure seule restante.
+  t = t.replace(new RegExp(TIME_PATTERN_SOURCE, "g"), " ");
+  return t.replace(/\s+/g, " ").trim();
+}
+
 /**
  * Remplace toute mention de tests par le VERDICT seul : « tests OK » ou
  * « tests KO ». Les comptes, les noms de fichiers de tests et les détails
@@ -130,6 +166,8 @@ export function sanitizeOwnerText(raw) {
   t = t.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // URL brutes.
   t = t.replace(/<?https?:\/\/\S+>?/gi, " ");
+  // Heures : aucun message ne porte l'heure (décision du propriétaire).
+  t = stripTimeMentions(t);
   // Mentions de tests → verdict seul (avant de toucher aux nombres).
   t = normalizeTestMentions(t);
   // Chemins Windows absolus (C:\…, C:/…).

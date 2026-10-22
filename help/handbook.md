@@ -3376,6 +3376,10 @@ Décocher le réglage suffit à tout arrêter.
 - **pas de détails techniques** : ni chemin de fichier, ni nom de fonction, ni
   numéro de session, ni compte de tests (juste « tests OK » ou « tests KO »),
   ni branche ni commit ;
+- **aucune heure dans les messages** : un message dit **ce qui se passe**, pas
+  quand ; vous êtes prévenu à l'instant, l'heure n'apporte rien ;
+- **aucun récapitulatif périodique** : pas de bilan du soir, pas de message à
+  heure fixe — uniquement des messages pour un changement réel ;
 - **un seul message par changement réel** : une rafale d'évènements produit un
   seul envoi, et un évènement sans information utile ne produit **aucun**
   message ;
