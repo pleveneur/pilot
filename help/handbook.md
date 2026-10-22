@@ -1114,6 +1114,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Changer de projet, fermer un projet ou en ouvrir un autre n'arrête JAMAIS un agent en cours** — quel que soit l'écran (agent du projet, agents multi-rôles 🎭, Assistant). L'agent du projet quitté est simplement **mis en pause** et reprend là où il en était au retour sur ce projet ; les agents des autres projets ouverts continuent leur travail. Seul un agent **au repos** (qui ne travaille pas) est libéré à la fermeture de son projet.
 - **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau du suivi du travail, une session qui travaille sans onglet ouvert reste **listée** avec son nom et son projet, sa pastille **respirant** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Cette liste n'affiche **aucune mention « arrière-plan »** (texte ou infobulle) : l'information est portée par la pastille et le nom en gras ; le libellé explicite reste dans la fiche de l'agent et dans le panneau Activité de l'onglet Agents. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
 - **Fond de la liste** : le fond de la liste des agents est **légèrement translucide** — on devine la page derrière, sans jamais gêner la lecture : les noms restent nets, en thème clair comme en thème sombre. Les pastilles ne changent pas (atténuées au repos, pleines et lumineuses quand l'agent travaille).
+- **Taille et présentation du panneau** : le panneau du suivi (cercle en haut à droite) est assez large pour ses trois onglets **sur une seule ligne** — jamais plus de **40 % de la largeur** de la fenêtre — et ne dépasse jamais **60 % de la hauteur** de l'écran : au-delà, seule la liste défile, et le panneau reste **entièrement visible**. Les trois listes ont exactement la même présentation, celle du panneau d'origine (mêmes lignes, mêmes textes).
 
 ### Voir le travail en cours (une compilation n'est pas un arrêt)
 - Pendant une **commande longue** (construction, série de tests, installation), l'écran **prouve** que le travail avance — à trois endroits :
@@ -1376,6 +1377,18 @@ apprend et répond.
   - Le panneau **reste ouvert** tant qu'on ne le ferme pas ; son état
     ouvert/fermé est **mémorisé**. Pendant l'ouverture, les nouveaux événements
     s'ajoutent en direct en haut de la liste.
+  - **Dimension et présentation** : le panneau est dimensionné pour que les
+    trois onglets tiennent sur **une seule ligne** — largeur entre **300 et
+    360 px**, jamais plus de **40 %** de la largeur de la fenêtre (fenêtre
+    étroite : le plancher de lisibilité des onglets l'emporte, et le panneau se
+    recale pour rester **entièrement dans l'écran**) — et il ne dépasse jamais
+    **60 %** de la hauteur de la fenêtre : au-delà, c'est le **contenu** de la
+    liste qui défile, **jamais** le panneau. Le contenu des trois listes
+    reprend **le style des listes déplacées** (mêmes classes et mêmes jetons de
+    thème : lignes, textes, mentions « en attente », éléments d'événement,
+    horodatage, espacements), sans aucune valeur de style recopiée : réglages
+    uniques dans les variables `--agent-activity-panel-*` et gabarits de liste
+    partagés (verrou `src/js/taille-et-style-panneau.test.js`).
   - Liste **chronologique** (plus récent en haut), pastille colorée par
     sévérité (succès / avertissement / erreur / info), horodatage discret.
   - Bouton **« tout effacer »** 🗑️ (dans l'onglet « Événements ») pour vider la

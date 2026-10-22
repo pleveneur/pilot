@@ -120,6 +120,18 @@ apprend et répond.
   - Le panneau **reste ouvert** tant qu'on ne le ferme pas ; son état
     ouvert/fermé est **mémorisé**. Pendant l'ouverture, les nouveaux événements
     s'ajoutent en direct en haut de la liste.
+  - **Dimension et présentation** : le panneau est dimensionné pour que les
+    trois onglets tiennent sur **une seule ligne** — largeur entre **300 et
+    360 px**, jamais plus de **40 %** de la largeur de la fenêtre (fenêtre
+    étroite : le plancher de lisibilité des onglets l'emporte, et le panneau se
+    recale pour rester **entièrement dans l'écran**) — et il ne dépasse jamais
+    **60 %** de la hauteur de la fenêtre : au-delà, c'est le **contenu** de la
+    liste qui défile, **jamais** le panneau. Le contenu des trois listes
+    reprend **le style des listes déplacées** (mêmes classes et mêmes jetons de
+    thème : lignes, textes, mentions « en attente », éléments d'événement,
+    horodatage, espacements), sans aucune valeur de style recopiée : réglages
+    uniques dans les variables `--agent-activity-panel-*` et gabarits de liste
+    partagés (verrou `src/js/taille-et-style-panneau.test.js`).
   - Liste **chronologique** (plus récent en haut), pastille colorée par
     sévérité (succès / avertissement / erreur / info), horodatage discret.
   - Bouton **« tout effacer »** 🗑️ (dans l'onglet « Événements ») pour vider la

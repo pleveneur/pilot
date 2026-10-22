@@ -1348,6 +1348,31 @@ body.theme-light.theme-tokyo-day {
   top: 8px;
   right: 12px;
   z-index: 10000;
+  /* DIMENSIONS DU PANNEAU : reglages UNIQUES (decisions du proprietaire),
+     ecrits ici une seule fois et consommes par `#agent-activity-dropdown`.
+     Aucune de ces valeurs n'est recopiee ailleurs dans la feuille.
+       --...-panel-min-width     : plancher de lisibilite. C'est la largeur en
+         dessous de laquelle les trois libelles d'onglet (« Agents »,
+         « Taches », « Evenements ») ne tiennent plus sur UNE seule ligne sans
+         etre tronques (borne : libelles + marges internes + les deux boutons
+         d'action de l'en-tete).
+       --...-panel-ideal-width   : largeur souhaitee sur un ecran courant.
+       --...-panel-max-width     : plafond pour ne jamais masquer l'editeur.
+       --...-panel-width-share   : part MAXIMALE de la largeur de la fenetre
+         (en `vw` : un pourcentage se resoudrait sur la largeur du conteneur
+         `#agent-activity`, qui n'est que le cercle de 14 px — jamais sur la
+         fenetre).
+       --...-panel-height-share  : part MAXIMALE de la hauteur de la fenetre
+         (en `vh`), au-dela, c'est le CONTENU qui defile, jamais le panneau.
+       --...-panel-margin        : marge qui garde le panneau DANS l'ecran
+         (12 px a droite + 20 px a gauche).
+     Verrou : src/js/taille-et-style-panneau.test.js */
+  --agent-activity-panel-min-width: 320px;
+  --agent-activity-panel-ideal-width: 34vw;
+  --agent-activity-panel-max-width: 360px;
+  --agent-activity-panel-width-share: 40vw;
+  --agent-activity-panel-height-share: 60vh;
+  --agent-activity-panel-margin: 32px;
 }
 #agent-activity-dot {
   position: relative;
@@ -1409,10 +1434,27 @@ body.theme-light.theme-tokyo-day {
   position: absolute;
   top: 22px;
   right: 0;
-  width: 300px;
-  /* Le panneau ne deborde jamais de l'ecran (petites fenetres comprises). */
-  max-width: calc(100vw - 32px);
-  max-height: min(420px, calc(100vh - 48px));
+  /* Largeur : les valeurs nommees de `#agent-activity` (une seule source). */
+  width: clamp(
+    var(--agent-activity-panel-min-width),
+    var(--agent-activity-panel-ideal-width),
+    var(--agent-activity-panel-max-width)
+  );
+  /* Jamais plus de la part decidee de la fenetre, SAUF quand ce plafond
+     passerait sous le plancher de lisibilite des trois onglets (fenetre
+     etroite) : la, le plancher gagne. La marge garantit dans tous les cas que
+     le panneau reste entierement DANS l'ecran et se recale.
+     Verrou : src/js/taille-et-style-panneau.test.js */
+  max-width: min(
+    max(var(--agent-activity-panel-min-width), var(--agent-activity-panel-width-share)),
+    calc(100vw - var(--agent-activity-panel-margin))
+  );
+  /* Jamais plus de 60 % de la hauteur de la fenetre : au-dela, c'est le
+     CONTENU des volets qui defile, jamais le panneau entier. */
+  max-height: min(
+    var(--agent-activity-panel-height-share),
+    calc(100vh - var(--agent-activity-panel-margin))
+  );
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1456,8 +1498,10 @@ body.theme-light.theme-tokyo-day {
 /* Volet « Agents » : la liste historique, au même endroit et avec le même fond
    translucide que le panneau (aucun fond propre). */
 #agent-activity-pane-agents {
-  padding: 4px;
-  overflow-y: auto;
+  /* Marge interne et defilement : ceux de la LISTE (regle groupee
+     `.sa-events-list, .sa-tasks-list, #agent-activity-list`), exactement comme
+     les deux volets du bas. Le volet ne fait que contenir sa liste. */
+  overflow: hidden;
 }
 /* Volets « Tâches » et « Événements » : ils conservent LEUR surface opaque
    (--surface-floating), celle sur laquelle les jetons de couleur
@@ -1468,21 +1512,21 @@ body.theme-light.theme-tokyo-day {
 #agent-activity-pane-events {
   background: var(--surface-floating);
 }
+/* Ligne de la liste des agents : uniquement ce qui est PROPRE au bouton. Le
+   gabarit de ligne (display, espacement, marge interne, arrondi) et le survol
+   sont ceux des listes du panneau du bas : UNE seule regle groupee les porte
+   pour les trois listes (voir `.sa-events-item, .agent-activity-item`), donc
+   aucune valeur n'est recopiee ici. */
 .agent-activity-item {
-  display: flex;
   align-items: center;
-  gap: 8px;
   width: 100%;
-  padding: 6px 8px;
   border: none;
   background: transparent;
   color: var(--text-primary);
   font-size: var(--font-sm);
   cursor: pointer;
-  border-radius: var(--radius-sm);
   text-align: left;
 }
-.agent-activity-item:hover { background: var(--bg-hover); }
 .agent-activity-item-dot {
   flex-shrink: 0;
   width: 8px;
@@ -4210,20 +4254,34 @@ body.zen-mode #project-footer {
   color: var(--text-primary);
   background: var(--bg-hover);
 }
-.sa-events-list {
+/* GABARIT DE LISTE des TROIS volets du panneau du suivi du travail, ecrit UNE
+   SEULE FOIS : la liste du volet « Agents » reprend celui des listes du panneau
+   du bas (« Evenements », « Taches ») — meme marge interne, meme defilement.
+   C'est le seul endroit ou ces valeurs existent. */
+.sa-events-list,
+.sa-tasks-list,
+#agent-activity-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 4px;
 }
-.sa-events-item {
+/* GABARIT DE LIGNE des TROIS listes, ecrit UNE SEULE FOIS : la ligne d'agent a
+   exactement l'espacement, la marge interne, l'arrondi et le survol de la ligne
+   d'evenement du panneau du bas. Aucune valeur recopiee : selecteur partage. */
+.sa-events-item,
+.agent-activity-item {
   display: flex;
-  align-items: flex-start;
   gap: 8px;
   padding: 6px 8px;
   border-radius: var(--radius-sm);
 }
-.sa-events-item:hover { background: var(--bg-hover); }
+.sa-events-item:hover,
+.agent-activity-item:hover { background: var(--bg-hover); }
+/* Ligne d'evenement : le texte peut tenir sur plusieurs lignes, la ligne est
+   donc alignee en HAUT (une ligne d'agent tient sur une seule ligne, elle est
+   alignee au centre — voir `.agent-activity-item`). */
+.sa-events-item { align-items: flex-start; }
 .sa-events-item-dot {
   flex-shrink: 0;
   width: 8px;
@@ -4261,6 +4319,9 @@ body.zen-mode #project-footer {
   align-items: center;
   gap: 4px;
   min-width: 0;
+  /* Une SEULE ligne d'onglets, toujours : la barre ne se replie jamais sur deux
+     lignes, meme fenetre etroite. Verrou : src/js/taille-et-style-panneau.test.js */
+  flex-wrap: nowrap;
 }
 .sa-events-tab {
   padding: 3px 8px;
@@ -4275,6 +4336,11 @@ body.zen-mode #project-footer {
   font-size: var(--font-sm);
   font-weight: 600;
   cursor: pointer;
+  /* Jamais de libelle coupe ni comprime : l'onglet garde sa largeur naturelle
+     sur une seule ligne (`white-space: nowrap`). C'est le panneau qui est
+     dimensionne pour eux (voir `--agent-activity-panel-min-width`). */
+  flex: 0 0 auto;
+  white-space: nowrap;
   transition: background 0.15s, color 0.15s;
 }
 .sa-events-tab:hover {
@@ -4296,12 +4362,8 @@ body.zen-mode #project-footer {
   flex-direction: column;
 }
 .sa-events-pane.hidden { display: none; }
-.sa-tasks-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 4px;
-}
+/* Les deux listes ci-dessus partagent le gabarit de `.sa-events-list` (regle
+   groupee plus haut) : aucune valeur n'est redefinie ici. */
 .sa-task-client {
   padding: 6px 8px 2px;
   font-size: var(--font-xs);
