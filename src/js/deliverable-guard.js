@@ -11,8 +11,19 @@
 //     demande EXPLICITEMENT d'écrire/créer/modifier un fichier et qui ne vise
 //     que des agents en lecture seule est refusée AVANT tout démarrage, avec un
 //     message qui nomme l'agent, la raison et la sortie (choisir un agent qui
-//     écrit). Le doute n'est JAMAIS un refus : sans verbe d'écriture ET sans
+//     écrit). Le doute n'est JAMAIS un refus : sans ordre d'écriture ET sans
 //     cible de fichier identifiables, la demande part comme avant.
+//
+//     Le refus ne repose PAS sur les mots employés mais sur ce que la demande
+//     DEMANDE (défaut constaté en usage réel : des missions de LECTURE SEULE
+//     étaient refusées à cause du verbe d'une phrase NÉGATIVE (« n'écrire aucun
+//     rapport », « ne modifier aucun fichier »), d'une ÉTIQUELLE de verdict
+//     (« À CORRIGER ») ou d'une citation de message de commit). Deux signaux
+//     fiables seulement, dans cet ordre :
+//       a. un livrable réellement attendu (`expected_files`) ;
+//       b. un ORDRE d'écriture positif adressé à l'agent (impératif, base
+//          verbale anglaise, ou infinitif gouverné par une formule de
+//          consigne) ET une cible de fichier dans la MÊME proposition.
 //  2. PREUVE DU LIVRABLE (`verifyExpectedFiles`) : quand la demande déclare les
 //     fichiers réellement attendus sur disque (`expected_files`), Pilot vérifie
 //     à la fin de la tâche que CHACUN existe. Absent ⇒ la tâche est rapportée en
@@ -25,32 +36,53 @@
 
 import { resolvePath } from "./orchestration.js";
 
-/** Normalise un texte pour l'analyse : minuscules, sans accents, espaces réduits. */
+/**
+ * Normalise un texte pour l'analyse : minuscules, apostrophes typographiques
+ * ramenées à l'apostrophe droite, espaces réduits. Les ACCENTS sont CONSERVÉS :
+ * ils distinguent l'ORDRE de l'ÉTAT (« modifie » impératif n'est pas
+ * « modifié » participe) — c'est ce qui rend le contrôle fiable.
+ */
 export function normalizeForMatch(text) {
   return String(text == null ? "" : text)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC")
+    .replace(/[\u2018\u2019\u02bc\u2032]/g, "'")
     .toLowerCase()
     .replace(/\s+/g, " ");
 }
 
-// ── Détection du besoin d'ÉCRIRE (conservatrice) ────────────────────────────
+/**
+ * Découpe un texte en PROPOSITIONS. Un ordre et sa cible doivent se trouver dans
+ * la MÊME proposition : un mot d'écriture isolé, ailleurs dans le texte, ne
+ * prouve jamais une demande d'écriture (étiquette, citation, description).
+ * Le point n'est un séparateur que s'il est suivi d'un blanc ou de la fin du
+ * texte — un chemin comme `src/js/main.js` ou une version `0.4.39` reste intact.
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function splitSegments(text) {
+  return String(text == null ? "" : text)
+    .split(/\n+|;|!|\?|\.(?=\s|$)/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// ── Détection du besoin d'ÉCRIRE (conservatrice, fondée sur un ORDRE) ───────
 // Verbes qui demandent explicitement de PRODUIRE ou de MODIFIER un fichier.
 // Volontairement limités : un mot absent ne peut pas provoquer un refus indu
-// (« dans le doute on lance »).
+// (« dans le doute on lance »). Sert de TRACE (champ `verb`), jamais de décision.
 const WRITE_VERB_RE = new RegExp(
   "\\b(?:" +
     [
-      // français (formes normalisées : sans accents)
+      // français
       "ecri(?:s|re|vez|t|vent|vant)",
       "cre(?:e|er|ez|ent|ant)",
-      "modifi(?:e|er|ez|ent|ant)",
-      "gener(?:e|er|ez|ent|ant)",
-      "ajout(?:e|er|ez|ent|ant)",
-      "enregistr(?:e|er|ez|ent|ant)",
-      "remplac(?:e|er|ez|ent|ant)",
-      "corrig(?:e|er|ez|ent|ant)",
-      "implement(?:e|er|ez|ent|ant)",
+      "modifi(?:e|er|ez|ent|ant|é|és)",
+      "gener(?:e|er|ez|ent|ant|é)",
+      "ajout(?:e|er|ez|ent|ant|é)",
+      "enregistr(?:e|er|ez|ent|ant|é)",
+      "remplac(?:e|er|ez|ent|ant|é)",
+      "corrig(?:e|er|ez|ent|ant|é)",
+      "implement(?:e|er|ez|ent|ant|é)",
       "mets? a jour",
       "mettre a jour",
       // anglais (une demande peut arriver dans la langue du modèle)
@@ -79,19 +111,211 @@ const FILE_EXT_RE = new RegExp(
   "i"
 );
 const FILE_NOUN_RE = /\bfichiers?\b|\bfiles?\b/;
+// Même motif, global : sert à RETIRER les chemins avant la recherche du verbe.
+const FILE_EXT_GLOBAL_RE = new RegExp(FILE_EXT_RE.source, "gi");
+
+/**
+ * Retire les CHEMINS de fichier d'un texte. Un nom de fichier n'est jamais un
+ * ordre : `corrige-guard.md` ne doit pas être lu comme l'impératif « corrige ».
+ * @param {string} text
+ * @returns {string}
+ */
+export function stripFileTargets(text) {
+  return String(text || "").replace(FILE_EXT_GLOBAL_RE, " ");
+}
+
+// ── 1. Formes d'ORDRE : le seul signal fiable d'une demande d'écriture ─────
+// Un mot du domaine de l'écriture ne prouve RIEN : il peut être une étiquette
+// (« À CORRIGER »), un nom (« une correction »), un participe (« le fichier a
+// été modifié »), la citation d'un message de commit ou un nom de fichier.
+// Seule une forme d'ORDRE adressée à l'agent compte :
+//   - impératif 2e personne en français (« écris », « modifie », « génère »…) ;
+//   - base verbale en anglais (« write », « modify »…) ;
+//   - infinitif GOUVERNÉ par une formule de consigne (« il faut écrire »,
+//     « merci de créer », « tu dois modifier »…), ou placé en TÊTE de
+//     proposition (liste de tâches : « - modifier src/js/main.js »).
+// Les variantes accentuées sont tolérées, mais la DERNIÈRE lettre de chaque
+// forme reste exacte : c'est elle qui sépare l'impératif du participe
+// (« modifie » / « modifié », « écris » / « écrit »).
+const ACCENT_CLASSES = {
+  a: "[aàâä]",
+  c: "[cç]",
+  e: "[eéèêë]",
+  i: "[iîï]",
+  o: "[oôö]",
+  u: "[uùûü]",
+  y: "[yÿ]",
+};
+
+/** Rend un mot tolérant aux accents (« ecrire » accepte « écrire »). */
+function accentTolerant(word) {
+  return String(word).replace(/[aceiouy]/g, (ch) => ACCENT_CLASSES[ch]);
+}
+
+/** Tolérant aux accents SAUF la dernière lettre, qui reste exacte. */
+function accentTolerantKeepingEnd(word) {
+  const w = String(word);
+  return accentTolerant(w.slice(0, -1)) + w.slice(-1);
+}
+
+/** Alternatives tolérantes aux accents (fin de chaque forme exacte). */
+function orderAlternation(words) {
+  return words.map(accentTolerantKeepingEnd).join("|");
+}
+
+// Un « \b » ne fonctionne pas devant une voyelle accentuée (é n'est pas un
+// caractère de mot en JavaScript) : on borne par un séparateur explicite.
+const WORD_START = "(?:^|[\\s,;:()\\[\\]{}\"'«»—–…-])";
+
+const WRITE_ORDER_FR = [
+  "ecris", "ecrivez", "cree", "creez", "modifie", "modifiez", "genere", "generez",
+  "ajoute", "ajoutez", "enregistre", "enregistrez", "remplace", "remplacez",
+  "corrige", "corrigez", "implemente", "implementez", "applique", "appliquez",
+  "redige", "redigez", "produis", "produisez", "complete", "completez",
+  "edite", "editez", "sauvegarde", "sauvegardez", "mets a jour", "mettez a jour",
+];
+
+// Anglais : base verbale (impératif). Aucun accent, formes exactes.
+const WRITE_ORDER_EN = [
+  "write", "create", "modify", "edit", "update", "add", "fix", "save",
+  "implement", "apply", "generate", "replace", "patch", "refactor",
+];
+
+const WRITE_INFINITIVE_FR = [
+  "ecrire", "creer", "modifier", "generer", "ajouter", "enregistrer",
+  "remplacer", "corriger", "implementer", "appliquer", "rediger", "produire",
+  "completer", "editer", "sauvegarder", "mettre a jour",
+];
+
+const WRITE_ORDER_RE = new RegExp(
+  WORD_START + "(?:" + orderAlternation(WRITE_ORDER_FR) + "|" + WRITE_ORDER_EN.join("|") + ")\\b"
+);
+const WRITE_INFINITIVE_RE = new RegExp(WORD_START + "(?:" + orderAlternation(WRITE_INFINITIVE_FR) + ")\\b");
+
+// Un impératif 2e personne et un présent 3e personne s'écrivent pareil
+// (« il modifie » / « modifie »). Un sujet à la 3e personne devant le verbe =
+// DESCRIPTION, pas un ordre adressé à l'agent.
+const THIRD_PERSON_BEFORE =
+  /(?:^|\s)(?:[a-zà-ÿ']*')?(?:il|elle|ils|elles|on|qui|ça|ca|cela|ceci|personne|chacun|agent|agents|codeur|assistant|planificateur|reviewer|script)\s+$/;
+
+// Formules qui transforment un infinitif en CONSIGNE.
+const ORDER_MARKERS = [
+  "il faut", "il est demande de", "il est demande d'", "il est necessaire de",
+  "tu dois", "vous devez", "tu devras", "vous devrez", "dois ", "devez ",
+  "merci de", "merci d'", "veuillez", "je veux que", "je souhaite que",
+  "commence par", "commencez par", "pense a", "pensez a",
+  "fais en sorte de", "fais en sorte d'",
+  "objectif", "consigne", "attendu", "tache", "mission",
+].map((marker) => new RegExp(accentTolerant(marker), "g"));
+
+/**
+ * Formule de consigne devant l'infinitif ? Une QUESTION n'est jamais un ordre :
+ * « dis-moi s'il faut modifier… » ne demande rien à l'agent.
+ * @param {string} before - texte qui précède l'infinitif
+ * @returns {boolean}
+ */
+function hasOrderMarkerBefore(before) {
+  const tail = String(before || "").slice(-90);
+  for (const re of ORDER_MARKERS) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(tail)) !== null) {
+      const prefix = tail.slice(Math.max(0, m.index - 4), m.index);
+      // « s'il faut… », « si … » : hypothèse, pas une consigne.
+      if (!/(?:^|\s)s'\s*$|\bsi\s+$/.test(prefix)) return true;
+      if (m[0].length === 0) re.lastIndex += 1; // garde-fou anti-boucle
+    }
+  }
+  return false;
+}
+
+/**
+ * Le verbe d'écriture est-il employé comme ORDRE dans cette proposition ?
+ * Aucune autre forme n'est acceptée : ni nom, ni participe, ni étiquette.
+ * @param {string} segment - proposition normalisée (négations neutralisées)
+ * @returns {string|null} la forme d'ordre trouvée, sinon null
+ */
+export function findWriteOrder(segment) {
+  const text = String(segment || "");
+  const imperative = text.match(WRITE_ORDER_RE);
+  if (imperative) {
+    // Le séparateur consommé devant le verbe fait partie du contexte examiné.
+    const prefix = text.slice(0, imperative.index + 1);
+    if (!THIRD_PERSON_BEFORE.test(prefix)) return imperative[0].trim();
+  }
+  const infinitive = text.match(WRITE_INFINITIVE_RE);
+  if (!infinitive) return null;
+  const before = text.slice(0, infinitive.index);
+  const head = before.replace(/^[\s\-*•\d.)\]]+/, "");
+  // Infinitif GOUVERNÉ par une consigne, ou en TÊTE de proposition (liste).
+  if (hasOrderMarkerBefore(head) || !head) return infinitive[0].trim();
+  return null;
+}
 
 // Négations : on neutralise ces segments AVANT l'analyse, pour ne jamais
-// refuser « analyse le fichier sans rien modifier » ou « ne modifie pas ce
-// fichier ». Neutraliser ne peut que rendre la détection PLUS tolérante.
-const NEGATION_PATTERNS = [
-  /\bsans\s+(?:rien\s+)?(?:le\s+|la\s+|les\s+|de\s+|d')?(?:modifier|ecrire|editer|toucher|changer|creer|produire|enregistrer|sauvegarder)\b[^.;\n]*/g,
-  /\bne\s+[^.;\n]{0,80}?\bpas\b[^.;\n]*/g,
-  /\bn'[^.;\n]{0,80}?\bpas\b[^.;\n]*/g,
-  /\bne\s+jamais\b[^.;\n]*/g,
-  /\baucun(?:e)?\s+(?:modification|ecriture|fichier)[^.;\n]*/g,
-  /\bwithout\s+(?:modifying|writing|editing|creating|touching|changing)\b[^.;\n]*/g,
-  /\bdo\s+not\s+(?:modify|write|edit|create|touch|change)\b[^.;\n]*/g,
+// refuser « analyse le fichier sans rien modifier », « ne modifie pas ce
+// fichier », « n'écrire aucun rapport », « ne modifier aucun fichier ».
+// Neutraliser ne peut que rendre la détection PLUS tolérante.
+const NEGATION_WRITE_WORDS = [
+  "modifier", "ecrire", "editer", "toucher", "changer", "creer", "produire",
+  "enregistrer", "sauvegarder", "ajouter", "corriger", "mettre",
 ];
+const NEGATION_OBJECT_WORDS = [
+  "modification", "ecriture", "fichier", "changement", "creation", "correction",
+  "ajout", "edition", "sauvegarde", "rapport",
+];
+
+const NEGATION_PATTERNS = [
+  // « sans (rien) écrire/modifier… » jusqu'à la fin de la proposition
+  new RegExp(
+    "\\bsans\\s+(?:rien\\s+)?(?:le\\s+|la\\s+|les\\s+|de\\s+|d'|du\\s+)?" +
+      "(?:" + NEGATION_WRITE_WORDS.map(accentTolerantKeepingEnd).join("|") + ")" +
+      "\\b[^.;!?\\n,]*",
+    "g"
+  ),
+  // « ne … pas / jamais / rien / aucun / plus » et « n' … <négation> ».
+  // La VIRGULE borne la portée de la négation : « ne modifie pas le code, puis
+  // écris X » neutralise la négation SANS effacer l'ordre qui suit.
+  /\b(?:ne|n')\s*[^.;!?\n,]{0,120}?\b(?:pas|jamais|rien|aucune?|nullement|plus)\b[^.;!?\n,]*/g,
+  // « aucun fichier », « aucune écriture »… (pluriel compris)
+  new RegExp(
+    "\\baucun(?:e)?\\s+(?:" +
+      NEGATION_OBJECT_WORDS.map((w) => accentTolerantKeepingEnd(w) + "s?").join("|") +
+      ")\\b[^.;!?\\n,]*",
+    "g"
+  ),
+  // « interdit de », « surtout pas », « abstiens-toi de »
+  /\b(?:interdit|interdiction|surtout\s+pas|abstiens?-toi|abstenez-vous|s'abstenir)\b[^.;!?\n]*/g,
+  // anglais
+  /\bwithout\s+(?:modifying|writing|editing|creating|touching|changing)\b[^.;!?\n]*/g,
+  /\b(?:do\s+not|don't|never)\s+(?:modify|write|edit|create|touch|change|add|update)\b[^.;!?\n]*/g,
+  /\bno\s+(?:modifications?|changes?|writes?|files?)\b[^.;!?\n]*/g,
+];
+
+// Négations de FORME, ordre de FOND : « n'oublie pas de créer X » est un ordre
+// d'écriture. Ces formules sont réécrites en consigne AVANT l'effacement des
+// négations, sinon le garde-fou deviendrait permissif.
+const FALSE_NEGATION_PATTERNS = [
+  new RegExp(
+    "\\b(?:" +
+      ["n'oublie", "n'oubliez", "n'hesite", "n'hesitez", "ne manque", "ne manquez"]
+        .map(accentTolerant)
+        .join("|") +
+      ")\\s+(?:pas|plus|surtout\\s+pas)\\s+(?:de\\s+|d'|a\\s+)",
+    "g"
+  ),
+];
+
+/**
+ * Convertit les négations de forme qui portent en réalité un ORDRE.
+ * @param {string} normalizedText
+ * @returns {string}
+ */
+export function neutralizeFalseNegations(normalizedText) {
+  let out = String(normalizedText || "");
+  for (const re of FALSE_NEGATION_PATTERNS) out = out.replace(re, "il faut ");
+  return out;
+}
 
 /** Retire (met à blanc) les segments négatifs d'un texte déjà normalisé. */
 export function stripNegations(normalizedText) {
@@ -102,13 +326,76 @@ export function stripNegations(normalizedText) {
   return out;
 }
 
+// Étiquettes et libellés : « à corriger », « à faire », « à compléter » sont des
+// ÉTATS, pas des ordres. Seuls les mots de l'étiquette sont retirés : un vrai
+// ordre qui suit dans la même proposition reste analysé.
+const LABEL_WORDS = [
+  "corriger", "faire", "modifier", "ecrire", "creer", "completer", "verifier",
+  "relire", "traiter", "appliquer", "ajouter", "revoir", "reprendre", "refaire",
+  "documenter", "sauvegarder",
+];
+const LABEL_PATTERN = new RegExp(
+  "(?:^|\\s)" + accentTolerant("a") + "\\s+(?:" + LABEL_WORDS.map(accentTolerantKeepingEnd).join("|") + ")\\b",
+  "g"
+);
+
+/** Retire les étiquettes de verdict/état d'un texte normalisé. */
+export function stripLabels(normalizedText) {
+  return String(normalizedText || "").replace(LABEL_PATTERN, " ");
+}
+
+// Citations : « … », " … ", “ … ”, ` … `. Un message de commit cité ou un nom
+// de fichier cité n'est jamais un ordre adressé à l'agent. Les citations ne sont
+// retirées que pour la recherche du VERBE : la CIBLE peut s'y trouver (un
+// chemin entre accents graves reste une cible valable).
+const QUOTED_PATTERNS = [/«[^»]*»/g, /"[^"]*"/g, /“[^”]*”/g, /`[^`]*`/g];
+
+/**
+ * Retire les passages CITÉS d'un texte (verbatim, message de commit…).
+ * @param {string} text
+ * @returns {string}
+ */
+export function stripQuoted(text) {
+  let out = String(text || "");
+  for (const re of QUOTED_PATTERNS) out = out.replace(re, " ");
+  return out;
+}
+
+/**
+ * Cible de fichier présente dans une proposition ?
+ * @param {string} text
+ * Cible de fichier présente dans une proposition ? La cible cherchée est celle
+ * de l'ORDRE : on privilégie le premier chemin situé APRÈS le verbe, sinon le
+ * premier chemin de la proposition (un chemin cité avant n'est pas la cible).
+ * @param {string} text
+ * @param {number} [fromIndex] - position du verbe dans `text`
+ * @returns {{value: string, via: string}|null}
+ */
+function fileTargetIn(text, fromIndex = 0) {
+  const source = String(text || "");
+  const re = new RegExp(FILE_EXT_GLOBAL_RE.source, "gi");
+  let first = null;
+  let m;
+  while ((m = re.exec(source)) !== null) {
+    if (!first) first = m[0];
+    if (m.index >= fromIndex) return { value: m[0], via: "file-path" };
+  }
+  if (first) return { value: first, via: "file-path" };
+  if (FILE_NOUN_RE.test(source)) return { value: "fichier", via: "file-noun" };
+  return null;
+}
+
 /**
  * La demande demande-t-elle EXPLICITEMENT d'écrire/créer/modifier un fichier ?
  *
- * Conservateur par construction : il faut un VERBE d'écriture ET une CIBLE
- * identifiable (chemin de fichier ou mot « fichier »). Un livrable DÉCLARÉ
- * (`expected_files`) est en soi une demande d'écriture explicite : il n'y a rien
- * à interpréter.
+ * Conservateur par construction, et fondé sur ce que la mission DEMANDE, pas
+ * sur les mots qu'elle contient. Deux signaux seulement :
+ *  a. un livrable DÉCLARÉ (`expected_files`) — rien à interpréter ;
+ *  b. un ORDRE d'écriture positif ET une cible de fichier dans la MÊME
+ *     proposition, après neutralisation des négations, des étiquettes et des
+ *     citations.
+ * Un verbe d'écriture sans cible (ex. « écris un plan »), une phrase négative,
+ * une étiquette (« À CORRIGER ») ou une citation ne déclenchent AUCUN refus.
  *
  * @param {string} taskText - texte de la demande (brut, avant enveloppe)
  * @param {{expectedFiles?: string[]}} [options]
@@ -120,20 +407,37 @@ export function detectExplicitWriteRequest(taskText, options = {}) {
   if (declared.length > 0) {
     return { explicit: true, verb: "livrable déclaré", target: declared[0], via: "expected_files" };
   }
-  const cleaned = stripNegations(normalizeForMatch(taskText));
-  if (!cleaned.trim()) return { explicit: false, verb: null, target: null, via: null };
-  const verbMatch = cleaned.match(WRITE_VERB_RE);
-  if (!verbMatch) return { explicit: false, verb: null, target: null, via: null };
-  const fileMatch = cleaned.match(FILE_EXT_RE);
-  if (fileMatch) {
-    return { explicit: true, verb: verbMatch[0], target: fileMatch[0], via: "file-path" };
+  let ambiguousVerb = null;
+  for (const raw of splitSegments(taskText)) {
+    const segment = stripLabels(
+      stripNegations(neutralizeFalseNegations(normalizeForMatch(raw)))
+    ).trim();
+    if (!segment) continue;
+    // Verbe cherché hors des CHEMINS et des CITATIONS : un nom de fichier
+    // (`corrige-guard.md`) ou un message de commit cité n'est pas un ordre.
+    const forVerb = stripQuoted(stripFileTargets(segment));
+    const order = findWriteOrder(forVerb);
+    if (!order) {
+      // Verbe d'écriture employé dans une autre forme (nom, participe, état) :
+      // ce n'est pas un ordre. On le retient seulement pour la traçabilité.
+      if (!ambiguousVerb) {
+        const any = forVerb.match(WRITE_VERB_RE);
+        if (any) ambiguousVerb = any[0];
+      }
+      continue;
+    }
+    // La cible cherchée est celle de l'ORDRE (« … puis écris docs/rapport.md »).
+    const at = order ? segment.toLowerCase().indexOf(order) : -1;
+    const target = fileTargetIn(segment, at >= 0 ? at + order.length : 0);
+    if (!target) {
+      // Ordre sans cible de fichier (ex. « écris un plan ») : AMBIGU → aucune
+      // décision, la demande part comme aujourd'hui.
+      if (!ambiguousVerb) ambiguousVerb = order;
+      continue;
+    }
+    return { explicit: true, verb: order, target: target.value, via: target.via };
   }
-  if (FILE_NOUN_RE.test(cleaned)) {
-    return { explicit: true, verb: verbMatch[0], target: "fichier", via: "file-noun" };
-  }
-  // Verbe d'écriture sans cible de fichier (ex. « écris un plan ») : AMBIGU →
-  // aucune décision, la demande part comme aujourd'hui.
-  return { explicit: false, verb: verbMatch[0], target: null, via: null };
+  return { explicit: false, verb: ambiguousVerb, target: null, via: null };
 }
 
 /**

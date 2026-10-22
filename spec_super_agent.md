@@ -2231,7 +2231,9 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
      référence ; **présent ⇒ comportement inchangé + confirmation**. L'existence
      seule compte (un fichier vide est conforme) et une sonde indisponible
      n'échoue **jamais** la tâche. **Sans `expected_files`, rien ne change**
-     (rétrocompatibilité totale). Couverture : `garde-fou-livrable.test.js`.
+     (rétrocompatibilité totale). Couverture : `garde-fou-livrable.test.js`
+     + `garde-fou-refus-lecture-seule.test.js` (formulations réelles acceptées,
+     vraies écritures refusées).
 
 <!-- HELP:super-agent-mcp -->
 ### MCP piloté par l'Assistant

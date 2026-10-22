@@ -62,6 +62,16 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
   (« analyse », « vérifie », « relis »…) part normalement, et une demande
   **ambiguë** aussi (dans le doute, l'agent est lancé comme avant). Une mission
   qui contient **au moins un agent qui écrit** n'est jamais refusée.
+- **Ce qui compte, c'est l'ORDRE, pas les mots.** Le refus se fonde sur une
+  consigne **positive** adressée à l'agent (« écris », « modifie », « génère »,
+  « il faut écrire », « merci de créer », « n'oublie pas de créer »…) **et** sur
+  la cible qu'elle désigne (un fichier), dans la **même phrase**. Tout le reste
+  ne déclenche **aucun** refus : une phrase **négative** (« n'écrire aucun
+  rapport », « ne modifier aucun fichier », « sans rien modifier »), une
+  **étiquette** de verdict (« À CORRIGER »), le mot « correction »,
+  l'évocation d'un fichier **déjà** modifié, un message de commit **cité** ou un
+  **nom de fichier** qui ressemble à un verbe (« corrige-guard.md »).
+  Une mission de lecture seule n'est donc plus bloquée à cause d'un mot.
 - **Fichiers attendus** : quand la demande **déclare** les fichiers réellement
   attendus, Pilot vérifie **en fin de tâche** que **chacun existe**. Un fichier
   déclaré **absent** fait **échouer** la tâche avec un message qui le nomme et
@@ -240,9 +250,28 @@ prompt et la fin de mission ne vérifiait aucun fichier.
   unitairement) :
   - `detectExplicitWriteRequest(taskText, {expectedFiles})` →
     `{explicit, verb, target, via}`. `via` ∈ `expected_files` | `file-path` |
-    `file-noun`. Un **verbe d'écriture sans cible de fichier** n'est pas une
-    preuve (`explicit: false`) ; les **négations** sont neutralisées avant
-    analyse (« sans rien modifier », « ne … pas », « without writing »).
+    `file-noun`. Deux signaux seulement : un **livrable déclaré**
+    (`expected_files`), ou un **ORDRE** d'écriture (`findWriteOrder`) **et** sa
+    cible de fichier dans la **même proposition** (`splitSegments`).
+    - Le texte est découpé en propositions ; un ordre et sa cible doivent s'y
+      trouver **ensemble** (une étiquette, une citation ou une description
+      ailleurs dans le texte ne compte pas).
+    - Les **accents sont conservés** (`normalizeForMatch`) : ils séparent
+      l'impératif du participe (« modifie » vs « modifié », « écris » vs
+      « écrit »), seul moyen fiable de distinguer un ordre d'un état.
+    - Seules les **formes d'ordre** comptent : impératif 2e personne, base
+      verbale anglaise, infinitif **gouverné** par une consigne (« il faut »,
+      « merci de », « tu dois »…) ou en **tête** de proposition (« - modifier
+      src/js/main.js »). Un infinitif après un sujet à la 3e personne (« il
+      modifie ») est une **description**, une question (« s'il faut… ») n'est
+      pas un ordre.
+    - Neutralisés avant analyse : **négations** (« sans rien modifier », « ne …
+      pas/jamais/rien/aucun », « n'écrire aucun rapport », « without writing »),
+      **étiquettes** (« à corriger »), **citations** (« … », `…`), **chemins de
+      fichier** (un nom comme `corrige-guard.md` n'est pas un verbe). La virgule
+      borne la négation : « ne modifie pas X, puis écris Y » reste un refus.
+    - Un verbe d'écriture **sans cible** (« écris un plan ») ou toute forme
+      ambiguë ⇒ `explicit: false` (dans le doute, la demande part).
   - `readOnlyWriteRefusalMessage({tool, agents, task, expectedFiles})` →
     message de refus **ou `null`** : refus seulement si **tous** les agents sont
     `readonly: true` **et** la demande est explicitement une écriture.
@@ -263,7 +292,13 @@ prompt et la fin de mission ne vérifiait aucun fichier.
   aucun texte ajouté.
 - **Preuve** : `src/js/garde-fou-livrable.test.js` (refus lecture seule,
   lecture acceptée, fichier absent ⇒ échec, présent ⇒ succès, sans champ ⇒
-  inchangé, agent jetable, verrou de source sur les 3 chemins de lancement).
+  inchangé, agent jetable, verrou de source sur les 3 chemins de lancement) +
+  `src/js/garde-fou-refus-lecture-seule.test.js` (les 4 formulations réelles qui
+  étaient refusées à tort sont **acceptées** : verbe dans une phrase négative,
+  consigne « ne modifier aucun fichier », étiquette « À CORRIGER », « relancer
+  une correction » ; les vraies demandes d'écriture restent **refusées** ; deux
+  mutations du module — décision sur un mot, garde-fou permissif — font échouer
+  respectivement 15 et 14 tests).
 
 ### Commandes Tauri (compétences)
 
