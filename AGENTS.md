@@ -204,6 +204,7 @@ pilot/
 │       ├── reservations.js # Orchestration multi-agents T6 : estimation préalable (plan-maker) + fichiers réservés .pilot/reservations.json (pures + I/O, fail-open)
 │       ├── backend-info.js   # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"
 │       ├── desktop-notify.js  # Notifications desktop natives (D1) — agent terminé à distance
+│       ├── read-aloud.js      # Lecture à voix haute d'une réponse assistant (bouton « Écouter / Arrêter » sous la bulle) : nettoyage du balisage (blocs de code non lus), découpage par phrases, une seule lecture à la fois, voix de la langue de l'interface (speechSynthesis natif, aucune dépendance)
 │       └── terminal.js        # Terminal intégré xterm.js
 ├── web/                       # UI web distante (mode remote, servie par axum)
 │   ├── index.html

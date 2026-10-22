@@ -3713,6 +3713,66 @@ body.zen-mode #project-footer {
   filter: brightness(0.95);
 }
 
+/* Lecture a voix haute des reponses de l'assistant (read-aloud.js).
+   Rangee d'actions discrete SOUS la bulle, posee sur les seules reponses de
+   l'assistant. L'etat est lisible en TEXTE ("Ecouter" / "Arreter"), par
+   `aria-pressed` et par un changement visuel — donc comprehensible sans
+   couleur. */
+.agent-message-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 2px;
+}
+
+.agent-read-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  font-size: var(--font-xs);
+  line-height: 1.7;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+}
+
+.agent-read-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.agent-read-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Lecture en cours : libelle "Arreter", icone carree, bord et fond accentues. */
+.agent-read-btn-speaking,
+.agent-read-btn[aria-pressed="true"] {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  font-weight: var(--fw-semibold);
+}
+
+.agent-read-btn[aria-pressed="true"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+/* Synthese vocale indisponible : bouton present mais inactif. */
+.agent-read-btn-unavailable:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.agent-read-btn .agent-read-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
 .agent-model-select {
   padding: 3px 6px;
   font-size: 11px;

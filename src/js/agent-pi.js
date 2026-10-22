@@ -62,6 +62,10 @@ async function getAgentEventChannel(agentId = "default", projectPath = null) {
   }
 }
 import { refreshIcons, setIcon } from "./icons.js";
+// Lecture a voix haute des reponses de l'assistant (bouton Ecouter / Arreter).
+// Regles : nettoyage du balisage, decoupage en phrases, une seule lecture a la
+// fois — elles vivent dans read-aloud.js, pas ici.
+import { attachReadAloud } from "./read-aloud.js";
 import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js";
 // Son de fin DIFFÉRÉ : le chat de l'agent signale son activité d'écriture et son
 // repos, pour qu'un son armé (fin de mission signalée par l'assistant) ne parte
@@ -7838,6 +7842,9 @@ function createAssistantBlock(container) {
   bubble.appendChild(flow);
   el.appendChild(bubble);
   container.appendChild(el);
+  // Bouton de lecture a voix haute : uniquement sur les reponses de l'agent
+  // (les fabriques des messages utilisateur et systeme ne l'appellent pas).
+  attachReadAloud(el, { win: globalThis.window, doc: globalThis.document, refreshIcons });
   return el;
 }
 

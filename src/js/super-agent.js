@@ -9,6 +9,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import markdownit from "markdown-it";
 import { refreshIcons } from "./icons.js";
+// Lecture a voix haute des reponses de l'assistant : rangee d'actions sous la
+// bulle (bouton Ecouter / Arreter). Regles (nettoyage du balisage, decoupage en
+// phrases, une seule lecture a la fois) regroupees dans read-aloud.js.
+import { attachReadAloud } from "./read-aloud.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage, purgeAgentTabView } from "./agent-pi.js";
 import {
@@ -1812,6 +1816,9 @@ export function createSuperAgentBlock(messagesEl, explicitBadges = null) {
   bubble.appendChild(flow);
   el.appendChild(bubble);
   messagesEl.appendChild(el);
+  // Bouton de lecture a voix haute : sur les SEULES reponses de l'assistant
+  // (jamais sur un message utilisateur ni sur un evenement systeme).
+  attachReadAloud(el, { win: globalThis.window, doc: globalThis.document, refreshIcons });
   scrollSuperToBottom(messagesEl);
   return el;
 }

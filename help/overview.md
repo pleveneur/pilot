@@ -294,6 +294,34 @@ chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
   configurés.
 <!-- /HELP:multi-agents -->
 
+<!-- HELP:lire-reponses -->
+## Écouter une réponse à voix haute 🔊
+
+Chaque réponse de l'assistant (onglet **π** comme onglet **🧭 Assistant**) porte
+un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la bulle.
+
+- **Un clic lit la réponse**, un **second clic l'arrête** : le bouton affiche
+  alors **« ⏹ Arrêter »** (le libellé, l'icône et l'encadré changent — l'état se
+  comprend même sans couleur).
+- **Rien ne se lit tout seul** : aucune lecture automatique et aucun son à
+  l'ouverture de Pilot. C'est vous qui décidez, message par message.
+- **Une seule lecture à la fois** : lancer une autre réponse arrête proprement
+  la précédente, jamais deux voix ensemble.
+- **La voix ne débite pas le balisage** : titres, puces, gras, tableaux, liens
+  et symboles sont retirés (un lien est lu par son libellé) et le contenu des
+  **blocs de code n'est pas lu** (Pilot annonce seulement « bloc de code »). Le
+  texte est découpé **phrase par phrase**, ce qui évite les coupures en plein
+  milieu d'une phrase.
+- **La voix suit la langue de l'interface** (français si Pilot est en
+  français) : Pilot demande la première voix disponible dans cette langue.
+- **Si la synthèse vocale manque** (fenêtre sans voix installée), le bouton
+  reste visible mais **inactif**, avec une courte infobulle qui l'explique.
+- **Vos propres messages** et les **événements système** ne portent pas ce
+  bouton.
+- **Ce que ça ne fait pas** : enregistrer le son dans un fichier. Le bouton
+  lit seulement, en direct.
+<!-- /HELP:lire-reponses -->
+
 <!-- HELP:gds -->
 ## GDS (gestionnaire de sources) — principe
 
