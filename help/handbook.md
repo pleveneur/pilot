@@ -3426,10 +3426,25 @@ préférez :
 - **tout autre texte** est pris comme réponse libre (valeur d'une saisie, ou
   précision d'un choix).
 
-Dès que la question est répondue (**bouton**, **texte sur Telegram**, ou
-réponse **dans Pilot**), le message Telegram est **mis à jour** : les boutons
-disparaissent et la mention **« ✅ Déjà répondu »** apparaît — vous voyez d'un
-coup d'œil qu'il n'y a plus rien à faire.
+Sur une question à **choix multiple**, les boutons sont des **cases à cocher** :
+
+- **un appui coche** l'option (la case passe de « ☐ » à « ✅ ») : vous pouvez en
+  cocher **plusieurs**, et le message affiche au fur et à mesure la **sélection en
+  cours** ;
+- **un second appui décoche** l'option ;
+- **rien n'est envoyé** tant que vous n'appuyez pas sur **« ✔️ Terminé »** : ce
+  bouton valide et transmet **toutes** les options cochées, **dans l'ordre de la
+  liste**. Sans « Terminé », la question reste ouverte ;
+- la réponse **en texte** fonctionne comme avant (numéro ou texte libre).
+
+Sur une question à **choix unique** ou une **confirmation (Oui / Non)**, un
+**seul appui** répond immédiatement : rien ne change.
+
+Dès que la question est répondue (**bouton**, **« Terminé »**, **texte sur
+Telegram**, ou réponse **dans Pilot**), le message Telegram est **mis à jour** :
+les boutons disparaissent et la mention **« ✅ Déjà répondu »** apparaît — vous
+voyez d'un coup d'œil qu'il n'y a plus rien à faire. Sur une question à choix
+multiple, la mention rappelle ce que vous avez coché.
 
 La **première réponse gagne** : si vous répondez dans Pilot **ou** sur Telegram,
 Pilot garde la première et ignore l'autre, sans erreur. Un message **tardif qui

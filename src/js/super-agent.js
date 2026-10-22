@@ -1698,16 +1698,26 @@ function telegramDescriptorOf(q) {
  * Applique une réponse reçue par Telegram à la question en cours, par le MÊME
  * chemin que si le propriétaire avait répondu dans l'application (`q.submit`) :
  *   - option (numéro) → choix unique / multi / confirmation ;
+ *   - sélection (question à choix multiple validée par « Terminé ») → toutes
+ *     les options cochées, dans l'ordre des options ;
  *   - confirmation par texte (accord / refus CLAIR) → `q.confirmed` ;
  *   - texte libre → valeur de saisie, ou précision d'un choix (mêmes règles que
  *     la validation de la barre de saisie) ;
  *   - texte ambigu sur une confirmation (`undecided`) → garde-fou : aucune
  *     décision (la question a déjà été reposée par la passerelle).
  * @param {object} q - question active.
- * @param {{kind: string, index?: number, value?: string, confirmed?: boolean}} parsed
+ * @param {{kind: string, index?: number, value?: string, confirmed?: boolean, values?: string[]}} parsed
  */
-async function applyTelegramAnswer(q, parsed) {
+export async function applyTelegramAnswer(q, parsed) {
   if (parsed.kind === "undecided") return; // jamais de confirmation par défaut
+  if (parsed.kind === "selection") {
+    // CHOIX MULTIPLE : la sélection complète remplace l'ensemble courant, puis
+    // la question est envoyée une seule fois (aucune réponse avant « Terminé »).
+    if (!q.multi) return;
+    q.selected = new Set(Array.isArray(parsed.values) ? parsed.values : []);
+    await q.submit("", false);
+    return;
+  }
   if (parsed.kind === "option") {
     if (q.multi) q.selected.add(parsed.value);
     else if (q.confirmed !== undefined) q.confirmed = parsed.value === "Oui";

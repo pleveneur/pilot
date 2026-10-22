@@ -11,6 +11,10 @@
 //     refus ; un texte ambigu ne tranche RIEN (la question est reposée) ;
 //   - tout autre texte est pris comme réponse libre (valeur pour une saisie,
 //     précision pour un choix).
+// Sur une question à CHOIX MULTIPLE (kind « multi »), les boutons sont des CASES
+// À COCHER : un appui COCHE (✅) ou DÉCOCHE (☐) sans rien envoyer, et un bouton
+// « Terminé » valide la liste cochée (dans l'ordre des options). Le texte libre
+// reste accepté tel quel (mêmes règles que ci-dessus).
 // La réponse revient dans Pilot par le MÊME chemin qu'une réponse donnée dans
 // l'application (le `resolve` fourni par l'appelant appelle `q.submit`).
 //
@@ -36,11 +40,14 @@ export const TELEGRAM_QUESTION_REMINDER_MS = 3 * 60 * 1000;
 /**
  * Met en forme la question pour Telegram : le titre, le message éventuel, puis
  * la liste numérotée des options quand il y en a. Sans options (saisie libre),
- * on invite simplement à répondre en texte. Fonction PURE.
- * @param {{title?: string, message?: string, options?: string[]}} [descriptor]
+ * on invite simplement à répondre en texte. Pour une question à CHOIX MULTIPLE,
+ * on invite à cocher les options puis à appuyer sur « Terminé » et, quand des
+ * options sont déjà cochées, la sélection courante est rappelée. Fonction PURE.
+ * @param {{title?: string, message?: string, options?: string[], kind?: string}} [descriptor]
+ * @param {Iterable<number>|null} [checked] - indices cochés (choix multiple).
  * @returns {string}
  */
-export function formatQuestionForTelegram(descriptor = {}) {
+export function formatQuestionForTelegram(descriptor = {}, checked = null) {
   const title = String(descriptor.title || "Question").trim() || "Question";
   const lines = [`❓ ${title}`];
   const message = String(descriptor.message || "").trim();
@@ -48,11 +55,17 @@ export function formatQuestionForTelegram(descriptor = {}) {
   const options = Array.isArray(descriptor.options) ? descriptor.options : [];
   if (options.length) {
     options.forEach((opt, i) => lines.push(`${i + 1}. ${String(opt)}`));
-    lines.push(
-      descriptor.kind === "confirm"
-        ? "Répondez par le numéro correspondant (ou par « oui » / « non »)."
-        : "Répondez par le numéro correspondant.",
-    );
+    if (isMultiDescriptor(descriptor)) {
+      lines.push("Cochez une ou plusieurs options, puis appuyez sur « Terminé ».");
+      const labels = checkedOptionValues(descriptor, checked);
+      if (labels.length) lines.push(`Sélection actuelle : ${labels.join(", ")}`);
+    } else {
+      lines.push(
+        descriptor.kind === "confirm"
+          ? "Répondez par le numéro correspondant (ou par « oui » / « non »)."
+          : "Répondez par le numéro correspondant.",
+      );
+    }
   } else {
     lines.push("Répondez par un message texte.");
   }
@@ -86,11 +99,22 @@ export function formatAlreadyAnswered(descriptor = {}) {
 
 /**
  * Texte du message RÉÉCRIT une fois la question répondue : la question est
- * conservée (traçabilité) et suivie de la mention « déjà répondu ». Fonction
+ * conservée (traçabilité) et suivie de la mention « déjà répondu ». Sur une
+ * question à CHOIX MULTIPLE validée par « Terminé », la sélection cochée est
+ * rappelée (dans l'ordre des options) : on voit ce qui a été répondu. Fonction
  * PURE.
+ * @param {object} [descriptor]
+ * @param {Iterable<number>|null} [checked] - indices cochés (choix multiple).
  */
-export function formatQuestionAnswered(descriptor = {}) {
-  return `${formatQuestionForTelegram(descriptor)}\n\n✅ Déjà répondu — les boutons sont désactivés.`;
+export function formatQuestionAnswered(descriptor = {}, checked = null) {
+  const base = formatQuestionForTelegram(descriptor);
+  const labels = isMultiDescriptor(descriptor)
+    ? checkedOptionValues(descriptor, checked)
+    : [];
+  if (labels.length) {
+    return `${base}\n\n✅ Répondu — votre sélection : ${labels.join(", ")} (les boutons sont désactivés).`;
+  }
+  return `${base}\n\n✅ Déjà répondu — les boutons sont désactivés.`;
 }
 
 /** Préfixe des charges utiles de bouton (« q<génération>:<index> »). */
@@ -100,39 +124,134 @@ export const TELEGRAM_CALLBACK_PREFIX = "q";
 export const MAX_CALLBACK_BYTES = 64;
 
 /**
+ * Action du bouton de VALIDATION d'une question à choix multiple. Elle voyage
+ * dans la même charge utile que les options (`q<génération>:<action>`), ce qui
+ * garde UN SEUL encodage de clic : `q<génération>:<index>` = option,
+ * `q<génération>:ok` = « Terminé ».
+ */
+export const TELEGRAM_MULTI_DONE_ACTION = "ok";
+
+/** Libellé du bouton de validation d'une question à choix multiple. */
+export const TELEGRAM_MULTI_DONE_LABEL = "✔️ Terminé";
+
+/** Libellés d'état des cases d'une question à choix multiple. */
+export const TELEGRAM_MULTI_CHECKED = "✅";
+export const TELEGRAM_MULTI_UNCHECKED = "☐";
+
+/**
+ * Vrai si le descripteur décrit une question à CHOIX MULTIPLE (cases à cocher).
+ * Fonction PURE.
+ * @param {{kind?: string}|null|undefined} descriptor
+ * @returns {boolean}
+ */
+export function isMultiDescriptor(descriptor) {
+  return !!(descriptor && descriptor.kind === "multi");
+}
+
+/**
+ * Indices cochés, valides, TRIÉS dans l'ordre des options (une seule source de
+ * vérité pour « dans l'ordre des options »). Accepte un tableau, un `Set` ou
+ * `null`. Fonction PURE.
+ * @param {{options?: string[]}} [descriptor]
+ * @param {Iterable<number>|null} [checked]
+ * @returns {number[]}
+ */
+export function checkedOptionIndices(descriptor = {}, checked = null) {
+  if (!checked) return [];
+  const options = Array.isArray(descriptor.options) ? descriptor.options : [];
+  const out = new Set();
+  for (const raw of checked) {
+    const index = Number(raw);
+    if (!Number.isInteger(index)) continue;
+    if (index < 0 || index >= options.length) continue;
+    out.add(index);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/**
+ * Libellés des options cochées (ordre des options). Fonction PURE.
+ * @param {{options?: string[]}} [descriptor]
+ * @param {Iterable<number>|null} [checked]
+ * @returns {string[]}
+ */
+export function checkedOptionValues(descriptor = {}, checked = null) {
+  const options = Array.isArray(descriptor.options) ? descriptor.options : [];
+  return checkedOptionIndices(descriptor, checked).map((i) => String(options[i]));
+}
+
+/**
  * Construit les boutons natifs d'une question à choix : un bouton par option,
  * avec une charge utile `q<génération>:<index>`. La GÉNÉRATION (incrémentée à
  * chaque question) rend la pression d'un ancien message inopérante quand la
  * question a été remplacée depuis. Les boutons dont la charge utile dépasse
- * 64 OCTETS sont écartés. Fonction PURE.
- * @param {{options?: string[]}} [descriptor]
+ * 64 OCTETS sont écartés.
+ *
+ * Sur une question à CHOIX MULTIPLE, chaque bouton porte en plus son ÉTAT
+ * (« ☐ » non coché, « ✅ » coché) et une dernière ligne porte le bouton
+ * « Terminé » (`q<génération>:ok`) qui valide la sélection : un clic sur une
+ * option ne répond donc PAS, il coche. Fonction PURE.
+ * @param {{options?: string[], kind?: string}} [descriptor]
  * @param {number} [generation]
+ * @param {Iterable<number>|null} [checked] - indices cochés (choix multiple).
  * @returns {{text: string, data: string}[]}
  */
-export function buildQuestionButtons(descriptor = {}, generation = 0) {
+export function buildQuestionButtons(descriptor = {}, generation = 0, checked = null) {
   const options = Array.isArray(descriptor.options) ? descriptor.options : [];
   const prefix = `${TELEGRAM_CALLBACK_PREFIX}${generation}:`;
-  return options
-    .map((opt, index) => ({
-      text: String(opt ?? "").trim().slice(0, 64) || `Option ${index + 1}`,
+  const multi = isMultiDescriptor(descriptor);
+  const checkedSet = new Set(multi ? checkedOptionIndices(descriptor, checked) : []);
+  const buttons = options.map((opt, index) => {
+    const label = String(opt ?? "").trim().slice(0, multi ? 60 : 64) || `Option ${index + 1}`;
+    return {
+      text: multi
+        ? `${checkedSet.has(index) ? TELEGRAM_MULTI_CHECKED : TELEGRAM_MULTI_UNCHECKED} ${label}`
+        : label,
       data: `${prefix}${index}`,
-    }))
-    .filter((b) => b.data.length <= MAX_CALLBACK_BYTES);
+    };
+  });
+  if (multi) {
+    buttons.push({ text: TELEGRAM_MULTI_DONE_LABEL, data: `${prefix}${TELEGRAM_MULTI_DONE_ACTION}` });
+  }
+  return buttons.filter((b) => b.data.length <= MAX_CALLBACK_BYTES);
 }
 
 /**
- * Décompose la charge utile d'un bouton (`q<génération>:<index>`). Renvoie
- * `null` pour une charge inconnue. Fonction PURE.
+ * Décompose la charge utile d'un bouton. Renvoie `null` pour une charge
+ * inconnue. Fonction PURE (une seule source de vérité pour l'encodage) :
+ *   - `q<génération>:<index>` → `{ generation, index }` (option) ;
+ *   - `q<génération>:ok` → `{ generation, action: "ok" }` (« Terminé »).
  * @param {string} data
- * @returns {{generation: number, index: number}|null}
+ * @returns {{generation: number, index: number}|{generation: number, action: string}|null}
  */
 export function parseCallbackData(data) {
-  const m = /^q(\d+):(\d+)$/.exec(String(data ?? "").trim());
-  if (!m) return null;
-  const generation = Number.parseInt(m[1], 10);
-  const index = Number.parseInt(m[2], 10);
-  if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(index)) return null;
-  return { generation, index };
+  const raw = String(data ?? "").trim();
+  const m = /^q(\d+):(\d+)$/.exec(raw);
+  if (m) {
+    const generation = Number.parseInt(m[1], 10);
+    const index = Number.parseInt(m[2], 10);
+    if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(index)) return null;
+    return { generation, index };
+  }
+  const done = new RegExp(`^q(\\d+):${TELEGRAM_MULTI_DONE_ACTION}$`).exec(raw);
+  if (done) {
+    const generation = Number.parseInt(done[1], 10);
+    if (!Number.isSafeInteger(generation)) return null;
+    return { generation, action: TELEGRAM_MULTI_DONE_ACTION };
+  }
+  return null;
+}
+
+/**
+ * Charge utile de réponse d'une question à CHOIX MULTIPLE validée : les
+ * indices ET les libellés cochés, dans l'ordre des options. Fonction PURE.
+ * @param {{options?: string[]}} [descriptor]
+ * @param {Iterable<number>|null} [checked]
+ * @returns {{kind: "selection", indices: number[], values: string[]}}
+ */
+export function multiSelectionPayload(descriptor = {}, checked = null) {
+  const indices = checkedOptionIndices(descriptor, checked);
+  return { kind: "selection", indices, values: checkedOptionValues(descriptor, checked) };
 }
 
 // ── Interprétation d'un texte libre répondant à une CONFIRMATION ───────────
@@ -226,6 +345,11 @@ export function parseTelegramAnswer(text, descriptor = {}) {
  *
  * @param {object} [deps]
  * @param {(text: string) => unknown} [deps.send] - envoi (passerelle existante).
+ * @param {(text: string, buttons: {text: string, data: string}[]) => unknown} [deps.sendButtons]
+ *   envoi à boutons natifs (renvoie `{sent, messageId}`).
+ * @param {(messageId: number, text: string, buttons?: {text: string, data: string}[]) => unknown} [deps.editMessage]
+ *   réécriture du message : sans boutons → « déjà répondu » (clavier retiré) ;
+ *   avec boutons → mise à jour de l'état des cases (choix multiple).
  * @param {number} [deps.reminderMs] - délai de l'unique rappel.
  * @param {{setTimeout: Function, clearTimeout: Function}} [deps.timers]
  * @param {(...args: unknown[]) => void} [deps.warn] - journalisation silencieuse.
@@ -325,9 +449,16 @@ export function createTelegramQuestionBridge(deps = {}) {
       // Lot 4 : une seule tentative de mise à jour du message, quel que soit le
       // nombre de résolutions observées.
       answeredSent: false,
+      // CHOIX MULTIPLE (lot 5) : cases cochées (indices d'options) et état des
+      // mises à jour du message, sérialisées (une édition à la fois, la
+      // dernière coche gagne).
+      multi: isMultiDescriptor(descriptor),
+      checked: new Set(),
+      editInFlight: false,
+      editDirty: false,
     };
-    const text = formatQuestionForTelegram(active.descriptor);
-    const buttons = buildQuestionButtons(active.descriptor, generation);
+    const text = formatQuestionForTelegram(active.descriptor, active.checked);
+    const buttons = buildQuestionButtons(active.descriptor, generation, active.checked);
     if (sendButtons && buttons.length) {
       const entry = active;
       Promise.resolve()
@@ -363,12 +494,57 @@ export function createTelegramQuestionBridge(deps = {}) {
     if (entry.messageId === null || entry.messageId === undefined) return;
     entry.answeredSent = true;
     try {
-      const result = editMessage(entry.messageId, formatQuestionAnswered(entry.descriptor));
+      const result = editMessage(
+        entry.messageId,
+        formatQuestionAnswered(entry.descriptor, entry.multi ? entry.checked : null),
+      );
       if (result && typeof result.catch === "function") {
         result.catch((e) => warn("[telegram-questions] mise à jour du message ignorée :", e));
       }
     } catch (e) {
       warn("[telegram-questions] mise à jour du message ignorée :", e);
+    }
+  }
+
+  /**
+   * CHOIX MULTIPLE : réécrit le message ouvert avec l'état coché courant (cases
+   * ☐ / ✅ et rappel de la sélection), sans rien valider. Les éditions sont
+   * SÉRIALISÉES (une seule en vol ; une coche arrivée entre-temps déclenche une
+   * dernière édition) pour ne pas empiler des appels réseau concurrents.
+   * SILENCIEUX : un échec n'a aucune conséquence, aucune erreur n'est visible.
+   */
+  function refreshCheckboxes(entry) {
+    if (!entry || entry.answeredSent || !editMessage) return;
+    if (entry.messageId === null || entry.messageId === undefined) return;
+    if (entry.editInFlight) {
+      entry.editDirty = true;
+      return;
+    }
+    entry.editInFlight = true;
+    entry.editDirty = false;
+    let result;
+    try {
+      result = editMessage(
+        entry.messageId,
+        formatQuestionForTelegram(entry.descriptor, entry.checked),
+        buildQuestionButtons(entry.descriptor, entry.generation, entry.checked),
+      );
+    } catch (e) {
+      entry.editInFlight = false;
+      warn("[telegram-questions] cases à cocher non mises à jour :", e);
+      return;
+    }
+    const done = () => {
+      entry.editInFlight = false;
+      if (entry.editDirty) refreshCheckboxes(entry);
+    };
+    if (result && typeof result.then === "function") {
+      result.then(done, (e) => {
+        warn("[telegram-questions] cases à cocher non mises à jour :", e);
+        done();
+      });
+    } else {
+      done();
     }
   }
 
@@ -495,12 +671,48 @@ export function createTelegramQuestionBridge(deps = {}) {
   }
 
   /**
+   * CHOIX MULTIPLE : valide la sélection (bouton « Terminé »). Renvoie au
+   * résolveur la liste cochée DANS L'ORDRE DES OPTIONS (`kind: "selection"`),
+   * par le même chemin qu'une réponse (marquage avant application, première
+   * réponse gagne, signal « déjà répondu » si la question est close).
+   * @returns {boolean} toujours vrai (l'appui est toujours consommé).
+   */
+  function validateSelection() {
+    if (!active) return true;
+    // « Terminé » n'a de sens que sur une question à choix multiple : sur une
+    // autre question (bouton périmé, charge bricolée) il ne répond RIEN.
+    if (!active.multi) return true;
+    if (active.resolved) {
+      fire(formatAlreadyAnswered(active.descriptor));
+      return true;
+    }
+    const entry = active;
+    const selection = multiSelectionPayload(entry.descriptor, entry.checked);
+    // Première réponse gagne : on marque AVANT d'appliquer (anti-réentrance).
+    entry.resolved = true;
+    clearReminder();
+    try {
+      const result = entry.resolve(selection);
+      if (result && typeof result.catch === "function") {
+        result.catch((e) => warn("[telegram-questions] réponse ignorée :", e));
+      }
+    } catch (e) {
+      warn("[telegram-questions] réponse ignorée :", e);
+    }
+    return true;
+  }
+
+  /**
    * Tente d'appliquer un APPUI DE BOUTON comme réponse à la question active.
    * MÊME chemin qu'une réponse textuelle (« 1 » → option 0) : mêmes garanties
    * (première réponse gagne, signal « déjà répondu » si la question est close).
    * Un bouton d'une question REMPLACÉE (génération différente) ou d'une charge
    * inconnue est consommé sans rien appliquer : un appui n'est jamais déposé
    * comme message de discussion.
+   *
+   * Sur une question à CHOIX MULTIPLE, le même encodage change de SENS :
+   * `q<génération>:<index>` COCHE / DÉCOCHE l'option (aucune réponse envoyée),
+   * et `q<génération>:ok` (« Terminé ») valide la sélection.
    * @returns {boolean} toujours vrai (l'appui est toujours consommé).
    */
   function pressCallback(data) {
@@ -510,9 +722,20 @@ export function createTelegramQuestionBridge(deps = {}) {
       fire(formatAlreadyAnswered());
       return true;
     }
+    if (pressed.action === TELEGRAM_MULTI_DONE_ACTION) return validateSelection();
     const options = Array.isArray(active.descriptor.options) ? active.descriptor.options : [];
     if (pressed.index < 0 || pressed.index >= options.length) return true;
-    return feed(String(pressed.index + 1));
+    if (!active.multi) return feed(String(pressed.index + 1));
+    // CHOIX MULTIPLE : on ne répond PAS ici — on coche (ou décoche) la case et
+    // on réécrit le message pour montrer l'état. La réponse part au « Terminé ».
+    if (active.resolved) {
+      fire(formatAlreadyAnswered(active.descriptor));
+      return true;
+    }
+    if (active.checked.has(pressed.index)) active.checked.delete(pressed.index);
+    else active.checked.add(pressed.index);
+    refreshCheckboxes(active);
+    return true;
   }
 
   return {
@@ -545,10 +768,15 @@ async function defaultSendButtons(text, buttons) {
 }
 
 /**
- * Réécrit le message d'une question répondue (retrait des boutons + mention
- * « déjà répondu »). Silencieux : un échec est ignoré.
+ * Réécrit le message d'une question : soit répondue (boutons retirés +
+ * « déjà répondu »), soit — pour une question à CHOIX MULTIPLE — avec l'état
+ * coché courant. Silencieux : un échec est ignoré.
  */
-async function defaultEditMessage(messageId, text) {
+async function defaultEditMessage(messageId, text, buttons) {
+  if (Array.isArray(buttons) && buttons.length) {
+    await invoke("telegram_edit_buttons", { messageId, text, buttons });
+    return;
+  }
   await invoke("telegram_edit_message", { messageId, text });
 }
 

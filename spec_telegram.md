@@ -132,10 +132,25 @@ préférez :
 - **tout autre texte** est pris comme réponse libre (valeur d'une saisie, ou
   précision d'un choix).
 
-Dès que la question est répondue (**bouton**, **texte sur Telegram**, ou
-réponse **dans Pilot**), le message Telegram est **mis à jour** : les boutons
-disparaissent et la mention **« ✅ Déjà répondu »** apparaît — vous voyez d'un
-coup d'œil qu'il n'y a plus rien à faire.
+Sur une question à **choix multiple**, les boutons sont des **cases à cocher** :
+
+- **un appui coche** l'option (la case passe de « ☐ » à « ✅ ») : vous pouvez en
+  cocher **plusieurs**, et le message affiche au fur et à mesure la **sélection en
+  cours** ;
+- **un second appui décoche** l'option ;
+- **rien n'est envoyé** tant que vous n'appuyez pas sur **« ✔️ Terminé »** : ce
+  bouton valide et transmet **toutes** les options cochées, **dans l'ordre de la
+  liste**. Sans « Terminé », la question reste ouverte ;
+- la réponse **en texte** fonctionne comme avant (numéro ou texte libre).
+
+Sur une question à **choix unique** ou une **confirmation (Oui / Non)**, un
+**seul appui** répond immédiatement : rien ne change.
+
+Dès que la question est répondue (**bouton**, **« Terminé »**, **texte sur
+Telegram**, ou réponse **dans Pilot**), le message Telegram est **mis à jour** :
+les boutons disparaissent et la mention **« ✅ Déjà répondu »** apparaît — vous
+voyez d'un coup d'œil qu'il n'y a plus rien à faire. Sur une question à choix
+multiple, la mention rappelle ce que vous avez coché.
 
 La **première réponse gagne** : si vous répondez dans Pilot **ou** sur Telegram,
 Pilot garde la première et ignore l'autre, sans erreur. Un message **tardif qui
@@ -717,7 +732,7 @@ l'avis retenu (doublon évité, mais l'avis brut n'est alors pas envoyé).
 
 ## 12. Étape 2 — canal de discussion à boutons natifs
 
-Quatre briques, un incrément chacune (branche `gds-refonte-l2`).
+Cinq briques, un incrément chacune (branche `gds-refonte-l2`).
 
 ### 12.1 Signal « déjà répondu » sur un message tardif (`telegram-questions.js`)
 
@@ -755,7 +770,8 @@ ajoute `callbackData` / `callbackId` au message remonté.
 délègue à `feed("<index + 1>")` : numéro d'option, garde-fou de plage,
 « première réponse gagne » et signal « déjà répondu » sont donc **exactement**
 ceux d'une réponse textuelle. Un appui périmé, hors plage ou illisible est
-consommé sans effet.
+consommé sans effet. Sur une question à **choix multiple**, le même appui
+**coche** au lieu de répondre (voir 12.5).
 
 ### 12.4 Message réécrit après réponse (`telegram_edit_message`)
 
@@ -765,21 +781,57 @@ consommé sans effet.
 par question ; l'échec est **silencieux** (thread détaché côté Rust, erreur avalée
 côté JS) : l'affichage Telegram est un confort, jamais une contrainte.
 
-### 12.5 Tests
+### 12.5 Question à CHOIX MULTIPLE — cases à cocher + « Terminé »
+
+Sur une question `kind: "multi"` (barre à cases cochées de l'onglet Assistant),
+le **même** encodage de clic change de **sens** : `q<génération>:<index>`
+**coche / décoche** l'option, et `q<génération>:ok` (**bouton « ✔️ Terminé »**)
+**valide** la sélection. Aucun second encodage n'est introduit :
+`parseCallbackData` reste l'unique source de vérité (`{generation, index}` ou
+`{generation, action: "ok"}`).
+
+- **Rendu** : `buildQuestionButtons(descriptor, génération, cochés)` préfixe les
+  libellés par **« ☐ »** / **« ✅ »** et ajoute la ligne « ✔️ Terminé » ;
+  `formatQuestionForTelegram(descriptor, cochés)` annonce « Cochez une ou
+  plusieurs options, puis appuyez sur « Terminé » » et rappelle la sélection en
+  cours. `checkedOptionIndices` / `checkedOptionValues` **trie** toujours les
+  indices dans l'ordre des options (une seule source de vérité pour « dans
+  l'ordre »).
+- **Un appui d'option ne répond pas** : `pressCallback` bascule la case, puis
+  `refreshCheckboxes` **réécrit le message** (même identifiant : aucun doublon) via
+  `telegram_edit_buttons` (`editMessageText` **avec** clavier). Les éditions sont
+  **sérialisées** (une en vol, une dernière si besoin) et **silencieuses** en cas
+  d'échec.
+- **Validation** : `validateSelection` marque la question résolue puis remet au
+  résolveur `multiSelectionPayload(...)` = `{kind: "selection", indices, values}`
+  → `applyTelegramAnswer` (`super-agent.js`) **remplace** `q.selected` puis
+  `q.submit("", false)`, exactement comme une validation dans l'application. Une
+  sélection vide reste une réponse (aucune option cochée).
+- **Texte libre inchangé** : un numéro reste une réponse immédiate et tout autre
+  texte une réponse libre (comportement antérieur conservé tel quel).
+- **Sans régression** : une question `choice` / `confirm` ne reçoit **pas** de
+  bouton « Terminé » ; un `q<gén>`‑`:ok` reçu sur une telle question ne répond
+  rien. Le filtre d'identité (propriétaire) et la génération (question remplacée)
+  s'appliquent **avant** toute bascule ou validation.
+
+### 12.6 Tests
 
 - **Rust** (`telegram.rs`) : clavier (un bouton par ligne, libellés vides et
   charges > 64 octets écartés) ; envoi à boutons (URL, `reply_markup`, identifiant
   extrait ; sans bouton → **aucun** clavier ; inerte → **aucun** réseau ; échec →
   jeton `***`) ; réception des appuis (propriétaire retenu, inconnu ignoré, charge
   vide écartée, ordre message/appui, curseur) ; édition (clavier retiré, endpoint,
-  inerte, jeton masqué).
+  inerte, jeton masqué) ; **cases** (`edit_buttons_body` conserve le clavier avec
+  l'état ✅/☐, endpoint + jeton masqué, inerte sans réseau).
 - **Interface** : `formatAlreadyAnswered`, `buildQuestionButtons`,
   `parseCallbackData`, `pressCallback` (même chemin qu'un texte, péremption,
   hors plage, sans question active, charge inconnue), envoi à boutons + repli
   (échec, réponse entre-temps), `formatQuestionAnswered` + `markAnswered`
   (identifiant inconnu, une seule tentative, échec silencieux), routage des
   appuis dans `telegram-inbound.js` (jamais déposés, curseur avancé, texte
-  jamais routé par ce chemin).
+  jamais routé par ce chemin) ; **choix multiple**
+  (`src/js/telegram-questions-multi.test.js`) et **retour dans Pilot**
+  (`src/js/super-agent-telegram-multi.test.js`).
 - **Non vérifié** (aucun bot réel engagé dans ces lots) : rendu effectif des
   boutons, accusé de réception visible côté client, mise à jour du message par
   l'API, et le comportement réel du client après un appui.

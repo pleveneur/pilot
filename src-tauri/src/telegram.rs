@@ -457,6 +457,98 @@ pub fn telegram_edit_message(app: AppHandle, message_id: i64, text: String) -> R
     Ok(())
 }
 
+// ── ÉTAPE 2 (lot 5) : CASES À COCHER (question à CHOIX MULTIPLE) ────────
+//
+// Une question à choix multiple garde le MÊME encodage de clic que les autres :
+// `q<génération>:<index>` désigne une option (ici : elle est cochée / décochée)
+// et `q<génération>:ok` est le bouton « Terminé ». Pour que le propriétaire voie
+// l'état des cases, le message est RÉÉCRIT avec son clavier mis à jour (libellés
+// « ☐ / ✅ ») : c'est `editMessageText` AVEC un clavier inline, d'où ce corps
+// dédié. Aucun envoi nouveau n'est créé (pas de doublon de message).
+
+/// Corps `editMessageText` AVEC clavier inline (mise à jour de l'état des cases).
+/// Un tableau de boutons vide retire le clavier. Fonction PURE.
+pub fn edit_buttons_body(
+    cfg: &TelegramConfig,
+    message_id: i64,
+    text: &str,
+    buttons: &[TelegramButton],
+) -> serde_json::Value {
+    serde_json::json!({
+        "chat_id": cfg.chat_id.trim(),
+        "message_id": message_id,
+        "text": clean_text(text),
+        "reply_markup": { "inline_keyboard": inline_keyboard_json(buttons) },
+    })
+}
+
+/// Cœur sans I/O de la mise à jour du message AVEC clavier (transport INJECTÉ,
+/// comme `dispatch_edit` : les tests n'atteignent jamais le réseau).
+pub fn dispatch_edit_buttons<P>(
+    cfg: &TelegramConfig,
+    message_id: i64,
+    text: &str,
+    buttons: &[TelegramButton],
+    post: P,
+) -> TelegramOutcome
+where
+    P: FnOnce(&str, &serde_json::Value) -> Result<serde_json::Value, String>,
+{
+    if let Some(reason) = cfg.inert_reason() {
+        return TelegramOutcome::Inert(reason);
+    }
+    if message_id <= 0 {
+        return TelegramOutcome::Inert("message inconnu");
+    }
+    let body = edit_buttons_body(cfg, message_id, text, buttons);
+    if body["text"].as_str().unwrap_or("").is_empty() {
+        return TelegramOutcome::Inert("message vide");
+    }
+    let url = format!(
+        "{}/bot{}/editMessageText",
+        TELEGRAM_API_BASE,
+        cfg.token.trim()
+    );
+    match post(&url, &body) {
+        Ok(_) => TelegramOutcome::Sent,
+        Err(e) => TelegramOutcome::Failed(redact_token(&e, &cfg.token)),
+    }
+}
+
+/// Commande Tauri : réécrit un message en CONSERVANT un clavier (état des cases
+/// d'une question à choix multiple). N'attend pas le réseau (thread détaché) et
+/// ne renvoie JAMAIS d'erreur ; un échec n'est consigné que d'une ligne, sans le
+/// jeton.
+#[tauri::command]
+pub fn telegram_edit_buttons(
+    app: AppHandle,
+    message_id: i64,
+    text: String,
+    buttons: Vec<TelegramButtonArg>,
+) -> Result<(), String> {
+    let Some(cfg) = read_gateway_config(&app) else {
+        return Ok(());
+    };
+    if !cfg.is_ready() || message_id <= 0 {
+        return Ok(());
+    }
+    let buttons: Vec<TelegramButton> = buttons
+        .into_iter()
+        .map(|b| TelegramButton {
+            text: b.text,
+            data: b.data,
+        })
+        .collect();
+    std::thread::spawn(move || {
+        if let TelegramOutcome::Failed(e) =
+            dispatch_edit_buttons(&cfg, message_id, &text, &buttons, http_post_json)
+        {
+            eprintln!("[telegram] mise à jour des cases ignorée : {}", e);
+        }
+    });
+    Ok(())
+}
+
 /// Consigne le résultat sans jamais écrire le jeton. Volontairement discret :
 /// un état inerte ne produit AUCUNE trace (c'est le cas normal et silencieux).
 fn log_outcome(outcome: &TelegramOutcome) {
@@ -1442,6 +1534,20 @@ mod tests {
     }
 
     #[test]
+    fn inbound_stranger_cannot_validate_a_multi_choice_selection() {
+        // MÊME filtre pour la nouvelle charge utile de validation (« q1:ok ») :
+        // un inconnu ne peut ni cocher ni valider.
+        let cfg = ready();
+        let response = updates_json(serde_json::json!([
+            { "update_id": 70, "callback_query": {
+                "id": "cb-10", "data": "q1:ok", "message": { "chat": { "id": 9999 } } } },
+        ]));
+        let poll = collect_inbound(&cfg, 0, &response);
+        assert!(poll.messages.is_empty(), "validation d'un inconnu non remontée");
+        assert_eq!(poll.next_offset, 71);
+    }
+
+    #[test]
     fn inbound_skips_callback_with_empty_payload() {
         let cfg = ready();
         let response = updates_json(serde_json::json!([
@@ -1633,6 +1739,84 @@ mod tests {
             text: text.to_string(),
             data: data.to_string(),
         }
+    }
+
+    // ── Étape 2 (lot 5) : cases à cocher (choix multiple) ──
+
+    /// Le clavier d'une question à choix multiple est CONSERVÉ lors de la mise à
+    /// jour de l'état des cases (« ☐ » / « ✅ » + « Terminé »).
+    #[test]
+    fn edit_buttons_body_keeps_inline_keyboard_with_check_state() {
+        let cfg = ready();
+        let buttons = [
+            bouton("✅ Option A", "q3:0"),
+            bouton("☐ Option B", "q3:1"),
+            bouton("✔️ Terminé", "q3:ok"),
+        ];
+        let body = edit_buttons_body(&cfg, 88, "❓ Choisir\nSélection actuelle : Option A", &buttons);
+        assert_eq!(body["chat_id"], "4242");
+        assert_eq!(body["message_id"], 88);
+        let keyboard = body["reply_markup"]["inline_keyboard"].as_array().unwrap();
+        assert_eq!(keyboard.len(), 3, "une ligne par bouton, Terminé compris");
+        assert_eq!(keyboard[0][0]["text"], "✅ Option A");
+        assert_eq!(keyboard[0][0]["callback_data"], "q3:0");
+        assert_eq!(keyboard[1][0]["text"], "☐ Option B");
+        assert_eq!(keyboard[2][0]["callback_data"], "q3:ok");
+    }
+
+    #[test]
+    fn dispatch_edit_buttons_targets_edit_endpoint_and_never_leaks_token() {
+        let cfg = ready();
+        let outcome = dispatch_edit_buttons(
+            &cfg,
+            88,
+            "❓ Choisir",
+            &[bouton("✅ A", "q3:0"), bouton("✔️ Terminé", "q3:ok")],
+            |url, body| {
+                assert!(url.ends_with("/bot123456:ABC-DEF/editMessageText"));
+                assert_eq!(body["message_id"], 88);
+                assert_eq!(
+                    body["reply_markup"]["inline_keyboard"].as_array().unwrap().len(),
+                    2
+                );
+                Err(format!("réseau: {url}"))
+            },
+        );
+        match outcome {
+            TelegramOutcome::Failed(msg) => {
+                assert!(!msg.contains("123456:ABC-DEF"), "jeton divulgué : {msg}");
+                assert!(msg.contains("***"));
+            }
+            other => panic!("attendu Failed, obtenu {other:?}"),
+        }
+    }
+
+    /// Réglage coupé : aucune mise à jour de cases ne part (aucun réseau).
+    #[test]
+    fn dispatch_edit_buttons_inert_never_touches_network() {
+        let disabled = TelegramConfig {
+            enabled: false,
+            ..ready()
+        };
+        let buttons = [bouton("✅ A", "q1:0")];
+        assert_eq!(
+            dispatch_edit_buttons(&disabled, 5, "texte", &buttons, |_, _| panic!(
+                "aucun réseau attendu"
+            )),
+            TelegramOutcome::Inert("passerelle désactivée")
+        );
+        assert_eq!(
+            dispatch_edit_buttons(&ready(), 0, "texte", &buttons, |_, _| panic!(
+                "aucun réseau attendu"
+            )),
+            TelegramOutcome::Inert("message inconnu")
+        );
+        assert_eq!(
+            dispatch_edit_buttons(&ready(), 5, "   ", &buttons, |_, _| panic!(
+                "aucun réseau attendu"
+            )),
+            TelegramOutcome::Inert("message vide")
+        );
     }
 
     #[test]
