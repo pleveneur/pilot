@@ -40,6 +40,14 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Changer de projet, fermer un projet ou en ouvrir un autre n'arrête JAMAIS un agent en cours** — quel que soit l'écran (agent du projet, agents multi-rôles 🎭, Assistant). L'agent du projet quitté est simplement **mis en pause** et reprend là où il en était au retour sur ce projet ; les agents des autres projets ouverts continuent leur travail. Seul un agent **au repos** (qui ne travaille pas) est libéré à la fermeture de son projet.
 - **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau de la cloche, une session qui travaille sans onglet ouvert reste **listée** avec son nom et son projet, sa pastille **respirant** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Cette liste n'affiche **aucune mention « arrière-plan »** (texte ou infobulle) : l'information est portée par la pastille et le nom en gras ; le libellé explicite reste dans la fiche de l'agent et dans le panneau Activité de l'onglet Agents. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
 
+### Voir le travail en cours (une compilation n'est pas un arrêt)
+- Pendant une **commande longue** (construction, série de tests, installation), l'écran **prouve** que le travail avance — à trois endroits :
+  - dans l'**onglet de l'agent** : la commande en cours porte un **point qui respire**, un **compteur de durée** (« 3 min 12 s ») et la **sortie en direct** (les dernières lignes produites) ;
+  - dans le **panneau d'activité** (cercle en haut à droite, clic) : la ligne « **En cours depuis 3 min 12 s** » et une « Dernière activité » **qui avance** ;
+  - dans la **liste des tâches** (en bas à droite) : la mission porte un point qui respire et sa durée (« depuis 3 min »).
+- Le libellé d'état dit la **vérité** : pendant une commande, il annonce « **⏳ bash en cours… (3 min 12 s)** » — jamais « Prêt », jamais « Réflexion… » (le modèle n'attend pas, il fait tourner un programme).
+- **Ce que cela ne change PAS** : la détection des agents bloqués, les arrêts automatiques et les durées d'exécution. Seul l'**affichage** progresse ; la sortie en direct est **bornée** (dernières lignes) et aucun **défilement automatique** ne vous est imposé.
+
 ### Agent jetable (à la volée, jamais enregistré)
 - Pour un besoin **ponctuel**, nul besoin de créer un agent : le rôle peut être
   décrit **dans la demande** elle-même. Cet agent est **jetable** — il existe
@@ -569,6 +577,45 @@ Les identifiants `#ae-*` sont **inchangés** : l'enregistrement relit exactement
 - Le coordinateur garde son contexte pendant toute la run.
 
 ## 8. Anti-régression
+
+### 8.1 Affichage du travail en cours (attente silencieuse)
+
+> Origine : `.pilot/rapports/rapport-diagnostic-attente-silencieuse.md`. Pendant
+> une compilation de dix minutes, l'écran laissait croire que tout était arrêté.
+> La cause était l'**affichage** (un outil traité comme un événement
+> instantané), pas la tuyauterie RPC. **Aucune** règle de détection, d'arrêt ou
+> de délai n'a changé.
+
+- **Module pur dédié `src/js/duree-travail.js`** : `formatElapsed` /
+  `shortElapsed` (durées), `formatWorkingSince` / `formatWorkingSinceShort`
+  (« En cours depuis … »), `resolveAgentStatus` (**seul** décideur du libellé
+  d'état : « ⏳ bash en cours… (3 min 12 s) » pendant un outil), `clipLiveOutput`
+  + `LIVE_OUTPUT_MAX_LINES`/`_CHARS` (sortie en direct bornée, dernières lignes),
+  `toolUpdateText`. Testé sans DOM (`travail-visible.test.js`).
+- **Onglet agent (`agent-pi.js`)** : `tool_execution_update` n'est plus ignoré —
+  il écrit la sortie en direct (throttle `LIVE_OUTPUT_THROTTLE_MS = 300`, un seul
+  `<pre class="agent-tool-live">` réutilisé, jamais de `scrollIntoView`).
+  `tool_execution_start` mémorise `toolStartedAt` **avant** tout retour
+  d'affichage ; `appendToolBlock(..., live=true)` ajoute la classe `running`, le
+  point et le compteur ; `finalizeToolBlock` retire la sortie en direct et
+  **fige** la durée. Les blocs rejoués depuis l'historique passent `live=false`
+  (markup d'origine, jamais de faux « en cours »). Un `statusTicker` de **1 s
+  sans aucun appel IPC** reformate les compteurs ; le poll de 2 s lit
+  `toolInProgress`.
+- **Panneaux (`agent-activity.js`)** : `flattenAgents` alimente un magasin
+  `workingSince` (purgé à l'arrêt, donc aucune durée périmée),
+  `buildRunningMissions` expose `since` (missions **en cours** seulement),
+  `renderCard` affiche « En cours depuis … », `anyBusy` s'appuie sur
+  `isAgentWorking` (et non `busy` seul : un outil long laissait la pastille
+  s'éteindre).
+- **Backend (`dashboard.rs`)** : `get_agent_supervision` recopie des champs
+  **additifs** déjà calculés par `agent_service.rs` (`lastActivity`,
+  `lastActivityRelative`, `isWorking`) à côté de `toolInProgress`. Aucune
+  sémantique modifiée.
+- **Ne pas régresser** : la sortie en direct ne doit jamais forcer le défilement
+  (`shouldFollowBottom`), les plafonds de sortie existants restent, et un libellé
+  rassurant (« Prêt », « Réflexion… », « Agents au repos ») ne doit jamais
+  s'afficher pendant qu'un outil tourne.
 
 - Ne pas toucher à `agent-pi.js`, `orchestration.js`, `agents-bus.js` (logique d'orchestration frontend).
 - Toutes les sessions passent par l'AgentService (une seule indirection `send`), jamais par un accès direct à une map dans `AppState`.

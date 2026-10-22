@@ -28,10 +28,18 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { formatWorkingSince, formatWorkingSinceShort } from "./duree-travail.js";
 
 // Dernière activité connue par agent (timestamp), alimentée par
 // `agent-state-changed`. Clé = agentId (id brut, ex: "superagent" ou l'id agent).
 const lastActivity = new Map();
+
+// Instant où chaque agent a été vu TRAVAILLANT pour la première fois (ms epoch).
+// Clé = agentId composite (agent + projet). Sert à afficher « En cours depuis
+// 3 min 12 s » : un travail est un INTERVALLE daté, pas un événement instantané
+// (rapport `.pilot/rapports/rapport-diagnostic-attente-silencieuse.md`).
+// Entrée effacée dès que l'agent ne travaille plus : aucune durée périmée.
+const workingSince = new Map();
 
 // Espace réservé des agents d'assistant SANS projet (clé `__assistant__`),
 // distinct de "" (super-agent Magnus) et de tout chemin de projet réel.
@@ -61,12 +69,36 @@ export function formatLastActivity(ts) {
 }
 
 /**
+ * Mémorise (et relit) l'instant où un agent a commencé à travailler.
+ * Fonction PURE vis-à-vis du DOM : le magasin est injecté, donc testable.
+ * @param {Map<string,number>} map magasin `agentId → timestamp de début`.
+ * @param {string} key identité de l'agent (agentId composite).
+ * @param {boolean} working l'agent travaille-t-il à cet instant ?
+ * @returns {number|null} début du travail en cours, ou null au repos.
+ */
+function trackWorkingSince(map, key, working) {
+  if (!map || typeof map.get !== "function") return null;
+  if (!working) {
+    map.delete(key);
+    return null;
+  }
+  const known = map.get(key);
+  if (known) return known;
+  const now = Date.now();
+  map.set(key, now);
+  return now;
+}
+
+/**
  * Aplatit la supervision en une liste plate d'agents.
  * @param {object} supervision — sortie de get_agent_supervision ({projects:[...]}).
  * @param {Map<string,number>} [lastActivityMap] — timestamps de dernière activité.
- * @returns {Array<{agentId,rawId,label,project,projectPath,state,busy,lastActivity,kind}>}
+ * @param {Map<string,number>} [workingSinceMap] — instants de début du travail en
+ *   cours (facultatif : sans magasin, `workingSince` vaut null — aucune durée
+ *   inventée, aucun effet de bord).
+ * @returns {Array<{agentId,rawId,label,project,projectPath,state,busy,working,workingSince,lastActivity,lastActivityRelative,kind}>}
  */
-export function flattenAgents(supervision, lastActivityMap) {
+export function flattenAgents(supervision, lastActivityMap, workingSinceMap) {
   const projects = (supervision && supervision.projects) || [];
   const list = [];
   for (const proj of projects) {
@@ -123,6 +155,9 @@ export function flattenAgents(supervision, lastActivityMap) {
       // jetable) et ne sert qu'à l'affichage.
       const rawId = isSuper ? "superagent" : (a.agent || label);
       const agentId = isSuper ? "superagent" : (isAssistant ? rawId : `${rawId}|${project}`);
+      // Début du travail EN COURS (intervalle daté) : mémorisé la première fois
+      // qu'on voit l'agent travailler, effacé dès qu'il s'arrête.
+      const startedAt = trackWorkingSince(workingSinceMap, agentId, working);
       list.push({
         agentId,
         rawId,
@@ -152,17 +187,42 @@ export function flattenAgents(supervision, lastActivityMap) {
         // sur l'extraction du prompt (resolveMissionLabel).
         resume: typeof a.resume === "string" ? a.resume : "",
         toolInProgress,
-        lastActivity: lastActivityMap ? formatLastActivity(lastActivityMap.get(rawId)) : null,
+        // Début du travail en cours (ms epoch) ou null : l'affichage en déduit
+        // « En cours depuis … ». Jamais une valeur inventée.
+        workingSince: startedAt,
+        // Dernière activité : le RELATIF fourni par le backend (« il y a 3 s »)
+        // est préféré quand il existe, car il AVANCE pendant le travail — c'est
+        // lui qui prouve que quelque chose se passe. Repli sur l'heure locale
+        // (map du push `agent-state-changed`, puis champ ISO de la supervision).
+        lastActivity:
+          formatLastActivity(lastActivityMap ? lastActivityMap.get(rawId) : undefined) ||
+          formatLastActivity(a.lastActivity) ||
+          null,
+        lastActivityRelative:
+          typeof a.lastActivityRelative === "string" ? a.lastActivityRelative : "",
         kind: isSuper ? "superagent" : (isAssistant ? "assistant" : "agent"),
       });
+    }
+  }
+  // Purge des durées devenues orphelines (agent sorti de la liste, arrêté) :
+  // aucune entrée fantôme ne peut plus produire une durée aberrante.
+  if (workingSinceMap && typeof workingSinceMap.keys === "function") {
+    const stillWorking = new Set(list.filter((a) => a.working).map((a) => a.agentId));
+    for (const key of [...workingSinceMap.keys()]) {
+      if (!stillWorking.has(key)) workingSinceMap.delete(key);
     }
   }
   return list;
 }
 
-/** true si au moins un agent est occupé (travail en cours). */
+/**
+ * true si au moins un agent TRAVAILLE (au sens de `isAgentWorking`).
+ * Le cercle en haut à droite et son infobulle s'appuient sur CETTE vérité :
+ * `busy` seul laissait le point s'éteindre et l'infobulle annoncer « Agents au
+ * repos » pendant qu'un outil long (compilation, tests) tournait réellement.
+ */
 export function anyBusy(list) {
-  return list.some((a) => a.busy);
+  return list.some(isAgentWorking);
 }
 
 // ── Travail effectif et travail SANS ONGLET (regle 1) ──
@@ -526,7 +586,7 @@ export function buildRunningMissions(list, queued) {
   const out = [];
   for (const a of list || []) {
     if (!isAgentWorking(a)) continue;
-    out.push({
+    const entry = {
       agent: a.label || "",
       project: a.project || "Assistant",
       // Ordre de repli strict : résumé FOURNI avec la demande, sinon extrait de
@@ -534,7 +594,11 @@ export function buildRunningMissions(list, queued) {
       // l'entrée reste identique (`resume` n'est pas recopié).
       mission: resolveMissionLabel(a.resume, a.prompt),
       waiting: false,
-    });
+    };
+    // Début du travail en cours : ajouté SEULEMENT quand il est connu (champ
+    // additif, absent sinon — la forme historique de l'entrée est préservée).
+    if (a.workingSince) entry.since = a.workingSince;
+    out.push(entry);
   }
   for (const q of queued || []) {
     if (!q) continue;
@@ -596,16 +660,21 @@ export function renderMissionsPanelHtml(missions) {
   const group = (title, list, isWaiting) => {
     if (!list.length) return "";
     const items = list
-      .map(
-        (m, i) => `
+      .map((m, i) => {
+        // Preuve de vie : une ligne « en cours » porte un point qui respire et la
+        // durée écoulée (« depuis 3 min »). Rien de tout cela pour une mission
+        // seulement EN ATTENTE : seule une ligne qui travaille est datée.
+        const sinceLabel = isWaiting ? null : formatWorkingSinceShort(m.since);
+        const dot = isWaiting ? "" : '<span class="sa-missions-dot"></span>';
+        return `
         <div class="sa-task-item${isWaiting ? " waiting" : " running"}">
           <div class="sa-task-head">
-            <span class="sa-task-title"><span class="sa-missions-rank">${i + 1}.</span>${esc(missionWho(m))}</span>
-            <span class="sa-task-status ${isWaiting ? "tone-todo" : "tone-progress"}">${isWaiting ? "en attente" : "en cours"}</span>
+            ${dot}<span class="sa-task-title"><span class="sa-missions-rank">${i + 1}.</span>${esc(missionWho(m))}</span>
+            <span class="sa-task-status ${isWaiting ? "tone-todo" : "tone-progress"}">${isWaiting ? "en attente" : "en cours"}</span>${sinceLabel ? `<span class="sa-task-since">${esc(sinceLabel)}</span>` : ""}
           </div>
           <div class="sa-task-meta">${esc(m.mission)}</div>
-        </div>`
-      )
+        </div>`;
+      })
       .join("");
     return `<div class="sa-task-client sa-missions-group ${isWaiting ? "waiting" : "running"}">${esc(title)} (${list.length})</div>${items}`;
   };
@@ -627,7 +696,7 @@ let currentActivityBusy = false;
 async function activityRefresh() {
   try {
     const sup = await invoke("get_agent_supervision");
-    const list = flattenAgents(sup, lastActivity);
+    const list = flattenAgents(sup, lastActivity, workingSince);
     currentActivityList = list;
     currentActivityBusy = anyBusy(list);
     for (const cb of [...activitySubscribers]) {
@@ -774,15 +843,23 @@ export function renderCard(agent) {
   // Regle 2 : l'entree dit en un coup d'oeil l'agent, son projet, et le fait
   // qu'il travaille en ARRIERE-PLAN (aucun onglet ouvert).
   const stateLabel = working ? (withoutTab ? "Travail (arrière-plan)" : "Travail") : "Repos";
+  // PREUVE DE VIE : pendant une commande longue (compilation, tests), la fiche
+  // affiche depuis COMBIEN DE TEMPS l'agent travaille. Sans cette ligne, la seule
+  // donnée datée (« Dernière activité ») restait figée pendant dix minutes.
+  const sinceLabel = working ? formatWorkingSince(agent.workingSince) : null;
+  // « Dernière activité » : le relatif fourni par le backend est préféré (il
+  // avance pendant le travail) ; repli sur l'heure locale, puis sur « — ».
+  const lastLabel = agent.lastActivityRelative || agent.lastActivity || "—";
   return `
     <div class="agent-activity-card-head">
       <span class="agent-activity-item-dot ${working ? "breathing" : ""} ${agent.kind === "superagent" ? "superagent" : ""}"></span>
       <span class="agent-activity-card-name">${esc(agent.label)}</span>
     </div>
     <div class="agent-activity-card-row"><span>État</span><span>${stateLabel}</span></div>
+    ${sinceLabel ? `<div class="agent-activity-card-row agent-activity-card-working"><span>En cours depuis</span><span>${esc(sinceLabel.replace("En cours depuis ", ""))}</span></div>` : ""}
     <div class="agent-activity-card-row"><span>Projet</span><span>${esc(agent.project || "—")}</span></div>
     <div class="agent-activity-card-row"><span>Onglet</span><span>${withoutTab ? "Aucun (arrière-plan)" : "Ouvert"}</span></div>
-    <div class="agent-activity-card-row"><span>Dernière activité</span><span>${esc(agent.lastActivity || "—")}</span></div>
+    <div class="agent-activity-card-row"><span>Dernière activité</span><span>${esc(lastLabel)}</span></div>
     <button class="agent-activity-card-open" data-agent-id="${esc(agent.agentId)}" data-kind="${esc(agent.kind)}">Afficher l'onglet</button>
   `;
 }

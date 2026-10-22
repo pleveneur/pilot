@@ -1061,6 +1061,14 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Changer de projet, fermer un projet ou en ouvrir un autre n'arrête JAMAIS un agent en cours** — quel que soit l'écran (agent du projet, agents multi-rôles 🎭, Assistant). L'agent du projet quitté est simplement **mis en pause** et reprend là où il en était au retour sur ce projet ; les agents des autres projets ouverts continuent leur travail. Seul un agent **au repos** (qui ne travaille pas) est libéré à la fermeture de son projet.
 - **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau de la cloche, une session qui travaille sans onglet ouvert reste **listée** avec son nom et son projet, sa pastille **respirant** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Cette liste n'affiche **aucune mention « arrière-plan »** (texte ou infobulle) : l'information est portée par la pastille et le nom en gras ; le libellé explicite reste dans la fiche de l'agent et dans le panneau Activité de l'onglet Agents. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
 
+### Voir le travail en cours (une compilation n'est pas un arrêt)
+- Pendant une **commande longue** (construction, série de tests, installation), l'écran **prouve** que le travail avance — à trois endroits :
+  - dans l'**onglet de l'agent** : la commande en cours porte un **point qui respire**, un **compteur de durée** (« 3 min 12 s ») et la **sortie en direct** (les dernières lignes produites) ;
+  - dans le **panneau d'activité** (cercle en haut à droite, clic) : la ligne « **En cours depuis 3 min 12 s** » et une « Dernière activité » **qui avance** ;
+  - dans la **liste des tâches** (en bas à droite) : la mission porte un point qui respire et sa durée (« depuis 3 min »).
+- Le libellé d'état dit la **vérité** : pendant une commande, il annonce « **⏳ bash en cours… (3 min 12 s)** » — jamais « Prêt », jamais « Réflexion… » (le modèle n'attend pas, il fait tourner un programme).
+- **Ce que cela ne change PAS** : la détection des agents bloqués, les arrêts automatiques et les durées d'exécution. Seul l'**affichage** progresse ; la sortie en direct est **bornée** (dernières lignes) et aucun **défilement automatique** ne vous est imposé.
+
 ### Agent jetable (à la volée, jamais enregistré)
 - Pour un besoin **ponctuel**, nul besoin de créer un agent : le rôle peut être
   décrit **dans la demande** elle-même. Cet agent est **jetable** — il existe
@@ -3125,7 +3133,9 @@ heure**. L'alerte « agent bloqué » comme **l'arrêt automatique (T2)** sont
 suspendus, et son créneau de run n'est ni libéré ni pris par une autre demande.
 Les fenêtres de temps (25 minutes) ne concernent qu'un agent **sans aucun outil
 en cours et sans nouvelle** : c'est celui-là, réellement figé, qui est signalé et
-arrêté.
+arrêté. Pendant ce temps, **l'écran le montre** : la commande en cours et sa
+durée écoulée s'affichent dans l'onglet de l'agent, dans la liste des agents et
+dans la liste des tâches — une compilation n'est jamais confondue avec un arrêt.
 
 Une **fin de tour partielle** de l'agent (reprise automatique après une erreur
 passagère ou une compaction) n'est **pas** un repos : l'agent reste considéré

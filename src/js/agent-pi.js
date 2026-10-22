@@ -28,6 +28,16 @@ import {
   buildPromptPayload,
 } from "./agent-hardening.js";
 import { shouldFollowBottom, updateFollowBottomFlag } from "./agent-scroll.js";
+// Durées et libellés honnêtes du travail en cours (module pur, testé) : un outil
+// long est un INTERVALLE daté, pas un événement instantané.
+import {
+  formatElapsed,
+  resolveAgentStatus,
+  clipLiveOutput,
+  toolUpdateText,
+  LIVE_OUTPUT_MAX_LINES,
+  LIVE_OUTPUT_MAX_CHARS,
+} from "./duree-travail.js";
 import { getTabsManager } from "./tabs.js";
 
 // Tâche #140 : espace réservé des agents d'assistant (aucun projet rattaché),
@@ -586,6 +596,14 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     currentTextBlock: null,       // sous-élément pour le texte
     currentThinkingBlock: null,   // sous-élément pour la pensée
     currentToolBlocks: new Map(), // toolCallId → élément DOM
+    // ── Travail EN COURS d'un outil (intervalle daté) ──
+    // Une commande n'est pas un événement instantané : elle a un DÉBUT, mémorisé
+    // ici pour afficher « ⏳ bash en cours… (3 min 12 s) » et le compteur du bloc.
+    // 0 = aucun outil en cours. Ce champ ne change AUCUNE détection d'anomalie :
+    // il ne sert qu'à l'affichage.
+    toolStartedAt: 0, // ms epoch du début de l'outil en cours
+    currentToolName: "", // nom de l'outil en cours (« bash », « read »…)
+    orchStatusPrefix: "", // préfixe de rôle (mode Orchestration) du libellé d'état
     pendingText: "",              // buffer texte en streaming
     pendingRender: false,          // flag pour throttling du rendu Markdown (requestAnimationFrame)
     lastAssistantRawText: "",      // texte brut complet de la dernière réponse (pour parsing orchestration)
@@ -972,13 +990,34 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     }
   }
   const statusEl = wrapper.querySelector("#agent-status");
+  // ── Libellé d'état HONNÊTE ──
+  // Un seul endroit décide du libellé : `resolveAgentStatus` (duree-travail.js,
+  // fonction pure testée). Règle : quand une COMMANDE tourne, le libellé dit
+  // laquelle et depuis combien de temps — jamais « Prêt » ni « Réflexion… »
+  // alors que le modèle attend un programme externe (rapport
+  // `.pilot/rapports/rapport-diagnostic-attente-silencieuse.md`).
+  const applyAgentStatus = (opts) => {
+    const o = opts || {};
+    const st = resolveAgentStatus({
+      toolInProgress: o.toolInProgress === true,
+      toolName: state.currentToolName,
+      toolStartedAt: state.toolStartedAt,
+      processing: o.processing === true,
+      now: Date.now(),
+      prefix: state.orchStatusPrefix,
+    });
+    statusEl.textContent = st.text;
+    statusEl.className = st.className;
+    return st;
+  };
   // Multi-projets : si l'agent de CE projet est déjà en train de travailler
   // (busy) au moment où l'onglet est (re)créé (ex: bascule sur un projet dont
   // l'agent tourne en arrière-plan), initialiser le statut à « Réflexion… »
-  // au lieu de « Prêt » par défaut. Sans cela, le statut restait « Prêt »
-  // jusqu'à l'agent_end suivant (l'agent_start avait déjà été émis avant la
-  // bascule et n'était donc pas reçu par ce listener). Affichage uniquement :
-  // on ne touche pas à state.isStreaming (l'état réel est géré par le backend).
+  // (ou à la commande en cours) au lieu de « Prêt » par défaut. Sans cela, le
+  // statut restait « Prêt » jusqu'à l'agent_end suivant (l'agent_start avait
+  // déjà été émis avant la bascule et n'était donc pas reçu par ce listener).
+  // Affichage uniquement : on ne touche pas à state.isStreaming (l'état réel est
+  // géré par le backend).
   (async () => {
     try {
       const sup = await invoke("get_agent_supervision");
@@ -987,10 +1026,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       const proj = sup.projects.find((p) => (p.path || "").replace(/\\/g, "/") === key);
       const agent = proj && (proj.agents || []).find((a) => a.active);
       const processing = agent && (agent.state === "running" || agent.state === "compacting");
-      if (processing) {
-        statusEl.textContent = "🤔 Réflexion...";
-        statusEl.className = "agent-status agent-status-streaming";
-      }
+      const toolInProgress = !!(agent && agent.toolInProgress === true);
+      if (processing || toolInProgress) applyAgentStatus({ processing, toolInProgress });
     } catch (_) { /* ignore : statut par défaut */ }
   })();
   // Issue #48 : poll périodique de l'activité de l'agent pour ne pas laisser le
@@ -1008,6 +1045,31 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       const proj = sup.projects.find((p) => (p.path || "").replace(/\\/g, "/") === key);
       const agent = proj && (proj.agents || []).find((a) => a.active);
       const processing = agent && (agent.state === "running" || agent.state === "compacting");
+      // Un OUTIL long (compilation, suite de tests) est du travail réel et le
+      // backend le publie (`toolInProgress`, champ additif). Deux sources, aucune
+      // invention : le drapeau du moteur, ou un bloc d'outil encore marqué en
+      // cours dans l'onglet. Sans cette lecture, l'écran annonçait « Prêt »
+      // pendant dix minutes de compilation.
+      const runningEl = container.querySelector(".agent-tool-inline.running");
+      const toolInProgress = !!(agent && agent.toolInProgress === true) || !!runningEl;
+      if (toolInProgress) {
+        if (!state.toolStartedAt) {
+          // Début inconnu (onglet recréé, événement manqué) : on prend
+          // l'horodatage du bloc s'il en a un, sinon maintenant. Jamais un
+          // départ situé dans le passé par défaut.
+          const fromBlock = runningEl ? Number(runningEl.dataset.startedAt) : 0;
+          state.toolStartedAt = fromBlock > 0 ? fromBlock : Date.now();
+          if (runningEl && !state.currentToolName) {
+            const lbl = runningEl.querySelector(".agent-tool-label");
+            state.currentToolName = lbl && lbl.textContent ? lbl.textContent.trim() : "";
+          }
+        }
+      } else if (state.toolStartedAt) {
+        // Plus aucun outil en cours (fin manquée ou exécution terminée) :
+        // on oublie la durée pour ne pas laisser un compteur figé à l'écran.
+        state.toolStartedAt = 0;
+        state.currentToolName = "";
+      }
       const isStreaming = statusEl.classList.contains("agent-status-streaming");
       const isError = statusEl.classList.contains("agent-status-error");
       // A15 : bascule vers « Réflexion » dès que l'agent traite, même si
@@ -1015,19 +1077,37 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       // sans agent-status-idle). L'ancienne condition exigeait la classe idle,
       // absente à la création de l'onglet → le statut restait « Prêt » pendant
       // tout le travail. On protège uniquement les états d'erreur.
-      if (processing && !isStreaming && !isError) {
-        statusEl.textContent = "🤔 Réflexion...";
-        statusEl.className = "agent-status agent-status-streaming";
-      } else if (!processing && isStreaming) {
+      if ((processing || toolInProgress) && !isError) {
+        applyAgentStatus({ processing: true, toolInProgress });
+      } else if (!processing && !toolInProgress && isStreaming) {
         statusEl.textContent = "Prêt";
         statusEl.className = "agent-status agent-status-idle";
       }
     } catch (_) { /* ignore */ }
   }, 2000);
+  // ── Battement d'une seconde : la durée du travail EN COURS avance ──
+  // Un seul intervalle, sans aucun appel IPC : il ne fait que rafraîchir des
+  // durées déjà affichées (compteur du bloc d'outil + libellé d'état). Si rien
+  // ne travaille, il ne touche à rien (coût nul, aucune requête).
+  const statusTicker = setInterval(() => {
+    const runningBlocks = container.querySelectorAll(".agent-tool-inline.running[data-started-at]");
+    for (const el of runningBlocks) {
+      const startedAt = Number(el.dataset.startedAt) || 0;
+      const counter = el.querySelector(".agent-tool-elapsed");
+      if (counter && startedAt > 0) counter.textContent = formatElapsed(Date.now() - startedAt);
+    }
+    if (state.toolStartedAt) {
+      const isError = statusEl.classList.contains("agent-status-error");
+      if (!isError) applyAgentStatus({ processing: true, toolInProgress: true });
+    }
+  }, 1000);
   // Nettoyer le poll quand l'onglet est fermé (évite les fuites). On observe le
   // parent du conteneur : quand le wrapper est retiré du DOM (fermeture d'onglet),
   // on arrête l'intervalle.
-  const _clearStatusPoll = () => clearInterval(statusPoll);
+  const _clearStatusPoll = () => {
+    clearInterval(statusPoll);
+    clearInterval(statusTicker);
+  };
   const _statusPollParent = container.parentNode;
   if (_statusPollParent) {
     const _statusPollObs = new MutationObserver(() => {
@@ -1912,6 +1992,10 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
           state.currentTextBlock = null;
           state.currentThinkingBlock = null;
           state.currentToolBlocks.clear();
+          // Aucun outil en cours : la durée affichée est oubliée (aucun compteur
+          // ne survit à une remise à zéro de la session).
+          state.currentToolName = "";
+          state.toolStartedAt = 0;
           state.pendingToolCalls.clear();
           state.pendingText = "";
           state.lastAssistantRawText = "";
@@ -1937,6 +2021,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
           state.currentTextBlock = null;
           state.currentThinkingBlock = null;
           state.currentToolBlocks.clear();
+          state.currentToolName = "";
+          state.toolStartedAt = 0;
           state.pendingToolCalls.clear();
           state.pendingText = "";
           state.lastAssistantRawText = "";
@@ -5197,6 +5283,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       state.currentTextBlock = null;
       state.currentThinkingBlock = null;
       state.currentToolBlocks.clear();
+      state.currentToolName = "";
+      state.toolStartedAt = 0;
       state.pendingToolCalls.clear();
       state.pendingText = "";
       state.lastAssistantRawText = "";
@@ -6130,6 +6218,11 @@ function maybeDetectReflectionLoop(state, messagesEl) {
 
 // Taille de la fenêtre d'historique des actions (dernières actions analysées).
 const ACTION_LOOP_WINDOW = 40;
+// Étranglement de la sortie EN DIRECT d'une commande (ms) : on n'écrit pas le
+// DOM à chaque ligne produite par un `cargo build --verbose`, mais au plus ~3
+// fois par seconde. Le plafond de lignes/caractères vit dans `duree-travail.js`
+// (`clipLiveOutput`).
+const LIVE_OUTPUT_THROTTLE_MS = 300;
 // Nombre d'occurrences d'une même action dans la fenêtre déclenchant la boucle.
 const ACTION_LOOP_MIN_REPEAT = 15;
 // RÈGLE 2 : les outils de LECTURE PURE (sans effet de bord) ne sont jamais
@@ -6456,6 +6549,13 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         state.orchestrationEnabled && state.orchestrationActiveRole
           ? (state.orchestrationActiveRole === "orchestrator" ? "🧠 Orchestrateur — " : "🔨 Codeur — ")
           : "";
+      // Mémorisé pour que le libellé d'état (commande en cours, ticker 1 s, poll
+      // de supervision) conserve le préfixe de rôle sans le recalculer.
+      state.orchStatusPrefix = orchRolePrefix;
+      // Nouveau tour : aucun outil n'est en cours (un compteur d'outil ne doit
+      // jamais survivre à un tour précédent).
+      state.currentToolName = "";
+      state.toolStartedAt = 0;
       statusEl.textContent = orchRolePrefix + "🤔 Réflexion...";
       statusEl.className = "agent-status agent-status-streaming";
       // Mode Orchestration : démarrer le chronométrage de la tâche courante (point N)
@@ -6606,6 +6706,10 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       state.currentToolBlocks.clear();
       state.pendingToolCalls.clear();
       state.pendingText = "";
+      // Fin de tour : plus aucun outil en cours (le libellé d'état ne doit pas
+      // continuer d'annoncer une commande terminée).
+      state.currentToolName = "";
+      state.toolStartedAt = 0;
       // Conserver la dernière réponse utile AVANT la remise à zéro de
       // lastAssistantRawText (faite plus bas dans ce handler) : elle servira à
       // l'instantané d'état de travail si une compaction survient avant le
@@ -7244,6 +7348,15 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       const toolId = payload.toolCallId;
       const toolName = payload.toolName || "";
       const toolArgs = payload.args || {};
+      // ── Une commande est un INTERVALLE daté ──
+      // On mémorise son début ICI, avant tout return d'affichage : le libellé
+      // d'état et le compteur doivent dire la vérité même quand les blocs d'outils
+      // ne sont pas affichés. Aucun impact sur la détection d'anomalie.
+      if (toolName) {
+        state.currentToolName = toolName;
+        state.toolStartedAt = Date.now();
+        applyAgentStatus({ processing: true, toolInProgress: true });
+      }
       // Retirer des appels en attente
       state.pendingToolCalls.delete(toolId);
       if (!showThinkingEnabled && !showToolsEnabled) break;
@@ -7256,7 +7369,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       }
       const existingBlock = state.currentToolBlocks.get(toolId);
       if (!existingBlock) {
-        const blk = appendToolBlock(state.currentAssistantBlock, toolName, toolArgs);
+        const blk = appendToolBlock(state.currentAssistantBlock, toolName, toolArgs, true);
         if (blk) state.currentToolBlocks.set(toolId, blk);
       }
       scrollToBottom(messagesEl);
@@ -7295,10 +7408,37 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     }
 
     case "tool_execution_update": {
+      // ── PREUVE DE VIE EN DIRECT ──
+      // La sortie de la commande EN COURS est écrite dans le bloc de l'outil au
+      // lieu d'être jetée (rapport `rapport-diagnostic-attente-silencieuse.md`,
+      // cause n° 1 : « l'onglet agent jette la sortie de la commande en cours »).
+      // Étranglée (~300 ms) et plafonnée (10 dernières lignes, 2000 caractères) :
+      // un `cargo build --verbose` ne peut pas noyer le DOM. AUCUN défilement
+      // automatique n'est forcé : la position de lecture reste celle de
+      // l'utilisateur (le suivi du bas reste régi par `shouldFollowBottom`).
+      const updId = payload.toolCallId;
+      const blk = updId ? state.currentToolBlocks.get(updId) : null;
+      if (!blk) break;
+      if (!showThinkingEnabled && !showToolsEnabled) break;
+      const nowUpd = Date.now();
+      if (nowUpd - (blk._liveAt || 0) < LIVE_OUTPUT_THROTTLE_MS) break;
+      blk._liveAt = nowUpd;
+      writeLiveToolOutput(blk, toolUpdateText(payload));
       break;
     }
 
     case "tool_execution_end": {
+      // ── Fin de la commande ──
+      // On fige la durée du bloc (elle reste lisible) et on retire la sortie en
+      // direct : la sortie COMPLÈTE est rendue juste après si l'affichage des
+      // outils est activé. Le libellé d'état revient à l'activité RÉELLE.
+      finalizeToolBlock(state, payload.toolCallId);
+      state.currentToolName = "";
+      state.toolStartedAt = 0;
+      if (state.isStreaming) {
+        const isErr = statusEl.classList.contains("agent-status-error");
+        if (!isErr) applyAgentStatus({ processing: true });
+      }
       // Issue #2 : après un outil, le contexte utilisé a changé → rafraîchir.
       maybeRefreshStats(state);
       // Reset timer d'inactivite orchestration (un outil vient de finir — le codeur
@@ -7797,7 +7937,7 @@ function renderThinkingContent(text) {
   return html || escapeHtml(text);
 }
 
-function appendToolBlock(parent, toolName, args) {
+function appendToolBlock(parent, toolName, args, live) {
   // N'afficher les appels d'outils que si la pensée ou les outils sont visibles
   if (!showThinkingEnabled && !showToolsEnabled) return null;
   // Ne pas afficher si le nom de l'outil est vide
@@ -7838,8 +7978,63 @@ function appendToolBlock(parent, toolName, args) {
   } else {
     inlineEl.innerHTML = `<span class="agent-tool-label">${escapeHtml(label)}</span>`;
   }
+  // Marque « en cours » UNIQUEMENT pour un outil réellement lancé (streaming).
+  // Les blocs rendus depuis l'historique (`live` absent) gardent exactement le
+  // balisage historique : ni point, ni compteur, ni classe `running`.
+  if (live === true) {
+    inlineEl.classList.add("running");
+    inlineEl.dataset.startedAt = String(Date.now());
+    const dot = document.createElement("span");
+    dot.className = "agent-tool-dot";
+    dot.setAttribute("aria-hidden", "true");
+    inlineEl.insertBefore(dot, inlineEl.firstChild);
+    const counter = document.createElement("span");
+    counter.className = "agent-tool-elapsed";
+    counter.textContent = formatElapsed(0);
+    counter.title = "Durée de la commande en cours";
+    inlineEl.appendChild(counter);
+  }
   target.appendChild(inlineEl);
   return inlineEl;
+}
+
+/**
+ * Écrit la sortie EN DIRECT d'une commande dans son bloc, sous le badge.
+ * Le bloc de sortie est créé à la première mise à jour puis RÉUTILISÉ (un seul
+ * élément, donc pas d'accumulation de DOM).
+ * @param {HTMLElement} block badge `.agent-tool-inline` de l'outil en cours.
+ * @param {string} text sortie brute déjà extraite.
+ */
+function writeLiveToolOutput(block, text) {
+  if (!block || typeof text !== "string" || !text) return;
+  const excerpt = clipLiveOutput(text, LIVE_OUTPUT_MAX_LINES, LIVE_OUTPUT_MAX_CHARS);
+  if (!excerpt) return;
+  let live = block.nextElementSibling;
+  if (!live || !live.classList || !live.classList.contains("agent-tool-live")) {
+    live = document.createElement("pre");
+    live.className = "agent-tool-live";
+    block.after(live);
+  }
+  live.textContent = excerpt;
+}
+
+/**
+ * Clôt l'affichage d'un outil : la durée est FIGÉE (elle reste lisible) et la
+ * sortie en direct est retirée (la sortie complète est rendue par
+ * `appendToolResult` quand l'affichage des outils est activé).
+ * @param {object} st état de l'onglet (`currentToolBlocks`).
+ * @param {string} toolId identifiant de l'appel d'outil.
+ */
+function finalizeToolBlock(st, toolId) {
+  if (!st || !st.currentToolBlocks || !toolId) return;
+  const block = st.currentToolBlocks.get(toolId);
+  if (!block) return;
+  block.classList.remove("running");
+  const counter = block.querySelector(".agent-tool-elapsed");
+  const startedAt = Number(block.dataset.startedAt) || 0;
+  if (counter && startedAt > 0) counter.textContent = formatElapsed(Date.now() - startedAt);
+  const live = block.nextElementSibling;
+  if (live && live.classList && live.classList.contains("agent-tool-live")) live.remove();
 }
 
 /**

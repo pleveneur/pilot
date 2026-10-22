@@ -1305,6 +1305,21 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             .get("toolInProgress")
             .and_then(|x| x.as_bool())
             .unwrap_or(false);
+        // ── PREUVE DE VIE (rapport « attente silencieuse ») ──
+        // Le moteur CALCULE DÉJÀ l'horodatage de dernière activité et sa forme
+        // relative (« il y a 12 s »). Il ne les publiait pas ici : l'affichage se
+        // rabattait donc sur un push `agent-state-changed` qui n'arrive JAMAIS
+        // pendant une commande longue (build, tests), d'où une ligne « Dernière
+        // activité » figée dix minutes. On recopie ces deux champs DÉJÀ calculés
+        // (et `isWorking`, l'état de travail explicite du moteur) : purement
+        // ADDITIF, aucune sémantique modifiée, aucune détection d'anomalie
+        // touchée.
+        let last_activity = s.get("lastActivity").and_then(|x| x.as_str()).unwrap_or("");
+        let last_activity_relative = s
+            .get("lastActivityRelative")
+            .and_then(|x| x.as_str())
+            .unwrap_or("");
+        let is_working = s.get("isWorking").and_then(|x| x.as_bool());
 
         let status = if !alive {
             "stopped"
@@ -1372,6 +1387,19 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
         // jetable). Le frontend s'en sert pour l'affichage et retombe sur
         // `agent` sinon ; les actions techniques continuent d'utiliser `agent`.
         insert_display_name(&mut entry, agent_name);
+
+        // Horodatages recopiés tels quels (absents si le moteur n'en a pas) :
+        // l'affichage en déduit « Dernière activité : il y a 12 s » et la durée
+        // du travail en cours. Aucune valeur inventée ici.
+        if !last_activity.is_empty() {
+            entry["lastActivity"] = serde_json::json!(last_activity);
+        }
+        if !last_activity_relative.is_empty() {
+            entry["lastActivityRelative"] = serde_json::json!(last_activity_relative);
+        }
+        if let Some(w) = is_working {
+            entry["isWorking"] = serde_json::json!(w);
+        }
 
         if let Some((_, list)) = by_project.iter_mut().find(|(p, _)| *p == project) {
             list.push(entry);

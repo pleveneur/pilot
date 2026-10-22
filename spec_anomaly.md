@@ -36,7 +36,9 @@ heure**. L'alerte « agent bloqué » comme **l'arrêt automatique (T2)** sont
 suspendus, et son créneau de run n'est ni libéré ni pris par une autre demande.
 Les fenêtres de temps (25 minutes) ne concernent qu'un agent **sans aucun outil
 en cours et sans nouvelle** : c'est celui-là, réellement figé, qui est signalé et
-arrêté.
+arrêté. Pendant ce temps, **l'écran le montre** : la commande en cours et sa
+durée écoulée s'affichent dans l'onglet de l'agent, dans la liste des agents et
+dans la liste des tâches — une compilation n'est jamais confondue avec un arrêt.
 
 Une **fin de tour partielle** de l'agent (reprise automatique après une erreur
 passagère ou une compaction) n'est **pas** un repos : l'agent reste considéré

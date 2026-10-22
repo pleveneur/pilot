@@ -1467,6 +1467,15 @@ body.theme-light.theme-tokyo-day {
   color: var(--text-primary);
   text-align: right;
 }
+/* Ligne « En cours depuis 3 min 12 s » : c'est la PREUVE DE VIE de la fiche
+   pendant une commande longue (compilation, tests). Mise en valeur discrète
+   (accent) et chiffres à largeur fixe pour que la durée ne fasse pas sauter la
+   colonne quand elle passe de « 9 s » à « 10 s ». */
+.agent-activity-card-row.agent-activity-card-working span:last-child {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-semibold);
+}
 .agent-activity-card-open {
   width: 100%;
   margin-top: 8px;
@@ -3298,6 +3307,63 @@ body.zen-mode #project-footer {
   word-break: break-all;
 }
 
+/* ── Travail EN COURS d'une commande (rapport « attente silencieuse ») ──
+   Un outil réellement lancé porte la classe `running` : un point qui respire
+   (même animation que les pastilles d'agents) et un compteur de durée qui
+   avance chaque seconde. Une fois la commande terminée, le point disparaît et
+   la durée FIGÉE reste lisible : l'utilisateur voit ce qui s'est passé et
+   combien de temps cela a pris. Les blocs rendus depuis l'historique n'ont
+   jamais cette classe (aucun faux « en cours »). */
+.agent-tool-inline .agent-tool-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+.agent-tool-inline.running {
+  color: var(--text-secondary);
+}
+.agent-tool-inline.running .agent-tool-dot {
+  animation: agent-pulse 1.5s ease-in-out infinite;
+}
+.agent-tool-inline.running .agent-tool-label {
+  color: var(--accent);
+}
+.agent-tool-elapsed {
+  flex-shrink: 0;
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+.agent-tool-inline.running .agent-tool-elapsed {
+  color: var(--accent);
+}
+
+/* Sortie EN DIRECT de la commande en cours : les dernières lignes produites,
+   bornées en hauteur. Aucun défilement automatique n'y est imposé : la position
+   de lecture appartient à l'utilisateur. */
+.agent-tool-live {
+  margin: 2px 0 6px;
+  padding: 6px 8px;
+  max-height: 140px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-left: 2px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-input);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--font-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .agent-thinking-content {
   padding: 2px 0 4px;
   font-size: var(--font-sm);
@@ -4197,6 +4263,26 @@ body.zen-mode #project-footer {
   color: var(--text-muted);
   word-break: break-word;
 }
+/* Ligne « en cours » d'une mission : point qui respire + durée écoulée. Rien de
+   tel sur une ligne seulement « en attente » : seule une mission qui travaille
+   est datée (rapport `rapport-diagnostic-attente-silencieuse.md`). */
+.sa-missions-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--sa-group-tone, var(--accent));
+  animation: agent-pulse 1.5s ease-in-out infinite;
+}
+.sa-task-since {
+  flex-shrink: 0;
+  margin-left: 6px;
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.sa-task-head { align-items: center; }
 
 /* Tâche #160 : bandeau d'événement en PLEIN ÉCRAN (réglage de l'onglet
    Assistant). Overlay centré, au-dessus de tout, NON interactif
