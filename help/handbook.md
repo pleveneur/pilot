@@ -3348,7 +3348,7 @@ même si vous êtes loin de l'ordinateur :
 **Réglage** : dans **Paramètres ⚙️ → onglet Assistant**, section
 **« Notifications Telegram »** :
 
-1. cochez **« Envoyer les avis sur Telegram »** ;
+1. cochez **« Me prévenir sur Telegram »** ;
 2. collez le **jeton du bot** (fourni par **@BotFather** dans Telegram) ;
 3. indiquez l'**identifiant de discussion** qui recevra les avis (votre
    identifiant personnel, ou celui d'un groupe).
@@ -3358,9 +3358,23 @@ Pour obtenir ces deux valeurs : créez un bot auprès de **@BotFather**
 auprès de **@userinfobot** (ou de l'API `getUpdates`).
 
 **Comportement quand c'est désactivé (par défaut)** : tant que l'interrupteur
-est décoché **ou** qu'un des deux champs est vide, **rien n'est envoyé**,
-Pilot ne contacte aucun serveur et **aucun message d'erreur** ne s'affiche.
-Décocher le réglage suffit à tout arrêter.
+est décoché **ou** qu'un des deux champs est vide, **rien n'est envoyé** sur
+Telegram (aucun message de début ni de fin, aucune alerte) et **aucun message
+d'erreur** ne s'affiche. Décocher le réglage suffit à tout arrêter ; les alertes
+restent alors visibles **dans Pilot**.
+
+**Un seul réglage, que l'Assistant peut changer lui-même** :
+
+- c'est le **seul** interrupteur des notifications Telegram (il n'existe aucune
+  seconde case ailleurs) ;
+- demandez-le **en toutes lettres** à l'Assistant, dans Pilot **ou** sur
+  Telegram — « préviens-moi sur Telegram », « arrête de me prévenir », « coupe
+  les notifications » : il applique **tout de suite** et confirme en **une
+  phrase**, sans vous redemander ;
+- **si vous écrivez au bot sur Telegram**, le réglage se **réactive
+  automatiquement** (vous écrivez là, donc vous voulez y être prévenu) : le geste
+  est journalisé et l'interrupteur des Paramètres apparaît coché. Un message
+  venant d'**une autre personne** ne change jamais ce réglage.
 
 **Ce que vous recevez est court et rangé** :
 

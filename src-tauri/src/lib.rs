@@ -377,8 +377,14 @@ struct AppConfig {
     // Avis envoyés au propriétaire sur Telegram (fin de tâche d'un agent,
     // anomalie d'agent bloqué, arrêt automatique d'une session). Désactivée par
     // défaut : un config.json ancien (sans ces champs) reste STRICTEMENT inerte.
+    // RÉGLAGE UNIQUE « me prévenir sur Telegram » — c'est LE seul réglage des
+    // notifications Telegram, et il n'existe QU'ICI (aucune copie ailleurs) :
+    // c'est lui qui coupe TOUS les envois (`telegram::inert_reason`), il est lu
+    // par l'assistant à chaque échange (`super_agent::telegram_notify_guideline`),
+    // changé par l'outil `set_telegram_notifications` (Pilot) et réactivé
+    // d'office quand le PROPRIÉTAIRE écrit au bot (`telegram.rs`).
     // Tant que l'interrupteur est faux ou que le jeton / l'identifiant de
-    // discussion est vide, rien n'est tenté (aucun réseau, aucune erreur).
+    // discussion est vide, rien n'est envoyé (aucun réseau, aucune erreur).
     // Le jeton est un secret d'envoi (jamais journalisé) : il est saisi dans les
     // Paramètres et transmis uniquement à l'API du bot.
     #[serde(default)]
@@ -4346,6 +4352,40 @@ mod tests {
             super::config_is_default(&config.lock().unwrap()),
             "la config reste inchangée quand le verrou est occupé"
         );
+    }
+
+    // ── Réglage UNIQUE « me prévenir sur Telegram » : il survit au redémarrage ──
+    /// Contrôle (c) : coupé par défaut, activé après un aller-retour de
+    /// sérialisation (le fichier de configuration est du JSON), et absent d'une
+    /// configuration ancienne ⇒ coupé (jamais allumé par accident).
+    #[test]
+    fn telegram_notify_setting_survives_restart_and_defaults_off() {
+        // Défaut : coupé (aucune surprise pour une installation neuve).
+        assert!(!super::AppConfig::default().telegram_notify_enabled);
+        // Ancienne configuration sans le champ : lisible, réglage coupé.
+        let old: super::AppConfig =
+            serde_json::from_str(r#"{"telegram_bot_token":"t","telegram_chat_id":"1"}"#)
+                .expect("une configuration ancienne doit rester lisible");
+        assert!(!old.telegram_notify_enabled);
+        // Activé → écrit sur disque → relu (redémarrage) : toujours activé.
+        let mut cfg = super::AppConfig::default();
+        cfg.telegram_notify_enabled = true;
+        let json = serde_json::to_string(&cfg).expect("sérialisation");
+        assert!(json.contains("\"telegram_notify_enabled\":true"));
+        let back: super::AppConfig = serde_json::from_str(&json).expect("relecture");
+        assert!(
+            back.telegram_notify_enabled,
+            "le réglage doit survivre à un redémarrage"
+        );
+        // Coupé → relu coupé (le retour arrière est persistant aussi).
+        let mut off = cfg.clone();
+        off.telegram_notify_enabled = false;
+        let back_off: super::AppConfig =
+            serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
+        assert!(!back_off.telegram_notify_enabled);
+        // La sentinelle « configuration par défaut » tient compte du réglage :
+        // un réglage activé ne peut pas être écrasé par le chargement paresseux.
+        assert!(!super::config_is_default(&cfg));
     }
 
     #[test]

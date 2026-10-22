@@ -54,7 +54,7 @@ même si vous êtes loin de l'ordinateur :
 **Réglage** : dans **Paramètres ⚙️ → onglet Assistant**, section
 **« Notifications Telegram »** :
 
-1. cochez **« Envoyer les avis sur Telegram »** ;
+1. cochez **« Me prévenir sur Telegram »** ;
 2. collez le **jeton du bot** (fourni par **@BotFather** dans Telegram) ;
 3. indiquez l'**identifiant de discussion** qui recevra les avis (votre
    identifiant personnel, ou celui d'un groupe).
@@ -64,9 +64,23 @@ Pour obtenir ces deux valeurs : créez un bot auprès de **@BotFather**
 auprès de **@userinfobot** (ou de l'API `getUpdates`).
 
 **Comportement quand c'est désactivé (par défaut)** : tant que l'interrupteur
-est décoché **ou** qu'un des deux champs est vide, **rien n'est envoyé**,
-Pilot ne contacte aucun serveur et **aucun message d'erreur** ne s'affiche.
-Décocher le réglage suffit à tout arrêter.
+est décoché **ou** qu'un des deux champs est vide, **rien n'est envoyé** sur
+Telegram (aucun message de début ni de fin, aucune alerte) et **aucun message
+d'erreur** ne s'affiche. Décocher le réglage suffit à tout arrêter ; les alertes
+restent alors visibles **dans Pilot**.
+
+**Un seul réglage, que l'Assistant peut changer lui-même** :
+
+- c'est le **seul** interrupteur des notifications Telegram (il n'existe aucune
+  seconde case ailleurs) ;
+- demandez-le **en toutes lettres** à l'Assistant, dans Pilot **ou** sur
+  Telegram — « préviens-moi sur Telegram », « arrête de me prévenir », « coupe
+  les notifications » : il applique **tout de suite** et confirme en **une
+  phrase**, sans vous redemander ;
+- **si vous écrivez au bot sur Telegram**, le réglage se **réactive
+  automatiquement** (vous écrivez là, donc vous voulez y être prévenu) : le geste
+  est journalisé et l'interrupteur des Paramètres apparaît coché. Un message
+  venant d'**une autre personne** ne change jamais ce réglage.
 
 **Ce que vous recevez est court et rangé** :
 
@@ -220,7 +234,7 @@ pour qu'un `config.json` ancien reste **inerte** (aucune migration requise) :
 
 | Champ | Type | Défaut | Rôle |
 |---|---|---|---|
-| `telegram_notify_enabled` | `bool` | `false` | Interrupteur principal. |
+| `telegram_notify_enabled` | `bool` | `false` | Réglage **UNIQUE** « me prévenir sur Telegram » (cf. § 14) : coupe **tous** les envois, lisible et modifiable par l'Assistant. |
 | `telegram_bot_token` | `String` | `""` | Jeton du bot (secret d'envoi). |
 | `telegram_chat_id` | `String` | `""` | Discussion cible (personne ou groupe). |
 | `telegram_dialog_enabled` | `bool` | `false` | Communication du **dialogue** de l'Assistant (bouton 🧭, lot 3). |
@@ -868,3 +882,78 @@ Canal, mode de connexion (HTTP, bot, `chat_id`), réglages existants
 (activation, destinataire), inertie totale quand la passerelle est désactivée ou
 mal configurée, envoi non bloquant en thread détaché, échec silencieux, jeton
 jamais journalisé. **Aucun nouveau réglage** n'a été ajouté.
+
+## 14. Réglage UNIQUE « me prévenir sur Telegram »
+
+Décision du propriétaire : **un seul** réglage dit s'il veut être prévenu sur
+Telegram, il n'existe **qu'une fois**, et **l'assistant peut le lire et le
+changer lui-même**.
+
+### 14.1 Où il vit (et nulle part ailleurs)
+
+`AppConfig.telegram_notify_enabled` (`src-tauri/src/lib.rs`) — le champ de
+l'étape 1, **conservé tel quel, sans doublon** :
+
+| Élément | Unique lieu |
+|---|---|
+| le champ | `telegram_notify_enabled` (aucun autre champ de notification) |
+| la case | `#setting-telegram-enabled`, Paramètres → onglet Assistant, section « Notifications Telegram », libellé **« Me prévenir sur Telegram »** |
+| la porte d'envoi | `TelegramConfig::inert_reason()` (`src-tauri/src/telegram.rs`) : coupée ⇒ aucun envoi, sous aucune forme |
+| l'écriture au nom de l'assistant | `set_telegram_notifications` → `src/js/telegram-notify-setting.js` → `save_config` |
+
+Le réglage voisin `telegram_dialog_enabled` n'est **pas** un second interrupteur
+de notification : il ne décide que de la **reformulation du dialogue** de
+l'Assistant (§ 11), n'a aucune case, et ne peut donc pas contredire celui-ci.
+
+### 14.2 Comment l'assistant VOIT l'état (choix justifié)
+
+**Contexte du prompt système**, et non un outil de lecture :
+`telegram_notify_guideline(enabled)` (`src-tauri/src/super_agent.rs`) est
+**reconstruit à chaque envoi**, dans les deux chemins de prompt (`do_send_super_agent_prompt` et `ask_super_agent`). L'état est donc **toujours frais** (jamais
+figé au démarrage), il est présent **au moment où l'assistant rédige**, sans
+appel d'outil à ne pas oublier ni aller-retour. Le bloc dit l'état (`ACTIF` /
+`COUPÉ`), ce que cela implique, et **comment le changer**.
+
+### 14.3 Comment il le CHANGE, depuis les deux canaux
+
+L'outil `set_telegram_notifications({enabled})`
+(`src-tauri/extensions/pilot-assistant-actions.ts`) passe par le canal d'action
+unique de Pilot (`PILOT_ASSISTANT_ACTION::`) ; `super-agent.js` applique
+immédiatement (`setTelegramNotifyEnabled`), puis confirme en **une phrase**
+(`telegramNotifyConfirmation`), **sans double confirmation**. Le même outil sert
+dans le chat de l'onglet 🧭 **et** depuis un message Telegram : les messages reçus
+sont injectés dans la **même session** de l'Assistant (`telegram-inbound.js`),
+donc il n'existe aucun second chemin d'écriture.
+
+### 14.4 Réactivation automatique par le propriétaire
+
+Règle (cœur pur, testé) : `owner_message_reactivates_notifications(enabled,
+messages)` — réglage **coupé** + au moins un message **du propriétaire** reçu.
+À la réception (`telegram_poll_inbound`), le réglage est réactivé : écriture
+**disque d'abord** (`save_config_disk`), puis mémoire, puis **journal**
+`<app_data_dir>/telegram_notify_state.log` (une ligne horodatée, sans secret) et
+évènement `pilot-telegram-notify-changed` pour rafraîchir l'interface.
+
+Pour que ce geste soit possible, la **réception** reste ouverte quand le réglage
+est coupé : `receive_inert_reason()` n'exige que le jeton et l'identifiant de
+discussion. `collect_inbound` ne retient **que** la discussion du propriétaire :
+un **inconnu** ne peut donc jamais réactiver le réglage.
+
+### 14.5 Quand c'est coupé, rien ne part
+
+`inert_reason()` est consulté par **toutes** les formes d'envoi (`dispatch`,
+`dispatch_buttons`, `dispatch_edit`) et l'accusé de réception des boutons
+(`answer_callback`) est lui aussi conditionné : aucun message de début, de fin,
+aucune alerte, aucun repli silencieux. Les **alertes restent visibles dans
+Pilot** (notifications natives et panneaux inchangés).
+
+### 14.6 Tests
+
+`src/js/telegram-notify-setting.test.js` (24 tests, `invoke` injecté) porte les
+**six contrôles** demandés et échoue si le branchement disparaît : (a) l'état
+n'est plus visible/injecté, (b) un envoi passe malgré le réglage coupé,
+(c) le réglage ne survit plus à un redémarrage, (d) un message du propriétaire ne
+réactive plus, (e) un inconnu réactive, (f) le réglage existe deux fois. Côté
+Rust : `telegram.rs` (inertie des trois formes d'envoi, réactivation, inconnu) et
+`super_agent.rs` (bloc d'état + présence dans le prompt assemblé) et `lib.rs`
+(aller-retour de sérialisation = survie au redémarrage).

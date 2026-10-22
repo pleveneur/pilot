@@ -111,6 +111,15 @@ import {
   relayAssistantMessageToTelegram,
   setRawAvisTurnProbe,
 } from "./telegram-dialog.js";
+// Réglage UNIQUE « me prévenir sur Telegram » (AppConfig
+// `telegram_notify_enabled`) : l'assistant le CHANGE ici (même chemin depuis le
+// chat de l'onglet 🧭 et depuis un message Telegram reçu) et l'interface est
+// rafraîchie quand la réception Telegram le réactive d'office.
+import {
+  TELEGRAM_NOTIFY_CHANGED_EVENT,
+  setTelegramNotifyEnabled,
+  telegramNotifyConfirmation,
+} from "./telegram-notify-setting.js";
 // Refonte des messages Telegram : le NOM COURT du projet vient de l'UNIQUE
 // fonction du projet (`projectShortName`) — jamais un chemin, jamais un nom
 // recopié à la main. « Assistant » seulement si aucun projet n'est ouvert.
@@ -2554,6 +2563,11 @@ export async function createSuperAgent(container) {
   const onTelegramPrefsChanged = () => { refreshTelegramDialogButton(); };
   refreshTelegramDialogButton();
   window.addEventListener("pilot-config-changed", onTelegramPrefsChanged);
+  // Réactivation AUTOMATIQUE du réglage « me prévenir sur Telegram » : elle est
+  // décidée côté Rust à la réception d'un message du PROPRIÉTAIRE (telegram.rs)
+  // et signalée ici pour que le bouton de communication se rafraîchisse sans
+  // redémarrage. Aucun état recopié : on relit la configuration.
+  window.addEventListener(TELEGRAM_NOTIFY_CHANGED_EVENT, onTelegramPrefsChanged);
 
   // Bascule l'état (clic sur le bouton) puis le persiste via la configuration.
   async function toggleTelegramDialog() {
@@ -5598,6 +5612,23 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       noteConcernedProject(path);
       appendSystemMessage(messagesEl, `✅ Projet « ${path} » ouvert et rendu actif.`);
       await respondSuperAgentAction(id, true);
+    } else if (action === "set_telegram_notifications") {
+      // Réglage UNIQUE « me prévenir sur Telegram » : l'assistant l'applique
+      // lui-même (demande du propriétaire, depuis le chat de l'onglet 🧭 ou
+      // depuis Telegram). Le champ `AppConfig.telegram_notify_enabled` reste le
+      // SEUL propriétaire : on écrit par `save_config`, jamais une valeur
+      // recopiée ailleurs. Application IMMÉDIATE, confirmation en UNE ligne.
+      const res = await setTelegramNotifyEnabled(info.enabled === true);
+      if (res.ok) {
+        appendSystemMessage(messagesEl, `📨 ${telegramNotifyConfirmation(res.enabled)}`);
+        await respondSuperAgentAction(id, true);
+      } else {
+        appendSystemMessage(
+          messagesEl,
+          "⚠️ Impossible d'enregistrer le réglage « me prévenir sur Telegram » : il reste inchangé.",
+        );
+        await respondSuperAgentAction(id, false);
+      }
     } else if (action === "delegate_to_coder") {
       if (!info.request) {
         await respondSuperAgentAction(id, false);

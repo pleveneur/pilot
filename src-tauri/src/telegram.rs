@@ -24,7 +24,7 @@
 
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Base de l'API « bot » de Telegram.
 pub const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
@@ -75,6 +75,26 @@ impl TelegramConfig {
         if !self.enabled {
             Some("passerelle désactivée")
         } else if self.token.trim().is_empty() {
+            Some("jeton du bot absent")
+        } else if self.chat_id.trim().is_empty() {
+            Some("identifiant de discussion absent")
+        } else {
+            None
+        }
+    }
+
+    /// Motif d'inertie de la RÉCEPTION. Seuls le jeton et l'identifiant de
+    /// discussion comptent : le réglage « me prévenir sur Telegram »
+    /// (`enabled`) ne coupe QUE l'ENVOI.
+    ///
+    /// Pourquoi la réception reste ouverte quand le réglage est coupé : c'est
+    /// la SEULE façon de savoir que le propriétaire écrit sur Telegram, donc de
+    /// RÉACTIVER le réglage d'office quand il le fait (« s'il écrit sur
+    /// Telegram, c'est qu'il veut être prévenu là »). Rien ne PART pour autant :
+    /// tous les envois passent par `dispatch` / `dispatch_buttons` /
+    /// `dispatch_edit`, qui consultent `inert_reason()` et restent inertes.
+    pub fn receive_inert_reason(&self) -> Option<&'static str> {
+        if self.token.trim().is_empty() {
             Some("jeton du bot absent")
         } else if self.chat_id.trim().is_empty() {
             Some("identifiant de discussion absent")
@@ -641,7 +661,10 @@ pub fn poll_inbound<S>(cfg: &TelegramConfig, offset: i64, fetch: S) -> Result<In
 where
     S: FnOnce(&str) -> Result<serde_json::Value, String>,
 {
-    if let Some(reason) = cfg.inert_reason() {
+    // Réception : jeton + identifiant de discussion. Le réglage « me prévenir
+    // sur Telegram » ne coupe QUE l'envoi — la réception reste ouverte pour
+    // pouvoir RÉACTIVER ce réglage dès que le propriétaire écrit (règle 4).
+    if let Some(reason) = cfg.receive_inert_reason() {
         return Ok(InboundPoll {
             messages: Vec::new(),
             next_offset: offset,
@@ -653,6 +676,117 @@ where
         // Défense en profondeur : un message d'erreur ne porte jamais le jeton.
         Err(e) => Err(redact_token(&e, &cfg.token)),
     }
+}
+
+// ── RÉGLAGE UNIQUE « me prévenir sur Telegram » (propriétaire) ───────────────
+//
+// Un SEUL réglage dit si le propriétaire veut être prévenu sur Telegram :
+// `AppConfig.telegram_notify_enabled`. Il n'existe nulle part ailleurs (aucune
+// copie, aucune seconde case) et c'est lui qui coupe TOUS les envois
+// (`inert_reason`).
+//
+// Règle de RÉACTIVATION automatique (décidée par le propriétaire) : dès qu'un
+// message du PROPRIÉTAIRE arrive via Telegram, le réglage est réactivé d'office
+// — s'il écrit sur Telegram, c'est qu'il veut y être prévenu. Seul le
+// propriétaire compte : `collect_inbound` écarte déjà tout autre expéditeur, ils
+// ne peuvent donc jamais réactiver le réglage.
+
+/// Faut-il réactiver le réglage ? Cœur PUR de la règle : réglage coupé ET au
+/// moins un message du PROPRIÉTAIRE reçu.
+///
+/// (Les messages retenus par `collect_inbound` viennent tous de la discussion du
+/// propriétaire : un inconnu n'y figure jamais. Un appui de bouton du
+/// propriétaire compte aussi comme un message de sa part.)
+pub fn owner_message_reactivates_notifications(
+    enabled: bool,
+    messages: &[InboundMessage],
+) -> bool {
+    !enabled && !messages.is_empty()
+}
+
+/// Journal disque du réglage (réactivations et changements) : fichier de
+/// données de l'application, borné (réécrit à zéro au-delà de 64 Ko). Aucune
+/// donnée sensible : ni jeton, ni identifiant de discussion.
+const NOTIFY_STATE_LOG_FILE: &str = "telegram_notify_state.log";
+const NOTIFY_STATE_LOG_MAX_BYTES: u64 = 64 * 1024;
+
+fn notify_state_log_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join(NOTIFY_STATE_LOG_FILE))
+}
+
+/// Écrit une ligne de journal (best-effort : un échec n'interrompt rien).
+fn journal_notify_state(app: &AppHandle, line: &str) {
+    let Some(path) = notify_state_log_path(app) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let stamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let entry = format!("{} {}\n", stamp, line);
+    let too_big = std::fs::metadata(&path)
+        .map(|m| m.len() > NOTIFY_STATE_LOG_MAX_BYTES)
+        .unwrap_or(false);
+    if too_big {
+        let _ = std::fs::write(&path, entry);
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = f.write_all(entry.as_bytes());
+    }
+}
+
+/// Réactive le réglage unique après un message du propriétaire : écrit le disque
+/// D'ABORD (l'état doit survivre à un redémarrage) puis la mémoire, journalise
+/// le geste et prévient l'interface.
+///
+/// Fail-open : une configuration indisponible laisse le réglage inchangé (jamais
+/// de valeur par défaut écrite à la place d'une vraie configuration).
+/// @returns `true` si le réglage est désormais actif.
+fn reactivate_notifications_from_owner_message(app: &AppHandle) -> bool {
+    let Some(state) = app.try_state::<crate::AppState>() else {
+        return false;
+    };
+    crate::ensure_config_loaded(&state.config, || crate::load_config_disk(app));
+    let mut cfg = match crate::get_config_read(&state.config, app) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!(
+                "[telegram] réactivation du réglage impossible (configuration indisponible) : {}",
+                e
+            );
+            return false;
+        }
+    };
+    if cfg.telegram_notify_enabled {
+        return true; // déjà actif : rien à faire, rien à journaliser
+    }
+    cfg.telegram_notify_enabled = true;
+    if let Err(e) = crate::save_config_disk(app, &cfg) {
+        eprintln!("[telegram] réactivation du réglage non persistée : {}", e);
+        return false;
+    }
+    match state.config.lock() {
+        Ok(mut guard) => *guard = cfg,
+        Err(poisoned) => *poisoned.into_inner() = cfg,
+    }
+    journal_notify_state(
+        app,
+        "réglage « me prévenir sur Telegram » RÉACTIVÉ par un message du propriétaire reçu via Telegram",
+    );
+    eprintln!(
+        "[telegram] réglage « me prévenir sur Telegram » réactivé : message du propriétaire reçu."
+    );
+    // L'interface relit la configuration (bouton de communication, Paramètres).
+    let _ = app.emit(
+        "pilot-telegram-notify-changed",
+        serde_json::json!({ "enabled": true, "reason": "owner_message" }),
+    );
+    true
 }
 
 /// Réception réelle : GET `getUpdates`, délais courts, `without_url` pour ne
@@ -799,13 +933,28 @@ pub fn telegram_poll_inbound(app: AppHandle) -> Result<serde_json::Value, String
                 }));
             }
             // Accusé de réception des appuis de boutons (défait la barre de
-            // progression du client Telegram) : best-effort et silencieux.
-            for m in poll.messages.iter().filter(|m| !m.callback_id.is_empty()) {
-                answer_callback(&cfg, &m.callback_id);
+            // progression du client Telegram) : best-effort et silencieux. Il
+            // n'a lieu QUE si le réglage autorise l'envoi — réglage coupé, rien
+            // ne part du tout (aucun appel réseau d'envoi).
+            if cfg.enabled {
+                for m in poll.messages.iter().filter(|m| !m.callback_id.is_empty()) {
+                    answer_callback(&cfg, &m.callback_id);
+                }
             }
+            // RÈGLE : un message du PROPRIÉTAIRE reçu via Telegram RÉACTIVE le
+            // réglage unique d'office (il écrit là, il veut y être prévenu).
+            // Les messages listés viennent tous de sa discussion ; un inconnu
+            // est écarté par `collect_inbound` et ne peut donc rien réactiver.
+            let reactivated = if owner_message_reactivates_notifications(cfg.enabled, &poll.messages)
+            {
+                reactivate_notifications_from_owner_message(&app)
+            } else {
+                false
+            };
             Ok(serde_json::json!({
                 "status": "ok",
                 "nextOffset": poll.next_offset,
+                "reactivated": reactivated,
                 "messages": poll
                     .messages
                     .iter()
@@ -920,6 +1069,40 @@ mod tests {
             dispatch(&cfg, ALERT_TEXT, |_, _, _| panic!("envoi interdit")),
             TelegramOutcome::Inert("identifiant de discussion absent")
         );
+    }
+
+    /// Contrôle (b) : réglage coupé ⇒ AUCUNE forme d'envoi ne part (texte,
+    /// boutons, modification). Ni message de début, ni de fin, ni alerte.
+    #[test]
+    fn notifications_off_blocks_every_outgoing_form() {
+        let cfg = TelegramConfig {
+            enabled: false,
+            ..ready()
+        };
+        assert_eq!(
+            dispatch_buttons(
+                &cfg,
+                "prévenir ?",
+                &[bouton("oui", "q1:0")],
+                |_, _| panic!("envoi interdit")
+            ),
+            TelegramSendOutcome::Inert("passerelle désactivée")
+        );
+        assert_eq!(
+            dispatch_edit(&cfg, 77, "fini", |_, _| panic!("envoi interdit")),
+            TelegramOutcome::Inert("passerelle désactivée")
+        );
+        // Début et fin de mission, et alerte : même inertie.
+        for text in [
+            "Pilot — Mission démarrée — ▶️ Un agent commence.",
+            DONE_TEXT,
+            ALERT_TEXT,
+        ] {
+            assert_eq!(
+                dispatch(&cfg, text, |_, _, _| panic!("envoi interdit")),
+                TelegramOutcome::Inert("passerelle désactivée")
+            );
+        }
     }
 
     #[test]
@@ -1102,16 +1285,26 @@ mod tests {
         assert_eq!(second.next_offset, 8, "curseur stable sans nouvel update");
     }
 
+    // Contrôle (d)/(e) : la RÉCEPTION reste ouverte quand le réglage est coupé
+    // (c'est ce qui permet de le réactiver), mais RIEN ne part pour autant.
     #[test]
-    fn inbound_inert_when_disabled_never_touches_network() {
+    fn inbound_receives_while_notifications_off_but_nothing_is_sent() {
         let cfg = TelegramConfig {
             enabled: false,
             ..ready()
         };
-        let poll = poll_inbound(&cfg, 5, |_| panic!("aucun accès réseau attendu")).unwrap();
-        assert_eq!(poll.inert, Some("passerelle désactivée"));
-        assert!(poll.messages.is_empty());
-        assert_eq!(poll.next_offset, 5, "curseur inchangé");
+        let response = updates_json(serde_json::json!([
+            { "update_id": 6, "message": { "chat": { "id": 4242 }, "text": "coucou" } },
+        ]));
+        let poll = poll_inbound(&cfg, 5, move |_| Ok(response.clone())).unwrap();
+        assert_eq!(poll.inert, None, "la réception n'est pas coupée par le réglage");
+        assert_eq!(poll.messages.len(), 1);
+        assert_eq!(poll.next_offset, 7, "le message est consommé une seule fois");
+        // Aucun envoi possible tant que le réglage est coupé.
+        assert_eq!(
+            dispatch(&cfg, DONE_TEXT, |_, _, _| panic!("envoi interdit")),
+            TelegramOutcome::Inert("passerelle désactivée")
+        );
     }
 
     #[test]
@@ -1363,16 +1556,74 @@ mod tests {
 
     #[test]
     fn inbound_without_config_cannot_answer_pending_question() {
-        // Interrupteur décoché ou champ vide : aucune tentative réseau, donc
+        // Jeton ou identifiant de discussion vide : aucune tentative réseau, donc
         // aucune réponse possible — inertie totale et silencieuse.
-        let disabled = TelegramConfig {
+        let no_token = TelegramConfig {
+            token: "   ".to_string(),
+            ..ready()
+        };
+        let p = poll_inbound(&no_token, 9, |_| panic!("aucun accès réseau attendu")).unwrap();
+        assert!(p.messages.is_empty());
+        assert_eq!(p.next_offset, 9);
+        assert_eq!(p.inert, Some("jeton du bot absent"));
+        assert!(
+            !owner_message_reactivates_notifications(false, &p.messages),
+            "sans message reçu, aucune réactivation"
+        );
+    }
+
+    // ── RÉACTIVATION AUTOMATIQUE par un message du PROPRIÉTAIRE ──
+
+    /// Cœur PUR de la règle de réactivation.
+    #[test]
+    fn owner_message_reactivates_only_when_off_and_only_with_a_message() {
+        let msg = |text: &str| InboundMessage {
+            update_id: 1,
+            text: text.to_string(),
+            callback_data: String::new(),
+            callback_id: String::new(),
+        };
+        // Coupé + un message du propriétaire → réactivation.
+        assert!(owner_message_reactivates_notifications(false, &[msg("bonjour")]));
+        // Coupé + appui de bouton du propriétaire → réactivation aussi (c'est un
+        // message de sa part).
+        assert!(owner_message_reactivates_notifications(
+            false,
+            &[InboundMessage {
+                update_id: 2,
+                text: "".to_string(),
+                callback_data: "q1:0".to_string(),
+                callback_id: String::new(),
+            }]
+        ));
+        // Coupé mais AUCUN message → rien à réactiver.
+        assert!(!owner_message_reactivates_notifications(false, &[]));
+        // Déjà actif → aucune réactivation inutile.
+        assert!(!owner_message_reactivates_notifications(true, &[msg("bonjour")]));
+    }
+
+    /// Contrôle (e) : un EXPÉDITEUR INCONNU ne doit jamais réactiver le réglage.
+    /// La réception ne retient que la discussion du propriétaire : le message de
+    /// l'inconnu n'atteint donc jamais la règle de réactivation.
+    #[test]
+    fn unknown_sender_never_reactivates_the_setting() {
+        let cfg = TelegramConfig {
             enabled: false,
             ..ready()
         };
-        let p = poll_inbound(&disabled, 9, |_| panic!("aucun accès réseau attendu")).unwrap();
-        assert!(p.messages.is_empty());
-        assert_eq!(p.next_offset, 9);
-        assert_eq!(p.inert, Some("passerelle désactivée"));
+        let response = updates_json(serde_json::json!([
+            { "update_id": 11, "message": { "chat": { "id": 999999 }, "text": "previens moi" } },
+            { "update_id": 12, "callback_query": { "id": "cb-1", "from": { "id": 999999 }, "message": { "chat": { "id": 999999 } }, "data": "q1:0" } },
+        ]));
+        let poll = poll_inbound(&cfg, 10, move |_| Ok(response.clone())).unwrap();
+        assert!(
+            poll.messages.is_empty(),
+            "un inconnu n'est jamais retenu par la réception"
+        );
+        assert!(
+            !owner_message_reactivates_notifications(cfg.enabled, &poll.messages),
+            "un inconnu ne peut pas réactiver le réglage"
+        );
     }
 
     // ── Étape 2 (lot 2) : questions à boutons natifs ──

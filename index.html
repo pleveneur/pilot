@@ -1114,7 +1114,7 @@
             <h3 class="settings-section-title"><i data-lucide="send" class="icon-sm"></i> Notifications Telegram</h3>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-telegram-enabled" />
-              <label for="setting-telegram-enabled" title="Envoyer sur Telegram les avis destinés à l'utilisateur : fin de tâche d'un agent, anomalie d'agent bloqué, arrêt automatique d'une session.">Envoyer les avis sur Telegram</label>
+              <label for="setting-telegram-enabled" title="Me prévenir sur Telegram : fin de tâche d'un agent, anomalie d'agent bloqué, arrêt automatique d'une session. Décoché = rien n'est envoyé sur Telegram. L'Assistant peut l'activer ou le couper lui-même quand vous le lui demandez ; un message que VOUS envoyez au bot le réactive automatiquement.">Me prévenir sur Telegram</label>
             </div>
             <div class="setting-row setting-row-indent">
               <label for="setting-telegram-token" title="Jeton du bot Telegram (fourni par @BotFather). Conservé dans votre configuration locale et utilisé uniquement pour envoyer les avis.">Jeton du bot :</label>
@@ -1125,7 +1125,7 @@
               <input type="text" id="setting-telegram-chat-id" autocomplete="off" spellcheck="false" placeholder="ex. 123456789" style="width:160px;" />
             </div>
             <div class="setting-row setting-row-indent">
-              <span style="font-size:11px;color:var(--text-muted);">Tant que l'interrupteur est décoché ou qu'un champ est vide, <strong>rien n'est envoyé</strong> (aucun message d'erreur). La <strong>réception</strong> des messages Telegram (vous répondre depuis Telegram) n'est <strong>pas encore prise en charge</strong>.</span>
+              <span style="font-size:11px;color:var(--text-muted);">Tant que l'interrupteur est décoché ou qu'un champ est vide, <strong>rien n'est envoyé</strong> sur Telegram (aucun message de début ni de fin, aucune alerte, et aucun message d'erreur) — les alertes restent visibles dans Pilot. C'est le <strong>seul</strong> réglage des notifications Telegram : l'Assistant peut l'activer ou le couper lui-même quand vous le lui demandez (dans Pilot ou depuis Telegram), et un message que <strong>vous</strong> envoyez au bot le réactive automatiquement.</span>
             </div>
           </div>
           </div>

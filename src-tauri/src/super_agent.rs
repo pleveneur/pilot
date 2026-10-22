@@ -662,6 +662,28 @@ fn build_project_context(active: Option<&str>, working: Option<&str>) -> String 
     ctx
 }
 
+/// État du réglage UNIQUE « me prévenir sur Telegram » — bloc de contexte du
+/// prompt système de l'assistant.
+///
+/// POURQUOI ICI (choix justifié, rapport § « comment l'assistant voit
+/// l'état ») : le prompt système est reconstruit à CHAQUE envoi (chat de
+/// l'onglet 🧭 comme message reçu via Telegram), donc l'état lu au moment de
+/// l'envoi est TOUJOURS frais — jamais figé au démarrage — et l'assistant en
+/// dispose au moment où il rédige sa réponse, sans appel d'outil
+/// supplémentaire (rien à oublier, aucun aller-retour). Le CHANGEMENT, lui,
+/// passe par l'outil `set_telegram_notifications` (extension
+/// `pilot-assistant-actions.ts`), traité par Pilot : une seule porte d'écriture,
+/// le champ `AppConfig.telegram_notify_enabled`.
+///
+/// Fonction PURE (aucun état global) : testable et mesurable.
+fn telegram_notify_guideline(enabled: bool) -> String {
+    if enabled {
+        "\n\nRéglage « me prévenir sur Telegram » : ACTIF — l'utilisateur reçoit les messages sur Telegram (début et fin de mission, alertes). S'il demande de ne plus être prévenu, d'arrêter ou de couper les notifications, applique-le TOUT DE SUITE avec l'outil `set_telegram_notifications` (enabled: false) puis confirme en UNE phrase, sans double confirmation.".to_string()
+    } else {
+        "\n\nRéglage « me prévenir sur Telegram » : COUPÉ — RIEN ne part sur Telegram (aucun message de début ni de fin, aucune alerte ; les alertes restent visibles dans Pilot). S'il demande à être prévenu sur Telegram, applique-le TOUT DE SUITE avec l'outil `set_telegram_notifications` (enabled: true) puis confirme en UNE phrase, sans double confirmation.".to_string()
+    }
+}
+
 /// Blocs du prompt système de l'assistant, dans leur ordre d'injection.
 /// Regroupés pour permettre un assemblage PUR (testé : mesure par bloc et
 /// garde-fou anti-regonflement) sans dépendre de `AppState`/`AppHandle`.
@@ -670,6 +692,8 @@ struct SuperAgentPromptBlocks<'a> {
     project_context: &'a str,
     known_projects: &'a str,
     available_agents: &'a str,
+    /// Réglage « me prévenir sur Telegram » (état lu à cet envoi même).
+    telegram_notify: &'a str,
     custom_prompt: &'a str,
     user_memory: &'a str,
     session_memory: &'a str,
@@ -691,6 +715,7 @@ fn assemble_super_agent_system_prompt(blocks: &SuperAgentPromptBlocks) -> String
     full_system.push_str(blocks.project_context);
     full_system.push_str(blocks.known_projects);
     full_system.push_str(blocks.available_agents);
+    full_system.push_str(blocks.telegram_notify);
     full_system.push_str(SUPER_AGENT_TOOLS_PROMPT);
     full_system.push_str(SUPER_AGENT_RESILIENCE_PROMPT);
     full_system.push_str(SUPER_AGENT_AGENTSMD_PROMPT);
@@ -738,10 +763,14 @@ pub(crate) fn do_send_super_agent_prompt(
     // personnalisé (configurable). Le nom est toujours injecté pour que
     // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
     // prompt personnalisé.
-    let (name, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly) = {
+    let (name, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly, telegram_notify_enabled) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_coordinator, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly)
+        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_coordinator, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly, cfg.telegram_notify_enabled)
     };
+    // Réglage « me prévenir sur Telegram » : lu À CET ENVOI (état toujours frais)
+    // et injecté dans le prompt système pour que l'assistant le voie à chaque
+    // échange, chat de l'onglet 🧭 comme message reçu via Telegram.
+    let telegram_notify = telegram_notify_guideline(telegram_notify_enabled);
     let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
     let role_text = SUPER_AGENT_ROLE_TEMPLATE.replacen("{}", &name, 1);
     // Contexte projet : le projet actuellement actif dans Pilot + le projet sur
@@ -774,6 +803,7 @@ pub(crate) fn do_send_super_agent_prompt(
         project_context: &project_context,
         known_projects: &known_projects,
         available_agents: &available_agents,
+        telegram_notify: &telegram_notify,
         custom_prompt: &system_prompt,
         user_memory: &user_memory,
         session_memory: &session_memory,
@@ -817,7 +847,7 @@ pub async fn ask_super_agent(
     message: String,
     history: Vec<SuperAgentTurn>,
 ) -> Result<String, String> {
-    let (pi_path, mut model, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly) = {
+    let (pi_path, mut model, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly, telegram_notify_enabled) = {
         let cfg = state.config.lock().unwrap();
         (
             cfg.rpc_pi_path.clone(),
@@ -829,6 +859,7 @@ pub async fn ask_super_agent(
             cfg.super_agent_adaptive_personality,
             cfg.super_agent_personality.clone(),
             cfg.super_agent_user_friendly,
+            cfg.telegram_notify_enabled,
         )
     };
 
@@ -884,6 +915,9 @@ pub async fn ask_super_agent(
     // « Voix » de l'assistant : style de réponse permanent, TOUJOURS actif
     // (indépendant des toggles concise / user-friendly).
     prompt.push_str(&voice_guideline());
+    // Réglage « me prévenir sur Telegram » : état lu MAINTENANT (ce chemin est
+    // celui de l'assistant jetable sans session RPC, ex. web remote).
+    prompt.push_str(&telegram_notify_guideline(telegram_notify_enabled));
     for turn in &history {
         let role = if turn.role == "user" { "Utilisateur" } else { "Assistant" };
         prompt.push_str(&format!("{} : {}\n\n", role, turn.content));
@@ -7810,6 +7844,59 @@ mod tests {
         assert_eq!(queued, 0);
     }
 
+    // ── Réglage UNIQUE « me prévenir sur Telegram » : l'assistant VOIT l'état ──
+    // Contrôle (a) : si l'assistant ne peut pas voir l'état, ces tests échouent.
+    #[test]
+    fn telegram_notify_guideline_states_the_true_state_and_how_to_change_it() {
+        let on = super::telegram_notify_guideline(true);
+        let off = super::telegram_notify_guideline(false);
+        assert!(on.contains("ACTIF"), "état actif non annoncé : {on}");
+        assert!(!on.contains("COUPÉ"), "état ambigu (actif ET coupé) : {on}");
+        assert!(off.contains("COUPÉ"), "état coupé non annoncé : {off}");
+        assert!(!off.contains(": ACTIF"), "état ambigu (coupé ET actif) : {off}");
+        for (label, g) in [("actif", &on), ("coupé", &off)] {
+            assert!(
+                g.contains("set_telegram_notifications"),
+                "l'assistant doit savoir COMMENT changer le réglage ({label}) : {g}"
+            );
+            assert!(
+                g.contains("UNE phrase"),
+                "la confirmation doit être d'UNE phrase ({label}) : {g}"
+            );
+        }
+    }
+
+    /// Contrôle (a) : l'état est réellement injecté dans le prompt ASSEMBLÉ
+    /// (pas seulement disponible dans une fonction non appelée).
+    #[test]
+    fn telegram_notify_state_is_injected_in_assembled_prompt() {
+        let session_memory = String::new();
+        let build = |enabled: bool| {
+            let telegram = super::telegram_notify_guideline(enabled);
+            let blocks = super::SuperAgentPromptBlocks {
+                role: "role",
+                project_context: "",
+                known_projects: "",
+                available_agents: "",
+                telegram_notify: &telegram,
+                custom_prompt: "",
+                user_memory: "",
+                session_memory: &session_memory,
+                concise: false,
+                coordinator: false,
+                user_friendly: false,
+                adaptive_personality: false,
+                personality: "",
+            };
+            super::assemble_super_agent_system_prompt(&blocks)
+        };
+        let actif = build(true);
+        let coupe = build(false);
+        assert!(actif.contains("me prévenir sur Telegram") && actif.contains("ACTIF"));
+        assert!(coupe.contains("me prévenir sur Telegram") && coupe.contains("COUPÉ"));
+        assert!(!actif.contains("COUPÉ"));
+    }
+
     // ---------------------------------------------------------------------
     // Prompt de l'assistant : mesure par bloc (base du garde-fou anti-
     // regonflement). Les blocs dynamiques sont représentatifs (3 projets,
@@ -7832,11 +7919,13 @@ mod tests {
             .join("\n- ")
         );
         let session_memory = String::from("Chantier en cours : alléger le prompt de l'assistant.");
+        let telegram_notify = super::telegram_notify_guideline(false);
         let blocks = super::SuperAgentPromptBlocks {
             role: &role,
             project_context: &project_context,
             known_projects: &known_projects,
             available_agents: &available_agents,
+            telegram_notify: &telegram_notify,
             custom_prompt: "",
             user_memory: "",
             session_memory: &session_memory,
@@ -7879,6 +7968,7 @@ mod tests {
             ("contexte projet", project_context.chars().count()),
             ("liste projets", known_projects.chars().count()),
             ("liste agents", available_agents.chars().count()),
+            ("réglage Telegram", telegram_notify.chars().count()),
             ("textes figés + voix", fixed),
             ("memoire de session", session_memory_block.chars().count()),
         ];

@@ -357,6 +357,32 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "set_telegram_notifications",
+    label: "Me prévenir sur Telegram",
+    description:
+      "Activer ou couper le réglage UNIQUE « me prévenir sur Telegram » (le même réglage que la case des Paramètres, onglet Assistant). enabled=true → l'utilisateur est prévenu sur Telegram (début et fin de mission, alertes) ; enabled=false → PLUS RIEN ne part sur Telegram (aucun message de début ni de fin, aucune alerte) et les alertes restent visibles dans Pilot. À utiliser dès que l'utilisateur demande à être prévenu sur Telegram, ou à ne plus l'être (« préviens-moi sur Telegram », « arrête de me prévenir », « coupe les notifications »…). L'état courant du réglage t'est donné à chaque échange : ne le devine pas. Applique immédiatement puis confirme en UNE phrase, sans demander de double confirmation.",
+    promptSnippet: "set_telegram_notifications: activer ou couper le réglage « me prévenir sur Telegram »",
+    promptGuidelines: [
+      "Call set_telegram_notifications(true) when the user asks to be notified on Telegram, and set_telegram_notifications(false) when they ask to stop being notified, to cut notifications, or to stop receiving messages there.",
+      "The current value of that setting is given in your context at every exchange (ACTIF / COUPE) — never guess it and never ask the user to remind you.",
+      "Apply immediately and confirm in ONE short sentence. Do not ask for a second confirmation.",
+    ],
+    parameters: Type.Object({
+      enabled: Type.Boolean({ description: "true → prévenir sur Telegram ; false → ne plus rien envoyer sur Telegram" }),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const enabled = params.enabled === true;
+      const payload = JSON.stringify({ action: "set_telegram_notifications", enabled });
+      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload, PILOT_UI_OPTS);
+      if (ok) {
+        return { content: [{ type: "text", text: enabled ? "Réglage appliqué : l'utilisateur est prévenu sur Telegram." : "Réglage appliqué : plus rien ne part sur Telegram." }] };
+      }
+      return { content: [{ type: "text", text: "Échec : le réglage « me prévenir sur Telegram » est inchangé." }] };
+    },
+  });
+
+  pi.registerTool({
     name: "delegate_to_coder",
     label: "Delegate to Coder",
     description:
