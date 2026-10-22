@@ -186,3 +186,118 @@ pub fn interproject_handoff(
         "source_name": source_name,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    //! Garde-fou de non-regression de la PORTE inter-projets (mission 377).
+    //!
+    //! La garde d'admission du transfert vit DANS la commande
+    //! `interproject_handoff` : elle lit `State<AppState>` (un etat Tauri, non
+    //! instanciable dans un test unitaire) et il est interdit de la deplacer.
+    //! Ces tests verrouillent donc la structure EXACTE de la garde dans le
+    //! source de production : si quelqu'un la retire, la deplace apres le
+    //! lancement de l'agent, perd un de ses deux chemins (chemin brut + chemin
+    //! normalise), transforme le refus en faux succes, ou ecrit le handoff
+    //! apres la garde (tache perdue), ils rougissent.
+
+    /// Source de PRODUCTION de ce fichier (module de tests retire), fins de
+    /// ligne normalisees : un worktree CRLF (CI Windows) doit produire le meme
+    /// texte qu'un worktree LF (quality-gate 3.4).
+    fn production() -> String {
+        let src = include_str!("interproject.rs").replace("\r\n", "\n");
+        match src.rfind("#[cfg(test)]") {
+            Some(cut) => src[..cut].to_string(),
+            None => src,
+        }
+    }
+
+    /// Position d'une ancre, avec un message explicite si elle a disparu.
+    fn position(src: &str, anchor: &str) -> usize {
+        src.find(anchor).unwrap_or_else(|| {
+            panic!(
+                "ancre de la garde introuvable (retiree ou deplacee ?) : {:?}",
+                anchor
+            )
+        })
+    }
+
+    /// Cas principal : un projet cible OCCUPE par un agent qui travaille ne
+    /// recoit aucune execution. La garde interroge l'occupation sur les deux
+    /// chemins (brut puis normalise, comme la clef d'anomalie), refuse par un
+    /// retour honnete `deferred` et, surtout, tranche AVANT de lancer l'agent.
+    #[test]
+    fn le_transfert_refuse_de_lancer_un_agent_quand_le_projet_cible_travaille() {
+        let prod = production();
+
+        // 1. La garde existe et couvre les DEUX chemins.
+        assert_eq!(
+            prod.matches("anomaly::project_has_working_agent(").count(),
+            2,
+            "la garde doit tester le chemin brut ET le chemin normalise"
+        );
+        position(
+            &prod,
+            "anomaly::project_has_working_agent(&m, &target, grace, now)",
+        );
+        position(
+            &prod,
+            "anomaly::project_has_working_agent(&m, &normalize_project_path(&target), grace, now)",
+        );
+
+        // 2. Le refus est honnete : tache deposee mais non lancee.
+        position(&prod, "\"deferred\": true,");
+        position(&prod, "AUCUNE exécution n'a été lancée");
+
+        // 3. La garde est une PORTE : elle tranche avant le lancement.
+        let garde = position(&prod, "let target_busy = {");
+        assert!(
+            garde < position(&prod, "rpc::do_start_agent_session("),
+            "la garde doit passer AVANT le lancement de l'agent du projet cible"
+        );
+        assert!(
+            garde < position(&prod, "rpc::do_send_agent_prompt("),
+            "la garde doit passer AVANT l'envoi du prompt"
+        );
+        assert!(
+            prod.contains("    if target_busy {\n"),
+            "le refus doit rester porte par un branchement sur `target_busy`"
+        );
+    }
+
+    /// Cas « busy perime » : un agent fige ne bloque pas le transfert. La garde
+    /// lit la grace configuree et un instant de reference, comme les autres
+    /// sondes de vivacite ; sans eux, une session morte bloquerait le projet
+    /// pour toujours.
+    #[test]
+    fn le_refus_ignore_un_agent_fige_et_suit_la_grace_configuree() {
+        let prod = production();
+        position(&prod, "let grace = crate::default_stale_busy_grace_minutes();");
+        position(&prod, "let now = std::time::Instant::now();");
+    }
+
+    /// La tache deposee ne se perd jamais : l'ecriture du fichier de handoff
+    /// precede la garde, donc un refus laisse quand meme la consigne sur place.
+    #[test]
+    fn le_handoff_est_depose_avant_la_garde_pour_ne_jamais_perdre_la_tache() {
+        let prod = production();
+        let ecriture = position(&prod, "std::fs::write(&handoff_path, &handoff_body)");
+        assert!(
+            ecriture < position(&prod, "let target_busy = {"),
+            "le fichier de handoff doit etre ecrit AVANT la garde (tache jamais perdue)"
+        );
+    }
+
+    /// Le chemin nominal (projet cible libre) reste un succes franc : il ne doit
+    /// pas se declarer « differe ».
+    #[test]
+    fn le_succes_nominal_ne_se_declare_pas_differe() {
+        let prod = production();
+        let refus = position(&prod, "\"deferred\": true,");
+        let retour_nominal = prod.rfind("Ok(json!({").expect("retour nominal du transfert");
+        assert!(refus < retour_nominal, "le refus precede le retour nominal");
+        assert!(
+            !prod[retour_nominal..].contains("deferred"),
+            "le retour nominal ne doit pas annoncer un transfert differe"
+        );
+    }
+}
