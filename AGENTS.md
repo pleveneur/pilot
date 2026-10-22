@@ -379,9 +379,22 @@ Quand l'utilisateur demande la publication :
    git push origin main
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
-5. Le workflow `.github/workflows/release.yml` build les 4 plateformes, signe les
+5. Le workflow `.github/workflows/release.yml` build les plateformes, signe les
    artefacts et génère `latest.json` automatiquement. Les utilisateurs installés
    reçoivent la mise à jour au prochain démarrage de Pilot.
+
+### Chaîne d'intégration — topologie à ne pas casser
+
+- Job `build` (Windows + macOS) = **chemin critique** de `latest-json`, donc de la
+  mise à jour automatique. `latest-json` ne dépend **que** de lui.
+- Job `build-linux` = séparé : plafond **90 min**, `continue-on-error`, aucun job
+  ne dépend de lui. Il ne retarde et ne bloque jamais une publication.
+- Job `latest-json-linux` = seconde passe optionnelle : si (et seulement si) Linux
+  a déposé ses artefacts, elle les ajoute à `latest.json`. Sinon elle ne fait rien.
+- Le front est construit **une seule fois** (`beforeBuildCommand`, qui lance aussi
+  `prepare:laya`) et les paquets npm sont mis en cache par système (`~/.npm`).
+  Ne pas réintroduire de `cargo build` manuel ni d'étape `prepare:laya` explicite.
+- Ces règles sont sous clé : `scripts/release-workflow.test.js` (`npx vitest run`).
 
 Ne jamais republier un tag déjà existant (créer un nouveau numéro de version à la place).
 Vérifier que le secret GitHub `TAURI_SIGNING_PRIVATE_KEY` est bien en place (sinon le
