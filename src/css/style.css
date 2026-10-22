@@ -120,6 +120,15 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   --text-secondary: #a0a6b4;
   --text-muted: #6b7280;
 
+  /* Panneau des evenements systeme (cloche de l'onglet assistant) : en mode
+     sombre les lignes etaient peu lisibles (texte en secondaire 6.76:1,
+     horodatage en attenue 3.41:1 sur --surface-floating). Le texte prend donc
+     le primaire et l'horodatage le secondaire, sans aucune couleur en dur :
+     chaque sous-theme sombre suit automatiquement sa propre palette.
+     Verrou : src/js/contraste-evenements-sombre.test.js */
+  --sa-events-text: var(--text-primary);
+  --sa-events-time: var(--text-secondary);
+
   /* Bordures subtiles semi-transparentes */
   --border-subtle: rgba(255, 255, 255, 0.07);
   --border-hover: rgba(255, 255, 255, 0.12);
@@ -199,6 +208,13 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   --text-primary: #1a1d24;
   --text-secondary: #5a6170;
   --text-muted: #8a91a0;
+
+  /* Panneau des evenements systeme : en mode clair on conserve EXACTEMENT
+     les couleurs d'avant (texte en secondaire, horodatage en attenue). Ces
+     deux jetons n'existent que pour que la correction du mode sombre ne
+     change rien ici. Verrou : src/js/contraste-evenements-sombre.test.js */
+  --sa-events-text: var(--text-secondary);
+  --sa-events-time: var(--text-muted);
 
   /* Bordures subtiles semi-transparentes */
   --border-subtle: rgba(0, 0, 0, 0.06);
@@ -4044,17 +4060,19 @@ body.zen-mode #project-footer {
 .sa-events-item-dot.warning { background: var(--warning); }
 .sa-events-item-dot.danger { background: var(--danger); }
 .sa-events-item-dot.info { background: var(--superagent-accent); }
+/* Couleurs par theme (jetons --sa-events-text / --sa-events-time) : le repli
+   conserve l'ancien rendu si un theme ne definit pas les jetons. */
 .sa-events-text {
   flex: 1;
   font-size: var(--font-sm);
-  color: var(--text-secondary);
+  color: var(--sa-events-text, var(--text-secondary));
   line-height: 1.4;
   word-break: break-word;
 }
 .sa-events-time {
   flex-shrink: 0;
   font-size: var(--font-xs);
-  color: var(--text-muted);
+  color: var(--sa-events-time, var(--text-muted));
   white-space: nowrap;
 }
 
