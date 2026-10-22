@@ -1340,7 +1340,8 @@ body.theme-light.theme-tokyo-day {
    Cercle flottant en haut à droite reflétant l'activité de TOUS les agents
    (assistant + codeurs). Le cercle « respire » dès qu'un agent travaille.
    Au clic : UN SEUL panneau (fond subtilement translucide, teinté violet) à
-   trois onglets — « Agents », « Événements », « Tâches » — plus la fiche agent.
+   trois onglets, dans l'ordre définitif « Agents », « Tâches », « Événements »
+   — plus la fiche agent.
    Il n'existe qu'un endroit d'affichage du travail : aucun second panneau. */
 #agent-activity {
   position: fixed;
@@ -1458,13 +1459,13 @@ body.theme-light.theme-tokyo-day {
   padding: 4px;
   overflow-y: auto;
 }
-/* Volets « Événements » et « Tâches » : ils conservent LEUR surface opaque
+/* Volets « Tâches » et « Événements » : ils conservent LEUR surface opaque
    (--surface-floating), celle sur laquelle les jetons de couleur
    --sa-events-text / --sa-events-time ont été mesurés (verrous
    contraste-evenements-sombre.test.js et fond-liste-agents-translucide.test.js) :
    aucun contraste perdu en passant dans le panneau teinté. */
-#agent-activity-pane-events,
-#agent-activity-pane-tasks {
+#agent-activity-pane-tasks,
+#agent-activity-pane-events {
   background: var(--surface-floating);
 }
 .agent-activity-item {

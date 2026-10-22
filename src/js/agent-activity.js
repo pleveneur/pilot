@@ -3,13 +3,14 @@
 // Cercle flottant en haut à droite reflétant l'activité de TOUS les agents
 // (assistant + codeurs). Le cercle « respire » (animation agent-pulse) dès
 // qu'UN agent travaille. Au clic : UN SEUL panneau (fond subtilement teinté
-// violet assistant) à TROIS onglets, dans cet ordre :
+// violet assistant) à TROIS onglets, dans cet ordre DÉFINITIF (décision
+// propriétaire, qui prime sur l'ordre initialement demandé) :
 //   1. « Agents »     — la liste des agents (pastille respirante, nom, projet)
 //                       puis la fiche de l'agent cliqué ;
-//   2. « Événements » — le journal des événements système (délégations,
-//                       démarrages/arrêts, erreurs, connexions perdues) ;
-//   3. « Tâches »     — les missions réellement en cours et la file « en
-//                       attente » des agents.
+//   2. « Tâches »     — les missions réellement en cours et la file « en
+//                       attente » des agents ;
+//   3. « Événements » — le journal des événements système (délégations,
+//                       démarrages/arrêts, erreurs, connexions perdues).
 // Les volets 2 et 3 sont ceux de l'ancien panneau de la cloche de l'onglet
 // Assistant, DÉPLACÉS ici : mêmes contenus, mêmes réglages, un seul endroit.
 //
@@ -905,8 +906,8 @@ export function renderBackgroundWorkersHtml(missions) {
 
 /**
  * Initialise le suivi du travail : le cercle d'activité (haut droite) ouvre UN
- * SEUL panneau à TROIS onglets — « Agents » (qui travaille), « Événements »
- * (journal système) et « Tâches » (missions en cours et en attente). Les deux
+ * SEUL panneau à TROIS onglets — « Agents » (qui travaille), « Tâches »
+ * (missions en cours et en attente) et « Événements » (journal système). Les deux
  * derniers volets sont ceux de l'ancien panneau de la cloche de l'onglet
  * Assistant, DÉPLACÉS ici (mêmes contenus, mêmes réglages, un seul endroit).
  * @param {object} tabs — instance du gestionnaire d'onglets (tabs.js).
@@ -1079,17 +1080,29 @@ export function initAgentActivity(tabs) {
 // événements (avec leur compteur non lu), mêmes missions (avec la mention
 // « en attente »), mêmes réglages.
 
-/** Onglets du panneau, dans l'ordre d'affichage. */
-export const AGENT_PANEL_TABS = ["agents", "events", "tasks"];
+/**
+ * Onglets du panneau, dans l'ordre d'affichage de GAUCHE À DROITE.
+ * ATTENTION : cet ordre est DÉFINITIF et verrouillé par test —
+ * « Agents » puis « Tâches » puis « Événements ». La navigation au clavier
+ * (flèches ←/→) suit exactement ce tableau. Les volets correspondants de
+ * index.html doivent être rangés dans le même ordre.
+ */
+export const AGENT_PANEL_TABS = ["agents", "tasks", "events"];
 /** Libellés visibles (ordre et intitulés verrouillés par test). */
 export const AGENT_PANEL_TAB_LABELS = { agents: "Agents", events: "Événements", tasks: "Tâches" };
+/**
+ * Onglet ouvert PAR DÉFAUT : « Agents » — à l'ouverture du panneau quand
+ * l'utilisateur n'a encore jamais choisi d'onglet (aucune mémoire). Un onglet
+ * mémorisé reste prioritaire sur ce défaut.
+ */
+export const AGENT_PANEL_DEFAULT_TAB = "agents";
 /** Clé du DERNIER onglet utilisé (rouvert au prochain démarrage). */
 export const AGENT_PANEL_TAB_KEY = "agent-activity-panel-tab";
 /** Plafond du compteur de non-lus (au-delà : « 99+ »). */
 export const AGENT_PANEL_UNREAD_MAX = 99;
 
 let panelUnread = 0;
-let panelActiveTab = "agents";
+let panelActiveTab = AGENT_PANEL_DEFAULT_TAB;
 let panelTabEnabled = { agents: true, events: true, tasks: true };
 const panelTabListeners = new Set();
 
@@ -1111,9 +1124,13 @@ export function agentPanelTabVisibility(config) {
   return { agents: true, events: true, tasks };
 }
 
-/** Normalise un nom d'onglet (« agents » par défaut, jamais un onglet inconnu). */
+/**
+ * Normalise un nom d'onglet (« agents » par défaut, jamais un onglet inconnu).
+ * Sert aussi bien à la lecture de la mémoire (localStorage) qu'à un appel
+ * direct : sans choix mémorisé, on arrive sur « Agents ».
+ */
 export function normalizeAgentPanelTab(tab) {
-  return AGENT_PANEL_TABS.includes(tab) ? tab : "agents";
+  return AGENT_PANEL_TABS.includes(tab) ? tab : AGENT_PANEL_DEFAULT_TAB;
 }
 
 /** Texte du compteur de non-lus (« 99+ » au-delà du plafond, chaine vide à 0). */
@@ -1194,7 +1211,7 @@ function updateAgentPanelBadge() {
 export function selectAgentPanelTab(tab, options) {
   const persist = !(options && options.persist === false);
   const wanted = normalizeAgentPanelTab(tab);
-  const next = panelTabEnabled[wanted] === false ? "agents" : wanted;
+  const next = panelTabEnabled[wanted] === false ? AGENT_PANEL_DEFAULT_TAB : wanted;
   panelActiveTab = next;
   for (const t of AGENT_PANEL_TABS) {
     const btn = document.getElementById(`agent-activity-tab-${t}`);
@@ -1236,7 +1253,7 @@ export function setAgentPanelTabsVisibility(config) {
     if (btn) btn.hidden = !visible[tab];
   }
   // Onglet désactivé pendant qu'il est affiché → repli sur « Agents ».
-  if (!visible.tasks && panelActiveTab === "tasks") selectAgentPanelTab("agents");
+  if (!visible.tasks && panelActiveTab === "tasks") selectAgentPanelTab(AGENT_PANEL_DEFAULT_TAB);
   return visible;
 }
 

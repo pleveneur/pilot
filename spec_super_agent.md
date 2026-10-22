@@ -100,13 +100,18 @@ apprend et répond.
   cloche (bas à droite de l'onglet 🧭) a été **déplacé** dans celui-ci — rien
   n'est perdu (mêmes événements, mêmes missions, même mention « en attente »,
   mêmes réglages).
-  - **Trois onglets, dans cet ordre** : **« Agents »** (la liste des agents du
-    suivi, inchangée : pastille respirante, projet, état), **« Événements »**
-    (historique système), **« Tâches »** (missions en cours et en attente).
-  - **Onglet mémorisé** : le panneau se rouvre sur le **dernier onglet
-    utilisé** (« Agents » au premier lancement). **Échap**, la croix **×** ou un
-    clic sur le cercle referment le panneau ; les onglets sont atteignables au
-    clavier (Tab) et commutables aux **flèches** (←/→, Début/Fin).
+  - **Trois onglets, dans cet ordre DÉFINITIF** (de gauche à droite ; décision
+    propriétaire, qui prime sur l'ordre initialement demandé) : **« Agents »**
+    (la liste des agents du suivi, inchangée : pastille respirante, projet,
+    état), **« Tâches »** (missions en cours et en attente), **« Événements »**
+    (historique système).
+  - **Onglet par défaut** : à l'ouverture du panneau, on arrive sur **« Agents »**
+    tant que l'utilisateur n'a **jamais** choisi d'onglet (aucune mémoire).
+  - **Onglet mémorisé** : dès qu'un onglet a été choisi, le panneau se rouvre sur
+    le **dernier onglet utilisé** (la mémoire l'emporte sur le défaut). **Échap**,
+    la croix **×** ou un clic sur le cercle referment le panneau ; les onglets
+    sont atteignables au clavier (Tab) et commutables aux **flèches** (←/→,
+    Début/Fin) **dans l'ordre d'affichage**, de gauche à droite.
   - **Signal d'attention conservé SUR le cercle** : une **pastille** posée sur
     le cercle affiche le nombre d'**événements non lus** (plafonnée à « 99+ ») et
     le cercle **s'allume** tant qu'il reste des événements non vus ; regarder
@@ -130,8 +135,9 @@ apprend et répond.
     (1-120 s, **5 s par défaut**). Le **dernier événement remplace** le
     précédent (jamais d'empilement) et le bandeau s'efface en douceur. Les
     **questions interactives** (choix, confirmations) ne sont **pas** concernées.
-- **Onglet « Tâches » du panneau du suivi du travail** : à côté d'« Agents » et
-  d'« Événements », le panneau propose l'onglet **« Tâches »** (**Paramètres ⚙️ →
+- **Onglet « Tâches » du panneau du suivi du travail** : l'ordre définitif des
+  onglets est **« Agents », « Tâches », « Événements »** ; le panneau propose
+  donc l'onglet **« Tâches »** juste après « Agents » (**Paramètres ⚙️ →
   onglet « Assistant » → « Onglet « Tâches » dans le panneau du suivi du travail
   (missions des agents) »**, **activé par défaut** ; décoché, l'onglet est
   **masqué** et le panneau reste sur les deux autres). Il liste les **missions
@@ -483,9 +489,10 @@ uniquement un bloc d'instructions dans le prompt système.
 
 ### Onglet « Tâches » du panneau du suivi du travail (missions des agents)
 - Le **panneau du suivi du travail** (#139, cercle en **haut à droite**, commun à
-  toutes les vues) porte **trois onglets commutables** dans son en-tête :
-  **« Agents »** (liste des agents), **« Événements »** (historique en direct,
-  inchangé) et **« Tâches »** (missions des agents). L'ancien panneau de la
+  toutes les vues) porte **trois onglets commutables** dans son en-tête, dans
+  l'ordre définitif : **« Agents »** (liste des agents), **« Tâches »** (missions
+  des agents) et **« Événements »** (historique en direct,
+  inchangé). L'ancien panneau de la
   cloche de l'onglet 🧭 n'existe plus : ses **deux contenus** (événements et
   missions) vivent ici, avec le même comportement.
 - **Source unique** : le **store d'activité partagé** de l'application

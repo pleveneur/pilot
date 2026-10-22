@@ -2179,7 +2179,8 @@ function flushPendingInfo() {
 
 /**
  * Applique le réglage global `super_agent_tasks_tab_enabled` (ACTIVÉ PAR DÉFAUT)
- * au panneau du suivi du travail : activé → onglet « Tâches » présent ;
+ * au panneau du suivi du travail : activé → onglet « Tâches » présent (ordre
+ * définitif des onglets : Agents, Tâches, Événements) ;
  * désactivé → panneau historique (Agents + Événements). Fail-open : réglage
  * illisible → onglet présent. Le panneau est GLOBAL (haut droite) : c'est
  * agent-activity.js qui l'applique, ici on ne fait que lui passer la config

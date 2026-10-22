@@ -2,14 +2,18 @@
 //
 // Decision du proprietaire : le travail se suit a UN SEUL endroit de l'ecran.
 // Le cercle respirant en haut a droite ouvre un panneau a TROIS onglets, dans
-// cet ordre : « Agents », « Evenements », « Taches ». L'ancien panneau de la
-// cloche (bouton cloche dans la barre de saisie de l'onglet Assistant + panneau
-// en bas a droite) a ete DEPLACE dans ce panneau : rien n'a ete perdu (memes
-// evenements, memes missions, meme mention « en attente », memes reglages).
+// cet ordre DEFINITIF (de gauche a droite) : « Agents », « Taches »,
+// « Evenements ». L'ancien panneau de la cloche (bouton cloche dans la barre de
+// saisie de l'onglet Assistant + panneau en bas a droite) a ete DEPLACE dans ce
+// panneau : rien n'a ete perdu (memes evenements, memes missions, meme mention
+// « en attente », memes reglages).
 //
 // Ce fichier echoue si :
 //   (a) le panneau de la cloche revient (bouton cloche, panneau bas-droite) ;
-//   (b) un des trois onglets disparait, change de nom ou d'ordre ;
+//   (b) un des trois onglets disparait, change de nom ou d'ordre (l'ordre
+//       attendu est « agents, tasks, events », cote boutons ET cote volets) ;
+//   (b-ter) le panneau s'ouvre sur un autre onglet que « Agents » quand aucun
+//       choix n'a ete memorise (un choix memorise reste prioritaire) ;
 //   (c) un des trois volets se vide (liste agents, evenements, missions) ou
 //       perd la mention « en attente » des missions en file ;
 //   (d) le signal d'attention (pastille + allumage du cercle) disparait ;
@@ -29,6 +33,7 @@ import {
   AGENT_PANEL_TABS,
   AGENT_PANEL_TAB_LABELS,
   AGENT_PANEL_TAB_KEY,
+  AGENT_PANEL_DEFAULT_TAB,
   AGENT_PANEL_UNREAD_MAX,
   agentPanelBadgeText,
   agentPanelClearUnread,
@@ -55,6 +60,9 @@ const html = lire("index.html");
 const css = lire("src/css/style.css");
 const jsPanel = lire("src/js/agent-activity.js");
 const jsSuper = lire("src/js/super-agent.js");
+
+/** Ordre DEFINITIF des onglets, de gauche a droite (verrouille par test). */
+const ORDRE_DEFINITIF = ["agents", "tasks", "events"];
 
 // ── DOM minimal (aucun navigateur requis) ──
 class FakeClassList {
@@ -122,6 +130,7 @@ beforeEach(() => {
     valeurs: new Map(),
     getItem(k) { return this.valeurs.has(k) ? this.valeurs.get(k) : null; },
     setItem(k, v) { this.valeurs.set(k, String(v)); },
+    removeItem(k) { this.valeurs.delete(k); },
   };
 });
 
@@ -182,9 +191,9 @@ describe("(a) plus de panneau cloche en bas a droite : un seul panneau", () => {
 // ════════════════════════════════════════════════════════════════════════════
 // (b) Les trois onglets existent, dans l'ordre, avec leurs libelles
 // ════════════════════════════════════════════════════════════════════════════
-describe("(b) trois onglets : Agents, Evenements, Taches", () => {
+describe("(b) trois onglets, ordre definitif : Agents, Taches, Evenements", () => {
   it("l'ordre et les libelles sont ceux demandes", () => {
-    expect(AGENT_PANEL_TABS).toEqual(["agents", "events", "tasks"]);
+    expect(AGENT_PANEL_TABS).toEqual(ORDRE_DEFINITIF);
     expect(AGENT_PANEL_TAB_LABELS).toEqual({
       agents: "Agents",
       events: "Événements",
@@ -193,7 +202,7 @@ describe("(b) trois onglets : Agents, Evenements, Taches", () => {
   });
 
   it("index.html porte les trois boutons d'onglet (role=tab, aria-selected)", () => {
-    const ordre = ["agents", "events", "tasks"].map((t) =>
+    const ordre = ORDRE_DEFINITIF.map((t) =>
       html.indexOf(`id="agent-activity-tab-${t}"`)
     );
     expect(ordre.every((i) => i > -1)).toBe(true);
@@ -206,6 +215,32 @@ describe("(b) trois onglets : Agents, Evenements, Taches", () => {
       expect(bouton).toContain("aria-selected=");
       expect(bouton).toContain(AGENT_PANEL_TAB_LABELS[t]);
     }
+  });
+
+  it("index.html range les Volets dans le meme ordre que les boutons", () => {
+    const ordre = ORDRE_DEFINITIF.map((t) =>
+      html.indexOf(`id="agent-activity-pane-${t}"`)
+    );
+    expect(ordre.every((i) => i > -1)).toBe(true);
+    expect([...ordre].sort((a, b) => a - b)).toEqual(ordre);
+  });
+
+  it("l'onglet ouvert au demarrage suit l'ordre (le premier bouton est « Agents »)", () => {
+    const barre = html.slice(
+      html.indexOf('<div class="sa-events-tabs" role="tablist"'),
+      html.indexOf('<div class="sa-events-header-actions">')
+    );
+    const premier = barre.indexOf('class="sa-events-tab');
+    expect(barre.slice(premier)).toContain(`id="agent-activity-tab-${ORDRE_DEFINITIF[0]}"`);
+  });
+
+  it("la navigation au clavier suit l'ordre d'affichage (gauche -> droite)", () => {
+    // Les fleches parcourent AGENT_PANEL_TABS tel quel : l'ordre du tableau EST
+    // l'ordre de tabulation visuel.
+    expect(AGENT_PANEL_TABS).toEqual(ORDRE_DEFINITIF);
+    expect(jsPanel).toMatch(/const visible = AGENT_PANEL_TABS\.filter\(\(t\) => panelTabEnabled\[t\]\)/);
+    expect(jsPanel).toMatch(/ArrowRight"\) next = visible\[\(i \+ 1\) % visible\.length\]/);
+    expect(jsPanel).toMatch(/ArrowLeft"\) next = visible\[\(i - 1 \+ visible\.length\) % visible\.length\]/);
   });
 
   it("un onglet inconnu retombe sur « Agents » (jamais un panneau vide)", () => {
@@ -244,6 +279,76 @@ describe("(b) trois onglets : Agents, Evenements, Taches", () => {
     closeAgentPanel();
     openAgentPanel();
     expect(getActiveAgentPanelTab()).toBe("tasks");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// (b-ter) Onglet par defaut : « Agents » tant qu'aucun choix n'est memorise
+// ════════════════════════════════════════════════════════════════════════════
+describe("(b-ter) ouverture par defaut sur « Agents » (la memoire reste prioritaire)", () => {
+  it("le defaut declare est « Agents »", () => {
+    expect(AGENT_PANEL_DEFAULT_TAB).toBe("agents");
+    expect(AGENT_PANEL_TABS[0]).toBe(AGENT_PANEL_DEFAULT_TAB);
+    // Aucune memoire, valeur inconnue, valeur vide : toujours « Agents ».
+    expect(normalizeAgentPanelTab(null)).toBe("agents");
+    expect(normalizeAgentPanelTab("")).toBe("agents");
+    expect(normalizeAgentPanelTab("nimporte-quoi")).toBe("agents");
+  });
+
+  it("sans memoire, la sequence d'initialisation du module ouvre sur « Agents »", () => {
+    // On part volontairement d'un AUTRE onglet, puis on rejoue exactement la
+    // sequence de restauration utilisee par initAgentActivity().
+    selectAgentPanelTab("events");
+    expect(getActiveAgentPanelTab()).toBe("events");
+    localStorage.removeItem(AGENT_PANEL_TAB_KEY);
+    const restaure = normalizeAgentPanelTab(localStorage.getItem(AGENT_PANEL_TAB_KEY));
+    selectAgentPanelTab(restaure, { persist: false });
+    openAgentPanel();
+    expect(isAgentPanelOpen()).toBe(true);
+    expect(getActiveAgentPanelTab()).toBe("agents");
+    expect(el("agent-activity-pane-agents").classList.contains("hidden")).toBe(false);
+    expect(el("agent-activity-pane-tasks").classList.contains("hidden")).toBe(true);
+    expect(el("agent-activity-pane-events").classList.contains("hidden")).toBe(true);
+    // Aucune memoire n'a ete fabriquee par une simple ouverture.
+    expect(localStorage.getItem(AGENT_PANEL_TAB_KEY)).toBe(null);
+  });
+
+  it("le module restaure bien son onglet depuis localStorage (memoire branchee)", () => {
+    expect(jsPanel).toMatch(
+      /selectAgentPanelTab\(\s*normalizeAgentPanelTab\(localStorage\.getItem\(AGENT_PANEL_TAB_KEY\)\),\s*\{ persist: false \}\s*\)/
+    );
+    // L'ouverture sans argument ne force aucun onglet (elle garde le restaure).
+    expect(jsPanel).toMatch(/openAgentPanel\(tab\)[\s\S]{0,200}if \(tab\) selectAgentPanelTab\(tab\)/);
+  });
+
+  it("un choix memorise l'emporte sur le defaut", () => {
+    selectAgentPanelTab("tasks");
+    closeAgentPanel();
+    // Reouverture = sequence reelle (lecture de la memoire, puis ouverture).
+    selectAgentPanelTab(
+      normalizeAgentPanelTab(localStorage.getItem(AGENT_PANEL_TAB_KEY)),
+      { persist: false }
+    );
+    openAgentPanel();
+    expect(getActiveAgentPanelTab()).toBe("tasks");
+  });
+
+  it("index.html marque « Agents » comme onglet actif au chargement", () => {
+    const bouton = (t) => {
+      const debut = html.indexOf(`id="agent-activity-tab-${t}"`);
+      return html.slice(html.lastIndexOf("<button", debut), html.indexOf("</button>", debut));
+    };
+    expect(bouton("agents")).toContain('class="sa-events-tab active"');
+    expect(bouton("agents")).toContain('aria-selected="true"');
+    expect(bouton("tasks")).not.toContain("active\"");
+    expect(bouton("events")).not.toContain("active\"");
+    // Seul le volet « Agents » est visible d'emblee.
+    const voletAgents = html.slice(
+      html.indexOf('id="agent-activity-pane-agents"') - 120,
+      html.indexOf('id="agent-activity-pane-tasks"')
+    );
+    expect(voletAgents).toContain('id="agent-activity-pane-agents"');
+    expect(voletAgents).not.toContain("agent-activity-pane-agents hidden");
   });
 });
 
@@ -306,7 +411,8 @@ describe("(b-bis) onglets lisibles en sombre et en clair", () => {
 describe("(c) les trois volets sont reellement alimentes", () => {
   it("volet Agents : la liste est branchee sur le store d'activite", () => {
     const debut = html.indexOf('id="agent-activity-pane-agents"');
-    const fin = html.indexOf('id="agent-activity-pane-events"');
+    const fin = html.indexOf('id="agent-activity-pane-tasks"');
+    expect(fin).toBeGreaterThan(debut);
     expect(html.slice(debut, fin)).toContain('id="agent-activity-list"');
     expect(jsPanel).toMatch(/function renderAgentsPane\(\)[\s\S]{0,400}renderDropdown\(getAgentActivitySnapshot\(\)\.list\)/);
     // Liste vide : message explicite, jamais un cadre muet.
@@ -315,7 +421,8 @@ describe("(c) les trois volets sont reellement alimentes", () => {
 
   it("volet Evenements : la liste est branchee sur le tampon des evenements", () => {
     const debut = html.indexOf('id="agent-activity-pane-events"');
-    const fin = html.indexOf('id="agent-activity-pane-tasks"');
+    const fin = html.indexOf('id="agent-activity-card"');
+    expect(fin).toBeGreaterThan(debut);
     expect(html.slice(debut, fin)).toContain('class="sa-events-list"');
     expect(jsSuper).toContain("agentPanelEventsListElement()");
     expect(jsSuper).toMatch(/list\.prepend\(item\)/);
@@ -326,7 +433,8 @@ describe("(c) les trois volets sont reellement alimentes", () => {
 
   it("volet Taches : missions reelles + mention « en attente » des missions en file", () => {
     const debut = html.indexOf('id="agent-activity-pane-tasks"');
-    const fin = html.indexOf('id="agent-activity-card"');
+    const fin = html.indexOf('id="agent-activity-pane-events"');
+    expect(fin).toBeGreaterThan(debut);
     expect(html.slice(debut, fin)).toContain('class="sa-tasks-list"');
     expect(jsSuper).toMatch(/buildRunningMissions\(snapshot\.list, collectQueuedMissions\(\)\)/);
     expect(jsSuper).toMatch(/superTasksList\.innerHTML = renderMissionsPanelHtml\(missions\)/);

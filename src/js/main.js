@@ -351,7 +351,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // le handler de clic sur les liens internes ouvre le fichier cible via tabs.openFile.
   window._pilotTabs = tabs;
   // Suivi du travail (haut droite) : cercle respirant + UN SEUL panneau à trois
-  // onglets (Agents, Événements, Tâches) + fiche agent. Unique endroit où le
+  // onglets (Agents, Tâches, Événements) + fiche agent. Unique endroit où le
   // travail se suit dans l'interface. Le bouton « Afficher l'onglet » de la fiche
   // appelle tabs._openAgent / tabs.openFile.
   initAgentActivity(tabs);

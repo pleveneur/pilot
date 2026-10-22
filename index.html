@@ -99,8 +99,10 @@
   <!-- Zone de Travail (Droite) -->
   <main id="main-area">
     <!-- Suivi du travail (haut droite) : UN SEUL panneau, ouvert par le cercle
-         respirant, à TROIS onglets — « Agents » (qui travaille), « Événements »
-         (journal système) et « Tâches » (missions en cours et en attente).
+         respirant, à TROIS onglets, dans l'ORDRE DÉFINITIF (de gauche à droite) :
+         « Agents » (qui travaille), « Tâches » (missions en cours et en attente)
+         et « Événements » (journal système). Le panneau s'ouvre sur « Agents »
+         tant que l'utilisateur n'a pas choisi un autre onglet (mémoire).
          Unique endroit de l'interface où le travail se suit : plus de panneau
          séparé, plus de seconde liste. -->
     <div id="agent-activity">
@@ -109,8 +111,8 @@
         <div class="sa-events-header">
           <div class="sa-events-tabs" role="tablist" aria-label="Suivi du travail">
             <button type="button" class="sa-events-tab active" role="tab" id="agent-activity-tab-agents" data-agent-panel-tab="agents" aria-controls="agent-activity-pane-agents" aria-selected="true" tabindex="0">Agents</button>
-            <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-events" data-agent-panel-tab="events" aria-controls="agent-activity-pane-events" aria-selected="false" tabindex="-1">Événements</button>
             <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-tasks" data-agent-panel-tab="tasks" aria-controls="agent-activity-pane-tasks" aria-selected="false" tabindex="-1">Tâches</button>
+            <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-events" data-agent-panel-tab="events" aria-controls="agent-activity-pane-events" aria-selected="false" tabindex="-1">Événements</button>
           </div>
           <div class="sa-events-header-actions">
             <button type="button" class="agent-btn" id="agent-activity-panel-clear" title="Tout effacer" aria-label="Tout effacer" hidden><i data-lucide="trash-2" class="icon-sm"></i></button>
@@ -120,11 +122,11 @@
         <div class="agent-activity-pane" id="agent-activity-pane-agents" role="tabpanel" aria-labelledby="agent-activity-tab-agents">
           <div id="agent-activity-list"></div>
         </div>
-        <div class="agent-activity-pane sa-events-pane hidden" id="agent-activity-pane-events" role="tabpanel" aria-labelledby="agent-activity-tab-events">
-          <div class="sa-events-list"></div>
-        </div>
         <div class="agent-activity-pane sa-events-pane hidden" id="agent-activity-pane-tasks" role="tabpanel" aria-labelledby="agent-activity-tab-tasks">
           <div class="sa-tasks-list"></div>
+        </div>
+        <div class="agent-activity-pane sa-events-pane hidden" id="agent-activity-pane-events" role="tabpanel" aria-labelledby="agent-activity-tab-events">
+          <div class="sa-events-list"></div>
         </div>
       </div>
       <div id="agent-activity-card" class="hidden"></div>
