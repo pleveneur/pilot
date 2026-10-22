@@ -64,8 +64,9 @@ async function getAgentEventChannel(agentId = "default", projectPath = null) {
 import { refreshIcons, setIcon } from "./icons.js";
 // Lecture a voix haute des reponses de l'assistant (bouton Ecouter / Arreter).
 // Regles : nettoyage du balisage, decoupage en phrases, une seule lecture a la
-// fois — elles vivent dans read-aloud.js, pas ici.
-import { attachReadAloud } from "./read-aloud.js";
+// fois, LECTURE DE LA SEULE REPONSE FINALE — elles vivent dans read-aloud.js,
+// pas ici.
+import { attachReadAloud, INTERNAL_MARKER } from "./read-aloud.js";
 import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js";
 // Son de fin DIFFÉRÉ : le chat de l'agent signale son activité d'écriture et son
 // repos, pour qu'un son armé (fin de mission signalée par l'assistant) ne parte
@@ -6942,7 +6943,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             const friendlyMsg = msg.errorMessage === "Connection error."
               ? "Erreur de connexion, vérifiez votre connexion à l'API"
               : msg.errorMessage;
-            appendTextSection(blk, `❌ **Erreur** : ${friendlyMsg}`);
+            appendNoticeSection(blk, `❌ **Erreur** : ${friendlyMsg}`);
             statusEl.textContent = "Erreur";
             statusEl.className = "agent-status agent-status-error";
             state.isStreaming = false;
@@ -6956,7 +6957,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             }
           }
         } else if (msg.stopReason === "aborted") {
-          appendTextSection(blk, "⏹️ Agent arrêté");
+          appendNoticeSection(blk, "⏹️ Agent arrêté");
           statusEl.textContent = "Arrêté";
           statusEl.className = "agent-status agent-status-idle";
           state.isStreaming = false;
@@ -7265,10 +7266,10 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             ? "Erreur de connexion, vérifiez votre connexion à l'API"
             : (delta.reason || "Erreur agent");
           if (state.currentAssistantBlock) {
-            appendTextSection(state.currentAssistantBlock, `❌ **Erreur** : ${errText}`);
+            appendNoticeSection(state.currentAssistantBlock, `❌ **Erreur** : ${errText}`);
           } else {
             const errBlk = createAssistantBlock(messagesEl);
-            appendTextSection(errBlk, `❌ **Erreur** : ${errText}`);
+            appendNoticeSection(errBlk, `❌ **Erreur** : ${errText}`);
           }
           break;
       }
@@ -7322,7 +7323,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           if (!state.currentAssistantBlock) {
             state.currentAssistantBlock = createAssistantBlock(messagesEl);
           }
-          appendTextSection(state.currentAssistantBlock, `❌ **Erreur** : ${friendlyMsg}`);
+          appendNoticeSection(state.currentAssistantBlock, `❌ **Erreur** : ${friendlyMsg}`);
           statusEl.textContent = "Erreur";
           statusEl.className = "agent-status agent-status-error";
           state.isStreaming = false;
@@ -7716,10 +7717,13 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // Injecter dans la bulle assistant si on est en train de streamer,
       // sinon créer un bloc assistant dédié
       if (state.isStreaming && state.currentAssistantBlock) {
-        appendTextSection(state.currentAssistantBlock, `❌ **Erreur processus** :\n\`\`\`\n${errText}\n\`\`\``);
+        appendNoticeSection(
+          state.currentAssistantBlock,
+          `❌ **Erreur processus** :\n\`\`\`\n${errText}\n\`\`\``,
+        );
       } else {
         const errBlk = createAssistantBlock(messagesEl);
-        appendTextSection(errBlk, `❌ **Erreur processus** :\n\`\`\`\n${errText}\n\`\`\``);
+        appendNoticeSection(errBlk, `❌ **Erreur processus** :\n\`\`\`\n${errText}\n\`\`\``);
       }
       break;
     }
@@ -7890,6 +7894,19 @@ function closeTextSection(section) {
   if (section && !section.dataset.closed) {
     section.dataset.closed = "true";
   }
+}
+
+/**
+ * Section texte d'AVERTISSEMENT TECHNIQUE (erreur, arret, redemarrage). Ce
+ * n'est PAS une reponse de l'assistant : elle est marquee "interne" pour que la
+ * lecture a voix haute (read-aloud.js, regle 9) ne la debite jamais — la
+ * decision vient d'ici (structure), jamais d'une devinette sur le texte.
+ * Le rendu visuel est inchange (meme classe, meme contenu, meme place).
+ */
+function appendNoticeSection(parent, content) {
+  const section = appendTextSection(parent, content);
+  if (section && section.dataset) section.dataset[INTERNAL_MARKER] = "true";
+  return section;
 }
 
 function appendThinkingSection(parent, content, allowEmpty = false) {
@@ -8349,7 +8366,7 @@ async function applyResumeSelection(messagesEl) {
                   appendSystemMessage(messagesEl, `⚠️ ${msg.errorMessage}`);
                 } else if (msg.stopReason === "aborted") {
                   if (!currentBlk) currentBlk = createAssistantBlock(messagesEl);
-                  appendTextSection(currentBlk, "⏹️ Agent arrêté");
+                  appendNoticeSection(currentBlk, "⏹️ Agent arrêté");
                 }
                 // Si la bulle créée est vide après rendu (outils masqués), la retirer
                 if (currentBlk && createdBlk) {

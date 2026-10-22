@@ -169,6 +169,8 @@ const {
   createSpeaker,
   createReadAloudButton,
   messageTextOf,
+  finalAnswerSections,
+  isInternalNotice,
   SPEECH_MAX_CHUNK,
 } = await import("./read-aloud.js");
 const { createSuperAgentBlock } = await import("./super-agent.js");
@@ -533,21 +535,24 @@ describe("bouton de lecture", () => {
     expect(lu).not.toContain("secret()");
   });
 
-  it("messageTextOf ignore les blocs de code et la reflexion", () => {
+  it("messageTextOf ignore les blocs de code et ne lit que la reponse finale", () => {
     const block = createSuperAgentBlock(globalThis.document.createElement("div"));
     const flow = block.querySelector(".agent-stream-flow");
-    const section = globalThis.document.createElement("div");
-    section.className = "agent-text-section";
-    section.innerHTML = "<p>Reponse lisible.</p><pre><code>code_non_lu()</code></pre>";
-    flow.appendChild(section);
+    // Travail interne AVANT la reponse : raisonnement, puis reponse finale.
     const thinking = globalThis.document.createElement("div");
     thinking.className = "agent-thinking";
     thinking.textContent = "reflexion privee";
     flow.appendChild(thinking);
+    const section = globalThis.document.createElement("div");
+    section.className = "agent-text-section";
+    section.innerHTML = "<p>Reponse lisible.</p><pre><code>code_non_lu()</code></pre>";
+    flow.appendChild(section);
 
     const text = messageTextOf(block);
     expect(text).toContain("Reponse lisible.");
+    expect(text).toContain("bloc de code");
     expect(text).not.toContain("code_non_lu()");
+    expect(text).not.toContain("reflexion privee");
   });
 });
 
@@ -604,3 +609,209 @@ function button_present_in_bubble_row(block) {
   const inBubble = findAll(bubble, "agent-read-btn").length > 0;
   return findAll(row, "agent-read-btn").length === 1 && !inBubble;
 }
+
+// ── 7. Seule la REPONSE FINALE est lue ─────────────────────────────────────
+//
+// Un message de l'assistant melange deux choses : le TRAVAIL INTERNE
+// (raisonnement, appels d'outils, resultats d'outils, sorties de commandes,
+// notes techniques) et la REPONSE FINALE (le texte rendu). La frontiere est
+// lue dans la STRUCTURE du flux, jamais devinee dans le texte. Ces controles
+// echouent si un fragment de travail interne recommence a etre lu, et si le
+// bouton lit quelque chose alors qu'il n'y a aucune reponse finale.
+
+/** Message assistant complet, comme le construit l'interface. */
+function makeMessage() {
+  const block = createSuperAgentBlock(globalThis.document.createElement("div"));
+  const flow = block.querySelector(".agent-stream-flow");
+  return { block, flow };
+}
+
+/** Ajoute une section de texte rendu (la reponse, seule chose audible). */
+function addText(flow, html) {
+  const section = globalThis.document.createElement("div");
+  section.className = "agent-text-section";
+  section.innerHTML = html;
+  flow.appendChild(section);
+  return section;
+}
+
+/** Ajoute un bloc de raisonnement affiche. */
+function addThinking(flow, text) {
+  const block = globalThis.document.createElement("div");
+  block.className = "agent-thinking";
+  block.innerHTML = `<div class="agent-thinking-content">${text}</div>`;
+  flow.appendChild(block);
+  return block;
+}
+
+/** Ajoute un appel d'outil (badge + argument). */
+function addToolCall(flow, name, arg) {
+  const block = globalThis.document.createElement("div");
+  block.className = "agent-tool-inline";
+  block.innerHTML = `<span class="agent-tool-label">${name}</span><code>${arg}</code>`;
+  flow.appendChild(block);
+  return block;
+}
+
+/** Ajoute un resultat d'outil depliable. */
+function addToolResult(flow, name, output) {
+  const block = globalThis.document.createElement("div");
+  block.className = "agent-tool-result";
+  block.innerHTML =
+    `<div class="agent-tool-result-header"><span class="agent-tool-result-name">${name}</span>` +
+    `<span class="agent-tool-result-preview">${output}</span></div>` +
+    `<pre class="agent-tool-result-content"><code>${output}</code></pre>`;
+  flow.appendChild(block);
+  return block;
+}
+
+describe("perimetre lu — seule la reponse finale", () => {
+  let synth;
+
+  beforeEach(() => {
+    synth = makeSynth();
+    globalThis.speechSynthesis = synth;
+    globalThis.SpeechSynthesisUtterance = FakeUtterance;
+  });
+
+  afterEach(() => {
+    delete globalThis.speechSynthesis;
+    delete globalThis.SpeechSynthesisUtterance;
+  });
+
+  /** Message « realiste » : travail interne puis reponse finale. */
+  function messageAvecTravailInterne() {
+    const { block, flow } = makeMessage();
+    addThinking(flow, "REFLEXION_PRIVEE je dois lire le fichier");
+    addToolCall(flow, "read", "ARGUMENT_OUTIL");
+    addToolResult(flow, "read", "SORTIE_OUTIL contenu du fichier");
+    addText(flow, "<p>Je regarde le fichier demande.</p>"); // narration : PAS la reponse
+    addThinking(flow, "REFLEXION_PRIVEE bis");
+    addToolCall(flow, "bash", "ARGUMENT_OUTIL bis");
+    addToolResult(flow, "bash", "SORTIE_OUTIL bis");
+    addText(flow, "<p>La reponse finale est prete. Voici le resultat demande.</p>");
+    return { block, flow };
+  }
+
+  it("ne garde QUE la suite finale de sections texte (structure)", () => {
+    const { block } = messageAvecTravailInterne();
+    const sections = finalAnswerSections(block);
+    expect(sections.length).toBe(1);
+    const text = messageTextOf(block);
+    expect(text).toContain("reponse finale est prete");
+    // Ni la narration intermediaire, ni le travail interne.
+    expect(text).not.toContain("Je regarde le fichier");
+    expect(text).not.toContain("REFLEXION_PRIVEE");
+    expect(text).not.toContain("ARGUMENT_OUTIL");
+    expect(text).not.toContain("SORTIE_OUTIL");
+  });
+
+  it("ce qui part reellement vers la synthese ne contient aucun travail interne", async () => {
+    const { block } = messageAvecTravailInterne();
+    const button = findAll(block, "agent-read-btn")[0];
+    await button.handlers.click[0]();
+    playUntilEnd(synth);
+    const lu = synth.spoken.map((u) => u.text).join(" ");
+    expect(lu).toContain("reponse finale est prete");
+    for (const interdit of [
+      "REFLEXION_PRIVEE",
+      "ARGUMENT_OUTIL",
+      "SORTIE_OUTIL",
+      "Je regarde le fichier",
+    ]) {
+      expect(lu, `ne doit jamais lire : ${interdit}`).not.toContain(interdit);
+    }
+  });
+
+  it("ne lit RIEN et le dit clairement quand il n'y a aucune reponse finale", async () => {
+    const { block, flow } = makeMessage();
+    addThinking(flow, "REFLEXION_PRIVEE");
+    addToolCall(flow, "read", "ARGUMENT_OUTIL");
+    addToolResult(flow, "read", "SORTIE_OUTIL");
+    // Le message s'arrete sur du travail : aucune reponse finale.
+    expect(finalAnswerSections(block).length).toBe(0);
+    expect(messageTextOf(block)).toBe("");
+
+    const button = findAll(block, "agent-read-btn")[0];
+    await button.handlers.click[0]();
+    playUntilEnd(synth);
+    expect(synth.spoken.length).toBe(0);
+    expect(button.querySelector(".agent-read-label").textContent).toMatch(/Rien a lire/i);
+    expect(button.title).toMatch(/aucune reponse finale/i);
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(button.classList.contains("agent-read-btn-speaking")).toBe(false);
+  });
+
+  it("un texte de narration suivi d'un outil n'est pas lu, meme sans apres", () => {
+    const { block, flow } = makeMessage();
+    addText(flow, "<p>Je vais maintenant lancer la commande.</p>");
+    addToolCall(flow, "bash", "npm test");
+    addToolResult(flow, "bash", "SORTIE_OUTIL");
+    const text = messageTextOf(block);
+    expect(text).toBe("");
+  });
+
+  it("les notes techniques marquees internes ne sont jamais lues", async () => {
+    const { block, flow } = makeMessage();
+    addThinking(flow, "REFLEXION_PRIVEE");
+    addText(flow, "<p>Voici la reponse finale.</p>");
+    // Note technique posee par appendNoticeSection (agent-pi.js).
+    const notice = addText(flow, "<p>Erreur processus : NOTE_TECHNIQUE</p>");
+    notice.dataset.agentInternal = "true";
+    expect(isInternalNotice(notice)).toBe(true);
+
+    const button = findAll(block, "agent-read-btn")[0];
+    await button.handlers.click[0]();
+    playUntilEnd(synth);
+    const lu = synth.spoken.map((u) => u.text).join(" ");
+    expect(lu).toContain("Voici la reponse finale");
+    expect(lu).not.toContain("NOTE_TECHNIQUE");
+  });
+
+  it("un bloc de code DANS la reponse finale est signale, jamais debite", async () => {
+    const { block, flow } = makeMessage();
+    addThinking(flow, "REFLEXION_PRIVEE");
+    addText(
+      flow,
+      "<p>Voici le correctif.</p><pre><code>CODE_SECRET_NE_DOIT_PAS_ETRE_LU()</code></pre><p>Fin.</p>",
+    );
+    const button = findAll(block, "agent-read-btn")[0];
+    await button.handlers.click[0]();
+    playUntilEnd(synth);
+    const lu = synth.spoken.map((u) => u.text).join(" ");
+    expect(lu).toContain("Voici le correctif");
+    expect(lu).toContain("bloc de code");
+    expect(lu).toContain("affiche a l'ecran");
+    expect(lu).not.toContain("CODE_SECRET_NE_DOIT_PAS_ETRE_LU");
+  });
+
+  it("un bloc neutre (boutons de choix) apres la reponse ne la masque pas", () => {
+    const { block, flow } = makeMessage();
+    addThinking(flow, "REFLEXION_PRIVEE");
+    addText(flow, "<p>Quel projet veux-tu ouvrir ?</p>");
+    const choice = globalThis.document.createElement("div");
+    choice.className = "agent-choice";
+    flow.appendChild(choice);
+    const text = messageTextOf(block);
+    expect(text).toContain("Quel projet veux-tu ouvrir");
+    expect(text).not.toContain("REFLEXION_PRIVEE");
+  });
+
+  it("le perimetre lu ne s'appuie que sur la structure (controle de source)", () => {
+    const src = readSource("src/js/read-aloud.js");
+    // La lecture passe par les sections de la reponse finale...
+    expect(src).toMatch(/export function messageTextOf\(/);
+    const msgStart = src.indexOf("export function messageTextOf(");
+    const msgBody = src.slice(msgStart, src.indexOf("\n}\n", msgStart));
+    expect(msgBody).toContain("finalAnswerSections(messageEl)");
+    // ... et la frontiere de la reponse finale est lue dans la STRUCTURE du
+    // flux : classes de travail interne + marque de note technique.
+    const start = src.indexOf("export function finalAnswerSections(");
+    const body = src.slice(start, src.indexOf("\n}\n", start));
+    expect(body).toContain("isInternalWorkBlock(child)");
+    expect(body).toContain("isInternalNotice(child)");
+    expect(body).toContain('classList.contains("agent-text-section")');
+    // Aucun mot-cle de contenu n'est utilise pour deviner la frontiere.
+    expect(body).not.toMatch(/reasoning|thinking|outil|tool/i);
+  });
+});

@@ -92,6 +92,17 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - Chaque commande : un **nom**, une **commande shell** et un **dossier de travail** optionnel (vide = racine du projet).
 - Un clic lance la commande dans le dossier choisi dans un **onglet terminal** (titre = nom de la commande) ; la liste des commandes se ferme et vous pouvez continuer à travailler. Relancer la même commande bascule sur l'onglet déjà ouvert ; fermer l'onglet arrête le process.
 
+### Écouter une réponse de l'assistant (🔊)
+- Chaque réponse de l'agent (onglet **π**) et de l'Assistant (onglet **🧭**) porte un bouton
+  **« 🔊 Écouter »** : un clic lit la réponse à voix haute, un second l'arrête. Rien ne se lit
+  tout seul, et une seule lecture tourne à la fois.
+- **Le réglage de la voix vit à un seul endroit** : ⚙️ **Paramètres → onglet « Assistant »** →
+  section **« Lecture des réponses »** (choix de la voix, état de la lecture, explication).
+  Par défaut : **automatique** (la voix de la langue de l'interface) ; le choix est mémorisé, et
+  si la voix choisie disparaît de l'ordinateur, Pilot revient proprement à la voix automatique.
+- Aucune voix installée sur le poste : le réglage est inactif et le bouton reste visible mais
+  inactif, avec une phrase qui explique quoi faire.
+
 ### Paramètres (modale ⚙️)
 - **Thème** : sombre (défaut) ou clair.
 - **Sous-thème** : 5 palettes par mode (dark : One Dark, Dracula, Nord, Tokyo Night ;

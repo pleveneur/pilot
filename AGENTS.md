@@ -61,6 +61,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Service Laya (classification locale) | `spec_laya.md` |
 | Aide intégrée (LLM sur la doc) | `spec_help.md` |
 | Revue de code assistée (H5) | `spec_review.md` |
+| Lecture des réponses à voix haute (bouton 🔊 + réglage de la voix) | `spec_read_aloud.md` |
 | Context Engine (auto-contexte agent) | `spec_context_engine.md` |
 | Code Graph (graphe de connaissances projet) | `spec_code_graph.md` |
 | Diff Review agent (modifications) | `spec_diff_review.md` |
@@ -122,6 +123,7 @@ pilot/
 ├── spec_quality_gate.md       # Spécifications quality-gate interne (implémenté)
 ├── spec_help.md               # Spécifications aide intégrée (LLM sur la doc)
 ├── spec_review.md             # Spécifications revue de code assistée (H5)
+├── spec_read_aloud.md         # Lecture des réponses à voix haute (bouton 🔊 + réglage UNIQUE de la voix : Paramètres → Assistant → Lecture des réponses)
 ├── spec_context_engine.md    # Spécifications Context Engine (H1, auto-contexte agent)
 ├── spec_code_graph.md        # Spécifications Code Graph (graphe de connaissances projet)
 ├── spec_diff_review.md       # Spécifications Diff Review agent (A4 V2, porte pré-écriture write/edit)
@@ -204,7 +206,7 @@ pilot/
 │       ├── reservations.js # Orchestration multi-agents T6 : estimation préalable (plan-maker) + fichiers réservés .pilot/reservations.json (pures + I/O, fail-open)
 │       ├── backend-info.js   # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"
 │       ├── desktop-notify.js  # Notifications desktop natives (D1) — agent terminé à distance
-│       ├── read-aloud.js      # Lecture à voix haute d'une réponse assistant (bouton « Écouter / Arrêter » sous la bulle) : nettoyage du balisage (blocs de code non lus), découpage par phrases, une seule lecture à la fois, voix de la langue de l'interface (speechSynthesis natif, aucune dépendance)
+│       ├── read-aloud.js      # Lecture à voix haute d'une réponse assistant (bouton « Écouter / Arrêter » sous la bulle) : nettoyage du balisage (blocs de code non lus), découpage par phrases, une seule lecture à la fois, voix de la langue de l'interface par défaut (speechSynthesis natif, aucune dépendance) + CHOIX de la voix réglé à UN SEUL endroit (Paramètres → onglet Assistant → section « Lecture des réponses »), mémorisé en config `read_aloud_voice`, repli propre si la voix a disparu, état publié par évènement `pilot-read-aloud-state`. Couverture : read-aloud.test.js + reglage-voix-onglet-assistant.test.js (voir spec_read_aloud.md)
 │       └── terminal.js        # Terminal intégré xterm.js
 ├── web/                       # UI web distante (mode remote, servie par axum)
 │   ├── index.html

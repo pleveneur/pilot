@@ -674,6 +674,15 @@ struct AppConfig {
     assistant_sound_enabled: bool,
     #[serde(default = "default_assistant_sound_volume")]
     assistant_sound_volume: u32,
+    // Lecture des réponses à voix haute : voix choisie par l'utilisateur,
+    // réglée UNIQUEMENT dans Paramètres → onglet « Assistant » → section
+    // « Lecture des réponses ». Valeur vide (défaut) = automatique, c'est-à-dire
+    // la première voix de la langue de l'interface. La valeur est l'identité
+    // stable d'une voix du système (`voiceURI`, à défaut son nom) ; si elle
+    // disparaît de l'ordinateur, la lecture retombe sur la voix de la langue de
+    // l'interface (aucune erreur, aucune lecture muette).
+    #[serde(default)]
+    read_aloud_voice: String,
     // Évolution 3 : assistant « réponses courtes » — quand activé, l'assistant
     // informe et décide sans détailler tout ce qui se fait, sauf demande
     // explicite. Défaut off. Injecté dans le prompt système.
@@ -1183,6 +1192,7 @@ impl Default for AppConfig {
             notify_super_agent_done: false,
             assistant_sound_enabled: false,
             assistant_sound_volume: default_assistant_sound_volume(),
+            read_aloud_voice: String::new(),
             super_agent_concise: false,
             super_agent_adaptive_personality: false,
             super_agent_personality: String::new(),

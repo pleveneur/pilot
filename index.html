@@ -1039,6 +1039,23 @@
               Pilot signale les demandes longues et propose de les confier à un agent, sans jamais lancer d'agent tout seul. Décocher ce réglage masque la pastille et son infobulle ; les tâches elles-mêmes restent intactes.
             </div>
           </div>
+          <!-- Lecture des reponses a voix haute : SEUL endroit ou se regle la voix
+               (aucun doublon dans les autres onglets). -->
+          <div class="settings-section" id="settings-section-read-aloud">
+            <h3 class="settings-section-title"><i data-lucide="volume-2" class="icon-sm"></i> Lecture des r&eacute;ponses &agrave; voix haute</h3>
+            <div class="setting-row">
+              <label for="setting-read-aloud-voice" title="Voix utilis&eacute;e par le bouton &laquo;&nbsp;&Eacute;couter&nbsp;&raquo; pos&eacute; sous chaque r&eacute;ponse de l'assistant. &laquo;&nbsp;Automatique&nbsp;&raquo; = premi&egrave;re voix de la langue de l'interface (recommand&eacute;).">Voix de lecture :</label>
+              <select id="setting-read-aloud-voice" aria-describedby="read-aloud-voice-note read-aloud-state">
+                <option value="">Automatique (voix de la langue de l'interface)</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="read-aloud-state" role="status" aria-live="polite">Aucune lecture en cours.</span>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="read-aloud-voice-note" role="note">Le bouton &laquo;&nbsp;&Eacute;couter&nbsp;&raquo; lit la seule r&eacute;ponse finale de la conversation, jamais le travail interne. Rien n'est lu automatiquement, et une seule lecture tourne &agrave; la fois.</span>
+            </div>
+          </div>
           <div class="settings-section">
             <h3 class="settings-section-title"><i data-lucide="building-2" class="icon-sm"></i> Clients</h3>
             <div class="setting-row">

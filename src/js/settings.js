@@ -26,6 +26,18 @@ import { thinkingLevelOptions } from "./thinking-levels.js";
 // PURES (normalisation du mode, lecture/découpage du modèle) partagées avec la
 // fiche de tâche du Kanban — testées dans super-agent-checklist.test.js.
 import { normalizeChecklistMode, normalizeChecklistTemplate } from "./super-agent-kanban.js";
+// Lecture des reponses a voix haute : le CHOIX DE LA VOIX vit uniquement dans
+// l'onglet « Assistant » des Parametres. Le module read-aloud.js fournit la
+// liste des voix installees et l'etat du reglage (fonctions pures, testees).
+import {
+  availableVoices,
+  voiceChoiceOptions,
+  voiceChoiceStatus,
+  readAloudStateLabel,
+  ensureVoices,
+  VOICES_WAIT_MS,
+  READ_ALOUD_STATE_EVENT,
+} from "./read-aloud.js";
 
 let currentConfig = null;
 
@@ -253,6 +265,13 @@ export async function initSettings() {
       modal.querySelectorAll(".settings-panel").forEach((p) => {
         p.classList.toggle("active", p.dataset.settingsPanel === key);
       });
+      // Section « Lecture des reponses » (onglet Assistant) : la liste des voix
+      // peut s'etre chargee depuis l'ouverture de la modale — on la relit.
+      if (key === "superagent") {
+        // On relit la liste des voix, mais on CONSERVE le choix en cours (il peut
+        // ne pas encore etre enregistre : changer d'onglet ne doit rien perdre).
+        refreshReadAloudVoice(selectReadAloudVoice ? selectReadAloudVoice.value : undefined);
+      }
     });
   });
   const selectTheme = document.getElementById("setting-theme");
@@ -433,6 +452,56 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     }
   }
   const taSuperAgentPrompt = document.getElementById("setting-superagent-prompt");
+
+  /** Affiche l'etat de la lecture (section « Lecture des reponses »). */
+  function showReadAloudState(state) {
+    lastReadAloudState = state || "";
+    if (readAloudStateEl) readAloudStateEl.textContent = readAloudStateLabel(lastReadAloudState);
+  }
+
+  /**
+   * Remplit le CHOIX DE LA VOIX (section « Lecture des reponses » de l'onglet
+   * Assistant) : « automatique » d'abord, puis chaque voix installee.
+   *
+   * C'est le SEUL endroit ou la voix se regle : jamais de doublon dans un autre
+   * onglet, jamais une popup par message. Trois cas sont annonces clairement :
+   *  - aucune voix installee → reglage inactif + phrase qui explique quoi faire ;
+   *  - voix memorisee disparue → retour a « automatique » + phrase qui le dit ;
+   *  - cas normal → phrase de rappel du fonctionnement.
+   * @param {string} [choice] voix a selectionner (defaut : la configuration)
+   */
+  function refreshReadAloudVoice(choice) {
+    if (!selectReadAloudVoice) return;
+    const wanted =
+      choice == null
+        ? currentConfig && currentConfig.read_aloud_voice
+          ? String(currentConfig.read_aloud_voice)
+          : ""
+        : String(choice);
+    const voices = availableVoices();
+    selectReadAloudVoice.innerHTML = "";
+    for (const opt of voiceChoiceOptions(voices)) {
+      const el = document.createElement("option");
+      el.value = opt.value;
+      el.textContent = opt.label;
+      selectReadAloudVoice.appendChild(el);
+    }
+    const status = voiceChoiceStatus(voices, wanted);
+    selectReadAloudVoice.value = status.value;
+    selectReadAloudVoice.disabled = status.kind === "empty";
+    if (readAloudVoiceNote) {
+      readAloudVoiceNote.textContent = status.hint;
+      readAloudVoiceNote.dataset.state = status.kind;
+    }
+    showReadAloudState(lastReadAloudState);
+    // Liste vide au premier instant (voix encore en chargement) : on re-tente
+    // une fois apres l'attente habituelle, sans jamais bloquer la modale.
+    if (!voices.length) {
+      ensureVoices(globalThis.window ? globalThis.window.speechSynthesis : null, VOICES_WAIT_MS).then((list) => {
+        if (list && list.length && selectReadAloudVoice) refreshReadAloudVoice(wanted);
+      });
+    }
+  }
   const chkSuperAgentThinking = document.getElementById("setting-superagent-thinking");
   // T6 : niveau de réflexion de l'Assistant ("" = non réglé → repli sur le
   // réglage général puis sur le défaut du moteur).
@@ -445,6 +514,13 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const assistantSoundVolumeRow = document.getElementById("assistant-sound-volume-row");
   const assistantSoundVolumeLabel = document.getElementById("assistant-sound-volume-label");
   const btnAssistantSoundTest = document.getElementById("btn-assistant-sound-test");
+  // ── Lecture des reponses a voix haute (SEUL endroit de reglage de la voix) ──
+  const selectReadAloudVoice = document.getElementById("setting-read-aloud-voice");
+  const readAloudStateEl = document.getElementById("read-aloud-state");
+  const readAloudVoiceNote = document.getElementById("read-aloud-voice-note");
+  // Dernier etat de lecture connu : la ligne d'etat de la section « Lecture des
+  // reponses » le reprend a chaque ouverture de la modale.
+  let lastReadAloudState = "";
   const chkSuperAgentConcise = document.getElementById("setting-superagent-concise");
   const chkSuperAgentCoordinator = document.getElementById("setting-superagent-coordinator");
   const chkSuperAgentUserFriendly = document.getElementById("setting-superagent-user-friendly");
@@ -1297,6 +1373,8 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   if (inputAssistantSoundVolume) inputAssistantSoundVolume.value = currentConfig.assistant_sound_volume ?? 100;
   if (assistantSoundVolumeRow) assistantSoundVolumeRow.style.display = (chkAssistantSoundEnabled && chkAssistantSoundEnabled.checked) ? "" : "none";
   if (assistantSoundVolumeLabel) assistantSoundVolumeLabel.textContent = `${inputAssistantSoundVolume ? inputAssistantSoundVolume.value : 100} %`;
+  // Section « Lecture des reponses » : choix de la voix + etat + explication.
+  refreshReadAloudVoice(currentConfig && currentConfig.read_aloud_voice);
   if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
   if (chkSuperAgentCoordinator) chkSuperAgentCoordinator.checked = currentConfig.super_agent_coordinator === true;
   if (chkSuperAgentUserFriendly) chkSuperAgentUserFriendly.checked = currentConfig.super_agent_user_friendly === true;
@@ -1430,6 +1508,20 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
       }
     });
   }
+
+  // ── Lecture des reponses a voix haute : SEUL reglage de la voix ──
+  // Le choix est memorise par l'enregistrement des Parametres (cle
+  // `read_aloud_voice`) ; il n'est jamais repris ailleurs dans l'interface.
+  if (selectReadAloudVoice) {
+    selectReadAloudVoice.addEventListener("change", () => {
+      refreshReadAloudVoice(selectReadAloudVoice.value);
+    });
+  }
+  // Etat de la lecture (ligne de la section) : alimente par read-aloud.js.
+  window.addEventListener(READ_ALOUD_STATE_EVENT, (event) => {
+    const state = event && event.detail ? event.detail.state : "";
+    showReadAloudState(state);
+  });
 
   // ── Mémoire (transfert de suivi, issue #69) ──
   if (btnMemExport) {
@@ -2173,6 +2265,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         notify_super_agent_done: chkSuperAgentNotifyDone ? chkSuperAgentNotifyDone.checked === true : false,
         assistant_sound_enabled: chkAssistantSoundEnabled ? chkAssistantSoundEnabled.checked === true : false,
         assistant_sound_volume: inputAssistantSoundVolume ? (parseInt(inputAssistantSoundVolume.value, 10) || 100) : 100,
+        // Lecture des reponses a voix haute : voix choisie dans l'onglet
+        // Assistant. Vide = automatique (voix de la langue de l'interface).
+        read_aloud_voice: selectReadAloudVoice ? selectReadAloudVoice.value : "",
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
         super_agent_coordinator: chkSuperAgentCoordinator ? chkSuperAgentCoordinator.checked === true : false,
         super_agent_user_friendly: chkSuperAgentUserFriendly ? chkSuperAgentUserFriendly.checked === true : false,

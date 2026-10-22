@@ -26,6 +26,9 @@ import { checkPiUpdate } from "./pi-update.js";
 import { initInterproject } from "./interproject.js";
 import { initProjectCommands } from "./project-commands.js";
 import { initGroupAssistant } from "./group-assistant.js";
+// Voix de lecture des reponses : la voix choisie dans Parametres → Assistant est
+// appliquee des le demarrage (et a chaque enregistrement des Parametres).
+import { applyVoicePreferenceFromConfig } from "./read-aloud.js";
 import { refreshIcons } from "./icons.js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -411,6 +414,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     refreshBackendInfo();
     // Re-sonde aussi la santé de l'agent (chemin pi peut avoir changé).
     checkPiHealth().then((h) => { if (h && !h.ok) warnPiUnavailable(h); });
+  });
+
+  // 3d-bis-ter. Voix de lecture des reponses (Parametres → Assistant) : elle
+  // est memorisee en configuration, donc appliquee ici au demarrage puis a
+  // chaque enregistrement. Valeur vide (defaut) = automatique.
+  invoke("get_config")
+    .then((cfg) => applyVoicePreferenceFromConfig(cfg))
+    .catch(() => {});
+  window.addEventListener("pilot-config-changed", (event) => {
+    applyVoicePreferenceFromConfig(event && event.detail);
   });
 
   // 3d-quinquies. Health check de l'agent au démarrage (E4) : si l'exécutable

@@ -307,10 +307,24 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   **blocs de code n'est pas lu** (Pilot annonce seulement « bloc de code »). Le
   texte est découpé **phrase par phrase**, ce qui évite les coupures en plein
   milieu d'une phrase.
+- **Le choix de la voix se règle à un seul endroit** : ⚙️ **Paramètres → onglet
+  « Assistant »** → section **« Lecture des réponses »**. Vous y trouvez le
+  **choix de la voix**, l'**état de la lecture** et l'**explication**, regroupés
+  au même endroit — ce réglage n'existe nulle part ailleurs (ni dans un autre
+  onglet des paramètres, ni dans une fenêtre par message).
+- Par défaut, la voix est sur **« Automatique »** : Pilot prend la voix de la
+  langue de l'interface. Si vous choisissez une voix précise, **ce choix est
+  mémorisé** et réutilisé aux démarrages suivants.
+- **La voix choisie a disparu de l'ordinateur** (désinstallée, autre poste) :
+  Pilot revient **proprement** sur la voix automatique, l'annonce dans la
+  section et ne produit ni erreur ni lecture muette.
 - **La voix suit la langue de l'interface** (français si Pilot est en
-  français) : Pilot demande la première voix disponible dans cette langue.
-- **Si la synthèse vocale manque** (fenêtre sans voix installée), le bouton
-  reste visible mais **inactif**, avec une courte infobulle qui l'explique.
+  français) : quand vous êtes en « Automatique », Pilot demande la première
+  voix disponible dans cette langue.
+- **Si aucune voix n'est installée** (fenêtre sans voix disponible), la
+  section affiche une phrase claire expliquant quoi installer et que la lecture
+  reste inactive ; le bouton **« 🔊 Écouter »** reste visible mais **inactif**,
+  avec une courte infobulle qui l'explique.
 - **Vos propres messages** et les **événements système** ne portent pas ce
   bouton.
 - **Ce que ça ne fait pas** : enregistrer le son dans un fichier. Le bouton

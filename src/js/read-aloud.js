@@ -10,15 +10,37 @@
 //   3. UNE SEULE lecture a la fois : lancer un autre message arrete proprement
 //      le precedent (aucun chevauchement, jamais deux voix ensemble).
 //   4. Le texte lu est nettoye : plus de balisage (titres, listes, gras, liens,
-//      tableaux), les blocs de code ne sont PAS debites, les liens sont lus par
-//      leur libelle.
+//      tableaux), les blocs de code ne sont PAS debites (la voix signale
+//      seulement qu'il y a du code a l'ecran), les liens sont lus par leur
+//      libelle.
 //   5. Le texte est decoupe phrase par phrase (avec une limite de longueur) et
 //      enchaine dans l'ordre ; l'arret fonctionne a tout moment.
-//   6. Synthese vocale absente ou aucune voix disponible : le bouton reste
-//      present mais INACTIF, avec une explication courte en infobulle.
+//   6. Synthese vocale absente ou AUCUNE VOIX installee : le bouton reste
+//      present mais INACTIF, avec une explication courte et claire (infobulle
+//      et texte du panneau de reglage), jamais un bouton muet.
 //   7. Langue : celle de l'interface, et on prend la premiere voix disponible
 //      dans cette langue. Le chargement des voix est attendu (sinon la premiere
-//      lecture partirait en silence).
+//      lecture partirait en silence). Le choix de la voix vit a UN SEUL
+//      endroit : Parametres → onglet « Assistant » → « Lecture des reponses ».
+//      Valeur par defaut : automatique (voix de la langue de l'interface). Une
+//      voix memorisee qui a disparu de l'ordinateur retombe proprement sur la
+//      voix de la langue de l'interface (aucune erreur, aucune lecture muette).
+//   8. SEULE LA REPONSE FINALE est lue. Un message de l'assistant contient deux
+//      sortes de choses : (a) le TRAVAIL INTERNE — raisonnement affiche, appels
+//      d'outils, resultats d'outils, sorties de commandes, notes techniques ;
+//      (b) la REPONSE FINALE — le texte rendu dans `.agent-text-section`. La
+//      frontiere n'est PAS devinee dans le texte : elle est lue dans la
+//      STRUCTURE du message (voir `finalAnswerSections`). Concretement, la
+//      reponse finale est la suite FINALE de sections de texte du flux
+//      chronologique : tout ce qui precede le dernier raisonnement ou le
+//      dernier outil est du travail interne et n'est JAMAIS lu. Un message sans
+//      texte apres son dernier outil n'a donc aucune reponse finale : le bouton
+//      ne lit rien et le dit (etat « Rien a lire »), plutot que de debiter du
+//      vide.
+//   9. Les notes techniques (erreur, arret, redemarrage) ne sont jamais lues :
+//      les fabriques de message les marquent avec `data-agent-internal="true"`
+//      (voir `appendNoticeSection` dans agent-pi.js). Elles ne masquent pas une
+//      reponse finale deja emise : elles sont ignorees, pas un frontiere.
 //
 // Le module est sans dependance : il recoit `win` (fenetre porteuse de
 // `speechSynthesis`) et `doc` — ce qui le rend testable sans navigateur.
@@ -29,14 +51,77 @@ export const SPEECH_MAX_CHUNK = 180;
 /** Attente maximale du chargement des voix (ms) avant de parler quand meme. */
 export const VOICES_WAIT_MS = 1500;
 
+/**
+ * Valeur du choix « automatique » dans le reglage de voix : voix de la langue
+ * de l'interface. C'est la valeur par defaut (champ vide en configuration).
+ */
+export const AUTO_VOICE_VALUE = "";
+
+/** Explication du bouton inactif quand aucune voix n'est installee. */
+export const NO_VOICE_HINT =
+  "Aucune voix n'est disponible sur cet ordinateur : la lecture a voix haute reste inactive.";
+
+/** Phrase du panneau de reglage quand la liste des voix est vide. */
+export const NO_VOICE_INSTALLED_HINT =
+  "Aucune voix n'est installee sur cet ordinateur : la lecture a voix haute reste inactive. " +
+  "Installez une voix dans les reglages de votre systeme, puis rouvrez les Parametres.";
+
+/** Explication affichee sous le reglage quand tout est normal. */
+export const READ_ALOUD_HELP_HINT =
+  "Le bouton \u00ab\u00a0\u00c9couter\u00a0\u00bb lit la seule reponse finale de la conversation, jamais le travail interne. " +
+  "Rien n'est lu automatiquement, et une seule lecture tourne a la fois.";
+
+/** Evenement emis a chaque changement d'etat de lecture (panneau des Parametres). */
+export const READ_ALOUD_STATE_EVENT = "pilot-read-aloud-state";
+
 /** Message court affiche quand la bulle ne contient rien a lire. */
-const EMPTY_MESSAGE_HINT = "Rien a lire dans ce message.";
+const EMPTY_MESSAGE_HINT =
+  "Rien a lire : ce message ne contient aucune reponse finale (seulement du travail interne).";
+
+/** Libelle visible (temporaire) quand il n'y a aucune reponse finale a lire. */
+const EMPTY_LABEL = "Rien a lire";
+
+/** Duree d'affichage du libelle « Rien a lire » (ms) avant retour a l'etat repos. */
+export const EMPTY_HINT_MS = 3000;
+
+/** Ce que la voix prononce a la place du CONTENU d'un bloc de code. */
+export const CODE_BLOCK_NOTICE = "bloc de code affiche a l'ecran";
+
+/**
+ * Classes des blocs de TRAVAIL INTERNE qui marquent une FRONTIERE dans un
+ * message : raisonnement affiche, appels d'outils, resultats d'outils, sorties
+ * de commandes, resume de compaction. Tout ce qui les precede n'est pas la
+ * reponse finale.
+ *
+ * Ces classes sont celles REELLEMENT posees par les fabriques de message
+ * (`agent-pi.js` et `super-agent.js`) : la decision s'appuie sur la structure
+ * du DOM, jamais sur des mots devines dans le texte.
+ */
+export const INTERNAL_BOUNDARY_CLASSES = [
+  "agent-thinking", // raisonnement affiche (bloc « pensee »)
+  "agent-thinking-content",
+  "agent-tool-inline", // appel d'outil (badge)
+  "agent-tool-block", // appel d'outil (ancien rendu)
+  "agent-tool-cmds", // commandes d'un ancien bloc d'outil
+  "agent-tool-live", // sortie de commande en direct
+  "agent-tool-result", // resultat d'outil (bloc depliable)
+  "agent-compaction-summary", // resume de compaction
+];
+
+/** Attribut de dataset qui marque une section de note technique (jamais lue). */
+export const INTERNAL_MARKER = "agentInternal";
 
 /** Lecture en cours, UNE SEULE a la fois pour toute l'application. */
 let currentPlayback = null;
 
 /** Compteur d'identifiants de lecture (jeton d'annulation). */
 let playbackSeq = 0;
+
+/**
+ * Voix preferee en cours d'application (vide = automatique). Memorisee pour la
+ * session a partir du reglage unique des Parametres (onglet « Assistant »).
+ */
+let preferredVoiceName = "";
 
 /** Appelle `fn` sans jamais laisser remonter d'exception (API navigateur). */
 function safeCall(fn, fallback = null) {
@@ -108,6 +193,172 @@ export function pickVoiceForLang(voices, lang) {
   return list.find((v) => langBase(v.lang) === base) || null;
 }
 
+// ── Choix de la voix (reglage unique : Parametres → Assistant) ─────────────
+
+/**
+ * Identite stable d'une voix, telle qu'enregistree en configuration : son
+ * `voiceURI` quand il existe (stable d'un demarrage a l'autre), sinon son nom.
+ * @param {SpeechSynthesisVoice} voice
+ * @returns {string}
+ */
+export function voiceKey(voice) {
+  if (!voice) return "";
+  return String(voice.voiceURI || voice.name || "").trim();
+}
+
+/**
+ * Voix installees dans cette fenetre. Jamais d'exception : liste vide si la
+ * synthese vocale est absente ou si la liste n'est pas encore chargee.
+ * @param {Window} [win]
+ * @returns {SpeechSynthesisVoice[]}
+ */
+export function availableVoices(win) {
+  const w = win || globalThis.window;
+  const synth = w && w.speechSynthesis;
+  if (!synth) return [];
+  const list = safeCall(() => synth.getVoices(), []);
+  const arr = Array.isArray(list) ? list : Array.from(list || []);
+  return arr.filter(Boolean);
+}
+
+/**
+ * Voix preferee memorisee (Parametres → Assistant). Valeur vide = automatique
+ * (voix de la langue de l'interface).
+ * @returns {string}
+ */
+export function getPreferredVoiceName() {
+  return preferredVoiceName;
+}
+
+/**
+ * Memorise la voix preferee, en memoire. La persistance est faite par la
+ * configuration (`read_aloud_voice`), ecrite par la modale des Parametres.
+ * @param {string} name
+ */
+export function setPreferredVoiceName(name) {
+  preferredVoiceName = String(name == null ? "" : name).trim();
+}
+
+/**
+ * Applique la voix memorisee dans la configuration (`read_aloud_voice`).
+ * Appelee au demarrage et apres chaque enregistrement des Parametres : une
+ * configuration sans le champ (ou un objet absent) ne change rien.
+ * @param {object} [config]
+ */
+export function applyVoicePreferenceFromConfig(config) {
+  if (!config || typeof config !== "object") return;
+  if (!Object.prototype.hasOwnProperty.call(config, "read_aloud_voice")) return;
+  setPreferredVoiceName(config.read_aloud_voice ? String(config.read_aloud_voice) : "");
+}
+
+/**
+ * Cherche une voix par son identite (identifiant stable, puis nom : une voix
+ * reinstallee peut changer d'identifiant sans changer de nom).
+ * @param {SpeechSynthesisVoice[]} voices
+ * @param {string} choice
+ * @returns {SpeechSynthesisVoice|null}
+ */
+export function findVoiceForChoice(voices, choice) {
+  const wanted = String(choice == null ? "" : choice).trim();
+  if (!wanted) return null;
+  const list = (Array.isArray(voices) ? voices : []).filter(Boolean);
+  const byKey = list.find((v) => voiceKey(v) === wanted);
+  if (byKey) return byKey;
+  return list.find((v) => String(v.name || "").trim() === wanted) || null;
+}
+
+/**
+ * Voix REELLEMENT utilisee pour lire : la voix choisie si elle existe encore,
+ * sinon repli propre sur la voix de la langue de l'interface (regle 7).
+ * @param {SpeechSynthesisVoice[]} voices
+ * @param {string} lang
+ * @param {string} [choice]
+ * @returns {SpeechSynthesisVoice|null}
+ */
+export function resolveVoiceForChoice(voices, lang, choice) {
+  const list = (Array.isArray(voices) ? voices : []).filter(Boolean);
+  if (!list.length) return null;
+  return findVoiceForChoice(list, choice) || pickVoiceForLang(list, lang);
+}
+
+/**
+ * Options du choix de voix : « automatique » d'abord, puis chaque voix
+ * installee, triee par langue puis par nom.
+ * @param {SpeechSynthesisVoice[]} voices
+ * @returns {{value: string, label: string}[]}
+ */
+export function voiceChoiceOptions(voices) {
+  const list = (Array.isArray(voices) ? voices : []).filter(Boolean).slice();
+  const autoLabel = "Automatique (voix de la langue de l'interface)";
+  const options = [{ value: AUTO_VOICE_VALUE, label: autoLabel }];
+  list.sort((a, b) => {
+    const la = String(a.lang || "");
+    const lb = String(b.lang || "");
+    if (la !== lb) return la < lb ? -1 : 1;
+    const na = String(a.name || "");
+    const nb = String(b.name || "");
+    return na < nb ? -1 : na > nb ? 1 : 0;
+  });
+  for (const voice of list) {
+    const name = String(voice.name || "").trim() || voiceKey(voice);
+    const lang = String(voice.lang || "").trim();
+    options.push({ value: voiceKey(voice), label: lang ? `${name} (${lang})` : name });
+  }
+  return options;
+}
+
+/**
+ * Etat du reglage de voix, tel que l'affiche le panneau des Parametres.
+ *  - `empty`   : aucune voix installee (reglage inactif + phrase explicative) ;
+ *  - `missing` : la voix memorisee n'existe plus (repli automatique annonce) ;
+ *  - `ok`      : le reglage est utilisable.
+ * @param {SpeechSynthesisVoice[]} voices
+ * @param {string} [choice]
+ * @returns {{kind: "empty"|"missing"|"ok", hint: string, missing: string, value: string}}
+ */
+export function voiceChoiceStatus(voices, choice) {
+  const list = (Array.isArray(voices) ? voices : []).filter(Boolean);
+  const wanted = String(choice == null ? "" : choice).trim();
+  if (!list.length) {
+    return { kind: "empty", hint: NO_VOICE_INSTALLED_HINT, missing: "", value: AUTO_VOICE_VALUE };
+  }
+  if (wanted && !findVoiceForChoice(list, wanted)) {
+    return {
+      kind: "missing",
+      hint:
+        `La voix memorisee \u00ab\u00a0${wanted}\u00a0\u00bb n'est plus disponible sur cet ordinateur : ` +
+        "la lecture utilise la voix de la langue de l'interface.",
+      missing: wanted,
+      value: AUTO_VOICE_VALUE,
+    };
+  }
+  return { kind: "ok", hint: READ_ALOUD_HELP_HINT, missing: "", value: wanted };
+}
+
+/**
+ * Libelle d'etat affiche dans le panneau « Lecture des reponses ».
+ * @param {string} [state]
+ * @returns {string}
+ */
+export function readAloudStateLabel(state) {
+  switch (state) {
+    case "speaking":
+      return "Lecture en cours\u2026";
+    case "ended":
+      return "Lecture terminee.";
+    case "stopped":
+      return "Lecture arretee.";
+    case "empty":
+      return "Rien a lire dans ce message.";
+    case "no-voice":
+      return "Aucune voix disponible : lecture impossible sur cet ordinateur.";
+    case "unavailable":
+      return "La synthese vocale n'est pas disponible dans cette fenetre.";
+    default:
+      return "Aucune lecture en cours.";
+  }
+}
+
 /**
  * Nettoie un texte (Markdown rendu en HTML et/ou Markdown brut) pour qu'il soit
  * LISIBLE par la voix : aucun symbole de balisage, blocs de code non debites,
@@ -119,10 +370,12 @@ export function pickVoiceForLang(voices, lang) {
 export function markupToSpeech(raw) {
   let t = String(raw == null ? "" : raw);
 
-  // Blocs de code : on ne les LIT PAS (on signale seulement qu'il y en a).
-  t = t.replace(/```[\s\S]*?```/g, " bloc de code. ");
-  t = t.replace(/~~~[\s\S]*?~~~/g, " bloc de code. ");
-  t = t.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, " bloc de code. ");
+  // Blocs de code : le CONTENU n'est jamais lu (regle 4) — la voix signale
+  // seulement qu'il y a du code a l'ecran.
+  const codeNotice = ` ${CODE_BLOCK_NOTICE}. `;
+  t = t.replace(/```[\s\S]*?```/g, codeNotice);
+  t = t.replace(/~~~[\s\S]*?~~~/g, codeNotice);
+  t = t.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, codeNotice);
   // Code en ligne : le contenu (nom de fichier, commande) est lisible, on garde.
   t = t.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, "$1");
 
@@ -244,14 +497,14 @@ function sentencesOfLine(line) {
  * @param {number} [waitMs]
  * @returns {Promise<SpeechSynthesisVoice|null>}
  */
-export function ensureVoice(synth, lang, waitMs = VOICES_WAIT_MS) {
-  if (!synth) return Promise.resolve(null);
+export function ensureVoices(synth, waitMs = VOICES_WAIT_MS) {
+  if (!synth) return Promise.resolve([]);
   const read = () => {
     const voices = safeCall(() => synth.getVoices(), []);
-    return Array.isArray(voices) ? voices : Array.from(voices || []);
+    return (Array.isArray(voices) ? voices : Array.from(voices || [])).filter(Boolean);
   };
   const initial = read();
-  if (initial.length) return Promise.resolve(pickVoiceForLang(initial, lang));
+  if (initial.length) return Promise.resolve(initial);
   return new Promise((resolve) => {
     let done = false;
     let timer = null;
@@ -260,13 +513,26 @@ export function ensureVoice(synth, lang, waitMs = VOICES_WAIT_MS) {
       done = true;
       if (timer) clearTimeout(timer);
       safeCall(() => synth.removeEventListener("voiceschanged", finish));
-      resolve(pickVoiceForLang(read(), lang));
+      resolve(read());
     };
     safeCall(() => synth.addEventListener("voiceschanged", finish));
     timer = setTimeout(finish, Math.max(0, Number(waitMs) || 0));
     // Node (tests) : ne pas retenir la boucle d'evenements.
     if (timer && typeof timer.unref === "function") timer.unref();
   });
+}
+
+/**
+ * Attend le chargement des voix puis renvoie la PREMIERE voix de la langue
+ * demandee (ou null si aucune voix ne correspond).
+ * @param {SpeechSynthesis} synth
+ * @param {string} lang
+ * @param {number} [waitMs]
+ * @returns {Promise<SpeechSynthesisVoice|null>}
+ */
+export function ensureVoice(synth, lang, waitMs = VOICES_WAIT_MS) {
+  if (!synth) return Promise.resolve(null);
+  return ensureVoices(synth, waitMs).then((voices) => pickVoiceForLang(voices, lang));
 }
 
 /** Arrete TOUTE lecture en cours (quel que soit le bouton qui l'a lancee). */
@@ -288,14 +554,27 @@ export function createSpeaker(win, options = {}) {
   const waitMs = options.waitMs == null ? VOICES_WAIT_MS : options.waitMs;
   const self = { token: null, speaking: () => false, speak, stop: stopReading };
 
+  /** Previens le panneau des Parametres de l'etat de lecture (regle 6/7). */
+  const broadcastState = (state) => {
+    safeCall(() => {
+      if (!w || typeof w.dispatchEvent !== "function") return;
+      const Ev = w.CustomEvent || globalThis.CustomEvent;
+      if (typeof Ev !== "function") return;
+      w.dispatchEvent(new Ev(READ_ALOUD_STATE_EVENT, { detail: { state } }));
+    });
+  };
+
   /**
    * Lit un texte (nettoye puis decoupe). Renvoie une promesse resolue a la fin
    * ou a l'arret.
    * @param {string} text
-   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty") => void}} [handlers]
+   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty"|"no-voice") => void}} [handlers]
    */
   async function speak(text, handlers = {}) {
-    const notify = (state) => safeCall(() => handlers.onstate && handlers.onstate(state));
+    const notify = (state) => {
+      safeCall(() => handlers.onstate && handlers.onstate(state));
+      broadcastState(state);
+    };
     if (!synth || !Utterance) {
       notify("unavailable");
       return false;
@@ -324,10 +603,21 @@ export function createSpeaker(win, options = {}) {
     // instant) : le bouton passe a « Arreter » sans attendre.
     notify("speaking");
 
-    // Voix : on attend leur chargement (sinon la premiere lecture est muette).
-    const voice = await ensureVoice(synth, lang, waitMs);
+    // Voix : on attend leur chargement (sinon la premiere lecture est muette),
+    // puis on applique la voix choisie dans les Parametres — repli propre sur la
+    // voix de la langue de l'interface si elle a disparu (regle 7).
+    const choice = options.voiceName == null ? getPreferredVoiceName() : options.voiceName;
+    const voices = await ensureVoices(synth, waitMs);
     // Arret (ou autre lecture) pendant l'attente : on ne parle pas.
     if (token.stopped || currentPlayback !== playback) return false;
+    // Aucune voix installee : on ne lance pas une lecture muette, on le dit.
+    if (!voices.length) {
+      currentPlayback = null;
+      token.stopped = true;
+      notify("no-voice");
+      return false;
+    }
+    const voice = resolveVoiceForChoice(voices, lang, choice);
 
     const speakIndex = (index) => {
       if (token.stopped || currentPlayback !== playback) return;
@@ -355,25 +645,75 @@ export function createSpeaker(win, options = {}) {
   return self;
 }
 
-/** Textes d'un message : sections rendues (HTML) nettoyees, sinon la bulle. */
+/** Conteneur du flux chronologique d'un message de l'assistant. */
+function flowOf(messageEl) {
+  const flow = safeCall(() =>
+    messageEl.querySelector ? messageEl.querySelector(".agent-stream-flow") : null,
+  );
+  if (flow) return flow;
+  // Compatibilite avec de tres anciennes bulles (pas de flux) : on se limite a
+  // la bulle de l'assistant, jamais au message entier.
+  return safeCall(
+    () => (messageEl.querySelector ? messageEl.querySelector(".agent-bubble-assistant") : null),
+    null,
+  );
+}
+
+/** Vrai si l'element est une NOTE TECHNIQUE (jamais lue, mais neutre). */
+export function isInternalNotice(el) {
+  const data = el && el.dataset;
+  return !!(data && String(data[INTERNAL_MARKER]) === "true");
+}
+
+/** Vrai si l'element est un bloc de travail interne qui FRONTIERE la reponse. */
+export function isInternalWorkBlock(el) {
+  const classes = el && el.classList;
+  if (!classes || typeof classes.contains !== "function") return false;
+  return INTERNAL_BOUNDARY_CLASSES.some((name) => classes.contains(name));
+}
+
+/**
+ * Sections de texte qui forment la REPONSE FINALE d'un message de l'assistant.
+ *
+ * Regle structurelle (regle 8) : on parcourt les enfants du flux dans l'ordre et
+ * on ne garde que la suite FINALE de sections de texte. Un bloc de travail
+ * interne (raisonnement, appel d'outil, resultat d'outil, sortie de commande)
+ * remet la suite a zero : le texte de narration emis avant un outil n'est donc
+ * jamais lu. Une note technique marquee (`data-agent-internal`) est ignoree
+ * sans couper la suite ; les autres elements (badges projet, boutons de choix)
+ * sont neutres.
+ * @param {HTMLElement} messageEl - element `.agent-message-assistant`
+ * @returns {HTMLElement[]} sections de la reponse finale (vide s'il n'y en a pas)
+ */
+export function finalAnswerSections(messageEl) {
+  if (!messageEl) return [];
+  const container = flowOf(messageEl);
+  if (!container) return [];
+  const children = safeCall(() => Array.from(container.children || []), []);
+  const answer = [];
+  for (const child of children) {
+    if (!child) continue;
+    if (isInternalNotice(child)) continue; // note technique : ignoree, jamais lue
+    if (isInternalWorkBlock(child)) {
+      answer.length = 0; // travail interne : ce qui precede n'est pas la reponse
+      continue;
+    }
+    if (child.classList && child.classList.contains("agent-text-section")) answer.push(child);
+    // Tout autre element (badges, boutons de choix...) ne coupe pas la suite.
+  }
+  return answer;
+}
+
+/** Texte a lire : la SEULE reponse finale du message, nettoyee (regle 8). */
 export function messageTextOf(messageEl) {
   if (!messageEl) return "";
-  const sections = safeCall(
-    () => (messageEl.querySelectorAll ? messageEl.querySelectorAll(".agent-text-section") : []),
-    [],
-  );
   const parts = [];
-  for (let i = 0; i < (sections ? sections.length : 0); i++) {
-    const section = sections[i];
-    if (!section) continue;
+  for (const section of finalAnswerSections(messageEl)) {
     const html = typeof section.innerHTML === "string" ? section.innerHTML : "";
     const clean = markupToSpeech(html || section.textContent || "");
     if (clean) parts.push(clean);
   }
-  if (parts.length) return parts.join("\n");
-  const bubble = safeCall(() => (messageEl.querySelector ? messageEl.querySelector(".agent-bubble") : null));
-  const raw = (bubble && (bubble.innerHTML || bubble.textContent)) || messageEl.textContent || "";
-  return markupToSpeech(raw);
+  return parts.join("\n");
 }
 
 /** Etats d'affichage du bouton (texte + visuel, comprehensible sans couleur). */
@@ -386,12 +726,20 @@ export const LABELS = {
     title: "La synth\u00e8se vocale n'est pas disponible dans cette fen\u00eatre.",
     aria: "La synth\u00e8se vocale n'est pas disponible dans cette fen\u00eatre",
   },
+  // Synthese vocale presente mais AUCUNE voix installee : bouton inactif et
+  // explication claire (regle 6). Il se reactive seul si une voix arrive.
+  novoice: {
+    text: "\u00c9couter",
+    icon: "volume-x",
+    title: NO_VOICE_HINT,
+    aria: NO_VOICE_HINT,
+  },
 };
 
 /**
  * Applique un etat au bouton (libelle en TEXTE + `aria-pressed` + classe).
  * @param {HTMLElement} button
- * @param {"idle"|"speaking"|"unavailable"} state
+ * @param {"idle"|"speaking"|"unavailable"|"novoice"} state
  */
 export function applyButtonState(button, state) {
   if (!button) return;
@@ -404,7 +752,10 @@ export function applyButtonState(button, state) {
   button.dataset.readState = state;
   if (button.classList) {
     button.classList.toggle("agent-read-btn-speaking", state === "speaking");
-    button.classList.toggle("agent-read-btn-unavailable", state === "unavailable");
+    button.classList.toggle(
+      "agent-read-btn-unavailable",
+      state === "unavailable" || state === "novoice",
+    );
   }
   return button;
 }
@@ -450,6 +801,57 @@ export function createReadAloudButton({ doc, win, getText, lang, refreshIcons } 
   }
   setState("idle");
 
+  // Aucune voix installee : le bouton reste visible mais INACTIF, avec une
+  // explication. Il se reactive tout seul des qu'une voix est disponible
+  // (regle 6) — sans jamais lancer de lecture de lui-meme.
+  let awaitingVoices = false;
+  const onVoicesChanged = () => {
+    if (!availableVoices(w).length) return;
+    safeCall(() => w.speechSynthesis.removeEventListener("voiceschanged", onVoicesChanged));
+    awaitingVoices = false;
+    if (button.dataset.readState === "novoice") {
+      button.disabled = false;
+      setState("idle");
+    }
+  };
+  const showNoVoice = () => {
+    button.disabled = true;
+    setState("novoice");
+    if (awaitingVoices) return;
+    awaitingVoices = true;
+    safeCall(() => w.speechSynthesis.addEventListener("voiceschanged", onVoicesChanged));
+  };
+  const disableIfNoVoice = (list) => {
+    if (list && list.length) return;
+    // Jamais pendant une lecture : on ne desactive pas un bouton qui parle.
+    const state = button.dataset.readState;
+    if (state === "speaking" || state === "unavailable") return;
+    showNoVoice();
+  };
+  // Au depart la liste est souvent vide (chargement asynchrone) : on laisse le
+  // temps d'attente habituel, puis on tranche une fois pour toutes.
+  if (!availableVoices(w).length) {
+    ensureVoices(w.speechSynthesis, VOICES_WAIT_MS).then(disableIfNoVoice);
+  }
+
+  // Aucune reponse finale dans ce message : on ne lit RIEN et on le dit
+  // clairement (libelle visible temporaire + infobulle explicative), au lieu de
+  // debiter du vide en silence.
+  let emptyTimer = null;
+  const showEmptyState = () => {
+    applyButtonState(button, "idle");
+    const labelEl = button.querySelector ? button.querySelector(".agent-read-label") : null;
+    if (labelEl) labelEl.textContent = EMPTY_LABEL;
+    button.title = EMPTY_MESSAGE_HINT;
+    button.setAttribute("aria-label", EMPTY_MESSAGE_HINT);
+    if (emptyTimer) clearTimeout(emptyTimer);
+    emptyTimer = setTimeout(() => {
+      emptyTimer = null;
+      setState("idle");
+    }, EMPTY_HINT_MS);
+    if (emptyTimer && typeof emptyTimer.unref === "function") emptyTimer.unref();
+  };
+
   const speaker = createSpeaker(w, { lang: lang || speechLang(d) });
   button.addEventListener("click", async () => {
     if (button.dataset.readState === "speaking") {
@@ -460,10 +862,9 @@ export function createReadAloudButton({ doc, win, getText, lang, refreshIcons } 
     const ok = await speaker.speak(text, {
       onstate: (state) => {
         if (state === "speaking") setState("speaking");
-        else if (state === "empty") {
-          applyButtonState(button, "idle");
-          button.title = EMPTY_MESSAGE_HINT;
-        } else setState("idle");
+        else if (state === "empty") showEmptyState();
+        else if (state === "no-voice") showNoVoice();
+        else setState("idle");
       },
     });
     return ok;
