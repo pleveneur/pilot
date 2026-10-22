@@ -15,7 +15,7 @@ import { notifyAgentDone } from "./desktop-notify.js";
 // immédiat, jamais retardé par le délai de sécurité).
 import { resetDeferredSound } from "./sound-deferred.js";
 import { buildProjectContext } from "./context-engine.js";
-import { canStartMission } from "./run-policy.js";
+import { canStartMission, canStartWork, workBlockedMessage } from "./run-policy.js";
 // GARDE-FOU DU LIVRABLE (défaut « l'agent rend un plan ») : les fichiers
 // RÉELLEMENT attendus sur disque, déclarés avec la mission, sont vérifiés en fin
 // de run. Un fichier déclaré ABSENT rend la mission en ÉCHEC explicite — jamais
@@ -3002,6 +3002,13 @@ export async function startAgentsRun(userPrompt, projectContext = "") {
   if (getRunState(runProject) === "running") {
     throw new Error("Une run est déjà en cours sur ce projet.");
   }
+  // Décideur UNIQUE (run-policy.js) : la mise à jour de Pilot peut occuper le
+  // terrain — aucun agent ne démarre alors. La sonde du bus n'est pas passée
+  // ici : la garde de run en cours ci-dessus fait déjà ce contrôle, on n'ajoute
+  // que la réservation.
+  if (!canStartWork(runProject, "write")) {
+    throw new Error(workBlockedMessage());
+  }
   if (!busState.coordinator) {
     await initAgentsBus(busState.callbacks);
   }
@@ -3046,8 +3053,11 @@ export async function startParallelRun(assignments, projectContext = "", options
   const nature = readOnly ? "read" : "write";
   // T2 : garde projet-scopée — une run sur un AUTRE projet ne bloque pas.
   // Lecture partagée : une mission de LECTURE cohabite avec d'autres lectures.
-  if (isRunInProgress(runProject, { nature })) {
-    throw new Error("Une run est déjà en cours sur ce projet.");
+  // Le gardien est le décideur UNIQUE `canStartWork` (run-policy.js) : il ajoute
+  // à la politique d'admission la réservation du terrain par la mise à jour de
+  // Pilot (écran de mise à jour ouvert ou installation en cours).
+  if (!canStartWork(runProject, nature, isRunInProgress)) {
+    throw new Error(workBlockedMessage());
   }
 
   const ctx = beginRun(runProject, { readOnly });

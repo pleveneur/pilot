@@ -72,7 +72,7 @@ import { injectSessionSummaryToSuperAgent, isProjectAgentBusy } from "./super-ag
 // Verrou par projet : une commande manuelle peut modifier le projet → elle
 // passe par la même politique d'admission que les missions (run-policy.js),
 // appliquée au bus d'agents (isRunInProgress).
-import { canSendManualCommand, canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
+import { canSendManualCommand, canSendManualCommandAsync, manualCommandBlockedMessage } from "./run-policy.js";
 import { isRunInProgress, releaseOrphanRunLock, getProjectRunLockInfo, forceReleaseProjectRunLock } from "./agents-bus.js";
 // Mission 385 : file d'attente des tâches PAR PROJET. Une seule tâche tourne à la
 // fois sur un projet ; une commande tapée pendant ce temps était REFUSÉE et la
@@ -1308,7 +1308,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       // dans la zone de saisie.
       return false;
     }
-    appendSystemMessage(messagesEl, `${MANUAL_COMMAND_BLOCKED_MESSAGE}\n\n${formatQueuedNotice(res.rank)}`);
+    appendSystemMessage(messagesEl, `${manualCommandBlockedMessage()}\n\n${formatQueuedNotice(res.rank)}`);
     refreshQueueBlock();
     return true;
   };
@@ -1336,7 +1336,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       // la file est pleine, ou si la relance depuis la file est elle-même
       // refusée).
       if (replayingQueuedCommand || !queueRefusedCommand(text)) {
-        appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+        appendSystemMessage(messagesEl, manualCommandBlockedMessage());
       }
       return false;
     }
@@ -1346,7 +1346,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     // (même sonde que la délégation). Refus visible, texte conservé.
     if (!isSlashCommand && !(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
       if (replayingQueuedCommand || !queueRefusedCommand(text)) {
-        appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+        appendSystemMessage(messagesEl, manualCommandBlockedMessage());
       }
       return false;
     }
@@ -6388,7 +6388,7 @@ function renderLoopAbandonChoices(messagesEl, state, kind) {
       // commandes manuelles. Évaluée AVANT `new_agent_session` : un refus ne doit
       // pas détruire la conversation sans rien relancer. Refus visible.
       if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
-        appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+        appendSystemMessage(messagesEl, manualCommandBlockedMessage());
         return;
       }
       invoke("new_agent_session").catch((e) => console.error("Erreur new_agent_session (Refaire):", e));
@@ -8547,7 +8547,7 @@ async function applyPromptSelection() {
   // effacement : en cas de refus, la saisie reste intacte et le refus est
   // affiché dans le chat.
   if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
-    if (promptMessagesEl) appendSystemMessage(promptMessagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+    if (promptMessagesEl) appendSystemMessage(promptMessagesEl, manualCommandBlockedMessage());
     return;
   }
   acInputEl.value = "";

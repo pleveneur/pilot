@@ -648,6 +648,12 @@ body.theme-light.theme-tokyo-day {
   font-weight: 500;
 }
 
+#status-update-waiting {
+  color: var(--accent, #4fc3f7);
+  white-space: nowrap;
+  font-weight: 500;
+}
+
 #status-version {
   color: var(--text-muted);
   white-space: nowrap;

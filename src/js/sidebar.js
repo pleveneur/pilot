@@ -19,7 +19,7 @@ import { projectGdsInfo } from "./gds-status.js";
 import { toastError, toastSuccess, toastInfo, toastWarning } from "./toast.js";
 // Verrou par projet : « Envoyer à l'agent » est une commande manuelle (elle
 // peut modifier le projet) → même politique d'admission que le chat.
-import { canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
+import { canSendManualCommandAsync, manualCommandBlockedMessage } from "./run-policy.js";
 import { isRunInProgress, releaseOrphanRunLock } from "./agents-bus.js";
 
 // Mapping extension → Lucide icon name (kebab-case) for file type icons.
@@ -328,7 +328,7 @@ class Sidebar {
       // Mission 380bis : la levée ciblée d'un verrou ORPHELIN est tentée AVANT le
       // refus (même rappel que le chat et le Prompt Builder).
       if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
-        toastWarning(MANUAL_COMMAND_BLOCKED_MESSAGE);
+        toastWarning(manualCommandBlockedMessage());
         return;
       }
       try {

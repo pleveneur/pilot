@@ -227,6 +227,17 @@ travailles t'est donc proposée **sans redémarrer** l'application.
 
 - **Proposition** : une fenêtre affiche la version, la date et le récapitulatif
   des changements, avec **Installer maintenant** ou **Plus tard**.
+- **Jamais pendant ton travail** : la fenêtre n'apparaît que si **aucun agent ne
+  travaille**. Si une tâche est en cours, elle **n'interrompt rien** : un petit
+  message discret te prévient (et un rappel « ⬆ Mise à jour en attente » reste
+  dans la barre de statut), puis la fenêtre s'affiche **d'elle-même** dès que la
+  tâche est terminée. Tu n'as rien à relancer.
+- **Et rien ne démarre pendant la mise à jour** : tant que la fenêtre est
+  ouverte, et pendant l'installation, **aucun agent ne démarre** — un lancement
+  est refusé avec un message clair qui dit quoi faire (choisir **Plus tard**, qui
+  libère tout de suite la place, ou installer, auquel cas le travail repart au
+  redémarrage). Une demande déjà en file d'attente **n'est pas perdue** : elle
+  démarre automatiquement quand la mise à jour ne bloque plus.
 - **« Plus tard » est retenu** : une fois la fenêtre reportée (bouton ou ✕),
   elle **ne revient plus** pour cette version, même à chaque retour sur Pilot —
   jusqu'au prochain démarrage. Une version **plus récente** t'est en revanche

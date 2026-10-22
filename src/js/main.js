@@ -9,7 +9,13 @@ import { initSearchPanel } from "./search-panel.js";
 import { openRecentPopover } from "./recent-files.js";
 import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo, showToast } from "./toast.js";
-import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus } from "./updater.js";
+import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus, setUpdateWorkProbe, recheckPendingUpdateWindow, getPendingUpdateWindow } from "./updater.js";
+// FENÊTRE RÉSERVÉE de mise à jour : la sonde « un agent travaille-t-il ? » est
+// installée ICI, au seul endroit qui connaît à la fois le bus d'agents (runs en
+// cours) et l'activité RÉELLE des sessions (agent qui travaille sans run).
+import { isRunInProgress } from "./agents-bus.js";
+import { isProjectAgentBusy } from "./super-agent.js";
+import { getAgentActivitySnapshot, subscribeAgentActivity, isAgentWorking, initAgentActivity } from "./agent-activity.js";
 import { initAnomalyDetection } from "./anomaly.js";
 // Étape 2 Telegram (lot 0) : écoute des messages entrants. Démarrée avec
 // l'application, INDÉPENDAMMENT de l'ouverture de l'onglet 🧭 Assistant.
@@ -18,7 +24,6 @@ import { loadTelegramDialogConfig } from "./telegram-dialog.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
 import { checkPiUpdate } from "./pi-update.js";
 import { initInterproject } from "./interproject.js";
-import { initAgentActivity } from "./agent-activity.js";
 import { initProjectCommands } from "./project-commands.js";
 import { initGroupAssistant } from "./group-assistant.js";
 import { refreshIcons } from "./icons.js";
@@ -251,6 +256,50 @@ async function executeCommand(id, tabs) {
 
 // --- App initialization ---
 
+/**
+ * Câblage de la FENÊTRE RÉSERVÉE de mise à jour (règle propriétaire : l'écran
+ * de mise à jour ne s'affiche que sur un terrain LIBRE, et rien ne démarre
+ * pendant qu'il est ouvert ou qu'une mise à jour s'installe).
+ *
+ * Ce fichier est le seul endroit qui connaît à la fois le BUS D'AGENTS (une
+ * run en cours, même sans activité récente) et l'ACTIVITÉ RÉELLE des sessions
+ * (un agent qui travaille sans run déclarée) : la sonde « un agent
+ * travaille-t-il ? » y est donc assemblée, puis confiée au module de la mise à
+ * jour. Aucune décision d'admission n'est prise ici : la règle et ses textes
+ * vivent dans `update-window.js`, et la décision reste dans `run-policy.js`.
+ */
+function initUpdateWindowReservation() {
+  setUpdateWorkProbe(async () => {
+    // 1. Activité RÉELLE des sessions (tous projets) : source de vérité du
+    //    travail en cours (idle ≠ travail).
+    const snap = getAgentActivitySnapshot();
+    if (snap && Array.isArray(snap.list) && snap.list.some(isAgentWorking)) return true;
+    // 2. BUS : une run en cours (mission d'agents) peut précéder le prochain
+    //    relevé d'activité — elle compte comme travail.
+    try {
+      if (isRunInProgress(undefined, {})) return true;
+      if (await isProjectAgentBusy(window._pilotProjectPath || ".")) return true;
+    } catch (_) {
+      /* sonde indisponible : le relevé d'activité ci-dessus fait foi */
+    }
+    return false;
+  });
+
+  // Le terrain se libère → l'écran de mise à jour EN ATTENTE s'affiche de
+  // lui-même (l'utilisateur n'a rien à relancer). On réexamine à chaque
+  // changement d'activité, et par sécurité toutes les 10 s tant qu'une mise à
+  // jour attend (une sonde peut manquer une transition).
+  let wasWorking = false;
+  subscribeAgentActivity((list) => {
+    const working = Array.isArray(list) && list.some(isAgentWorking);
+    if (wasWorking && !working) recheckPendingUpdateWindow();
+    wasWorking = working;
+  });
+  setInterval(() => {
+    if (getPendingUpdateWindow().pending) recheckPendingUpdateWindow();
+  }, 10000);
+}
+
 /** Avertit l'utilisateur que l'agent (pi/plh) est indisponible au démarrage.
  *  Silencieux pour `no_path` (cas « pas encore configuré » normal — la gate
  *  d'ouverture de l'onglet agent gère ce cas gracieusement avec un écran guidé). */
@@ -350,6 +399,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   loadTelegramDialogConfig();
 
   // 3d-bis. Vérification automatique des mises à jour (Tauri updater)
+  initUpdateWindowReservation();
   initUpdater();
 
   // 3d-quater. Sondage du backend (pi vs plh) pour l'affichage dynamique du nom

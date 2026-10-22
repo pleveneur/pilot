@@ -23,6 +23,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { showToast, toastError } from "./toast.js";
 import { renderMarkdown } from "./preview.js";
+import {
+  UPDATE_WINDOW_REASONS,
+  getUpdateWindowReservation,
+  isUpdateWindowReserved,
+  releaseUpdateWindow,
+  reserveUpdateWindow,
+} from "./update-window.js";
 
 let _checking = false;
 let _pendingUpdate = null; // objet Update en attente d'installation
@@ -39,6 +46,17 @@ let _dismissedVersion = null;
 // téléchargement ne doit ni réactiver le bouton, ni masquer la progression, ni
 // permettre une seconde installation en parallèle.
 let _installing = false;
+
+// ── FENÊTRE RÉSERVÉE ──────────────────────────────────────────────────────
+// L'écran de mise à jour ne s'affiche QUE sur un terrain libre (aucun agent ne
+// travaille) ; s'il y a du travail, la fenêtre ATTEND et s'affiche d'elle-même
+// dès que le terrain se libère (voir `tryOpenUpdateWindow`). Pendant qu'elle
+// est ouverte — et pendant l'installation — aucun agent ne démarre : la
+// réservation est posée dans `update-window.js`, consultée par le gardien
+// existant `run-policy.js` (aucun second gardien).
+let _workProbe = null; // sonde « un agent travaille-t-il ? » posée par main.js
+let _opening = false; // ouverture en cours (anti-double affichage)
+let _announcedWaitingVersion = null; // attente déjà annoncée (un seul toast)
 
 // Début du dernier contrôle (toutes origines) : borne les contrôles déclenchés
 // par un retour au premier plan pour ne pas marteler le réseau sur des
@@ -189,6 +207,149 @@ function dismissModal() {
   if (_installing) return;
   if (_pendingUpdate?.version) _dismissedVersion = _pendingUpdate.version;
   modalEl?.classList.add("hidden");
+  // Le terrain est RENDU : le travail peut repartir immédiatement (c'est ce que
+  // promet le message de refus affiché aux lancements pendant la fenêtre).
+  releaseUpdateWindow();
+  clearWaitingNotice();
+}
+
+// ── FENÊTRE RÉSERVÉE : report de l'affichage et réservation du terrain ────
+
+/**
+ * Installe la sonde « un agent travaille-t-il ? » (posée par main.js, qui seul
+ * connaît le bus d'agents ET l'activité réelle des sessions). Sans sonde
+ * installée, l'écran s'affiche immédiatement (aucun report à décider) : le
+ * comportement historique est conservé hors interface.
+ * @param {function(): (boolean|Promise<boolean>)} probe
+ * @returns {void}
+ */
+export function setUpdateWorkProbe(probe) {
+  _workProbe = typeof probe === "function" ? probe : null;
+}
+
+/**
+ * Un agent travaille-t-il en ce moment ? (règle 1 de la fenêtre réservée)
+ * Fail-closed : une sonde en échec est traitée comme « du travail est en
+ * cours » — on ne coupe jamais un travail sur une erreur de sonde ; le
+ * réexamen périodique (`recheckPendingUpdateWindow`) retente, donc l'écran
+ * finit toujours par s'afficher quand le terrain est réellement libre.
+ * @returns {Promise<boolean>}
+ */
+async function isWorkRunning() {
+  if (!_workProbe) return false;
+  try {
+    return (await _workProbe()) === true;
+  } catch (e) {
+    console.warn("Sonde d'activité indisponible pour la mise à jour :", e);
+    return true;
+  }
+}
+
+/**
+ * Annonce, UNE fois, que la mise à jour attend la fin du travail en cours.
+ * Aucune fenêtre : l'information est discrète (toast court + rappel dans la
+ * barre de statut), le travail n'est jamais interrompu.
+ * @param {object} update
+ * @returns {void}
+ */
+function announceWaiting(update) {
+  const version = String((update && update.version) || "");
+  setWaitingNotice(version);
+  if (_announcedWaitingVersion === version) return;
+  _announcedWaitingVersion = version;
+  showToast(
+    `⬆ Mise à jour${version ? ` v${version}` : ""} de Pilot disponible : elle attendra la fin du travail en cours.`,
+    "info",
+    8000
+  );
+}
+
+/**
+ * Rappel VISIBLE et non bloquant dans la barre de statut : la mise à jour est
+ * prête et s'affichera dès que le travail en cours sera terminé.
+ * @param {string} version
+ * @returns {void}
+ */
+function setWaitingNotice(version) {
+  const el = typeof document !== "undefined" && document.getElementById
+    ? document.getElementById("status-update-waiting")
+    : null;
+  if (!el) return;
+  el.textContent = `⬆ Mise à jour${version ? ` v${version}` : ""} en attente (à la fin du travail en cours)`;
+  el.classList.remove("hidden");
+}
+
+/** Retire le rappel de la barre de statut (plus rien n'attend). */
+function clearWaitingNotice() {
+  const el = typeof document !== "undefined" && document.getElementById
+    ? document.getElementById("status-update-waiting")
+    : null;
+  if (!el) return;
+  el.textContent = "";
+  el.classList.add("hidden");
+}
+
+/**
+ * Ouvre l'écran de mise à jour SI — et seulement si — le terrain est libre.
+ *
+ * La règle est vérifiée AU MOMENT D'AFFICHER (pas seulement à la détection) et
+ * DEUX fois : une seconde lecture immédiatement avant l'affichage ferme la
+ * fenêtre de course où un travail redémarre entre l'intention et l'affichage
+ * (aucun « écran fantôme » au milieu d'un travail).
+ * @returns {Promise<boolean>} true si l'écran est affiché
+ */
+export async function tryOpenUpdateWindow() {
+  const update = _pendingUpdate;
+  if (!update) return false;
+  if (_installing || _opening) return false; // installation : jamais de réaffichage
+  if (_dismissedVersion && update.version === _dismissedVersion) return false;
+  if (isUpdateWindowReserved()) return false; // déjà ouverte
+  _opening = true;
+  try {
+    if (await isWorkRunning()) {
+      announceWaiting(update);
+      return false;
+    }
+    // Seconde lecture, immédiate : le travail a-t-il repris entre-temps ?
+    if (await isWorkRunning()) {
+      announceWaiting(update);
+      return false;
+    }
+    // Le terrain est libre : il est RÉSERVÉ avant l'affichage, donc aucun
+    // lancement ne peut s'intercaler entre la décision et l'écran.
+    reserveUpdateWindow(UPDATE_WINDOW_REASONS.WINDOW, { version: update.version });
+    clearWaitingNotice();
+    showUpdateModal(update);
+    return !!(modalEl && !modalEl.classList.contains("hidden"));
+  } finally {
+    _opening = false;
+  }
+}
+
+/**
+ * Réexamine une mise à jour en attente (appelé à chaque changement d'activité
+ * des agents par main.js) : l'écran s'affiche de lui-même dès que le terrain
+ * se libère, sans que l'utilisateur ait à relancer un contrôle.
+ * @returns {Promise<boolean>|undefined}
+ */
+export function recheckPendingUpdateWindow() {
+  if (!_pendingUpdate) return undefined;
+  return tryOpenUpdateWindow();
+}
+
+/**
+ * État de la fenêtre réservée (lecture seule) : ce qui attend et pourquoi aucun
+ * agent ne démarre.
+ * @returns {{pending: boolean, version: string, reserved: boolean, reason: string}}
+ */
+export function getPendingUpdateWindow() {
+  const reservation = getUpdateWindowReservation();
+  return {
+    pending: !!_pendingUpdate,
+    version: (_pendingUpdate && _pendingUpdate.version) || "",
+    reserved: reservation.reserved,
+    reason: reservation.reason,
+  };
 }
 
 /** Affiche la modale de mise à jour avec le changelog de la nouvelle version. */
@@ -347,6 +508,10 @@ async function installUpdate(update) {
   installBtn.disabled = true;
   laterBtn.disabled = true;
   progressEl.classList.remove("hidden");
+  // Pendant l'installation, la mise à jour occupe le terrain au même titre que
+  // l'écran ouvert : aucun agent ne démarre jusqu'au redémarrage de Pilot
+  // (règle unique : `update-window.js`, consultée par `run-policy.js`).
+  reserveUpdateWindow(UPDATE_WINDOW_REASONS.INSTALLING, { version: update && update.version });
 
   // Résultat de l'étape d'arrêt des services (`null` tant qu'elle n'a pas eu
   // lieu : un échec du téléchargement ne doit produire aucune consigne). Déclaré
@@ -399,8 +564,10 @@ async function installUpdate(update) {
     // quoi faire. Message non bloquant, en français, jamais un code technique.
     const consigne = consigneApresEchecInstallation(arretServices);
     if (consigne) showToast(consigne, "warning", 20000);
-    // On permet un nouvel essai.
+    // On permet un nouvel essai. L'écran reste affiché, donc le terrain reste
+    // réservé : aucun agent ne démarre tant que l'écran est ouvert.
     _installing = false;
+    reserveUpdateWindow(UPDATE_WINDOW_REASONS.WINDOW, { version: update && update.version });
     installBtn.disabled = false;
     laterBtn.disabled = false;
     progressEl.classList.add("hidden");
@@ -494,7 +661,12 @@ export async function checkForUpdate(silent = true) {
         detail: "",
         lastSuccessAt: new Date(),
       };
-      showUpdateModal(update);
+      // FENÊTRE RÉSERVÉE : la mise à jour est MÉMORISÉE puis proposée seulement
+      // si aucun agent ne travaille. Si du travail est en cours, rien ne
+      // s'affiche (le travail n'est pas interrompu) et l'écran arrive de
+      // lui-même à la fin (voir `tryOpenUpdateWindow` / `recheckPendingUpdateWindow`).
+      _pendingUpdate = update;
+      await tryOpenUpdateWindow();
     } else {
       _lastCheck = {
         at: new Date(),

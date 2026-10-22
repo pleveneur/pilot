@@ -360,7 +360,7 @@ describe("2. câblage dans l'onglet agent (agent-pi.js)", () => {
     // La relance réutilise le chemin d'envoi existant (aucun lancement parallèle).
     expect(code).toContain("const sent = await sendPrompt();");
     // Le texte saisi reste dans la zone de saisie en cas de file pleine.
-    expect(body).toContain("appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE)");
+    expect(body).toContain("appendSystemMessage(messagesEl, manualCommandBlockedMessage())");
   });
 
   it("`/file` et `/file vide` sont traités LOCALEMENT, avant tout envoi au moteur", () => {

@@ -46,6 +46,11 @@ import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBu
 import { periodBounds, periodKindLabel, formatPeriodReport, weekBounds } from "./period-report.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
+// FENÊTRE RÉSERVÉE de mise à jour : tant que l'écran de mise à jour est ouvert —
+// ou qu'une mise à jour s'installe — RIEN ne démarre (ni mission, ni délégation).
+// La règle et son texte vivent dans `update-window.js` ; ici on ne fait que
+// consulter ce même état, jamais une copie locale.
+import { isUpdateWindowReserved, updateWindowBlockedMessage } from "./update-window.js";
 import { shouldFinalizeOnAgentEnd } from "./agent-hardening.js";
 import { toastInfo } from "./toast.js";
 import { createReportDeliveryGate } from "./super-agent-reports.js";
@@ -1106,7 +1111,10 @@ export async function replayQueuedMissionForProject(target, deps = {}) {
   const queue = runAgentsQueueByProject[missionQueueKey(target)] || [];
   if (queue.length === 0) return { replayed: false, reason: "empty" };
   // (la clé de file est résolue par `missionQueueKey` : une seule file par dossier)
-  const isFree = deps.isAdmissionFree || (async (p) => !(await isRunStillActive(p)));
+  // FENÊTRE RÉSERVÉE de mise à jour : le terrain n'est PAS libre tant que la
+  // mise à jour l'occupe — la mission RESTE en file (jamais perdue, jamais
+  // lancée) et repart d'elle-même quand l'écran est refermé.
+  const isFree = deps.isAdmissionFree || (async (p) => !isUpdateWindowReserved() && !(await isRunStillActive(p)));
   let free;
   try {
     free = await isFree(target);
@@ -1166,6 +1174,21 @@ export function armQueueReplay(target) {
  */
 function launchQueuedMission(target, entry) {
   if (!target || !entry) return;
+  // FENÊTRE RÉSERVÉE de mise à jour : une mission SORTIE de la file ne démarre
+  // pas tant que la mise à jour occupe le terrain (écran ouvert ou installation
+  // en cours). Elle est remise EN TÊTE — aucune perte, ordre d'arrivée conservé —
+  // et le rejeu la reprend dès que la place est rendue. Ce garde est placé DANS
+  // le point de passage unique : il couvre donc aussi les lancements directs
+  // déclenchés par la fin d'une run, pas seulement le rejeu périodique.
+  if (isUpdateWindowReserved()) {
+    const blockedKey = missionQueueKey(target);
+    if (!runAgentsQueueByProject[blockedKey]) runAgentsQueueByProject[blockedKey] = [];
+    if (!runAgentsQueueByProject[blockedKey].includes(entry)) {
+      runAgentsQueueByProject[blockedKey].unshift(entry);
+    }
+    armQueueReplay(target);
+    return;
+  }
   // P1 — FENÊTRE DE COURSE : la mission vient d'être retirée de la file par
   // l'appelant (`shift`) et n'est pas encore inscrite au bus. La réservation est
   // posée ICI, synchronement (aucun `await` entre le shift et elle) : une
@@ -1275,7 +1298,7 @@ export async function replayDelegationQueueForProject(projectPath, deps = {}) {
   if (!projectPath) return { replayed: false, reason: "no_target" };
   const ds = delegationState(projectPath);
   if (ds.queue.length === 0) return { replayed: false, reason: "empty" };
-  const isFree = deps.isAgentFree || (async (p) => !(await isRunStillActive(p)));
+  const isFree = deps.isAgentFree || (async (p) => !isUpdateWindowReserved() && !(await isRunStillActive(p)));
   let free;
   try {
     free = await isFree(projectPath);
@@ -4879,7 +4902,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // réservation de `launchQueuedMission`, comptée par
           // `pendingMissionsAhead` : la fenêtre de course du rejeu est fermée.
           const admission = decideMissionAdmission(target, {
-            busy: isRunInProgress(target, { nature: missionNature }) || busyManual,
+            // FENÊTRE RÉSERVÉE : la mise à jour de Pilot occupe le terrain → la
+            // demande est MISE EN FILE (aucun lancement, aucune perte).
+            busy: isRunInProgress(target, { nature: missionNature }) || busyManual || isUpdateWindowReserved(),
             dequeue: !!(launchOpts && launchOpts.dequeue),
           });
           if (admission.queue) {
@@ -4908,6 +4933,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
               // Décision EXPLICITE et TRACÉE : la demande ne double pas la file.
               traceMissionQueuedBehindPending(target, aheadLabels, task);
               appendSystemMessage(messagesEl, `⏳ ${admission.pending} demande(s) attendent déjà sur ce projet — votre demande est mise en file DERRIÈRE elles ; elle démarrera à son tour, dans l'ordre d'arrivée.`);
+            } else if (isUpdateWindowReserved()) {
+              // FENÊTRE RÉSERVÉE : motif EXACT (écran ouvert ou installation) —
+              // le texte vient du module de la règle, jamais d'une copie.
+              appendSystemMessage(messagesEl, `${updateWindowBlockedMessage()}\n\nVotre demande est mise en file : elle démarrera dès la fin de la mise à jour.`);
             } else {
               appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.");
             }
@@ -4959,7 +4988,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // P1 — ORDRE D'ARRIVÉE : même point de décision que `launchOrQueue`
           // (`decideMissionAdmission`) — la file est consultée AVANT de démarrer.
           const admission = decideMissionAdmission(target, {
-            busy: !!(blockedByFlag || blockedByBus),
+            // FENÊTRE RÉSERVÉE : la mise à jour de Pilot occupe le terrain → la
+            // demande est MISE EN FILE (aucun lancement, aucune perte).
+            busy: !!(blockedByFlag || blockedByBus || isUpdateWindowReserved()),
             dequeue: !!(launchOpts && launchOpts.dequeue),
           });
           if (admission.queue) {
@@ -4980,6 +5011,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
               // Décision EXPLICITE et TRACÉE : la demande ne double pas la file.
               traceMissionQueuedBehindPending(target, aheadLabels, task);
               appendSystemMessage(messagesEl, `⏳ ${admission.pending} demande(s) attendent déjà sur ce projet — votre demande est mise en file DERRIÈRE elles ; elle démarrera à son tour, dans l'ordre d'arrivée.`);
+            } else if (isUpdateWindowReserved()) {
+              // FENÊTRE RÉSERVÉE : motif EXACT (écran ouvert ou installation).
+              appendSystemMessage(messagesEl, `${updateWindowBlockedMessage()}\n\nVotre demande est mise en file : elle démarrera dès la fin de la mise à jour.`);
             } else {
               appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.");
             }
@@ -5640,14 +5674,22 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // `ds.busy` couvre les délégations consécutives DU PROJET ; `isProjectBusy`
       // couvre le cas où l'agent est occupé par un prompt manuel (onglet visible).
       const ds = delegationState(projectPath);
-      const busy = ds.busy || await isProjectAgentBusy(projectPath);
+      // FENÊTRE RÉSERVÉE de mise à jour : la mise à jour occupe le terrain →
+      // MÊME traitement qu'un agent occupé (mise en file, jamais de perte).
+      const busy = ds.busy || isUpdateWindowReserved() || await isProjectAgentBusy(projectPath);
       if (busy) {
         ds.queue.push({ request, projectPath, agentId, messagesEl, invisible, forceInvisible, agentTabOpen });
         // POINT C : la demande en file est TOUJOURS rejouée (sonde réelle de
         // l'agent cible) — jamais de blocage silencieux si l'agent_end n'arrive
         // pas (prompt distant, session figée…).
         armDelegationQueueReplay(projectPath);
-        appendSystemMessage(messagesEl, "📋 L'agent travaille déjà sur une tâche. Demande mise en file (elle sera transmise à la fin de la tâche en cours).");
+        if (isUpdateWindowReserved()) {
+          // Motif EXACT fourni par le module de la règle (écran ouvert ou
+          // installation) : l'utilisateur sait pourquoi et QUAND ça repart.
+          appendSystemMessage(messagesEl, `${updateWindowBlockedMessage()}\n\nLa demande est mise en file : elle sera transmise à l'agent dès la fin de la mise à jour.`);
+        } else {
+          appendSystemMessage(messagesEl, "📋 L'agent travaille déjà sur une tâche. Demande mise en file (elle sera transmise à la fin de la tâche en cours).");
+        }
         await respondSuperAgentAction(id, true);
         return;
       }
@@ -5964,6 +6006,13 @@ function flushDelegationQueue(projectPath) {
   const ds = delegationState(projectPath);
   ds.busy = false;
   if (ds.queue.length === 0) return;
+  if (isUpdateWindowReserved()) {
+    // FENÊTRE RÉSERVÉE : rien ne démarre. La demande RESTE en tête de file (le
+    // rejeu périodique la reprendra dès que la mise à jour n'occupe plus le
+    // terrain) — aucune demande n'est consommée puis perdue.
+    armDelegationQueueReplay(projectPath);
+    return;
+  }
   const tabs = window._pilotTabs;
   if (!tabs) {
     // Gestionnaire d'onglets indisponible : on GARDE la demande en tête de file

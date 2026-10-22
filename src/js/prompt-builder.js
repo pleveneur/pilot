@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toastError, toastWarning } from "./toast.js";
 // Verrou par projet : « Envoyer à l'agent » est une commande manuelle (elle
 // peut modifier le projet) → même politique d'admission que le chat.
-import { canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
+import { canSendManualCommandAsync, manualCommandBlockedMessage } from "./run-policy.js";
 import { isRunInProgress, releaseOrphanRunLock } from "./agents-bus.js";
 import { isProjectAgentBusy } from "./super-agent.js";
 
@@ -321,7 +321,7 @@ export async function createPromptBuilder(container, sidebar) {
     // refus (même rappel que le chat et le menu contextuel) — sinon ce bouton
     // restait bloqué 2 à 3 min par un agent mort.
     if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
-      toastWarning(MANUAL_COMMAND_BLOCKED_MESSAGE);
+      toastWarning(manualCommandBlockedMessage());
       return;
     }
 

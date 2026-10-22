@@ -430,7 +430,9 @@ describe("POINT B — commande manuelle soumise à la politique d'admission", ()
     const guardIdx = src.indexOf("!canSendManualCommand(window._pilotProjectPath");
     const sendIdx = src.indexOf('invoke("send_agent_prompt", payload)');
     expect(guardIdx).toBeGreaterThan(-1);
-    expect(src).toContain("MANUAL_COMMAND_BLOCKED_MESSAGE");
+    // Refus visible : le texte vient du décideur UNIQUE (`run-policy.js`), qui
+    // nomme le motif exact (fenêtre de mise à jour ou travail en cours).
+    expect(src).toContain("manualCommandBlockedMessage()");
     expect(sendIdx).toBeGreaterThan(-1);
     // La garde est branchée dans le chemin d'envoi, avant l'invoke.
     expect(guardIdx).toBeLessThan(sendIdx);
@@ -449,7 +451,7 @@ describe("POINT B — commande manuelle soumise à la politique d'admission", ()
 function assertGuardBeforeSend(src, label) {
   const guardIdx = src.indexOf("canSendManualCommandAsync(");
   const sendIdx = src.indexOf('invoke("send_agent_prompt", {');
-  const refuseIdx = src.indexOf("MANUAL_COMMAND_BLOCKED_MESSAGE");
+  const refuseIdx = src.indexOf("manualCommandBlockedMessage()");
   expect(guardIdx, `${label} : garde absente`).toBeGreaterThan(-1);
   expect(refuseIdx, `${label} : refus non visible`).toBeGreaterThan(-1);
   expect(sendIdx, `${label} : envoi absent`).toBeGreaterThan(-1);
@@ -544,7 +546,7 @@ describe("POINT D — le sens inverse : commande manuelle vs mission d'écriture
     const body = src.slice(fnIdx, endIdx);
     expect(body).toContain("canSendManualCommandAsync(window._pilotProjectPath");
     expect(body).toContain("isProjectAgentBusy");
-    expect(body).toContain("MANUAL_COMMAND_BLOCKED_MESSAGE");
+    expect(body).toContain("manualCommandBlockedMessage()");
   });
 });
 
@@ -972,7 +974,7 @@ describe("POINT G — le bouton « Refaire » (dialogue de boucle) est gardé", 
     const sendIdx = body.indexOf('invoke("send_agent_prompt", { message: prompt })');
     const newSessionIdx = body.indexOf('invoke("new_agent_session")');
     expect(guardIdx, "garde absente").toBeGreaterThan(-1);
-    expect(body).toContain("MANUAL_COMMAND_BLOCKED_MESSAGE");
+    expect(body).toContain("manualCommandBlockedMessage()");
     expect(sendIdx, "envoi absent").toBeGreaterThan(-1);
     expect(newSessionIdx, "nouvelle session absente").toBeGreaterThan(-1);
     expect(guardIdx, "la garde doit précéder l'envoi").toBeLessThan(sendIdx);

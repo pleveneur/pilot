@@ -110,6 +110,12 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 ### Barre de statut
 - Position du curseur (ligne, colonne).
 - Type de fichier et raccourcis disponibles.
+- **« ⬆ Mise à jour en attente (à la fin du travail en cours) »** quand une nouvelle version de Pilot attend qu'un agent termine sa tâche.
+
+### Mise à jour de Pilot
+- Pilot vérifie seul s'il existe une version plus récente (au démarrage, toutes les 6 heures, et à chaque retour sur Pilot), puis propose la version, sa date et le récapitulatif des changements.
+- **Jamais pendant votre travail** : la fenêtre de mise à jour n'apparaît que si **aucun agent ne travaille**. Si une tâche est en cours, elle n'est pas interrompue : un message discret vous prévient et la fenêtre s'affiche **d'elle-même** dès la fin de la tâche.
+- **Rien ne démarre pendant la mise à jour** : tant que la fenêtre est ouverte, et pendant l'installation, aucun agent ne démarre (le message de refus explique quoi faire). **« Plus tard »** libère la place immédiatement ; une demande déjà en file d'attente n'est pas perdue et repart ensuite toute seule.
 
 ### Multiplateforme
 - **Windows**, **macOS** et **Linux** via Tauri v2.

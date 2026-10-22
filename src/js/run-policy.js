@@ -1,6 +1,7 @@
 // Politique d'admission des missions d'agents (lecture partagée / modification
-// exclusive). Module PUR, sans I/O ni état : la décision est calculée à partir
-// de la nature de la mission et de ce qui tourne déjà SUR LE MÊME PROJET.
+// exclusive). Aucune I/O : la décision est calculée à partir de la nature de la
+// mission, de ce qui tourne déjà SUR LE MÊME PROJET, et de la réservation du
+// terrain par la mise à jour (`update-window.js`, consulté et non dupliqué).
 //
 // Règles (spécifiées par le propriétaire, non réinterprétées) :
 //   - des projets différents ne se bloquent jamais (le cadrage par projet est
@@ -10,7 +11,13 @@
 //     partagées) ;
 //   - toute mission qui MODIFIE est exclusive : elle ne démarre pas tant que
 //     quelque chose tourne sur le projet ;
-//   - rien ne démarre tant qu'une mission qui MODIFIE tourne sur le projet.
+//   - rien ne démarre tant qu'une mission qui MODIFIE tourne sur le projet ;
+//   - rien ne démarre non plus pendant que la MISE À JOUR de Pilot occupe le
+//     terrain (écran de mise à jour ouvert ou installation en cours) : cette
+//     partie de la règle est portée par `update-window.js` (seul propriétaire
+//     de la réservation) et consultée ICI, dans le gardien déjà existant.
+
+import { isUpdateWindowReserved, updateWindowBlockedMessage } from "./update-window.js";
 
 /** Nature d'une mission d'après le drapeau `readonly` du registre des agents. */
 export function missionNature(readonly) {
@@ -51,6 +58,39 @@ export const MANUAL_COMMAND_BLOCKED_MESSAGE =
   "pas modifier le projet en même temps.";
 
 /**
+ * Le travail peut-il DÉMARRER maintenant ? (décideur UNIQUE du démarrage)
+ *
+ * Une seule fonction pour les deux familles de démarrages — mission d'agents
+ * et commande manuelle — afin qu'aucun chemin ne puisse oublier une partie de
+ * la règle :
+ *   1. la mise à jour de Pilot occupe le terrain (écran ouvert ou installation
+ *      en cours) → refus, quel que soit l'état du projet ;
+ *   2. sinon, la politique d'admission du projet tranche (`canStartMission` :
+ *      lecture partagée / modification exclusive).
+ * @param {string} project - projet ciblé (le verrou est PAR PROJET)
+ * @param {"read"|"write"} nature - nature du travail à admettre
+ * @param {function(string, {nature:string}):boolean} [isRunInProgress] - sonde
+ *   du verrou d'admission du bus (agents-bus.js), injectée pour rester sans
+ *   dépendance.
+ * @returns {boolean} false si le travail ne doit pas démarrer maintenant
+ */
+export function canStartWork(project, nature, isRunInProgress) {
+  if (isUpdateWindowReserved()) return false;
+  if (typeof isRunInProgress !== "function") return true;
+  return !isRunInProgress(project, { nature });
+}
+
+/**
+ * Message de refus d'un travail refusé, MOTIF EXACT (une seule source) :
+ * fenêtre de mise à jour ou installation en cours si la mise à jour occupe le
+ * terrain, sinon le message d'occupation du projet.
+ * @returns {string}
+ */
+export function workBlockedMessage() {
+  return updateWindowBlockedMessage() || MANUAL_COMMAND_BLOCKED_MESSAGE;
+}
+
+/**
  * Une commande manuelle peut-elle être envoyée maintenant sur ce projet ?
  * @param {string} project - projet ciblé (le verrou est PAR PROJET)
  * @param {function(string, {nature:string}):boolean} isRunInProgress - sonde du
@@ -58,8 +98,19 @@ export const MANUAL_COMMAND_BLOCKED_MESSAGE =
  * @returns {boolean} false si une run tourne déjà sur le même projet
  */
 export function canSendManualCommand(project, isRunInProgress) {
-  if (typeof isRunInProgress !== "function") return true;
-  return !isRunInProgress(project, { nature: MANUAL_COMMAND_NATURE });
+  // Décideur UNIQUE (`canStartWork`) : une commande manuelle est une
+  // modification exclusive du projet, et elle est refusée pendant la fenêtre
+  // réservée de mise à jour.
+  return canStartWork(project, MANUAL_COMMAND_NATURE, isRunInProgress);
+}
+
+/**
+ * Message de refus d'une commande manuelle (motif exact fourni par le
+ * décideur unique `canSendManualCommand`/`canStartWork`).
+ * @returns {string}
+ */
+export function manualCommandBlockedMessage() {
+  return workBlockedMessage();
 }
 
 /**
@@ -80,6 +131,10 @@ export function canSendManualCommand(project, isRunInProgress) {
  * @returns {Promise<boolean>}
  */
 export async function canSendManualCommandAsync(project, isRunInProgress, isAgentBusy, releaseStaleLock) {
+  // Fenêtre réservée de mise à jour : le refus est VOULU (écran ouvert ou
+  // installation en cours) — aucune levée de verrou orphelin n'est tentée, il
+  // n'y a pas de verrou en cause.
+  if (isUpdateWindowReserved()) return false;
   if (!canSendManualCommand(project, isRunInProgress)) {
     // Mission 380 : un verrou resté fermé sans porteur ne doit pas condamner la
     // saisie de l'utilisateur jusqu'au redémarrage. On tente une levée CIBLÉE
