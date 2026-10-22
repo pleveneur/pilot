@@ -11,12 +11,13 @@
 // valeur.
 //
 // Qui fait quoi :
-//   - l'ÉTAT est lu par l'assistant dans son prompt système, reconstruit à
-//     CHAQUE envoi côté Rust (`telegram_notify_guideline` dans super_agent.rs) :
-//     il est donc toujours à jour, jamais figé au démarrage ;
-//   - l'assistant CHANGE le réglage avec l'outil `set_telegram_notifications`
-//     (extension pilot-assistant-actions) : le même chemin sert dans le chat de
-//     l'onglet 🧭 ET depuis un message Telegram reçu (même session) ;
+//   - l'ÉTAT est obtenu par l'assistant en APPELANT l'outil UNIQUE
+//     `telegram_notifications` (extension pilot-assistant-actions) : sans
+//     argument il renvoie l'état en clair, avec `enabled` il le change et
+//     renvoie le nouvel état. AUCUNE valeur n'est injectée dans le prompt
+//     système ni dans un bloc de contexte : la seule source est l'appel ;
+//   - le même chemin sert dans le chat de l'onglet 🧭 ET depuis un message
+//     Telegram reçu (même session) ;
 //   - la RÉACTIVATION automatique (un message du propriétaire arrive via
 //     Telegram) vit côté Rust, à la réception (`telegram.rs`) : elle ne dépend
 //     ni de l'ouverture d'un onglet ni de ce module.
@@ -64,6 +65,42 @@ export function telegramNotifyConfirmation(enabled) {
   return enabled
     ? "C'est fait : je vous préviens sur Telegram."
     : "C'est fait : plus rien ne part sur Telegram.";
+}
+
+/**
+ * Réponse de l'outil UNIQUE quand on lui demande l'état (aucun argument) : dit
+ * en clair OUI ou NON, sans jargon. C'est la SEULE façon dont l'assistant
+ * apprend l'état — rien n'est injecté dans son prompt ni dans un contexte.
+ * Fonction PURE.
+ * @param {boolean} enabled
+ * @returns {string}
+ */
+export function telegramNotifyStateAnswer(enabled) {
+  return enabled === true
+    ? "Réglage « me prévenir sur Telegram » : OUI. L'utilisateur veut être prévenu sur Telegram (début et fin de mission, alertes). Pour l'arrêter : rappelle cet outil avec enabled: false."
+    : "Réglage « me prévenir sur Telegram » : NON. Rien ne part sur Telegram (aucun message de début ni de fin, aucune alerte) et les alertes restent visibles dans Pilot. Pour l'activer : rappelle cet outil avec enabled: true.";
+}
+
+/**
+ * LECTURE de l'état par la commande existante `get_config` (source unique :
+ * `AppConfig.telegram_notify_enabled`). Un échec n'invente AUCUNE valeur :
+ * `ok: false` et l'appelant le signale en clair.
+ * @param {object} [deps]
+ * @param {(cmd: string, args?: object) => Promise<unknown>} [deps.invokeFn]
+ * @returns {Promise<{ok: boolean, enabled: boolean, error?: string}>}
+ */
+export async function readTelegramNotifyEnabled(deps = {}) {
+  const call = deps.invokeFn || defaultInvoke;
+  let cfg;
+  try {
+    cfg = await call("get_config");
+  } catch (e) {
+    return { ok: false, enabled: false, error: String(e) };
+  }
+  if (!cfg || typeof cfg !== "object") {
+    return { ok: false, enabled: false, error: "configuration indisponible" };
+  }
+  return { ok: true, enabled: isTelegramNotifyEnabled(cfg) };
 }
 
 /**

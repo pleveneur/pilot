@@ -3457,8 +3457,7 @@ d'une **autre personne** que vous est **ignoré** (jamais de réponse).
 📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
 petit bouton de discussion permet d'**activer** cette communication. Il
 n'apparaît que si l'envoi Telegram est réellement **en état de fonctionner**
-(interrupteur **« Envoyer les avis sur Telegram »** coché, jeton et identifiant
-renseignés — ces réglages restent dans **Paramètres ⚙️ → onglet Assistant**) :
+(case **« Me prévenir sur Telegram »** cochée, jeton et identifiant renseignés — ces réglages restent dans **Paramètres ⚙️ → onglet Assistant**) :
 s'il s'affiche, c'est que vos messages partiront vraiment. Une fois activé, ce que
 l'Assistant écrit vous arrive **aussi sur Telegram**, **résumé en une phrase
 simple**, et **seulement quand cela vous est utile** : réponse à votre question,

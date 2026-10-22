@@ -163,8 +163,7 @@ d'une **autre personne** que vous est **ignoré** (jamais de réponse).
 📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
 petit bouton de discussion permet d'**activer** cette communication. Il
 n'apparaît que si l'envoi Telegram est réellement **en état de fonctionner**
-(interrupteur **« Envoyer les avis sur Telegram »** coché, jeton et identifiant
-renseignés — ces réglages restent dans **Paramètres ⚙️ → onglet Assistant**) :
+(case **« Me prévenir sur Telegram »** cochée, jeton et identifiant renseignés — ces réglages restent dans **Paramètres ⚙️ → onglet Assistant**) :
 s'il s'affiche, c'est que vos messages partiront vraiment. Une fois activé, ce que
 l'Assistant écrit vous arrive **aussi sur Telegram**, **résumé en une phrase
 simple**, et **seulement quand cela vous est utile** : réponse à votre question,
@@ -951,27 +950,36 @@ l'étape 1, **conservé tel quel, sans doublon** :
 | le champ | `telegram_notify_enabled` (aucun autre champ de notification) |
 | la case | `#setting-telegram-enabled`, Paramètres → onglet Assistant, section « Notifications Telegram », libellé **« Me prévenir sur Telegram »** |
 | la porte d'envoi | `TelegramConfig::inert_reason()` (`src-tauri/src/telegram.rs`) : coupée ⇒ aucun envoi, sous aucune forme |
-| l'écriture au nom de l'assistant | `set_telegram_notifications` → `src/js/telegram-notify-setting.js` → `save_config` |
+| l'écriture au nom de l'assistant | outil UNIQUE `telegram_notifications` → `src/js/telegram-notify-setting.js` → `save_config` |
 
 Le réglage voisin `telegram_dialog_enabled` n'est **pas** un second interrupteur
 de notification : il ne décide que de la **reformulation du dialogue** de
 l'Assistant (§ 11), n'a aucune case, et ne peut donc pas contredire celui-ci.
 
-### 14.2 Comment l'assistant VOIT l'état (choix justifié)
+### 14.2 Comment l'assistant LIT l'état : le même outil, sans argument
 
-**Contexte du prompt système**, et non un outil de lecture :
-`telegram_notify_guideline(enabled)` (`src-tauri/src/super_agent.rs`) est
-**reconstruit à chaque envoi**, dans les deux chemins de prompt (`do_send_super_agent_prompt` et `ask_super_agent`). L'état est donc **toujours frais** (jamais
-figé au démarrage), il est présent **au moment où l'assistant rédige**, sans
-appel d'outil à ne pas oublier ni aller-retour. Le bloc dit l'état (`ACTIF` /
-`COUPÉ`), ce que cela implique, et **comment le changer**.
+**Un seul outil** est exposé à l'assistant — `telegram_notifications`
+(`src-tauri/extensions/pilot-assistant-actions.ts`), libellé « Me prévenir sur
+Telegram ». Il sert à la fois à **lire** et à **changer** :
+
+| Appel | Effet | Réponse de l'outil |
+|---|---|---|
+| sans argument (`enabled` absent) | lecture seule | l'état en clair : « … : OUI » ou « … : NON » |
+| `enabled: true` | le propriétaire est prévenu | le **nouvel** état (OUI) |
+| `enabled: false` | plus rien ne part | le **nouvel** état (NON) |
+
+**Aucune valeur n'est injectée dans le prompt** de l'assistant ni dans un bloc de
+contexte : la seule source de l'état est l'appel de l'outil (décision du
+propriétaire — un bloc de contexte peut devenir une phrase périmée). L'ancien
+bloc `telegram_notify_guideline` a donc été **retiré** de `super_agent.rs`
+(`do_send_super_agent_prompt` et `ask_super_agent`).
 
 ### 14.3 Comment il le CHANGE, depuis les deux canaux
 
-L'outil `set_telegram_notifications({enabled})`
-(`src-tauri/extensions/pilot-assistant-actions.ts`) passe par le canal d'action
-unique de Pilot (`PILOT_ASSISTANT_ACTION::`) ; `super-agent.js` applique
-immédiatement (`setTelegramNotifyEnabled`), puis confirme en **une phrase**
+L'outil unique envoie son payload par le sentinel d'`input`
+`PILOT_ASSISTANT_TELEGRAM_NOTIFY::` ; `super-agent.js` lit ou applique
+immédiatement (`readTelegramNotifyEnabled` / `setTelegramNotifyEnabled`), puis
+répond à l'assistant avec l'état en clair et confirme à l'écran en **une phrase**
 (`telegramNotifyConfirmation`), **sans double confirmation**. Le même outil sert
 dans le chat de l'onglet 🧭 **et** depuis un message Telegram : les messages reçus
 sont injectés dans la **même session** de l'Assistant (`telegram-inbound.js`),

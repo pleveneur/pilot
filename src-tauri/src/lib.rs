@@ -379,10 +379,11 @@ struct AppConfig {
     // défaut : un config.json ancien (sans ces champs) reste STRICTEMENT inerte.
     // RÉGLAGE UNIQUE « me prévenir sur Telegram » — c'est LE seul réglage des
     // notifications Telegram, et il n'existe QU'ICI (aucune copie ailleurs) :
-    // c'est lui qui coupe TOUS les envois (`telegram::inert_reason`), il est lu
-    // par l'assistant à chaque échange (`super_agent::telegram_notify_guideline`),
-    // changé par l'outil `set_telegram_notifications` (Pilot) et réactivé
-    // d'office quand le PROPRIÉTAIRE écrit au bot (`telegram.rs`).
+    // c'est lui qui coupe TOUS les envois (`telegram::inert_reason`), il est
+    // LISIBLE et MODIFIABLE par l'assistant à travers l'outil UNIQUE
+    // `telegram_notifications` (Pilot ; sans argument = état, avec `enabled` =
+    // changement) — aucune valeur d'état n'est injectée dans son prompt — et il
+    // est réactivé d'office quand le PROPRIÉTAIRE écrit au bot (`telegram.rs`).
     // Tant que l'interrupteur est faux ou que le jeton / l'identifiant de
     // discussion est vide, rien n'est envoyé (aucun réseau, aucune erreur).
     // Le jeton est un secret d'envoi (jamais journalisé) : il est saisi dans les

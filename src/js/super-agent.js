@@ -112,13 +112,17 @@ import {
   setRawAvisTurnProbe,
 } from "./telegram-dialog.js";
 // Réglage UNIQUE « me prévenir sur Telegram » (AppConfig
-// `telegram_notify_enabled`) : l'assistant le CHANGE ici (même chemin depuis le
-// chat de l'onglet 🧭 et depuis un message Telegram reçu) et l'interface est
-// rafraîchie quand la réception Telegram le réactive d'office.
+// `telegram_notify_enabled`) : l'outil UNIQUE `telegram_notifications` passe par
+// ici, dans le chat de l'onglet 🧭 comme depuis un message Telegram reçu — LIRE
+// (aucun argument) et CHANGER (enabled: true/false) empruntent le MÊME chemin.
+// Aucune valeur d'état n'est injectée dans le prompt de l'assistant. L'interface
+// est rafraîchie quand la réception Telegram réactive le réglage d'office.
 import {
   TELEGRAM_NOTIFY_CHANGED_EVENT,
+  readTelegramNotifyEnabled,
   setTelegramNotifyEnabled,
   telegramNotifyConfirmation,
+  telegramNotifyStateAnswer,
 } from "./telegram-notify-setting.js";
 // Refonte des messages Telegram : le NOM COURT du projet vient de l'UNIQUE
 // fonction du projet (`projectShortName`) — jamais un chemin, jamais un nom
@@ -4480,6 +4484,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
     const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
     const GIT_LOG_SENTINEL = "PILOT_ASSISTANT_GIT_LOG::";
+    const TELEGRAM_NOTIFY_SENTINEL = "PILOT_ASSISTANT_TELEGRAM_NOTIFY::";
     const SCHEDULE_SENTINEL = "PILOT_ASSISTANT_SCHEDULE::";
     const TOOLS_SENTINEL = "PILOT_ASSISTANT_TOOLS::";
     const title = payload.title || "";
@@ -5408,6 +5413,47 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       }
       return;
     }
+    if (title.startsWith(TELEGRAM_NOTIFY_SENTINEL)) {
+      // Outil UNIQUE « me prévenir sur Telegram » : LECTURE et CHANGEMENT.
+      // Sans valeur (`enabled` absent) on renvoie l'état en clair ; avec une
+      // valeur on l'applique (champ `AppConfig.telegram_notify_enabled`, seule
+      // source de vérité, persistée par `save_config`) et on renvoie le nouvel
+      // état. Une seule porte : rien n'est injecté dans le prompt.
+      let req = {};
+      try {
+        req = JSON.parse(title.slice(TELEGRAM_NOTIFY_SENTINEL.length)) || {};
+      } catch (_) {
+        req = {};
+      }
+      const wanted = typeof req.enabled === "boolean" ? req.enabled : null;
+      if (wanted === null) {
+        const read = await readTelegramNotifyEnabled();
+        await respondSuperAgent(
+          id,
+          read.ok
+            ? telegramNotifyStateAnswer(read.enabled)
+            : `Réglage « me prévenir sur Telegram » : impossible de le lire (${read.error || "configuration indisponible"}). L'état n'a pas été modifié.`,
+          false,
+        );
+        return;
+      }
+      const res = await setTelegramNotifyEnabled(wanted);
+      if (res.ok) {
+        appendSystemMessage(messagesEl, `📨 ${telegramNotifyConfirmation(res.enabled)}`);
+        await respondSuperAgent(id, telegramNotifyStateAnswer(res.enabled), false);
+      } else {
+        appendSystemMessage(
+          messagesEl,
+          "⚠️ Impossible d'enregistrer le réglage « me prévenir sur Telegram » : il reste inchangé.",
+        );
+        await respondSuperAgent(
+          id,
+          `Échec : le réglage « me prévenir sur Telegram » est inchangé (${res.error || "écriture impossible"}).`,
+          false,
+        );
+      }
+      return;
+    }
     if (title.startsWith(SCHEDULE_SENTINEL)) {
       // Outil schedule (chantier #13) : l'assistant programme des relances
       // différées/périodiques. Le titre contient un JSON {op, name, prompt,
@@ -5622,23 +5668,6 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       noteConcernedProject(path);
       appendSystemMessage(messagesEl, `✅ Projet « ${path} » ouvert et rendu actif.`);
       await respondSuperAgentAction(id, true);
-    } else if (action === "set_telegram_notifications") {
-      // Réglage UNIQUE « me prévenir sur Telegram » : l'assistant l'applique
-      // lui-même (demande du propriétaire, depuis le chat de l'onglet 🧭 ou
-      // depuis Telegram). Le champ `AppConfig.telegram_notify_enabled` reste le
-      // SEUL propriétaire : on écrit par `save_config`, jamais une valeur
-      // recopiée ailleurs. Application IMMÉDIATE, confirmation en UNE ligne.
-      const res = await setTelegramNotifyEnabled(info.enabled === true);
-      if (res.ok) {
-        appendSystemMessage(messagesEl, `📨 ${telegramNotifyConfirmation(res.enabled)}`);
-        await respondSuperAgentAction(id, true);
-      } else {
-        appendSystemMessage(
-          messagesEl,
-          "⚠️ Impossible d'enregistrer le réglage « me prévenir sur Telegram » : il reste inchangé.",
-        );
-        await respondSuperAgentAction(id, false);
-      }
     } else if (action === "delegate_to_coder") {
       if (!info.request) {
         await respondSuperAgentAction(id, false);

@@ -1,17 +1,17 @@
-// telegram-notify-setting.test.js — garde-fous du réglage UNIQUE
-// « me prévenir sur Telegram » (spec_telegram.md).
+// telegram-notify-setting.test.js — garde-fous de l'outil UNIQUE
+// « me prévenir sur Telegram » (spec_telegram.md § 14).
 //
-// Ces tests échouent si l'une des règles du propriétaire est cassée :
-//   (a) l'assistant ne peut plus VOIR l'état du réglage à chaque échange ;
-//   (b) un message peut partir alors que le réglage est coupé ;
-//   (c) le réglage ne survit plus à un redémarrage ;
-//   (d) un message du PROPRIÉTAIRE reçu via Telegram ne réactive plus le réglage ;
-//   (e) un expéditeur INCONNU peut réactiver le réglage ;
-//   (f) le réglage existe deux fois (deux cases, deux champs).
-//
-// Les deux familles sont couvertes : le module JS (lecture/écriture) et le
-// BRANCHEMENT réel, lu dans les sources Rust/TS/HTML/JS (un branchement oublié
-// est un réglage mort).
+// Règle du propriétaire : UN SEUL outil, qui LIT l'état (sans argument) et le
+// CHANGE (avec une valeur), et qui est la SEULE source de l'état — aucune valeur
+// figée dans le prompt ni dans un bloc de contexte. Ces tests échouent si :
+//   (a) il existe deux outils au lieu d'un ;
+//   (b) un appel SANS argument ne renvoie pas l'état ;
+//   (c) un appel AVEC une valeur ne change pas l'état ;
+//   (d) une valeur figée est encore injectée dans le prompt ou le contexte ;
+//   (e) l'état ne survit pas à un redémarrage ;
+//   (f) un message Telegram du propriétaire ne remet pas l'état à oui ;
+//   (g) un message d'un inconnu change l'état ;
+//   (h) un message part alors que l'état est « non ».
 
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -20,8 +20,10 @@ import { resolve } from "node:path";
 import {
   TELEGRAM_NOTIFY_FIELD,
   isTelegramNotifyEnabled,
+  readTelegramNotifyEnabled,
   setTelegramNotifyEnabled,
   telegramNotifyConfirmation,
+  telegramNotifyStateAnswer,
   withTelegramNotifyEnabled,
 } from "./telegram-notify-setting.js";
 
@@ -39,13 +41,29 @@ const actionsTs = readText("src-tauri/extensions/pilot-assistant-actions.ts");
 const superAgentJs = readText("src/js/super-agent.js");
 const settingsJs = readText("src/js/settings.js");
 const indexHtml = readText("index.html");
+const settingJs = readText("src/js/telegram-notify-setting.js");
 
 /** Nombre d'occurrences d'un motif (littéral). */
 function count(haystack, needle) {
   return haystack.split(needle).length - 1;
 }
 
-describe("réglage « me prévenir sur Telegram » — module", () => {
+/** Corps de l'outil UNIQUE dans l'extension (jusqu'au `registerTool` suivant). */
+function telegramToolBody() {
+  const start = actionsTs.indexOf('name: "telegram_notifications"');
+  expect(start, "outil telegram_notifications introuvable").toBeGreaterThan(-1);
+  const next = actionsTs.indexOf("pi.registerTool({", start);
+  return actionsTs.slice(start, next === -1 ? actionsTs.length : next);
+}
+
+/** Branche de l'outil dans le routage des `ctx.ui.input` de l'onglet 🧭. */
+function telegramHandlerBody() {
+  const start = superAgentJs.indexOf('title.startsWith(TELEGRAM_NOTIFY_SENTINEL)');
+  expect(start, "branche TELEGRAM_NOTIFY_SENTINEL introuvable").toBeGreaterThan(-1);
+  return superAgentJs.slice(start, start + 2200);
+}
+
+describe("outil UNIQUE « me prévenir sur Telegram » — module", () => {
   it("lit strictement le champ unique (absent ou non booléen = coupé)", () => {
     expect(TELEGRAM_NOTIFY_FIELD).toBe("telegram_notify_enabled");
     expect(isTelegramNotifyEnabled({ telegram_notify_enabled: true })).toBe(true);
@@ -72,6 +90,48 @@ describe("réglage « me prévenir sur Telegram » — module", () => {
     }
     expect(telegramNotifyConfirmation(true)).toMatch(/préviens/i);
     expect(telegramNotifyConfirmation(false)).toMatch(/plus rien/i);
+  });
+
+  it("répond « OUI » ou « NON » en clair à une demande d'état", () => {
+    const on = telegramNotifyStateAnswer(true);
+    const off = telegramNotifyStateAnswer(false);
+    expect(on).toContain("OUI");
+    expect(on).not.toContain("NON");
+    expect(off).toContain("NON");
+    expect(off).not.toContain("OUI");
+    // Compréhensible par un non-spécialiste : pas de jargon technique.
+    for (const line of [on, off]) {
+      expect(line).toContain("me prévenir sur Telegram");
+      expect(line).not.toContain("AppConfig");
+      expect(line).not.toContain("telegram_notify_enabled");
+      expect(line.split("\n")).toHaveLength(1);
+    }
+  });
+
+  it("LIT l'état par la commande get_config (aucune valeur inventée)", async () => {
+    let asked = [];
+    const on = await readTelegramNotifyEnabled({
+      invokeFn: async (cmd) => {
+        asked.push(cmd);
+        return { telegram_notify_enabled: true };
+      },
+    });
+    expect(asked).toEqual(["get_config"]);
+    expect(on).toEqual({ ok: true, enabled: true });
+    const off = await readTelegramNotifyEnabled({
+      invokeFn: async () => ({ telegram_notify_enabled: false }),
+    });
+    expect(off).toEqual({ ok: true, enabled: false });
+  });
+
+  it("signale une lecture impossible sans inventer d'état", async () => {
+    const res = await readTelegramNotifyEnabled({
+      invokeFn: async () => {
+        throw new Error("base indisponible");
+      },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("base indisponible");
   });
 
   it("écrit la configuration RELUE (jamais un instantané périmé) et prévient l'interface", async () => {
@@ -140,7 +200,7 @@ describe("réglage « me prévenir sur Telegram » — module", () => {
   });
 });
 
-describe("(f) le réglage n'existe QU'UNE fois", () => {
+describe("le réglage n'existe QU'UNE fois", () => {
   it("un seul champ de configuration dans AppConfig", () => {
     // Déclaration du champ (le type de la structure), pas ses usages.
     expect(count(libRs, "telegram_notify_enabled: bool,")).toBe(1);
@@ -161,38 +221,174 @@ describe("(f) le réglage n'existe QU'UNE fois", () => {
   it("un seul point de lecture/écriture côté interface", () => {
     expect(count(settingsJs, "chkTelegramEnabled")).toBeGreaterThan(0);
     expect(count(settingsJs, "setting-telegram-enabled")).toBe(1);
-    // Aucun autre module ne relit le champ directement (une seule porte) : la
-    // seule mention dans super-agent.js est un commentaire d'architecture.
+    // Aucun autre module ne relit le champ directement (une seule porte) : les
+    // seules mentions dans super-agent.js sont des commentaires d'architecture.
     const codeOnly = (src) => src.replace(/^\s*\/\/.*$/gm, "");
     expect(count(codeOnly(superAgentJs), TELEGRAM_NOTIFY_FIELD)).toBe(0);
+    // Et une seule porte d'écriture : `save_config` (aucune seconde commande).
+    expect(settingJs).toContain('call("save_config"');
+    expect(count(settingJs, "get_config")).toBeGreaterThanOrEqual(2);
   });
 });
 
-describe("(a) l'assistant VOIT l'état du réglage à chaque échange", () => {
-  it("l'état est écrit dans le prompt système, dans les DEUX chemins d'envoi", () => {
-    expect(count(superAgentRs, "fn telegram_notify_guideline(")).toBe(1);
-    // 1 définition + 2 appels hors tests (envoi RPC de l'assistant, assistant
-    // jetable) : les deux chemins de prompt sont couverts.
+describe("(a) UN SEUL outil, pas deux", () => {
+  it("un seul outil porte le réglage dans le registre de l'assistant", () => {
+    const noms = actionsTs.match(/name: "([a-z0-9_]+)"/g) || [];
+    const telegram = noms.filter((n) => n.includes("telegram"));
+    expect(telegram).toEqual(['name: "telegram_notifications"']);
+  });
+
+  it("l'ancien outil d'écriture séparé a disparu (aucun doublon)", () => {
+    expect(actionsTs).not.toContain("set_telegram_notifications");
+    expect(superAgentJs).not.toContain('"set_telegram_notifications"');
+    expect(actionsTs).not.toContain("set_telegram_notification_enabled");
+  });
+
+  it("le même outil sert à LIRE et à CHANGER (un seul sentinel, un seul chemin)", () => {
+    const body = telegramToolBody();
+    expect(count(actionsTs, 'PILOT_ASSISTANT_TELEGRAM_NOTIFY::"')).toBe(1);
+    expect(body).toContain("TELEGRAM_NOTIFY_SENTINEL");
+    // Aucun second canal : l'outil ne passe plus par le confirm d'action.
+    expect(body).not.toContain("ACTION_SENTINEL");
+    expect(body).not.toContain("ctx.ui.confirm(");
+  });
+});
+
+describe("(b) un appel SANS argument renvoie l'état", () => {
+  it("le paramètre est OPTIONNEL et l'absence signifie « lire »", () => {
+    const body = telegramToolBody();
+    expect(body).toContain("enabled: Type.Optional(Type.Boolean(");
+    // Absence de valeur → `null` transmis à Pilot (lecture seule).
+    expect(body).toContain('typeof params.enabled === "boolean" ? params.enabled : null');
+    expect(body).toContain("JSON.stringify({ enabled: wanted })");
+  });
+
+  it("la branche de Pilot répond l'état en clair quand rien n'est demandé", () => {
+    const body = telegramHandlerBody();
+    expect(body).toContain("const wanted = typeof req.enabled === \"boolean\" ? req.enabled : null;");
+    expect(body).toContain("if (wanted === null) {");
+    expect(body).toContain("readTelegramNotifyEnabled()");
+    expect(body).toContain("telegramNotifyStateAnswer(read.enabled)");
+    // L'état est bien RENVOYÉ à l'assistant (réponse de l'outil).
+    expect(body).toContain("await respondSuperAgent(");
+    // Une lecture n'écrit jamais.
+    expect(body.indexOf("if (wanted === null) {")).toBeLessThan(
+      body.indexOf("setTelegramNotifyEnabled(wanted)"),
+    );
+  });
+
+  it("la description dit comment demander l'état (compréhensible sans doc)", () => {
+    const body = telegramToolBody();
+    expect(body).toMatch(/SANS argument/);
+    expect(body).toMatch(/OUI.*NON|NON.*OUI/);
+    expect(body).toContain("label: \"Me prévenir sur Telegram\"");
+  });
+});
+
+describe("(c) un appel AVEC une valeur change l'état", () => {
+  it("la valeur demandée est bien appliquée (jamais devinée)", () => {
+    const body = telegramHandlerBody();
+    expect(body).toContain("const res = await setTelegramNotifyEnabled(wanted);");
+    expect(body).toContain("telegramNotifyConfirmation(res.enabled)");
+    // Le nouvel état est renvoyé à l'assistant pour qu'il confirme en une ligne.
+    expect(body).toContain("telegramNotifyStateAnswer(res.enabled)");
+  });
+
+  it("la description annonce le changement ET le nouvel état renvoyé", () => {
+    const body = telegramToolBody();
+    expect(body).toContain("enabled: true");
+    expect(body).toContain("enabled: false");
+    expect(body).toMatch(/nouvel état/);
+  });
+});
+
+describe("(d) AUCUNE valeur figée dans le prompt ou le contexte", () => {
+  it("le bloc de contexte du réglage a été retiré du prompt système", () => {
+    expect(count(superAgentRs, "telegram_notify_guideline")).toBe(0);
+    expect(superAgentRs).not.toContain("blocks.telegram_notify");
+    expect(superAgentRs).not.toContain("telegram_notify:");
+  });
+
+  it("le prompt système ne lit plus du tout le réglage", () => {
+    expect(count(superAgentRs, "telegram_notify_enabled")).toBe(0);
+    // Aucune mention du réglage dans le prompt : la seule source est l'outil.
     const prod = superAgentRs.slice(0, superAgentRs.indexOf("#[cfg(test)]"));
-    expect(count(prod, "telegram_notify_guideline(")).toBe(3);
-    expect(superAgentRs).toContain("telegram_notify: &telegram_notify,");
-    expect(superAgentRs).toContain("full_system.push_str(blocks.telegram_notify);");
-    // L'état lu vient du champ unique de la configuration.
-    expect(count(superAgentRs, "cfg.telegram_notify_enabled")).toBe(2);
+    expect(prod.toLowerCase()).not.toContain("telegram");
   });
 
-  it("le bloc dit l'état ET comment le changer", () => {
-    const start = superAgentRs.indexOf("fn telegram_notify_guideline(");
-    const body = superAgentRs.slice(start, start + 1600);
-    expect(body).toContain("ACTIF");
-    expect(body).toContain("COUPÉ");
-    expect(body).toContain("set_telegram_notifications");
-    // Interdiction de demander une double confirmation.
-    expect(body).toContain("sans double confirmation");
+  it("la description de l'outil ne prétend plus que l'état est dans le contexte", () => {
+    const body = telegramToolBody();
+    expect(body).not.toContain("t'est donné à chaque échange");
+    expect(body).not.toContain("ACTIF");
+    expect(body).toContain("ONLY source of truth");
+  });
+
+  it("le module JS ne construit aucun texte de prompt", () => {
+    expect(settingJs).not.toContain("ACTIF");
+    expect(settingJs).not.toContain("guideline");
+    expect(settingJs).not.toContain("system_prompt");
   });
 });
 
-describe("(b) réglage coupé ⇒ RIEN ne part", () => {
+describe("(e) l'état survit à un redémarrage", () => {
+  it("le champ est persisté (sérialisé) et relu, avec un défaut coupé", () => {
+    // Test Rust dédié : défaut coupé, écriture disque, relecture identique.
+    expect(libRs).toContain("fn telegram_notify_setting_survives_restart_and_defaults_off");
+    // La lecture de l'outil passe par la configuration PERSISTÉE (get_config).
+    expect(settingJs).toContain('call("get_config")');
+    // L'écriture de l'outil passe par save_config (fichier, pas la mémoire seule).
+    expect(settingJs).toContain('call("save_config"');
+  });
+});
+
+describe("(f) un message du propriétaire RÉACTIVE le réglage", () => {
+  it("la règle est branchée sur la réception réelle", () => {
+    const start = telegramRs.indexOf("pub fn telegram_poll_inbound");
+    const body = telegramRs.slice(start, start + 2600);
+    expect(body).toContain("owner_message_reactivates_notifications(cfg.enabled, &poll.messages)");
+    expect(body).toContain("reactivate_notifications_from_owner_message(&app)");
+    // L'information remonte à l'interface (champ additif + événement).
+    expect(body).toContain('"reactivated": reactivated');
+    expect(telegramRs).toContain('"pilot-telegram-notify-changed"');
+  });
+
+  it("la réactivation est PERSISTÉE (disque d'abord) et JOURNALISÉE", () => {
+    const start = telegramRs.indexOf("fn reactivate_notifications_from_owner_message");
+    const body = telegramRs.slice(start, start + 2000);
+    expect(body).toContain("crate::save_config_disk(app, &cfg)");
+    expect(body.indexOf("save_config_disk")).toBeLessThan(body.indexOf("*guard = cfg"));
+    expect(body).toContain("journal_notify_state(");
+    expect(telegramRs).toContain("RÉACTIVÉ par un message du propriétaire");
+  });
+
+  it("la réception n'est PAS coupée par le réglage (sinon rien ne pourrait le réactiver)", () => {
+    const start = telegramRs.indexOf("pub fn receive_inert_reason(");
+    const body = telegramRs.slice(start, start + 600);
+    expect(body).not.toContain("self.enabled");
+    const poll = telegramRs.indexOf("pub fn poll_inbound");
+    expect(telegramRs.slice(poll, poll + 600)).toContain("cfg.receive_inert_reason()");
+  });
+});
+
+describe("(g) un expéditeur INCONNU ne réactive JAMAIS le réglage", () => {
+  it("seule la discussion du propriétaire est retenue par la réception", () => {
+    const start = telegramRs.indexOf("fn collect_inbound");
+    expect(start).toBeGreaterThan(-1);
+    const body = telegramRs.slice(start, start + 3000);
+    // Filtre strict sur l'identifiant de discussion du propriétaire.
+    expect(body).toContain("chat_id.as_deref() == Some(owner)");
+  });
+
+  it("la réactivation ne consomme QUE les messages retenus (donc du propriétaire)", () => {
+    const start = telegramRs.indexOf("pub fn telegram_poll_inbound");
+    const body = telegramRs.slice(start, start + 2600);
+    expect(body).toContain("owner_message_reactivates_notifications(cfg.enabled, &poll.messages)");
+    // Aucune lecture brute du JSON Telegram dans ce chemin.
+    expect(body).not.toContain("\"message\"");
+  });
+});
+
+describe("(h) réglage coupé ⇒ RIEN ne part", () => {
   it("les trois formes d'envoi consultent la même porte d'inertie", () => {
     for (const fn of ["dispatch", "dispatch_buttons", "dispatch_edit"]) {
       const start = telegramRs.indexOf(`pub fn ${fn}`);
@@ -225,77 +421,8 @@ describe("(b) réglage coupé ⇒ RIEN ne part", () => {
   });
 });
 
-describe("(d) un message du propriétaire RÉACTIVE le réglage", () => {
-  it("la règle est branchée sur la réception réelle", () => {
-    const start = telegramRs.indexOf("pub fn telegram_poll_inbound");
-    const body = telegramRs.slice(start, start + 2600);
-    expect(body).toContain("owner_message_reactivates_notifications(cfg.enabled, &poll.messages)");
-    expect(body).toContain("reactivate_notifications_from_owner_message(&app)");
-    // L'information remonte à l'interface (champ additif + événement).
-    expect(body).toContain('"reactivated": reactivated');
-    expect(telegramRs).toContain('"pilot-telegram-notify-changed"');
-  });
-
-  it("la réactivation est PERSISTÉE (disque d'abord) et JOURNALISÉE", () => {
-    const start = telegramRs.indexOf("fn reactivate_notifications_from_owner_message");
-    const body = telegramRs.slice(start, start + 2000);
-    expect(body).toContain("crate::save_config_disk(app, &cfg)");
-    expect(body.indexOf("save_config_disk")).toBeLessThan(body.indexOf("*guard = cfg"));
-    expect(body).toContain("journal_notify_state(");
-    expect(telegramRs).toContain("RÉACTIVÉ par un message du propriétaire");
-  });
-
-  it("la réception n'est PAS coupée par le réglage (sinon rien ne pourrait le réactiver)", () => {
-    const start = telegramRs.indexOf("pub fn receive_inert_reason(");
-    const body = telegramRs.slice(start, start + 600);
-    expect(body).not.toContain("self.enabled");
-    const poll = telegramRs.indexOf("pub fn poll_inbound");
-    expect(telegramRs.slice(poll, poll + 600)).toContain("cfg.receive_inert_reason()");
-  });
-});
-
-describe("(e) un expéditeur INCONNU ne réactive JAMAIS le réglage", () => {
-  it("seule la discussion du propriétaire est retenue par la réception", () => {
-    const start = telegramRs.indexOf("fn collect_inbound");
-    expect(start).toBeGreaterThan(-1);
-    const body = telegramRs.slice(start, start + 3000);
-    // Filtre strict sur l'identifiant de discussion du propriétaire.
-    expect(body).toContain("chat_id.as_deref() == Some(owner)");
-  });
-
-  it("la réactivation ne consomme QUE les messages retenus (donc du propriétaire)", () => {
-    const start = telegramRs.indexOf("pub fn telegram_poll_inbound");
-    const body = telegramRs.slice(start, start + 2600);
-    expect(body).toContain("owner_message_reactivates_notifications(cfg.enabled, &poll.messages)");
-    // Aucune lecture brute du JSON Telegram dans ce chemin.
-    expect(body).not.toContain("\"message\"");
-  });
-});
-
-describe("l'assistant CHANGE le réglage depuis les deux canaux", () => {
-  it("l'outil existe et passe par le canal d'action unique de Pilot", () => {
-    expect(actionsTs).toContain('name: "set_telegram_notifications"');
-    expect(actionsTs).toContain('action: "set_telegram_notifications"');
-    expect(actionsTs).toContain("ACTION_SENTINEL + payload");
-    // Paramètre booléen, et confirmation en UNE phrase (aucune double demande).
-    const start = actionsTs.indexOf('name: "set_telegram_notifications"');
-    const body = actionsTs.slice(start, start + 2200);
-    expect(body).toContain("enabled: Type.Boolean(");
-    expect(body).toContain("ctx.ui.confirm(");
-  });
-
-  it("Pilot applique l'action en écrivant le champ unique", () => {
-    const start = superAgentJs.indexOf('action === "set_telegram_notifications"');
-    expect(start).toBeGreaterThan(-1);
-    const body = superAgentJs.slice(start, start + 1200);
-    expect(body).toContain("setTelegramNotifyEnabled(info.enabled === true)");
-    expect(body).toContain("telegramNotifyConfirmation(");
-    expect(body).toContain("respondSuperAgentAction(");
-  });
-
-  it("la même session sert dans Pilot ET depuis Telegram (aucun second chemin)", () => {
-    // Les messages Telegram sont injectés dans la session de l'Assistant : les
-    // outils y sont les mêmes, donc rien à dupliquer.
+describe("le même chemin dans Pilot ET depuis Telegram", () => {
+  it("les messages Telegram arrivent dans la MÊME session de l'assistant", () => {
     const inbound = readText("src/js/telegram-inbound.js");
     expect(inbound).toContain("injectExternalMessageToSuperAgent");
     // Et l'interface est rafraîchie quand Rust réactive le réglage.

@@ -48,6 +48,13 @@ const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
 // exécute la commande Rust `git_log_project` (lecture seule) et renvoie
 // l'historique des commits (JSON) comme `value` de la réponse.
 const GIT_LOG_SENTINEL = "PILOT_ASSISTANT_GIT_LOG::";
+// Sentinel préfixant le titre d'un `input` de l'outil UNIQUE « me prévenir sur
+// Telegram ». Pilot le détecte, LIT l'état (aucun argument) ou APPLIQUE la valeur
+// demandée (`enabled: true/false`), et renvoie l'état en clair comme `value` de
+// la réponse. UN seul sentinel, donc UN seul chemin : lire et changer passent
+// par le même outil (décision du propriétaire : pas d'outil de lecture séparé,
+// pas de valeur d'état injectée dans le prompt).
+const TELEGRAM_NOTIFY_SENTINEL = "PILOT_ASSISTANT_TELEGRAM_NOTIFY::";
 
 // Garde-fou anti-blocage (bug « agents figés ») : en mode RPC, un `ctx.ui.*`
 // émet un `extension_ui_request` sur stdout et pi attend la réponse SANS
@@ -357,28 +364,29 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "set_telegram_notifications",
+    name: "telegram_notifications",
     label: "Me prévenir sur Telegram",
     description:
-      "Activer ou couper le réglage UNIQUE « me prévenir sur Telegram » (le même réglage que la case des Paramètres, onglet Assistant). enabled=true → l'utilisateur est prévenu sur Telegram (début et fin de mission, alertes) ; enabled=false → PLUS RIEN ne part sur Telegram (aucun message de début ni de fin, aucune alerte) et les alertes restent visibles dans Pilot. À utiliser dès que l'utilisateur demande à être prévenu sur Telegram, ou à ne plus l'être (« préviens-moi sur Telegram », « arrête de me prévenir », « coupe les notifications »…). L'état courant du réglage t'est donné à chaque échange : ne le devine pas. Applique immédiatement puis confirme en UNE phrase, sans demander de double confirmation.",
-    promptSnippet: "set_telegram_notifications: activer ou couper le réglage « me prévenir sur Telegram »",
+      "Le réglage « me prévenir sur Telegram » de l'utilisateur : ce SEUL outil sert à le LIRE et à le CHANGER. Appelle-le SANS argument (`enabled` absent) pour savoir où en est le réglage : il te répond en clair, « OUI » ou « NON ». Appelle-le AVEC `enabled: true` pour que l'utilisateur soit prévenu sur Telegram (début et fin de mission, alertes), ou AVEC `enabled: false` pour que PLUS RIEN n'y parte (aucun message de début ni de fin, aucune alerte ; les alertes restent visibles dans Pilot). Il applique le changement et te renvoie le nouvel état : confirme alors en UNE phrase, sans demander de double confirmation. Sers-t'en dès que l'utilisateur parle de ces notifications (« préviens-moi sur Telegram », « arrête de me prévenir », « coupe les notifications », « est-ce que tu me préviens sur Telegram ? »…) : ne devine jamais l'état et ne demande pas à l'utilisateur de te le rappeler.",
+    promptSnippet: "telegram_notifications: lire (sans argument) ou changer (enabled: true/false) le réglage « me prévenir sur Telegram »",
     promptGuidelines: [
-      "Call set_telegram_notifications(true) when the user asks to be notified on Telegram, and set_telegram_notifications(false) when they ask to stop being notified, to cut notifications, or to stop receiving messages there.",
-      "The current value of that setting is given in your context at every exchange (ACTIF / COUPE) — never guess it and never ask the user to remind you.",
-      "Apply immediately and confirm in ONE short sentence. Do not ask for a second confirmation.",
+      "Call telegram_notifications with NO argument to READ the setting: the answer says OUI (yes) or NON (no) in plain words. Never guess the state and never ask the user to remind you.",
+      "Call telegram_notifications with enabled: true to start notifying the user on Telegram, and enabled: false when they ask to stop being notified, to cut notifications, or to stop receiving messages there. The answer gives the new state: confirm in ONE short sentence, without a second confirmation.",
+      "This tool is the ONLY source of truth for that setting: nothing about it is written in your context, so call it when you need it instead of assuming.",
     ],
     parameters: Type.Object({
-      enabled: Type.Boolean({ description: "true → prévenir sur Telegram ; false → ne plus rien envoyer sur Telegram" }),
+      enabled: Type.Optional(Type.Boolean({ description: "true → prévenir sur Telegram ; false → ne plus rien envoyer sur Telegram ; absent → l'outil renvoie seulement l'état actuel" })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const enabled = params.enabled === true;
-      const payload = JSON.stringify({ action: "set_telegram_notifications", enabled });
-      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload, PILOT_UI_OPTS);
-      if (ok) {
-        return { content: [{ type: "text", text: enabled ? "Réglage appliqué : l'utilisateur est prévenu sur Telegram." : "Réglage appliqué : plus rien ne part sur Telegram." }] };
+      // `null` = lecture seule. Une valeur explicite = changement d'état.
+      const wanted = typeof params.enabled === "boolean" ? params.enabled : null;
+      const payload = JSON.stringify({ enabled: wanted });
+      const result = await ctx.ui.input(TELEGRAM_NOTIFY_SENTINEL + payload, "", PILOT_UI_OPTS);
+      if (result == null) {
+        return { content: [{ type: "text", text: "Réglage « me prévenir sur Telegram » : aucune réponse de Pilot (délai de 2 min dépassé ou annulation), l'appel a été interrompu. L'état est inchangé : rappelle l'outil pour le connaître." }] };
       }
-      return { content: [{ type: "text", text: "Échec : le réglage « me prévenir sur Telegram » est inchangé." }] };
+      return { content: [{ type: "text", text: String(result) }] };
     },
   });
 
