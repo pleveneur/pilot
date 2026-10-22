@@ -350,9 +350,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Exposé globalement pour la prévisualisation Markdown (issue #22) :
   // le handler de clic sur les liens internes ouvre le fichier cible via tabs.openFile.
   window._pilotTabs = tabs;
-  // Indicateur d'activité des agents (haut droite) : cercle respirant + liste
-  // déroulante + fiche. Unique indicateur d'activité de l'interface. Le bouton
-  // « Afficher l'onglet » de la fiche appelle tabs._openAgent / tabs.openFile.
+  // Suivi du travail (haut droite) : cercle respirant + UN SEUL panneau à trois
+  // onglets (Agents, Événements, Tâches) + fiche agent. Unique endroit où le
+  // travail se suit dans l'interface. Le bouton « Afficher l'onglet » de la fiche
+  // appelle tabs._openAgent / tabs.openFile.
   initAgentActivity(tabs);
   // Exposé pour la vérification de mise à jour de Pi à l'ouverture de l'onglet
   // agent (issue #26) : appelé depuis tabs.js _openAgent après le health check.

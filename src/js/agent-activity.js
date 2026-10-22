@@ -1,30 +1,38 @@
-// agent-activity.js — Indicateur d'activité des agents (haut droite)
+// agent-activity.js — Suivi du travail (haut droite)
 //
 // Cercle flottant en haut à droite reflétant l'activité de TOUS les agents
 // (assistant + codeurs). Le cercle « respire » (animation agent-pulse) dès
-// qu'UN agent travaille. Au clic : liste déroulante (fond solide, teinté violet
-// assistant) avec un
-// cercle respirant par agent, puis une fiche (nom, état, projet, dernière
-// activité) avec un bouton « Afficher l'onglet ».
+// qu'UN agent travaille. Au clic : UN SEUL panneau (fond subtilement teinté
+// violet assistant) à TROIS onglets, dans cet ordre :
+//   1. « Agents »     — la liste des agents (pastille respirante, nom, projet)
+//                       puis la fiche de l'agent cliqué ;
+//   2. « Événements » — le journal des événements système (délégations,
+//                       démarrages/arrêts, erreurs, connexions perdues) ;
+//   3. « Tâches »     — les missions réellement en cours et la file « en
+//                       attente » des agents.
+// Les volets 2 et 3 sont ceux de l'ancien panneau de la cloche de l'onglet
+// Assistant, DÉPLACÉS ici : mêmes contenus, mêmes réglages, un seul endroit.
 //
-// Comportement de la liste : le clic sur le cercle principal bascule
-// l'ouverture/fermeture. La liste reste OUVERTE tant qu'on ne reclique pas sur
-// ce cercle (pas de fermeture au clic extérieur). L'état déplié/replié est
-// persisté via localStorage (agent-activity-expanded) et restauré au démarrage.
+// Comportement du panneau : le clic sur le cercle bascule ouverture/fermeture ;
+// il reste OUVERT tant qu'on ne reclique pas sur ce cercle, sur × ou sur Échap
+// (pas de fermeture au clic extérieur). L'onglet actif et l'état ouvert/replié
+// sont persistés (localStorage) et restaurés au démarrage — dernier onglet
+// utilisé, sinon « Agents ».
 //
 // Source de vérité : `get_agent_supervision` (dashboard.rs), pollée toutes les
 // 2 s, + événement push `agent-state-changed` (Rust → JS) pour un rafraîchissement
 // immédiat. Aucune commande Rust ajoutée.
 //
 // Le poll + le filtrage sont centralisés dans un « store » partagé
-// (subscribeAgentActivity) consommé par l'indicateur ci-dessus ET par le
+// (subscribeAgentActivity) consommé par le panneau ci-dessus ET par le
 // résumé repliable des agents du mode « Assistant Only » immersif
 // (super-agent.js) — même source de données, même filtrage, aucun polling
 // dupliqué.
 //
 // Les fonctions pures (flattenAgents, anyBusy, shortMission, buildRunningMissions,
 // renderDropdown, renderCard, renderStaticAgentList, formatLastActivity) sont
-// testées dans agent-activity.test.js.
+// testées dans agent-activity.test.js ; le panneau à trois onglets l'est dans
+// panneau-suivi-trois-onglets.test.js.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -228,8 +236,8 @@ export function anyBusy(list) {
 // ── Travail effectif et travail SANS ONGLET (regle 1) ──
 // Une seule source de verite pour « cet agent travaille-t-il ? », partagee par
 // la liste deroulante (cercle en haut a droite), la fiche d'agent, le volet
-// « En cours » du panneau de la cloche et le panneau « Activite » de l'onglet
-// Agents : aucune logique de vivacite n'est dupliquee.
+// « Tâches » du panneau du suivi du travail et le panneau « Activite » de
+// l'onglet Agents : aucune logique de vivacite n'est dupliquee.
 
 /**
  * true si la session TRAVAILLE reellement a cet instant. Fonction PURE.
@@ -283,7 +291,7 @@ export function buildBackgroundWorkMissions(list) {
     }));
 }
 
-// ── Missions en cours (affichage du panneau de la cloche) ──
+// ── Missions en cours (volet « Taches » du panneau du suivi du travail) ──
 
 /** Longueur maximale affichée du texte d'une mission (une phrase courte). */
 export const MISSION_MAX_CHARS = 120;
@@ -568,8 +576,8 @@ export function shortMission(text) {
 }
 
 /**
- * Construit la liste des missions RÉELLEMENT en cours à afficher (panneau de la
- * cloche, onglet « En cours »). Fonction PURE.
+ * Construit la liste des missions RÉELLEMENT en cours à afficher (volet
+ * « Tâches » du panneau du suivi du travail). Fonction PURE.
  *
  * Règles (faux négatifs interdits) :
  *  - un agent RETENU si `busy` OU `toolInProgress` : un outil long et SILENCIEUX
@@ -896,29 +904,30 @@ export function renderBackgroundWorkersHtml(missions) {
 }
 
 /**
- * Initialise l'indicateur d'activité des agents.
+ * Initialise le suivi du travail : le cercle d'activité (haut droite) ouvre UN
+ * SEUL panneau à TROIS onglets — « Agents » (qui travaille), « Événements »
+ * (journal système) et « Tâches » (missions en cours et en attente). Les deux
+ * derniers volets sont ceux de l'ancien panneau de la cloche de l'onglet
+ * Assistant, DÉPLACÉS ici (mêmes contenus, mêmes réglages, un seul endroit).
  * @param {object} tabs — instance du gestionnaire d'onglets (tabs.js).
  */
 export function initAgentActivity(tabs) {
   const container = document.getElementById("agent-activity");
   const dot = document.getElementById("agent-activity-dot");
-  const dropdown = document.getElementById("agent-activity-dropdown");
+  const panel = document.getElementById("agent-activity-dropdown");
+  const listEl = document.getElementById("agent-activity-list");
   const card = document.getElementById("agent-activity-card");
-  if (!container || !dot || !dropdown || !card) return;
+  if (!container || !dot || !panel || !listEl || !card) return;
 
-  let currentList = [];
   let currentCardAgent = null;
 
   // Consommation du store partagé (poll 2 s + push agent-state-changed, même
   // filtrage flattenAgents) : comportement identique à l'ancien refresh()
   // interne, sans polling propre (source unique pour tous les affichages).
   subscribeAgentActivity((list, busy) => {
-    currentList = list;
     dot.classList.toggle("breathing", busy);
     dot.title = busy ? "Un agent travaille" : "Agents au repos";
-    if (!dropdown.classList.contains("hidden")) {
-      dropdown.innerHTML = renderDropdown(list);
-    }
+    if (isAgentPanelOpen() && panelActiveTab === "agents") renderAgentsPane();
     if (currentCardAgent) {
       const updated = list.find(
         (a) => a.agentId === currentCardAgent.agentId && a.kind === currentCardAgent.kind
@@ -930,36 +939,24 @@ export function initAgentActivity(tabs) {
     }
   });
 
-  function toggleDropdown() {
-    if (dropdown.classList.contains("hidden")) {
-      dropdown.innerHTML = renderDropdown(currentList);
-      dropdown.classList.remove("hidden");
-      card.classList.add("hidden");
-      localStorage.setItem("agent-activity-expanded", "true");
-    } else {
-      dropdown.classList.add("hidden");
-      localStorage.setItem("agent-activity-expanded", "false");
-    }
-  }
-
-  // Clic sur le cercle → bascule l'ouverture/fermeture de la liste.
+  // Clic sur le cercle → ouvre le panneau sur le dernier onglet utilisé (à
+  // défaut « Agents ») ; un second clic le referme.
   dot.addEventListener("click", (e) => {
     e.stopPropagation();
-    toggleDropdown();
+    toggleAgentPanel();
   });
 
-  // Clic sur un agent de la liste → affiche sa fiche (la liste se replie).
-  dropdown.addEventListener("click", (e) => {
+  // Clic sur un agent de la liste → affiche sa fiche (le panneau se referme).
+  listEl.addEventListener("click", (e) => {
     const item = e.target.closest(".agent-activity-item");
     if (!item) return;
-    const agent = currentList.find(
+    const agent = getAgentActivitySnapshot().list.find(
       (a) => a.agentId === item.dataset.agentId && a.kind === item.dataset.kind
     );
     if (!agent) return;
     currentCardAgent = agent;
     card.innerHTML = renderCard(agent);
-    dropdown.classList.add("hidden");
-    localStorage.setItem("agent-activity-expanded", "false");
+    closeAgentPanel();
     card.classList.remove("hidden");
   });
 
@@ -967,7 +964,7 @@ export function initAgentActivity(tabs) {
   card.addEventListener("click", async (e) => {
     const btn = e.target.closest(".agent-activity-card-open");
     if (!btn) return;
-    const agent = currentList.find(
+    const agent = getAgentActivitySnapshot().list.find(
       (a) => a.agentId === btn.dataset.agentId && a.kind === btn.dataset.kind
     );
     if (!agent) return;
@@ -997,15 +994,311 @@ export function initAgentActivity(tabs) {
     card.classList.add("hidden");
   });
 
-  // NOTE : pas de fermeture au clic extérieur — la liste reste ouverte jusqu'à
-  // ce qu'on reclique sur le cercle principal (comportement « liste persistante »).
-  // L'état déplié/replié est persisté via localStorage (agent-activity-expanded).
-  // Le poll 2 s + le push `agent-state-changed` sont gérés par le store partagé
-  // (ensureActivityStore), auquel l'indicateur vient de s'abonner.
-
-  // Restaure l'état déplié/replié persisté (localStorage).
-  if (localStorage.getItem("agent-activity-expanded") === "true") {
-    dropdown.innerHTML = renderDropdown(currentList);
-    dropdown.classList.remove("hidden");
+  // Boutons d'onglet du panneau (souris + clavier).
+  for (const tab of AGENT_PANEL_TABS) {
+    const btn = document.getElementById(`agent-activity-tab-${tab}`);
+    if (btn) btn.addEventListener("click", () => selectAgentPanelTab(tab));
   }
+  // Flèches gauche/droite + Début/Fin : navigation standard d'une barre
+  // d'onglets (les onglets masqués par le réglage sont sautés).
+  const tablist = panel.querySelector('[role="tablist"]');
+  if (tablist) {
+    tablist.addEventListener("keydown", (e) => {
+      const visible = AGENT_PANEL_TABS.filter((t) => panelTabEnabled[t]);
+      if (!visible.length) return;
+      const i = Math.max(0, visible.indexOf(panelActiveTab));
+      let next = null;
+      if (e.key === "ArrowRight") next = visible[(i + 1) % visible.length];
+      else if (e.key === "ArrowLeft") next = visible[(i - 1 + visible.length) % visible.length];
+      else if (e.key === "Home") next = visible[0];
+      else if (e.key === "End") next = visible[visible.length - 1];
+      if (!next) return;
+      e.preventDefault();
+      selectAgentPanelTab(next);
+      const btn = document.getElementById(`agent-activity-tab-${next}`);
+      if (btn) btn.focus();
+    });
+  }
+  // Échap : referme le panneau et rend le focus au cercle (jamais de clavier
+  // piégé dans le panneau).
+  panel.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    e.stopPropagation();
+    closeAgentPanel();
+    dot.focus();
+  });
+
+  // Fermeture explicite (bouton ×) et effacement des événements (« tout
+  // effacer », visible sur le seul onglet Événements).
+  const closeBtn = document.getElementById("agent-activity-panel-close");
+  if (closeBtn) closeBtn.addEventListener("click", () => closeAgentPanel());
+  const clearBtn = document.getElementById("agent-activity-panel-clear");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      const eventsList = agentPanelEventsListElement();
+      if (eventsList) eventsList.innerHTML = "";
+      agentPanelClearUnread();
+    });
+  }
+  // Un clic sur une mission referme le panneau (le détail d'une tâche de suivi
+  // reste dans son onglet Kanban dédié).
+  const tasksList = agentPanelTasksListElement();
+  if (tasksList) tasksList.addEventListener("click", () => closeAgentPanel());
+
+  // Réglage global « onglet Tâches » : appliqué dès le démarrage (le panneau est
+  // global, il n'attend plus l'ouverture de l'onglet Assistant) et à chaque
+  // changement de configuration.
+  const applyTasksSetting = (cfg) => setAgentPanelTabsVisibility(cfg);
+  invoke("get_config")
+    .then(applyTasksSetting)
+    .catch(() => { /* fail-open : onglet affiché */ });
+  window.addEventListener("pilot-config-changed", () => {
+    invoke("get_config").then(applyTasksSetting).catch(() => {});
+  });
+
+  // NOTE : pas de fermeture au clic extérieur — le panneau reste ouvert jusqu'à
+  // ce qu'on reclique sur le cercle (ou × / Échap). Le poll 2 s + le push
+  // `agent-state-changed` sont gérés par le store partagé (ensureActivityStore).
+
+  // Restaure l'état ouvert/replié et le dernier onglet utilisé (localStorage).
+  selectAgentPanelTab(
+    normalizeAgentPanelTab(localStorage.getItem(AGENT_PANEL_TAB_KEY)),
+    { persist: false }
+  );
+  if (localStorage.getItem("agent-activity-expanded") === "true") {
+    openAgentPanel();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Panneau unique du suivi du travail : TROIS onglets dans un seul panneau
+// ════════════════════════════════════════════════════════════════════════════
+// Décision propriétaire : le travail se suit à UN SEUL endroit de l'écran. Le
+// cercle en haut à droite ouvre ce panneau ; l'ancien panneau de la cloche (en
+// bas à droite de l'onglet Assistant) a été déplacé ici, sans perte : mêmes
+// événements (avec leur compteur non lu), mêmes missions (avec la mention
+// « en attente »), mêmes réglages.
+
+/** Onglets du panneau, dans l'ordre d'affichage. */
+export const AGENT_PANEL_TABS = ["agents", "events", "tasks"];
+/** Libellés visibles (ordre et intitulés verrouillés par test). */
+export const AGENT_PANEL_TAB_LABELS = { agents: "Agents", events: "Événements", tasks: "Tâches" };
+/** Clé du DERNIER onglet utilisé (rouvert au prochain démarrage). */
+export const AGENT_PANEL_TAB_KEY = "agent-activity-panel-tab";
+/** Plafond du compteur de non-lus (au-delà : « 99+ »). */
+export const AGENT_PANEL_UNREAD_MAX = 99;
+
+let panelUnread = 0;
+let panelActiveTab = "agents";
+let panelTabEnabled = { agents: true, events: true, tasks: true };
+const panelTabListeners = new Set();
+
+/** Élément du panneau (null tant que l'interface n'est pas prête). */
+function panelEl() {
+  return document.getElementById("agent-activity-dropdown");
+}
+
+/**
+ * Visibilité des onglets selon la configuration : le réglage global
+ * `super_agent_tasks_tab_enabled` (ACTIVÉ PAR DÉFAUT) commande le seul onglet
+ * « Tâches » ; les deux autres sont toujours là. Fail-open : réglage illisible
+ * → onglet affiché.
+ * @param {object|null} config
+ * @returns {{agents: boolean, events: boolean, tasks: boolean}}
+ */
+export function agentPanelTabVisibility(config) {
+  const tasks = !(config && config.super_agent_tasks_tab_enabled === false);
+  return { agents: true, events: true, tasks };
+}
+
+/** Normalise un nom d'onglet (« agents » par défaut, jamais un onglet inconnu). */
+export function normalizeAgentPanelTab(tab) {
+  return AGENT_PANEL_TABS.includes(tab) ? tab : "agents";
+}
+
+/** Texte du compteur de non-lus (« 99+ » au-delà du plafond, chaine vide à 0). */
+export function agentPanelBadgeText(count) {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if (n <= 0) return "";
+  return n > AGENT_PANEL_UNREAD_MAX ? `${AGENT_PANEL_UNREAD_MAX}+` : String(n);
+}
+
+/** Onglet actuellement affiché. */
+export function getActiveAgentPanelTab() {
+  return panelActiveTab;
+}
+
+/** Le panneau est-il ouvert ? */
+export function isAgentPanelOpen() {
+  const panel = panelEl();
+  return !!panel && !panel.classList.contains("hidden");
+}
+
+/**
+ * L'onglet `tab` est-il affiché à l'écran (panneau ouvert ET onglet actif ET
+ * onglet disponible) ? Sert à ne pas compter comme « non lu » ce que
+ * l'utilisateur regarde.
+ */
+export function isAgentPanelPaneVisible(tab) {
+  const wanted = normalizeAgentPanelTab(tab);
+  return isAgentPanelOpen() && panelActiveTab === wanted && panelTabEnabled[wanted] !== false;
+}
+
+/** Liste des événements (volet Événements) — null si l'interface n'est pas prête. */
+export function agentPanelEventsListElement() {
+  return document.querySelector("#agent-activity-pane-events .sa-events-list");
+}
+
+/** Liste des missions (volet Tâches) — null si l'interface n'est pas prête. */
+export function agentPanelTasksListElement() {
+  return document.querySelector("#agent-activity-pane-tasks .sa-tasks-list");
+}
+
+/**
+ * S'abonne aux changements d'état du panneau (onglet actif, ouverture).
+ * @param {(state: {tab: string, open: boolean}) => void} cb
+ * @returns {Function} désabonnement.
+ */
+export function onAgentPanelTabChange(cb) {
+  if (typeof cb !== "function") return () => {};
+  panelTabListeners.add(cb);
+  return () => panelTabListeners.delete(cb);
+}
+
+function emitAgentPanelState() {
+  const state = { tab: panelActiveTab, open: isAgentPanelOpen() };
+  for (const cb of [...panelTabListeners]) {
+    try { cb(state); } catch (_) { /* un abonné fautif ne casse pas le panneau */ }
+  }
+}
+
+/** Met à jour le signal d'attention posé sur le cercle (pastille + cercle). */
+function updateAgentPanelBadge() {
+  const text = agentPanelBadgeText(panelUnread);
+  const badge = document.getElementById("agent-activity-badge");
+  if (badge) {
+    badge.textContent = text || "0";
+    badge.hidden = !text;
+  }
+  const dot = document.getElementById("agent-activity-dot");
+  if (dot) dot.classList.toggle("agent-unread", !!text);
+}
+
+/**
+ * Affiche un onglet du panneau (et masque les autres). Un onglet désactivé par
+ * le réglage n'est jamais sélectionné. Persiste le choix (mémoire d'onglet).
+ * @param {"agents"|"events"|"tasks"} tab
+ * @param {{persist?: boolean}} [options]
+ * @returns {string} l'onglet réellement affiché.
+ */
+export function selectAgentPanelTab(tab, options) {
+  const persist = !(options && options.persist === false);
+  const wanted = normalizeAgentPanelTab(tab);
+  const next = panelTabEnabled[wanted] === false ? "agents" : wanted;
+  panelActiveTab = next;
+  for (const t of AGENT_PANEL_TABS) {
+    const btn = document.getElementById(`agent-activity-tab-${t}`);
+    const pane = document.getElementById(`agent-activity-pane-${t}`);
+    const active = t === next;
+    if (btn) {
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-selected", active ? "true" : "false");
+      btn.tabIndex = active ? 0 : -1;
+    }
+    if (pane) pane.classList.toggle("hidden", !active);
+  }
+  // Le bouton « tout effacer » ne concerne que la liste des événements.
+  const clearBtn = document.getElementById("agent-activity-panel-clear");
+  if (clearBtn) clearBtn.hidden = next !== "events";
+  // Regarder les événements, c'est les lire : le compteur retombe à zéro.
+  if (next === "events" && isAgentPanelOpen()) {
+    panelUnread = 0;
+    updateAgentPanelBadge();
+  }
+  if (persist) {
+    try { localStorage.setItem(AGENT_PANEL_TAB_KEY, next); } catch (_) { /* stockage plein */ }
+  }
+  emitAgentPanelState();
+  return next;
+}
+
+/**
+ * Applique la visibilité des onglets (réglage global). Appelée au démarrage et à
+ * chaque changement de configuration : la bascule est immédiate, sans redémarrer.
+ * @param {object|null} config
+ * @returns {{agents: boolean, events: boolean, tasks: boolean}}
+ */
+export function setAgentPanelTabsVisibility(config) {
+  const visible = agentPanelTabVisibility(config);
+  panelTabEnabled = visible;
+  for (const tab of AGENT_PANEL_TABS) {
+    const btn = document.getElementById(`agent-activity-tab-${tab}`);
+    if (btn) btn.hidden = !visible[tab];
+  }
+  // Onglet désactivé pendant qu'il est affiché → repli sur « Agents ».
+  if (!visible.tasks && panelActiveTab === "tasks") selectAgentPanelTab("agents");
+  return visible;
+}
+
+/** Ouvre le panneau (sur l'onglet mémorisé, ou sur `tab` s'il est fourni). */
+export function openAgentPanel(tab) {
+  const panel = panelEl();
+  if (!panel) return;
+  if (tab) selectAgentPanelTab(tab);
+  renderAgentsPane();
+  panel.classList.remove("hidden");
+  const card = document.getElementById("agent-activity-card");
+  if (card) card.classList.add("hidden");
+  const dot = document.getElementById("agent-activity-dot");
+  if (dot) dot.setAttribute("aria-expanded", "true");
+  try { localStorage.setItem("agent-activity-expanded", "true"); } catch (_) { /* stockage plein */ }
+  if (panelActiveTab === "events") {
+    panelUnread = 0;
+    updateAgentPanelBadge();
+  }
+  emitAgentPanelState();
+}
+
+/** Referme le panneau (le contenu est conservé : aucune donnée perdue). */
+export function closeAgentPanel() {
+  const panel = panelEl();
+  if (panel) panel.classList.add("hidden");
+  const dot = document.getElementById("agent-activity-dot");
+  if (dot) dot.setAttribute("aria-expanded", "false");
+  try { localStorage.setItem("agent-activity-expanded", "false"); } catch (_) { /* stockage plein */ }
+  emitAgentPanelState();
+}
+
+/** Bascule ouverture/fermeture du panneau (clic sur le cercle). */
+export function toggleAgentPanel() {
+  if (isAgentPanelOpen()) closeAgentPanel();
+  else openAgentPanel();
+}
+
+/**
+ * Signale un nouvel événement système : compteur de non-lus + pastille sur le
+ * cercle, SAUF si l'utilisateur regarde déjà la liste des événements.
+ */
+export function agentPanelNoteEvent() {
+  if (isAgentPanelPaneVisible("events")) return;
+  panelUnread++;
+  updateAgentPanelBadge();
+}
+
+/** Remet le compteur de non-lus à zéro (liste lue ou effacée). */
+export function agentPanelClearUnread() {
+  panelUnread = 0;
+  updateAgentPanelBadge();
+}
+
+/** Compteur courant de non-lus (lecture seule, pour l'UI et les tests). */
+export function getAgentPanelUnread() {
+  return panelUnread;
+}
+
+/** Repeint la liste des agents dans le volet « Agents ». */
+function renderAgentsPane() {
+  const listEl = document.getElementById("agent-activity-list");
+  if (!listEl) return;
+  listEl.innerHTML = renderDropdown(getAgentActivitySnapshot().list);
 }

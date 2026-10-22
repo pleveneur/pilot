@@ -120,7 +120,8 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   --text-secondary: #a0a6b4;
   --text-muted: #6b7280;
 
-  /* Panneau des evenements systeme (cloche de l'onglet assistant) : en mode
+  /* Evenements systeme (volet « Evenements » du panneau du suivi du travail) :
+     en mode
      sombre les lignes etaient peu lisibles (texte en secondaire 6.76:1,
      horodatage en attenue 3.41:1 sur --surface-floating). Le texte prend donc
      le primaire et l'horodatage le secondaire, sans aucune couleur en dur :
@@ -1335,11 +1336,12 @@ body.theme-light.theme-tokyo-day {
 
 #tab-bar::-webkit-scrollbar { height: 4px; }
 
-/* --- Indicateur d'activité des agents (haut droite) ---
+/* --- Suivi du travail (haut droite) ---
    Cercle flottant en haut à droite reflétant l'activité de TOUS les agents
    (assistant + codeurs). Le cercle « respire » dès qu'un agent travaille.
-   Au clic : liste déroulante (fond subtilement translucide, teinté violet) +
-   fiche agent. */
+   Au clic : UN SEUL panneau (fond subtilement translucide, teinté violet) à
+   trois onglets — « Agents », « Événements », « Tâches » — plus la fiche agent.
+   Il n'existe qu'un endroit d'affichage du travail : aucun second panneau. */
 #agent-activity {
   position: fixed;
   top: 8px;
@@ -1347,6 +1349,7 @@ body.theme-light.theme-tokyo-day {
   z-index: 10000;
 }
 #agent-activity-dot {
+  position: relative;
   width: 14px;
   height: 14px;
   border-radius: 50%;
@@ -1365,6 +1368,31 @@ body.theme-light.theme-tokyo-day {
   opacity: 1;
   animation: agent-pulse 1.5s ease-in-out infinite;
 }
+/* Signal d'attention (ex-compteur de la cloche) : la pastille reste posée sur
+   le cercle du suivi du travail — visible sans ouvrir le panneau. */
+#agent-activity-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--superagent-accent);
+  color: var(--bg-input);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  font-weight: 600;
+  pointer-events: none;
+  animation: agent-pulse 1.5s ease-in-out infinite;
+}
+#agent-activity-badge[hidden] { display: none; }
+/* Des événements non lus : le cercle lui-même s'allume (jamais muet). */
+#agent-activity-dot.agent-unread {
+  background: var(--superagent-accent);
+  opacity: 1;
+}
 /* Reglages UNIQUES du fond de la liste des agents (aucune couleur en dur : la
    teinte de l'assistant melangee a --surface-3 reste la source).
      --agent-activity-panel-base  = la teinte du fond, inchangee ;
@@ -1380,14 +1408,20 @@ body.theme-light.theme-tokyo-day {
   position: absolute;
   top: 22px;
   right: 0;
-  min-width: 150px;
+  width: 300px;
+  /* Le panneau ne deborde jamais de l'ecran (petites fenetres comprises). */
+  max-width: calc(100vw - 32px);
+  max-height: min(420px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   /* Repli : fond OPAQUE (rendu historique). C'est ce que peignent les moteurs
      qui ne savent pas flouter l'arriere-plan : jamais de fond translucide
      sans flou, donc jamais de texte illisible par-dessus la page. */
   background: var(--agent-activity-panel-base);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   border-radius: var(--radius-sm);
-  padding: 4px;
+  padding: 0;
   z-index: 10001;
 }
 /* Fond subtilement translucide : la translucidation se limite a l'opacite
@@ -1408,6 +1442,31 @@ body.theme-light.theme-tokyo-day {
   }
 }
 #agent-activity-dropdown.hidden { display: none; }
+/* Les trois volets du panneau unique : un seul est visible à la fois (mêmes
+   règles de gabarit pour les trois : ils défilent dans la hauteur du panneau). */
+.agent-activity-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.agent-activity-pane.hidden { display: none; }
+/* Volet « Agents » : la liste historique, au même endroit et avec le même fond
+   translucide que le panneau (aucun fond propre). */
+#agent-activity-pane-agents {
+  padding: 4px;
+  overflow-y: auto;
+}
+/* Volets « Événements » et « Tâches » : ils conservent LEUR surface opaque
+   (--surface-floating), celle sur laquelle les jetons de couleur
+   --sa-events-text / --sa-events-time ont été mesurés (verrous
+   contraste-evenements-sombre.test.js et fond-liste-agents-translucide.test.js) :
+   aucun contraste perdu en passant dans le panneau teinté. */
+#agent-activity-pane-events,
+#agent-activity-pane-tasks {
+  background: var(--surface-floating);
+}
 .agent-activity-item {
   display: flex;
   align-items: center;
@@ -4115,69 +4174,12 @@ body.zen-mode #project-footer {
   50% { opacity: 0.5; }
 }
 
-/* ── Panneau des événements système de l'assistant (tâche #139) ──
+/* ── Listes du panneau du suivi du travail (événements système, missions) ──
    Les événements système (délégations, démarrage/arrêt d'agents, erreurs,
-   connexion perdue, notifications) sont regroupés dans un petit panneau en bas
-   à droite de l'onglet 🧭, ouvert par un bouton « cloche » compact dans la barre
-   de saisie. Tout via les variables de thème (aucune couleur en dur). */
-.sa-events-btn {
-  position: relative;
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  margin-left: auto; /* tout à droite de la barre de saisie */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-input);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.sa-events-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-  border-color: var(--accent);
-}
-.sa-events-btn.agent-pulse {
-  animation: agent-pulse 1.5s ease-in-out infinite;
-}
-.sa-events-badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--superagent-accent);
-  color: var(--bg-input);
-  font-size: var(--font-xs);
-  line-height: 16px;
-  text-align: center;
-  font-weight: 600;
-  pointer-events: none;
-}
-.sa-events-badge[hidden] { display: none; }
-#superagent-events-panel {
-  position: fixed;
-  right: 12px;
-  bottom: 56px;
-  width: 280px;
-  max-height: 320px;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-floating);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  z-index: 10001;
-  overflow: hidden;
-}
-#superagent-events-panel.hidden { display: none; }
+   connexion perdue, notifications) et les missions des agents sont deux volets
+   du MÊME panneau que la liste des agents (haut droite, panneau ouvert par le
+   cercle d'activité) : plus de panneau séparé, plus de bouton « cloche ».
+   Tout via les variables de thème (aucune couleur en dur). */
 .sa-events-header {
   display: flex;
   align-items: center;
@@ -4249,11 +4251,10 @@ body.zen-mode #project-footer {
   white-space: nowrap;
 }
 
-/* Onglet « Tâches » du panneau cloche (onglet 🧭 Assistant) : même panneau,
-   même position, même largeur que la liste des événements — seuls le contenu de
-   l'en-tête (deux boutons d'onglet au lieu d'un titre) et le volet changent.
-   Un volet par onglet ; la liste des tâches ouvertes défile comme celle des
-   événements (`max-height` héritée du panneau). */
+/* Onglet « Tâches » du panneau du suivi du travail : même panneau, mêmes
+   onglets que la liste des événements — seuls le contenu et le volet changent.
+   Un volet par onglet ; la liste défile comme celle des événements
+   (`max-height` héritée du panneau). */
 .sa-events-tabs {
   display: flex;
   align-items: center;
@@ -4265,7 +4266,11 @@ body.zen-mode #project-footer {
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-muted);
+  /* Onglet au repos : texte SECONDAIRE (lisible AA sur --surface-2 dans les deux
+     themes, contrairement a --text-muted qui tombait sous 3:1). Aucune couleur
+     en dur : chaque sous-theme suit sa propre palette.
+     Verrou : src/js/panneau-suivi-trois-onglets.test.js */
+  color: var(--text-secondary);
   font-size: var(--font-sm);
   font-weight: 600;
   cursor: pointer;
@@ -4304,9 +4309,9 @@ body.zen-mode #project-footer {
   letter-spacing: 0.03em;
   color: var(--text-muted);
 }
-/* Volet « En cours » du panneau cloche : deux groupes EXPLICITES et colorés —
-   « En cours » (bleu, ce qui travaille) et « En attente » (ambre, la file, dans
-   l'ordre). Le rang de chaque ligne rend l'ordre lisible. */
+/* Volet « Tâches » du panneau du suivi du travail : deux groupes EXPLICITES et
+   colorés — « En cours » (bleu, ce qui travaille) et « En attente » (ambre, la
+   file, dans l'ordre). Le rang de chaque ligne rend l'ordre lisible. */
 .sa-task-client.sa-missions-group {
   margin-top: 6px;
   border-left: 3px solid transparent;
@@ -4394,8 +4399,9 @@ body.zen-mode #project-footer {
 /* Tâche #160 : bandeau d'événement en PLEIN ÉCRAN (réglage de l'onglet
    Assistant). Overlay centré, au-dessus de tout, NON interactif
    (pointer-events: none — laisse passer les clics), disparition automatique
-   via la classe .fade-out (transition courte ~400 ms). Même palette que le
-   panneau cloche (tâche #139) : variables de thème, aucune couleur en dur. */
+   via la classe .fade-out (transition courte ~400 ms). Même palette que la
+   liste des événements du panneau du suivi du travail (tâche #139) : variables
+   de thème, aucune couleur en dur. */
 .superagent-events-overlay {
   position: fixed;
   top: 50%;
@@ -9816,10 +9822,11 @@ body.pilot-loading *::after {
   background: color-mix(in srgb, var(--superagent-accent) 8%, var(--surface-2));
 }
 /* Ajustements A19 : le bouton de synthèse vocale (🔊) a été retiré du mode
-   Assistant Only (l'élément n'existe plus), et le bouton « cloche » des
-   événements reste un contrôleur du mode standard — masqué tant que l'overlay
-   est actif (le panneau, non déplacé, est de toute façon recouvert). */
-.superagent-immersive-active .sa-events-btn {
+   Assistant Only (l'élément n'existe plus), et le suivi du travail (cercle +
+   panneau à trois onglets) reste un contrôleur du mode standard — masqué tant
+   que l'overlay est actif (le panneau, non déplacé, est de toute façon
+   recouvert). */
+.superagent-immersive-active #agent-activity {
   display: none;
 }
 

@@ -91,22 +91,34 @@ apprend et répond.
   Tâche terminée… », « ⚠️ Connexion perdue… ») sont affichés **dans l'ordre
   de leur émission** grâce à un buffer d'ordonnancement + compteur de
   séquence (#20), même s'ils arrivent hors ordre (sources asynchrones).
-- **#139 — Panneau des événements système** : les **événements système**
-  (délégations, démarrage/arrêt d'agents, erreurs, connexion perdue,
-  notifications) ne s'affichent **plus au centre** de la discussion : ils sont
-  regroupés dans un **petit panneau en bas à droite** de l'onglet 🧭, ouvert
-  par un **bouton « cloche » 🔔** compact tout à droite de la barre de saisie.
-  - Un **badge compteur** indique le nombre d'événements **non lus** depuis la
-    dernière ouverture (il **pulse** quand le panneau est fermé et qu'un
-    nouvel événement arrive).
-  - Le panneau **reste ouvert** tant qu'on ne le ferme pas (bouton **×** ou
-    cloche) ; l'état ouvert/fermé est **mémorisé** et restauré à la réouverture
-    de l'onglet. Pendant l'ouverture, les nouveaux événements s'ajoutent en
-    direct en haut de la liste (compteur à 0).
+- **#139 — Panneau du suivi du travail (UN SEUL endroit à l'écran)** : les
+  **événements système** (délégations, démarrage/arrêt d'agents, erreurs,
+  connexion perdue, notifications) **et** les **missions des agents** se suivent
+  dans **un seul panneau**, ouvert par le **cercle d'activité en HAUT À DROITE**
+  de la fenêtre (le cercle qui respire quand du travail est en cours). Il ne
+  reste **ni second panneau, ni bouton « cloche »** à l'écran : le panneau de la
+  cloche (bas à droite de l'onglet 🧭) a été **déplacé** dans celui-ci — rien
+  n'est perdu (mêmes événements, mêmes missions, même mention « en attente »,
+  mêmes réglages).
+  - **Trois onglets, dans cet ordre** : **« Agents »** (la liste des agents du
+    suivi, inchangée : pastille respirante, projet, état), **« Événements »**
+    (historique système), **« Tâches »** (missions en cours et en attente).
+  - **Onglet mémorisé** : le panneau se rouvre sur le **dernier onglet
+    utilisé** (« Agents » au premier lancement). **Échap**, la croix **×** ou un
+    clic sur le cercle referment le panneau ; les onglets sont atteignables au
+    clavier (Tab) et commutables aux **flèches** (←/→, Début/Fin).
+  - **Signal d'attention conservé SUR le cercle** : une **pastille** posée sur
+    le cercle affiche le nombre d'**événements non lus** (plafonnée à « 99+ ») et
+    le cercle **s'allume** tant qu'il reste des événements non vus ; regarder
+    l'onglet « Événements » **éteint** le signal. Tant que la liste est sous vos
+    yeux, un nouvel événement **ne compte pas** comme non lu.
+  - Le panneau **reste ouvert** tant qu'on ne le ferme pas ; son état
+    ouvert/fermé est **mémorisé**. Pendant l'ouverture, les nouveaux événements
+    s'ajoutent en direct en haut de la liste.
   - Liste **chronologique** (plus récent en haut), pastille colorée par
     sévérité (succès / avertissement / erreur / info), horodatage discret.
-  - Bouton **« tout effacer »** 🗑️ pour vider la liste. Tampon mémoire borné
-    (~150 items) pour garder le panneau lisible.
+  - Bouton **« tout effacer »** 🗑️ (dans l'onglet « Événements ») pour vider la
+    liste. Tampon mémoire borné (~150 items) pour garder la liste lisible.
   - Les **éléments interactifs** (boutons de choix, confirmations, saisies)
     restent **au centre** de la discussion : ce sont des questions qui
     nécessitent votre action, pas des événements système.
@@ -118,11 +130,13 @@ apprend et répond.
     (1-120 s, **5 s par défaut**). Le **dernier événement remplace** le
     précédent (jamais d'empilement) et le bandeau s'efface en douceur. Les
     **questions interactives** (choix, confirmations) ne sont **pas** concernées.
-- **Volet « En cours » dans le panneau cloche** : en plus des **Événements**, le
-  panneau cloche propose un **second onglet « En cours »** (**Paramètres ⚙️ →
-  onglet « Assistant » → « Onglet « En cours » dans le panneau de la cloche »**,
-  **activé par défaut**). Il liste les **missions réellement en cours** de vos
-  agents : pour chacune, une **phrase courte** qui dit la **tâche réelle**,
+- **Onglet « Tâches » du panneau du suivi du travail** : à côté d'« Agents » et
+  d'« Événements », le panneau propose l'onglet **« Tâches »** (**Paramètres ⚙️ →
+  onglet « Assistant » → « Onglet « Tâches » dans le panneau du suivi du travail
+  (missions des agents) »**, **activé par défaut** ; décoché, l'onglet est
+  **masqué** et le panneau reste sur les deux autres). Il liste les **missions
+  réellement en cours** de vos agents : pour chacune, une **phrase courte** qui
+  dit la **tâche réelle**,
   affichée **en premier** (avant le nom de l'agent et le projet, qui suivent sur
   la ligne secondaire). Cette phrase vient de la **demande elle-même** (résumé
   court fourni par l'assistant ; à défaut, l'objectif de la demande). Les
@@ -467,16 +481,20 @@ uniquement un bloc d'instructions dans le prompt système.
   fichiers projets. C'est l'utilisateur qui pilote ces cartes directement dans
   la vue.
 
-### Volet « En cours » du panneau cloche (missions des agents)
-- Le **panneau cloche** (#139, en bas à droite de l'onglet 🧭) porte désormais
-  **deux onglets commutables** dans son en-tête : **« Événements »** (historique
-  en direct, inchangé) et **« En cours »** (missions des agents).
+### Onglet « Tâches » du panneau du suivi du travail (missions des agents)
+- Le **panneau du suivi du travail** (#139, cercle en **haut à droite**, commun à
+  toutes les vues) porte **trois onglets commutables** dans son en-tête :
+  **« Agents »** (liste des agents), **« Événements »** (historique en direct,
+  inchangé) et **« Tâches »** (missions des agents). L'ancien panneau de la
+  cloche de l'onglet 🧭 n'existe plus : ses **deux contenus** (événements et
+  missions) vivent ici, avec le même comportement.
 - **Source unique** : le **store d'activité partagé** de l'application
   (`agent-activity.js`, celui de l'indicateur d'activité des projets, du mode
   immersif et de l'onglet agent) — **aucune** commande Rust nouvelle, **aucun**
-  appel supplémentaire au moteur. Le volet **s'abonne** à ce store tant qu'il est
-  affiché (et se **désabonne** à la fermeture du panneau ou au retour sur
-  Événements), donc il se **met à jour en direct** avec le rafraîchissement léger
+  appel supplémentaire au moteur. Le volet **s'abonne** à ce store tant que
+  l'onglet « Tâches » est **affiché** (et se **désabonne** dès qu'on le quitte
+  ou que le panneau se ferme), donc il se **met à jour en direct** avec le
+  rafraîchissement léger
   existant. La commutation d'onglet reste purement visuelle.
 - **Contenu** : pour chaque agent **retenu** → `{ agent, projet, mission }`.
   Filtre, mise en forme et rendu sont des **fonctions pures**
@@ -1556,9 +1574,9 @@ d'arrêt ne peut donc plus oublier de laisser une trace. Si la trace ne peut pas
   une demande à l'agent », « Préparer une livraison », « Lister les tâches en
   cours ») qui **préremplissent la zone de saisie** (elles n'envoient pas).
 - La barre du haut ne contient aucun toggle voix : la **🎙️ dictée** reste dans
-  la barre de saisie. Ni bouton de **synthèse vocale** (🔊), ni bouton
-  d'**événements** (cloche / panneau) en mode assistant seul — ces contrôles
-  restent propres au mode standard. Le message d'accueil affiche le **nom réel
+  la barre de saisie. Ni bouton de **synthèse vocale** (🔊), ni **suivi du
+  travail** (cercle + panneau à trois onglets) en mode assistant seul — ces
+  contrôles restent propres au mode standard. Le message d'accueil affiche le **nom réel
   de l'assistant** (config de l'onglet 🧭), avec repli « Pilot Assistant ».
 - Le bouton **← (retour)** revient à l'interface complète. L'état de la
   conversation est **préservé** lors des allers-retours (les éléments du chat

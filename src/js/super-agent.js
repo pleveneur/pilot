@@ -43,7 +43,7 @@ import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, rele
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
-import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml, normalizeMissionResume } from "./agent-activity.js";
+import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility } from "./agent-activity.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames } from "./super-agent-badges.js";
@@ -198,35 +198,21 @@ let nextInfoSeq = 0;
 
 // ── Panneau des événements système (tâche #139) ──
 // Les événements système (délégations, démarrage/arrêt d'agents, erreurs,
-// connexion perdue, notifications) sont retirés du centre de la discussion et
-// regroupés dans un petit panneau en bas à droite de l'onglet 🧭, ouvert par un
-// bouton « cloche » compact dans la barre de saisie. Les éléments interactifs
-// (confirm/select/choice) restent au centre. L'état ouvert/fermé est mémorisé
-// (localStorage) et restauré à la réouverture de l'onglet.
-const SUPER_EVENTS_KEY = "pilot_superagent_events_open";
+// connexion perdue, notifications) sont retirés du centre de la discussion. Ils
+// sont affichés dans le panneau du SUIVI DU TRAVAIL (haut droite, ouvert par le
+// cercle d'activité), onglet « Événements » — panneau unique partagé avec la
+// liste des agents et les missions : plus de panneau ni de bouton « cloche »
+// propres à l'onglet Assistant. Le compteur de non-lus est porté par le cercle.
+// Les éléments interactifs (confirm/select/choice) restent au centre.
 const SUPER_EVENTS_MAX = 150; // tampon mémoire (évite un panneau illisible)
-let superEventsPanel = null;   // panneau #superagent-events-panel
-let superEventsBtn = null;     // bouton cloche .sa-events-btn
-let superEventsBadge = null;   // badge compteur .sa-events-badge
-let superEventsList = null;    // liste .sa-events-list
-let superEventsOpen = false;   // panneau ouvert ?
-let superEventsUnread = 0;     // événements non lus depuis la dernière ouverture
-// Onglet « Tâches » du même panneau (tâches OUVERTES du suivi) : le panneau
-// porte DEUX onglets commutables (« Événements » — existant, inchangé — et
-// « Tâches »), activés par le réglage global `super_agent_tasks_tab_enabled`
-// (actif par défaut). Le volet Tâches est rafraîchi à chaque affichage (jamais
-// une photo périmée).
-let superEventsTabEventsBtn = null; // bouton d'onglet « Événements »
-let superEventsTabTasksBtn = null;  // bouton d'onglet « Tâches »
-let superEventsPaneEvents = null;   // volet Événements
-let superEventsPaneTasks = null;    // volet Tâches
-let superTasksList = null;          // liste .sa-tasks-list (« En cours » : missions)
+// Filet de rejeu du volet « Tâches » : le volet est alimenté par le store
+// d'activité tant qu'il est affiché (abonnement posé par loadSuperMissions).
 let superMissionsUnsub = null;      // désabonnement du store d'activité (volet ouvert) pour le détail
-let superEventsActiveTab = "events"; // onglet actif du panneau
+let stopPanelTabWatch = null;       // désabonnement du suivi des onglets du panneau global
 
 // ── Overlay plein écran des événements (tâche #160) ──
 // Quand le réglage `super_agent_events_overlay_enabled` est actif, chaque
-// événement du panneau cloche s'affiche AUSSI en bandeau discret AU CENTRE de
+// événement du volet « Événements » s'affiche AUSSI en bandeau discret AU CENTRE de
 // l'écran (au-dessus de tout), avec disparition automatique après une durée
 // réglable (défaut 5 s). Un SEUL emplacement : le dernier événement REMPLACE le
 // précédent et le minuteur repart (jamais d'empilement). Les questions
@@ -249,7 +235,7 @@ export function normalizeOverlaySeconds(seconds) {
 }
 
 /** Mappe un niveau d'événement (info|warn|error|success) vers la classe CSS de
- * la pastille de l'overlay (même palette que le panneau cloche). Pur et
+ * la pastille de l'overlay (même palette que le volet « Événements »). Pur et
  * testable (tâche #160).
  * @param {string} level
  * @returns {string} info|warning|danger|success
@@ -2138,21 +2124,23 @@ function formatSuperEventTime(d) {
 }
 
 /**
- * Ajoute un événement système au panneau (tâche #139). `level` ∈
- * info|warn|error|success. Si le panneau est fermé, incrémente le compteur
- * non-lu et fait pulser le badge. Tampon mémoire borné (SUPER_EVENTS_MAX).
- * Fail-open : si le panneau n'existe pas (onglet fermé), on ne fait rien.
+ * Ajoute un événement système dans le volet « Événements » du panneau du suivi
+ * du travail (haut droite). `level` ∈ info|warn|error|success. Si l'utilisateur
+ * ne regarde pas déjà cette liste, le compteur de non-lus augmente et la
+ * pastille du cercle s'allume (agent-activity.js). Tampon mémoire borné
+ * (SUPER_EVENTS_MAX).
  * @param {string} level
  * @param {string} text
  */
 function pushSuperAgentSystemEvent(level, text, title) {
   const trimmed = String(text || "").trim();
   if (!trimmed || isBareProjectPath(trimmed)) return;
-  // Tâche #160 : même source que le panneau cloche → overlay plein écran (si le
-  // réglage est activé). Indépendant du panneau : s'affiche même si l'onglet 🧭
-  // n'a pas encore construit le panneau (fail-open symétrique).
+  // Tâche #160 : même source que la liste des événements → overlay plein écran
+  // (si le réglage est activé). Indépendant du panneau : s'affiche même si
+  // l'interface du panneau n'est pas encore prête (fail-open symétrique).
   showSuperEventOverlay(level, trimmed);
-  if (!superEventsList) return; // panneau pas encore créé (onglet fermé)
+  const list = agentPanelEventsListElement();
+  if (!list) return; // panneau pas encore prêt (interface non initialisée)
   const item = document.createElement("div");
   item.className = "sa-events-item";
   const dot = document.createElement("span");
@@ -2169,16 +2157,14 @@ function pushSuperAgentSystemEvent(level, text, title) {
   item.appendChild(dot);
   item.appendChild(label);
   item.appendChild(time);
-  superEventsList.prepend(item);
+  list.prepend(item);
   // Tampon mémoire borné : on retire les plus anciens (fin de liste).
-  while (superEventsList.children.length > SUPER_EVENTS_MAX) {
-    superEventsList.lastChild.remove();
+  while (list.children.length > SUPER_EVENTS_MAX) {
+    list.lastChild.remove();
   }
-  if (!superEventsOpen) {
-    superEventsUnread++;
-    updateSuperEventsBadge();
-    if (superEventsBtn) superEventsBtn.classList.add("agent-pulse");
-  }
+  // Signal d'attention sur le cercle (compteur de non-lus), sauf si la liste
+  // des événements est sous les yeux de l'utilisateur.
+  agentPanelNoteEvent();
 }
 
 /** Affiche les messages d'info en attente dans l'ordre de leur séquence. */
@@ -2191,82 +2177,32 @@ function flushPendingInfo() {
   }
 }
 
-/** Met à jour le badge compteur d'événements non lus (masqué si 0). */
-function updateSuperEventsBadge() {
-  if (!superEventsBadge) return;
-  if (superEventsUnread > 0) {
-    superEventsBadge.textContent = superEventsUnread > 99 ? "99+" : String(superEventsUnread);
-    superEventsBadge.hidden = false;
-  } else {
-    superEventsBadge.hidden = true;
-  }
-}
-
-/** Ouvre le panneau des événements (compteur remis à 0, badge masqué). */
-function openSuperEvents() {
-  superEventsOpen = true;
-  superEventsUnread = 0;
-  updateSuperEventsBadge();
-  if (superEventsPanel) superEventsPanel.classList.remove("hidden");
-  if (superEventsBtn) superEventsBtn.classList.remove("agent-pulse");
-  localStorage.setItem(SUPER_EVENTS_KEY, "1");
-  // Onglet « En cours » : la liste est alimentée en direct par le store
-  // d'activité tant qu'elle est affichée (abonnement posé par loadSuperMissions).
-  // L'onglet « Événements » reste alimenté en direct par le tampon mémoire
-  // existant (inchangé).
-  if (superEventsActiveTab === "tasks") loadSuperMissions();
-}
-
-/** Ferme le panneau des événements. */
-function closeSuperEvents() {
-  superEventsOpen = false;
-  stopSuperMissionsWatch();
-  if (superEventsPanel) superEventsPanel.classList.add("hidden");
-  localStorage.setItem(SUPER_EVENTS_KEY, "0");
-}
-
-/** Bascule l'ouverture/fermeture du panneau des événements. */
-function toggleSuperEvents() {
-  if (superEventsOpen) closeSuperEvents();
-  else openSuperEvents();
-}
-
-/**
- * Active un onglet du panneau cloche (« Événements » | « En cours »). Le volet
- * « En cours » est mis à jour EN DIRECT tant qu'il est affiché (abonnement au
- * store d'activité partagé) ; la commutation est purement visuelle (aucun
- * aller-retour réseau pour Événements). L'onglet « En cours » n'est sélectionnable
- * que s'il est affiché (réglage global activé).
- * @param {"events"|"tasks"} tab
- */
-function switchSuperEventTab(tab) {
-  const tasksAvailable = !!(superEventsTabTasksBtn && !superEventsTabTasksBtn.hidden);
-  superEventsActiveTab = tab === "tasks" && tasksAvailable ? "tasks" : "events";
-  const isTasks = superEventsActiveTab === "tasks";
-  if (superEventsTabEventsBtn) superEventsTabEventsBtn.classList.toggle("active", !isTasks);
-  if (superEventsTabTasksBtn) superEventsTabTasksBtn.classList.toggle("active", isTasks);
-  if (superEventsPaneEvents) superEventsPaneEvents.classList.toggle("hidden", isTasks);
-  if (superEventsPaneTasks) superEventsPaneTasks.classList.toggle("hidden", !isTasks);
-  // Le bouton « tout effacer » ne concerne que la liste des événements.
-  if (superEventsPanel) {
-    const clearBtn = superEventsPanel.querySelector(".sa-events-clear");
-    if (clearBtn) clearBtn.hidden = isTasks;
-  }
-  if (isTasks) loadSuperMissions();
-  else stopSuperMissionsWatch();
-}
-
 /**
  * Applique le réglage global `super_agent_tasks_tab_enabled` (ACTIVÉ PAR DÉFAUT)
- * au panneau cloche : activé → deux onglets (Événements + En cours) ; désactivé →
- * panneau historique inchangé (Événements seuls). Fail-open : réglage illisible
- * → on garde les deux onglets. Appelée à la construction du panneau ET à chaque
- * changement de configuration (bascule à chaud sans rouvrir l'onglet).
+ * au panneau du suivi du travail : activé → onglet « Tâches » présent ;
+ * désactivé → panneau historique (Agents + Événements). Fail-open : réglage
+ * illisible → onglet présent. Le panneau est GLOBAL (haut droite) : c'est
+ * agent-activity.js qui l'applique, ici on ne fait que lui passer la config
+ * (appelée à la création de l'onglet Assistant ET à chaque changement de
+ * configuration — la bascule est à chaud, sans rouvrir l'onglet).
  */
 function applySuperEventsTabsVisibility() {
-  const enabled = (configCache || {}).super_agent_tasks_tab_enabled !== false;
-  if (superEventsTabTasksBtn) superEventsTabTasksBtn.hidden = !enabled;
-  if (!enabled && superEventsActiveTab === "tasks") switchSuperEventTab("events");
+  setAgentPanelTabsVisibility(configCache || {});
+}
+
+/**
+ * Réagit au changement d'onglet du panneau du suivi du travail : le volet
+ * « Tâches » n'est alimenté EN DIRECT (store d'activité partagé) que tant qu'il
+ * est affiché ; les autres onglets coupent cette surveillance (aucun travail
+ * inutile, aucune photo périmée au retour : on recharge à l'affichage).
+ * @param {{tab: string, open: boolean}} state
+ */
+function onPanelTabChanged(state) {
+  if (!state || !state.open || state.tab !== "tasks") {
+    stopSuperMissionsWatch();
+    return;
+  }
+  loadSuperMissions();
 }
 
 /**
@@ -2281,6 +2217,7 @@ function applySuperEventsTabsVisibility() {
  * PUR (renderMissionsPanelHtml, agent-activity.js).
  */
 function renderSuperMissions() {
+  const superTasksList = agentPanelTasksListElement();
   if (!superTasksList) return;
   const snapshot = getAgentActivitySnapshot();
   const missions = buildRunningMissions(snapshot.list, collectQueuedMissions());
@@ -2335,6 +2272,7 @@ function stopSuperMissionsWatch() {
  * partagé) + missions en file d'attente, marquées « en attente ».
  */
 function loadSuperMissions() {
+  const superTasksList = agentPanelTasksListElement();
   if (!superTasksList) return;
   superTasksList.innerHTML = `<div class="dash-loading">Chargement des missions…</div>`;
   startSuperMissionsWatch();
@@ -2444,7 +2382,7 @@ export async function createSuperAgent(container) {
   const onConfigChanged = () => {
     refreshSuperAgentConfig().then(() => {
       // Réglage global de l'onglet « Tâches » : activation/désactivation à chaud,
-      // sans redémarrer (le panneau cloche suit immédiatement).
+      // sans redémarrer (le panneau du suivi du travail suit immédiatement).
       applySuperEventsTabsVisibility();
       const tabs = window._pilotTabs;
       if (tabs && typeof tabs.updateSuperAgentLabel === "function") {
@@ -2581,76 +2519,20 @@ export async function createSuperAgent(container) {
     <textarea class="agent-input" id="superagent-input" rows="1" placeholder="Poser une question sur tous les projets… (Entrée pour envoyer)"></textarea>
     <button class="agent-btn agent-mic-btn" data-action="voice" title="Dictée vocale (transcription cloud)" aria-label="Dictée vocale"><i data-lucide="mic" class="icon-sm"></i></button>
     <button class="agent-btn agent-send-btn" data-action="send"><i data-lucide="send-horizontal" class="icon-sm"></i></button>
-    <button class="agent-btn sa-events-btn" data-action="events" title="Événements système" aria-label="Événements système"><i data-lucide="bell" class="icon-sm"></i><span class="sa-events-badge" hidden>0</span></button>
   `;
   wrapper.appendChild(inputBar);
 
-  // ── Panneau des événements système (tâche #139) ──
-  // Bouton « cloche » compact tout à droite de la barre de saisie + panneau en
-  // bas à droite de l'onglet. Les événements système y sont regroupés au fil de
-  // leur arrivée ; le compteur non-lu pulse quand le panneau est fermé. L'état
-  // ouvert/fermé est mémorisé (localStorage) et restauré à la réouverture.
-  const eventsBtn = inputBar.querySelector(".sa-events-btn");
-  const eventsBadge = eventsBtn.querySelector(".sa-events-badge");
-  const eventsPanel = document.createElement("div");
-  eventsPanel.id = "superagent-events-panel";
-  eventsPanel.className = "sa-events-panel hidden";
-  // Le panneau porte DEUX onglets commutables : « Événements » (historique,
-  // inchangé) et « En cours » (missions RÉELLEMENT en cours des agents, source :
-  // store d'activité partagé — ajouté quand le réglage global
-  // `super_agent_tasks_tab_enabled` est actif — il l'est par défaut). Les tâches
-  // du suivi (kanban) restent dans leur onglet dédié, ouvert par le bouton Kanban
-  // de la barre latérale.
-  eventsPanel.innerHTML = `
-    <div class="sa-events-header">
-      <div class="sa-events-tabs" role="tablist">
-        <button class="sa-events-tab active" role="tab" data-sa-tab="events">Événements</button>
-        <button class="sa-events-tab" role="tab" data-sa-tab="tasks" hidden>En cours</button>
-      </div>
-      <div class="sa-events-header-actions">
-        <button class="agent-btn sa-events-clear" title="Tout effacer" aria-label="Tout effacer"><i data-lucide="trash-2" class="icon-sm"></i></button>
-        <button class="agent-btn sa-events-close" title="Fermer" aria-label="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
-      </div>
-    </div>
-    <div class="sa-events-pane sa-events-pane-events">
-      <div class="sa-events-list"></div>
-    </div>
-    <div class="sa-events-pane sa-events-pane-tasks hidden">
-      <div class="sa-tasks-list"></div>
-    </div>
-  `;
-  wrapper.appendChild(eventsPanel);
-  superEventsPanel = eventsPanel;
-  superEventsBtn = eventsBtn;
-  superEventsBadge = eventsBadge;
-  superEventsList = eventsPanel.querySelector(".sa-events-list");
-  superEventsTabEventsBtn = eventsPanel.querySelector('.sa-events-tab[data-sa-tab="events"]');
-  superEventsTabTasksBtn = eventsPanel.querySelector('.sa-events-tab[data-sa-tab="tasks"]');
-  superEventsPaneEvents = eventsPanel.querySelector(".sa-events-pane-events");
-  superEventsPaneTasks = eventsPanel.querySelector(".sa-events-pane-tasks");
-  superTasksList = eventsPanel.querySelector(".sa-tasks-list");
-  superEventsOpen = false;
-  superEventsUnread = 0;
-  superEventsActiveTab = "events";
-  eventsBtn.addEventListener("click", toggleSuperEvents);
-  eventsPanel.querySelector(".sa-events-close").addEventListener("click", closeSuperEvents);
-  eventsPanel.querySelector(".sa-events-clear").addEventListener("click", () => {
-    if (superEventsList) superEventsList.innerHTML = "";
-  });
-  // Commutation des onglets (le volet « En cours » est suivi en direct pendant
-  // son affichage, cf. startSuperMissionsWatch).
-  superEventsTabEventsBtn.addEventListener("click", () => switchSuperEventTab("events"));
-  superEventsTabTasksBtn.addEventListener("click", () => switchSuperEventTab("tasks"));
-  // Le volet « En cours » liste les missions des agents en travail. Un clic sur
-  // une mission referme le panneau (pas de détail de tâche ici : le kanban garde
-  // son onglet dédié, ouvert par le bouton Kanban de la barre latérale).
-  superTasksList.addEventListener("click", () => closeSuperEvents());
-  // Réglage global : panneau historique (Événements seuls) si désactivé.
+  // ── Suivi du travail (haut droite) : AUCUN panneau propre ici ──
+  // Les événements système et les missions des agents sont deux volets du
+  // panneau unique ouvert par le cercle d'activité (agent-activity.js) : plus de
+  // bouton « cloche » dans la barre de saisie, plus de panneau en bas à droite
+  // (un seul endroit à l'écran pour suivre le travail). Ce module ne fait
+  // qu'ALIMENTER ce panneau (événements poussés dans sa liste, missions
+  // rechargées quand son onglet « Tâches » s'affiche).
+  if (stopPanelTabWatch) stopPanelTabWatch();
+  stopPanelTabWatch = onAgentPanelTabChange(onPanelTabChanged);
+  // Réglage global : onglet « Tâches » présent ou non.
   applySuperEventsTabsVisibility();
-  // Restaurer l'état ouvert/fermé mémorisé (localStorage).
-  if (localStorage.getItem(SUPER_EVENTS_KEY) === "1") {
-    openSuperEvents();
-  }
   // Indicateur discret « assistant occupé » (Bug 1 UX) : bandeau inséré au-dessus
   // de la barre de saisie. Visible uniquement quand l'utilisateur tente d'envoyer
   // pendant que l'assistant est occupé ; disparaît quand le backend redevient libre.
@@ -3179,8 +3061,8 @@ export async function createSuperAgent(container) {
   // dans l'overlay — aucun rendu dupliqué, la dictée vocale et le rendu du
   // chat restent ceux de l'onglet normal. Le dernier mode choisi est mémorisé
   // (localStorage) et restauré à la réouverture de l'onglet.
-  // Ajustements A19 : ni bouton de synthèse vocale (🔊), ni bouton/panneau
-  // d'événements (cloche) dans ce mode — ils restent propres au mode standard.
+  // Ajustements A19 : ni bouton de synthèse vocale (🔊), ni suivi du travail
+  // (cercle + panneau) dans ce mode — ils restent propres au mode standard.
   const IMMERSIVE_KEY = "pilot_superagent_immersive";
   let immersiveOverlay = null;
   // Résumé des agents repliable (point ⇆ liste, barre du haut) : désabonnement
@@ -3284,9 +3166,9 @@ export async function createSuperAgent(container) {
     if (pendingBar) immInput.appendChild(pendingBar);
     // Disclaimer (maquette V4) : mention sous la barre de saisie.
     if (immersiveDisclaimer) immInput.appendChild(immersiveDisclaimer);
-    // Ajustement A19 : le panneau des événements (et sa cloche) reste un
-    // contrôleur du mode standard — il n'est plus déplacé dans l'overlay
-    // (recouvert par celui-ci, bouton masqué via .superagent-immersive-active).
+    // Ajustement A19 : le suivi du travail (cercle + panneau à trois onglets)
+    // reste un contrôleur du mode standard — il n'est plus déplacé dans l'overlay
+    // (recouvert par celui-ci, masqué via .superagent-immersive-active).
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
     refreshIcons(immersiveOverlay);
@@ -3721,16 +3603,15 @@ export async function createSuperAgent(container) {
       pendingBarEl = null;
       pendingInputEl = null;
       superMessagesEl = null;
-      // Tâche #139 : libérer les références du panneau des événements (l'onglet
-      // est fermé ; les prochains événements seront ignorés jusqu'à la réouverture).
+      // Suivi du travail (haut droite) : on retire nos abonnements (le panneau
+      // est GLOBAL, il survit à la fermeture de l'onglet Assistant ; seuls nos
+      // propres branchements sont libérés). Les événements déjà affichés restent
+      // dans le panneau — aucune donnée perdue.
+      if (stopPanelTabWatch) {
+        stopPanelTabWatch();
+        stopPanelTabWatch = null;
+      }
       stopSuperMissionsWatch();
-      superTasksList = null;
-      superEventsPanel = null;
-      superEventsBtn = null;
-      superEventsBadge = null;
-      superEventsList = null;
-      superEventsOpen = false;
-      superEventsUnread = 0;
       // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
       // Anti-doublon Telegram (lot 3) : l'Assistant ne peut plus parler → les
       // avis bruts retardés partent MAINTENANT (aucun événement perdu), et la
@@ -4353,14 +4234,15 @@ function scheduleTransientDisconnect(messagesEl, statusEl, onFail) {
 }
 
 /**
- * Retire le message « Connexion au super-agent perdue » du panneau des
- * événements quand le processus redevient vivant (correctif V2). Idempotent et
- * fail-open : si le panneau n'existe pas (onglet fermé) ou qu'aucun message
+ * Retire le message « Connexion au super-agent perdue » du volet « Événements »
+ * du panneau du suivi du travail quand le processus redevient vivant (correctif
+ * V2). Idempotent et fail-open : si le panneau n'existe pas ou qu'aucun message
  * n'est présent, ne fait rien. Ne retire JAMAIS un message si la session reste
  * morte (vrai blocage) — la décision est pilotée par `shouldClearDisconnectedMessage`
  * côté appelant (superStatusPoll, `alive`).
  */
 function removeSuperAgentDisconnectedEvent() {
+  const superEventsList = agentPanelEventsListElement();
   if (!superEventsList) return;
   const items = superEventsList.querySelectorAll(".sa-events-item");
   for (const item of items) {

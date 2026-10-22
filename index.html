@@ -98,11 +98,35 @@
 
   <!-- Zone de Travail (Droite) -->
   <main id="main-area">
-    <!-- Indicateur d'activité des agents (haut droite) : cercle respirant + liste
-         déroulante + fiche agent. Unique indicateur d'activité de l'interface. -->
+    <!-- Suivi du travail (haut droite) : UN SEUL panneau, ouvert par le cercle
+         respirant, à TROIS onglets — « Agents » (qui travaille), « Événements »
+         (journal système) et « Tâches » (missions en cours et en attente).
+         Unique endroit de l'interface où le travail se suit : plus de panneau
+         séparé, plus de seconde liste. -->
     <div id="agent-activity">
-      <button id="agent-activity-dot" title="Activité des agents"></button>
-      <div id="agent-activity-dropdown" class="hidden"></div>
+      <button id="agent-activity-dot" title="Suivi du travail" aria-label="Suivi du travail" aria-haspopup="true" aria-expanded="false"><span id="agent-activity-badge" hidden>0</span></button>
+      <div id="agent-activity-dropdown" class="hidden">
+        <div class="sa-events-header">
+          <div class="sa-events-tabs" role="tablist" aria-label="Suivi du travail">
+            <button type="button" class="sa-events-tab active" role="tab" id="agent-activity-tab-agents" data-agent-panel-tab="agents" aria-controls="agent-activity-pane-agents" aria-selected="true" tabindex="0">Agents</button>
+            <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-events" data-agent-panel-tab="events" aria-controls="agent-activity-pane-events" aria-selected="false" tabindex="-1">Événements</button>
+            <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-tasks" data-agent-panel-tab="tasks" aria-controls="agent-activity-pane-tasks" aria-selected="false" tabindex="-1">Tâches</button>
+          </div>
+          <div class="sa-events-header-actions">
+            <button type="button" class="agent-btn" id="agent-activity-panel-clear" title="Tout effacer" aria-label="Tout effacer" hidden><i data-lucide="trash-2" class="icon-sm"></i></button>
+            <button type="button" class="agent-btn" id="agent-activity-panel-close" title="Fermer" aria-label="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
+          </div>
+        </div>
+        <div class="agent-activity-pane" id="agent-activity-pane-agents" role="tabpanel" aria-labelledby="agent-activity-tab-agents">
+          <div id="agent-activity-list"></div>
+        </div>
+        <div class="agent-activity-pane sa-events-pane hidden" id="agent-activity-pane-events" role="tabpanel" aria-labelledby="agent-activity-tab-events">
+          <div class="sa-events-list"></div>
+        </div>
+        <div class="agent-activity-pane sa-events-pane hidden" id="agent-activity-pane-tasks" role="tabpanel" aria-labelledby="agent-activity-tab-tasks">
+          <div class="sa-tasks-list"></div>
+        </div>
+      </div>
       <div id="agent-activity-card" class="hidden"></div>
     </div>
     <div id="tab-bar"></div>
@@ -991,7 +1015,7 @@
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-events-overlay" />
-              <label for="setting-superagent-events-overlay" title="Afficher TEMPORAIREMENT au centre de l'écran (au-dessus de tout) chaque événement de l'Assistant (fin de tâche, erreur, agent terminé…), comme le panneau cloche. Le dernier événement remplace le précédent. Les questions interactives (choix, confirmations) ne sont pas concernées. Désactivé par défaut.">Événements en plein écran (bandeau central temporaire)</label>
+              <label for="setting-superagent-events-overlay" title="Afficher TEMPORAIREMENT au centre de l'écran (au-dessus de tout) chaque événement du suivi du travail (fin de tâche, erreur, agent terminé…), comme la liste des événements du panneau (cercle en haut à droite). Le dernier événement remplace le précédent. Les questions interactives (choix, confirmations) ne sont pas concernées. Désactivé par défaut.">Événements en plein écran (bandeau central temporaire)</label>
             </div>
             <div class="setting-row" id="superagent-events-overlay-duration-row" style="display:none;">
               <label for="setting-superagent-events-overlay-seconds" title="Durée d'affichage du bandeau central (en secondes) avant sa disparition.">Durée d'affichage :</label>
@@ -1000,7 +1024,7 @@
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-tasks-tab" />
-              <label for="setting-superagent-tasks-tab" title="Ajouter un onglet « En cours » au panneau de la cloche (onglet Assistant) : liste les MISSIONS RÉELLEMENT en cours de vos agents (projet, texte de la demande), un agent au repos n'y figure pas. Une mission qui attend qu'un agent se libère apparaît avec la mention « en attente ». Activé par défaut.">Onglet « En cours » dans le panneau de la cloche (missions des agents)</label>
+              <label for="setting-superagent-tasks-tab" title="Afficher l'onglet « Tâches » du panneau du suivi du travail (cercle en haut à droite) : il liste les MISSIONS RÉELLEMENT en cours de vos agents (projet, texte de la demande), un agent au repos n'y figure pas. Une mission qui attend qu'un agent se libère apparaît avec la mention « en attente ». Activé par défaut.">Onglet « Tâches » dans le panneau du suivi du travail (missions des agents)</label>
             </div>
             <div class="setting-row setting-row-indent">
               <label for="setting-superagent-checklist-mode" title="Contrôle des points de checklist quand une tâche de suivi passe en « Terminé » : Désactivée = aucun contrôle ; Rappel simple (défaut) = un avertissement signale les points restants et la clôture reste possible ; Bloquante = la clôture est refusée tant que des points restent à cocher.">Checklist de livraison obligatoire :</label>

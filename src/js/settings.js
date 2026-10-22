@@ -538,7 +538,7 @@ const superAgentScheduleCount = document.getElementById("setting-superagent-sche
 const chkSuperAgentEventsOverlay = document.getElementById("setting-superagent-events-overlay");
 const inputSuperAgentEventsOverlaySeconds = document.getElementById("setting-superagent-events-overlay-seconds");
 const superAgentEventsOverlayDurationRow = document.getElementById("superagent-events-overlay-duration-row");
-// Onglet « Tâches » du panneau cloche (actif par défaut).
+// Onglet « Tâches » du panneau du suivi du travail (actif par défaut).
 const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-tab");
 // ── Lot A idée 3 (tranche 3.5) : checklist de livraison ──
 // Mode de contrôle au passage en « Terminé » (off / warn / block) et modèle de

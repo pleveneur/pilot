@@ -28,7 +28,7 @@ import { thinkingLevelOptions, THINKING_LEVEL_HINT } from "./thinking-levels.js"
 // Visibilité du travail SANS ONGLET (règle 1) : le panneau « Activité » de cet
 // écran ne se limite plus aux runs du bus (qui supposent un onglet ou une run
 // lancée depuis ici). Il s'abonne au store partagé déjà utilisé par le cercle
-// d'activité et par le volet « En cours » du panneau de la cloche, et affiche
+// d'activité et par le volet « Tâches » du panneau du suivi du travail, et affiche
 // toute session qui TRAVAILLE sans onglet ouvert, avec l'agent, le projet et sa
 // mission. Aucune logique de vivacité n'est dupliquée, aucun onglet ouvert.
 import {

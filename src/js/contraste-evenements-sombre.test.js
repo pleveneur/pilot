@@ -1,10 +1,11 @@
 /**
- * Garde-fou de lisibilite du panneau des evenements systeme (la « cloche » de
- * l'onglet Assistant) en mode sombre.
+ * Garde-fou de lisibilite de la liste des evenements systeme (volet
+ * « Evenements » du panneau du suivi du travail, haut droite) en mode sombre.
  *
- * Constat mesure : les lignes du panneau `#superagent-events-panel` etaient
- * peintes avec `--text-secondary` (texte) et `--text-muted` (horodatage) sur
- * `--surface-floating`. En theme sombre par defaut cela donnait 6.76:1 pour le
+ * Constat mesure (a l'epoque du panneau de la cloche, depuis DEPLACE dans ce
+ * volet du panneau du suivi du travail — memes jetons, meme surface) : les
+ * lignes du panneau d'evenements etaient peintes avec `--text-secondary` (texte)
+ * et `--text-muted` (horodatage) sur `--surface-floating`. En theme sombre par defaut cela donnait 6.76:1 pour le
  * texte (sous le seuil AAA de 7:1) et 3.41:1 pour l'horodatage (sous le seuil
  * AA de 4.5:1) : les rappels et evenements se lisaient mal.
  *

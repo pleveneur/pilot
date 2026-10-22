@@ -103,6 +103,17 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - Aucune voix installée sur le poste : le réglage est inactif et le bouton reste visible mais
   inactif, avec une phrase qui explique quoi faire.
 
+### Suivre le travail (cercle en haut à droite)
+- Le **cercle en haut à droite** de la fenêtre est le **seul endroit** où se suit le travail :
+  il respire quand des agents travaillent, et un clic l'ouvre. Un **second panneau**
+  (l'ancienne « cloche ») n'existe plus : tout est réuni ici.
+- Le panneau a **trois onglets** : **« Agents »** (qui travaille, sur quel projet),
+  **« Événements »** (démarrages, fins de tâche, erreurs, connexions) et **« Tâches »**
+  (les missions en cours et celles qui attendent leur tour, avec la mention « en attente »).
+- Une **pastille sur le cercle** indique les événements que vous n'avez pas encore vus ;
+  ouvrir l'onglet « Événements » l'éteint. Le panneau se rouvre sur l'onglet où vous l'avez
+  laissé, et se ferme par **Échap**, la **croix** ou un clic sur le cercle.
+
 ### Paramètres (modale ⚙️)
 - **Thème** : sombre (défaut) ou clair.
 - **Sous-thème** : 5 palettes par mode (dark : One Dark, Dracula, Nord, Tokyo Night ;

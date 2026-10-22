@@ -326,7 +326,7 @@ export function buildBulkUndoPlan(changes) {
 }
 
 /**
- * Une tâche est-elle OUVERTE ? L'onglet « Tâches » du panneau cloche ne montre
+ * Une tâche est-elle OUVERTE ? L'onglet « Tâches » du suivi du travail ne montre
  * que le travail qui reste à faire. Une tâche terminée, annulée/abandonnée OU
  * à qualifier (statut inconnu) n'est pas « ouverte » : elle ne doit pas
  * gonfler la liste « à faire ». Pur et testable.
