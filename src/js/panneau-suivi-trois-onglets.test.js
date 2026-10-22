@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 
+import { invoke } from "@tauri-apps/api/core";
 import {
   AGENT_PANEL_TABS,
   AGENT_PANEL_TAB_LABELS,
@@ -51,6 +52,7 @@ import {
   renderDropdown,
   renderMissionsPanelHtml,
   buildRunningMissions,
+  initAgentActivity,
 } from "./agent-activity.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -85,14 +87,29 @@ class FakeEl {
     this.hidden = false;
     this.textContent = "";
     this.innerHTML = "";
+    // Ecouteurs REELS : permet de declencher les vrais gestionnaires du module
+    // (navigation clavier) au lieu de relire le source (controle (b)).
+    this.ecouteurs = new Map();
+    this.tablist = null;
   }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return this.attrs[k] === undefined ? null : this.attrs[k]; }
-  addEventListener() {}
-  querySelector() { return null; }
+  addEventListener(type, fn) {
+    if (!this.ecouteurs.has(type)) this.ecouteurs.set(type, []);
+    this.ecouteurs.get(type).push(fn);
+  }
+  /** Declenche un evenement sur cet element (test seulement). */
+  declenche(type, evt) {
+    for (const fn of this.ecouteurs.get(type) || []) fn(evt);
+  }
+  querySelector(sel) {
+    return sel === '[role="tablist"]' ? this.tablist : null;
+  }
+  focus() {}
 }
 
 const PANEL_IDS = [
+  "agent-activity",
   "agent-activity-dropdown",
   "agent-activity-dot",
   "agent-activity-badge",
@@ -109,6 +126,8 @@ const parId = (id) => registry.get(id) || null;
 
 function installeDom() {
   registry = new Map(PANEL_IDS.map((id) => [id, new FakeEl(id)]));
+  // Barre d'onglets : le module la cherche par role="tablist" DANS le panneau.
+  el("agent-activity-dropdown").tablist = new FakeEl("agent-activity-tablist");
   el("agent-activity-dropdown").classList.add("hidden");
   for (const t of AGENT_PANEL_TABS) {
     if (t !== "agents") el(`agent-activity-pane-${t}`).classList.add("hidden");
@@ -241,6 +260,61 @@ describe("(b) trois onglets, ordre definitif : Agents, Taches, Evenements", () =
     expect(jsPanel).toMatch(/const visible = AGENT_PANEL_TABS\.filter\(\(t\) => panelTabEnabled\[t\]\)/);
     expect(jsPanel).toMatch(/ArrowRight"\) next = visible\[\(i \+ 1\) % visible\.length\]/);
     expect(jsPanel).toMatch(/ArrowLeft"\) next = visible\[\(i - 1 \+ visible\.length\) % visible\.length\]/);
+  });
+
+  it("l'ordre de TABULATION au clavier est celui de l'ECRAN (gestionnaire reel)", () => {
+    // Ordre REELLEMENT affiche, lu dans index.html (independamment du module).
+    const ordreEcran = ["agents", "tasks", "events"].sort(
+      (a, b) =>
+        html.indexOf(`id="agent-activity-tab-${a}"`) -
+        html.indexOf(`id="agent-activity-tab-${b}"`)
+    );
+    // Le module, source des clics ET des fleches, suit le meme ordre.
+    expect(AGENT_PANEL_TABS).toEqual(ordreEcran);
+
+    // DOM minimal (`window` + barre d'onglets), puis branchement du VRAI
+    // gestionnaire de touches de initAgentActivity : on mesure le comportement,
+    // pas la presence d'une ligne de code.
+    const fenetreAvant = globalThis.window;
+    globalThis.window = { addEventListener() {} };
+    vi.useFakeTimers();
+    try {
+      invoke.mockResolvedValue({});
+      initAgentActivity({ openFile() {}, _openAgent() {} });
+      const barre = el("agent-activity-dropdown").tablist;
+      expect(barre).not.toBe(null);
+      expect(getActiveAgentPanelTab()).toBe(ordreEcran[0]);
+
+      const suite = [];
+      const fleche = (key) => {
+        let empeche = false;
+        barre.declenche("keydown", { key, preventDefault() { empeche = true; } });
+        expect(empeche).toBe(true);
+        suite.push(getActiveAgentPanelTab());
+      };
+      fleche("ArrowRight");
+      fleche("ArrowRight");
+      fleche("ArrowRight"); // bouclage sur le premier
+      fleche("ArrowLeft");
+      const n = ordreEcran.length;
+      // Droite = onglet SUIVANT a l'ecran, gauche = precedent (avec bouclage) :
+      // la sequence doit etre exactement celle de l'ordre visible.
+      expect(suite).toEqual([
+        ordreEcran[1 % n],
+        ordreEcran[2 % n],
+        ordreEcran[0],
+        ordreEcran[(n - 1) % n],
+      ]);
+      // Le volet affiche est celui de l'onglet atteint au clavier, jamais un autre.
+      for (const t of ordreEcran) {
+        expect(el(`agent-activity-pane-${t}`).classList.contains("hidden")).toBe(
+          t !== getActiveAgentPanelTab()
+        );
+      }
+    } finally {
+      vi.useRealTimers();
+      globalThis.window = fenetreAvant;
+    }
   });
 
   it("un onglet inconnu retombe sur « Agents » (jamais un panneau vide)", () => {
