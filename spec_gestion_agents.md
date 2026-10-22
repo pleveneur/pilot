@@ -238,7 +238,13 @@ reste refusé.
 - **Identifiant réservé `eph-`** : `isEphemeralAgentId`, `makeEphemeralAgentId`,
 `buildEphemeralAgent`, `mergeAgentsWithEphemeral` (le persistant gagne),
 `splitEphemeralIds`, `persistEphemeralAgent`, `disposeEphemeralAgent(s)`
-(`src/js/ephemeral-agents.js`).
+(`src/js/ephemeral-agents.js`). Le préfixe est **vérifié à l'écriture côté Rust**
+(`EPHEMERAL_AGENT_PREFIX`, `is_ephemeral_agent_id`) : `register_ephemeral_agent`
+refuse un agent jetable qui ne le porte pas (il masquerait sinon un agent du
+registre par le repli mémoire de `get_agent`), et le point d'écriture en base
+(`upsert_agent_conn`) refuse un identifiant du registre qui le porterait. Les
+deux espaces d'identifiants restent ainsi disjoints, sans dépendre du seul
+appelant JS.
 - **Fusion après chaque lecture du registre** : `mergeEphemeralAgentsIntoBus`
 (`agents-bus.js`) est appelée par `initAgentsBus` **et** par
 `reloadAgentsRegistry` — sinon l'agent serait « inconnu » au lancement.

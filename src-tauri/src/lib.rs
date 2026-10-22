@@ -3273,9 +3273,12 @@ pub fn run() {
                 std::thread::spawn(move || {
                     let pid_path = plface_pid_path(&handle);
                     // Nettoyage d'abord : ne referme QUE le visage lancé par un
-                    // Pilot précédent (trace), jamais un visage ouvert à la main.
+                    // Pilot précédent dont le propriétaire n'est plus vivant —
+                    // jamais un visage ouvert à la main, ni celui d'une autre
+                    // copie de Pilot encore ouverte (règle unique, cf.
+                    // `plface::cleanup_stale`).
                     if let Some(pid_path) = pid_path.as_deref() {
-                        let _ = plface::stop_owned(pid_path);
+                        let _ = plface::cleanup_stale(pid_path);
                     }
                     if !enabled {
                         return;

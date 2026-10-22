@@ -1046,8 +1046,10 @@ Contrat de durée de vie et d'isolement :
 - **Nom affiché ≠ identité technique** : `get_agent_supervision`
   (`dashboard.rs`) publie un champ **ADDITIF** `name` — le nom lisible de
   l'agent jetable, lu **en mémoire seule**
-  (`AgentService::ephemeral_agent_name`, borné à 40 caractères par
-  `clip_agent_display_name`) — et le champ `agent` conserve son sens :
+  (`AgentService::ephemeral_agent_name`, borné à 40 caractères **marque de coupe
+  « … » comprise** par `clip_agent_display_name` — `AGENT_DISPLAY_NAME_MAX_CHARS`
+  est la seule source de vérité de cette limite, donc jamais 41 caractères) — et
+  le champ `agent` conserve son sens :
   l'**identité** (`eph-…`). Le frontend (`flattenAgents`,
   `src/js/agent-activity.js`) affiche `label = a.name || a.agent`, tandis que
   `rawId` / `agentId` restent bâtis sur `a.agent` : l'**ouverture d'onglet
@@ -1191,9 +1193,14 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   Le rappel est injecté dans la conversation de l'assistant à l'échéance (pas de
   notification OS). Son **affichage ne passe pas par une bulle au milieu du
   fil** (issue #36) : le rappel apparaît comme un **événement du panneau 🔔**
-  (en bas à droite de l'onglet 🧭), sur une **seule ligne courte** portant la
-  **date et heure de déclenchement** au format local français (ex. « ⏰ relance —
-  29/08 à 14:30 »), et un **toast discret** reprend ce même libellé. Le
+  (en bas à droite de l'onglet 🧭), sur une **seule ligne courte** portant
+  l'**heure de livraison** — c'est-à-dire l'instant où la relance a été
+  **effectivement remise** à l'Assistant — au format local français (ex.
+  « ⏰ relance — 29/08 à 14:30 »), et un **toast discret** reprend ce même
+  libellé. Ce n'est donc PAS l'échéance théorique (`nextFireAt`) : quand le
+  tick a du retard (onglet fermé, assistant occupé, rappel rejoué), l'heure
+  affichée est celle de la livraison réelle, et c'est le fait utile à
+  l'utilisateur. Le
   **prompt** du rappel (consigne technique pour l'assistant) **n'est pas
   affiché** : il reste consultable **au survol** de la ligne d'événement
   (info-bulle). Si la date est absente ou invalide, seul le marqueur

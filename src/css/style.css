@@ -124,7 +124,9 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
      sombre les lignes etaient peu lisibles (texte en secondaire 6.76:1,
      horodatage en attenue 3.41:1 sur --surface-floating). Le texte prend donc
      le primaire et l'horodatage le secondaire, sans aucune couleur en dur :
-     chaque sous-theme sombre suit automatiquement sa propre palette.
+     chaque sous-theme sombre suit automatiquement sa propre palette — sauf
+     celui dont le secondaire ne suffit pas (cf. l'exception documentee sous
+     `.theme-one-dark`, ou l'horodatage reprend le primaire).
      Verrou : src/js/contraste-evenements-sombre.test.js */
   --sa-events-text: var(--text-primary);
   --sa-events-time: var(--text-secondary);
@@ -307,6 +309,13 @@ body.theme-dark.theme-one-dark {
   --warning: #e5c07b;
   --ring: 0 0 0 2px rgba(97, 175, 239, 0.35);
   --shadow-glow: 0 0 16px rgba(97, 175, 239, 0.15);
+  /* EXCEPTION documentee : le secondaire de cette palette (#8a919e) ne donne
+     que 4.12:1 sur --surface-floating (#2c313a), SOUS le seuil AA de 4.5:1
+     pour l'horodatage des evenements. Il reprend donc le primaire (#abb2bf,
+     6.13:1) : la hierarchie visuelle reste portee par la taille (--font-xs).
+     Choix assume ici, mesure par src/js/contraste-evenements-sombre.test.js —
+     pas un « on verra plus tard ». */
+  --sa-events-time: var(--text-primary);
 }
 
 /* ── Dark : Dracula ── */

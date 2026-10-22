@@ -48,11 +48,15 @@ export function formatReminderQuietLabel(when) {
 }
 
 // Libellé de notification pour le panneau Événements / toast (issue #36).
-// Combine la date de déclenchement et le marqueur discret : « ⏰ relance —
-// 29/08 à 14:30 ». Le prompt complet reste consultable au survol (title, côté
-// super-agent.js), jamais affiché en clair dans le flux.
-export function formatReminderNotificationLabel(value) {
-  return formatReminderQuietLabel(formatReminderDate(value));
+// Combine le marqueur discret et l'HEURE DE LIVRAISON : « ⏰ relance —
+// 29/08 à 14:30 ». Attention au sens, souvent confondu : ce n'est PAS
+// l'échéance théorique du rappel (`nextFireAt`), mais l'instant où l'appelant a
+// effectivement livré la relance à l'assistant (`new Date()` côté
+// super-agent.js) — les deux diffèrent dès qu'un tick a du retard (onglet
+// fermé, assistant occupé, rappel rejoué). Le prompt complet reste consultable
+// au survol (title, côté super-agent.js), jamais affiché en clair.
+export function formatReminderNotificationLabel(deliveredAt) {
+  return formatReminderQuietLabel(formatReminderDate(deliveredAt));
 }
 
 // Validation miroir de l'opération Rust schedule_set_enabled (désactivation /

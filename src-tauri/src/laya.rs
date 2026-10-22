@@ -670,40 +670,14 @@ pub(crate) fn write_trace(path: &Path, trace: &LayaTrace) {
     let _ = std::fs::write(path, format_trace(trace));
 }
 
-/// Nom de programme de l'application Pilot en cours (propriétaire inscrit dans
-/// la trace). PURE vis-à-vis du processus : lit seulement son propre chemin.
-pub(crate) fn owner_process_name() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        .unwrap_or_default()
-}
-
-/// Décision PURE de **nettoyage au démarrage** : faut-il refermer le service
-/// restant ?
-///
-/// - trace absente/illisible (`owner = None`) → non, on ne touche à rien ;
-/// - trace qui nous appartient (relance interne) → oui ;
-/// - propriétaire encore VIVANT (autre copie de Pilot ouverte) → non, sa trace
-///   reste : c'est LUI qui le refermera, et la nouvelle copie le réutilise ;
-/// - propriétaire mort → oui : service orphelin d'une fermeture brutale.
-pub(crate) fn decide_startup_cleanup(
-    owner: Option<u32>,
-    owner_alive: bool,
-    self_pid: u32,
-) -> bool {
-    match owner {
-        None => false,
-        Some(pid) if pid == self_pid => true,
-        Some(_) => !owner_alive,
-    }
-}
-
-/// Décision PURE d'**arrêt à la fermeture** : on ne referme QUE le service que
-/// CETTE copie de Pilot a lancé (trace portant son identifiant). PURE.
-pub(crate) fn decide_shutdown_stop(owner: Option<u32>, self_pid: u32) -> bool {
-    owner == Some(self_pid)
-}
+/// Nom de programme de l'application Pilot en cours, décisions d'arrêt et de
+/// nettoyage : règle PARTAGÉE avec le visage PLface, définie une seule fois dans
+/// `plface` (le module des processus tracés) et ré-exportée ici pour ses
+/// appelants historiques. Une seule définition = jamais deux comportements à
+/// maintenir (un service survivant n'est refermé que par son propriétaire).
+pub(crate) use crate::plface::{
+    decide_shutdown_stop, decide_startup_cleanup, owner_process_name,
+};
 
 /// Referme le service décrit par la trace (garde de nom : jamais une autre
 /// application) et efface la trace. Jamais bloquant au-delà de l'arrêt borné.

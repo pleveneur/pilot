@@ -41,8 +41,10 @@ pub(crate) const PLFACE_API_HOST: &str = "127.0.0.1";
 pub(crate) const PLFACE_API_PORT: u16 = 3000;
 /// Nom du fichier de trace du visage lancé par Pilot, écrit dans le dossier de
 /// données de l'application. Il retient l'identifiant **et** le nom du programme
-/// lancés par Pilot : c'est ce qui permet de ne refermer **que** le visage
-/// démarré par Pilot (jamais celui ouvert à la main par la personne) et de le
+/// lancés par Pilot, ainsi que **leur propriétaire** (identifiant et nom du
+/// programme de Pilot qui a lancé ce visage) : c'est ce qui permet de ne refermer
+/// **que** le visage démarré par cette copie de Pilot (jamais celui ouvert à la
+/// main par la personne, jamais celui d'une autre copie encore ouverte) et de le
 /// nettoyer au démarrage suivant si Pilot a été fermé brutalement — sinon le
 /// visage resterait en vie et verrouillerait sa propre copie, empêchant la
 /// préparation du paquet en développement.
@@ -226,6 +228,104 @@ pub(crate) fn name_matches(observed: &str, expected: &str) -> bool {
 /// Lit la trace disque. Toute erreur (fichier absent, illisible) = `None`.
 pub(crate) fn read_pid_file(path: &Path) -> Option<(u32, String)> {
     parse_pid_file(&std::fs::read_to_string(path).ok()?)
+}
+
+// ── Trace AVEC propriétaire (partagée avec le service Laya) ──
+
+/// Nom de programme de l'application Pilot en cours (propriétaire inscrit dans
+/// la trace). PURE vis-à-vis du processus : lit seulement son propre chemin.
+pub(crate) fn owner_process_name() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_default()
+}
+
+/// Contenu de la trace AVEC son propriétaire : identifiant et nom du processus
+/// tracé, puis identifiant et nom du programme de Pilot propriétaire — quatre
+/// lignes, celles du format sans propriétaire restant en tête pour que
+/// `parse_pid_file` continue de les lire. PURE.
+pub(crate) fn format_owned_trace(
+    pid: u32,
+    exe_name: &str,
+    owner_pid: u32,
+    owner_name: &str,
+) -> String {
+    format!("{pid}\n{exe_name}\n{owner_pid}\n{owner_name}\n")
+}
+
+/// Propriétaire inscrit dans une trace : `(identifiant, nom du programme)`.
+/// `None` si ces lignes manquent ou sont illisibles : trace d'une version
+/// antérieure au propriétaire, ou trace tronquée — dans le doute, l'appelant ne
+/// referme RIEN. PURE.
+pub(crate) fn parse_owner(raw: &str) -> Option<(u32, String)> {
+    let mut lines = raw.lines().map(str::trim).filter(|l| !l.is_empty());
+    let _pid = lines.next()?;
+    let _name = lines.next()?;
+    let owner_pid = lines.next()?.parse::<u32>().ok().filter(|p| *p > 0)?;
+    let owner_name = lines.next()?.to_string();
+    Some((owner_pid, owner_name))
+}
+
+/// Propriétaire inscrit dans la trace disque. Toute erreur = `None`.
+pub(crate) fn read_owner(path: &Path) -> Option<(u32, String)> {
+    parse_owner(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Décision PURE de **nettoyage au démarrage** : faut-il refermer le processus
+/// tracé restant ?
+///
+/// - trace absente/illisible (`owner = None`) → non, on ne touche à rien ;
+/// - trace qui nous appartient (relance interne) → oui ;
+/// - propriétaire encore VIVANT (autre copie de Pilot ouverte) → non, sa trace
+///   reste : c'est LUI qui refermera, et la nouvelle copie réutilise le
+///   processus qui répond ;
+/// - propriétaire mort → oui : processus orphelin d'une fermeture brutale.
+///
+/// Règle PARTAGÉE par le service Laya et le visage PLface (ré-exportée par
+/// `laya` pour ses appelants historiques) : une seule définition, donc jamais
+/// deux comportements à maintenir.
+pub(crate) fn decide_startup_cleanup(owner: Option<u32>, owner_alive: bool, self_pid: u32) -> bool {
+    match owner {
+        None => false,
+        Some(pid) if pid == self_pid => true,
+        Some(_) => !owner_alive,
+    }
+}
+
+/// Décision PURE d'**arrêt à la fermeture** : on ne referme QUE le processus que
+/// CETTE copie de Pilot a lancé (trace portant son identifiant). PURE.
+pub(crate) fn decide_shutdown_stop(owner: Option<u32>, self_pid: u32) -> bool {
+    owner == Some(self_pid)
+}
+
+/// Vrai si CETTE copie de Pilot peut refermer le processus décrit par la trace.
+/// PURE.
+///
+/// Une trace **sans propriétaire** vient d'une version antérieure au
+/// propriétaire : une seule version a pu l'écrire, donc une seule copie a pu
+/// lancer ce processus → elle est traitée comme la nôtre (comportement d'avant
+/// ce correctif). Sans cette tolérance de transition, un processus « legacy »
+/// échapperait **définitivement** à Pilot : plus jamais refermé, et il bloquerait
+/// la mise à jour suivante (fichiers verrouillés).
+pub(crate) fn owns_trace(owner: Option<u32>, self_pid: u32) -> bool {
+    match owner {
+        None => true,
+        Some(_) => decide_shutdown_stop(owner, self_pid),
+    }
+}
+
+/// Écrit la trace disque AVEC son propriétaire (crée le dossier au besoin).
+/// Fail-open : toute erreur d'écriture est ignorée (au pire, pas de nettoyage au
+/// démarrage suivant).
+pub(crate) fn write_owned_pid_file(path: &Path, pid: u32, exe_name: &str) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        path,
+        format_owned_trace(pid, exe_name, std::process::id(), &owner_process_name()),
+    );
 }
 
 /// Écrit la trace disque (crée le dossier au besoin). Fail-open : toute erreur
@@ -417,25 +517,65 @@ pub(crate) fn kill_process(pid: u32, expected_name: &str) -> bool {
     wait_until_gone(pid)
 }
 
-/// Arrête le visage **que Pilot a lancé**, d'après le fichier de trace :
+/// Arrête le visage **que cette copie de Pilot a lancé**, d'après le fichier de
+/// trace :
 /// - aucune trace → Pilot n'a rien lancé → ne touche à rien (`NotRunning`) ; un
 ///   visage ouvert à la main par la personne n'est donc jamais refermé ;
-/// - trace présente → arrêt propre (`GET /close`, best effort borné) puis arrêt
-///   du processus (garde sur le nom : jamais une autre application), trace
-///   effacée.
+/// - trace appartenant à une **autre copie** de Pilot (encore ouverte ou non) →
+///   on n'y touche pas : c'est son propriétaire qui la referme (règle unique, cf.
+///   `decide_shutdown_stop`). Sans cette garde, deux copies partageant le même
+///   dossier de données se refermaient mutuellement leur visage ;
+/// - trace sans propriétaire (version antérieure) → traitée comme la nôtre, par
+///   tolérance de transition (cf. `owns_trace`) ;
+/// - trace qui nous appartient → arrêt propre (`GET /close`, best effort borné)
+///   puis arrêt du processus (garde sur le nom : jamais une autre application),
+///   trace effacée.
 ///
 /// Appelé à la **fermeture de Pilot** (le visage ne doit pas lui survivre et
-/// verrouiller un fichier du dossier de compilation) et **au démarrage
-/// suivant** (nettoyage d'un visage resté en vie après une fermeture brutale).
+/// verrouiller un fichier du dossier de compilation).
 /// Jamais bloquant au-delà de `PROBE_TIMEOUT`, jamais d'erreur remontée.
 pub(crate) fn stop_owned(pid_path: &Path) -> PlfaceStopOutcome {
     let Some((pid, name)) = read_pid_file(pid_path) else {
         return PlfaceStopOutcome::NotRunning;
     };
+    let owner = read_owner(pid_path).map(|(pid, _)| pid);
+    if !owns_trace(owner, std::process::id()) {
+        return PlfaceStopOutcome::NotRunning;
+    }
+    stop_traced(pid_path, pid, &name)
+}
+
+/// **Nettoyage au démarrage suivant** : referme un visage resté en vie après une
+/// fermeture brutale, mais JAMAIS celui d'une autre copie de Pilot encore
+/// vivante (règle unique, cf. `decide_startup_cleanup`) : dans ce cas la trace
+/// est laissée intacte et le visage qui répond est réutilisé tel quel.
+/// Une trace sans propriétaire (version antérieure) est nettoyée comme avant
+/// (cf. `owns_trace`). Jamais bloquant, jamais d'erreur remontée.
+pub(crate) fn cleanup_stale(pid_path: &Path) -> bool {
+    let Some((pid, name)) = read_pid_file(pid_path) else {
+        return true;
+    };
+    if let Some((owner_pid, owner_name)) = read_owner(pid_path) {
+        // Propriétaire sans nom inscrit : impossible de vérifier qu'il est mort →
+        // on ne referme rien (règle de prudence).
+        if owner_name.trim().is_empty() {
+            return true;
+        }
+        let alive = owner_alive(owner_pid, &owner_name);
+        if !decide_startup_cleanup(Some(owner_pid), alive, std::process::id()) {
+            return true;
+        }
+    }
+    matches!(stop_traced(pid_path, pid, &name), PlfaceStopOutcome::Closed)
+}
+
+/// Referme le processus décrit par la trace (arrêt propre best effort puis garde
+/// de nom) et efface la trace. Jamais bloquant au-delà de `PROBE_TIMEOUT`.
+fn stop_traced(pid_path: &Path, pid: u32, name: &str) -> PlfaceStopOutcome {
     if probe_api(PLFACE_API_HOST, PLFACE_API_PORT, PROBE_TIMEOUT) {
         let _ = request_close(PLFACE_API_HOST, PLFACE_API_PORT, PROBE_TIMEOUT);
     }
-    let stopped = kill_process(pid, &name);
+    let stopped = kill_process(pid, name);
     clear_pid_file(pid_path);
     if stopped {
         PlfaceStopOutcome::Closed
@@ -549,7 +689,7 @@ pub(crate) fn launch_if_needed(
         PlfaceDecision::Launch => match spawn_detached(trimmed, avatar) {
             Ok(pid) => {
                 if let Some(path) = pid_path {
-                    write_pid_file(path, pid, &exe_file_name(trimmed));
+                    write_owned_pid_file(path, pid, &exe_file_name(trimmed));
                 }
                 PlfaceLaunchOutcome::Launched
             }
@@ -841,6 +981,154 @@ mod tests {
         ));
         clear_pid_file(&path);
         assert_eq!(stop_owned(&path), PlfaceStopOutcome::NotRunning);
+    }
+
+    /// Trace AVEC propriétaire : les deux premières lignes restent celles du
+    /// format historique (donc relues par `parse_pid_file`), les deux suivantes
+    /// disent à QUI le visage appartient. PURE.
+    #[test]
+    fn trace_proprietaire_aller_retour() {
+        let raw = format_owned_trace(1234, "plface.exe", 5678, "pilot.exe");
+        assert_eq!(parse_pid_file(&raw), Some((1234, "plface.exe".to_string())));
+        assert_eq!(parse_owner(&raw), Some((5678, "pilot.exe".to_string())));
+        // Trace d'une version antérieure au propriétaire : deux lignes seulement.
+        assert_eq!(parse_pid_file("1234\nplface.exe\n"), Some((1234, "plface.exe".to_string())));
+        assert_eq!(parse_owner("1234\nplface.exe\n"), None);
+        // Trace vide, tronquée ou propriétaire illisible : aucun propriétaire.
+        assert_eq!(parse_owner(""), None);
+        assert_eq!(parse_owner("1234\nplface.exe\nabc\npilot.exe"), None);
+        assert_eq!(parse_owner("1234\nplface.exe\n0\npilot.exe"), None);
+    }
+
+    /// Trace SANS propriétaire (écrite par une version antérieure au
+    /// propriétaire) : une seule version a pu l'écrire, donc une seule copie a pu
+    /// lancer ce visage → elle est traitée comme la nôtre (tolérance de
+    /// transition, cf. `owns_trace`). Sans cela, un visage « legacy » échapperait
+    /// définitivement à Pilot et pourrait bloquer la mise à jour suivante.
+    #[test]
+    fn trace_sans_proprietaire_reste_refermee_par_cette_copie() {
+        assert!(owns_trace(None, 1234));
+        assert!(!owns_trace(Some(999), 1234));
+        assert!(owns_trace(Some(1234), 1234));
+        // Garde : si un visage répond ici (poste de développement), on ne teste
+        // pas le refermement mais seulement la décision.
+        if is_running() {
+            return;
+        }
+        let path = std::env::temp_dir().join(format!(
+            "pilot-plface-test-{}-sans-proprietaire.pid",
+            std::process::id()
+        ));
+        clear_pid_file(&path);
+        std::fs::write(&path, format_pid_file(4242, "plface.exe")).expect("trace");
+        assert_eq!(stop_owned(&path), PlfaceStopOutcome::Closed);
+        assert_eq!(read_pid_file(&path), None, "trace effacée après refermement");
+        // Et au démarrage suivant : même règle.
+        std::fs::write(&path, format_pid_file(4242, "plface.exe")).expect("trace");
+        assert!(cleanup_stale(&path));
+        assert_eq!(read_pid_file(&path), None, "trace nettoyée au démarrage");
+        clear_pid_file(&path);
+    }
+
+    /// Processus témoin VIVANT et son nom observé : sert d'« autre copie de
+    /// Pilot encore ouverte » (propriétaire de la trace). Jamais une application
+    /// de la personne.
+    #[cfg(windows)]
+    fn spawn_witness() -> (std::process::Child, String) {
+        let child = Command::new("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 > NUL"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("processus témoin");
+        (child, "cmd.exe".to_string())
+    }
+
+    #[cfg(unix)]
+    fn spawn_witness() -> (std::process::Child, String) {
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("processus témoin");
+        (child, "sleep".to_string())
+    }
+
+    /// COEUR DU DÉFAUT CORRIGÉ : la trace ne disait pas à QUI appartenait le
+    /// visage, donc deux copies de Pilot partageant le même dossier de données
+    /// se refermaient mutuellement leur visage. Désormais, un visage dont le
+    /// propriétaire est une AUTRE copie encore vivante n'est jamais refermé, ni
+    /// à la fermeture ni au démarrage suivant.
+    #[test]
+    fn trace_d_une_autre_copie_vivante_n_est_pas_refermee() {
+        let (mut witness, name) = spawn_witness();
+        let pid = witness.id();
+        let path = std::env::temp_dir().join(format!(
+            "pilot-plface-test-{}-autre-copie.pid",
+            std::process::id()
+        ));
+        clear_pid_file(&path);
+        // Le visage tracé ET son propriétaire sont le témoin (autre copie).
+        std::fs::write(&path, format_owned_trace(pid, &name, pid, &name)).expect("trace");
+
+        // Fermeture de CETTE copie : le visage d'une autre copie survit intact.
+        assert_eq!(stop_owned(&path), PlfaceStopOutcome::NotRunning);
+        assert_eq!(
+            read_pid_file(&path),
+            Some((pid, name.clone())),
+            "trace d'une autre copie : intacte"
+        );
+        assert!(
+            witness.try_wait().unwrap().is_none(),
+            "le visage d'une autre copie de Pilot doit survivre"
+        );
+
+        // Démarrage suivant : propriétaire VIVANT → aucun nettoyage.
+        assert!(cleanup_stale(&path));
+        assert_eq!(
+            read_pid_file(&path),
+            Some((pid, name.clone())),
+            "trace toujours intacte au démarrage suivant"
+        );
+        assert!(witness.try_wait().unwrap().is_none());
+
+        clear_pid_file(&path);
+        let _ = witness.kill();
+        let _ = witness.wait();
+    }
+
+    /// Un visage dont le PROPRIÉTAIRE est mort (fermeture brutale) est bien
+    /// nettoyé au démarrage suivant : la garde de propriété ne transforme pas le
+    /// nettoyage en abandon.
+    #[test]
+    fn visage_orphelin_est_nettoye_au_demarrage() {
+        // Un vrai visage qui tournerait sur le poste ne doit jamais être fermé
+        // par un test : dans ce cas on s'abstient.
+        if probe_api(PLFACE_API_HOST, PLFACE_API_PORT, PROBE_TIMEOUT) {
+            return;
+        }
+        let path = std::env::temp_dir().join(format!(
+            "pilot-plface-test-{}-orphelin.pid",
+            std::process::id()
+        ));
+        clear_pid_file(&path);
+        // Le propriétaire est CETTE copie (comme un Pilot relancé) et le
+        // processus tracé n'existe pas : le nettoyage aboutit, sans rien tuer.
+        std::fs::write(
+            &path,
+            format_owned_trace(
+                4_294_967_290,
+                "plface.exe",
+                std::process::id(),
+                &owner_process_name(),
+            ),
+        )
+        .expect("trace");
+        assert!(cleanup_stale(&path));
+        assert_eq!(read_pid_file(&path), None, "trace effacée après nettoyage");
     }
 
     // Sortie réelle de `tasklist /FI "PID eq <pid>" /FO CSV /NH` (Windows) :

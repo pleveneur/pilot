@@ -442,12 +442,19 @@ fn prompt_snapshot(command: &Value) -> Option<String> {
 /// onglet de l'agent) : l'identité technique reste le champ `agent` (pour un
 /// agent jetable, `eph-<base36>-<hex>`), employée par toutes les actions
 /// (arrêt ciblé, ouverture d'onglet, horodatage d'activité).
+///
+/// C'est la SEULE source de vérité de cette limite : le « … » de coupe est
+/// COMPRIS dedans, donc un nom publié ne dépasse jamais 40 caractères.
 pub const AGENT_DISPLAY_NAME_MAX_CHARS: usize = 40;
 
-/// Borne un nom d'affichage à `max_chars` caractères (jamais en octets).
+/// Borne un nom d'affichage à `max_chars` caractères AU TOTAL (jamais en
+/// octets), marque de coupe « … » COMPRISE.
 ///
 /// Coupe PROPRE : on recule jusqu'à une frontière de mot (espace) sauf si cela
-/// amputait plus de la moitié du texte ; la coupe est signalée par « … ».
+/// amputait plus de la moitié du texte ; la coupe est signalée par « … », qui
+/// occupe la dernière place du budget. Un nom plus long que la limite tient
+/// donc dans `max_chars` caractères exactement (`max_chars + 1` avant ce
+/// correctif : la limite annoncée par la documentation était dépassée de 1).
 /// Un nom déjà assez court est renvoyé tel quel (espaces de bord retirés).
 pub fn clip_agent_display_name(name: &str, max_chars: usize) -> String {
     let text = name.trim();
@@ -455,16 +462,40 @@ pub fn clip_agent_display_name(name: &str, max_chars: usize) -> String {
     if chars.len() <= max_chars {
         return text.to_string();
     }
-    let min_keep = max_chars / 2;
-    let mut end = max_chars;
-    for i in (min_keep..max_chars).rev() {
+    if max_chars == 0 {
+        return String::new();
+    }
+    // Le « … » de coupe est DANS le budget : le texte gardé laisse une place.
+    let budget = max_chars - 1;
+    let min_keep = budget / 2;
+    let mut end = budget;
+    for i in (min_keep..budget).rev() {
         if chars[i] == ' ' {
             end = i;
             break;
         }
     }
     let kept: String = chars[..end].iter().collect();
-    format!("{}…", kept.trim())
+    let kept = kept.trim();
+    if kept.is_empty() {
+        // Budget d'un seul caractère (ou coupe impossible) : le marqueur seul.
+        return "…".to_string();
+    }
+    format!("{}…", kept)
+}
+
+/// Préfixe RÉSERVÉ des identifiants d'**agents jetables** (éphémères).
+///
+/// Un agent jetable ne peut PAS s'en passer (il prendrait sinon l'identifiant
+/// d'un agent du registre, que le repli mémoire de `get_agent` masquerait), et
+/// un agent du registre ne peut PAS le porter : les deux espaces d'identifiants
+/// restent ainsi disjoints. Miroir JS : `EPHEMERAL_AGENT_PREFIX`
+/// (`src/js/ephemeral-agents.js`).
+pub const EPHEMERAL_AGENT_PREFIX: &str = "eph-";
+
+/// Vrai si `agent_id` porte le préfixe réservé des agents jetables. PURE.
+pub fn is_ephemeral_agent_id(agent_id: &str) -> bool {
+    agent_id.trim().starts_with(EPHEMERAL_AGENT_PREFIX)
 }
 
 /// Ajoute (si pertinent) l'avertissement d'extensions projet au message d'erreur.
@@ -503,15 +534,27 @@ impl AgentService {
     /// aucune écriture en base. Elle est consultable par `get_agent` (repli) et
     /// n'apparaît jamais dans `list_agents` (qui lit la table `agents`).
     ///
+    /// Le PREFIXE RÉSERVÉ (`EPHEMERAL_AGENT_PREFIX`) est vérifié ICI, à
+    /// l'écriture : un agent jetable ne peut pas prendre l'identifiant d'un
+    /// agent du registre (il le masquerait par le repli mémoire de `get_agent`).
+    ///
     /// La durée de vie est celle de la tâche : l'appelant la purge à la fin
     /// (`clear_ephemeral_agent`), et l'arrêt de sa session la purge aussi.
     pub fn register_ephemeral_agent(&self, agent: Agent) -> Result<Agent, String> {
-        if agent.id.trim().is_empty() {
+        let id = agent.id.trim().to_string();
+        if id.is_empty() {
             return Err("Agent jetable : identifiant requis".to_string());
+        }
+        if !is_ephemeral_agent_id(&id) {
+            return Err(format!(
+                "Agent jetable : l'identifiant doit porter le préfixe réservé « {} » (reçu : {})",
+                EPHEMERAL_AGENT_PREFIX, id
+            ));
         }
         // Un agent éphémère n'est jamais « visible » : il n'est pas un onglet du
         // registre. (Il reste listé comme SESSION pendant qu'il travaille.)
         let mut stored = agent;
+        stored.id = id;
         stored.visible = false;
         stored.loaded = false;
         stored.busy = false;
@@ -3924,6 +3967,18 @@ fn normalize_scope(project_path: Option<&str>) -> Option<String> {
 /// insert) pour rendre l'upsert idempotent. Les agents de projet (project_path
 /// non-NULL) gardent le `ON CONFLICT` natif.
 fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), String> {
+    // PRÉFIXE RÉSERVÉ (symétrique de `register_ephemeral_agent`) : ceinture ET
+    // bretelles au seul point d'écriture en base du registre. Sans elle, une
+    // ligne du registre pourrait porter le préfixe des agents jetables et
+    // partager l'espace d'identifiants réservé — et le repli mémoire de
+    // `get_agent` masquerait alors l'agent du registre.
+    if is_ephemeral_agent_id(&agent.id) {
+        return Err(format!(
+            "Agent du registre : l'identifiant « {} » porte le préfixe réservé des agents jetables (« {} »)",
+            agent.id.trim(),
+            EPHEMERAL_AGENT_PREFIX
+        ));
+    }
     let capabilities = serde_json::to_string(&agent.capabilities)
         .map_err(|e| format!("Erreur sérialisation capabilities: {}", e))?;
     let skills = serde_json::to_string(&agent.skills)
@@ -4387,6 +4442,52 @@ mod tests {
 
     // ── AGENT JETABLE : magasin MÉMOIRE seule (aucune ligne en base) ──
 
+    /// Le PRÉFIXE RÉSERVÉ est vérifié à l'écriture, côté Rust : un agent
+    /// jetable qui ne le porte pas est REFUSÉ (il prendrait l'identifiant d'un
+    /// agent du registre, masqué ensuite par le repli mémoire de `get_agent`),
+    /// et un agent du registre ne peut pas le porter non plus.
+    #[test]
+    fn prefixe_reserve_verifie_a_l_ecriture() {
+        // Prédicat pur : miroir de `EPHEMERAL_AGENT_PREFIX` côté JS.
+        assert_eq!(EPHEMERAL_AGENT_PREFIX, "eph-");
+        assert!(is_ephemeral_agent_id("eph-1-abc"));
+        assert!(!is_ephemeral_agent_id("auditeur"));
+        assert!(!is_ephemeral_agent_id("eph"));
+        assert!(!is_ephemeral_agent_id(""));
+
+        let svc = AgentService::new();
+        // Sans le préfixe : refusé, rien n'est enregistré.
+        let sans = sample_agent("auditeur");
+        let err = svc
+            .register_ephemeral_agent(sans)
+            .expect_err("agent jetable sans préfixe réservé");
+        assert!(err.contains(EPHEMERAL_AGENT_PREFIX), "message : {err}");
+        assert!(!svc.is_ephemeral_agent("auditeur"));
+        assert!(svc.list_ephemeral_agents().is_empty());
+
+        // Avec le préfixe : accepté (espaces de bord retirés de l'identifiant).
+        let avec = sample_agent(" eph-1-abc ");
+        let stored = svc
+            .register_ephemeral_agent(avec)
+            .expect("agent jetable préfixé");
+        assert_eq!(stored.id, "eph-1-abc");
+
+        // Symétrie : le préfixe réservé ne peut pas entrer dans le REGISTRE.
+        let conn = persistence_conn();
+        let mut registre = sample_agent("eph-2-def");
+        registre.project_path = Some("G:/IA_PL/pilot".to_string());
+        assert!(
+            upsert_agent_conn(&conn, &registre).is_err(),
+            "le registre ne doit pas accepter le préfixe réservé"
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agents WHERE id = 'eph-2-def'", [], |r| {
+                r.get(0)
+            })
+            .expect("compte des fiches");
+        assert_eq!(count, 0, "aucune ligne écrite pour un identifiant réservé");
+    }
+
     /// Un agent jetable vit uniquement en mémoire : enregistré, résolu par la
     /// portée, et purgé sans laisser de trace. C'est la condition (a)/(b) de la
     /// mission côté Rust : aucun `upsert` n'est impliqué nulle part.
@@ -4502,7 +4603,7 @@ mod tests {
     }
 
     /// Le bornage du nom d'affichage est PUR : jamais plus de
-    /// `AGENT_DISPLAY_NAME_MAX_CHARS` caractères + « … », coupe sur un mot.
+    /// `AGENT_DISPLAY_NAME_MAX_CHARS` caractères (« … » COMPRIS), coupe sur un mot.
     #[test]
     fn nom_d_affichage_borne_a_40_caracteres() {
         // Court : inchangé (espaces de bord retirés).
@@ -4513,15 +4614,33 @@ mod tests {
         // Trop long : coupé sur une frontière de mot, « … » annoncé.
         let long = "auditeur de sécurité et de cohérence des données du projet";
         let got = clip_agent_display_name(long, AGENT_DISPLAY_NAME_MAX_CHARS);
-        assert!(got.chars().count() <= AGENT_DISPLAY_NAME_MAX_CHARS + 1);
+        // La limite ANNONCÉE est la limite RÉELLE : « … » compte dedans, donc
+        // jamais 41 caractères (le défaut corrigé : doc 40, fonction 41).
+        assert!(
+            got.chars().count() <= AGENT_DISPLAY_NAME_MAX_CHARS,
+            "nom publié de {} caractères pour une limite de {}",
+            got.chars().count(),
+            AGENT_DISPLAY_NAME_MAX_CHARS
+        );
         assert!(got.ends_with('…'));
         assert!(got.starts_with("auditeur"));
         // Coupe sur un mot : le texte gardé est un PRÉFIXE de l'original.
         assert!(long.starts_with(got.trim_end_matches('…')));
-        // Chaîne de 200 caractères SANS espace : la coupe reste bornée.
+        // Chaîne de 200 caractères SANS espace (aucune frontière de mot) : le
+        // budget est utilisé jusqu'au dernier caractère, « … » compris.
         let dense = "x".repeat(200);
         let cut = clip_agent_display_name(&dense, AGENT_DISPLAY_NAME_MAX_CHARS);
-        assert!(cut.chars().count() <= AGENT_DISPLAY_NAME_MAX_CHARS + 1);
+        assert_eq!(cut.chars().count(), AGENT_DISPLAY_NAME_MAX_CHARS);
+        assert!(cut.ends_with('…'));
+        // Tout le reste de la plage : jamais un caractère de trop.
+        for max in 1..=AGENT_DISPLAY_NAME_MAX_CHARS {
+            let out = clip_agent_display_name(&dense, max);
+            assert!(
+                out.chars().count() <= max,
+                "borne {max} dépassée : {} caractères",
+                out.chars().count()
+            );
+        }
     }
 
     // ── Tâche #345 : clé de projet canonique (fiches d'agent en double) ──

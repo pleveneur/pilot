@@ -14,6 +14,14 @@
  * propre palette) ; en clair ils reprennent exactement les anciennes valeurs,
  * pour que l'apparence du mode clair ne bouge pas.
  *
+ * Exception assumee et verrouillee ici : dans la palette « one-dark » le
+ * secondaire (#8a919e) ne donne que 4.12:1 sur --surface-floating (#2c313a),
+ * donc sous le seuil AA de 4.5:1 reclame ci-dessous pour un horodatage. Le
+ * sous-theme pointe donc son `--sa-events-time` vers le primaire (6.13:1) ; la
+ * hierarchie visuelle reste portee par la taille de police (--font-xs). Le
+ * plancher des sous-themes est desormais celui de la norme (4.5:1) et non plus
+ * 4:1, qui laissait passer ce cas.
+ *
  * Ce test echoue si le contraste du texte des evenements en mode sombre
  * retombe sous le seuil vise, si un jeton disparait, si une couleur est ecrite
  * en dur, ou si le mode clair change. Aucun navigateur n'est requis : simple
@@ -31,7 +39,7 @@ const css = readFileSync(resolve(ROOT, "src/css/style.css"), "utf8").replace(/\r
 const SEUIL_TEXTE_SOMBRE = 10; // texte des evenements, theme sombre par defaut
 const SEUIL_HEURE_SOMBRE = 6; // horodatage, theme sombre par defaut
 const SEUIL_TEXTE_SOUS_THEME = 4.5; // plancher AA pour tout sous-theme sombre
-const SEUIL_HEURE_SOUS_THEME = 4; // plancher des horodatages des sous-themes
+const SEUIL_HEURE_SOUS_THEME = 4.5; // plancher AA pour les horodatages aussi
 
 /** Sous-themes sombres (blocs `body.theme-dark.theme-*` du fichier de styles). */
 const SOUS_THEMES_SOMBRES = [

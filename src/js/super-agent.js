@@ -3776,6 +3776,9 @@ async function scheduleTick() {
         // Issue #36 : le rappel s'affiche dans le panneau Événements (cloche)
         // et via un toast discret, plus en bulle au milieu du fil. Le prompt
         // complet reste consultable au survol (title de l'événement).
+        // L'horodatage est celui de la LIVRAISON (maintenant), pas l'échéance
+        // théorique `nextFireAt` : en cas de tick en retard, c'est le moment où
+        // la relance a réellement été remise à l'assistant qui est affiché.
         const reminderLabel = formatReminderNotificationLabel(new Date());
         pushSuperAgentSystemEvent("info", reminderLabel, d.prompt);
         toastInfo(reminderLabel);
