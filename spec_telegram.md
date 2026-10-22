@@ -985,6 +985,16 @@ dans le chat de l'onglet 🧭 **et** depuis un message Telegram : les messages r
 sont injectés dans la **même session** de l'Assistant (`telegram-inbound.js`),
 donc il n'existe aucun second chemin d'écriture.
 
+**Une demande ambiguë ne change RIEN.** Un « arrête » tout seul (« stop »,
+« laisse tomber ») ne dit pas **quoi** arrêter : l'outil ne doit alors appliquer
+**aucune** valeur, **demander de quoi il s'agit**, et une ambiguïté n'est
+**jamais** lue comme un « oui ». Seule une intention claire portant sur **ces**
+notifications Telegram (les arrêter, ou les recevoir) fait changer le réglage.
+La règle est écrite dans la `description` de l'outil **et** dans ses
+`promptGuidelines` ; côté Pilot, la valeur appliquée vient **uniquement** du
+paramètre booléen `enabled` (aucune lecture en langage naturel dans ce chemin),
+donc une phrase ambiguë ne peut pas changer le réglage par accident.
+
 ### 14.4 Réactivation automatique par le propriétaire
 
 Règle (cœur pur, testé) : `owner_message_reactivates_notifications(enabled,
@@ -1009,11 +1019,13 @@ Pilot** (notifications natives et panneaux inchangés).
 
 ### 14.6 Tests
 
-`src/js/telegram-notify-setting.test.js` (24 tests, `invoke` injecté) porte les
-**six contrôles** demandés et échoue si le branchement disparaît : (a) l'état
-n'est plus visible/injecté, (b) un envoi passe malgré le réglage coupé,
-(c) le réglage ne survit plus à un redémarrage, (d) un message du propriétaire ne
-réactive plus, (e) un inconnu réactive, (f) le réglage existe deux fois. Côté
+`src/js/telegram-notify-setting.test.js` (`invoke` injecté) porte les contrôles
+demandés et échoue si le branchement disparaît : (a) un seul outil (aucun
+doublon), (b) un appel **sans argument** renvoie l'état, (c) un appel **avec une
+valeur** change l'état, (d) aucune valeur n'est figée dans le prompt ou un
+contexte, (e) l'état survit à un redémarrage, (f) un message du propriétaire
+réactive le réglage, (g) un inconnu ne réactive rien, (h) réglage coupé ⇒ aucun
+envoi (trois formes + accusé), (i) une demande **ambiguë** ne change rien. Côté
 Rust : `telegram.rs` (inertie des trois formes d'envoi, réactivation, inconnu) et
-`super_agent.rs` (bloc d'état + présence dans le prompt assemblé) et `lib.rs`
-(aller-retour de sérialisation = survie au redémarrage).
+`lib.rs` (aller-retour de sérialisation = survie au redémarrage) ; plus aucun test
+d'injection dans le prompt, puisque l'injection n'existe plus.

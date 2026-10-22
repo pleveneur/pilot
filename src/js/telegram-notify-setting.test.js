@@ -11,7 +11,8 @@
 //   (e) l'état ne survit pas à un redémarrage ;
 //   (f) un message Telegram du propriétaire ne remet pas l'état à oui ;
 //   (g) un message d'un inconnu change l'état ;
-//   (h) un message part alors que l'état est « non ».
+//   (h) un message part alors que l'état est « non » ;
+//   (i) une demande AMBIGUË (« arrête » tout seul) change le réglage.
 
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -427,5 +428,38 @@ describe("le même chemin dans Pilot ET depuis Telegram", () => {
     expect(inbound).toContain("injectExternalMessageToSuperAgent");
     // Et l'interface est rafraîchie quand Rust réactive le réglage.
     expect(count(superAgentJs, "TELEGRAM_NOTIFY_CHANGED_EVENT")).toBeGreaterThan(0);
+  });
+});
+
+describe("(i) une demande AMBIGUË ne change rien", () => {
+  it("la description interdit d'agir sur un « arrête » tout seul (et de lire l'ambiguïté comme un oui)", () => {
+    const body = telegramToolBody();
+    expect(body).toMatch(/AMBIGU/i);
+    // L'exemple nu qui ne doit RIEN décider.
+    expect(body).toMatch(/« arrête » tout seul/);
+    // La consigne est bien « ne rien appliquer puis demander »…
+    expect(body).toMatch(/AUCUNE valeur/);
+    expect(body).toMatch(/demande de quoi/);
+    // …et jamais « ambiguïté = oui ».
+    expect(body).toMatch(/ne lis jamais une ambiguïté comme un « oui »/);
+  });
+
+  it("la règle est aussi dans les consignes données au modèle (promptGuidelines)", () => {
+    const body = telegramToolBody();
+    expect(body).toMatch(/NEVER change the setting on an ambiguous request/);
+    expect(body).toMatch(/never read ambiguity as a yes/);
+  });
+
+  it("Pilot n'applique QUE le paramètre : aucune valeur devinée depuis le texte", () => {
+    const body = telegramHandlerBody();
+    // La seule source de la valeur est le paramètre booléen `enabled`.
+    expect(body).toContain('typeof req.enabled === "boolean" ? req.enabled : null');
+    expect(count(body, "setTelegramNotifyEnabled(")).toBe(1);
+    // Aucune lecture en langage naturel dans ce chemin (pas de « arrête »,
+    // pas de recherche de mot dans la conversation) : une demande ambiguë
+    // n'a donc aucun moyen de changer le réglage.
+    expect(body).not.toMatch(/toLowerCase\(/);
+    expect(body).not.toMatch(/includes\(/);
+    expect(body).not.toMatch(/arrêt|arrete/i);
   });
 });
