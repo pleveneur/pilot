@@ -117,7 +117,10 @@ export function runAgentsResultFailed(result) {
 export async function emitRunAgentsFinishNotice({ ok, projectPath, result, notify, playSound, consign }) {
   const { title, body } = buildRunAgentsNotification({ ok: ok === true, projectPath });
   // Avis de fin : émis en premier, une seule fois, quoi qu'il arrive ensuite.
-  ignoreAsyncFailure(notify, { title, body });
+  // `project` (chemin) et `ok` sont transmis EN PLUS de `title`/`body` : les
+  // canaux distants (Telegram) y trouvent le nom court du projet et le verdict
+  // (« livré » / « échec »), sans relire le texte de la notification native.
+  ignoreAsyncFailure(notify, { title, body, project: projectPath || "", ok: ok === true });
   ignoreAsyncFailure(playSound, "fin");
   // Consignation dans le suivi (compte-rendu). Fail-open : un échec de remise
   // n'enlève PAS l'avis de fin déjà émis et ne remonte pas à l'appelant.

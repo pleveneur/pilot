@@ -30,6 +30,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { assistantKindFromAnswers, buildAssistantKindQuestion } from "./laya-gateway.js";
 import { splitLayaChunks } from "./laya-utils.js";
+import { buildAssistantMessage, projectShortName, publishOwnerText } from "./telegram-messages.js";
 
 /** Longueur maximale de la phrase envoyée à Telegram. */
 export const TELEGRAM_DIALOG_MAX_CHARS = 200;
@@ -370,12 +371,14 @@ function rawAvisTurnInProgress() {
 
 /** Envoie un avis brut sans jamais laisser remonter d'erreur. */
 function sendRawAvis(entry) {
-  try {
-    const result = (entry.send || defaultSend)(entry.text);
-    if (result && typeof result.catch === "function") result.catch(() => {});
-  } catch (_) {
-    // Inerte : un échec d'avis ne perturbe jamais l'application.
-  }
+  // SOURCE UNIQUE du message (telegram-messages.js) : le texte a déjà été
+  // construit par un gabarit ; la porte applique l'anti-rafale et les heures
+  // calmes (23 h → 7 h) puis envoie. Inerte en cas d'échec.
+  publishOwnerText(entry.text, {
+    project: entry.project,
+    danger: entry.danger === true,
+    send: entry.send || defaultSend,
+  });
 }
 
 /** Abandonne les avis bruts en attente (l'Assistant a parlé, ou remise à zéro). */
@@ -424,16 +427,24 @@ function scheduleRawAvis(entry, delay) {
  *   - communication ACTIVE → retardée d'une courte fenêtre : abandonnée si
  *     l'Assistant parle réellement (il couvre l'événement), envoyée sinon.
  *
- * @param {string} text - texte déjà assemblé (titre + corps).
+ * @param {string} text - texte déjà assemblé par un gabarit de `telegram-messages.js`
+ *   (nom court du PROJET en tête : un message = un projet).
  * @param {{critical?: boolean}} [opts]
- * @param {object} [deps] - { isActive, send } injectables (tests).
+ * @param {object} [deps] - { isActive, send, project } injectables (tests).
  * @returns {void}
  */
 export function deliverRawTelegramAvis(text, opts = {}, deps = {}) {
   const message = String(text ?? "").trim();
   if (!message) return;
   const isActive = deps.isActive || isTelegramDialogActive;
-  const entry = { text: message, send: deps.send || defaultSend, timer: null, deadline: 0 };
+  const entry = {
+    text: message,
+    send: deps.send || defaultSend,
+    project: deps.project,
+    danger: opts.critical === true,
+    timer: null,
+    deadline: 0,
+  };
   if (opts.critical === true || !isActive()) {
     sendRawAvis(entry);
     return;
@@ -464,16 +475,30 @@ function defaultSend(text) {
   return invoke("telegram_notify", { text });
 }
 
+/** Libellé du projet pour la parole de l'Assistant (nom court, jamais un chemin). */
+function assistantOwnerProject(deps = {}) {
+  if (deps.project) return deps.project;
+  const active =
+    typeof window !== "undefined" && window ? window._pilotProjectPath || "" : "";
+  return projectShortName(active) || "Assistant";
+}
+
 /**
  * Transmet la réponse de l'Assistant sur Telegram, en UNE phrase simple.
  * Inerte (aucun envoi, aucune erreur) si la communication n'est pas active ou si
  * le message n'est pas utile. Les dépendances sont injectables (tests).
  *
+ * Le message suit la règle de contenu commune (source unique
+ * `telegram-messages.js`, gabarit `buildAssistantMessage`) : NOM COURT DU PROJET
+ * en tête, aucun chemin, aucune fonction, aucun numéro de session — et il passe
+ * la porte commune (anti-rafale, heures calmes 23 h → 7 h).
+ *
  * @param {string} text - message complet de l'Assistant.
  * @param {object} [deps]
  * @param {() => boolean} [deps.isActive] - état (défaut : `isTelegramDialogActive`).
  * @param {(text: string) => unknown} [deps.send] - envoi (défaut : `telegram_notify`).
- * @returns {boolean} vrai si une phrase a été transmise.
+ * @param {string} [deps.project] - projet concerné (défaut : projet actif).
+ * @returns {boolean} vrai si un message a été produit (envoyé ou mis de côté).
  */
 export function relayAssistantMessageToTelegram(text, deps = {}) {
   const isActive = deps.isActive || isTelegramDialogActive;
@@ -481,18 +506,18 @@ export function relayAssistantMessageToTelegram(text, deps = {}) {
   if (!isUsefulAssistantMessage(text)) return false;
   const line = condenseAssistantMessage(text);
   if (!line) return false;
-  const send = deps.send || defaultSend;
-  try {
-    const result = send(line);
-    if (result && typeof result.catch === "function") {
-      result.catch(() => {});
-    }
-  } catch (_) {
-    // Jamais visible : un échec de la parole de l'Assistant ne perturbe rien.
+  const message = buildAssistantMessage({ project: assistantOwnerProject(deps), text: line });
+  if (!message) return false;
+  const result = publishOwnerText(message, {
+    project: assistantOwnerProject(deps),
+    send: deps.send || defaultSend,
+  });
+  if (result.status === "empty") return false;
+  if (result.status === "sent" || result.status === "dropped") {
+    // L'Assistant a réellement parlé (l'information est sortie) : il couvre
+    // l'événement → les avis bruts encore en attente sont abandonnés.
+    claimRawAvisForAssistant();
   }
-  // L'Assistant a réellement parlé : il couvre l'événement → les avis bruts
-  // encore en attente dans la fenêtre anti-doublon sont abandonnés.
-  claimRawAvisForAssistant();
   return true;
 }
 

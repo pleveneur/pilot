@@ -67,7 +67,7 @@ import { refreshIcons, setIcon } from "./icons.js";
 // fois, LECTURE DE LA SEULE REPONSE FINALE — elles vivent dans read-aloud.js,
 // pas ici.
 import { attachReadAloud, INTERNAL_MARKER } from "./read-aloud.js";
-import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js";
+import { notifyAgentDoneFromRemote, notifyAgentDone, notifyTaskStarted } from "./desktop-notify.js";
 // Son de fin DIFFÉRÉ : le chat de l'agent signale son activité d'écriture et son
 // repos, pour qu'un son armé (fin de mission signalée par l'assistant) ne parte
 // jamais pendant que le texte / le raisonnement s'affiche encore.
@@ -6440,6 +6440,17 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     state.lastPromptOrigin = payload.source || "desktop";
     const el = appendUserMessage(messagesEl, payload.text);
     if (el && payload.source === "remote") el.classList.add("agent-message-remote");
+    // Refonte des messages Telegram : un prompt venu du TÉLÉPHONE mérite UN
+    // message de DÉBUT d'une ligne (« Pilot : tâche lancée depuis le téléphone »),
+    // pour que le propriétaire sache sur quel projet quelque chose commence. Une
+    // rafale de messages envoyés du téléphone ne produit qu'un seul envoi (porte
+    // commune : anti-rafale + heures calmes).
+    if (payload.source === "remote") {
+      notifyTaskStarted({
+        project: window._pilotProjectPath || "",
+        action: "tâche lancée depuis le téléphone",
+      }).catch(() => {});
+    }
     return;
   }
 
@@ -6596,14 +6607,14 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // desktop ne doit pas notifier). Le reset évite aussi les fausses notifs
       // sur un agent_end parasite sans prompt préalable.
       if (state.lastPromptOrigin === "remote") {
-        notifyAgentDoneFromRemote();
+        notifyAgentDoneFromRemote({ project: window._pilotProjectPath || "" });
         state.lastPromptOrigin = null;
       }
       // Issue #41 : notification native pour un chat LOCAL (si activé dans les
       // Paramètres). Limitée au chat standard (le mode orchestration notifie à
       // la fin du plan, pas à chaque tâche).
       if (!state.orchestrationEnabled) {
-        notifyAgentDone({ local: true }).catch(() => {});
+        notifyAgentDone({ local: true, project: window._pilotProjectPath || "" }).catch(() => {});
       }
       state.isStreaming = false;
       state.pendingRender = false;

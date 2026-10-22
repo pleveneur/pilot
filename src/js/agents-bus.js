@@ -9,7 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { backendKind } from "./backend-info.js";
-import { notifyAgentDone } from "./desktop-notify.js";
+import { notifyAnomaly } from "./desktop-notify.js";
 // Annulation d'une run : les surfaces de rendu des agents peuvent s'interrompre
 // sans signaler leur repos → remise à zéro du son différé (son suivant
 // immédiat, jamais retardé par le délai de sécurité).
@@ -1770,10 +1770,14 @@ function resetTimeout(ctx) {
     } else {
       settleMission(ctx.runKey, "error", { message: `${msg} Aucun travail nouveau détecté sur le disque.` });
     }
-    // P7 : notification desktop à l'arrêt auto (réutilise desktop-notify.js).
-    notifyAgentDone({
-      title: "Pilot — Agent en timeout",
-      body: `⏱️ L'agent ${agentId} est resté inactif (${Math.round(busState.timeoutMs / 1000)} s). La run a été arrêtée automatiquement.`,
+    // P7 : ALERTE Telegram/desktop à l'arrêt auto (réutilise desktop-notify.js).
+    // Refonte des messages : une seule ligne — ce qui a bloqué ET la décision
+    // attendue ; le nom court du PROJET est en tête, aucune donnée interne
+    // (identifiant d'agent technique, durée en millisecondes, nom de réglage).
+    notifyAnomaly({
+      project: ctx.agentProject[agentId] || ctx.project || "",
+      problem: "un agent est resté sans activité, la tâche a été arrêtée",
+      decision: "relancer la tâche ou allonger le délai d'inactivité dans les paramètres",
     }).catch(() => {});
     // Portée CIBLÉE : le timeout d'inactivité de CETTE run ne doit jamais
     // arrêter les agents d'une autre run (autre projet, autre mission).

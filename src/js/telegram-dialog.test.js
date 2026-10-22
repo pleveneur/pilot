@@ -48,6 +48,13 @@ import {
   flushRawTelegramAvis,
 } from "./telegram-dialog.js";
 import { forwardToTelegram } from "./desktop-notify.js";
+import { resetTelegramGate, setTelegramGateDeps } from "./telegram-messages.js";
+
+// Horloge FIXE de la porte des messages (12 h : hors heures calmes 23 h → 7 h).
+// Sans elle, un test lancé la nuit verrait ses envois mis de côté : les tests ne
+// doivent jamais dépendre de l'heure à laquelle la suite tourne.
+const T = (iso) => Date.parse(iso);
+const HEURE_PLEINE = T("2026-05-05T12:00:00");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
@@ -89,12 +96,17 @@ beforeEach(() => {
   invoke.mockClear();
   invoke.mockImplementation(async () => ({}));
   resetTelegramDialogState();
+  // Porte unique des messages : horloge fixe + état vierge (aucun report d'un test).
+  resetTelegramGate();
+  setTelegramGateDeps({ now: () => HEURE_PLEINE });
 });
 
 afterEach(() => {
   setRawAvisTimers(null);
   setRawAvisTurnProbe(null);
   resetTelegramDialogState();
+  resetTelegramGate();
+  setTelegramGateDeps({ now: () => Date.now() });
 });
 
 describe("condensation d'un message en une phrase simple", () => {
@@ -207,7 +219,9 @@ describe("inertie totale", () => {
     );
     expect(ok).toBe(true);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0][0]).toBe("J'ai terminé la mission.");
+    // Règle de contenu commune : le NOM COURT DU PROJET est en tête du message
+    // (aucun projet ouvert ici → « Assistant »), la phrase reste simple.
+    expect(send.mock.calls[0][0]).toBe("Assistant : j'ai terminé la mission.");
   });
 
   it("un échec d'envoi est avalé (jamais d'erreur visible)", () => {
@@ -314,16 +328,26 @@ describe("conservation du réglage et compatibilité d'une ancienne config", () 
 });
 
 describe("absence de doublon d'avis (et zéro perte)", () => {
-  it("communication INACTIVE → avis brut transmis comme avant (étape 1)", async () => {
-    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
-    expect(telegramMessages()).toEqual(["Pilot — Agent terminé — ✅ terminé"]);
+  it("communication INACTIVE → avis brut transmis (message de FIN, projet en tête)", async () => {
+    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé", {
+      project: "G:/IA_PL/pilot",
+      result: "terminé",
+    });
+    // Un message = UN projet : nom court en tête, verdict, aucun chemin.
+    expect(telegramMessages()).toEqual(["pilot : livré — terminé"]);
   });
 
   it("communication ACTIVE → une ALERTE n'est jamais retardée ni coupée", async () => {
     setTelegramDialogConfigured(true);
     setTelegramDialogEnabled(true);
-    await forwardToTelegram("Pilot — Anomalie détectée", "⚠️ agent bloqué", { critical: true });
-    expect(telegramMessages()).toEqual(["Pilot — Anomalie détectée — ⚠️ agent bloqué"]);
+    await forwardToTelegram("Pilot — Anomalie détectée", "⚠️ agent bloqué", {
+      critical: true,
+      project: "G:/IA_PL/pilot",
+      decision: "relancer la tâche ou vérifier l'agent",
+    });
+    expect(telegramMessages()).toEqual([
+      "⚠️ pilot : agent bloqué — à décider : relancer la tâche ou vérifier l'agent",
+    ]);
   });
 
   it("communication ACTIVE → avis non critique RETARDÉ, puis envoyé si l'Assistant ne parle pas", async () => {
@@ -331,12 +355,15 @@ describe("absence de doublon d'avis (et zéro perte)", () => {
     setTelegramDialogEnabled(true);
     const timers = manualTimers();
     setRawAvisTimers(timers);
-    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
+    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé", {
+      project: "G:/IA_PL/pilot",
+      result: "terminé",
+    });
     // Retardé (pas encore envoyé) mais PAS perdu : il part à l'échéance.
     expect(telegramMessages()).toEqual([]);
     expect(timers.count()).toBe(1);
     timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS);
-    expect(telegramMessages()).toEqual(["Pilot — Agent terminé — ✅ terminé"]);
+    expect(telegramMessages()).toEqual(["pilot : livré — terminé"]);
   });
 
   it("communication ACTIVE → avis retardé ABANDONNÉ si l'Assistant parle pendant la fenêtre", async () => {
@@ -344,15 +371,18 @@ describe("absence de doublon d'avis (et zéro perte)", () => {
     setTelegramDialogEnabled(true);
     const timers = manualTimers();
     setRawAvisTimers(timers);
-    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
+    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé", {
+      project: "G:/IA_PL/pilot",
+      result: "terminé",
+    });
     const sent = relayAssistantMessageToTelegram(
       "✅ La tâche déléguée est terminée.",
-      { send: (text) => invoke("telegram_notify", { text }) }
+      { send: (text) => invoke("telegram_notify", { text }), project: "G:/IA_PL/pilot" }
     );
     expect(sent).toBe(true);
     timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS * 3);
     // Pas de doublon : seule la phrase de l'Assistant est partie.
-    expect(telegramMessages()).toEqual(["✅ La tâche déléguée est terminée."]);
+    expect(telegramMessages()).toEqual(["pilot : ✅ La tâche déléguée est terminée."]);
   });
 
   it("communication ACTIVE → un tour en cours repousse l'échéance, la fin de tour sans parole déclenche l'avis", async () => {
@@ -362,13 +392,16 @@ describe("absence de doublon d'avis (et zéro perte)", () => {
     setRawAvisTimers(timers);
     let busy = true;
     setRawAvisTurnProbe(() => busy);
-    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
+    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé", {
+      project: "G:/IA_PL/pilot",
+      result: "terminé",
+    });
     timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS);
     // Le tour de l'Assistant est en cours : on attend sa fin réelle.
     expect(telegramMessages()).toEqual([]);
     busy = false;
     flushRawTelegramAvis();
-    expect(telegramMessages()).toEqual(["Pilot — Agent terminé — ✅ terminé"]);
+    expect(telegramMessages()).toEqual(["pilot : livré — terminé"]);
   });
 
   it("communication ACTIVE → l'Assistant parle à la place, en une phrase", () => {
@@ -379,8 +412,9 @@ describe("absence de doublon d'avis (et zéro perte)", () => {
       { send: (text) => invoke("telegram_notify", { text }) }
     );
     expect(sent).toBe(true);
+    // Nom court du projet en tête (aucun projet ouvert → « Assistant »).
     expect(telegramMessages()).toEqual([
-      "⚠️ Un agent semble bloqué, je l'ai arrêté et relancé.",
+      "Assistant : ⚠️ Un agent semble bloqué, je l'ai arrêté et relancé.",
     ]);
   });
 });

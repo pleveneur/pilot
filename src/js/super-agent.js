@@ -103,6 +103,21 @@ import {
   relayAssistantMessageToTelegram,
   setRawAvisTurnProbe,
 } from "./telegram-dialog.js";
+// Refonte des messages Telegram : le NOM COURT du projet vient de l'UNIQUE
+// fonction du projet (`projectShortName`) — jamais un chemin, jamais un nom
+// recopié à la main. « Assistant » seulement si aucun projet n'est ouvert.
+import { projectShortName } from "./telegram-messages.js";
+
+/**
+ * Projet à afficher en tête des messages Telegram de l'Assistant : le nom court
+ * du projet actif, ou « Assistant » quand aucun projet n'est ouvert.
+ * @returns {string}
+ */
+function assistantTelegramProject() {
+  const active =
+    typeof window !== "undefined" && window ? window._pilotProjectPath || "" : "";
+  return projectShortName(active) || "Assistant";
+}
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -876,7 +891,18 @@ export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
   const message = `⚠️ ${count} demande(s) en file d'attente abandonnée(s) : ${labels.join(" · ")}. Le motif est consigné (${reason}).`;
   console.warn("[super-agent] file de missions :", message);
   try {
-    await notifySuperAgentDone({ title: "Pilot — Assistant", body: message });
+    // Refonte des messages Telegram : ALERTE d'UNE ligne — nom court du PROJET
+    // en tête, ce qui bloque et la décision attendue. Aucun numéro de mission,
+    // aucun motif interne, aucun libellé de file (ils restent dans la console).
+    await notifySuperAgentDone({
+      title: "Pilot — Assistant",
+      body: message,
+      project: target || "",
+      ok: false,
+      type: "alert",
+      problem: "des demandes en attente ont été abandonnées",
+      decision: "relancer les demandes si elles sont toujours utiles",
+    });
   } catch (_) {
     /* notification indisponible : la console porte déjà l'information */
   }
@@ -929,7 +955,11 @@ export async function keepQueuedRunAgentsMissions(target, opts = {}) {
   const message = `📋 ${count} mission(s) conservée(s) en file d'attente : ${labels.join(" · ")}. Elles seront rejouées dès que le projet est libre (motif consigné : ${reason}).`;
   console.warn("[super-agent] file de missions :", message);
   try {
-    await notifySuperAgentDone({ title: "Pilot — Assistant", body: message });
+    // Refonte des messages Telegram : les missions sont CONSERVÉES et rejouées
+    // automatiquement — aucune information décisive, aucune action attendue du
+    // propriétaire. Filtré À LA SOURCE : rien ne part sur Telegram (`telegram:
+    // false`). L'information reste dans la console et dans la trace disque.
+    await notifySuperAgentDone({ title: "Pilot — Assistant", body: message, telegram: false });
   } catch (_) {
     /* notification indisponible : la console porte déjà l'information */
   }
@@ -1010,7 +1040,16 @@ export async function abandonQueuedDelegations(projectPath, opts = {}) {
   const message = `⚠️ ${count} délégation(s) en file d'attente abandonnée(s) : ${labels.join(" · ")}. Le motif est consigné (${reason}).`;
   console.warn("[super-agent] file de délégations :", message);
   try {
-    await notifySuperAgentDone({ title: "Pilot — Assistant", body: message });
+    // Refonte des messages Telegram : ALERTE d'UNE ligne, projet en tête.
+    await notifySuperAgentDone({
+      title: "Pilot — Assistant",
+      body: message,
+      project: target || "",
+      ok: false,
+      type: "alert",
+      problem: "des demandes en attente ont été abandonnées",
+      decision: "relancer la demande si elle est toujours utile",
+    });
   } catch (_) {
     /* notification indisponible : la console porte déjà l'information */
   }
@@ -2119,7 +2158,9 @@ function appendSystemMessage(messagesEl, text) {
   // feu et oubli : jamais bloquant pour l'affichage, jamais d'erreur visible.
   if (isTelegramDialogActive()) {
     classifyAssistantMessageWithLaya(trimmed).then((verdict) => {
-      if (verdict.kind === "alert") relayAssistantMessageToTelegram(trimmed);
+      if (verdict.kind === "alert") {
+        relayAssistantMessageToTelegram(trimmed, { project: assistantTelegramProject() });
+      }
     });
   }
   const seq = infoSeq++;
@@ -4105,7 +4146,9 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // Anti-doublon SANS PERTE : si l'Assistant n'a rien transmis (réponse vide ou
     // écartée par le filtre), les avis bruts retardés pendant ce tour partent
     // maintenant — un événement ne peut plus rester sans aucune information.
-    const spokenToTelegram = relayAssistantMessageToTelegram(respText);
+    const spokenToTelegram = relayAssistantMessageToTelegram(respText, {
+      project: assistantTelegramProject(),
+    });
     onEnd();
     if (!spokenToTelegram) flushRawTelegramAvis();
     // Fin de flux : une fois la dernière frame de rendu peinte, le rendu est au
@@ -4148,7 +4191,15 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       const msg = buildSuperAgentDisconnectedMessage();
       appendSystemMessage(messagesEl, msg);
       // Issue #16 : anomalie de suivi — notifier (si le réglage est activé).
-      notifySuperAgentDone({ title: "Pilot — Assistant", body: msg }).catch(() => {});
+      notifySuperAgentDone({
+        title: "Pilot — Assistant",
+        body: msg,
+        project: assistantTelegramProject(),
+        ok: false,
+        type: "alert",
+        problem: "la connexion à l'assistant est perdue",
+        decision: "le relancer depuis son onglet",
+      }).catch(() => {});
       // Son « point » : point important / anomalie (si le son est activé).
       playAssistantSound("point").catch(() => {});
     });
@@ -6727,7 +6778,9 @@ function warnInjectionFailure(status, detail, category) {
   if (superWarnMessagesEl) {
     appendSystemMessage(superWarnMessagesEl, text);
   } else {
-    notifySuperAgentDone({ title: "Pilot — Assistant", body: text }).catch(() => {});
+    // Refonte des messages Telegram : événement INTERNE (le compte-rendu sera
+    // rejoué), aucune décision attendue du propriétaire → rien sur Telegram.
+    notifySuperAgentDone({ title: "Pilot — Assistant", body: text, telegram: false }).catch(() => {});
   }
 }
 
@@ -6760,9 +6813,14 @@ async function sendSuperAgentReport(entry, opts = {}) {
       `[Tâche déléguée terminée] Demande transmise à l'agent du projet ${del.projectPath || ""} : ${del.request}\n`;
     summary = marker + summary;
     // Issue #16 : tâche déléguée terminée → notification native (si activée).
+    // Refonte des messages Telegram : message de FIN du projet CONCERNÉ (un
+    // message = un projet) — nom court en tête, verdict « livré », aucune
+    // information d'étape, aucun chemin de fichier.
     notifySuperAgentDone({
       title: "Pilot — Assistant",
       body: `✅ Tâche déléguée terminée (projet « ${del.projectPath || "inconnu"} »). L'agent a répondu à la demande transmise.`,
+      project: del.projectPath || "",
+      ok: true,
     }).catch(() => {});
     // Son « fin » : tâche d'agent terminée (si le son est activé). ARMÉ et non
     // joué ici : le compte rendu va lancer un tour de l'Assistant dont le texte

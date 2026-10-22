@@ -38,6 +38,13 @@ import {
   setTelegramDialogConfigured,
   setTelegramDialogEnabled,
 } from "./telegram-dialog.js";
+import { resetTelegramGate, setTelegramGateDeps } from "./telegram-messages.js";
+
+// Horloge FIXE (12 h, hors heures calmes 23 h → 7 h) : les tests ne dépendent
+// jamais de l'heure à laquelle la suite tourne.
+const HEURE_PLEINE = Date.parse("2026-05-05T12:00:00");
+// Un seul projet par message : on fournit toujours le projet concerné.
+const PROJET = "G:/IA_PL/pilot";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
@@ -56,12 +63,19 @@ beforeEach(() => {
   // État Telegram du dialogue remis à zéro : ces tests portent sur l'étape 1
   // (communication du dialogue coupée), sauf le test d'alerte explicite.
   resetTelegramDialogState();
+  // Porte unique des messages : état vierge + horloge fixe hors heures calmes.
+  resetTelegramGate();
+  setTelegramGateDeps({ now: () => HEURE_PLEINE });
 });
 
 describe("forwardToTelegram — branchement de l'interface", () => {
-  it("transmet titre et corps fusionnés à la commande telegram_notify", async () => {
-    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
-    expect(telegramMessages()).toEqual(["Pilot — Agent terminé — ✅ terminé"]);
+  it("un avis historique devient un message de FIN, nom court du projet en tête", async () => {
+    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé", {
+      project: PROJET,
+      result: "terminé",
+    });
+    // Un message = UN projet ; aucun chemin, aucun titre d'application.
+    expect(telegramMessages()).toEqual(["pilot : livré — terminé"]);
   });
 
   it("ne transmet rien pour un texte vide", async () => {
@@ -70,43 +84,86 @@ describe("forwardToTelegram — branchement de l'interface", () => {
     expect(telegramMessages()).toEqual([]);
   });
 
+  it("ne transmet rien pour un événement sans information utile (aucun projet)", async () => {
+    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
+    expect(telegramMessages()).toEqual([]);
+  });
+
   it("avale un échec de la commande (jamais d'erreur remontée)", async () => {
     invoke.mockRejectedValueOnce(new Error("moteur indisponible"));
-    await expect(forwardToTelegram("titre", "corps")).resolves.toBeUndefined();
+    await expect(
+      forwardToTelegram("titre", "corps", { project: PROJET, result: "corps" })
+    ).resolves.toBeUndefined();
   });
 
   it("avale une absence d'invoke (hors Tauri)", async () => {
     invoke.mockImplementationOnce(() => {
       throw new Error("invoke indisponible");
     });
-    await expect(forwardToTelegram("titre", "corps")).resolves.toBeUndefined();
+    await expect(
+      forwardToTelegram("titre", "corps", { project: PROJET, result: "corps" })
+    ).resolves.toBeUndefined();
   });
 });
 
 describe("branchement sur les avis existants", () => {
   it("fin de tâche d'un agent (chat local) → transmis même si notify_agent_done est désactivé", async () => {
     invoke.mockImplementation(async (cmd) => (cmd === "get_config" ? { notify_agent_done: false } : {}));
-    await notifyAgentDone({ local: true });
-    expect(telegramMessages()).toEqual(["Pilot — Agent terminé — ✅ L'agent a terminé."]);
+    await notifyAgentDone({ local: true, project: PROJET });
+    expect(telegramMessages()).toEqual(["pilot : livré — L'agent a terminé."]);
   });
 
   it("fin de tâche à distance → UN SEUL envoi (pas de doublon avec notifyAgentDone)", async () => {
-    await notifyAgentDoneFromRemote();
+    await notifyAgentDoneFromRemote({ project: PROJET });
     expect(telegramMessages()).toEqual([
-      "Pilot — Agent terminé — ✅ La tâche lancée à distance est terminée.",
+      "pilot : livré — la tâche lancée à distance est terminée",
+    ]);
+  });
+
+  it("une fin de tâche peut dire ce qu'il reste à tester", async () => {
+    await notifyAgentDoneFromRemote({
+      project: PROJET,
+      result: "le correctif est en place",
+      testable: "ouvrir un fichier puis le refermer",
+    });
+    expect(telegramMessages()).toEqual([
+      "pilot : livré — le correctif est en place\nÀ tester : ouvrir un fichier puis le refermer",
     ]);
   });
 
   it("événement important de l'assistant → transmis même si notify_super_agent_done est désactivé", async () => {
     invoke.mockImplementation(async (cmd) => (cmd === "get_config" ? { notify_super_agent_done: false } : {}));
-    await notifySuperAgentDone({ title: "Pilot — Assistant", body: "tâche déléguée terminée" });
-    expect(telegramMessages()).toEqual(["Pilot — Assistant — tâche déléguée terminée"]);
+    await notifySuperAgentDone({
+      title: "Pilot — Assistant",
+      body: "tâche déléguée terminée",
+      project: PROJET,
+      ok: true,
+      result: "tâche déléguée terminée",
+    });
+    expect(telegramMessages()).toEqual(["pilot : livré — tâche déléguée terminée"]);
   });
 
   it("alerte d'anomalie / arrêt automatique → transmise même si la surveillance est désactivée", async () => {
     invoke.mockImplementation(async (cmd) => (cmd === "get_config" ? { anomaly_detection_enabled: false } : {}));
-    await notifyAnomaly({ title: "Pilot — Arrêt automatique", body: "agent stoppé (bloqué)" });
-    expect(telegramMessages()).toEqual(["Pilot — Arrêt automatique — agent stoppé (bloqué)"]);
+    await notifyAnomaly({
+      title: "Pilot — Arrêt automatique",
+      body: "agent stoppé (bloqué)",
+      project: PROJET,
+      problem: "un agent est resté bloqué, il a été arrêté",
+      decision: "le relancer ou vérifier ce qu'il faisait",
+    });
+    expect(telegramMessages()).toEqual([
+      "⚠️ pilot : un agent est resté bloqué, il a été arrêté — à décider : le relancer ou vérifier ce qu'il faisait",
+    ]);
+  });
+
+  it("une alerte sans décision possible n'est PAS envoyée (jamais de bruit inutile)", async () => {
+    await notifyAnomaly({
+      title: "Pilot — Anomalie détectée",
+      body: "⚠️ Un agent semble bloqué (actif sans progression).",
+      project: PROJET,
+    });
+    expect(telegramMessages()).toEqual([]);
   });
 
   it("une lecture de configuration en ÉCHEC n'empêche pas la transmission Telegram", async () => {
@@ -114,9 +171,13 @@ describe("branchement sur les avis existants", () => {
       if (cmd === "get_config") throw new Error("config indisponible");
       return {};
     });
-    await notifyAnomaly();
+    await notifyAnomaly({
+      project: PROJET,
+      problem: "Un agent semble bloqué (actif sans progression).",
+      decision: "lancer le diagnostic ou arrêter l'agent",
+    });
     expect(telegramMessages()).toEqual([
-      "Pilot — Anomalie détectée — ⚠️ Un agent semble bloqué (actif sans progression).",
+      "⚠️ pilot : Un agent semble bloqué (actif sans progression). — à décider : lancer le diagnostic ou arrêter l'agent",
     ]);
   });
 
@@ -125,9 +186,15 @@ describe("branchement sur les avis existants", () => {
     // active, l'anti-doublon ne doit JAMAIS faire taire une alerte.
     setTelegramDialogConfigured(true);
     setTelegramDialogEnabled(true);
-    await notifyAnomaly({ title: "Pilot — Agent silencieux", body: "un agent ne produit plus rien" });
+    await notifyAnomaly({
+      title: "Pilot — Agent silencieux",
+      body: "un agent ne produit plus rien",
+      project: PROJET,
+      problem: "un agent ne produit plus rien",
+      decision: "relancer la tâche ou arrêter l'agent",
+    });
     expect(telegramMessages()).toEqual([
-      "Pilot — Agent silencieux — un agent ne produit plus rien",
+      "⚠️ pilot : un agent ne produit plus rien — à décider : relancer la tâche ou arrêter l'agent",
     ]);
     resetTelegramDialogState();
   });

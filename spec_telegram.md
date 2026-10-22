@@ -68,6 +68,26 @@ est décoché **ou** qu'un des deux champs est vide, **rien n'est envoyé**,
 Pilot ne contacte aucun serveur et **aucun message d'erreur** ne s'affiche.
 Décocher le réglage suffit à tout arrêter.
 
+**Ce que vous recevez est court et rangé** :
+
+- **un message = un projet**, dont le **nom est en tête** (« MakeFilm : … ») :
+  quand deux projets tournent en même temps, vous savez toujours de qui on
+  parle, et vous recevez **un message par projet** (jamais un message mélangé) ;
+- **trois types de message seulement** :
+  - **début** (une ligne : le projet et ce qui commence) ;
+  - **fin** (deux lignes au plus : « livré » ou « échec », puis ce que **vous**
+    pouvez tester) ;
+  - **alerte** (une ligne : ce qui bloque **et** ce qu'il faut décider — s'il n'y
+    a rien à décider, vous n'êtes pas dérangé) ;
+- **pas de détails techniques** : ni chemin de fichier, ni nom de fonction, ni
+  numéro de session, ni compte de tests (juste « tests OK » ou « tests KO »),
+  ni branche ni commit ;
+- **un seul message par changement réel** : une rafale d'évènements produit un
+  seul envoi, et un évènement sans information utile ne produit **aucun**
+  message ;
+- **heures calmes respectées** : rien entre **23 h et 7 h**, sauf danger
+  immédiat. Les messages de la nuit vous arrivent au réveil, une seule fois.
+
 **Détails utiles** :
 
 - l'envoi se fait **en arrière-plan** : il ne ralentit ni ne bloque jamais
@@ -745,3 +765,94 @@ côté JS) : l'affichage Telegram est un confort, jamais une contrainte.
 - **Non vérifié** (aucun bot réel engagé dans ces lots) : rendu effectif des
   boutons, accusé de réception visible côté client, mise à jour du message par
   l'API, et le comportement réel du client après un appui.
+
+## 13. Refonte des messages — un projet par message, trois types seulement
+
+> **Statut : ✅ Implémenté.** Refonte demandée par le propriétaire : « quand deux
+> projets tournent en même temps, je ne sais plus qui fait quoi, et je reçois
+> trop d'informations inutiles. »
+
+### 13.1 Source unique de vérité (`src/js/telegram-messages.js`)
+
+Module **pur** (aucune dépendance Tauri, réseau ou horloge : l'horloge et
+l'envoyeur sont **injectés** par `setTelegramGateDeps`). Plus aucun texte n'est
+composé ailleurs : les appelants (`desktop-notify.js`, `telegram-dialog.js`)
+transmettent un **évènement typé**, le module décide du message — ou de son
+absence.
+
+| Type (`TELEGRAM_MESSAGE_TYPES`) | Gabarit | Exemple concret |
+|---|---|---|
+| `START` | `<projet> : <action>` — 1 ligne | `MakeFilm : correction de l'autotest lancée` |
+| `END` | `<projet> : livré` / `échec — …` (+ `À tester : …` au plus) | `MakeFilm : livré`<br>`À tester : relancer l'export` |
+| `ALERT` | `⚠️ <projet> : <problème> — à décider : <décision>` — 1 ligne | `⚠️ MakeFilm : un agent est resté bloqué — à décider : le relancer` |
+| `ASSISTANT` | `<projet> : <phrase>` | `Pilot : j'ai terminé la mission.` |
+
+- **Nom court du projet** : **une seule** fonction, `projectShortName` (nom du
+  dossier ; gère `\`, `/`, `::` et une lettre de lecteur seule). Une valeur
+  contenant **deux chemins** distincts rend `""` → **aucun** message
+  (impossible d'avoir deux projets dans un message).
+- **Nettoyage** `sanitizeOwnerText` : retire le code, les chemins, les noms de
+  fichiers/modules/fonctions, les identifiants `snake_case`, les **numéros de
+  session/mission**, les **empreintes** hexadécimales/UUID, les **branches** et
+  **commits**, le balisage Markdown. `normalizeTestMentions` réduit tout compte
+  de tests à « tests OK » / « tests KO ».
+- **Bornes** : 110 car. (début, résultat, à tester), 150 (alerte), 200
+  (assistant). Une pastille d'état en tête (`⚠️`, `✅`, `🔴`…) est retirée : le
+  gabarit porte déjà verdict et marqueur.
+- **Rien d'utile ⇒ rien d'envoyé** : `buildOwnerMessage` rend `""` (statut
+  `empty`) sans projet, sans action, sans résultat exploitable, et pour une
+  **alerte sans décision possible** (une alerte qui n'appelle aucune action est
+  du bruit). Les textes triviaux (« ok », « bien reçu », « tout va bien ») sont
+  écartés par `isTrivialMessage`.
+
+### 13.2 Porte unique de publication
+
+`publishOwnerEvent(event)` / `publishOwnerText(text)` — seuls points d'envoi :
+
+1. **anti-rafale** (`isDuplicateMessage`) : même information pour le même
+   projet dans une fenêtre de **90 s** → statut `dropped`, aucun envoi (deux
+   projets différents ne sont jamais confondus) ;
+2. **heures calmes** (23 h → 7 h, heure locale) : statut `held`, message mis de
+   côté (réserve bornée à 20) puis remis à la fin de la plage
+   (`flushHeldOwnerEvents`). Seul `danger: true` (danger immédiat) franchit la
+   plage ; une **alerte** n'est jamais retardée par le canal ;
+3. **envoi** par l'envoyeur injecté (échec **avalé**).
+
+### 13.3 Ce qui n'est plus envoyé, et pourquoi
+
+| N'est plus envoyé | Raison |
+|---|---|
+| étapes intermédiaires, « préparation », « mission relancée » | ne changent rien pour le propriétaire |
+| accusés de réception, « tout va bien », résumés périodiques | aucun message inutile |
+| numéros de session/mission, chemins, fichiers, fonctions, modules | illisibles sur un téléphone, et fuite de détail interne |
+| comptes de tests, empreintes, branches, commits | remplacés par « tests OK » / « tests KO » |
+| file de missions **conservée**, échec d'injection d'un compte-rendu | évènements **internes** (`telegram: false`, filtrés à la source) |
+
+### 13.4 Tests et contrôles
+
+`src/js/telegram-messages.test.js` (32 tests, horloge et envoyeur **injectés**)
+contient **six contrôles** qui échouent si la règle casse :
+
+| Contrôle | Ce qu'il interdit |
+|---|---|
+| **[a]** | message à **deux projets** (et deux projets fusionnés) |
+| **[b]** | chemin, nom de fichier/fonction, n° de session, empreinte, compte de tests |
+| **[c]** | évènement **sans information utile** produisant un envoi |
+| **[d]** | deux messages pour la **même information** (rafale) |
+| **[e]** | message **sans nom de projet en tête** |
+| **[f]** | envoi pendant les **heures calmes** (hors danger immédiat) |
+
+**Preuve par neutralisation** (chaque contrôle rougit quand on retire la règle,
+puis fichier restauré à l'identique — même empreinte SHA-256) :
+`[a]` 2 rouges, `[b]` 4, `[c]` 1, `[d]` 2, `[e]` 1, `[f]` 2.
+
+Les tests d'intégration du branchement restent dans
+`src/js/telegram-notify.test.js` et `src/js/telegram-dialog.test.js` (mêmes
+règles, `invoke` mocké).
+
+### 13.5 Ce qui ne change pas
+
+Canal, mode de connexion (HTTP, bot, `chat_id`), réglages existants
+(activation, destinataire), inertie totale quand la passerelle est désactivée ou
+mal configurée, envoi non bloquant en thread détaché, échec silencieux, jeton
+jamais journalisé. **Aucun nouveau réglage** n'a été ajouté.

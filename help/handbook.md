@@ -1428,26 +1428,32 @@ apprend et répond.
 - **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
-- **Badges projet par bulle (snapshot à l'envoi)** : chaque demande et sa
-  réponse portent les badges des projets **réellement concernés par la
-  discussion**, étiquetés au moment où vous envoyez la demande = **uniquement
-  les projets explicitement nommés dans le texte**, dans leur **ordre
-  d'apparition**, sans doublon. **Aucun projet cité = aucune étiquette** : le
-  projet simplement **ouvert dans Pilot** n'est **jamais** affiché par défaut
-  (un nom faux fait croire à un travail sur le mauvais projet, ce qui est pire
-  que pas de nom). Plusieurs projets cités → plusieurs badges compacts sur la
-  même bulle. La détection est **sans IA** :
-  correspondance insensible à la casse sur le **nom affiché** du projet (ex:
-  « PLh ») ou la **fin de son chemin** (ex: « ia_pl/plh »), avec **frontières
-  de mots** (une demande qui parle de « pilotage » n'étiquette pas le projet
-  « pilot »). La réponse hérite des badges de la demande qui l'a déclenchée et
-  peut y **ajouter** les projets réellement cités dans le texte de la réponse
-  (jamais en retirer un correct, jamais en inventer un). Les badges sont
-  **figés pour toujours** : changer de projet actif (même via `open_project`
-  pendant le tour) ne modifie **jamais** les badges déjà affichés, et aucune
-  bulle n'est re-étiquetée rétrospectivement. La **bulle de continuation**
-  après une question posée à l'utilisateur hérite des badges de la demande
-  initiale (la paire question/réponse porte les mêmes étiquettes).
+- **Badges projet par bulle (snapshot à l'envoi)** : chaque bulle de
+  l'Assistant porte le nom du/des projet(s) **concerné(s)**, choisi dans cet
+  ordre (règle unique : `resolveBubbleBadgeNames`, module pur
+  `super-agent-badges.js`) : **(1)** les projets **explicitement nommés dans le
+  texte**, dans leur **ordre d'apparition**, sans doublon ; **(2)** sinon, les
+  projets **réellement concernés par l'échange** (mission / agents lancés,
+  agent ciblé, projet transmis à un agent, projet ouvert par l'Assistant) ;
+  **(3)** sinon, **en dernier recours**, le **projet ouvert au moment de la
+  création de la bulle** (snapshot figé) ; **(4)** sinon **aucune étiquette** —
+  jamais de nom inventé. Un projet **visé** par l'échange prime donc toujours
+  sur le projet simplement affiché à l'écran (mission sur `PLh` alors que
+  `Pilot` est ouvert → badge « PLh »). Plusieurs projets cités → plusieurs
+  badges compacts sur la même bulle. Aucune étiquette sur les bulles de
+  l'**utilisateur**, les **messages système** et les **erreurs**. La détection
+  du texte est **sans IA** : correspondance insensible à la casse sur le **nom
+  affiché** du projet (ex: « PLh ») ou la **fin de son chemin** (ex:
+  « ia_pl/plh »), avec **frontières de mots** (une demande qui parle de
+  « pilotage » n'étiquette pas le projet « pilot »). La réponse hérite des
+  badges **figés** de la demande qui l'a déclenchée et peut y **ajouter** les
+  projets réellement cités dans le texte de la réponse (jamais en retirer un
+  correct, jamais en inventer un). Les badges sont **figés pour toujours** :
+  changer de projet actif (même via `open_project` pendant le tour) ne modifie
+  **jamais** les badges déjà affichés, et aucune bulle n'est re-étiquetée
+  rétrospectivement. La **bulle de continuation** après une question posée à
+  l'utilisateur hérite des badges de la demande initiale (la paire
+  question/réponse porte les mêmes étiquettes).
 - **Une bulle par tour d'agent par projet** : un « tour » = depuis que
   l'Assistant commence à répondre jusqu'à `agent_end` (fin du tour, c'est à
   l'utilisateur de parler). Pendant un tour, l'Assistant peut enchaîner
@@ -3348,6 +3354,26 @@ auprès de **@userinfobot** (ou de l'API `getUpdates`).
 est décoché **ou** qu'un des deux champs est vide, **rien n'est envoyé**,
 Pilot ne contacte aucun serveur et **aucun message d'erreur** ne s'affiche.
 Décocher le réglage suffit à tout arrêter.
+
+**Ce que vous recevez est court et rangé** :
+
+- **un message = un projet**, dont le **nom est en tête** (« MakeFilm : … ») :
+  quand deux projets tournent en même temps, vous savez toujours de qui on
+  parle, et vous recevez **un message par projet** (jamais un message mélangé) ;
+- **trois types de message seulement** :
+  - **début** (une ligne : le projet et ce qui commence) ;
+  - **fin** (deux lignes au plus : « livré » ou « échec », puis ce que **vous**
+    pouvez tester) ;
+  - **alerte** (une ligne : ce qui bloque **et** ce qu'il faut décider — s'il n'y
+    a rien à décider, vous n'êtes pas dérangé) ;
+- **pas de détails techniques** : ni chemin de fichier, ni nom de fonction, ni
+  numéro de session, ni compte de tests (juste « tests OK » ou « tests KO »),
+  ni branche ni commit ;
+- **un seul message par changement réel** : une rafale d'évènements produit un
+  seul envoi, et un évènement sans information utile ne produit **aucun**
+  message ;
+- **heures calmes respectées** : rien entre **23 h et 7 h**, sauf danger
+  immédiat. Les messages de la nuit vous arrivent au réveil, une seule fois.
 
 **Détails utiles** :
 

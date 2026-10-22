@@ -62,7 +62,15 @@ function handleAnomaly(a) {
   const lastEvent = a.lastEvent || "inconnu";
   const msg = `L'agent « ${agent} » est actif mais sans progression depuis ${idle} min (dernier événement : ${lastEvent}).`;
   // Notification desktop native.
-  notifyAnomaly({ title: "Pilot — Anomalie détectée", body: msg }).catch(() => {});
+  // Telegram (refonte des messages) : ALERTE d'UNE ligne — ce qui bloque et la
+  // décision attendue ; nom court du PROJET en tête, aucun identifiant technique.
+  notifyAnomaly({
+    title: "Pilot — Anomalie détectée",
+    body: msg,
+    project,
+    problem: "un agent ne progresse plus",
+    decision: "lancer le diagnostic ou arrêter l'agent",
+  }).catch(() => {});
   // Bandeau d'alerte persistant avec bouton de lancement de l'agent de diagnostic.
   showAnomalyBanner({ agent, project, idle, lastEvent, msg });
 }
@@ -80,7 +88,13 @@ function handleAutoStopped(a) {
   const reason = a.reason || "Agent bloqué (actif sans progression)";
   const msg = `L'agent délégué « ${agent} » a été arrêté automatiquement : ${reason} (${idle} min sans progression).`;
   // Notification desktop native.
-  notifyAnomaly({ title: "Pilot — Agent arrêté automatiquement", body: msg }).catch(() => {});
+  notifyAnomaly({
+    title: "Pilot — Agent arrêté automatiquement",
+    body: msg,
+    project,
+    problem: "un agent bloqué a été arrêté automatiquement",
+    decision: "lancer le diagnostic ou relancer la tâche",
+  }).catch(() => {});
   // Bandeau d'alerte avec bouton « 🔍 Diagnostiquer » (relance manuelle possible).
   showAnomalyBanner({ agent, project, idle, lastEvent: "arrêt automatique", msg });
   // PROPOSE automatiquement le diagnostic (moniteur Rust : déjà lancé).
@@ -101,7 +115,13 @@ function handleSilentSession(a) {
   const msg = a.message ||
     `⚠️ L'agent « ${agent} » ne produit rien depuis ${idle} min (projet : ${project}, dernier événement : ${a.lastEvent || "inconnu"}).`;
   // Notification desktop native (même famille que les avis de fin de run).
-  notifyAnomaly({ title: "Pilot — Agent silencieux", body: msg }).catch(() => {});
+  notifyAnomaly({
+    title: "Pilot — Agent silencieux",
+    body: msg,
+    project,
+    problem: "un agent ne produit plus rien",
+    decision: "relancer la tâche ou arrêter l'agent",
+  }).catch(() => {});
   // Bandeau d'alerte persistant (réutilise l'existant).
   showAnomalyBanner({ agent, project, idle, lastEvent: a.lastEvent || "aucun", msg });
 }
