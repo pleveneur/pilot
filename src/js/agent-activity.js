@@ -81,7 +81,15 @@ export function flattenAgents(supervision, lastActivityMap) {
         ? "Assistant"
         : proj.name || project.split(/[\\/]/).pop() || "";
     for (const a of proj.agents || []) {
-      const label = a.agent || "";
+      // Affichage vs IDENTITÉ : `name` est un champ ADDITIF de la supervision
+      // (nom lisible d'un agent jetable, publié par dashboard.rs). Le libellé
+      // affiché le prend quand il existe et retombe sur l'identifiant technique
+      // sinon (agents du registre : comportement inchangé). L'IDENTITÉ reste
+      // l'identifiant brut `a.agent` (`eph-…` pour un agent jetable) : elle
+      // alimente `rawId` (arrêt ciblé, ouverture d'onglet) et la clé
+      // d'horodatage d'activité. Un libellé mis à la place de l'identifiant
+      // casserait ces actions.
+      const label = a.name || a.agent || "";
       const state = a.state || "stopped";
       const busy = state === "running" || state === "compacting";
       // Travail EFFECTIF de la session : soit l'agent produit (busy), soit un
@@ -108,12 +116,13 @@ export function flattenAgents(supervision, lastActivityMap) {
       }
       // Identité UNIQUE par agent : deux agents peuvent porter le même nom
       // (« codeur ») sur des PROJETS différents. Pour l'assistant (projet ""),
-      // l'id reste "superagent" ; pour un agent, on combine nom + chemin projet
-      // (ex: "codeur|C:/proj/Pilot") pour lever toute ambiguïté dans la liste
-      // aplatie et au clic. `rawId` garde l'id brut (== label pour un agent
-      // nommé), `label` et `project` restent l'affichage lisible.
-      const rawId = isSuper ? "superagent" : label;
-      const agentId = isSuper ? "superagent" : (isAssistant ? label : `${label}|${project}`);
+      // l'id reste "superagent" ; pour un agent, on combine l'IDENTIFIANT BRUT
+      // + chemin projet (ex: "codeur|C:/proj/Pilot") pour lever toute ambiguïté
+      // dans la liste aplatie et au clic. `rawId` garde l'id brut (`a.agent`) :
+      // jamais le libellé d'affichage, qui peut être un nom lisible (agent
+      // jetable) et ne sert qu'à l'affichage.
+      const rawId = isSuper ? "superagent" : (a.agent || label);
+      const agentId = isSuper ? "superagent" : (isAssistant ? rawId : `${rawId}|${project}`);
       list.push({
         agentId,
         rawId,

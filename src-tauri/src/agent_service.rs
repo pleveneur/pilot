@@ -435,6 +435,38 @@ fn prompt_snapshot(command: &Value) -> Option<String> {
     Some(out)
 }
 
+/// Longueur maximale (en CARACTÈRES) du NOM D'AFFICHAGE d'un agent publié par
+/// la supervision (`get_agent_supervision`, champ ADDITIF `name`).
+///
+/// Le nom sert UNIQUEMENT à l'affichage (liste d'activité, panneau des tâches,
+/// onglet de l'agent) : l'identité technique reste le champ `agent` (pour un
+/// agent jetable, `eph-<base36>-<hex>`), employée par toutes les actions
+/// (arrêt ciblé, ouverture d'onglet, horodatage d'activité).
+pub const AGENT_DISPLAY_NAME_MAX_CHARS: usize = 40;
+
+/// Borne un nom d'affichage à `max_chars` caractères (jamais en octets).
+///
+/// Coupe PROPRE : on recule jusqu'à une frontière de mot (espace) sauf si cela
+/// amputait plus de la moitié du texte ; la coupe est signalée par « … ».
+/// Un nom déjà assez court est renvoyé tel quel (espaces de bord retirés).
+pub fn clip_agent_display_name(name: &str, max_chars: usize) -> String {
+    let text = name.trim();
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_chars {
+        return text.to_string();
+    }
+    let min_keep = max_chars / 2;
+    let mut end = max_chars;
+    for i in (min_keep..max_chars).rev() {
+        if chars[i] == ' ' {
+            end = i;
+            break;
+        }
+    }
+    let kept: String = chars[..end].iter().collect();
+    format!("{}…", kept.trim())
+}
+
 /// Ajoute (si pertinent) l'avertissement d'extensions projet au message d'erreur.
 /// Fail-open : sans `.pi/extensions`, renvoie le message tel quel.
 fn append_ext_diag_hint(cwd: &str, msg: String) -> String {
@@ -493,6 +525,25 @@ impl AgentService {
     /// Vrai si l'identifiant désigne un agent jetable en mémoire.
     pub fn is_ephemeral_agent(&self, agent_id: &str) -> bool {
         self.ephemeral_agents.lock().unwrap().contains_key(agent_id)
+    }
+
+    /// NOM LISIBLE d'un agent jetable, pour l'AFFICHAGE seulement (champ
+    /// ADDITIF `name` de `get_agent_supervision`), borné à
+    /// `AGENT_DISPLAY_NAME_MAX_CHARS` caractères.
+    ///
+    /// Lecture **mémoire seule** (aucun accès base) : la supervision est pollée
+    /// toutes les 2 s. `None` — et donc repli de l'affichage sur l'identifiant
+    /// technique, comportement inchangé — dès que l'identifiant n'est pas un
+    /// agent jetable en mémoire ou que son nom est vide.
+    pub fn ephemeral_agent_name(&self, agent_id: &str) -> Option<String> {
+        let name = {
+            let map = self.ephemeral_agents.lock().unwrap();
+            map.get(agent_id).map(|a| a.name.trim().to_string())
+        }?;
+        if name.is_empty() {
+            return None;
+        }
+        Some(clip_agent_display_name(&name, AGENT_DISPLAY_NAME_MAX_CHARS))
     }
 
     /// Purge UN agent jetable (fin de tâche). Retourne `true` s'il existait.
@@ -4413,6 +4464,64 @@ mod tests {
         // Purge globale (fin de run, changement de projet…).
         assert_eq!(svc.clear_ephemeral_agents(), 1);
         assert!(svc.list_ephemeral_agents().is_empty());
+    }
+
+    /// Le NOM d'affichage d'un agent jetable est publié (mémoire seule) et
+    /// borné : c'est lui que la supervision expose dans son champ ADDITIF
+    /// `name`, jamais à la place de l'identifiant technique (`eph-…`).
+    /// Échoue si le nom cesse d'être exposé (régression d'affichage).
+    #[test]
+    fn nom_d_affichage_d_un_agent_jetable_est_expose_et_borne() {
+        let svc = AgentService::new();
+        // Identifiant inconnu : aucun nom inventé (l'affichage retombe sur l'id).
+        assert_eq!(svc.ephemeral_agent_name("eph-inconnu-1"), None);
+        // Agent du registre : jamais de nom publié (affichage inchangé).
+        assert_eq!(svc.ephemeral_agent_name("codeur"), None);
+
+        let mut a = sample_agent("eph-test-1");
+        a.name = "  auditeur-cohérence  ".to_string();
+        a.project_path = Some("G:/IA_PL/pilot".to_string());
+        svc.register_ephemeral_agent(a).expect("enregistrement mémoire");
+
+        // Nom lisible, espaces de bord retirés.
+        assert_eq!(
+            svc.ephemeral_agent_name("eph-test-1").as_deref(),
+            Some("auditeur-cohérence")
+        );
+        // L'identité technique reste intacte et distincte du nom.
+        let stored = svc.list_ephemeral_agents();
+        assert_eq!(stored[0].id, "eph-test-1");
+
+        // Nom vide : None (repli explicite sur l'identifiant à l'affichage).
+        assert!(svc.update_ephemeral("eph-test-1", |a| a.name = "   ".to_string()));
+        assert_eq!(svc.ephemeral_agent_name("eph-test-1"), None);
+
+        // Purge : plus aucun nom (fin de tâche).
+        svc.clear_ephemeral_agent("eph-test-1");
+        assert_eq!(svc.ephemeral_agent_name("eph-test-1"), None);
+    }
+
+    /// Le bornage du nom d'affichage est PUR : jamais plus de
+    /// `AGENT_DISPLAY_NAME_MAX_CHARS` caractères + « … », coupe sur un mot.
+    #[test]
+    fn nom_d_affichage_borne_a_40_caracteres() {
+        // Court : inchangé (espaces de bord retirés).
+        assert_eq!(clip_agent_display_name("  auditeur  ", 40), "auditeur");
+        // Exactement au plafond : inchangé.
+        let exact = "a".repeat(AGENT_DISPLAY_NAME_MAX_CHARS);
+        assert_eq!(clip_agent_display_name(&exact, 40), exact);
+        // Trop long : coupé sur une frontière de mot, « … » annoncé.
+        let long = "auditeur de sécurité et de cohérence des données du projet";
+        let got = clip_agent_display_name(long, AGENT_DISPLAY_NAME_MAX_CHARS);
+        assert!(got.chars().count() <= AGENT_DISPLAY_NAME_MAX_CHARS + 1);
+        assert!(got.ends_with('…'));
+        assert!(got.starts_with("auditeur"));
+        // Coupe sur un mot : le texte gardé est un PRÉFIXE de l'original.
+        assert!(long.starts_with(got.trim_end_matches('…')));
+        // Chaîne de 200 caractères SANS espace : la coupe reste bornée.
+        let dense = "x".repeat(200);
+        let cut = clip_agent_display_name(&dense, AGENT_DISPLAY_NAME_MAX_CHARS);
+        assert!(cut.chars().count() <= AGENT_DISPLAY_NAME_MAX_CHARS + 1);
     }
 
     // ── Tâche #345 : clé de projet canonique (fiches d'agent en double) ──

@@ -1228,6 +1228,23 @@ fn recent_summaries(conn: &rusqlite::Connection, sql: &str, project_id: i64) -> 
     out
 }
 
+/// Ajoute le champ ADDITIF `name` à une entrée de supervision : NOM LISIBLE
+/// d'un agent (agent jetable), destiné à l'AFFICHAGE seulement.
+///
+/// Fonction PURE (aucun accès disque, base ou état applicatif) : elle n'ajoute
+/// le champ que si un nom **non vide** est fourni. Le champ `agent` n'est jamais
+/// touché — il reste l'identité technique employée partout ailleurs (arrêt
+/// ciblé, ouverture d'onglet, horodatage d'activité). Un nom absent donne une
+/// entrée STRICTEMENT identique à l'ancienne (aucune clé ajoutée).
+fn insert_display_name(entry: &mut Value, name: Option<String>) {
+    if let Some(n) = name {
+        let trimmed = n.trim();
+        if !trimmed.is_empty() {
+            entry["name"] = Value::String(trimmed.to_string());
+        }
+    }
+}
+
 /// Supervision multi-projets (P8) : vue agrégée des agents en cours sur TOUS
 /// les projets, par projet, avec leur état (running / paused / stopped).
 /// Réutilise le mécanisme existant `AgentService::list_agent_sessions` (P2) —
@@ -1323,6 +1340,12 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             if busy { "running" } else if state == "active" { "idle" } else { "paused" }
         };
 
+        // NOM LISIBLE d'un agent jetable (champ ADDITIF `name`) : lu en mémoire,
+        // borné à 40 caractères. Aucun autre agent n'en reçoit (fonction
+        // `insert_display_name`) : pour le registre, l'affichage reste celui
+        // d'aujourd'hui. `agent` conserve son sens d'IDENTITÉ technique.
+        let agent_name = app_state.agent_service.ephemeral_agent_name(&agent);
+
         // L'assistant (super-agent) est enregistré sous l'id `superagent` avec
         // un projet pseudo-global "" : on lui donne le nom réglé par
         // l'utilisateur (⚙️ → Assistant → Nom), et non un libellé codé en dur.
@@ -1334,7 +1357,7 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             agent
         };
 
-        let entry = serde_json::json!({
+        let mut entry = serde_json::json!({
             "agent": agent_label,
             "mode": mode,
             "state": status,
@@ -1345,6 +1368,10 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             "resume": resume,
             "toolInProgress": tool_in_progress,
         });
+        // Champ `name` : ajouté UNIQUEMENT quand un nom lisible existe (agent
+        // jetable). Le frontend s'en sert pour l'affichage et retombe sur
+        // `agent` sinon ; les actions techniques continuent d'utiliser `agent`.
+        insert_display_name(&mut entry, agent_name);
 
         if let Some((_, list)) = by_project.iter_mut().find(|(p, _)| *p == project) {
             list.push(entry);
@@ -1512,6 +1539,36 @@ pub fn purge_project_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Le résumé de supervision porte un champ ADDITIF `name` (nom lisible),
+    /// SANS changer le sens de `agent` (identité technique). Échoue si le nom
+    /// disparaît de la supervision (l'utilisateur reverrait `eph-…`) et si
+    /// l'identité est écrasée par le libellé (les actions casseraient).
+    #[test]
+    fn le_resume_de_supervision_porte_le_nom_sans_toucher_a_l_identite() {
+        // Agent jetable : identité `eph-…` + nom lisible séparé.
+        let mut entry = serde_json::json!({
+            "agent": "eph-mvj108jh-17",
+            "state": "running",
+        });
+        insert_display_name(&mut entry, Some("auditeur-cohérence".to_string()));
+        assert_eq!(entry["name"], serde_json::json!("auditeur-cohérence"));
+        // L'identité technique reste l'identifiant brut, inchangé.
+        assert_eq!(entry["agent"], serde_json::json!("eph-mvj108jh-17"));
+
+        // Agent du registre (aucun nom) : entrée STRICTEMENT identique à avant
+        // (aucune clé `name`), donc affichage inchangé.
+        let mut plain = serde_json::json!({ "agent": "codeur", "state": "idle" });
+        insert_display_name(&mut plain, None);
+        assert!(plain.get("name").is_none());
+        assert_eq!(plain["agent"], serde_json::json!("codeur"));
+
+        // Nom vide ou blanc : jamais de clé (le frontend retombe sur `agent`).
+        let mut blank = serde_json::json!({ "agent": "eph-x-1" });
+        insert_display_name(&mut blank, Some("   ".to_string()));
+        assert!(blank.get("name").is_none());
+        assert_eq!(blank["agent"], serde_json::json!("eph-x-1"));
+    }
 
     #[test]
     fn lang_for_ext_known() {

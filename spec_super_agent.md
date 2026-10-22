@@ -758,6 +758,12 @@ uniquement un bloc d'instructions dans le prompt système.
   de la tâche.
 - Il peut être **mêlé** à des agents du registre dans une même mission : seuls
   les agents jetables disparaissent ensuite.
+- Il **porte son nom à l'écran** : dans la **liste des agents** (en haut à
+  droite), dans la **liste des tâches en cours** (en bas à droite) et dans
+  l'**onglet** de l'agent, vous lisez le **nom significatif** que l'Assistant a
+  donné à l'agent (rôle court, borné à 40 caractères), et non son identifiant
+  interne (`eph-…`). Si aucun nom n'est fourni, l'identifiant s'affiche comme
+  avant ; rien ne change pour les agents du registre ni pour l'Assistant.
 - Un agent **réutilisable** (que vous voulez retrouver plus tard) se crée
   toujours normalement : c'est l'agent « sur mesure » du registre.
 <!-- /HELP:super-agent-agent-jetable -->
@@ -1037,6 +1043,23 @@ Contrat de durée de vie et d'isolement :
 - **Visible comme session, invisible comme agent** : `visible = false` en
   permanence (pas d'onglet), mais la session est listée parmi les sessions
   actives tant qu'elle travaille — comme un agent en arrière-plan.
+- **Nom affiché ≠ identité technique** : `get_agent_supervision`
+  (`dashboard.rs`) publie un champ **ADDITIF** `name` — le nom lisible de
+  l'agent jetable, lu **en mémoire seule**
+  (`AgentService::ephemeral_agent_name`, borné à 40 caractères par
+  `clip_agent_display_name`) — et le champ `agent` conserve son sens :
+  l'**identité** (`eph-…`). Le frontend (`flattenAgents`,
+  `src/js/agent-activity.js`) affiche `label = a.name || a.agent`, tandis que
+  `rawId` / `agentId` restent bâtis sur `a.agent` : l'**ouverture d'onglet
+  ciblée**, l'**arrêt ciblé** et l'**horodatage d'activité** continuent
+  d'utiliser l'identifiant. Aucun agent du registre (ni l'Assistant) ne reçoit
+  ce champ : leur affichage est inchangé. Aucune migration (définition en
+  mémoire, purgée en fin de tâche). Preuves :
+  `src/js/agent-activity-nom-jetable.test.js` et les tests
+  `nom_d_affichage_d_un_agent_jetable_est_expose_et_borne` /
+  `nom_d_affichage_borne_a_40_caracteres` (`agent_service.rs`),
+  `le_resume_de_supervision_porte_le_nom_sans_toucher_a_l_identite`
+  (`dashboard.rs`).
 - **Fin de tâche = disparition** : purge à la conclusion de la mission
   (`settleRun`), à l'abandon d'une mission jamais lancée
   (`abandonQueuedRunAgentsMissions`), à l'arrêt de la session (`stop_owned`),
