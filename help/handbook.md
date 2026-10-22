@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-21 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-22 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -3334,7 +3334,9 @@ service — « arrêté », « en cours de chargement du modèle… », « prêt
 pas encore téléchargé », ou « n'embarque pas le service Laya » (uniquement sur
 les versions où le service n'a pas pu être livré, p. ex. macOS Intel : l'écran le
 dit alors franchement). Un service lancé à la main n'est jamais arrêté par
-Pilot ; seul le service que Pilot a démarré est refermé à la fermeture.
+Pilot ; seul le service que Pilot a démarré est refermé à la fermeture **et
+avant une mise à jour** (sinon le service garderait `node.exe` et les fichiers
+ONNX ouverts, et l'installateur ne pourrait pas les remplacer).
 
 Sous les réglages du modèle, une autre ligne indique l'état du **modèle** :
 « prêt », « absent », « téléchargement… n % », « interrompu », « adresse

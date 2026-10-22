@@ -99,7 +99,9 @@ service — « arrêté », « en cours de chargement du modèle… », « prêt
 pas encore téléchargé », ou « n'embarque pas le service Laya » (uniquement sur
 les versions où le service n'a pas pu être livré, p. ex. macOS Intel : l'écran le
 dit alors franchement). Un service lancé à la main n'est jamais arrêté par
-Pilot ; seul le service que Pilot a démarré est refermé à la fermeture.
+Pilot ; seul le service que Pilot a démarré est refermé à la fermeture **et
+avant une mise à jour** (sinon le service garderait `node.exe` et les fichiers
+ONNX ouverts, et l'installateur ne pourrait pas les remplacer).
 
 Sous les réglages du modèle, une autre ligne indique l'état du **modèle** :
 « prêt », « absent », « téléchargement… n % », « interrompu », « adresse
@@ -236,11 +238,27 @@ dossier ne contenant qu'un `.part` ne lance donc jamais le service.
 **Veille** : aucune surveillance périodique en marche 2. L'état est à la
 demande (`laya_status`) ; la dernière issue (`outcome`) est mémorisée.
 
-**Arrêt** (fermeture de Pilot) : `stop_owned` → arrêt du processus tracé **si et
-seulement si la trace nous appartient** (garde de nom : jamais une autre
-application dont le pid serait réutilisé), trace effacée. Un service **lancé à
-la main** par la personne n'est jamais tracé, donc jamais refermé ; le service
-d'une autre copie de Pilot est laissé à son propriétaire.
+**Arrêt** (fermeture de Pilot **et mise à jour**) : `stop_owned` → arrêt du
+processus tracé **si et seulement si la trace nous appartient** (garde de nom :
+jamais une autre application dont le pid serait réutilisé), trace effacée. Un
+service **lancé à la main** par la personne n'est jamais tracé, donc jamais
+refermé ; le service d'une autre copie de Pilot est laissé à son propriétaire.
+
+**Règle UNIQUE, deux appelants** (`lib.rs` → `arreter_services_avant_maj`,
+surface applicative `arreter_services_pour_app`) : elle arrête le visage PLface
+**et** le service Laya, et elle est appelée par (1) `RunEvent::ExitRequested`
+(fermeture propre) et (2) la commande `stop_services_before_update` invoquée par
+l'interface **juste avant** `update.install()`. Raison du second appelant : le
+greffon de mise à jour quitte l'application par `std::process::exit(0)` **sans**
+émettre `ExitRequested`, donc le premier chemin n'est jamais exécuté lors d'une
+mise à jour ; le service survivait et l'installateur NSIS (qui ne referme que
+`Pilot.exe`) échouait sur `laya\node\node.exe` et les DLL ONNX encore mappés
+(« erreur d'ouverture du fichier pour écriture »). Aucune logique dupliquée : un
+test Rust (`arret_des_services_avant_maj_reste_branche_sur_les_deux_chemins`)
+échoue si le branchement disparaît ou si la logique est recopiée, et un test
+front (`updater-arret-services-avant-maj.test.js`) verrouille l'ordre
+« télécharger → arrêter → installer » (l'arrêt est fail-open : il ne bloque
+jamais l'installation).
 
 **Démarrage à la demande** (`laya_service_start`, bouton « Démarrer le service
 maintenant ») : mêmes règles que le démarrage automatique, à une exception près —

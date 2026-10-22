@@ -19,6 +19,7 @@
 
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { showToast, toastError } from "./toast.js";
 import { renderMarkdown } from "./preview.js";
@@ -244,6 +245,35 @@ function showUpdateModal(update) {
   modalEl.classList.remove("hidden");
 }
 
+/**
+ * Arrête, AVANT l'installateur d'une mise à jour, les services que Pilot a
+ * lui-même lancés (service Laya et son `node.exe` embarqué, visage PLface).
+ *
+ * Pourquoi ici et pas seulement à la fermeture : la mise à jour quitte
+ * l'application par un arrêt brutal à l'intérieur du greffon
+ * (`std::process::exit(0)`), donc l'événement de fermeture propre n'est jamais
+ * émis et le service survivrait ; l'installateur ne referme que Pilot.exe et
+ * écrase les fichiers en place, dont `node.exe` et les DLL ONNX encore mappés
+ * par ce processus (« erreur d'ouverture du fichier pour écriture »).
+ *
+ * Côté Rust, la règle est UNIQUE (`arreter_services_avant_maj`) et partagée
+ * avec le chemin de fermeture propre : elle ne referme que les processus tracés
+ * ET possédés par cette copie de Pilot (jamais un service lancé à la main, ni
+ * celui d'une autre copie de Pilot).
+ *
+ * Fail-open : un échec (service déjà arrêté, commande indisponible) ne bloque
+ * JAMAIS l'installation de la mise à jour.
+ */
+async function arreterServicesAvantMaj() {
+  try {
+    await invoke("stop_services_before_update");
+    return true;
+  } catch (e) {
+    console.warn("Arrêt des services avant mise à jour impossible:", e);
+    return false;
+  }
+}
+
 /** Télécharge, installe puis relance l'application. */
 async function installUpdate(update) {
   if (!ensureModal()) return;
@@ -259,7 +289,7 @@ async function installUpdate(update) {
   try {
     let contentLength = 0;
     let downloaded = 0;
-    await update.downloadAndInstall((event) => {
+    const onEvent = (event) => {
       switch (event.event) {
         case "Started":
           contentLength = event.data.contentLength ?? 0;
@@ -280,7 +310,16 @@ async function installUpdate(update) {
           progressLabelEl.textContent = "Installation…";
           break;
       }
-    });
+    };
+    // Ordre VOLONTAIRE (télécharger → arrêter les services → installer) :
+    // 1. télécharger d'abord, pour ne rien arrêter si le téléchargement échoue ;
+    // 2. arrêter les services que Pilot a lancés (service Laya, visage PLface)
+    //    AVANT que l'installateur ne démarre ;
+    // 3. installer (l'installateur écrase les fichiers du dossier
+    //    d'installation : un `node.exe` encore vivant les verrouille).
+    await update.download(onEvent);
+    await arreterServicesAvantMaj();
+    await update.install();
     showToast("Mise à jour téléchargée. Redémarrage…", "success", 5000);
     await relaunch();
   } catch (e) {

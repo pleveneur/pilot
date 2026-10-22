@@ -23,6 +23,9 @@ const { checkMock, showToastMock } = vi.hoisted(() => ({
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: (...args) => checkMock(...args) }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(async () => {}) }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "0.4.35" }));
+// L'installation passe par une commande Pilot (« arrêter les services avant
+// l'installateur ») : on la simule, sans quoi l'import échouerait hors Tauri.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
 vi.mock("./toast.js", () => ({
   showToast: (...args) => showToastMock(...args),
   toastInfo: vi.fn(),
@@ -94,9 +97,21 @@ function buildDom() {
   return map;
 }
 
-/** Une mise à jour disponible, avec une installation contrôlable par le test. */
-function makeUpdate(version, downloadAndInstall = vi.fn(() => new Promise(() => {}))) {
-  return { available: true, version, date: "2026-10-21T10:00:00Z", body: `## v${version}\n\nnotes`, downloadAndInstall };
+/**
+ * Une mise à jour disponible, avec des étapes contrôlables par le test.
+ * L'installation réelle se fait en deux temps — `download()` puis `install()` —
+ * parce que l'arrêt des services de Pilot s'intercale entre les deux (sinon le
+ * service Laya verrouille `node.exe` au moment de l'installation).
+ */
+function makeUpdate(version, steps = {}) {
+  return {
+    available: true,
+    version,
+    date: "2026-10-21T10:00:00Z",
+    body: `## v${version}\n\nnotes`,
+    download: steps.download || vi.fn(async () => {}),
+    install: steps.install || vi.fn(async () => {}),
+  };
 }
 
 const modalVisible = () => !els["update-modal"].classList.contains("hidden");
@@ -166,23 +181,23 @@ describe("Défaut 2 — une seule installation à la fois", () => {
     const installPromise = new Promise((resolve) => {
       releaseInstall = resolve;
     });
-    const downloadAndInstall = vi.fn(async () => {
+    const install = vi.fn(async () => {
       await installPromise;
     });
 
-    checkMock.mockResolvedValue(makeUpdate("0.4.40", downloadAndInstall));
+    checkMock.mockResolvedValue(makeUpdate("0.4.40", { install }));
     await updater.checkForUpdate(true);
     expect(modalVisible()).toBe(true);
 
     // Premier clic : l'installation démarre.
     els["btn-update-install"].__click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(install).toHaveBeenCalledTimes(1);
     expect(els["btn-update-install"].disabled).toBe(true);
     expect(els.__progress.classList.contains("hidden")).toBe(false);
 
     // Un contrôle de fond tombe PENDANT le téléchargement.
-    checkMock.mockResolvedValue(makeUpdate("0.4.40", downloadAndInstall));
+    checkMock.mockResolvedValue(makeUpdate("0.4.40", { install }));
     await updater.checkForUpdate(true);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -193,7 +208,7 @@ describe("Défaut 2 — une seule installation à la fois", () => {
     // Second clic : AUCUNE seconde installation, et l'utilisateur est informé.
     els["btn-update-install"].__click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(downloadAndInstall).toHaveBeenCalledTimes(1); // AVANT : 2
+    expect(install).toHaveBeenCalledTimes(1); // AVANT : 2
     expect(showToastMock).toHaveBeenCalledWith(
       expect.stringMatching(/déjà en cours/i),
       "info",

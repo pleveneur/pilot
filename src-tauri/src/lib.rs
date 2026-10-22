@@ -2226,6 +2226,67 @@ fn laya_download_pid_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|dir| dir.join(laya_download::FETCH_PID_FILE_NAME))
 }
 
+/// Résultat de l'arrêt des services lancés par Pilot (PLface, service Laya).
+/// `true` = plus aucun processus de service en vie (déjà arrêté, refermé, ou
+/// rien à refermer). Rendu à l'interface, qui ne s'en sert jamais pour bloquer
+/// quoi que ce soit (l'installation d'une mise à jour est fail-open).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServicesArretOutcome {
+    pub(crate) plface_stopped: bool,
+    pub(crate) laya_stopped: bool,
+}
+
+/// RÈGLE UNIQUE d'arrêt des services lancés par Pilot (visage PLface + service
+/// Laya). Appelée par les DEUX chemins qui doivent refermer ces processus, et
+/// par eux seuls :
+///
+/// 1. la fermeture propre de Pilot (`RunEvent::ExitRequested`) ;
+/// 2. juste AVANT une mise à jour (commande `stop_services_before_update`,
+///    invoquée par l'interface avant `update.install()`) : le greffon de mise à
+///    jour quitte par `std::process::exit(0)` **sans** émettre
+///    `ExitRequested`, donc sans cet arrêt le service survivrait et
+///    l'installateur ne pourrait pas écraser `laya\node\node.exe` ni les
+///    binaires ONNX mappés par ce processus (fichiers verrouillés).
+///
+/// Le comportement est celui de `plface::stop_owned` / `laya::stop_owned`, sans
+/// aucune duplication de logique : aucune trace → rien n'est refermé (service
+/// ouvert à la main par le propriétaire) ; trace d'une AUTRE copie de Pilot →
+/// laissée intacte. Fail-open, borné (au plus ~2 s par service).
+pub(crate) fn arreter_services_avant_maj(
+    plface_pid: Option<&std::path::Path>,
+    laya_pid: Option<&std::path::Path>,
+) -> ServicesArretOutcome {
+    let plface_stopped = match plface_pid {
+        Some(path) => !matches!(plface::stop_owned(path), plface::PlfaceStopOutcome::Failed),
+        // Trace non résoluble (dossier de données introuvable) : rien à faire.
+        None => true,
+    };
+    let laya_stopped = match laya_pid {
+        Some(path) => laya::stop_owned(path),
+        None => true,
+    };
+    ServicesArretOutcome {
+        plface_stopped,
+        laya_stopped,
+    }
+}
+
+/// Résout les deux traces (services lancés par CETTE copie de Pilot) puis
+/// applique la règle unique `arreter_services_avant_maj`.
+pub(crate) fn arreter_services_pour_app(app: &AppHandle) -> ServicesArretOutcome {
+    arreter_services_avant_maj(plface_pid_path(app).as_deref(), laya_pid_path(app).as_deref())
+}
+
+/// Appelée par l'interface **juste avant** de lancer l'installateur d'une mise
+/// à jour (`update.install()`), donc avant que le greffon ne quitte l'app par
+/// `std::process::exit(0)`. Les services doivent être refermés AVANT que
+/// l'installateur n'écrase les fichiers du dossier d'installation.
+#[tauri::command]
+fn stop_services_before_update(app: AppHandle) -> ServicesArretOutcome {
+    arreter_services_pour_app(&app)
+}
+
 /// Modèle Laya : dossier où va le modèle quand il est livré avec l'application :
 /// dossier de **données** de l'application (`<données>/laya/model-ml`). Les
 /// ressources livrées sont en lecture seule (version installée dans
@@ -3735,6 +3796,9 @@ pub fn run() {
             laya_model_state,
             laya_model_download,
             laya_model_cancel,
+            // ── Mise à jour : arrêt des services lancés par Pilot AVANT
+            // l'installateur (règle unique `arreter_services_pour_app`) ──
+            stop_services_before_update,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")
@@ -3753,20 +3817,14 @@ pub fn run() {
                     let state = app.state::<AppState>();
                     rpc::do_shutdown_all_sessions(&state);
                 }
-                // PLface : c'est Pilot qui a lancé le visage, c'est donc à lui de le
-                // refermer. Sinon il resterait en vie et verrouillerait sa propre
-                // copie dans le dossier de compilation (préparation du paquet
-                // impossible au lancement suivant). Un visage ouvert à la main par
-                // la personne n'est pas tracé et n'est jamais refermé ici.
-                if let Some(pid_path) = plface_pid_path(app) {
-                    let _ = plface::stop_owned(&pid_path);
-                }
-                // Service Laya : idem — Pilot referme le service qu'il a lancé, et
-                // jamais celui que le propriétaire a lancé à la main (aucune trace
-                // dans ce cas).
-                if let Some(pid_path) = laya_pid_path(app) {
-                    let _ = laya::stop_owned(&pid_path);
-                }
+                // PLface + service Laya : c'est Pilot qui a lancé ces processus,
+                // c'est donc à lui de les refermer (sinon le visage resterait en vie
+                // et verrouillerait sa propre copie dans le dossier de compilation,
+                // et le service Laya empêcherait toute installation de mise à jour).
+                // RÈGLE UNIQUE partagée avec le chemin de mise à jour :
+                // `arreter_services_pour_app` — aucune trace (service lancé à la main
+                // par le propriétaire) = rien n'est refermé.
+                let _ = arreter_services_pour_app(app);
                 let tx_opt = {
                     let state = app.state::<AppState>();
                     let mut guard = state.web_shutdown.lock().unwrap();
@@ -4215,5 +4273,136 @@ mod tests {
         assert!(super::config_is_default(&only_dialog));
         only_dialog.telegram_dialog_enabled = true;
         assert!(!super::config_is_default(&only_dialog));
+    }
+
+    // ── Mise à jour : arrêt des services lancés par Pilot AVANT l'installateur ──
+    //
+    // Les fichiers verrouillés à chaque mise à jour (node.exe du service Laya +
+    // DLL ONNX) venaient de là : le greffon de mise à jour quitte l'application
+    // par `std::process::exit(0)` sans émettre `ExitRequested`, donc le seul
+    // arrêt existant n'était JAMAIS exécuté. Ces tests verrouillent la règle
+    // unique et son branchement sur les DEUX chemins.
+
+    /// Dossier temporaire isolé (jamais les traces réelles du propriétaire).
+    fn dossier_temporaire(nom: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pilot-maj-services-{}-{}",
+            std::process::id(),
+            nom
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dossier temporaire");
+        dir
+    }
+
+    #[test]
+    fn arret_avant_maj_sans_trace_ne_referme_rien_et_reussit() {
+        // Aucun service lancé par Pilot (traces absentes) : l'arrêt est un
+        // no-op qui RÉUSSIT — la mise à jour ne doit jamais être bloquée.
+        let dir = dossier_temporaire("sans-trace");
+        let plface_pid = dir.join(crate::plface::PID_FILE_NAME);
+        let laya_pid = dir.join(crate::laya::PID_FILE_NAME);
+        let out = super::arreter_services_avant_maj(Some(&plface_pid), Some(&laya_pid));
+        assert_eq!(
+            out,
+            super::ServicesArretOutcome {
+                plface_stopped: true,
+                laya_stopped: true,
+            },
+            "sans trace, rien n'est refermé et l'arrêt est un succès"
+        );
+        assert!(!plface_pid.exists(), "aucune trace ne doit être créée");
+        assert!(!laya_pid.exists(), "aucune trace ne doit être créée");
+        // Chemins non résolubles (dossier de données introuvable) : même issue.
+        assert_eq!(
+            super::arreter_services_avant_maj(None, None),
+            super::ServicesArretOutcome {
+                plface_stopped: true,
+                laya_stopped: true,
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn arret_avant_maj_ne_touche_pas_au_service_dune_autre_copie_pilot() {
+        // Le comportement existant (testé dans `laya.rs`) doit survivre au
+        // passage par la règle unique : la trace d'une AUTRE copie de Pilot
+        // n'est ni refermée ni effacée par notre arrêt.
+        let dir = dossier_temporaire("autre-copie");
+        let laya_pid = dir.join(crate::laya::PID_FILE_NAME);
+        let trace = crate::laya::LayaTrace {
+            pid: u32::MAX - 1,
+            name: "node.exe".to_string(),
+            owner_pid: std::process::id().wrapping_add(1),
+            owner_name: "pilot.exe".to_string(),
+        };
+        crate::laya::write_trace(&laya_pid, &trace);
+        let out = super::arreter_services_avant_maj(None, Some(&laya_pid));
+        assert!(out.laya_stopped, "rien à refermer, et jamais celui d'autrui");
+        assert_eq!(
+            crate::laya::read_trace(&laya_pid),
+            Some(trace),
+            "la trace d'une autre copie de Pilot reste intacte"
+        );
+        crate::plface::clear_pid_file(&laya_pid);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn arret_des_services_avant_maj_reste_branche_sur_les_deux_chemins() {
+        // GARDE-FOU DE NON-RÉGRESSION : si l'arrêt des services cesse d'être
+        // appelé par le chemin de mise à jour (ou si le chemin de fermeture
+        // propre se remet à dupliquer la logique), ce test échoue.
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("lecture de lib.rs")
+            .replace("\r\n", "\n");
+        let prod = &src[..src
+            .rfind("#[cfg(test)]")
+            .expect("ancre du module de tests")];
+
+        // 1. La fonction unique existe et reste l'UNIQUE endroit qui arrête le
+        //    service Laya, la commande appelée par l'interface y passe aussi.
+        assert_eq!(
+            prod.matches("laya::stop_owned(").count(),
+            1,
+            "l'arrêt du service Laya ne doit exister qu'à un seul endroit (la règle unique)"
+        );
+        assert_eq!(
+            prod.matches("arreter_services_pour_app(").count(),
+            3,
+            "attendu : la définition + le chemin de fermeture propre + la commande de mise à jour"
+        );
+
+        // 2. Le chemin de la MISE À JOUR : la commande invoquée par l'interface
+        //    juste avant `update.install()` est déclarée ET enregistrée (sans
+        //    enregistrement, elle serait inutilisable et l'arrêt n'aurait lieu).
+        assert!(
+            prod.contains("fn stop_services_before_update(app: AppHandle)"),
+            "la commande d'arrêt avant mise à jour doit exister"
+        );
+        assert!(
+            prod.contains("            stop_services_before_update,"),
+            "la commande doit être enregistrée dans `invoke_handler`"
+        );
+
+        // 3. Le chemin de FERMETURE PROPRE utilise la même fonction et ne
+        //    duplique plus les deux arrêts (règle unique, comportement préservé).
+        let exit_start = prod
+            .find(".run(|app, event| {")
+            .expect("ancre du gestionnaire d'événements Tauri");
+        let exit_block = &prod[exit_start..];
+        assert!(
+            exit_block.contains("arreter_services_pour_app(app)"),
+            "la fermeture propre doit appeler la règle unique"
+        );
+        assert!(
+            !exit_block.contains("laya::stop_owned("),
+            "la fermeture propre ne doit plus arrêter le service Laya elle-même"
+        );
+        assert!(
+            !exit_block.contains("plface::stop_owned("),
+            "la fermeture propre ne doit plus arrêter le visage elle-même"
+        );
     }
 }
