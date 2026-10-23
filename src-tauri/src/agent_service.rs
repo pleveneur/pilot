@@ -739,6 +739,13 @@ impl AgentService {
     /// comptée comme exclusive par la file d'attente ni maintenir le verrou de
     /// run. Ne crée AUCUNE entrée (idempotent si le couple est inconnu) et ne
     /// touche PAS aux seuils d'anomalie (25 min / 2 min).
+    ///
+    /// `tool_started_at` est remis à `None` en même temps que
+    /// `tool_in_progress = false` : session arrêtée = aucun outil ouvert, donc
+    /// aucune référence de départ ne doit subsister. La promesse « remis à None
+    /// à TOUS les cas de fin » (borne dure de 60 min, cf. `anomaly.rs`) est ainsi
+    /// vraie sur ce chemin d'arrêt comme sur les autres (fin de tour, `agent_start`,
+    /// mort du process, libération pour outil perdu).
     pub fn clear_anomaly_busy(
         map: &Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
         project: &str,
@@ -758,6 +765,10 @@ impl AgentService {
             // cours ne subsiste (anti-fuite des marqueurs).
             e.awaiting_user = false;
             e.tool_in_progress = false;
+            // Aucun outil ouvert ⇒ aucune référence de départ d'outil : sans cette
+            // remise à `None`, la promesse « remis à None à tous les cas de fin »
+            // serait fausse (l'ancien instant survivrait à l'arrêt de la session).
+            e.tool_started_at = None;
         }
     }
 
@@ -930,6 +941,13 @@ impl AgentService {
     /// avec le chemin BRUT de l'appelant, alors que la purge lit le chemin
     /// CANONIQUE en base (tâche #345) : comparer les seules clés exactes laisserait
     /// un `busy` résiduel et bloquerait le prochain démarrage. Ne crée aucune entrée.
+    ///
+    /// Même remise à zéro COMPLÈTE que `clear_anomaly_busy` (relecture d'`adfb20b`) :
+    /// session fantôme purgée = plus aucun outil ouvert, donc `tool_in_progress`
+    /// retombe à `false` et `tool_started_at` à `None`. Sans cela, `busy` seul était
+    /// effacé et le marqueur d'outil survivait : `session_is_working`
+    /// (`list_agent_sessions`) et la sonde d'activité du projet pouvaient rester
+    /// « au travail » sur une session qui ne travaillait plus.
     fn clear_anomaly_busy_normalized(
         map: &Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
         project: &str,
@@ -946,6 +964,9 @@ impl AgentService {
                 entry.busy = false;
                 entry.blocked_reported = false;
                 entry.auto_stopped_reported = false;
+                entry.awaiting_user = false;
+                entry.tool_in_progress = false;
+                entry.tool_started_at = None;
             }
         }
     }
@@ -6256,6 +6277,10 @@ mod tests {
                 .expect("entrée d'anomalie conservée (mise à zéro, pas suppression)");
             assert!(!e.busy, "après arrêt, le couple ne doit plus être « busy »");
             assert!(!e.tool_in_progress, "plus d'outil en cours après arrêt");
+            assert!(
+                e.tool_started_at.is_none(),
+                "plus d'instant de départ d'outil après arrêt (la borne dure de\n                 60 min ne doit jamais repartir d'un start mort)"
+            );
             assert!(!e.awaiting_user, "plus d'attente utilisateur après arrêt");
             assert!(!e.auto_stopped_reported, "marqueur d'arrêt auto réarmé");
         }

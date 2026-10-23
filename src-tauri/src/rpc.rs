@@ -281,8 +281,21 @@ pub(crate) fn reset_project_activity(state: &AppState, project_key: &str) {
 ///
 /// Même politique de péremption que `anomaly::should_release_stale_busy` (moteur)
 /// et `isBusyStale` (JS) : une seule vérité sur le vieillissement d'un `busy`.
-/// L'exemption `tool_in_progress`, elle, n'est JAMAIS bornée par le temps (ni ici,
-/// ni dans `should_release_stale_busy`, ni dans `isSessionWorking` côté JS).
+///
+/// BORNE — l'exemption `tool_in_progress` n'est PAS éternelle : elle vaut tant
+/// que l'opération n'est pas **perdue**, exactement comme le fait déjà
+/// `should_release_stale_busy` depuis le correctif `adfb20b`
+/// (`anomaly::tool_operation_lost`, plafond dur de 60 min = la même constante
+/// partagée, jamais recopiée). Sans cette borne côté activité de PROJET, le
+/// moteur libérait bien son créneau fantôme mais `get_project_agent_states`
+/// (donc `isProjectAgentBusy` côté interface et l'admission des missions)
+/// restait « occupé » à VIE : le cercle d'activité s'éteignait et la mise à jour
+/// n'était toujours jamais proposée (relecture du correctif `adfb20b`).
+/// Référence de l'âge : `updated`, qui n'avance que sur un ÉVÉNEMENT — et
+/// `tool_execution_update` en est un. Un outil réellement vivant reste donc
+/// « occupé » aussi longtemps qu'il travaille ; un outil dont la fin a été
+/// perdue n'émet plus rien et finit par être libéré. Aucun kill, aucun arrêt :
+/// seule la conclusion « occupé » change.
 pub(crate) fn project_activity_is_busy(
     activity: Option<&SessionActivity>,
     grace: std::time::Duration,
@@ -290,9 +303,13 @@ pub(crate) fn project_activity_is_busy(
     now: std::time::Instant,
 ) -> bool {
     let Some(a) = activity else { return false };
-    // Outil en cours = travail qui avance : jamais « libre », quel que soit le
-    // temps d'exécution (la vivacité reste vérifiée par l'appelant).
-    if a.tool_in_progress {
+    // Outil en cours = travail qui avance : « occupé » quel que soit le temps
+    // d'exécution TANT QUE l'opération n'est pas considérée perdue (borne dure
+    // partagée avec `anomaly::should_release_stale_busy`, 60 min). Au-delà, la
+    // fin de l'outil a été perdue : on retombe sur les règles de péremption
+    // ci-dessous, comme pour un busy périmé (la vivacité reste vérifiée par
+    // l'appelant via `project_busy_with_liveness`).
+    if a.tool_in_progress && !anomaly::tool_operation_lost(a.updated, now) {
         return true;
     }
     let age = now.duration_since(a.updated);
@@ -1238,7 +1255,8 @@ mod tests {
         assert!(!project_activity_is_busy(Some(&a), grace, stale, now));
     }
 
-    /// CORRECTION 1 bis — un OUTIL EN COURS n'est JAMAIS conclu « libre ».
+    /// CORRECTION 1 bis — un OUTIL EN COURS n'est jamais conclu « libre » **tant
+    /// qu'il n'est pas perdu**.
     ///
     /// Un build, une campagne de tests ou une installation sont SILENCIEUX : aucun
     /// événement n'est émis entre `tool_execution_start` et `tool_execution_end`.
@@ -1247,6 +1265,10 @@ mod tests {
     /// l'agent travaillait encore (un second lancement pouvait démarrer). Même
     /// exemption que `should_release_stale_busy` (correction 1).
     ///
+    /// Le PLAFOND de 60 min (correctif `adfb20b`, relecture) ne doit pas casser ce
+    /// cas : un outil qui tourne DEPUIS MOINS de 60 min reste « occupé » quelle que
+    /// soit la durée de la fenêtre busy-stale (25 min).
+    ///
     /// Contre-preuve : sans outil en cours, la même entrée très ancienne reste
     /// LIBRE — le filet anti-verrou « busy périmé » est conservé.
     #[test]
@@ -1254,19 +1276,20 @@ mod tests {
         let grace = Duration::from_secs(15);
         let stale = Duration::from_secs(25 * 60);
 
-        // Outil en cours, dernière activité très ancienne (1 h de build silencieux) :
-        // le projet est OCCUPÉ — aucun plafond de durée ne s'applique.
-        let (a, now) = activity_with_tool(true, true, 3600);
+        // Outil en cours, dernière activité très ancienne (1 h de build silencieux
+        // moins une seconde) : le projet est OCCUPÉ — la fenêtre busy-stale de
+        // 25 min ne s'applique pas à une opération d'outil en cours.
+        let (a, now) = activity_with_tool(true, true, 59 * 60);
         assert!(
             project_activity_is_busy(Some(&a), grace, stale, now),
-            "outil en cours depuis 1 h → projet occupé, jamais conclu libre"
+            "outil en cours depuis 59 min → projet occupé, jamais conclu libre"
         );
-        // Même au-delà de plusieurs heures, et même si `busy` est retombé (fin de tour
-        // pi avant relance) : l'outil en cours suffit.
-        let (a, now) = activity_with_tool(false, true, 6 * 3600);
+        // Même si `busy` est retombé (fin de tour pi avant relance) : l'outil en
+        // cours suffit.
+        let (a, now) = activity_with_tool(false, true, 20 * 60);
         assert!(
             project_activity_is_busy(Some(&a), grace, stale, now),
-            "outil en cours (busy=false, 6 h) → toujours occupé"
+            "outil en cours depuis 20 min (busy=false) → toujours occupé"
         );
 
         // Contre-preuve — comportement d'aujourd'hui CONSERVÉ : sans outil en cours,
@@ -1280,6 +1303,72 @@ mod tests {
         assert!(
             !project_activity_is_busy(Some(&a), grace, stale, now),
             "session au repos sans outil en cours → libérée (comportement conservé)"
+        );
+    }
+
+    /// Relecture du correctif `adfb20b` (manque 1) — une activité de PROJET
+    /// bloquée par un outil PERDU (aucun `tool_execution_end` reçu depuis plus de
+    /// 60 min) ne doit plus être considérée comme occupée.
+    ///
+    /// Sans cette borne, `get_project_agent_states().busy` restait vrai à VIE :
+    /// le cercle d'activité finissait bien par s'éteindre (le moteur libère son
+    /// créneau fantôme) mais `isProjectAgentBusy` côté interface et l'admission
+    /// des missions continuaient de refuser indéfiniment — la mise à jour n'était
+    /// donc TOUJOURS jamais proposée. La borne est la MÊME que celle du moteur
+    /// (`anomaly::TOOL_IN_PROGRESS_MAX_SUSPEND_SECS`, via
+    /// `anomaly::tool_operation_lost`) : une seule vérité, pas une seconde règle.
+    #[test]
+    fn project_activity_lost_tool_over_cap_is_released() {
+        let grace = Duration::from_secs(15);
+        let stale = Duration::from_secs(25 * 60);
+
+        // Outil perdu, ouvert il y a 61 min (aucun événement depuis) : le projet
+        // est LIBRE, même si `busy` est encore posé — exactement ce que fait le
+        // moteur pour son propre drapeau (`should_release_stale_busy`).
+        let (a, now) = activity_with_tool(true, true, 61 * 60);
+        assert!(
+            !project_activity_is_busy(Some(&a), grace, stale, now),
+            "outil perdu depuis plus de 60 min → projet libéré (sinon mise à jour \
+             et missions refusées à vie)"
+        );
+        // Et sans `busy` (fin de tour pi avant relance perdue) : même verdict.
+        let (a, now) = activity_with_tool(false, true, 6 * 3600);
+        assert!(
+            !project_activity_is_busy(Some(&a), grace, stale, now),
+            "outil perdu (busy=false) → projet libéré"
+        );
+
+        // Frontière : 60 min pile = plafond atteint = outil perdu (même égalité
+        // que `tool_in_progress_suspends` : l'exemption vaut `age < 60 min`).
+        let (a, now) = activity_with_tool(true, true, 60 * 60);
+        assert!(!project_activity_is_busy(Some(&a), grace, stale, now));
+        // 59 min 59 s : encore sous le plafond → TOUJOURS occupé.
+        let (a, now) = activity_with_tool(true, true, 60 * 60 - 1);
+        assert!(project_activity_is_busy(Some(&a), grace, stale, now));
+    }
+
+    /// Relecture du correctif `adfb20b` — contre-épreuve « vrai outil long » :
+    /// un outil réellement en cours depuis 20 min (build, série de tests) n'est
+    /// PAS libéré. Le plafond de 60 min ne change donc rien au comportement des
+    /// opérations légitimes, et ne peut jamais interrompre un agent (cette
+    /// fonction ne fait que répondre à une question).
+    #[test]
+    fn project_activity_real_tool_of_20_minutes_is_still_busy() {
+        let grace = Duration::from_secs(15);
+        let stale = Duration::from_secs(25 * 60);
+
+        // 20 min d'outil silencieux, `busy` posé : occupé.
+        let (a, now) = activity_with_tool(true, true, 20 * 60);
+        assert!(
+            project_activity_is_busy(Some(&a), grace, stale, now),
+            "un vrai outil de 20 min n'est jamais libéré"
+        );
+        // 20 min d'outil silencieux, `busy` retombé (fin de tour avant relance) :
+        // occupé quand même (l'outil en cours est autoritaire).
+        let (a, now) = activity_with_tool(false, true, 20 * 60);
+        assert!(
+            project_activity_is_busy(Some(&a), grace, stale, now),
+            "vrai outil de 20 min (busy=false) → toujours occupé"
         );
     }
 

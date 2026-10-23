@@ -3412,7 +3412,8 @@ dans la liste des tâches — une compilation n'est jamais confondue avec un arr
 **Cas de l'outil qui ne se termine jamais** : si un outil reste ouvert plus de
 **60 minutes** sans jamais rendre la main (fin d'outil perdue), Pilot considère
 qu'il est **perdu** et libère seulement l'indicateur « occupé » — le cercle
-d'activité s'éteint et la mise à jour peut de nouveau être proposée. **Rien n'est
+d'activité s'éteint, les nouvelles missions sont de nouveau acceptées sur ce
+projet et la mise à jour peut de nouveau être proposée. **Rien n'est
 interrompu** : ni l'outil, ni l'agent. Le motif est journalisé.
 
 Une **fin de tour partielle** de l'agent (reprise automatique après une erreur

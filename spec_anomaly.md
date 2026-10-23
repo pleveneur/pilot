@@ -43,7 +43,8 @@ dans la liste des tâches — une compilation n'est jamais confondue avec un arr
 **Cas de l'outil qui ne se termine jamais** : si un outil reste ouvert plus de
 **60 minutes** sans jamais rendre la main (fin d'outil perdue), Pilot considère
 qu'il est **perdu** et libère seulement l'indicateur « occupé » — le cercle
-d'activité s'éteint et la mise à jour peut de nouveau être proposée. **Rien n'est
+d'activité s'éteint, les nouvelles missions sont de nouveau acceptées sur ce
+projet et la mise à jour peut de nouveau être proposée. **Rien n'est
 interrompu** : ni l'outil, ni l'agent. Le motif est journalisé.
 
 Une **fin de tour partielle** de l'agent (reprise automatique après une erreur
@@ -253,15 +254,25 @@ l'outil) n'est plus arrêté à tort au bout du seuil. Un agent **réellement fi
 comme avant : le seuil, le réglage d'activation et la proposition de diagnostic
 restent inchangés.
 
-**Nuance — le seul plafond restant est l'inactivité, jamais le travail** : les
-quatre garde-fous (alerte d'anomalie, arrêt automatique T2, filet « occupé
+**Nuance — l'inactivité seule ne suffit pas, et l'exemption n'est pas éternelle** :
+les quatre garde-fous (alerte d'anomalie, arrêt automatique T2, filet « occupé
 périmé » busy-stale §2.4, signalement de session muette) et les deux sondes
 (`isSessionWorking` côté interface, `project_activity_is_busy` côté moteur)
-partagent la même exemption, **jamais bornée par le temps** : tant qu'une
-opération d'outil est en cours, l'agent travaille, quel que soit le temps
-écoulé. La fenêtre de **25 minutes** ne sert donc plus qu'à un agent **sans outil
-et sans nouvelle** — le seul cas où le figement est plausible (un `busy` périmé,
-ou un processus mort, que le filet « processus mort » juge indépendamment).
+partagent la même exemption : tant qu'une opération d'outil est en cours,
+l'agent travaille. Deux **familles** sont à distinguer, et c'est la seule
+distinction qui compte :
+
+- les garde-fous qui **agissent** (arrêt T2) ou **alertent** (anomalie, session
+  muette) gardent l'exemption **intégrale, jamais bornée** : un `cargo test` de
+  40 min ou une campagne de 2 h ne déclenche ni coupe ni faux « agent bloqué » ;
+- ceux qui se contentent de **libérer un drapeau d'occupation** (filet
+  busy-stale §2.4 et sonde `project_activity_is_busy`) appliquent la **borne
+  dure de 60 min** (§2.4 quinquies) : au-delà, la fin de l'outil est considérée
+  perdue et le drapeau est libéré — rien n'est interrompu.
+
+La fenêtre de **25 minutes** ne sert donc qu'à un agent **sans outil et sans
+nouvelle** — le seul cas où le figement est plausible (un `busy` périmé, ou un
+processus mort, que le filet « processus mort » juge indépendamment).
 Le délai d'inactivité côté interface (`agent_timeout_ms`, agents-bus.js) reste un
 garde-fou **distinct** : s'il se déclenche, le travail réellement écrit sur le
 disque est vérifié avant tout verdict d'échec (§2.4 ter).
@@ -270,7 +281,8 @@ disque est vérifié avant tout verdict d'échec (§2.4 ter).
 
 **Une opération d'outil EN COURS exclut la libération** : comme les trois
 garde-fous voisins, `should_release_stale_busy` renvoie `false` tant que
-`tool_in_progress` est posé. Un build ou une campagne de tests silencieuse de
+`tool_in_progress` est posé **et que l'opération n'est pas perdue** (borne dure
+de 60 min, §2.4 quinquies). Un build ou une campagne de tests silencieuse de
 plus d'une heure n'émet aucun événement : sans cette exemption, le créneau d'un
 agent parfaitement vivant était libéré, son tour mis en échec, et une **seconde
 mission pouvait démarrer** sur le même projet. Le filet « processus mort »
@@ -369,15 +381,19 @@ d'événements, avec deux angles morts :
    (déjà maintenu par l'observateur Rust et déjà exempté par l'arrêt auto T2)
    n'était pas exposé par `list_agent_sessions` ; `isSessionWorking` concluait
    donc « plus aucun agent ne travaille » au milieu du travail. Le champ est
-   désormais exposé (`toolInProgress`) et traité comme du travail, **sans aucune
-   borne de durée** : le borner par la fenêtre busy-stale faisait conclure qu'une
-   session ne travaillait plus au-delà de 25 minutes (même symptôme que la
-   correction 1 côté Rust). Seule la **mort** de la session lève ce constat.
+   désormais exposé (`toolInProgress`) et traité comme du travail, **sans être
+   borné par la fenêtre busy-stale** : la borner par cette fenêtre faisait conclure
+   qu'une session ne travaillait plus au-delà de 25 minutes (même symptôme que la
+   correction 1 côté Rust). Seule la **mort** de la session lève ce constat (la
+   borne dure de 60 min est traitée séparément, §2.4 quinquies, et ne concerne que
+   le drapeau d'occupation du moteur).
    Le même signal existe côté moteur : `SessionActivity` porte `tool_in_progress`
    (posé et levé par l'unique écrivain de la map d'activité, remis à zéro à
-   l'arrêt) et `project_activity_is_busy` conclut « occupé » dès qu'un outil
-   tourne, sans borne de temps — sans quoi le projet était déclaré « libre » au
-   bout de 25 minutes et une seconde mission pouvait démarrer.
+   l'arrêt) et `project_activity_is_busy` conclut « occupé » tant qu'un outil
+   tourne — sans quoi le projet était déclaré « libre » au bout de 25 minutes et
+   une seconde mission pouvait démarrer. Cette exemption est bornée par la MÊME
+   règle de 60 min que le filet busy-stale (§2.4 quinquies), via la même fonction
+   (`anomaly::tool_operation_lost`) : une seule vérité, jamais recopiée.
 2. **Aucune vérification du disque avant l'échec** : la porte `ghosts` est scopée
    aux agents **déclarés** dans la run ; un agent inconnu de la sonde (id/projet
    non concordant) la faisait tirer alors qu'une session du **projet** produisait
@@ -471,23 +487,39 @@ Correctif (côté Rust uniquement) :
 1. Champ **additif** `tool_started_at: Option<Instant>` dans
    `AgentAnomalyState`, mémorisé à chaque `tool_execution_start` et remis à
    `None` à la clôture (`tool_execution_end`, fin de tour, `agent_start`,
-   mort du process) ;
+   mort du process, arrêt de session via `clear_anomaly_busy`) ;
 2. `tool_in_progress_suspends(entry, now)` : l'exemption ne vaut que si l'outil
    tourne depuis **moins** de `TOOL_IN_PROGRESS_MAX_SUSPEND_SECS` (**60 min**,
    décision du propriétaire). Au-delà, l'outil est considéré **perdu** ; repli
    documenté `last_activity` si `tool_started_at` est inconnu, pour qu'aucun
    état ne redevienne éternel ;
-3. **seul** `should_release_stale_busy` applique cette borne. Les exemptions de
-   `should_auto_stop_on_progress` (kill T2) et des alertes lecture seule
-   (`should_report_anomaly`, `should_report_silent_session`) restent
-   **intégrales** : un `cargo test` de 2 h ne doit déclencher ni coupe ni faux
-   « agent bloqué » ;
+3. l'exemption bornée s'applique à **tous les chemins qui ne font que libérer un
+   drapeau d'occupation** : `should_release_stale_busy` (moteur) **et**
+   `rpc::project_activity_is_busy` (sondes d'admission de mission :
+   `get_project_agent_states().busy`, donc `isProjectAgentBusy` côté interface et
+   la politique de run). Les deux appellent la MÊME fonction
+   `anomaly::tool_operation_lost(started, now)` — une seule vérité, aucune règle
+   recopiée. Les exemptions de `should_auto_stop_on_progress` (kill T2) et des
+   alertes lecture seule (`should_report_anomaly`, `should_report_silent_session`)
+   restent **intégrales** : un `cargo test` de 2 h ne doit déclencher ni coupe ni
+   faux « agent bloqué » ;
 4. à la libération, le moniteur remet **`busy` ET `tool_in_progress` à false**
    (sans quoi `session_is_working`, la pastille d'activité et la fenêtre de mise
    à jour resteraient « occupées ») — **sans jamais tuer le process ni arrêter
    la session** ; le motif est **tracé** (règle 3 : ligne horodatée
    `[anomaly] …` + `reason`/`toolLost`/`detectedAt` dans l'événement
    `agent-stale-busy-released`).
+
+**Bout en bout (relecture du correctif)** : borner le moteur ne suffisait pas.
+Tant que la sonde d'activité du PROJET n'appliquait pas la même borne, son
+`busy` restait vrai à vie : le cercle d'activité s'éteignait bien, mais la mise
+à jour n'était **toujours jamais** proposée (`isWorkRunning` de l'updater) et
+les nouvelles missions restaient refusées par l'admission. Les trois symptômes
+(cercle allumé, mise à jour muette, missions refusées) suivent désormais la
+même conclusion. L'âge est lu sur `SessionActivity::updated`, qui n'avance que
+sur un ÉVÉNEMENT — `tool_execution_update` en est un : un outil réellement vivant
+reste « occupé » aussi longtemps qu'il travaille ; un outil dont la fin est
+perdue n'émet plus rien et finit par être libéré.
 
 Les seuils existants sont inchangés : busy-stale **25 min**, `awaiting_user`
 **45 min**, purge sur mort du process, priorité de la mise à jour, double lecture
@@ -557,10 +589,10 @@ callback de notification du bus (message ⏱️).
   `super-agent-launch-verdict.test.js`.
 - Correctif « opération longue » couvert par les tests, sur les chemins
   concernés : tant qu'un outil est EN COURS (`tool_in_progress`),
-  `should_auto_stop_on_progress` **et** `should_release_stale_busy` renvoient
-  `false`, et les sondes `isSessionWorking` (JS) / `project_activity_is_busy`
-  (Rust) concluent « au travail » **sans borne de temps** ; un agent figé (aucun
-  outil, plus de progression) est arrêté comme avant.
+  `should_auto_stop_on_progress` renvoie `false` sans borne de temps, et
+  `should_release_stale_busy` comme `project_activity_is_busy` (Rust) concluent
+  « au travail » jusqu'à la borne dure de 60 min (§2.4 quinquies) ; un agent figé
+  (aucun outil, plus de progression) est arrêté comme avant.
 - Pause « attente de réponse utilisateur » couverte par les tests : tant que
   `awaiting_user` est posé, l'arrêt T2, le plafond de l'Assistant et la
   libération du créneau fantôme ne se déclenchent pas ; dès que le marqueur est
@@ -582,6 +614,19 @@ callback de notification du bus (message ⏱️).
   (repli `last_activity`) et, inchangé et toujours vert,
   `should_release_stale_busy_does_not_fire_during_long_tool` (build de 20 min
   jamais libéré).
+- **La même borne côté activité de PROJET** est couverte par
+  `project_activity_lost_tool_over_cap_is_released` (outil perdu depuis 61 min →
+  projet libre, avec ou sans `busy` ; frontière 60 min pile → libre ; 59 min 59 s
+  → occupé) et `project_activity_real_tool_of_20_minutes_is_still_busy` (vrai
+  outil de 20 min jamais libéré, `busy` posé ou non). L'ancien test
+  `project_activity_busy_during_long_tool_is_never_free` reste vert pour les
+  durées sous le plafond (son assertion « 1 h / 6 h toujours occupé » décrivait
+  l'absence de borne et a été corrigée).
+- `clear_anomaly_busy` (et sa variante normalisée de purge des sessions
+  fantômes) remet **`tool_in_progress = false` ET `tool_started_at = None`** :
+  vérifié par `stop_clears_anomaly_busy_for_couple` (assertion ajoutée), donc la
+  promesse « remis à `None` à tous les cas de fin » est vraie.
 - **Ne casse pas** la surveillance existante (pastille d'activité par projet), ni
   le bouton manuel « 🔍 Diagnostiquer », ni la file d'attente d'exclusivité, ni
-  le filet busy-stale (25 min, sans kill, jamais pendant un outil en cours).
+  le filet busy-stale (25 min, sans kill, jamais pendant un outil en cours
+  légitime).

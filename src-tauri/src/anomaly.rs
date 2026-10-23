@@ -429,6 +429,11 @@ fn awaiting_user_suspends(entry: &AgentAnomalyState, now: Instant) -> bool {
 /// (build complet, série de tests, longue analyse) : une vraie opération longue
 /// n'est jamais libérée (cf. `should_release_stale_busy_does_not_fire_during_
 /// long_tool`, build de 20 min).
+///
+/// La borne est appliquée là où elle libère un DRAPEAU d'occupation, et là
+/// seulement : `should_release_stale_busy` (moteur) **et**
+/// `rpc::project_activity_is_busy` (sondes d'admission de mission). Les deux
+/// passent par la MÊME fonction (`tool_operation_lost`) : une seule vérité.
 pub(crate) const TOOL_IN_PROGRESS_MAX_SUSPEND_SECS: u64 = 60 * 60;
 
 /// L'exemption `tool_in_progress` est-elle ENCORE valable pour la libération du
@@ -447,7 +452,30 @@ fn tool_in_progress_suspends(entry: &AgentAnomalyState, now: Instant) -> bool {
         return false;
     }
     let started = entry.tool_started_at.unwrap_or(entry.last_activity);
-    now.saturating_duration_since(started).as_secs() < TOOL_IN_PROGRESS_MAX_SUSPEND_SECS
+    !tool_operation_lost(started, now)
+}
+
+/// L'opération d'outil ouverte à `started` est-elle considérée **PERDUE** à
+/// `now` (aucune clôture reçue depuis plus de `TOOL_IN_PROGRESS_MAX_SUSPEND_SECS`,
+/// soit 60 minutes) ?
+///
+/// C'est la **SEULE** expression de la borne, volontairement partagée par les
+/// deux familles de sondes qui doivent l'appliquer exactement de la même façon :
+///
+///  - `tool_in_progress_suspends` — moteur d'anomalie (libération du créneau
+///    fantôme, `should_release_stale_busy`) ;
+///  - `rpc::project_activity_is_busy` — sondes d'ADMISSION de mission
+///    (`get_project_agent_states().busy`, donc `isProjectAgentBusy` côté
+///    interface et la politique de run) : quand la libération du moteur avait
+///    lieu sans que cette sonde la suive, le cercle d'activité s'éteignait mais
+///    la mise à jour n'était **toujours jamais** proposée et les nouvelles
+///    missions restaient refusées (relecture du correctif `adfb20b`).
+///
+/// Une seconde règle recopiée aurait pu dériver de celle-ci : il n'y en a pas.
+/// Aucun effet de bord : cette fonction ne fait que répondre à une question
+/// (elle ne tue ni n'arrête rien).
+pub(crate) fn tool_operation_lost(started: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(started).as_secs() >= TOOL_IN_PROGRESS_MAX_SUSPEND_SECS
 }
 
 /// Décide si un agent doit être arrêté AUTOMATIQUEMENT (T2) : agent busy, sans
