@@ -338,10 +338,22 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   section affiche une phrase claire expliquant quoi installer et que la lecture
   reste inactive ; le bouton **« 🔊 Écouter »** reste visible mais **inactif**,
   avec une courte infobulle qui l'explique.
+- **Une vraie voix française, sans Internet** : la liste des voix propose aussi
+  **« Voix française locale »**. Elle fonctionne **hors ligne**, **sans clé** et
+  **sans carte graphique**, avec un moteur et un modèle d'environ **60 Mo**
+  déposés **une seule fois** sur votre ordinateur (Pilot ne télécharge rien).
+  La même section indique **où déposer ces fichiers** et si le moteur est prêt.
+- **Si le moteur local est absent ou échoue**, la lecture ne s'arrête pas : elle
+  **continue avec la voix du système** et le dit clairement dans la section,
+  avec une ligne dans un **journal** (dossier de la voix locale). Rien ne bloque,
+  rien ne plante.
+- **Le choix reste le même qu'avant** : une seule voix à la fois, mémorisée,
+  et le texte lu est nettoyé et découpé de la même façon quel que soit le moteur.
 - **Vos propres messages** et les **événements système** ne portent pas ce
   bouton.
-- **Ce que ça ne fait pas** : enregistrer le son dans un fichier. Le bouton
-  lit seulement, en direct.
+- **Ce que ça ne fait pas** : enregistrer le son dans un fichier, ni envoyer le
+  texte à un service en ligne. Le bouton lit seulement, en direct, sur votre
+  ordinateur.
 <!-- /HELP:lire-reponses -->
 
 <!-- HELP:gds -->

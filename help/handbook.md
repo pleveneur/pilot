@@ -333,10 +333,22 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   section affiche une phrase claire expliquant quoi installer et que la lecture
   reste inactive ; le bouton **« 🔊 Écouter »** reste visible mais **inactif**,
   avec une courte infobulle qui l'explique.
+- **Une vraie voix française, sans Internet** : la liste des voix propose aussi
+  **« Voix française locale »**. Elle fonctionne **hors ligne**, **sans clé** et
+  **sans carte graphique**, avec un moteur et un modèle d'environ **60 Mo**
+  déposés **une seule fois** sur votre ordinateur (Pilot ne télécharge rien).
+  La même section indique **où déposer ces fichiers** et si le moteur est prêt.
+- **Si le moteur local est absent ou échoue**, la lecture ne s'arrête pas : elle
+  **continue avec la voix du système** et le dit clairement dans la section,
+  avec une ligne dans un **journal** (dossier de la voix locale). Rien ne bloque,
+  rien ne plante.
+- **Le choix reste le même qu'avant** : une seule voix à la fois, mémorisée,
+  et le texte lu est nettoyé et découpé de la même façon quel que soit le moteur.
 - **Vos propres messages** et les **événements système** ne portent pas ce
   bouton.
-- **Ce que ça ne fait pas** : enregistrer le son dans un fichier. Le bouton
-  lit seulement, en direct.
+- **Ce que ça ne fait pas** : enregistrer le son dans un fichier, ni envoyer le
+  texte à un service en ligne. Le bouton lit seulement, en direct, sur votre
+  ordinateur.
 
 ---
 
@@ -2993,10 +3005,15 @@ rejouer.
   repart repliée).
 - **Indicateur d'activité** sous les messages : point **vert « Prêt · lecture
   seule »** au repos, **violet pulsant « Réfléchit… »** quand l'Assistant
-  travaille. Pendant la réflexion, le **fond de la zone de saisie** respire
-  (halo discret animé) dans les **deux modes** (standard et assistant seul) —
-  en complément de l'**anneau pulsant autour du logo** en mode immersif ; au
-  repos, aucun effet, la zone reste utilisable.
+  travaille. Le **fond de la zone de saisie** respire (halo discret animé) dans
+  les **deux modes** (standard et assistant seul) pendant que l'Assistant
+  réfléchit **et aussi pendant qu'un agent qu'il a lancé travaille** — le même
+  signal que le point qui respire dans la liste des agents, pour que vous
+  sachiez que le travail continue même après une délégation ; en complément de
+  l'**anneau pulsant autour du logo** en mode immersif. Il ne respire **pas**
+  pendant qu'une question d'agent attend votre réponse (la zone reste alors en
+  mode normal, prête à recevoir votre précision) ; au repos, aucun effet, la
+  zone reste utilisable.
 - **Suggestions** : quatre chips (« Faire un point sur un projet », « Déléguer
   une demande à l'agent », « Préparer une livraison », « Lister les tâches en
   cours ») qui **préremplissent la zone de saisie** (elles n'envoient pas).

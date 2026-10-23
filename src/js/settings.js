@@ -38,6 +38,9 @@ import {
   VOICES_WAIT_MS,
   READ_ALOUD_STATE_EVENT,
 } from "./read-aloud.js";
+// Voix française LOCALE (Piper, hors ligne) : le statut du moteur et le libellé
+// de son choix viennent d'un seul module — aucune valeur recopiée ici.
+import { getLocalVoiceStatus, refreshLocalVoiceStatus } from "./local-voice.js";
 
 let currentConfig = null;
 
@@ -460,15 +463,18 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   }
 
   /**
-   * Remplit le CHOIX DE LA VOIX (section « Lecture des reponses » de l'onglet
-   * Assistant) : « automatique » d'abord, puis chaque voix installee.
+   * Remplit le CHOIX DE LA VOIX (section « Lecture des réponses » de l'onglet
+   * Assistant) : « automatique » d'abord, puis la voix française LOCALE, puis
+   * chaque voix installée.
    *
-   * C'est le SEUL endroit ou la voix se regle : jamais de doublon dans un autre
-   * onglet, jamais une popup par message. Trois cas sont annonces clairement :
-   *  - aucune voix installee → reglage inactif + phrase qui explique quoi faire ;
-   *  - voix memorisee disparue → retour a « automatique » + phrase qui le dit ;
+   * C'est le SEUL endroit où la voix se règle : jamais de doublon dans un autre
+   * onglet, jamais une popup par message. Quatre cas sont annoncés clairement :
+   *  - aucune voix installée → réglage inactif + phrase qui explique quoi faire ;
+   *  - voix mémorisée disparue → retour à « automatique » + phrase qui le dit ;
+   *  - voix locale choisie mais moteur absent → choix CONSERVÉ + phrase qui dit
+   *    que la lecture utilise la voix du système en attendant ;
    *  - cas normal → phrase de rappel du fonctionnement.
-   * @param {string} [choice] voix a selectionner (defaut : la configuration)
+   * @param {string} [choice] voix à sélectionner (défaut : la configuration)
    */
   function refreshReadAloudVoice(choice) {
     if (!selectReadAloudVoice) return;
@@ -478,29 +484,69 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
           ? String(currentConfig.read_aloud_voice)
           : ""
         : String(choice);
+    renderReadAloudVoice(wanted, getLocalVoiceStatus());
+    // Statut du moteur local : demandé UNE fois, puis la section est re-rendue.
+    // Jamais bloquant : sans réponse, la voix du système reste utilisable.
+    if (!getLocalVoiceStatus()) {
+      refreshLocalVoiceStatus().then((status) => {
+        if (status) renderReadAloudVoice(wanted, status);
+      });
+    }
+  }
+
+  /**
+   * Rendu réel de la section « Lecture des réponses » pour un état du moteur
+   * local donné (null = pas encore connu).
+   * @param {string} wanted valeur demandée (réglage enregistré ou choix en cours)
+   * @param {object|null} local état du moteur de voix locale
+   */
+  function renderReadAloudVoice(wanted, local) {
+    if (!selectReadAloudVoice) return;
     const voices = availableVoices();
     selectReadAloudVoice.innerHTML = "";
-    for (const opt of voiceChoiceOptions(voices)) {
+    for (const opt of voiceChoiceOptions(voices, local || undefined)) {
       const el = document.createElement("option");
       el.value = opt.value;
       el.textContent = opt.label;
       selectReadAloudVoice.appendChild(el);
     }
-    const status = voiceChoiceStatus(voices, wanted);
+    const status = voiceChoiceStatus(voices, wanted, local);
     selectReadAloudVoice.value = status.value;
     selectReadAloudVoice.disabled = status.kind === "empty";
     if (readAloudVoiceNote) {
       readAloudVoiceNote.textContent = status.hint;
       readAloudVoiceNote.dataset.state = status.kind;
     }
+    // Ligne dédiée au moteur local : où sont les fichiers, et ce qui se passe
+    // en cas d'absence. Une seule phrase, toujours visible (aucun blocage).
+    if (readAloudLocalNote) {
+      readAloudLocalNote.textContent = localVoiceNoteText(local);
+      readAloudLocalNote.dataset.state = local && local.installed ? "ok" : "missing";
+    }
     showReadAloudState(lastReadAloudState);
     // Liste vide au premier instant (voix encore en chargement) : on re-tente
-    // une fois apres l'attente habituelle, sans jamais bloquer la modale.
+    // une fois après l'attente habituelle, sans jamais bloquer la modale.
     if (!voices.length) {
       ensureVoices(globalThis.window ? globalThis.window.speechSynthesis : null, VOICES_WAIT_MS).then((list) => {
-        if (list && list.length && selectReadAloudVoice) refreshReadAloudVoice(wanted);
+        if (list && list.length && selectReadAloudVoice) {
+          renderReadAloudVoice(wanted, getLocalVoiceStatus());
+        }
       });
     }
+  }
+
+  /**
+   * Phrase de la ligne « voix locale » : état réel du moteur, ou vérification
+   * en cours (jamais une promesse non tenue).
+   * @param {object|null} local
+   * @returns {string}
+   */
+  function localVoiceNoteText(local) {
+    if (!local) return "Voix française locale : vérification du moteur en cours\u2026";
+    if (local.installed && local.dir) {
+      return `${local.hint} Moteur et modèle se trouvent dans « ${local.dir} ».`;
+    }
+    return local.hint;
   }
   const chkSuperAgentThinking = document.getElementById("setting-superagent-thinking");
   // T6 : niveau de réflexion de l'Assistant ("" = non réglé → repli sur le
@@ -518,6 +564,8 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const selectReadAloudVoice = document.getElementById("setting-read-aloud-voice");
   const readAloudStateEl = document.getElementById("read-aloud-state");
   const readAloudVoiceNote = document.getElementById("read-aloud-voice-note");
+  // Ligne d'état du MOTEUR DE VOIX LOCALE (même section, même endroit unique).
+  const readAloudLocalNote = document.getElementById("read-aloud-local-note");
   // Dernier etat de lecture connu : la ligne d'etat de la section « Lecture des
   // reponses » le reprend a chaque ouverture de la modale.
   let lastReadAloudState = "";

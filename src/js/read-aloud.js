@@ -29,6 +29,14 @@
 //      Valeur par defaut : automatique (voix de la langue de l'interface). Une
 //      voix memorisee qui a disparu de l'ordinateur retombe proprement sur la
 //      voix de la langue de l'interface (aucune erreur, aucune lecture muette).
+//   7bis. Deux moteurs possibles, choisis par LE MEME reglage unique :
+//      - `""` ou une voix du systeme : synthese vocale de la fenetre ;
+//      - `LOCAL_VOICE_VALUE` : voix FRANCAISE LOCALE (Piper, hors ligne, sans
+//        cle, sans carte graphique — voir `local-voice.js`). Le nettoyage et le
+//        decoupage du texte sont IDENTIQUES pour les deux moteurs : seul leur
+//        moteur de synthese change. Si le moteur local manque ou echoue, la
+//        lecture NE S'ARRETE PAS : elle retombe sur la voix du systeme, ecrit
+//        une ligne dans le journal et le dit dans l'etat affiche.
 //   8. SEULE LA REPONSE FINALE est lue. Un message de l'assistant contient deux
 //      sortes de choses : (a) le TRAVAIL INTERNE — raisonnement affiche, appels
 //      d'outils, resultats d'outils, sorties de commandes, notes techniques ;
@@ -55,9 +63,29 @@
 // par la.
 
 import { CODE_BLOCK_NOTICE, cutTextAtBoundary, textForSpeech } from "./speech-text.js";
+// Voix française LOCALE (hors ligne, sans clé, sans GPU) : le module sait si le
+// moteur est là, synthétise et joue un morceau, journalise un repli. Le réglage
+// unique (`read_aloud_voice`) et l'état de lecture restent ICI.
+import {
+  LOCAL_VOICE_ONLY_HINT,
+  LOCAL_VOICE_READY_HINT,
+  LOCAL_VOICE_VALUE,
+  getLocalVoiceStatus,
+  isLocalVoiceChoice,
+  isLocalVoiceInstalled,
+  localVoiceChoiceLabel,
+  localVoiceMissingHint,
+  logLocalVoice,
+  playLocalChunks,
+  refreshLocalVoiceStatus,
+} from "./local-voice.js";
 
 // Re-exporte pour les appelants historiques (le nom vient de speech-text.js).
 export { CODE_BLOCK_NOTICE };
+// La valeur RÉSERVÉE qui active la voix locale vient de `local-voice.js` : elle
+// est ré-exportée ici pour que le réglage (Paramètres) et la lecture la lisent
+// au même endroit — jamais une seconde définition.
+export { LOCAL_VOICE_VALUE, LOCAL_VOICE_LABEL } from "./local-voice.js";
 
 /** Longueur maximale d'un morceau lu (en caracteres). */
 export const SPEECH_MAX_CHUNK = 180;
@@ -298,10 +326,14 @@ export function resolveVoiceForChoice(voices, lang, choice) {
  * @param {SpeechSynthesisVoice[]} voices
  * @returns {{value: string, label: string}[]}
  */
-export function voiceChoiceOptions(voices) {
+export function voiceChoiceOptions(voices, local) {
   const list = (Array.isArray(voices) ? voices : []).filter(Boolean).slice();
   const autoLabel = "Automatique (voix de la langue de l'interface)";
   const options = [{ value: AUTO_VOICE_VALUE, label: autoLabel }];
+  // Voix francaise LOCALE : proposee juste apres « automatique » des que
+  // l'appelant fournit l'etat du moteur local (Parametres). Le libelle dit
+  // franchement « non installee » quand c'est le cas : aucun choix fantome.
+  if (local) options.push({ value: LOCAL_VOICE_VALUE, label: localVoiceChoiceLabel(local) });
   list.sort((a, b) => {
     const la = String(a.lang || "");
     const lb = String(b.lang || "");
@@ -325,12 +357,33 @@ export function voiceChoiceOptions(voices) {
  *  - `ok`      : le reglage est utilisable.
  * @param {SpeechSynthesisVoice[]} voices
  * @param {string} [choice]
- * @returns {{kind: "empty"|"missing"|"ok", hint: string, missing: string, value: string}}
+ * @param {{installed?: boolean, dir?: string}|null} [local] etat du moteur local
+ * @returns {{kind: "empty"|"missing"|"ok"|"local-missing", hint: string, missing: string, value: string}}
  */
-export function voiceChoiceStatus(voices, choice) {
+export function voiceChoiceStatus(voices, choice, local) {
   const list = (Array.isArray(voices) ? voices : []).filter(Boolean);
   const wanted = String(choice == null ? "" : choice).trim();
+  const localInstalled = !!(local && local.installed);
+  // Choix de la voix locale : le choix est CONSERVE (il ne se perd pas si le
+  // moteur est installe plus tard), et la note dit clairement ce qui se passe
+  // pendant ce temps (lecture avec la voix du systeme).
+  if (isLocalVoiceChoice(wanted)) {
+    if (localInstalled) {
+      return { kind: "ok", hint: LOCAL_VOICE_READY_HINT, missing: "", value: LOCAL_VOICE_VALUE };
+    }
+    return {
+      kind: "local-missing",
+      hint: localVoiceMissingHint(local && local.dir),
+      missing: "",
+      value: LOCAL_VOICE_VALUE,
+    };
+  }
   if (!list.length) {
+    // Aucune voix du systeme mais moteur local pret : le reglage reste
+    // utilisable (le local prend le relais), et la note le dit.
+    if (localInstalled) {
+      return { kind: "ok", hint: LOCAL_VOICE_ONLY_HINT, missing: "", value: wanted };
+    }
     return { kind: "empty", hint: NO_VOICE_INSTALLED_HINT, missing: "", value: AUTO_VOICE_VALUE };
   }
   if (wanted && !findVoiceForChoice(list, wanted)) {
@@ -359,6 +412,11 @@ export function readAloudStateLabel(state) {
       return "Lecture terminee.";
     case "stopped":
       return "Lecture arretee.";
+    case "local-fallback":
+      return (
+        "Voix française locale indisponible : lecture avec la voix du système " +
+        "(détail dans le journal)."
+      );
     case "empty":
       return "Rien a lire dans ce message.";
     case "no-voice":
@@ -493,10 +551,32 @@ export function stopReading() {
 }
 
 /**
+ * Traduction lisible d'un echec du moteur local (message du journal).
+ * @param {string} reason
+ * @returns {string}
+ */
+export function localFailureReason(reason) {
+  switch (reason) {
+    case "unavailable":
+      return "la synthese locale n'a rien renvoye";
+    case "error":
+      return "le son local n'a pas pu etre joue";
+    case "no-audio":
+      return "cette fenetre ne sait pas jouer de son";
+    case "empty":
+      return "aucun texte a lire";
+    case "stopped":
+      return "lecture interrompue";
+    default:
+      return String(reason || "raison inconnue");
+  }
+}
+
+/**
  * Cree un lecteur pour une fenetre. Une seule lecture a la fois pour toute
  * l'application : un nouveau `speak` arrete la lecture precedente.
  * @param {Window} win
- * @param {{lang?: string, waitMs?: number}} [options]
+ * @param {{lang?: string, waitMs?: number, invoke?: Function, voiceName?: string}} [options]
  */
 export function createSpeaker(win, options = {}) {
   const w = win || globalThis.window;
@@ -520,7 +600,7 @@ export function createSpeaker(win, options = {}) {
    * Lit un texte (nettoye puis decoupe). Renvoie une promesse resolue a la fin
    * ou a l'arret.
    * @param {string} text
-   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty"|"no-voice") => void}} [handlers]
+   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty"|"no-voice"|"local-fallback") => void}} [handlers]
    */
   async function speak(text, handlers = {}) {
     const notify = (state) => {
@@ -540,12 +620,16 @@ export function createSpeaker(win, options = {}) {
     }
     stopReading(); // une seule lecture a la fois
     const token = { id: ++playbackSeq, stopped: false };
+    // Arrets complementaires : la lecture locale doit pouvoir couper son audio
+    // en cours (le `synth.cancel()` ne la concerne pas).
+    const extraStops = [];
     const playback = {
       token,
       stop() {
         if (token.stopped) return;
         token.stopped = true;
         safeCall(() => synth.cancel());
+        for (const fn of extraStops.slice()) safeCall(fn);
         if (currentPlayback === playback) currentPlayback = null;
         notify("stopped");
       },
@@ -557,10 +641,55 @@ export function createSpeaker(win, options = {}) {
     // instant) : le bouton passe a « Arreter » sans attendre.
     notify("speaking");
 
-    // Voix : on attend leur chargement (sinon la premiere lecture est muette),
-    // puis on applique la voix choisie dans les Parametres — repli propre sur la
-    // voix de la langue de l'interface si elle a disparu (regle 7).
+    // Voix choisie dans LE reglage unique (Parametres → Assistant → Lecture des
+    // reponses). Soit une voix du systeme, soit la voix francaise LOCALE.
     const choice = options.voiceName == null ? getPreferredVoiceName() : options.voiceName;
+
+    // ── Voix FRANCAISE LOCALE (Piper) : hors ligne, sans cle, sans GPU ──────
+    // Meme texte nettoye, meme decoupage que la voix du systeme : seul le moteur
+    // de synthese change. Le repli est OBLIGATOIRE et VISIBLE : moteur ou modele
+    // absent, synthese en echec, audio refuse -> une ligne dans le journal, un
+    // etat clair, puis lecture avec la voix du systeme (jamais de blocage).
+    if (isLocalVoiceChoice(choice)) {
+      const local = getLocalVoiceStatus() || (await refreshLocalVoiceStatus(options));
+      if (token.stopped || currentPlayback !== playback) return false;
+      if (local && local.installed) {
+        const outcome = await playLocalChunks({
+          win: w,
+          chunks,
+          invoke: options.invoke,
+          isCancelled: () => token.stopped || currentPlayback !== playback,
+          onStopRegister: (fn) => extraStops.push(fn),
+        });
+        if (outcome.reason === "ended") {
+          currentPlayback = null;
+          token.stopped = true;
+          notify("ended");
+          return true;
+        }
+        if (outcome.reason === "stopped" || token.stopped) return false;
+        await logLocalVoice(
+          `Voix francaise locale indisponible (${localFailureReason(outcome.reason)}) : ` +
+            "repli sur la voix du systeme.",
+          options,
+        );
+      } else {
+        await logLocalVoice(
+          `Voix francaise locale non installee (${(local && local.hint) || "moteur absent"}) : ` +
+            "repli sur la voix du systeme.",
+          options,
+        );
+      }
+      if (token.stopped || currentPlayback !== playback) return false;
+      // Dit clairement a l'utilisateur que la lecture ne se fait pas avec la
+      // voix demandee (etat visible dans le panneau des Parametres).
+      notify("local-fallback");
+    }
+
+    // Voix du systeme : on attend leur chargement (sinon la premiere lecture
+    // partirait en silence), puis on applique la voix choisie dans les
+    // Parametres — repli propre sur la voix de la langue de l'interface si elle
+    // a disparu (regle 7).
     const voices = await ensureVoices(synth, waitMs);
     // Arret (ou autre lecture) pendant l'attente : on ne parle pas.
     if (token.stopped || currentPlayback !== playback) return false;
@@ -718,9 +847,9 @@ export function applyButtonState(button, state) {
  * Cree le bouton « Ecouter / Arreter ». Fonctionne sans synthese vocale : dans
  * ce cas le bouton est present mais inactif, avec une explication en infobulle.
  * @param {{doc?: Document, win?: Window, getText: () => string, lang?: string,
- *          refreshIcons?: (root: HTMLElement) => void}} options
+ *          invoke?: Function, refreshIcons?: (root: HTMLElement) => void}} options
  */
-export function createReadAloudButton({ doc, win, getText, lang, refreshIcons } = {}) {
+export function createReadAloudButton({ doc, win, getText, lang, invoke, refreshIcons } = {}) {
   const w = win || globalThis.window;
   const d = doc || (w && w.document) || globalThis.document;
   if (!d) return null;
@@ -777,6 +906,9 @@ export function createReadAloudButton({ doc, win, getText, lang, refreshIcons } 
   };
   const disableIfNoVoice = (list) => {
     if (list && list.length) return;
+    // La voix francaise LOCALE installee rend la lecture possible meme sans
+    // aucune voix du systeme : dans ce cas on ne desactive pas le bouton.
+    if (isLocalVoiceChoice(getPreferredVoiceName()) && isLocalVoiceInstalled()) return;
     // Jamais pendant une lecture : on ne desactive pas un bouton qui parle.
     const state = button.dataset.readState;
     if (state === "speaking" || state === "unavailable") return;
@@ -806,7 +938,20 @@ export function createReadAloudButton({ doc, win, getText, lang, refreshIcons } 
     if (emptyTimer && typeof emptyTimer.unref === "function") emptyTimer.unref();
   };
 
-  const speaker = createSpeaker(w, { lang: lang || speechLang(d) });
+  const speaker = createSpeaker(w, {
+    lang: lang || speechLang(d),
+    invoke,
+  });
+  // Statut du moteur de voix locale : demande UNE fois, sans bloquer. Il sert a
+  // ne pas desactiver le bouton quand la voix locale est choisie et prete.
+  if (isLocalVoiceChoice(getPreferredVoiceName()) && !getLocalVoiceStatus()) {
+    refreshLocalVoiceStatus({ invoke }).then((status) => {
+      if (!status || !status.installed) return;
+      if (button.dataset.readState !== "novoice") return;
+      button.disabled = false;
+      setState("idle");
+    });
+  }
   button.addEventListener("click", async () => {
     if (button.dataset.readState === "speaking") {
       speaker.stop();
@@ -818,6 +963,9 @@ export function createReadAloudButton({ doc, win, getText, lang, refreshIcons } 
         if (state === "speaking") setState("speaking");
         else if (state === "empty") showEmptyState();
         else if (state === "no-voice") showNoVoice();
+        // Repli sur la voix du systeme : la lecture CONTINUE, le bouton reste
+        // donc sur « Arreter » (et le panneau des Parametres dit le repli).
+        else if (state === "local-fallback") setState("speaking");
         else setState("idle");
       },
     });
@@ -832,7 +980,7 @@ export function createReadAloudButton({ doc, win, getText, lang, refreshIcons } 
  * l'utilisateur ni les evenements systeme ne portent ce bouton.
  * @param {HTMLElement} messageEl - element `.agent-message-assistant`
  * @param {{doc?: Document, win?: Window, getText?: () => string, lang?: string,
- *          refreshIcons?: (root: HTMLElement) => void}} [options]
+ *          invoke?: Function, refreshIcons?: (root: HTMLElement) => void}} [options]
  * @returns {HTMLElement|null} le bouton pose
  */
 export function attachReadAloud(messageEl, options = {}) {
@@ -844,6 +992,7 @@ export function attachReadAloud(messageEl, options = {}) {
     doc: d,
     win: options.win,
     lang: options.lang,
+    invoke: options.invoke,
     refreshIcons: options.refreshIcons,
     getText: options.getText || (() => messageTextOf(messageEl)),
   });

@@ -61,7 +61,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Service Laya (classification locale) | `spec_laya.md` |
 | Aide intégrée (LLM sur la doc) | `spec_help.md` |
 | Revue de code assistée (H5) | `spec_review.md` |
-| Lecture des réponses à voix haute (bouton 🔊 + réglage de la voix) | `spec_read_aloud.md` |
+| Lecture des réponses à voix haute (bouton 🔊, réglage unique de la voix, voix française locale hors ligne) | `spec_read_aloud.md` |
 | Context Engine (auto-contexte agent) | `spec_context_engine.md` |
 | Code Graph (graphe de connaissances projet) | `spec_code_graph.md` |
 | Diff Review agent (modifications) | `spec_diff_review.md` |
@@ -212,7 +212,8 @@ pilot/
 │       ├── reservations.js # Orchestration multi-agents T6 : estimation préalable (plan-maker) + fichiers réservés .pilot/reservations.json (pures + I/O, fail-open)
 │       ├── backend-info.js   # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"
 │       ├── desktop-notify.js  # Notifications desktop natives (D1) — agent terminé à distance
-│       ├── read-aloud.js      # Lecture à voix haute d'une réponse assistant (bouton « Écouter / Arrêter » sous la bulle) : découpage par phrases, une seule lecture à la fois, voix de la langue de l'interface par défaut (speechSynthesis natif, aucune dépendance) + CHOIX de la voix réglé à UN SEUL endroit (Paramètres → onglet Assistant → section « Lecture des réponses »), mémorisé en config `read_aloud_voice`, repli propre si la voix a disparu, état publié par évènement `pilot-read-aloud-state`. Le nettoyage du texte dit vit dans `speech-text.js`. Couverture : read-aloud.test.js + reglage-voix-onglet-assistant.test.js (voir spec_read_aloud.md)
+│       ├── read-aloud.js      # Lecture à voix haute d'une réponse assistant (bouton « Écouter / Arrêter » sous la bulle) : découpage par phrases, une seule lecture à la fois, voix de la langue de l'interface par défaut (speechSynthesis natif, aucune dépendance) + CHOIX de la voix réglé à UN SEUL endroit (Paramètres → onglet Assistant → section « Lecture des réponses »), mémorisé en config `read_aloud_voice`, repli propre si la voix a disparu, état publié par évènement `pilot-read-aloud-state` ; gère AUSSI la valeur réservée `local:piper` (voix française locale) avec repli OBLIGATOIRE et visible sur la voix du système. Le nettoyage du texte dit vit dans `speech-text.js`. Couverture : read-aloud.test.js + reglage-voix-onglet-assistant.test.js + voix-locale.test.js (voir spec_read_aloud.md)
+│       ├── local-voice.js     # Voix française LOCALE (hors ligne, sans clé, sans GPU) : moteur Piper + modèle `fr_FR-siwis-medium` (~63 Mo) — SOURCE UNIQUE de `LOCAL_VOICE_VALUE` (`local:piper`) et des libellés, statut du moteur (`tts_local_status`), synthèse d'un morceau en WAV (`tts_local_synthesize`), lecture audio de la suite de morceaux (synthèse d'avance, arrêt immédiat), journal du repli (`tts_local_log`) ; aucun appel réseau, toute erreur → `null` + journal, jamais une exception
 │       ├── speech-text.js     # SEUL nettoyage du texte destiné à la synthèse vocale (fonction PURE `textForSpeech`) : émojis/pictogrammes retirés, balisage Markdown/HTML retiré, blocs de code non lus (annoncés), tableaux en texte courant, liens lus par leur libellé, espaces/lignes vides réduits, accents/ponctuation/chiffres conservés ; + `cutTextAtBoundary` (coupure sur fin de phrase ou de mot, jamais dans un mot). Idempotente, appelée uniquement par read-aloud.js — jamais par l'affichage. Couverture : speech-text.test.js
 │       └── terminal.js        # Terminal intégré xterm.js
 ├── web/                       # UI web distante (mode remote, servie par axum)
@@ -286,6 +287,7 @@ pilot/
         ├── code_graph.rs     # Code Graph : extraction heuristique/tree-sitter + graphe SQLite + requêtes
         ├── dashboard.rs      # Tableau de bord projet (issue #51) : métriques fichiers/Git + activité agent
         ├── vault.rs          # Coffre fort (issue #52) : AES-256-GCM + Argon2id, ~/.pilot/vault.json
+        ├── tts_local.rs      # Voix française LOCALE de la lecture à voix haute : moteur Piper + modèle fr_FR-siwis-medium (~63 Mo) dans <app_data_dir>/voix-locale/ — statut (tts_local_status), synthèse WAV en base64 via processus local sans fenêtre, plafond 30 s (tts_local_synthesize), journal du repli (tts_local_log, voix-locale.log) ; hors ligne, sans clé, sans GPU, aucun fichier supprimé
         ├── mcp_config.rs     # POC MCP consommateur : mcp.json (app_data_dir), serveurs stdio, test connexion
         ├── gds.rs            # GDS Phase A : config projet .pilot/gds.json + provision + commandes (gds_provision/gds_validate_user/gds_add_project)
         ├── gds_db.rs         # GDS : pool PostgreSQL sqlx, provision idempotent, migrations, CRUD users/projects/git_repos
