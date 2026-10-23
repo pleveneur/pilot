@@ -9,12 +9,16 @@
 //   2. AUCUNE lecture automatique : rien ne part sans un clic.
 //   3. UNE SEULE lecture a la fois : lancer un autre message arrete proprement
 //      le precedent (aucun chevauchement, jamais deux voix ensemble).
-//   4. Le texte lu est nettoye : plus de balisage (titres, listes, gras, liens,
-//      tableaux), les blocs de code ne sont PAS debites (la voix signale
-//      seulement qu'il y a du code a l'ecran), les liens sont lus par leur
-//      libelle.
+//   4. Le texte lu est nettoye a UN SEUL endroit (`speech-text.js`,
+//      `textForSpeech`) : plus d'emojis ni de pictogrammes, plus de balisage
+//      (titres, listes, gras, liens, tableaux), les blocs de code ne sont PAS
+//      debites (la voix signale seulement qu'il y a du code a l'ecran), les
+//      liens sont lus par leur libelle. Ce nettoyage ne sert QU'A la voix :
+//      rien de ce qui s'affiche a l'ecran ne passe par la.
 //   5. Le texte est decoupe phrase par phrase (avec une limite de longueur) et
-//      enchaine dans l'ordre ; l'arret fonctionne a tout moment.
+//      enchaine dans l'ordre ; une coupure de longueur tombe sur une fin de
+//      phrase ou de mot, jamais au milieu d'un mot ; l'arret fonctionne a tout
+//      moment.
 //   6. Synthese vocale absente ou AUCUNE VOIX installee : le bouton reste
 //      present mais INACTIF, avec une explication courte et claire (infobulle
 //      et texte du panneau de reglage), jamais un bouton muet.
@@ -44,6 +48,16 @@
 //
 // Le module est sans dependance : il recoit `win` (fenetre porteuse de
 // `speechSynthesis`) et `doc` — ce qui le rend testable sans navigateur.
+//
+// Le NETTOYAGE du texte parle vit a UN SEUL endroit : `speech-text.js`
+// (`textForSpeech`). Ce fichier-ci ne fait que l'appeler, sur le seul chemin
+// qui alimente la synthese vocale. Rien de ce qui s'affiche a l'ecran ne passe
+// par la.
+
+import { CODE_BLOCK_NOTICE, cutTextAtBoundary, textForSpeech } from "./speech-text.js";
+
+// Re-exporte pour les appelants historiques (le nom vient de speech-text.js).
+export { CODE_BLOCK_NOTICE };
 
 /** Longueur maximale d'un morceau lu (en caracteres). */
 export const SPEECH_MAX_CHUNK = 180;
@@ -83,9 +97,6 @@ const EMPTY_LABEL = "Rien a lire";
 
 /** Duree d'affichage du libelle « Rien a lire » (ms) avant retour a l'etat repos. */
 export const EMPTY_HINT_MS = 3000;
-
-/** Ce que la voix prononce a la place du CONTENU d'un bloc de code. */
-export const CODE_BLOCK_NOTICE = "bloc de code affiche a l'ecran";
 
 /**
  * Classes des blocs de TRAVAIL INTERNE qui marquent une FRONTIERE dans un
@@ -361,74 +372,24 @@ export function readAloudStateLabel(state) {
 
 /**
  * Nettoie un texte (Markdown rendu en HTML et/ou Markdown brut) pour qu'il soit
- * LISIBLE par la voix : aucun symbole de balisage, blocs de code non debites,
- * liens remplaces par leur libelle, ponctuation conservee (elle donne le
- * rythme de la phrase).
+ * LISIBLE par la voix : aucun emoji, aucun symbole de balisage, blocs de code
+ * non debites, liens remplaces par leur libelle, ponctuation conservee (elle
+ * donne le rythme de la phrase).
+ *
+ * Nom HISTORIQUE conserve (les appelants et les tests l'utilisent) :
+ * l'implementation UNIQUE vit dans `textForSpeech` (`speech-text.js`).
  * @param {string} raw
  * @returns {string}
  */
 export function markupToSpeech(raw) {
-  let t = String(raw == null ? "" : raw);
-
-  // Blocs de code : le CONTENU n'est jamais lu (regle 4) — la voix signale
-  // seulement qu'il y a du code a l'ecran.
-  const codeNotice = ` ${CODE_BLOCK_NOTICE}. `;
-  t = t.replace(/```[\s\S]*?```/g, codeNotice);
-  t = t.replace(/~~~[\s\S]*?~~~/g, codeNotice);
-  t = t.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, codeNotice);
-  // Code en ligne : le contenu (nom de fichier, commande) est lisible, on garde.
-  t = t.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, "$1");
-
-  // Liens et images : on garde le LIBELLE, jamais l'adresse.
-  t = t.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
-  t = t.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
-  t = t.replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1");
-
-  // Balisage HTML structurel -> ponctuation et pauses.
-  t = t.replace(/<\s*br\s*\/?>/gi, "\n");
-  t = t.replace(/<\s*li[^>]*>/gi, "\n");
-  t = t.replace(/<\s*\/\s*(p|div|li|tr|h[1-6]|section|article|blockquote|ul|ol)\s*>/gi, ". ");
-  t = t.replace(/<[^>]+>/g, " ");
-
-  // Tableaux Markdown : lignes de separation supprimees, barres -> pauses.
-  t = t.replace(/^[ \t]*\|?[\s:|-]*-[\s:|-]*\|[ \t]*$/gm, " ");
-  t = t.replace(/\|/g, " ");
-
-  // Titres, citations, puces, numeros de liste : symboles retires.
-  t = t.replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "");
-  t = t.replace(/^[ \t]{0,3}>[ \t]?/gm, "");
-  t = t.replace(/^[ \t]*[-*+][ \t]+/gm, "");
-  t = t.replace(/^[ \t]*\d+[.)][ \t]+/gm, "");
-  // Regles horizontales (---, ***, ___).
-  t = t.replace(/^[ \t]*([-*_])[ \t]*\1[ \t]*\1[\s\S]*$/gm, " ");
-
-  // Emphase / code inline / raye : symboles retires.
-  t = t.replace(/\*\*|__|~~/g, "");
-  t = t.replace(/[*`]/g, "");
-
-  // Entites HTML courantes.
-  t = t
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#0?39;/gi, "'")
-    .replace(/&(?:hellip|mldr);/gi, "...");
-
-  // Espaces et ponctuation : une phrase propre, sans ".." ni "mot .".
-  t = t.replace(/[ \t]+/g, " ");
-  t = t.replace(/\s*\n\s*/g, "\n");
-  t = t.replace(/([.!?])[ \t]*\./g, "$1");
-  t = t.replace(/\s+([.,])/g, "$1");
-  t = t.replace(/\n{2,}/g, "\n");
-  return t.trim();
+  return textForSpeech(raw);
 }
 
 /**
  * Decoupe un texte en morceaux courts, phrase par phrase, en preservant l'ordre.
- * Une phrase trop longue est recoupee (virgule, point-virgule, deux-points,
- * puis espace) pour ne jamais depasser `maxLen`.
+ * Une phrase trop longue est recoupee sur une FIN DE PHRASE ou une FIN DE MOT
+ * (`cutTextAtBoundary`) : jamais au milieu d'un mot, jamais au-dela de `maxLen`
+ * (sauf mot insecable plus long que la limite).
  * @param {string} text
  * @param {number} [maxLen]
  * @returns {string[]}
@@ -444,22 +405,13 @@ export function splitSentences(text, maxLen = SPEECH_MAX_CHUNK) {
         out.push(sentence);
         continue;
       }
-      // Phrase trop longue : on coupe au dernier separateur naturel.
+      // Phrase trop longue : coupure sur une fin de phrase ou de mot, JAMAIS
+      // au milieu d'un mot (`cutTextAtBoundary`, speech-text.js).
       let rest = sentence;
       while (rest.length > limit) {
-        const slice = rest.slice(0, limit + 1);
-        let cut = -1;
-        for (const sep of [", ", "; ", ": ", " "]) {
-          const idx = slice.lastIndexOf(sep);
-          if (idx > 0) {
-            cut = idx + sep.length;
-            break;
-          }
-        }
-        if (cut <= 0) cut = limit;
-        const piece = rest.slice(0, cut).trim();
-        if (piece) out.push(piece);
-        rest = rest.slice(cut).trim();
+        const [head, tail] = cutTextAtBoundary(rest, limit);
+        if (head) out.push(head);
+        rest = tail;
       }
       if (rest) out.push(rest);
     }
@@ -579,7 +531,9 @@ export function createSpeaker(win, options = {}) {
       notify("unavailable");
       return false;
     }
-    const chunks = splitSentences(markupToSpeech(text));
+    // SEUL endroit ou le texte part vers la synthese vocale : nettoyage unique
+    // (`textForSpeech`, speech-text.js) puis decoupage en morceaux courts.
+    const chunks = splitSentences(textForSpeech(text));
     if (!chunks.length) {
       notify("empty");
       return false;

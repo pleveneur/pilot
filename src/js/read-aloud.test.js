@@ -535,6 +535,61 @@ describe("bouton de lecture", () => {
     expect(lu).not.toContain("secret()");
   });
 
+  it("ce qui part vers la voix ne contient AUCUN emoji ni marque de mise en forme", async () => {
+    // Reponse reelle : titre emoji, gras, puce emoji, tableau, bloc de code,
+    // lien, italique. Le texte affiche a l'ecran n'est PAS modifie (le rendu
+    // markdown reste tel quel) ; seul ce qui part vers la synthese est nettoye.
+    const block = createSuperAgentBlock(globalThis.document.createElement("div"));
+    const flow = block.querySelector(".agent-stream-flow");
+    const section = globalThis.document.createElement("div");
+    section.className = "agent-text-section";
+    const html =
+      "<h2>✅ Correction terminée 🎉</h2>" +
+      "<p>**Fichier modifié** : <code>read-aloud.js</code>.</p>" +
+      "<ul><li>🎯 Le nettoyage est centralisé</li><li>⚙️ 2 tests ajoutés</li></ul>" +
+      "<table><thead><tr><th>Avant</th><th>Après</th></tr></thead>" +
+      "<tbody><tr><td>**gras** 😀</td><td>gras</td></tr></tbody></table>" +
+      "<pre><code>const secret = 'ne doit pas etre lu';</code></pre>" +
+      "<p>Voir <a href=\"https://exemple.test/doc\">la documentation</a>. Le résultat est _meilleur_ !</p>";
+    section.innerHTML = html;
+    flow.appendChild(section);
+
+    const button = block.querySelector(".agent-read-btn");
+    await button.handlers.click[0]();
+    playUntilEnd(synth);
+    const lu = synth.spoken.map((u) => u.text).join(" ");
+
+    // Une phrase naturelle est prononcee...
+    expect(lu).toContain("Correction terminée");
+    expect(lu).toContain("Le nettoyage est centralisé");
+    expect(lu).toContain("2 tests ajoutés");
+    expect(lu).toContain("la documentation");
+    expect(lu).toContain("meilleur"); // le mot est lu, l'accent grave ne l'est pas
+    // ... et rien du balisage ne l'est.
+    for (const interdit of [
+      "✅",
+      "🎉",
+      "😀",
+      "🎯",
+      "⚙",
+      "**",
+      "_",
+      "#",
+      "<",
+      ">",
+      "https://",
+      "ne doit pas etre lu",
+      "const secret",
+    ]) {
+      expect(lu, `la voix ne doit pas lire « ${interdit} »`).not.toContain(interdit);
+    }
+    // L'affichage a l'ecran, lui, n'a pas bouge d'un caractere : le HTML de la
+    // section (donc les emojis) est intact, seul le texte envoye a la voix est
+    // nettoye.
+    expect(section.innerHTML).toBe(html);
+    expect(html).toContain("✅");
+  });
+
   it("messageTextOf ignore les blocs de code et ne lit que la reponse finale", () => {
     const block = createSuperAgentBlock(globalThis.document.createElement("div"));
     const flow = block.querySelector(".agent-stream-flow");

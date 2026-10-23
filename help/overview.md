@@ -316,9 +316,10 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   la précédente, jamais deux voix ensemble.
 - **La voix ne débite pas le balisage** : titres, puces, gras, tableaux, liens
   et symboles sont retirés (un lien est lu par son libellé) et le contenu des
-  **blocs de code n'est pas lu** (Pilot annonce seulement « bloc de code »). Le
-  texte est découpé **phrase par phrase**, ce qui évite les coupures en plein
-  milieu d'une phrase.
+  **blocs de code n'est pas lu** (Pilot annonce seulement « bloc de code »). Les
+  **émojis** ne sont pas prononcés non plus : la phrase lue reste naturelle. Le
+  texte est découpé **phrase par phrase**, et une coupure tombe toujours sur une
+  fin de phrase ou de mot — jamais au milieu d'un mot.
 - **Le choix de la voix se règle à un seul endroit** : ⚙️ **Paramètres → onglet
   « Assistant »** → section **« Lecture des réponses »**. Vous y trouvez le
   **choix de la voix**, l'**état de la lecture** et l'**explication**, regroupés

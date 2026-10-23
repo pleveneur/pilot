@@ -9,11 +9,30 @@ Bouton **« 🔊 Écouter » / « ⏹ Arrêter »** sous chaque réponse de l'ag
    à l'ouverture de Pilot ni à l'arrivée d'un message.
 2. **Une seule lecture à la fois** : lancer une autre réponse arrête la
    précédente (`stopReading` avant toute nouvelle prise de parole).
-3. **Texte nettoyé** : le balisage (titres, puces, gras, tableaux, liens,
-   symboles) n'est pas débité ; un lien est lu par son libellé ; un **bloc de
-   code** est annoncé (« bloc de code … affiché à l'écran »), jamais lu.
+3. **Texte nettoyé — un seul endroit** : `textForSpeech` (`src/js/speech-text.js`),
+   fonction **pure**, seule implémentation appelée par le chemin de la voix
+   (`read-aloud.js` : `markupToSpeech` n'est plus qu'un alias historique, et
+   `speak` nettoie avant de découper). Elle retire : **émojis et pictogrammes**
+   (drapeaux, carnations, ZWJ, sélecteurs de variation — les **chiffres** restent),
+   les marques de mise en forme (`**`, `__`, `~~`, accents graves, `#`, `>`),
+   puces et numéros de liste, traits de séparation, les **blocs de code**
+   (annoncés « bloc de code … affiché à l'écran », jamais lus), l'**URL** des
+   liens (le libellé est gardé) et les balises HTML.
+   - **Tableaux** : lus en **texte courant** (lignes de séparation supprimées,
+     barres → espaces). Choisi plutôt que supprimés : dans une réponse
+     d'assistant un tableau porte une information (comparatif, valeurs) dont la
+     disparition appauvrirait la lecture.
+   - **Conservé** : accents, ponctuation (y compris l'espace avant `!`, `?`,
+     `;`, `:`), apostrophes, chiffres, texte entre accents graves (sans les
+     accents graves).
+   - **Idempotente** : le chemin applique le nettoyage deux fois (construction du
+     texte du message puis prise de parole) sans effet supplémentaire.
+   - **Rien d'autre ne l'appelle** : l'affichage, le rendu Markdown et le fil de
+     discussion ne changent pas d'un caractère.
 4. **Découpage phrase par phrase** (`splitSentences`, plafond
-   `SPEECH_MAX_CHUNK`), pour éviter les coupures en plein milieu.
+   `SPEECH_MAX_CHUNK`) ; une phrase trop longue est coupée par
+   `cutTextAtBoundary` sur une **fin de phrase**, sinon sur une **fin de mot** —
+   jamais au milieu d'un mot.
 5. **Seule la réponse finale est lue** : la frontière est lue dans la
    **structure** du flux (`finalAnswerSections`) — raisonnement, appels et
    résultats d'outils, sorties de commandes, notes techniques marquées
@@ -69,7 +88,9 @@ aucun enregistrement dans un fichier.
 
 ## 5. Couverture
 
-`src/js/read-aloud.test.js` (lecture, nettoyage, une seule à la fois, voix) et
+`src/js/read-aloud.test.js` (lecture, nettoyage, une seule à la fois, voix),
+`src/js/speech-text.test.js` (nettoyage du texte de la voix : cas réels avec
+émojis, gras, bloc de code, tableau, lien, liste ; coupure sur frontière) et
 `src/js/reglage-voix-onglet-assistant.test.js` (emplacement unique, absence de
 doublon, défaut automatique, mémorisation, repli, liste vide, aucune lecture
 automatique).
