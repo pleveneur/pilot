@@ -129,4 +129,13 @@ valeur recopiée, aucun réseau, texte nettoyé avant le moteur local, repli
 visible + journal, arrêt du son local). Côté Rust : tests de `tts_local` (statut
 sur dossier vide/équipé, chemins déduits d'un seul dossier, journal du repli).
 
+**Règle des tests de lecture (leçon de la CI 0.4.43)** : aucun de ces tests ne
+doit dépendre d'un **délai au temps réel** pour supposer qu'une lecture est
+encore en cours. Le son factice est soit laissé volontairement sans fin
+(`fakeWindow({ autoEnd: false })`), soit terminé explicitement
+(`finishLast(...)`) ; on attend un **fait observable** (`waitUntil(...)`), jamais
+un `await` de quelques millisecondes. Un `sleep` court est vert sur une machine
+lente et rouge sur une machine rapide (incident : Linux/macOS rouges, Windows
+vert, sans aucune différence de comportement).
+
 Aide utilisateur : `help/overview.md`, bloc `HELP:lire-reponses`.

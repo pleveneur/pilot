@@ -60,7 +60,7 @@ function fakeVoice(name = "Microsoft Hortense", lang = "fr-FR") {
  * Fenêtre factice : synthèse vocale du système (dont on enregistre les
  * énoncés) et un lecteur audio factice (dont on enregistre les sources).
  */
-function fakeWindow({ voices = [fakeVoice()], withAudio = true } = {}) {
+function fakeWindow({ voices = [fakeVoice()], withAudio = true, autoEnd = true } = {}) {
   const spoken = [];
   const events = [];
   const synth = {
@@ -93,7 +93,10 @@ function fakeWindow({ voices = [fakeVoice()], withAudio = true } = {}) {
       FakeAudio.played.push(this);
     }
     play() {
-      setTimeout(() => this.onended && this.onended(), 0);
+      // `autoEnd: false` : le son ne se termine JAMAIS tout seul. Un test qui
+      // doit arrêter la lecture en cours ne peut alors plus dépendre de la
+      // vitesse de la machine (voir « l'arrêt coupe le son local »).
+      if (autoEnd) setTimeout(() => this.onended && this.onended(), 0);
       return Promise.resolve();
     }
     pause() {
@@ -141,6 +144,23 @@ function fakeInvoke(scenario = {}) {
 /** Laisse tourner les minuteries (lecture audio factice). */
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 5));
+}
+
+/**
+ * Attend qu'une condition devienne vraie, sans délai arbitraire : la suite doit
+ * donner le MÊME résultat sur une machine rapide (Linux/macOS) et lente
+ * (Windows). Une attente borne évite de bloquer la suite en cas de régression.
+ * @param {() => boolean} condition
+ * @param {number} [timeoutMs]
+ */
+async function waitUntil(condition, timeoutMs = 5000) {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error("condition non atteinte dans le délai imparti (5 s)");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 beforeEach(() => {
@@ -405,7 +425,14 @@ describe("lecture locale et repli", () => {
 
   it("l'arrêt coupe le son local (une seule lecture à la fois)", async () => {
     setLocalVoiceStatus({ installed: true, dir: "C:/x" });
-    const { win, FakeAudio } = fakeWindow();
+    // Le son factice ne se termine pas tout seul : la lecture est donc encore
+    // RÉELLEMENT en cours au moment de l'arrêt, sur toute machine et à toute
+    // vitesse. Avant, un `await tick()` de 5 ms supposait la lecture encore en
+    // cours ; les phrases factices se terminant en 0 ms, la lecture entière
+    // pouvait être finie au bout de ces 5 ms — c'était le cas sous
+    // Linux/macOS (test rouge) et pas sous Windows (test vert), sans qu'aucun
+    // comportement de Pilot diffère.
+    const { win, FakeAudio } = fakeWindow({ autoEnd: false });
     const { invoke } = fakeInvoke({ audio: "UklGRg==" });
     const speaker = createSpeaker(win, {
       lang: "fr-FR",
@@ -414,11 +441,16 @@ describe("lecture locale et repli", () => {
       waitMs: 0,
     });
     const pending = speaker.speak("Phrase une. Phrase deux. Phrase trois.", {});
-    await tick();
+    // On attend le DÉBUT réel de la première phrase (aucune hypothèse de durée).
+    await waitUntil(() => FakeAudio.played.length > 0);
     speaker.stop();
-    await pending;
-    // Au moins un son a été lancé puis mis en pause : plus rien ne joue.
-    expect(FakeAudio.played.length).toBeGreaterThan(0);
-    expect(FakeAudio.played.some((audio) => audio.paused)).toBe(true);
+    const ok = await pending;
+    // L'arrêt interrompt la lecture : la promesse se termine et rien ne joue.
+    expect(ok).toBe(false);
+    // Une SEULE phrase a démarré (les suivantes ne partent jamais), et elle a
+    // été mise en pause par l'arrêt : plus aucun son ne joue.
+    expect(FakeAudio.played).toHaveLength(1);
+    expect(FakeAudio.played[0].paused).toBe(true);
+    expect(FakeAudio.played.some((audio) => !audio.paused)).toBe(false);
   });
 });
