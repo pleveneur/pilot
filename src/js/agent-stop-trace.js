@@ -160,6 +160,9 @@ async function writeAgentStopTraceFile(path, line) {
  * @param {string} [entry.agentId]
  * @param {string} [entry.projectPath]
  * @param {number|null} [entry.uid] - uid de session transmis à l'arrêt
+ * @param {string} [entry.text] - texte DÉJÀ ÉCRIT par l'agent au moment de son
+ *   arrêt (mort / plante) : il rejoint la MÊME ligne de journal, dans le champ
+ *   `text=`. Aucun second journal, aucun second emplacement de traces.
  * @returns {Promise<boolean>} true si la ligne a été écrite (projet OU global)
  */
 export async function traceAutomaticAgentStop(entry = {}) {

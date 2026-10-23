@@ -31,6 +31,13 @@ import {
 // Journal disque du MOTIF des arrêts automatiques (correctif faux positif de
 // détection de boucle : la cause de l'arrêt doit survivre à la session).
 import { traceAutomaticAgentStop } from "./agent-stop-trace.js";
+// TEXTE DÉJÀ ÉCRIT D'UN AGENT MORT : quand un agent lancé en arrière-plan meurt
+// ou plante, ce qu'il avait déjà rédigé est CONSERVÉ et restitué (le buffer
+// `loop.lastText` était accumulé puis remis à zéro sans jamais être lu).
+import {
+  normalizePartialText as normalizePartialAgentText,
+  buildAgentDeathReport,
+} from "./agent-partial-text.js";
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 // Son de fin DIFFÉRÉ jusqu'à la fin réelle de l'affichage (le son ne doit plus
 // partir pendant que la réponse / le raisonnement s'écrit encore). L'émetteur
@@ -6330,7 +6337,7 @@ async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, r
 
   // Buffer de détection de boucle, SCOPÉ au listener (pas de variable de
   // module transitoire — issue #55, 4.3).
-  const loop = { buffer: "", lastText: "", lastChecked: 0, stopped: false, toolCalls: [] };
+  const loop = { buffer: "", lastText: "", priorText: "", lastChecked: 0, stopped: false, toolCalls: [] };
 
   // Écouter le canal d'événements de l'agent (même canal que l'onglet agent),
   // en utilisant l'id RÉSOLU (4.1).
@@ -6367,7 +6374,13 @@ function handleInvisibleAgentEvent(payload, messagesEl, agentId, projectPath, lo
   // (le compte rendu de fin ne doit contenir que le DERNIER message de l'agent).
   if (type === "message_start") {
     const m = payload.message;
-    if (m && m.role === "assistant") loop.lastText = "";
+    if (m && m.role === "assistant") {
+      // On REPART d'un texte vide pour le compte rendu courant, mais le texte
+      // déjà produit n'est plus jeté : il est conservé de côté. Si le processus
+      // meurt ensuite, c'est le dernier texte réellement écrit qui est restitué.
+      if (normalizePartialAgentText(loop.lastText)) loop.priorText = loop.lastText;
+      loop.lastText = "";
+    }
     return;
   }
   if (type === "message_update") {
@@ -6412,6 +6425,9 @@ function handleInvisibleAgentEvent(payload, messagesEl, agentId, projectPath, lo
     // comme le bus (agents-bus.js).
     if (!shouldFinalizeOnAgentEnd(payload)) {
       loop.buffer = "";
+      // Le texte déjà produit est CONSERVÉ (relance, compaction, continuation) :
+      // une mort qui suivrait ne doit pas emporter le travail déjà rédigé.
+      if (normalizePartialAgentText(loop.lastText)) loop.priorText = loop.lastText;
       loop.lastText = "";
       return;
     }
@@ -6427,10 +6443,9 @@ function handleInvisibleAgentEvent(payload, messagesEl, agentId, projectPath, lo
     return;
   }
   if (type === "process_exit" || type === "process_error") {
-    finalizeInvisibleAgent(
-      messagesEl, agentId, projectPath,
-      "⚠️ Connexion à l'agent en arrière-plan perdue."
-    );
+    // MORT / PLANTE : on conserve et on rend visible le texte que l'agent avait
+    // déjà écrit (au lieu d'un simple « Connexion perdue » qui le jetait).
+    void reportInvisibleAgentDeath(messagesEl, agentId, projectPath, loop, type);
     return;
   }
 }
@@ -6470,15 +6485,66 @@ export function buildInvisibleAgentFinalSummary(finalText) {
     : "L'agent a terminé la tâche déléguée en arrière-plan.";
 }
 
+/**
+ * Compose le compte rendu d'un agent MORT ou planté (fonction pure) : ce que
+ * l'agent avait DÉJÀ écrit, ou — s'il n'a rien écrit — la mention explicite
+ * « aucun texte récupéré ». Jamais un silence, jamais un texte inventé.
+ * @param {unknown} partialText - texte accumulé avant la mort (peut être "")
+ * @returns {string}
+ */
+export function buildInvisibleAgentDeathSummary(partialText) {
+  const text = normalizePartialAgentText(partialText);
+  return buildAgentDeathReport({ text, source: text ? "memory" : "none" });
+}
+
+/**
+ * Signale la mort d'un agent invisible : trace disque (même journal que les
+ * arrêts — champ `text=`) puis compte rendu à l'assistant avec le texte déjà
+ * produit. Aucune relance automatique : on conserve, on ne rejoue rien.
+ * @param {Element} messagesEl
+ * @param {string} agentId
+ * @param {string|null} projectPath
+ * @param {object} loop - buffers du suivi (lastText / priorText)
+ * @param {string} type - "process_exit" | "process_error"
+ * @returns {Promise<void>}
+ */
+async function reportInvisibleAgentDeath(messagesEl, agentId, projectPath, loop, type) {
+  const kept =
+    normalizePartialAgentText(loop && loop.lastText) ||
+    normalizePartialAgentText(loop && loop.priorText);
+  const tracked = invisibleAgents.get(invisibleAgentKey(agentId, projectPath));
+  const uid = tracked ? tracked.sessionUid : null;
+  // RÈGLE 3 : même emplacement de trace que les autres arrêts (jamais un
+  // second journal) ; l'écriture ne bloque jamais la fin de tâche.
+  await traceAutomaticAgentStop({
+    reason: "session-error",
+    detected: type === "process_error" ? "process-error" : "process-exit",
+    agentId,
+    projectPath,
+    uid,
+    text: kept,
+  }).catch(() => {});
+  finalizeInvisibleAgent(
+    messagesEl,
+    agentId,
+    projectPath,
+    `⚠️ Connexion à l'agent en arrière-plan perdue. ${buildInvisibleAgentDeathSummary(kept)}`,
+    { death: true },
+  );
+}
+
 /** Finalise le suivi (idempotent) : notifie, feedback délégation. */
-function finalizeInvisibleAgent(messagesEl, agentId, projectPath, message) {
+function finalizeInvisibleAgent(messagesEl, agentId, projectPath, message, options = {}) {
   // Finaliser une seule fois (l'état de l'objet a déjà basculé).
   const key = invisibleAgentKey(agentId, projectPath);
   const t = invisibleAgents.get(key);
   if (!t) return;
   // Récupérer le DERNIER message assistant réellement produit AVANT de supprimer
   // le suivi (le loop est porté par l'entrée de la map).
-  const finalText = t.loop && typeof t.loop.lastText === "string" ? t.loop.lastText : "";
+  const finalText =
+    (t.loop && typeof t.loop.lastText === "string" && t.loop.lastText) ||
+    (t.loop && typeof t.loop.priorText === "string" ? t.loop.priorText : "") ||
+    "";
   stopInvisibleAgentMonitoring(agentId, projectPath);
   appendSystemMessage(messagesEl, message);
   // Injecter le feedback de délégation (consomme pending → notification
@@ -6486,7 +6552,11 @@ function finalizeInvisibleAgent(messagesEl, agentId, projectPath, message) {
   // Garde de curation : un compte rendu sans résultat (agent sans texte final)
   // n'est pas mémorisé — SAUF s'il porte le feedback d'une délégation en attente
   // (la fin de tâche déléguée n'est jamais perdue, cf. `injectSessionSummaryToSuperAgent`).
-  const reportSummary = buildInvisibleAgentFinalSummary(finalText);
+  // MORT / PLANTE : le compte rendu dit ce que l'agent avait écrit, ou
+  // explicitement qu'aucun texte n'a été récupéré (jamais un silence).
+  const reportSummary = options && options.death
+    ? buildInvisibleAgentDeathSummary(finalText)
+    : buildInvisibleAgentFinalSummary(finalText);
   injectSessionSummaryToSuperAgent(reportSummary, projectPath, {
     remember: shouldRememberAgentReport(reportSummary),
   }).catch(() => {});

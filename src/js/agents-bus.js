@@ -62,6 +62,17 @@ import {
   traceAutomaticAgentStop,
   setAgentStopTraceFailureReporter,
 } from "./agent-stop-trace.js";
+// TEXTE DÉJÀ ÉCRIT D'UN AGENT MORT : à la mort d'un agent (process_exit /
+// process_error / extension_error), son travail rédigé était jeté (le buffer de
+// streaming était remis à zéro sans être lu). On le conserve et on le rend
+// visible : restitution dans le message d'échec + champ `text=` du journal des
+// arrêts existant (aucun second journal). Jamais de silence, jamais de texte
+// inventé — sans rien à restituer, la phrase le dit explicitement.
+import {
+  normalizePartialText,
+  extractDelegationResultText,
+  buildPartialTextDeathNotice,
+} from "./agent-partial-text.js";
 // ENTONNOIR UNIQUE des arrêts AUTOMATIQUES (règle 3) : un seul point de passage
 // écrit le motif AVANT d'arrêter. Les sites d'arrêt automatique de ce fichier ne
 // choisissent donc plus « trace ou pas trace » : ils décrivent leur motif et
@@ -2658,28 +2669,88 @@ export function handleAgentEvent(ev) {
       console.warn("[agents-bus] process exit après boucle", agentId, loopReason);
       // RÈGLE 3 : la session meurt ICI (processus tué par l'arrêt de boucle) —
       // le motif de fin de session est journalisé, distinct de la détection.
-      traceAutomaticAgentStop({
-        reason: "session-error",
-        detected: "loop-process-exit",
-        agentId,
-        projectPath: ctx.agentProject[agentId] || ctx.project || "",
-        uid: expectedSessionUid(ctx, agentId),
-      }).catch(() => {});
-      failAgentTurn(agentId, loopReason, ctx);
+      // Le texte déjà rédigé par l'agent rejoint la MÊME ligne (champ `text=`).
+      void finalizeDeadAgent(agentId, ctx, String(loopReason), { detected: "loop-process-exit" });
       return;
     }
     const reason = event.reason || event.message || event.error || "processus arrêté";
     console.log("[agents-bus] process error/exit", agentId, reason);
     // RÈGLE 3 : fin de session sur processus mort — motif écrit AVANT l'échec.
-    traceAutomaticAgentStop({
-      reason: "session-error",
-      detected: "process-exit",
-      agentId,
-      projectPath: ctx.agentProject[agentId] || ctx.project || "",
-      uid: expectedSessionUid(ctx, agentId),
-    }).catch(() => {});
-    failAgentTurn(agentId, reason, ctx);
+    // MORT / PLANTE SANS RAPPORT : on conserve et on rend visible le texte que
+    // l'agent avait DÉJÀ produit au lieu de le jeter (cf. `finalizeDeadAgent`).
+    void finalizeDeadAgent(agentId, ctx, String(reason), { detected: "process-exit" });
   }
+}
+
+/**
+ * Récupère le texte qu'un agent avait déjà produit au moment de sa mort.
+ *
+ * 1. la MÉMOIRE de la session d'abord (`streamingTextByAgent`, lu AVANT toute
+ *    remise à zéro) ;
+ * 2. si elle est vide, la récupération DÉJÀ EXISTANTE côté Rust
+ *    (`get_delegation_result` : session vivante puis fichier de session le plus
+ *    récent de l'agent) — aucun mécanisme dupliqué ;
+ * 3. sinon rien, et on le DIT (jamais un silence, jamais un texte inventé).
+ *
+ * @param {string} agentId
+ * @param {object} ctx - contexte de run
+ * @param {string} memoryText - texte accumulé en mémoire (avant remise à zéro)
+ * @returns {Promise<{text: string, source: "memory"|"session"|"none"}>}
+ */
+export async function recoverDeadAgentText(agentId, ctx, memoryText) {
+  const memory = normalizePartialText(memoryText);
+  if (memory) return { text: memory, source: "memory" };
+  const project = ctx && (ctx.agentProject[agentId] || ctx.project) ? (ctx.agentProject[agentId] || ctx.project) : "";
+  try {
+    const response = await invoke("get_delegation_result", {
+      project,
+      sessionId: null,
+      agentId,
+    });
+    const found = extractDelegationResultText(response);
+    if (found) return { text: found, source: "session" };
+  } catch (err) {
+    // Récupération impossible : ce n'est pas une raison pour jeter le reste —
+    // le message d'échec dira explicitement qu'aucun texte n'a été récupéré.
+    console.warn("[agents-bus] récupération du texte de l'agent interrompu impossible", agentId, err);
+  }
+  return { text: "", source: "none" };
+}
+
+/**
+ * Finalise la mort d'un agent (processus mort, plantage) en CONSERVANT son
+ * travail rédigé :
+ *  1. capture du texte partiel (mémoire, puis session sur le disque) ;
+ *  2. écriture dans le journal des arrêts EXISTANT (`.pilot/agent-stops.log`,
+ *     champ `text=`) — aucun second journal, aucun second emplacement ;
+ *  3. échec prononcé avec le texte restitué (ou la mention explicite « aucun
+ *     texte récupéré »).
+ * Aucune relance automatique : on conserve, on ne rejoue rien.
+ *
+ * @param {string} agentId
+ * @param {object} ctx - contexte de run
+ * @param {string} reason - cause de la mort (déjà lisible)
+ * @param {{detected?: string}} [options]
+ * @returns {Promise<void>}
+ */
+async function finalizeDeadAgent(agentId, ctx, reason, options = {}) {
+  const detected = (options && options.detected) || "process-exit";
+  const partial = await recoverDeadAgentText(agentId, ctx, ctx.streamingTextByAgent[agentId] || "");
+  // RÈGLE 3 : le motif de fin de session est journalisé (même ligne, même
+  // emplacement que la trace d'arrêt) AVANT que l'échec ne soit prononcé.
+  await traceAutomaticAgentStop({
+    reason: "session-error",
+    detected,
+    agentId,
+    projectPath: ctx.agentProject[agentId] || ctx.project || "",
+    uid: expectedSessionUid(ctx, agentId),
+    text: partial.text,
+  }).catch(() => {});
+  await failAgentTurn(agentId, reason, ctx, {
+    partialText: partial.text,
+    partialSource: partial.source,
+    restorePartialText: true,
+  });
 }
 
 function extractTextFromContent(content) {
@@ -3004,7 +3075,13 @@ async function describeInterruptedRun(ctx) {
     : "L'exécution de l'agent a été interrompue avant la fin. Rien n'a été écrit sur le disque : aucun travail à récupérer, vous pouvez relancer la tâche.";
 }
 
-async function failAgentTurn(agentId, reason, ctx) {
+async function failAgentTurn(agentId, reason, ctx, options = {}) {
+  const opts = options || {};
+  // TEXTE DÉJÀ ÉCRIT : lu AVANT la remise à zéro ci-dessous. C'est exactement
+  // cette remise à zéro qui jetait le travail rédigé par l'agent : on garde une
+  // copie pour la restituer (message d'échec + journal des arrêts).
+  const partialText =
+    typeof opts.partialText === "string" ? opts.partialText : ctx.streamingTextByAgent[agentId] || "";
   ctx.endedByAgent[agentId] = true; // marqueur anti double-finalisation
   ctx.pendingErrorByAgent[agentId] = undefined;
   ctx.streamingTextByAgent[agentId] = "";
@@ -3015,6 +3092,15 @@ async function failAgentTurn(agentId, reason, ctx) {
   if (ctx.interruptedRunByAgent[agentId] || /abort/i.test(String(reason))) {
     delete ctx.interruptedRunByAgent[agentId];
     reason = await describeInterruptedRun(ctx);
+  }
+  // MORT / PLANTE (processus mort) : le texte déjà produit est rendu visible au
+  // lieu d'être jeté. Sans rien à restituer, la phrase le DIT (« aucun texte
+  // récupéré ») — jamais un silence, jamais un texte inventé.
+  if (opts.restorePartialText) {
+    reason = `${reason}\n\n${buildPartialTextDeathNotice({
+      text: partialText,
+      source: opts.partialSource || (partialText ? "memory" : "none"),
+    })}`;
   }
   const project = ctx.agentProject[agentId] || ctx.project;
   // T6 : libérer les réservations du projet à l'échec du tour du codeur.

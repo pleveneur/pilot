@@ -70,6 +70,9 @@ export const MANUAL_STOP_MARKER = "R3-EXCEPTION-MANUEL";
  * @param {string|null} [options.projectPath] - projet de l'agent (journal local)
  * @param {number|null} [options.uid] - uid de session transmis à l'arrêt
  * @param {string} [options.detail] - précision libre (champ `detail=` du journal)
+ * @param {string} [options.text] - texte DÉJÀ ÉCRIT par l'agent arrêté (champ
+ *   `text=` du MÊME journal — la restitution du travail partiel ne crée pas un
+ *   second journal)
  * @param {() => any} options.stop - action d'arrêt (garde de propriété INCHANGÉE)
  * @returns {Promise<{traced: boolean, stopped: boolean}>}
  *   `traced` : la ligne de journal a été écrite (projet ou journal global) ;
@@ -82,6 +85,7 @@ export async function stopAgentWithTrace({
   projectPath = "",
   uid = null,
   detail = "",
+  text = "",
   stop,
 } = {}) {
   const why = typeof reason === "string" ? reason.trim() : "";
@@ -97,6 +101,7 @@ export async function stopAgentWithTrace({
         projectPath,
         uid,
         detail,
+        text,
       })) === true;
       // `traceAutomaticAgentStop` signale déjà ses propres échecs (rapporteur,
       // repli global) : on ne double pas le message ici.

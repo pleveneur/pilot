@@ -1493,14 +1493,44 @@ IPC existantes, rotation 256 Ko, fail-open côté arrêt) :
 
 `detected` distingue « boucle d'outils » (`tool-calls`) de « boucle de
 réflexion » (`text`, `text-escalation-exhausted`, `turn-cap`) — la cause ne reste
-plus en mémoire seulement. Côté bus d'agents, l'arrêt automatique transmet aussi
+plus en mémoire seulement. Une ligne peut porter en plus `detail=` (ce qui a été
+abandonné, nommé) et `text=` (le travail que l'agent avait **déjà écrit** quand
+il est mort — voir « Le travail écrit d'un agent mort n'est plus jeté »
+ci-dessous ; sauts de ligne encodés `\n`, champ borné à 4 000 caractères, la
+ligne du journal reste UNE ligne). Côté bus d'agents, l'arrêt automatique transmet aussi
 l'uid de session quand il est connu : `stop_agent_process` + `expectedUid`
 (garde de propriété : une session remplacée n'est pas tuée) ; uid inconnu →
 `stop_agent_session` (chemin historique, seul à libérer l'activité du projet).
 Modules : `loop-detection.js` (pures : `collectWriteContent`,
-`hashLoopContent`, `buildAgentStopTraceLine`, `appendAgentStopTrace`,
-`buildAgentStopRequest`), `agent-stop-trace.js` (I/O du journal),
+`hashLoopContent`, `buildAgentStopTraceLine`, `sanitizeAgentStopTraceText`,
+`appendAgentStopTrace`, `buildAgentStopRequest`), `agent-stop-trace.js` (I/O du
+journal), `agent-partial-text.js` (pures : restitution du texte d'un agent mort),
 `super-agent.js` / `agents-bus.js` (points d'arrêt).
+
+### Le travail écrit d'un agent mort n'est plus jeté
+
+Quand un agent **meurt ou plante** (`process_exit`, `process_error`,
+`extension_error`), Pilot ne jette plus ce qu'il avait déjà écrit :
+
+1. le texte partiel est **lu avant toute remise à zéro** (mémoire de la session :
+   `streamingTextByAgent` côté bus, `loop.lastText` côté Assistant — ce dernier
+   est désormais **conservé de côté** au lieu d'être remis à zéro) ;
+2. s'il est vide, la **récupération existante** est tentée telle quelle
+   (`get_delegation_result` : session vivante, puis session de l'agent sur le
+   disque) — aucun second mécanisme ;
+3. il est écrit dans le **journal des arrêts existant** (`text=` de
+   `<projet>/.pilot/agent-stops.log`) — **aucun second journal, aucun second
+   emplacement** ;
+4. il figure dans le **message d'échec** rendu à l'assistant, avec la phrase qui
+   dit ce que l'agent avait écrit **et** que la mission n'est pas terminée ;
+5. si vraiment rien n'a été produit, le message le dit explicitement
+   (« aucun texte récupéré ») : jamais un silence, jamais un texte inventé.
+
+**Aucune relance automatique** : on conserve et on rend visible, on ne rejoue
+rien. La limite de 45 minutes des questions en attente et le comportement d'un
+agent qui **finit bien** sont inchangés. Verrou anti-régression :
+`agent-texte-agent-mort.test.js` (texte dans le message + sur le disque ; mention
+ explicite quand il n'y a rien ; récupération disque quand la mémoire est vide).
 
 ### Règle 3 — aucun arrêt automatique sans trace écrite (tous les chemins)
 
@@ -1525,7 +1555,8 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
 | Demandes en file qui ne peuvent plus être rejouées / abandonnées | `queue-abandoned` | `watchdog`, `clear-all-runs`, `user-abandon`, `stop-agent` (délégations uniquement), `file-vide` |
 | Missions **conservées** en file par un arrêt d'agent (P2 : aucune destruction) | `queue-kept` | `stop-agent` |
 | Boucle détectée dans l'onglet agent principal (`agent-pi.js`) | `loop-detection` | `text`, `actions` |
-| Fin de SESSION par erreur dans le bus (chaque `failAgentTurn`) | `session-error`, `spawn-failed`, `run-exception` | erreur d'envoi de correction, sortie de processus (boucle / mort), message en erreur, modèle absent, exception du tour |
+| Fin de SESSION par erreur dans le bus (chaque `failAgentTurn`) | `session-error`, `spawn-failed`, `run-exception` | erreur d'envoi de correction, sortie de processus (boucle : `loop-process-exit`), mort du processus (`process-exit`), message en erreur, modèle absent, exception du tour |
+| Mort / plantage d'un agent lancé en arrière-plan (Assistant) | `session-error` | `process-exit`, `process-error` |
 | Destruction de la session de l'onglet agent (`stop_agent_session`) | `session-restart` | `quality-gate-toggle`, `reconnect`, `settings-restart` |
 | `/file vide` (familles commandes / missions / délégations) | `queue-abandoned` | `file-vide` |
 | Retrait ciblé d'**une seule** mission en attente (`/file retire <rang>`, outil assistant `remove_queued_mission`) | `queue-mission-removed` | `file-retire`, `assistant-remove-one`, `remove-one` |
@@ -1647,6 +1678,14 @@ Côté bus d'agents, **tous** les arrêts automatiques passent par un **point de
 passage unique** qui écrit le motif **avant** d'arrêter : un nouveau chemin
 d'arrêt ne peut donc plus oublier de laisser une trace. Si la trace ne peut pas
 être écrite, l'arrêt a quand même lieu — et l'échec est **signalé**, jamais tu.
+**Un agent qui meurt ou plante ne perd plus son travail écrit** : ce qu'il avait
+**déjà rédigé** vous revient dans le compte rendu de la tâche (avec la phrase qui
+dit que la mission n'est **pas** terminée), et il est conservé dans le **même**
+journal (`text=`) — jamais un second journal. Si la mémoire de la session est
+vide, Pilot relit la session de l'agent **sur le disque** ; s'il n'y a vraiment
+rien, c'est dit explicitement (« **aucun texte récupéré** ») : ni silence, ni
+texte inventé. Rien n'est relancé automatiquement — conserver et montrer, pas
+rejouer.
 <!-- /HELP:loop-detection-writes -->
 
 ### Mode « Assistant seul » (A19, maquette ASS_Only_V4)

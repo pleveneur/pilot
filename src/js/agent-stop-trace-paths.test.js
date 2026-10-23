@@ -462,9 +462,14 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       // trace doit être CELLE du chemin, pas une trace lointaine du même bloc.
       maxDistance: 800,
     });
-    expect(res.sites, "un appel `failAgentTurn` a été ajouté/retiré").toBe(9);
+    // 8 depuis la restitution du texte d'un agent mort : les DEUX appels de la
+    // branche `process_exit` (processus mort / boucle) sont remplacés par UN SEUL
+    // appel, dans `finalizeDeadAgent`, qui écrit la trace (avec le texte partiel)
+    // puis prononce l'échec — le motif écrit ne peut donc plus diverger du
+    // message rendu à l'assistant.
+    expect(res.sites, "un appel `failAgentTurn` a été ajouté/retiré").toBe(8);
     expect(res.untraced, "fin de session par erreur restée MUETTE").toEqual([]);
-    expect(res.traced).toBe(9);
+    expect(res.traced).toBe(8);
     // Les quatre motifs de fin par erreur sont explicites (jamais un texte vide).
     for (const motif of ["session-error", "spawn-failed", "model-missing", "run-exception"]) {
       expect(SRC_BUS, `motif de fin de session absent : ${motif}`).toContain(`"${motif}"`);
@@ -573,17 +578,24 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     // 4) : les QUATRE chemins d'abandon de file (missions/délégations, variante
     // synchrone / variante tracée) y passent, donc un nouveau chemin d'abandon
     // ne peut ni oublier la trace ni journaliser en double.
-    expect(counts.sa, "traces de l'assistant").toBe(4);
+    // 5 depuis la restitution du texte d'un agent mort : la mort d'un agent
+    // lancé en arrière-plan écrit sa trace AVANT de rendre le compte rendu
+    // (`reportInvisibleAgentDeath`, champ `text=` avec le travail déjà rédigé).
+    expect(counts.sa, "traces de l'assistant").toBe(5);
     // 18 traces existantes + 5 fins de session par erreur du bus = 23, MOINS les
     // 5 traces absorbées par l'ENTONNOIR UNIQUE (2 boucles, 1 plafond MAX_TURNS,
     // 1 session périmée, 1 nettoyage post-spawn) = 18, PLUS 1 ajoutée depuis
     // (arrêt auto de run devenu tracé dans le mécanisme) = 19 traces explicites.
-    expect(positionsIn(SRC_BUS, /traceAutomaticAgentStop[A-Za-z]*[(]/g).length, "traces explicites du bus").toBe(19);
+    // 19 avant la restitution du texte d'un agent mort ; –2 (branche
+    // `process_exit` : deux traces remplacées par une seule, dans
+    // `finalizeDeadAgent`) + 1 (cette trace unique, qui porte le texte partiel)
+    // = 18.
+    expect(positionsIn(SRC_BUS, /traceAutomaticAgentStop[A-Za-z]*[(]/g).length, "traces explicites du bus").toBe(18);
     // Points de trace de l'entonnoir : 2 boucles + 1 timeout + 1 plafond pi +
     // 1 plafond MAX_TURNS + 1 arrêt auto de run + 1 session périmée + 1 nettoyage.
     expect(positionsIn(SRC_BUS, /stopAgentWithTrace[(]/g).length, "appels d'entonnoir du bus").toBe(8);
     // Total des points de trace du bus (traces explicites + entonnoir) : épinglé.
-    expect(counts.bus, "points de trace du bus").toBe(27);
+    expect(counts.bus, "points de trace du bus").toBe(26);
   });
 
   it("un site terminal ajouté sans trace fait échouer la matrice (preuve du contrôle)", () => {

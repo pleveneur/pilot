@@ -627,6 +627,12 @@ export function buildActionLoopCorrectionPrompt(level, options = {}) {
 // journal des actions écran (`.pilot/screen-actions.log`).
 export const AGENT_STOP_TRACE_RELATIVE_PATH = ".pilot/agent-stops.log";
 export const AGENT_STOP_TRACE_MAX_CHARS = 256 * 1024;
+/**
+ * Longueur maximale du champ `text=` (texte qu'un agent avait déjà écrit au
+ * moment de sa mort). Bornée pour que la ligne reste exploitable et pour que la
+ * rotation du journal ne fasse pas disparaître les arrêts précédents.
+ */
+export const AGENT_STOP_TRACE_TEXT_MAX_CHARS = 4000;
 
 /**
  * Assainit une valeur de champ : une seule ligne, espaces compactés, longueur
@@ -643,6 +649,26 @@ function sanitizeTraceValue(value, max = 200) {
 }
 
 /**
+ * Assainit le TEXTE PARTIEL d'un agent mort pour le journal (pure) : la ligne du
+ * journal reste UNE ligne (les sauts de ligne réels sont encodés `\n`), les
+ * espaces horizontaux sont compactés et la longueur est bornée. La structure des
+ * phrases reste lisible : c'est un texte à exploiter, pas un hachage.
+ * @param {unknown} value
+ * @param {number} [max=AGENT_STOP_TRACE_TEXT_MAX_CHARS]
+ * @returns {string}
+ */
+export function sanitizeAgentStopTraceText(value, max = AGENT_STOP_TRACE_TEXT_MAX_CHARS) {
+  const raw = value === undefined || value === null ? "" : String(value);
+  const oneLine = raw
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n/g, "\\n")
+    .replace(/[ \t\f\v]+/g, " ")
+    .trim();
+  if (!oneLine) return "";
+  return oneLine.length > max ? oneLine.slice(0, max - 3) + "..." : oneLine;
+}
+
+/**
  * Construit une ligne du journal des arrêts automatiques (pure).
  * Format : `<RFC3339>  op=auto-stop  reason=…  detected=…  agent=…  project=…  uid=…`
  * (deux espaces entre champs, comme le journal des actions écran), suivi d'un
@@ -656,6 +682,9 @@ function sanitizeTraceValue(value, max = 200) {
  * @param {string} [entry.projectPath]
  * @param {number|null} [entry.uid] - uid de session transmis à l'arrêt
  * @param {string} [entry.detail] - ce qui a été abandonné, nommé (optionnel)
+ * @param {string} [entry.text] - texte DÉJÀ ÉCRIT par un agent mort (optionnel ;
+ *   champ `text=`, sauts de ligne encodés, longueur bornée) — c'est le MÊME
+ *   journal que la trace d'arrêt, jamais un second journal
  * @param {string} [entry.timestamp] - horodatage (défaut : maintenant)
  * @returns {string}
  */
@@ -675,6 +704,10 @@ export function buildAgentStopTraceLine(entry = {}) {
   // demandes en file). Sans lui, aucune ligne existante ne change de format.
   const detail = sanitizeTraceValue(e.detail, 400);
   if (detail) fields.push("detail=" + detail);
+  // `text` (optionnel) : le travail déjà rédigé par un agent mort n'est plus
+  // jeté — il est conservé dans le MÊME journal, avec la trace de son arrêt.
+  const partialText = sanitizeAgentStopTraceText(e.text);
+  if (partialText) fields.push("text=" + partialText);
   return at + "  " + fields.join("  ");
 }
 
