@@ -12,7 +12,11 @@ import { vi, describe, it, expect } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
-vi.mock("markdown-it", () => ({ default: vi.fn(() => ({ render: () => "" })) }));
+// `use` doit etre chainable : le vrai markdown-it renvoie l'instance
+// (`markdownit({…}).use(plugin, opts)` dans preview.js).
+vi.mock("markdown-it", () => ({
+  default: vi.fn(() => ({ use() { return this; }, render: () => "" })),
+}));
 vi.mock("./icons.js", () => ({ refreshIcons: vi.fn() }));
 vi.mock("./backend-info.js", () => ({ agentDisplayLabel: vi.fn(), backendKind: vi.fn() }));
 vi.mock("./agent-pi.js", () => ({ appendDelegatedMessage: vi.fn(), purgeAgentTabView: vi.fn() }));
@@ -32,6 +36,16 @@ vi.mock("./agents-bus.js", () => ({
 vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
 vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
 vi.mock("./super-agent-schedule.js", () => ({ shouldScheduleTick: vi.fn(), parseScheduleEvery: vi.fn() }));
+
+// `super-agent.js` charge designormais `updater.js` -> `preview.js`, qui pose un
+// ecouteur `theme-changed` des le chargement du module : un `window` minimal suffit.
+if (!globalThis.window) {
+  globalThis.window = {
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() { return true; },
+  };
+}
 
 const { shouldScrollSuperToBottom, computeSuperAtBottomFlag, buildInvisibleAgentFinalSummary } = await import("./super-agent.js");
 
