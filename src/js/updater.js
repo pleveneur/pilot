@@ -352,6 +352,31 @@ export function getPendingUpdateWindow() {
   };
 }
 
+/**
+ * Une mise à jour ATTEND-ELLE la place sur le terrain ? (lecture seule, PURE)
+ *
+ * Sert à donner à l'attente une PRIORITÉ sur la relance AUTOMATIQUE du travail
+ * (mission sortie de file, délégation en file) : sans elle, la chaîne d'agents
+ * reprend la place dans la même foulée que la fin d'une run et l'écran de mise
+ * à jour, lui, n'a jamais les 10 s de terrain libre que demande son réexamen —
+ * la mise à jour restait alors annoncée « à la fin du travail en cours »
+ * indéfiniment (défaut constaté sur la 0.4.42).
+ *
+ * Vrai seulement quand l'attente est RÉELLE : une version mémorisée, pas encore
+ * reportée par le propriétaire (« Plus tard » / ✕), pas en cours d'installation,
+ * et écran pas encore ouvert (sinon le terrain est déjà réservé et c'est
+ * `isTerrainReserved()` qui tranche).
+ * @returns {boolean}
+ */
+export function isUpdateWaitingForGround() {
+  if (!_pendingUpdate) return false;
+  if (_installing) return false; // elle OCCUPE déjà le terrain (installation)
+  if (isUpdateWindowReserved()) return false; // l'écran est déjà ouvert
+  const version = _pendingUpdate.version;
+  if (_dismissedVersion && version === _dismissedVersion) return false; // reporté
+  return true;
+}
+
 /** Affiche la modale de mise à jour avec le changelog de la nouvelle version. */
 function showUpdateModal(update) {
   if (!ensureModal()) {

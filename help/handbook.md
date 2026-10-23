@@ -239,6 +239,11 @@ travailles t'est donc proposée **sans redémarrer** l'application.
   message discret te prévient (et un rappel « ⬆ Mise à jour en attente » reste
   dans la barre de statut), puis la fenêtre s'affiche **d'elle-même** dès que la
   tâche est terminée. Tu n'as rien à relancer.
+- **La mise à jour passe avant la tâche suivante** : si des tâches s'enchaînent
+  ou attendent en file, la mise à jour en attente **prend la place à la fin de
+  la tâche en cours**, avant le lancement de la suivante (qui reste en file et
+  repart après). Une mise à jour annoncée ne peut donc plus rester « en attente »
+  indéfiniment parce que le travail ne s'arrête jamais.
 - **Et rien ne démarre pendant la mise à jour** : tant que la fenêtre est
   ouverte, et pendant l'installation, **aucun agent ne démarre** — un lancement
   est refusé avec un message clair qui dit quoi faire (choisir **Plus tard**, qui

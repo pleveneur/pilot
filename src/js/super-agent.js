@@ -70,6 +70,14 @@ import {
   canAssistantReflect,
   assistantReflectionBlockedMessage,
 } from "./run-policy.js";
+// MISE À JOUR EN ATTENTE (correctif du 2026-10-23, cas 0.4.42) : une mise à jour
+// mémorisée et non reportée par le propriétaire a la PRIORITÉ sur la relance
+// AUTOMATIQUE du travail (mission sortie de file, délégation en file). Sans
+// cela la chaîne d'agents reprend la place dans la même foulée que la fin d'une
+// run, le terrain n'est jamais libre 10 s d'affilée et l'écran de mise à jour ne
+// s'affiche jamais. La règle vit dans `updater.js` (source unique) : ici on ne
+// fait que la consulter.
+import { isUpdateWaitingForGround, recheckPendingUpdateWindow } from "./updater.js";
 import { shouldFinalizeOnAgentEnd } from "./agent-hardening.js";
 import { toastInfo } from "./toast.js";
 import { createReportDeliveryGate } from "./super-agent-reports.js";
@@ -1394,6 +1402,22 @@ function launchQueuedMission(target, entry) {
       runAgentsQueueByProject[blockedKey].unshift(entry);
     }
     armQueueReplay(target);
+    return;
+  }
+  // MISE À JOUR EN ATTENTE : même refus que ci-dessus, avec une différence
+  // décisive — le terrain est LIBRE à cet instant précis (fin d'une run, ou
+  // rejeu périodique). On ne se contente donc pas de garder la mission en file :
+  // on déclenche MAINTENANT l'écran de mise à jour, qui prend la place. Sans ce
+  // déclencheur, la mission suivante repartait immédiatement et l'attente ne
+  // trouvait jamais les 10 s de terrain libre que demande son réexamen.
+  if (isUpdateWaitingForGround()) {
+    const waitingKey = missionQueueKey(target);
+    if (!runAgentsQueueByProject[waitingKey]) runAgentsQueueByProject[waitingKey] = [];
+    if (!runAgentsQueueByProject[waitingKey].includes(entry)) {
+      runAgentsQueueByProject[waitingKey].unshift(entry);
+    }
+    armQueueReplay(target);
+    recheckPendingUpdateWindow();
     return;
   }
   // P1 — FENÊTRE DE COURSE : la mission vient d'être retirée de la file par
@@ -6328,6 +6352,15 @@ function flushDelegationQueue(projectPath) {
     // rejeu périodique la reprendra dès que le terrain sera libre) — aucune
     // demande n'est consommée puis perdue.
     armDelegationQueueReplay(projectPath);
+    return;
+  }
+  // MISE À JOUR EN ATTENTE : le terrain est LIBRE à cet instant (fin d'une run)
+  // — la mise à jour prend la place avant la demande suivante, qui reste en
+  // tête de file (rejeu réarmé). Sans cela, la délégation suivante repartait
+  // aussitôt et l'écran de mise à jour attendait une fenêtre qui n'arrive jamais.
+  if (isUpdateWaitingForGround()) {
+    armDelegationQueueReplay(projectPath);
+    recheckPendingUpdateWindow();
     return;
   }
   const tabs = window._pilotTabs;
