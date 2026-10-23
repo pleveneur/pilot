@@ -1721,10 +1721,15 @@ rejouer.
   repart repliée).
 - **Indicateur d'activité** sous les messages : point **vert « Prêt · lecture
   seule »** au repos, **violet pulsant « Réfléchit… »** quand l'Assistant
-  travaille. Pendant la réflexion, le **fond de la zone de saisie** respire
-  (halo discret animé) dans les **deux modes** (standard et assistant seul) —
-  en complément de l'**anneau pulsant autour du logo** en mode immersif ; au
-  repos, aucun effet, la zone reste utilisable.
+  travaille. Le **fond de la zone de saisie** respire (halo discret animé) dans
+  les **deux modes** (standard et assistant seul) pendant que l'Assistant
+  réfléchit **et aussi pendant qu'un agent qu'il a lancé travaille** — le même
+  signal que le point qui respire dans la liste des agents, pour que vous
+  sachiez que le travail continue même après une délégation ; en complément de
+  l'**anneau pulsant autour du logo** en mode immersif. Il ne respire **pas**
+  pendant qu'une question d'agent attend votre réponse (la zone reste alors en
+  mode normal, prête à recevoir votre précision) ; au repos, aucun effet, la
+  zone reste utilisable.
 - **Suggestions** : quatre chips (« Faire un point sur un projet », « Déléguer
   une demande à l'agent », « Préparer une livraison », « Lister les tâches en
   cours ») qui **préremplissent la zone de saisie** (elles n'envoient pas).
@@ -1799,6 +1804,32 @@ par l'Assistant était avorté quelques secondes après son démarrage).
 - **Tests** : `src/js/agents-bus-stop-scope.test.js` (portée ciblée vs globale,
   uid transmis, réservations) ; `agent_service.rs` (`session_ownership_allows`,
   monotonie des uid).
+
+---
+
+## Technique — signal de travail de la zone de saisie 🧭
+
+Correctif du symptôme « le point de la liste des agents respire, la zone de
+saisie du chat non » : après une délégation, `delegate_to_coder` rend la main
+immédiatement, donc l'`agent_end` de l'Assistant arrive alors que l'agent du
+projet **commence** à travailler → la barre retombait au repos alors que le
+travail continuait.
+
+- **Une seule décision, pure et testée** : `superAgentInputReflecting({ agentReflecting, agentsWorking, pendingQuestion })`
+  (`src/js/super-agent.js`) — la zone respire si l'Assistant réfléchit **ou** si
+  un agent travaille, **jamais** pendant l'attente d'une question
+  (`pendingQuestion` prioritaire).
+- **Même état que le point de la liste** : `agentsWorking` vient du store
+  partagé `agent-activity.js` (`subscribeAgentActivity` → 2ᵉ argument `busy` =
+  `anyBusy(list)`), le **même** que celui qui fait respirer le point du haut à
+  droite. Abonnement retiré à la fermeture de l'onglet (`unlisten`).
+- **Même style, aucune règle CSS ajoutée** : classe existante
+  `superagent-input-reflecting` (`.agent-chat-input-bar`). L'anneau du logo
+  hero (mode assistant seul), le bandeau « occupé », le bouton « Analyser et
+  ranger mes données » et le libellé d'état gardent **leur propre** signal —
+  aucun autre indicateur modifié.
+- **Tests** : `src/js/super-agent-reflecting.test.js`.
+- Rapport détaillé : `RAPPORT-pulsation-zone-saisie.md`.
 
 ---
 
