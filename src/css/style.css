@@ -583,12 +583,17 @@ body.theme-light.theme-tokyo-day {
 }
 
 .pj-panel {
+  /* Etape 1 de la navigation : chaque bouton porte desormais son libelle court
+     a cote de son icone. Une seule colonne de lignes pleine largeur : aucun
+     libelle tronque, aucun retour a la ligne, largeur de la colonne inchangee
+     (280 px au minimum). */
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 4px;
   padding: 8px;
-  /* Cadre + fond portés par #project-footer (un seul bloc visuel) :
+  /* Cadre + fond portes par #project-footer (un seul bloc visuel) :
      le panel ne garde que sa mise en page interne. */
 }
 
@@ -1321,6 +1326,26 @@ body.theme-light.theme-tokyo-day {
 }
 #global-actions button:active,
 .pj-panel button:active { transform: scale(0.94); }
+
+/* Etape 1 de la navigation : boutons nommes du panneau projet.
+   Icone a gauche, libelle court a droite, ligne pleine largeur — le texte
+   n'est jamais coupe et la colonne de gauche n'est pas elargie. */
+.pj-panel button {
+  width: 100%;
+  padding: 0 8px;
+  gap: 8px;
+  justify-content: flex-start;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  text-align: left;
+}
+
+.pj-btn-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
 
 /* --- Tab Bar --- */
 #tab-bar {
