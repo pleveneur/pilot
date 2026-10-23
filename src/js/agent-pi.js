@@ -15,6 +15,9 @@ import { exportConversationMarkdown, copyConversationHtml } from "./conversation
 import { renderEditGateDialog } from "./diff-view.js";
 // Contrôle de l'écran (serveurs MCP « écran ») : dialogue de confirmation dédié.
 import { SCREEN_GATE_SENTINEL } from "./screen-guard.js";
+// Relais des questions d'agent (SOURCE UNIQUE partagée avec le bus d'agents) :
+// décision « relayable » + nom de l'événement de relais vers l'assistant.
+import { AGENT_RELAY_EVENT, isRelayableAgentChoice } from "./agent-choice-relay.js";
 import { animateModalOpen, animatePanelOpen } from "./modal-anim.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { agentSelectorIds, findModelSelect } from "./agent-model-selector.js";
@@ -7697,7 +7700,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         && isSuperAgentActiveTab()
         && isRelayableAgentChoice(payload)
       ) {
-        window.dispatchEvent(new CustomEvent("pilot-agent-relay-request", {
+        window.dispatchEvent(new CustomEvent(AGENT_RELAY_EVENT, {
           detail: {
             payload,
             agentId: state.agentId || "default",
@@ -8807,23 +8810,11 @@ function isSuperAgentActiveTab() {
 
 /** Relais via l'assistant (tâche de suivi #22) : un choix pilot-choices émis par
  * un agent du projet (select/confirm/input) est relayé dans le chat 🧭 quand
- * l'onglet Assistant est ouvert. On exclut les demandes internes (porte
- * pré-écriture pilot-edit-gate, actions assistant) qui ont leur propre
- * traitement. */
-function isRelayableAgentChoice(payload) {
-  const m = payload.method;
-  if (m === "select" || m === "input") return true;
-  if (m === "confirm") {
-    const msg = payload.message || "";
-    if (msg.startsWith("PILOT_EDIT_GATE::")) return false;
-    if (msg.startsWith("PILOT_ASSISTANT_ACTION::")) return false;
-    // Contrôle de l'écran : la confirmation doit rester dans l'onglet de l'agent
-    // concerné (elle décide d'une action réelle sur la machine).
-    if (msg.startsWith(SCREEN_GATE_SENTINEL)) return false;
-    return true;
-  }
-  return false;
-}
+ * l'onglet Assistant est ouvert. La décision « relayable ou non » (exclusion des
+ * demandes internes : porte pré-écriture pilot-edit-gate, actions assistant,
+ * contrôle de l'écran) vit dans `agent-choice-relay.js` — SOURCE UNIQUE, partagée
+ * avec le bus d'agents (agents-bus.js), pour que les deux chemins de relais ne
+ * divergent jamais. */
 
 async function handleExtensionUiRequest(payload, container, state) {
   const { id, method } = payload;

@@ -166,7 +166,8 @@ pilot/
 │       ├── agent-pi.js        # Chat agent Pi (RPC), streaming, onglet π
 │       ├── agent-model-selector.js # C4 : id DOM du sélecteur de modèle propres au couple (projet, agent) — pures
 │       ├── orchestration.js   # Mode Orchestration : prompts, parsing plan, validation (pures)
-│       ├── agents-bus.js      # Bus d'agents (orchestration) : contexte de run, verrou par projet, restitution fiable fin-de-run (willRetry/agent_settled, erreurs différées)
+│       ├── agents-bus.js      # Bus d'agents (orchestration) : contexte de run, verrou par projet, restitution fiable fin-de-run (willRetry/agent_settled, erreurs différées) — les QUESTIONS d'un agent (extension_ui_request) ne sont plus auto-répondues : elles remontent à l'assistant (relais, voir agent-choice-relay.js)
+│       ├── agent-choice-relay.js # SOURCE UNIQUE du relais des questions d'agent vers la conversation de l'assistant : événement `pilot-agent-relay-request`, décision `isRelayableAgentChoice` (exclusion des portes internes : diff review, action assistant, contrôle de l'écran), libellé `agentQuestionLabel` — partagé par agent-pi.js (onglet chat) et agents-bus.js (agents en arrière-plan, sans condition d'onglet actif) ; aucune réponse décidée à la place de l'utilisateur
 │       ├── ephemeral-agents.js # Agent jetable (à la volée) : id réservé `eph-`, magasin mémoire, fusion dans le bus, purge en fin de tâche — aucune écriture en base
 │       ├── orchestration-reviewer.js # Reviewer indépendant (H2 V1) : buildReviewPrompt, parseReviewResult, glob matching (pures)
 │       ├── theme.js           # Gestion des thèmes dark/light

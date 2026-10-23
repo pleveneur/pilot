@@ -88,6 +88,14 @@ import {
 // Le chemin RÉEL reste utilisé tel quel pour le backend (jamais la clé).
 import { sameProject, projectScopedKey, deleteProjectScoped, queueKeyMatchesProject } from "./project-key.js";
 import { isProjectReservedBy, deleteReservations, clearAllReservations } from "./reservations.js";
+// RELAIS DES QUESTIONS D'AGENT (source unique partagée avec l'onglet chat) : une
+// question posée par un agent lancé par l'assistant REMONTE à l'utilisateur via
+// la conversation de l'assistant, au lieu d'être répondue à sa place par le bus.
+import {
+  AGENT_RELAY_EVENT,
+  isRelayableAgentChoice,
+  agentQuestionLabel,
+} from "./agent-choice-relay.js";
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
@@ -2686,13 +2694,27 @@ function extractTextFromContent(content) {
 }
 
 /**
- * Gère les extension_ui_request des agents : auto-répond car les agents tournent
- * de manière autonome (pas d'interaction UI manuelle possible pendant une run).
- * - notify  → affiche le message dans l'UI, pas de réponse attendue
- * - confirm → auto-approuve (l'utilisateur a explicitement demandé la tâche)
- * - select  → sélectionne la première option
- * - input   → annule (pas de saisie utilisateur possible en mode autonome)
- * - editor  → ignore (pas d'éditeur intégré pour les agents)
+ * Gère les extension_ui_request des agents.
+ *
+ * RÈGLE (règle du propriétaire, 2026-10-16) : un agent PEUT poser une question
+ * — on en a besoin — et cette question doit REMONTER à l'utilisateur via la
+ * conversation de l'assistant, qui la lui transmet. Aucune réponse n'est
+ * décidée à la place de l'utilisateur : l'ancien comportement du bus
+ * (`confirmed: true`, `options[0]`, `cancelled: true`) est SUPPRIMÉ — il
+ * répondait à la place de l'utilisateur, qui ne voyait donc jamais la question.
+ *
+ * - notify / setStatus / setWidget / setTitle / set_editor_text → sans réponse
+ * - confirm / select / input → QUESTION relayée par le MÊME mécanisme que l'onglet
+ *   chat (événement `pilot-agent-relay-request`). Aucune condition « onglet
+ *   actif » : les agents de l'assistant tournent en arrière-plan et leur
+ *   question doit remonter de la même façon.
+ * - portes internes (diff review, action assistant, contrôle de l'écran) et
+ *   `editor` → ce ne sont pas des questions de l'utilisateur : elles ne sont pas
+ *   relayées, et le bus ne répond plus à leur place (aucun repli inventé).
+ *
+ * Si l'utilisateur ne répond pas, la demande reste EN ATTENTE : la limite de
+ * 45 min déjà en place côté Rust (`anomaly::AWAITING_USER_MAX_SUSPEND_SECS`)
+ * empêche le gel de la file. Aucun `setTimeout` ne fabrique de réponse.
  */
 async function handleExtensionUiRequest(agentId, event, ctx) {
   const { id, method } = event;
@@ -2712,28 +2734,59 @@ async function handleExtensionUiRequest(agentId, event, ctx) {
     return; // fire-and-forget
   }
 
-  let command;
-  if (method === "confirm") {
-    command = { type: "extension_ui_response", id, confirmed: true, cancelled: false };
-  } else if (method === "select") {
-    const options = event.options || [];
-    command = options.length > 0
-      ? { type: "extension_ui_response", id, value: options[0] }
-      : { type: "extension_ui_response", id, cancelled: true };
-  } else if (method === "input") {
-    command = { type: "extension_ui_response", id, cancelled: true };
-  } else if (method === "editor") {
-    command = { type: "extension_ui_response", id, cancelled: true };
-  } else {
-    command = { type: "extension_ui_response", id, cancelled: true };
+  if (isRelayableAgentChoice(event)) {
+    // QUESTION de l'agent : elle remonte à l'utilisateur (aucune réponse ici).
+    relayAgentQuestion(agentId, event, ctx);
+    return;
   }
 
+  // Porte INTERNE (le bus n'a pas de surface pour l'afficher) ou demande sans
+  // question pour l'utilisateur : on ne répond PLUS à sa place. L'attente est
+  // signalée (jamais silencieuse) et reste bornée par la limite Rust de 45 min.
+  emit("notify", {
+    agentId,
+    notifyType: "warning",
+    message:
+      `⚠️ L'agent ${agentId} attend une validation interne (« ${agentQuestionLabel(event)} », ${method}). ` +
+      `Aucune réponse n'est décidée à votre place ; la demande reste en attente (plafond de 45 min).`,
+  });
+}
+
+/**
+ * RELAIS D'UNE QUESTION D'AGENT (agents lancés en arrière-plan par l'assistant).
+ *
+ * Réutilise le MÉCANISME EXISTANT de l'onglet chat : le même événement navigateur
+ * (`pilot-agent-relay-request`, écouté par `super-agent.js` →
+ * `relayAgentChoiceRequest`) — aucune seconde mécanique. La réponse de
+ * l'utilisateur est routée vers LA bonne session agent par `send_agent_command_to`.
+ *
+ * Aucune condition « onglet actif » : la question d'un agent lancé en
+ * arrière-plan doit remonter. Si aucun écouteur n'est présent (onglet 🧭 jamais
+ * ouvert), la question reste EN ATTENTE : surtout aucune réponse inventée.
+ *
+ * @param {string} agentId - agent émetteur (clé du bus)
+ * @param {object} event - `extension_ui_request` brut (id, method, title, options…)
+ * @param {object} ctx - contexte de run (projet réel de l'agent)
+ */
+function relayAgentQuestion(agentId, event, ctx) {
+  const projectPath = ctx.agentProject[agentId] || ctx.project || null;
   try {
-    await invoke("send_agent_process_command", { agentId, command, project: ctx.agentProject[agentId] || ctx.project || null });
-    console.log("[agents-bus] ext_ui_response sent", agentId, "method=" + method, "id=" + id);
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(
+        new CustomEvent(AGENT_RELAY_EVENT, { detail: { payload: event, agentId, projectPath } }),
+      );
+      console.log("[agents-bus] question relayée à l'assistant", agentId, "method=" + event.method, "id=" + event.id);
+    }
   } catch (err) {
-    console.error("[agents-bus] extension_ui_response error", agentId, err);
+    console.error("[agents-bus] relais de la question impossible", agentId, err);
   }
+  // Visibilité garantie : la question est signalée même si la conversation de
+  // l'assistant n'est pas ouverte (aucune réponse n'est décidée pour autant).
+  emit("notify", {
+    agentId,
+    notifyType: "warning",
+    message: `❓ L'agent ${agentId} attend votre réponse : « ${agentQuestionLabel(event)} ».`,
+  });
 }
 
 // T6 : nettoie les réservations du projet quand le CODEUR termine son tour

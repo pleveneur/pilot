@@ -1112,6 +1112,12 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - Compétence absente de la liste mais déjà cochée = dossier introuvable dans `~/.pilot/skills` : elle reste affichée pour ne pas disparaître sans que vous le sachiez.
 - Pour en ajouter une : créez le dossier `<nom>/SKILL.md` dans `~/.pilot/skills`, puis rouvrez l'éditeur de l'agent.
 
+### Poser une question : elle vous revient toujours
+- Un agent **peut poser une question** (choix d'une approche, confirmation, saisie) : c'est souvent indispensable, et la question **remonte jusqu'à vous**. Elle s'affiche dans la conversation de l'**Assistant**, avec ses options, et **vous** y répondez (champ de précision optionnel).
+- Cela vaut **aussi pour les agents lancés en arrière-plan** par l'Assistant, même si vous n'êtes pas sur l'onglet 🧭 : la question est relayée de la même façon, et elle est **signalée** dans le suivi. **Aucune réponse n'est décidée à votre place** (ni approbation, ni première option, ni annulation).
+- Si vous ne répondez pas, la demande **reste en attente** : la limite d'attente de **45 minutes** déjà en place évite qu'elle bloque la file indéfiniment. Aucune réponse de repli n'est inventée.
+- Les **demandes internes** (validation d'écriture, action Pilot, contrôle de l'écran) gardent leur propre dialogue et ne sont jamais tranchées automatiquement.
+
 ### Suivre et arrêter
 - Une tâche lancée sur un agent **peut en appeler un autre** : Pilot relaie le résultat à l'appelant, un seul agent travaille à la fois (hors sous-tâches parallèles).
 - **Détection de cycle** : un agent déjà dans la chaîne ne peut pas être rappelé.
@@ -2431,13 +2437,28 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 ### Relayer les questions des agents du projet (tâche #22)
 - Quand un **agent du projet** (ex: agent de contrôle) a besoin d'une décision
   de votre part pendant son travail (choix d'une approche, confirmation,
-  saisie…), c'est **l'Assistant qui sert d'interface** : tant que vous êtes sur
-  l'onglet 🧭, la question de l'agent est **affichée dans la conversation de
-  l'Assistant**, avec les options proposées.
+  saisie…), c'est **l'Assistant qui sert d'interface** : la question de l'agent
+  est **affichée dans la conversation de l'Assistant**, avec les options
+  proposées.
 - Vous pouvez **annoter / modifier / valider** votre réponse avant qu'elle soit
   envoyée à l'agent (champ de précision optionnel + bouton de validation).
 - La réponse est transmise au **bon agent** (chaque agent est identifié : ses
   réponses ne sont pas mélangées), qui poursuit son travail débloqué.
+- **Agents lancés en arrière-plan** : la question remonte de la **même façon**,
+  sans exiger que l'onglet 🧭 soit ouvert ou actif (auparavant, le bus d'agents
+  répondait à leur place : `confirm` → approuvé, `select` → première option,
+  `input` → annulé, si bien que la question n'était jamais visible). Aucune
+  réponse n'est désormais décidée à votre place ; la demande reste **en attente**
+  tant que vous ne répondez pas (limite de **45 minutes**, `anomaly.rs`
+  `AWAITING_USER_MAX_SUSPEND_SECS`, qui empêche le gel de la file).
+
+<!-- HELP:super-agent-relay-questions -->
+- Quand un agent lancé par l'Assistant a besoin d'une décision de votre part
+  (choix, confirmation, saisie), la question **remonte dans la conversation de
+  l'Assistant** avec ses options — même si l'agent tourne en arrière-plan et même
+  si vous n'êtes pas sur l'onglet 🧭. Aucune réponse n'est décidée à votre place ;
+  sans réponse, la demande attend (plafond de 45 min).
+<!-- /HELP:super-agent-relay-questions -->
 
 ### Apprendre en continu
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**

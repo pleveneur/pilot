@@ -13,6 +13,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(resolve(here, p), "utf8");
 
 const agentPi = read("agent-pi.js");
+const relay = read("agent-choice-relay.js");
 const settings = read("settings.js");
 const html = read("../../index.html");
 const extension = read("../../src-tauri/extensions/mcp-client.src.ts");
@@ -57,8 +58,14 @@ describe("contrôle de l'écran — dialogue de confirmation (agent-pi.js)", () 
   });
 
   it("n'expose plus le dialogue d'écran au relais de l'assistant", () => {
-    expect(agentPi).toMatch(
+    // La décision « relayable » vit désormais dans `agent-choice-relay.js`
+    // (source unique partagée avec le bus d'agent) : c'est LÀ que le contrôle de
+    // l'écran est exclu du relais, et `agent-pi.js` consomme cette décision.
+    expect(relay).toMatch(
       /if \(msg\.startsWith\(SCREEN_GATE_SENTINEL\)\) return false;/,
+    );
+    expect(agentPi).toMatch(
+      /import \{ AGENT_RELAY_EVENT, isRelayableAgentChoice \} from "\.\/agent-choice-relay\.js";/,
     );
   });
 });
