@@ -40,6 +40,12 @@ arrêté. Pendant ce temps, **l'écran le montre** : la commande en cours et sa
 durée écoulée s'affichent dans l'onglet de l'agent, dans la liste des agents et
 dans la liste des tâches — une compilation n'est jamais confondue avec un arrêt.
 
+**Cas de l'outil qui ne se termine jamais** : si un outil reste ouvert plus de
+**60 minutes** sans jamais rendre la main (fin d'outil perdue), Pilot considère
+qu'il est **perdu** et libère seulement l'indicateur « occupé » — le cercle
+d'activité s'éteint et la mise à jour peut de nouveau être proposée. **Rien n'est
+interrompu** : ni l'outil, ni l'agent. Le motif est journalisé.
+
 Une **fin de tour partielle** de l'agent (reprise automatique après une erreur
 passagère ou une compaction) n'est **pas** un repos : l'agent reste considéré
 comme en train de travailler, son créneau comme sa place en file sont conservés.
@@ -449,6 +455,44 @@ la protection réelle est intacte (session fantôme, process mort, réservation
 abandonnée sont toujours libérés). Le plancher n'est **pas** exposé dans les
 paramètres (non réclamé, ajouterait un réglage pour un cas interne).
 
+### 2.4 quinquies Borne dure de l'exemption d'outil (60 min)
+
+`tool_in_progress` était le **seul** état du moteur **sans aucune borne
+temporelle** : un `tool_execution_end` perdu (outil tué avec le tour, réponse
+d'outil jamais rendue, `agent_end` avec `willRetry` sans reprise réelle) laissait
+le marqueur posé À VIE. L'exemption neutralisait alors les trois filets
+(`should_auto_stop_on_progress`, `should_report_anomaly`,
+`should_release_stale_busy`) : la session restait « occupée » indéfiniment —
+cercle d'activité qui respire sans fin, fenêtre de mise à jour **muette**
+(`RAPPORT-diag-indicateur-travail.md`, points A→E).
+
+Correctif (côté Rust uniquement) :
+
+1. Champ **additif** `tool_started_at: Option<Instant>` dans
+   `AgentAnomalyState`, mémorisé à chaque `tool_execution_start` et remis à
+   `None` à la clôture (`tool_execution_end`, fin de tour, `agent_start`,
+   mort du process) ;
+2. `tool_in_progress_suspends(entry, now)` : l'exemption ne vaut que si l'outil
+   tourne depuis **moins** de `TOOL_IN_PROGRESS_MAX_SUSPEND_SECS` (**60 min**,
+   décision du propriétaire). Au-delà, l'outil est considéré **perdu** ; repli
+   documenté `last_activity` si `tool_started_at` est inconnu, pour qu'aucun
+   état ne redevienne éternel ;
+3. **seul** `should_release_stale_busy` applique cette borne. Les exemptions de
+   `should_auto_stop_on_progress` (kill T2) et des alertes lecture seule
+   (`should_report_anomaly`, `should_report_silent_session`) restent
+   **intégrales** : un `cargo test` de 2 h ne doit déclencher ni coupe ni faux
+   « agent bloqué » ;
+4. à la libération, le moniteur remet **`busy` ET `tool_in_progress` à false**
+   (sans quoi `session_is_working`, la pastille d'activité et la fenêtre de mise
+   à jour resteraient « occupées ») — **sans jamais tuer le process ni arrêter
+   la session** ; le motif est **tracé** (règle 3 : ligne horodatée
+   `[anomaly] …` + `reason`/`toolLost`/`detectedAt` dans l'événement
+   `agent-stale-busy-released`).
+
+Les seuils existants sont inchangés : busy-stale **25 min**, `awaiting_user`
+**45 min**, purge sur mort du process, priorité de la mise à jour, double lecture
+et sonde fail-closed. Un vrai build de 20 min n'est jamais libéré.
+
 ### 2.5 Agent de diagnostic (`anomaly::start_diagnostic_agent`)
 
 Commande Tauri : lance un processus agent dédié (`diagnostic`, canal
@@ -531,6 +575,13 @@ callback de notification du bus (message ⏱️).
   le seuil, l'agent est arrêté, l'événement UI + bandeau apparaissent, la file
   d'exclusivité est libérée (un agent en attente prend le relais) et l'agent de
   diagnostic est lancé automatiquement.
+- Borne dure de l'exemption d'outil (§2.4 quinquies) couverte par
+  `should_release_stale_busy_fires_when_tool_never_ends` (outil ouvert depuis
+  61 min → libération ; 59 min 59 s → aucune libération ; 60 min pile →
+  libération), `should_release_stale_busy_bounds_tool_without_start_instant`
+  (repli `last_activity`) et, inchangé et toujours vert,
+  `should_release_stale_busy_does_not_fire_during_long_tool` (build de 20 min
+  jamais libéré).
 - **Ne casse pas** la surveillance existante (pastille d'activité par projet), ni
   le bouton manuel « 🔍 Diagnostiquer », ni la file d'attente d'exclusivité, ni
   le filet busy-stale (25 min, sans kill, jamais pendant un outil en cours).

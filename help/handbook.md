@@ -3409,6 +3409,12 @@ arrêté. Pendant ce temps, **l'écran le montre** : la commande en cours et sa
 durée écoulée s'affichent dans l'onglet de l'agent, dans la liste des agents et
 dans la liste des tâches — une compilation n'est jamais confondue avec un arrêt.
 
+**Cas de l'outil qui ne se termine jamais** : si un outil reste ouvert plus de
+**60 minutes** sans jamais rendre la main (fin d'outil perdue), Pilot considère
+qu'il est **perdu** et libère seulement l'indicateur « occupé » — le cercle
+d'activité s'éteint et la mise à jour peut de nouveau être proposée. **Rien n'est
+interrompu** : ni l'outil, ni l'agent. Le motif est journalisé.
+
 Une **fin de tour partielle** de l'agent (reprise automatique après une erreur
 passagère ou une compaction) n'est **pas** un repos : l'agent reste considéré
 comme en train de travailler, son créneau comme sa place en file sont conservés.

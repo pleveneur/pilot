@@ -84,6 +84,16 @@ pub struct AgentAnomalyState {
     /// automatique T2 est suspendu (un long travail qui avance ne doit plus être
     /// coupé à tort).
     pub tool_in_progress: bool,
+    /// Instant du DERNIER `tool_execution_start` de l'exécution en cours
+    /// (`None` quand aucun outil n'est ouvert). Champ ADDITIF : il donne à
+    /// l'exemption `tool_in_progress` une BORNE DURE (`tool_in_progress_suspends`),
+    /// le seul état du code qui n'en avait aucune. Un `tool_execution_end` perdu
+    /// (outil tué avec le tour, réponse d'outil jamais rendue, `agent_end`
+    /// `willRetry` sans reprise réelle) laissait sinon `tool_in_progress` posé À
+    /// VIE : la session restait « occupée », le cercle d'activité respirait sans
+    /// fin et la fenêtre de mise à jour restait muette (rapport
+    /// `RAPPORT-diag-indicateur-travail.md`, points A→E).
+    pub tool_started_at: Option<Instant>,
     /// Lot 3 (défaut A) : l'exécution EN COURS a-t-elle déjà produit un RÉSULTAT
     /// visible (`message_end`, `tool_execution_end`, `compaction_end`) ? Réarmé à
     /// false à chaque `agent_start`. Une session qui n'a RIEN produit ET qui est
@@ -250,6 +260,7 @@ pub fn make_observer(
                     entry.awaiting_user = false;
                     // Mort du process : aucun outil ne tourne plus.
                     entry.tool_in_progress = false;
+                    entry.tool_started_at = None;
                 }
             } else {
                 let entry = m.entry(agent_key.clone()).or_insert(AgentAnomalyState {
@@ -263,6 +274,8 @@ pub fn make_observer(
                     awaiting_user: is_user_request,
                     // Posé si cet événement fondateur est déjà un start d'outil.
                     tool_in_progress: t == "tool_execution_start",
+                    // Instant du start : base de la borne dure de l'exemption.
+                    tool_started_at: if t == "tool_execution_start" { Some(now) } else { None },
                     // Un événement fondateur peut déjà être un résultat.
                     produced_output: OUTPUT_EVENTS.contains(&t),
                 });
@@ -274,6 +287,7 @@ pub fn make_observer(
                     // Nouvelle exécution : aucun outil en cours (anti-fuite si un
                     // `tool_execution_end` de la run précédente a été perdu).
                     entry.tool_in_progress = false;
+                    entry.tool_started_at = None;
                     // Lot 3 (défaut A) : nouvelle exécution → rien n'a encore été
                     // produit. Le marqueur sera posé au premier `message_end` /
                     // `tool_execution_end` / `compaction_end`.
@@ -296,6 +310,7 @@ pub fn make_observer(
                         entry.auto_stopped_reported = false;
                         // Fin de tour : plus aucun outil en cours (anti-fuite).
                         entry.tool_in_progress = false;
+                        entry.tool_started_at = None;
                     }
                 }
                 // Marqueur « en attente de réponse utilisateur » : posé par une
@@ -327,8 +342,13 @@ pub fn make_observer(
                 // Les autres événements d'activité ne changent pas ce marqueur.
                 if t == "tool_execution_end" {
                     entry.tool_in_progress = false;
+                    // Outil clos : la borne dure repart de zéro au prochain start.
+                    entry.tool_started_at = None;
                 } else if t == "tool_execution_start" {
                     entry.tool_in_progress = true;
+                    // Mémorise l'instant du start : SEULE référence de la borne
+                    // dure de l'exemption (`tool_in_progress_suspends`).
+                    entry.tool_started_at = Some(now);
                 }
             }
         }
@@ -381,6 +401,53 @@ fn awaiting_user_suspends(entry: &AgentAnomalyState, now: Instant) -> bool {
         return false;
     }
     now.saturating_duration_since(entry.last_activity).as_secs() < AWAITING_USER_MAX_SUSPEND_SECS
+}
+
+/// Durée MAXIMALE pendant laquelle une OPÉRATION D'OUTIL en cours
+/// (`tool_in_progress`) suspend la LIBÉRATION du drapeau d'occupation
+/// (`should_release_stale_busy`). Décision du propriétaire : plafond dur à
+/// 60 minutes.
+///
+/// Pourquoi : `tool_in_progress` était le SEUL état du code sans borne
+/// temporelle. Un `tool_execution_end` perdu (outil tué avec le tour, réponse
+/// d'outil jamais rendue, `agent_end` `willRetry` sans reprise réelle) laissait
+/// le marqueur posé à vie ; l'exemption neutralisait alors les trois filets
+/// (`should_auto_stop_on_progress`, `should_report_anomaly`,
+/// `should_release_stale_busy`) et la session restait « occupée »
+/// indéfiniment — cercle d'activité qui respire sans fin, mise à jour jamais
+/// proposée (`RAPPORT-diag-indicateur-travail.md` § A/C).
+///
+/// Portée VOULUE : au-delà du plafond, seul le DRAPEAU d'occupation est
+/// libéré. L'OUTIL n'est JAMAIS tué et la session n'est JAMAIS arrêtée : c'est
+/// pourquoi le plafond ne s'applique PAS aux exemptions qui mènent à une action
+/// (`should_auto_stop_on_progress` = kill T2) ni aux alertes lecture seule
+/// (`should_report_anomaly` / `should_report_silent_session`) : un `cargo test`
+/// de 40 min, ou même une campagne de 2 h, reste du travail légitime et ne doit
+/// déclencher ni coupe ni faux « agent bloqué ».
+///
+/// Les 60 minutes sont très au-dessus de toute opération légitime observée
+/// (build complet, série de tests, longue analyse) : une vraie opération longue
+/// n'est jamais libérée (cf. `should_release_stale_busy_does_not_fire_during_
+/// long_tool`, build de 20 min).
+pub(crate) const TOOL_IN_PROGRESS_MAX_SUSPEND_SECS: u64 = 60 * 60;
+
+/// L'exemption `tool_in_progress` est-elle ENCORE valable pour la libération du
+/// drapeau d'occupation ? Oui tant que l'outil tourne depuis moins de
+/// `TOOL_IN_PROGRESS_MAX_SUSPEND_SECS`. Au-delà, l'outil est considéré PERDU
+/// (son `tool_execution_end` ne reviendra jamais) : le drapeau d'occupation est
+/// libéré exactement comme pour un busy périmé.
+///
+/// Repli : si l'instant du start n'est pas connu (`tool_started_at: None`, entrée
+/// construite à la main ou antérieure au champ), on prend `last_activity` comme
+/// référence — c'est, au pire, l'instant du `tool_execution_start` lui-même. La
+/// borne reste donc TOUJOURS appliquée : aucun état ne redevient éternel.
+/// Pure et testable.
+fn tool_in_progress_suspends(entry: &AgentAnomalyState, now: Instant) -> bool {
+    if !entry.tool_in_progress {
+        return false;
+    }
+    let started = entry.tool_started_at.unwrap_or(entry.last_activity);
+    now.saturating_duration_since(started).as_secs() < TOOL_IN_PROGRESS_MAX_SUSPEND_SECS
 }
 
 /// Décide si un agent doit être arrêté AUTOMATIQUEMENT (T2) : agent busy, sans
@@ -524,14 +591,23 @@ fn is_super_agent_key(project: &str, agent: &str) -> bool {
 /// un second lancement pouvait démarrer sur le même projet. Le filet
 /// « processus mort » (`has_dead_agent_process`, moniteur) reste le SEUL juge des
 /// cas réellement figés : il est indépendant de cette fonction.
+///
+/// BORNE (rapport `RAPPORT-diag-indicateur-travail.md` D.1) : cette exemption
+/// n'était bornée par RIEN — un `tool_execution_end` perdu figeait le drapeau
+/// d'occupation à vie. Elle l'est désormais par `TOOL_IN_PROGRESS_MAX_SUSPEND_SECS`
+/// (60 min) via `tool_in_progress_suspends`. Au-delà, l'outil est considéré
+/// perdu et le drapeau est libéré ; l'outil et la session ne sont PAS
+/// interrompus (aucun kill ici : le kill relève de l'arrêt auto T2).
 pub(crate) fn should_release_stale_busy(entry: &AgentAnomalyState, grace_minutes: u32, now: Instant) -> bool {
     if !entry.busy || awaiting_user_suspends(entry, now) {
         return false;
     }
     // Outil en cours (build, série de tests, longue analyse) = travail qui
     // avance : aucun événement n'est émis entre `tool_execution_start` et
-    // `tool_execution_end`. Ne jamais libérer le créneau pendant ce temps.
-    if entry.tool_in_progress {
+    // `tool_execution_end`. Ne jamais libérer le créneau pendant ce temps —
+    // SAUF si l'outil semble perdu (ouvert depuis plus de 60 min, aucun
+    // `tool_execution_end` reçu) : la borne évite l'état éternel.
+    if tool_in_progress_suspends(entry, now) {
         return false;
     }
     let idle_secs = now.duration_since(entry.last_activity).as_secs();
@@ -715,7 +791,7 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
             // Lot 3 (défaut A) : sessions muettes détectées dans ce passage.
             let mut silent_alerts: Vec<(String, String, String, u64)> = Vec::new();
             let mut auto_stops: Vec<(String, String, u64)> = Vec::new();
-            let mut stale_releases: Vec<(String, String, u64)> = Vec::new();
+            let mut stale_releases: Vec<(String, String, u64, bool)> = Vec::new();
             let mut super_stops: Vec<(String, u64)> = Vec::new();
             // Bug #152 : entrées busy dont la vivacité (process mort sans
             // événement de fin) sera vérifiée HORS verrou (try_wait sur le
@@ -792,10 +868,26 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                         && !entry.auto_stopped_reported
                         && should_release_stale_busy(entry, stale_busy_grace, now)
                     {
+                        // Outil ouvert depuis plus de `TOOL_IN_PROGRESS_MAX_SUSPEND_SECS`
+                        // (60 min) et jamais clos : son `tool_execution_end` ne
+                        // reviendra pas, il est considéré PERDU. On libère donc AUSSI
+                        // `tool_in_progress` (sinon `session_is_working`, la pastille
+                        // d'activité et la fenêtre de mise à jour resteraient
+                        // « occupées » à vie). L'OUTIL ET LA SESSION NE SONT PAS
+                        // INTERROMPUS : aucun kill, aucun arrêt — seul le drapeau
+                        // d'occupation est remis à zéro.
+                        let tool_lost = entry.tool_in_progress;
                         entry.busy = false;
+                        entry.tool_in_progress = false;
+                        entry.tool_started_at = None;
                         entry.blocked_reported = false;
                         entry.auto_stopped_reported = false;
-                        stale_releases.push((project.clone(), agent.clone(), idle_secs / 60));
+                        stale_releases.push((
+                            project.clone(),
+                            agent.clone(),
+                            idle_secs / 60,
+                            tool_lost,
+                        ));
                     }
                     // Bug #152 : candidat à la purge si l'entrée reste busy — la
                     // vivacité est vérifiée hors verrou (has_dead_agent_process).
@@ -902,13 +994,43 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
             // agents-bus libère le créneau d'exclusivité et lance les demandes en
             // file (failAgentTurn → launchNextQueued), même quand l'arrêt auto T2
             // est désactivé. Le process n'est PAS tué (le kill relève de T2).
-            for (project, agent, idle_min) in stale_releases {
+            for (project, agent, idle_min, tool_lost) in stale_releases {
+                if !tool_lost {
+                    let _ = app.emit(
+                        "agent-stale-busy-released",
+                        serde_json::json!({
+                            "project": project,
+                            "agent": agent,
+                            "idleMinutes": idle_min,
+                        }),
+                    );
+                    continue;
+                }
+                // RÈGLE 3 (traçabilité) : une libération automatique ne se fait
+                // jamais en silence quand elle corrige un état anormal (outil
+                // jamais terminé). Même famille que la trace des sessions muettes
+                // ci-dessus : ligne horodatée sur la sortie d'erreur + motif porté
+                // par l'événement (le frontend peut le dire à l'utilisateur).
+                let detected_at = chrono::Utc::now().to_rfc3339();
+                let reason = format!(
+                    "Outil jamais terminé : opération ouverte depuis plus de {} min sans \
+                     `tool_execution_end` — considérée perdue, drapeau d'occupation libéré \
+                     (ni l'outil ni la session n'ont été interrompus).",
+                    TOOL_IN_PROGRESS_MAX_SUSPEND_SECS / 60
+                );
+                eprintln!(
+                    "[anomaly] {} {} (agent « {} », projet {})",
+                    detected_at, reason, agent, project
+                );
                 let _ = app.emit(
                     "agent-stale-busy-released",
                     serde_json::json!({
                         "project": project,
                         "agent": agent,
                         "idleMinutes": idle_min,
+                        "toolLost": true,
+                        "detectedAt": detected_at,
+                        "reason": reason,
                     }),
                 );
             }
@@ -1419,6 +1541,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
         let (iso, relative) = last_activity_info(&state);
@@ -1440,6 +1563,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
         let (iso2, relative2) = last_activity_info(&no_wall);
@@ -1467,6 +1591,7 @@ mod tests {
             auto_stopped_reported: reported,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
 
@@ -1587,6 +1712,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
 
@@ -1633,6 +1759,10 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress,
+            // Outil démarré depuis le début de l'inactivité (12 min) : l'arrêt
+            // auto T2 n'applique PAS le plafond de 60 min (il TUERAIT la
+            // session) — l'exemption y reste entière.
+            tool_started_at: tool_in_progress.then(|| now - Duration::from_secs(720)),
             produced_output: false,
         };
 
@@ -1682,6 +1812,10 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress,
+            // Alerte d'anomalie (lecture seule) : son exemption n'est pas bornée
+            // non plus — un `cargo test` de 40 min, ou de 2 h, ne doit jamais
+            // produire de faux « agent bloqué ».
+            tool_started_at: tool_in_progress.then(|| now - Duration::from_secs(3600)),
             produced_output: true,
         };
         let timeout_secs = 30 * 60;
@@ -1741,6 +1875,10 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress,
+            // Outil démarré il y a 20 min : c'est l'objet du test — un VRAI
+            // build/test long, bien SOUS le plafond dur
+            // `TOOL_IN_PROGRESS_MAX_SUSPEND_SECS` (60 min).
+            tool_started_at: tool_in_progress.then(|| now - Duration::from_secs(20 * 60)),
             produced_output: true,
         };
 
@@ -1756,6 +1894,88 @@ mod tests {
             should_release_stale_busy(&state(false), 25, now),
             "agent réellement figé (aucun outil en cours) → libération conservée"
         );
+    }
+
+    /// Rapport `RAPPORT-diag-indicateur-travail.md` (A, C, D.1) : l'exemption
+    /// `tool_in_progress` était le SEUL état du moteur SANS AUCUNE borne
+    /// temporelle. Un `tool_execution_end` perdu (outil tué avec le tour, réponse
+    /// d'outil jamais rendue) laissait le marqueur posé à vie : la session
+    /// restait « occupée » indéfiniment (cercle d'activité qui respire sans fin,
+    /// mise à jour jamais proposée). Au-delà du plafond dur de 60 min, l'outil est
+    /// considéré PERDU et le drapeau d'occupation est libéré — sans arrêter la
+    /// session ni interrompre l'outil.
+    #[test]
+    fn should_release_stale_busy_fires_when_tool_never_ends() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        // Fixture : busy, outil ouvert et JAMAIS clos, aucune attente utilisateur.
+        let state = |tool_age_secs: u64| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(tool_age_secs + 60),
+            last_progress: now - Duration::from_secs(tool_age_secs + 60),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "tool_execution_start".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress: true,
+            tool_started_at: Some(now - Duration::from_secs(tool_age_secs)),
+            produced_output: true,
+        };
+
+        // Outil ouvert depuis 61 min (> plafond dur de 60 min) → considéré perdu
+        // → le verrou est libéré (le busy seul aurait mis 25 min, mais 25 < 60 :
+        // ici c'est bien le plafond de l'OUTIL qui tranche, pas la grâce).
+        assert!(
+            should_release_stale_busy(&state(TOOL_IN_PROGRESS_MAX_SUSPEND_SECS + 60), 25, now),
+            "outil jamais terminé au-delà de 60 min → outil perdu, verrou libéré"
+        );
+
+        // Contre-preuve du plafond : à 59 min 59 s, l'outil est encore considéré
+        // en cours malgré une inactivité DÉJÀ supérieure à la grâce de 25 min →
+        // aucune libération (cas limite du plafond).
+        assert!(
+            !should_release_stale_busy(&state(TOOL_IN_PROGRESS_MAX_SUSPEND_SECS - 1), 25, now),
+            "outil de 59 min 59 s → toujours en cours, aucune libération"
+        );
+
+        // Frontière exacte : à exactement 60 min, l'outil n'est plus toléré
+        // (l'exemption vaut tant que l'âge est STRICTEMENT inférieur au plafond)
+        // → la libération s'applique.
+        assert!(
+            should_release_stale_busy(&state(TOOL_IN_PROGRESS_MAX_SUSPEND_SECS), 25, now),
+            "outil de 60 min pile → plafond atteint, verrou libéré"
+        );
+    }
+
+    /// Filet de sécurité : si l'instant du `tool_execution_start` n'est pas connu
+    /// (`tool_started_at: None`), le plafond reste APPLIQUÉ en prenant
+    /// `last_activity` comme référence (au pire l'instant du start lui-même).
+    /// Aucun état ne redevient éternel, même sans horodatage de start.
+    #[test]
+    fn should_release_stale_busy_bounds_tool_without_start_instant() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        let state = |idle_secs: u64| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(idle_secs),
+            last_progress: now - Duration::from_secs(idle_secs),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "tool_execution_start".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress: true,
+            tool_started_at: None,
+            produced_output: true,
+        };
+
+        // Inactivité sous le plafond → exemption conservée (travail légitime).
+        assert!(!should_release_stale_busy(&state(30 * 60), 25, now));
+        // Inactivité au-delà du plafond → libération (repli documenté).
+        assert!(should_release_stale_busy(
+            &state(TOOL_IN_PROGRESS_MAX_SUSPEND_SECS + 1),
+            25,
+            now
+        ));
     }
 
     /// Verrou fantôme (busy-stale) : `should_release_stale_busy` libère la marque
@@ -1774,6 +1994,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
 
@@ -1812,6 +2033,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
 
@@ -1842,6 +2064,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
         let mut map: HashMap<String, AgentAnomalyState> = HashMap::new();
@@ -1991,6 +2214,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
 
@@ -2044,6 +2268,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: true,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
 
@@ -2092,6 +2317,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         };
         assert!(
@@ -2131,6 +2357,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: produced,
         };
         // (a) a déjà livré un résultat → JAMAIS (faux positif « en échec après
@@ -2153,6 +2380,7 @@ mod tests {
         // (d) opération d'outil en cours (silence légitime).
         let working = AgentAnomalyState {
             tool_in_progress: true,
+            tool_started_at: Some(Instant::now()),
             ..state_at(3600, true, false)
         };
         assert!(

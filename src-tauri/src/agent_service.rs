@@ -6007,6 +6007,7 @@ mod tests {
                 auto_stopped_reported: false,
                 awaiting_user: false,
                 tool_in_progress: false,
+                tool_started_at: None,
                 produced_output: false,
             },
         );
@@ -6081,6 +6082,7 @@ mod tests {
                 auto_stopped_reported: false,
                 awaiting_user: false,
                 tool_in_progress: false,
+                tool_started_at: None,
                 produced_output: false,
             },
         );
@@ -6237,6 +6239,7 @@ mod tests {
                     auto_stopped_reported: false,
                     awaiting_user: false,
                     tool_in_progress: true,
+                    tool_started_at: Some(Instant::now()),
                     produced_output: false,
                 },
             );
@@ -6271,6 +6274,7 @@ mod tests {
                     auto_stopped_reported: false,
                     awaiting_user: false,
                     tool_in_progress: true,
+                    tool_started_at: Some(Instant::now()),
                     produced_output: false,
                 },
             );
@@ -6317,6 +6321,7 @@ mod tests {
                 auto_stopped_reported: false,
                 awaiting_user: false,
                 tool_in_progress: true,
+                tool_started_at: Some(Instant::now()),
                 produced_output: false,
             },
         );
@@ -6479,6 +6484,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         }
     }

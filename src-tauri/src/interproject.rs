@@ -339,6 +339,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            tool_started_at: None,
             produced_output: false,
         }
     }
