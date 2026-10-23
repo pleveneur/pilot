@@ -81,6 +81,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Coffre fort de mots de passe (chiffré) | `spec_vault.md` |
 | GDS (gestionnaire de sources) | `plan_gds.md` (roadmap) → `spec_gds.md` (spec détaillée, phases A→B→C) ; mise en place : `docs/gds-server-setup.md` (serveur, référence) + `docs/gds-guide-mise-en-place.md` (parcours de retest complet, checklist serveur → usage à plusieurs) |
 | Composant web de discussion (issue #56) | `spec_web_component.md` (spec détaillée, phase D) |
+| Les cinq règles de la chaîne d'agents (ce qu'elles garantissent + le test qui les tient) | `spec_cinq_regles_chaine_agents.md` (source unique) |
 | Roadmap restante | `plan_dev.md` + `idees_evolutions.md` |
 | Protocole anti-régression | `.pi/skills/quality-gate/SKILL.md` |
 
@@ -121,6 +122,7 @@ pilot/
 ├── spec_web_remote.md         # Spécifications accès distant web (implémenté)
 ├── spec_voice_input.md        # Spécifications dictée vocale (implémenté)
 ├── spec_quality_gate.md       # Spécifications quality-gate interne (implémenté)
+├── spec_cinq_regles_chaine_agents.md # SOURCE UNIQUE des 5 règles de la chaîne d'agents : garantie + test qui la tient
 ├── spec_help.md               # Spécifications aide intégrée (LLM sur la doc)
 ├── spec_review.md             # Spécifications revue de code assistée (H5)
 ├── spec_read_aloud.md         # Lecture des réponses à voix haute (bouton 🔊 + réglage UNIQUE de la voix : Paramètres → Assistant → Lecture des réponses)

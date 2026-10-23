@@ -466,6 +466,7 @@ pilot/
 ├── vite.config.js            # Configuration Vite
 ├── AGENTS.md                 # Instructions assistant (source de vérité)
 ├── spec_*.md                 # Spécifications par feature
+├── spec_cinq_regles_chaine_agents.md # Les 5 règles de la chaîne d'agents et leurs tests
 ├── plan_dev.md               # Plan de développement
 ├── README.md                 # Ce fichier
 ├── help/                     # Aide intégrée (handbook)
