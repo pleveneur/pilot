@@ -383,6 +383,33 @@ export function superAgentReflectingFromEvent(type) {
 }
 
 /**
+ * Decision PURE (testable) : la zone de saisie de la conversation de
+ * l'Assistant doit-elle porter le signal de travail (classe
+ * `superagent-input-reflecting`, respiration du fond du champ) ?
+ *
+ * Le point qui respire dans la liste des agents suit l'etat PARTAGE
+ * `anyBusy(list)` (agent-activity.js, via `subscribeAgentActivity`). La zone de
+ * saisie doit afficher le MEME signal, sinon on ecrit sans voir qu'un agent
+ * travaille encore (l'Assistant delegue puis rend la main : sa propre session
+ * n'est plus « en traitement » alors que l'agent delegue commence a travailler).
+ *
+ * Regles :
+ *  - `agentReflecting` : l'Assistant lui-meme reflechit (agent_start / poll) ;
+ *  - `agentsWorking` : au moins un agent travaille (etat partage, identique a
+ *    celui du point du haut a droite) ;
+ *  - `pendingQuestion` : une question d'agent attend une reponse — la barre
+ *    reste alors en mode normal, prete a saisir la precision (chantier #132) ;
+ *    aucune teinte, quel que soit le travail en cours.
+ * @param {{agentReflecting?: boolean, agentsWorking?: boolean, pendingQuestion?: boolean}} etats
+ * @returns {boolean} true si la zone de saisie doit respirer.
+ */
+export function superAgentInputReflecting(etats = {}) {
+  const e = etats || {};
+  if (e.pendingQuestion === true) return false;
+  return e.agentReflecting === true || e.agentsWorking === true;
+}
+
+/**
  * Consigne préparée envoyée dans la conversation de l'Assistant par le bouton
  * « Analyser et ranger mes données » de l'onglet 🧭 (spec_super_agent.md §7).
  *
@@ -2999,6 +3026,10 @@ export async function createSuperAgent(container) {
   // Réutilise le MÊME signal d'état que `busyHint`/`backendBusy` (agent_start /
   // agent_end), pas une nouvelle source de vérité. Ne verrouille pas la saisie
   // (le textarea reste utilisable) et ne touche pas au contenu saisi.
+  // Ce signal est COMPOSÉ dans `applyReflecting` : la zone de saisie respire
+  // aussi quand un agent DÉLÉGUÉ travaille (état partagé `busy`), pas seulement
+  // pendant la réflexion de l'Assistant — même décision que le point de la
+  // liste des agents. Aucune autre règle d'affichage n'est modifiée.
   function setReflecting(reflecting) {
     superSetReflecting(reflecting);
   }
@@ -3013,19 +3044,43 @@ export async function createSuperAgent(container) {
   // une réflexion (voir applyReflecting appelé par enterImmersive /
   // exitImmersive).
   let reflectingActive = false;
+  // Travail des agents, lu sur le store PARTAGE de agent-activity.js (le meme
+  // etat `busy` = anyBusy(list) qui fait respirer le point du haut a droite).
+  // Il ne sert QU'A la zone de saisie : l'anneau du logo hero du mode assistant
+  // seul, le bandeau « occupe » et le bouton « Analyser et ranger mes donnees »
+  // gardent leur propre signal (aucun autre indicateur modifie).
+  let agentsWorkingActive = false;
   function applyReflecting() {
-    const active = reflectingActive && !hasPendingQuestion();
+    const pending = hasPendingQuestion();
+    // Anneau pulsant du logo hero (mode assistant seul) : inchange, lie a la
+    // seule reflexion de l'Assistant.
     if (immersiveOverlay) {
       const hero = immersiveOverlay.querySelector(".sa-immersive-hero");
-      if (hero) hero.classList.toggle("sa-immersive-reflecting", active);
+      if (hero) hero.classList.toggle("sa-immersive-reflecting", reflectingActive && !pending);
     }
-    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", active);
+    // Zone de saisie : une seule decision (superAgentInputReflecting), meme
+    // style et meme animation que ceux deja appliques (aucune regle CSS
+    // nouvelle).
+    const inputActive = superAgentInputReflecting({
+      agentReflecting: reflectingActive,
+      agentsWorking: agentsWorkingActive,
+      pendingQuestion: pending,
+    });
+    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", inputActive);
   }
+  // Abonnement au store partage (aucun polling ni calcul nouveau : `busy` est
+  // deja calcule par agent-activity.js). Desabonne dans `unlisten`.
+  const unsubscribeAgentsWorking = subscribeAgentActivity((_list, busy) => {
+    const working = busy === true;
+    if (working === agentsWorkingActive) return;
+    agentsWorkingActive = working;
+    applyReflecting();
+  });
   superSetReflecting = (reflecting) => {
     // Chantier #132 : pendant l'attente d'un choix (question en attente), la
     // barre ne passe PAS en teinte « réflexion » — elle reste en mode normal,
-    // prête à saisir la précision. La teinte ne s'applique qu'à la réflexion
-    // réelle (aucune question en attente).
+    // prête à saisir la précision. La teinte ne s'applique qu'au travail
+    // réel (aucune question en attente).
     reflectingActive = !!reflecting;
     applyReflecting();
     // Bouton « Analyser et ranger mes données » : désactivé pendant que
@@ -3795,9 +3850,10 @@ export async function createSuperAgent(container) {
         // backendBusy verrouillé sur true (sinon les envois suivants seraient
         // bloqués sans raison).
         backendBusy = false;
-        // Filet de sécurité : retire aussi la teinte « réflexion » si elle
-        // était restée active (ex: agent_end manqué) — l'effet ne doit jamais
-        // rester bloqué quand l'assistant ne réfléchit plus.
+        // Filet de sécurité : retire la part « réflexion de l'Assistant » de la
+        // teinte si elle était restée active (ex: agent_end manqué). L'effet ne
+        // reste jamais bloqué quand l'assistant ne réfléchit plus ; il ne
+        // subsiste que si un agent travaille réellement (état partagé `busy`).
         setReflecting(false);
       }
       // Filet périodique : si l'assistant est libre (aucun traitement) et que
@@ -3870,6 +3926,9 @@ export async function createSuperAgent(container) {
         stopPanelTabWatch = null;
       }
       stopSuperMissionsWatch();
+      // Signal de travail de la zone de saisie : on retire notre abonnement au
+      // store partage (le store et le point du haut survivent a la fermeture).
+      unsubscribeAgentsWorking();
       // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
       // Anti-doublon Telegram (lot 3) : l'Assistant ne peut plus parler → les
       // avis bruts retardés partent MAINTENANT (aucun événement perdu), et la

@@ -33,7 +33,7 @@ vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
 vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
 vi.mock("./super-agent-schedule.js", () => ({ shouldScheduleTick: vi.fn(), parseScheduleEvery: vi.fn() }));
 
-const { superAgentReflectingFromEvent } = await import("./super-agent.js");
+const { superAgentReflectingFromEvent, superAgentInputReflecting } = await import("./super-agent.js");
 
 describe("superAgentReflectingFromEvent (teinte réflexion de la zone de saisie)", () => {
   it("active la teinte sur agent_start (réflexion)", () => {
@@ -54,5 +54,32 @@ describe("superAgentReflectingFromEvent (teinte réflexion de la zone de saisie)
     expect(superAgentReflectingFromEvent("extension_ui_request")).toBeNull();
     expect(superAgentReflectingFromEvent("")).toBeNull();
     expect(superAgentReflectingFromEvent(undefined)).toBeNull();
+  });
+});
+
+describe("superAgentInputReflecting (la zone de saisie respire quand un agent travaille)", () => {
+  it("respire quand l'Assistant lui-même réfléchit", () => {
+    expect(superAgentInputReflecting({ agentReflecting: true, agentsWorking: false })).toBe(true);
+  });
+
+  it("respire aussi quand seul un agent délégué travaille (même état que la liste)", () => {
+    // Cas du symptôme : l'Assistant a rendu la main après délégation, un agent
+    // du projet travaille encore → le point du haut respire, la saisie aussi.
+    expect(superAgentInputReflecting({ agentReflecting: false, agentsWorking: true })).toBe(true);
+  });
+
+  it("reste au repos quand personne ne travaille", () => {
+    expect(superAgentInputReflecting({ agentReflecting: false, agentsWorking: false })).toBe(false);
+    expect(superAgentInputReflecting({})).toBe(false);
+    expect(superAgentInputReflecting()).toBe(false);
+  });
+
+  it("ne respire jamais pendant l'attente d'une question (règle #132 conservée)", () => {
+    expect(
+      superAgentInputReflecting({ agentReflecting: true, agentsWorking: true, pendingQuestion: true })
+    ).toBe(false);
+    expect(
+      superAgentInputReflecting({ agentReflecting: false, agentsWorking: true, pendingQuestion: true })
+    ).toBe(false);
   });
 });
