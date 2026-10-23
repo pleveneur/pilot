@@ -589,6 +589,9 @@ P6, P8 et une partie de P1, sans toucher à la disposition.
 
 ## 6. Ce qui demande une décision de votre part
 
+> **Ces cinq questions ont été tranchées le 2026-10-23 : voir le § 7.**
+> Le tableau ci-dessous est conservé tel qu'il a été posé, pour mémoire.
+
 | # | Question | Choix possibles | Ma recommandation |
 |---|---|---|---|
 | **D1** | Faut-il **3 boutons nommés** en bas de la colonne de gauche, ou garder les icônes et n'ajouter que le texte ? | (a) 3 boutons + menu (b) icônes + texte partout | **(a)** : c'est ce qui fait passer de 14 à 3 |
@@ -599,13 +602,105 @@ P6, P8 et une partie de P1, sans toucher à la disposition.
 
 ---
 
-## 7. Limites de ce document
+## 7. Décisions du propriétaire (2026-10-23)
+
+Les cinq questions du § 6 ont été tranchées le **2026-10-23**. Les cinq réponses
+suivent la recommandation qui y figurait. Les questions restent posées au § 6 (on
+n'y touche pas) ; cette section consigne seulement les réponses et **ce qu'elles
+changent dans le plan du § 5**.
+
+### D1 — Trois boutons nommés, plus un menu → choix (a)
+
+**Décision.** Le bas de la colonne de gauche passe à **3 boutons nommés**
+(Assistant, Terminal, Lancer l'agent) plus un menu **« Autres écrans »** pour le
+reste. La variante « garder les 14 icônes en ajoutant le texte partout » est
+écartée.
+
+**Conséquences sur le plan.**
+- L'**étape 5** (regrouper le bas) est retenue telle que décrite au § 4.3 et
+  devient la référence : c'est elle qui règle P1.
+- L'**étape 1** (nommer les 14 boutons **sur place**) ne produit plus de gain
+  durable : les boutons qu'elle nommerait disparaissent à l'étape 5. Elle reste
+  possible comme livraison provisoire, mais elle est sinon **fondue dans
+  l'étape 5**. Le travail de rédaction des libellés se reporte sur les 3 boutons et
+  sur les 7 lignes du menu « Autres écrans », qui sont nommées en clair.
+- Les identifiants de boutons existants ne sont pas supprimés (points de
+  vigilance du § 5) : les entrées du menu réutilisent les identifiants actuels,
+  donc les tests et les gestionnaires d'événements continuent de fonctionner.
+
+### D2 — Le Coffre déménage dans Réglages → choix (a)
+
+**Décision.** Le Coffre fort passe dans **Réglages**, avec **un clic de plus**,
+par cohérence avec les trois autres écrans sortis du haut de la colonne
+(Brouillon, Aide et lui).
+
+**Conséquences sur le plan.**
+- L'**étape 6** (7 icônes → 3, avec une section « Accès directs » en tête des
+  Réglages) est retenue telle quelle, et sa section « Accès directs » contient bien
+  les **quatre** écrans retirés, Coffre compris (§ 4.4).
+- La variante « garder le Coffre en haut » évoquée au § 4.4 et au § 6 est
+  **abandonnée** : plus aucune exception à traiter lors du câblage.
+- Le recul d'un clic est **assumé**, et son rattrapage est prévu par l'**étape 4**
+  (palette universelle) : `Ctrl+Shift+P` puis « coffre » retrouve l'écran en trois
+  lettres (§ 4.8). Le Coffre reste l'onglet `vault` : on déplace son bouton
+  d'entrée, pas l'écran.
+
+### D3 — Nom fixe pour l'onglet de conversation → choix (a)
+
+**Décision.** L'onglet de conversation avec l'agent porte un **nom fixe**
+(« Conversation avec l'agent ») ; le **nom du moteur** (Agent Pi / Agent PLh)
+descend en **sous-titre**.
+
+**Conséquences sur le plan.**
+- L'**étape 3** (« désambiguïser ») est **élargie** : elle ne renomme pas seulement
+  « Agents » en « Équipe d'agents », elle donne aussi son nom fixe à l'onglet de
+  conversation. Le libellé à changer est celui de la barre d'onglets, le nom du
+  moteur restant affiché juste en dessous.
+- Le **mode de routage `agent`** ne change pas de nom (points de vigilance du
+  § 5) : seul l'affichage change.
+- La conséquence attendue est la fin de P2 et de P6 (« agent » ne désigne plus
+  trois choses). Le réglage « Bloquer la saisie de l'agent quand l'onglet Assistant
+  est ouvert » pourra alors être **réévalué** — cette réévaluation n'est pas dans
+  les étapes 1 à 10 et fera l'objet d'une demande séparée.
+
+### D4 — Le panneau Travail s'ouvre au clic → choix (a)
+
+**Décision.** Le panneau **Travail** s'ouvre **au clic**, **jamais au survol**.
+Le cercle animé actuel reste un bouton cliquable qui montre l'état du travail.
+
+**Conséquences sur le plan.**
+- L'**étape 7** (un seul panneau Travail) est retenue sans ajout de comportement
+  au survol : aucun gestionnaire d'ouverture au passage de la souris n'est écrit.
+  Le risque d'ouverture accidentelle du panneau disparaît par construction.
+- « Où en est mon projet ? » se fait donc en **1 clic** sur Travail, puis 1 clic
+  sur l'un des 4 onglets du panneau (§ 4.6).
+
+### D5 — La fusion des Paramètres est repoussée → choix (b)
+
+**Décision.** La **fusion des Paramètres** (11 → 6 onglets) est **repoussée après
+les étapes 1 à 7**. Elle n'est pas annulée.
+
+**Conséquences sur le plan.**
+- L'ordre d'exécution devient : **étapes 1 à 7**, puis **étape 8** (la fusion,
+  toujours estimée « gros »). Les étapes **9** (fil d'Ariane) et **10** (finitions)
+  ne dépendent pas de la fusion : elles peuvent être livrées avant ou après l'étape
+  8, au choix, sans rien changer au reste.
+- L'**étape 6** reste faite avant la fusion : elle ajoute une section « Accès
+  directs » **en tête** de la fenêtre des Réglages sans réordonner les onglets, donc
+  elle n'engage pas la fusion et ne la rend pas plus coûteuse.
+- Tant que l'étape 8 n'est pas faite, les **11 onglets** et les trois
+  incohérences de rangement de P7 subsistent : **P7 reste ouvert**, et sera
+  re-planifié au vu de l'usage des étapes 1 à 7.
+
+## 8. Limites de ce document
 
 - L'inventaire porte sur le **code d'interface réel** (`index.html`, `src/js/*.js`)
   au moment de la rédaction. Il ne décrit pas le **contenu** des écrans (ce qu'on
   y lit), seulement leur **accès**.
 - Les estimations sont données en **petit / moyen / gros**, pas en jours : elles
   comparent les étapes entre elles.
-- Ce document **ne tranche pas** les décisions D1 à D5 : il les pose.
+- Ce document **ne tranchait pas** les décisions D1 à D5 : il les posait. Elles
+  ont été **tranchées le 2026-10-23** et consignées au **§ 7**, avec ce que chaque
+  choix change dans le plan du § 5.
 - Aucune modification de code, aucune publication, aucun changement de version
   n'a été effectué pour l'écrire.
