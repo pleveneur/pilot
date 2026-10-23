@@ -850,6 +850,129 @@ export function abandonProjectMissionQueue(projectPath, opts = {}) {
 }
 
 /**
+ * RETRAIT CIBLE d'UNE mission EN ATTENTE (et non vidage de la file).
+ *
+ * Defaut corrige : la file d'un projet ne savait oublier QU'EN ENTIER
+ * (`abandonProjectMissionQueue`). Une demande perimee, devenue sans objet,
+ * gardait sa place et prenait le verrou du projet a son tour (`reason=queue-
+ * order-respected detected=admission-fifo` dans le journal des arrets), ce qui
+ * bloquait le travail utile pendant des dizaines de minutes.
+ *
+ * Regles tenues :
+ *   1. SEULE la mission designee disparait ; les autres restent en file et
+ *      GARDENT leur ordre (aucun tri, aucun deplacement) ;
+ *   2. la mission EN COURS ne se retire pas par ce chemin (elle n'est plus dans
+ *      la file ; arreter un agent est un autre geste) ;
+ *   3. le verrou du projet n'est NI pris NI relache ici : la place liberee est
+ *      reprise par la suivante, le rejeu est rearme pour elle ;
+ *   4. RÈGLE 4 : la ligne de journal est ecrite ICI (point unique
+ *      `traceQueueAbandon`) avec le motif et le nom de la mission retiree.
+ * @param {string} projectPath - projet ciblé (`__assistant__` : repli global)
+ * @param {{id?:number, index?:number, label?:string, reason?:string, detected?:string}} opts
+ *   `id` : numero de mission ; `index` : position dans la file (1 = tete) ;
+ *   `label` : libelle exact (dernier recours)
+ * @returns {{ok:boolean, removed:number, id:number|null, label:string, remaining:number, reason:string, message:string}}
+ */
+export function removeQueuedMission(projectPath, opts = {}) {
+  const target = missionQueueKey(projectPath);
+  const queue = runAgentsQueueByProject[target] || [];
+  const remainingNow = () => (runAgentsQueueByProject[target] || []).length;
+  const refuse = (reason, message) => ({
+    ok: false,
+    removed: 0,
+    id: null,
+    label: "",
+    remaining: remainingNow(),
+    reason,
+    message,
+  });
+
+  const rawId = Number(opts && opts.id);
+  const rawIndex = Number(opts && opts.index);
+  const wantedLabel = typeof (opts && opts.label) === "string" ? opts.label.trim() : "";
+  const hasId = Number.isFinite(rawId) && rawId > 0;
+  const hasIndex = Number.isFinite(rawIndex) && rawIndex > 0;
+  if (!hasId && !hasIndex && !wantedLabel) {
+    return refuse(
+      "no-selector",
+      "Aucune mission designee : precisez le numero de mission ou le rang affiche par /file. Rien n'a ete retire.",
+    );
+  }
+  if (queue.length === 0) {
+    // Rien n'attend : la demande visee est donc en cours d'execution (elle
+    // n'est plus dans la file) ou deja partie.
+    return refuse(
+      "empty",
+      "Aucune mission en attente sur ce projet : rien n'a ete retire. Arreter une mission EN COURS d'execution est un autre geste.",
+    );
+  }
+
+  let position = -1;
+  if (hasId) position = queue.findIndex((entry) => entry && Number(entry.id) === Math.trunc(rawId));
+  else if (hasIndex) position = Math.trunc(rawIndex) - 1;
+  else position = queue.findIndex((entry) => missionQueueLabel(entry) === wantedLabel);
+  if (position < 0 || position >= queue.length) {
+    // Une mission sortie de la file (reservation posee, run en vol) n'est plus
+    // « en attente » : on ne peut pas la retirer d'ici.
+    const running =
+      !!runAgentsInFlightByProject[inFlightKey(projectPath)] ||
+      pendingMissionClaims(projectPath).length > 0;
+    if (running) {
+      return refuse(
+        "mission-running",
+        "Cette mission n'est plus en ATTENTE : elle demarre ou s'execute. Le retrait ne concerne que les missions en attente (arreter un agent est un autre geste). Rien n'a ete retire.",
+      );
+    }
+    return refuse(
+      "not-found",
+      "Mission introuvable dans la file d'attente de ce projet (deja retiree ou deja demarree). Rien n'a ete retire.",
+    );
+  }
+
+  // Retrait ATOMIQUE d'une seule entree : les suivantes gardent leur ordre.
+  const [entry] = queue.splice(position, 1);
+  const left = queue.length;
+  if (left === 0) delete runAgentsQueueByProject[target];
+
+  const label = missionQueueLabel(entry);
+  const numericId = entry && Number.isFinite(Number(entry.id)) ? Math.trunc(Number(entry.id)) : null;
+
+  // RÈGLE 4 : la trace est ecrite ICI (meme journal que les abandons, motif
+  // distinct) — le retrait ne peut donc pas passer inapercu.
+  traceQueueAbandon({
+    project: projectPath || "",
+    family: "mission",
+    labels: [label],
+    reason: (opts && opts.reason) || "queue-mission-removed",
+    detected: (opts && opts.detected) || "remove-one",
+  });
+
+  // AGENT JETABLE : les agents ephemeres de la mission retiree n'auront jamais
+  // de tache — ils sont purges avec elle (les lignes du registre des agents ne
+  // sont jamais touchees : `disposeEphemeralAgents` ignore les identifiants
+  // persistants).
+  const ephemeralIds = [];
+  for (const aid of entry && Array.isArray(entry.agentIds) ? entry.agentIds : []) {
+    if (isEphemeralAgentId(aid)) ephemeralIds.push(aid);
+  }
+  if (ephemeralIds.length > 0) {
+    disposeEphemeralAgents(ephemeralIds, projectPath || null).catch(() => {});
+  }
+
+  // Liberte rendue a la file : le verrou du projet n'est ni pris ni relache ici
+  // (la place n'est pas « liberee » au sens du verrou, elle est simplement
+  // rendue disponible) ; le rejeu est rearme pour que la suivante demarre des
+  // que le projet est reellement libre. File vide : rien a rejouer.
+  if (left > 0) armQueueReplay(projectPath);
+
+  const message =
+    left > 0
+      ? `Mission retiree de la file d'attente : ${label}. Il reste ${left} demande(s) en attente, dans leur ordre ; la suivante demarrera des que le projet sera libre.`
+      : `Mission retiree de la file d'attente : ${label}. La file ne contient plus aucune demande en attente (la tache en cours, s'il y en a une, continue).`;
+  return { ok: true, removed: 1, id: numericId, label, remaining: left, reason: "", message };
+}
+
+/**
  * RÈGLE 4 — ABANDON EXPLICITE et TRACÉ d'une file de missions.
  *
  * Le watchdog de run vidait la file par `runAgentsQueueByProject[target].length
@@ -4487,7 +4610,47 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const TELEGRAM_NOTIFY_SENTINEL = "PILOT_ASSISTANT_TELEGRAM_NOTIFY::";
     const SCHEDULE_SENTINEL = "PILOT_ASSISTANT_SCHEDULE::";
     const TOOLS_SENTINEL = "PILOT_ASSISTANT_TOOLS::";
+    // Retrait CIBLE d'une mission en attente (outil `remove_queued_mission`).
+    // L'assistant ne voit jamais la file : il designe la demande par son rang
+    // affiche (`/file`) ou par son numero de mission.
+    const QUEUE_REMOVE_SENTINEL = "PILOT_ASSISTANT_QUEUE_REMOVE::";
     const title = payload.title || "";
+    if (title.startsWith(QUEUE_REMOVE_SENTINEL)) {
+      let info = {};
+      try {
+        info = JSON.parse(title.slice(QUEUE_REMOVE_SENTINEL.length)) || {};
+      } catch (_) {
+        info = {};
+      }
+      // Chargement PARESSEUX : la vue de file importe deja ce module (eviter un
+      // cycle d'imports statique) — et elle reste la SEULE source de l'ordre
+      // affiche (rangs), donc la seule a savoir traduire un rang en mission.
+      let result;
+      try {
+        const { removeProjectQueuedMission } = await import("./project-queue-view.js");
+        const project = (typeof info.project === "string" && info.project) || window._pilotProjectPath || ".";
+        result = removeProjectQueuedMission(project, {
+          rank: info.rank,
+          missionId: info.mission_id != null ? info.mission_id : info.missionId,
+          reason: "queue-mission-removed",
+          detected: "assistant-remove-one",
+        });
+      } catch (e) {
+        result = { ok: false, removed: 0, remaining: 0, reason: "error", message: `Retrait impossible : ${String(e)}` };
+      }
+      await respondSuperAgent(
+        id,
+        JSON.stringify({
+          ok: !!result.ok,
+          removed: result.removed || 0,
+          remaining: Number.isFinite(result.remaining) ? result.remaining : 0,
+          reason: result.reason || "",
+          message: result.message || "",
+        }),
+        false,
+      );
+      return;
+    }
     if (title.startsWith(MEMORY_SAVE_SENTINEL)) {
       // Mémoire de session (pilot-assistant-session-memory) : l'assistant
       // enregistre un résumé compact (sujet en cours, chantiers en cours) via

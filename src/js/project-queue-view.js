@@ -21,6 +21,7 @@ import {
   getProjectDelegationQueue,
   abandonProjectMissionQueue,
   abandonProjectDelegationQueue,
+  removeQueuedMission,
 } from "./super-agent.js";
 import {
   buildProjectQueueView,
@@ -121,6 +122,117 @@ export function formatProjectQueueReport(project) {
   } catch (_) {
     return "🧾 File d'attente du projet : indisponible pour le moment (réessayez dans un instant).";
   }
+}
+
+/**
+ * RETRAIT CIBLE d'UNE mission de l'assistant, designee par son rang AFFICHE
+ * (celui que `/file` montre : la tache en cours occupe le rang 1).
+ *
+ * C'est le geste qui manquait : la file ne savait oublier qu'EN ENTIER (mission
+ * 385, `/file vide`). Une demande devenue sans objet gardait sa place et prenait
+ * le verrou du projet a son tour (cf. `queue-order-respected` / `admission-fifo`
+ * dans `.pilot/agent-stops.log`).
+ *
+ * Ce module reste la SEULE source de l'ordre affiche (rangs) : c'est donc ici,
+ * et nulle part ailleurs, qu'un rang affiche se traduit en mission de la file.
+ * Le retrait lui-meme (splice, journal, rejeu) appartient a `removeQueuedMission`.
+ * @param {string} project - projet ciblé
+ * @param {{rank?:number, missionId?:number, reason?:string, detected?:string}} selector
+ * @returns {{ok:boolean, removed:number, id:number|null, label:string, remaining:number, reason:string, message:string}}
+ */
+export function removeProjectQueuedMission(project, selector = {}) {
+  const target = project || ".";
+  const reason = selector.reason || "queue-mission-removed";
+  const detected = selector.detected || "remove-one";
+  const numericMission = Number(selector.missionId);
+  const hasMission = Number.isFinite(numericMission) && numericMission > 0;
+  const numericRank = Number(selector.rank);
+  const hasRank = Number.isFinite(numericRank) && numericRank > 0;
+  if (!hasMission && !hasRank) {
+    const remaining = (() => {
+      try {
+        return getProjectMissionQueue(target).length;
+      } catch (_) {
+        return 0;
+      }
+    })();
+    return {
+      ok: false,
+      removed: 0,
+      id: null,
+      label: "",
+      remaining,
+      reason: "no-selector",
+      message:
+        "Aucune mission designee : precisez le rang affiche par /file (par exemple /file retire 2) ou le numero de mission. Rien n'a ete retire.",
+    };
+  }
+  if (hasMission) {
+    return removeQueuedMission(target, { id: Math.trunc(numericMission), reason, detected });
+  }
+
+  const rank = Math.trunc(numericRank);
+  let view = null;
+  try {
+    view = readProjectQueueView(target);
+  } catch (_) {
+    view = null;
+  }
+  const waiting = (view && view.waiting) || [];
+  const entry = waiting.find((item) => item && item.rank === rank);
+  if (!entry) {
+    const missionCount = (() => {
+      try {
+        return getProjectMissionQueue(target).length;
+      } catch (_) {
+        return 0;
+      }
+    })();
+    // Le rang 1 (ou celui d'une tache lancee) est occupe par ce qui TOURNE : ce
+    // n'est pas une mission en attente, et l'arreter est un autre geste.
+    const runningIndex = ((view && view.running) || []).findIndex((item, i) => 1 + i === rank);
+    if (runningIndex >= 0) {
+      return {
+        ok: false,
+        removed: 0,
+        id: null,
+        label: "",
+        remaining: missionCount,
+        reason: "running",
+        message: `La demande du rang ${rank} est la tache EN COURS : le retrait ne concerne que les missions EN ATTENTE. Pour l'arreter, c'est l'arret de l'agent (autre geste). Rien n'a ete retire.`,
+      };
+    }
+    return {
+      ok: false,
+      removed: 0,
+      id: null,
+      label: "",
+      remaining: missionCount,
+      reason: "no-rank",
+      message: `Aucune demande en attente au rang ${rank} : rien n'a ete retire. La tache EN COURS ne se retire pas par ce chemin (arreter un agent est un autre geste).`,
+    };
+  }
+  if (entry.kind !== "mission") {
+    let missions = 0;
+    try {
+      missions = getProjectMissionQueue(target).length;
+    } catch (_) {
+      missions = 0;
+    }
+    return {
+      ok: false,
+      removed: 0,
+      id: null,
+      label: "",
+      remaining: missions,
+      reason: "not-a-mission",
+      message: `La demande en attente au rang ${rank} n'est pas une mission de l'Assistant (${entry.kind}) : ce geste ne retire que les missions de l'Assistant, une par une. Rien n'a ete retire.`,
+    };
+  }
+  // Les missions de la vue sont, dans l'ordre, exactement celles de la file de
+  // missions : la position parmi elles est l'index de file (1 = tete).
+  const position = waiting.filter((item) => item && item.kind === "mission").indexOf(entry) + 1;
+  return removeQueuedMission(target, { index: position, reason, detected });
 }
 
 /**

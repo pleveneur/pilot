@@ -114,6 +114,10 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   ouvrir l'onglet « Événements » l'éteint. Le panneau s'ouvre sur **« Agents »** tant que vous
   n'avez pas choisi d'onglet, puis se rouvre sur l'onglet où vous l'avez laissé ; il se ferme par
   **Échap**, la **croix** ou un clic sur le cercle.
+- **Une demande en attente devenue inutile se retire seule** : la commande **`/file retire <rang>`**
+  retire **une seule** demande de la file (le rang affiché par `/file` — la tâche en cours occupe le
+  1er rang), les autres restent dans leur ordre et la tâche en cours continue. `/file vide` continue
+  de tout abandonner, et l'Assistant peut faire ce retrait ciblé à votre demande.
 - Sa taille s'adapte à la fenêtre : assez large pour les trois onglets **sur une seule ligne**
   (jamais plus de 40 % de la largeur) et jamais plus de **60 % de la hauteur de l'écran** — au-delà,
   seule la liste défile, et le panneau reste entièrement visible. Les trois listes ont exactement

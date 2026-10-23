@@ -195,6 +195,8 @@ pilot/
 │       ├── feedback.js       # Onglet « 💬 Feedback » : remarques/évolutions (GitHub + email + lecture issues)
 │       ├── super-agent.js    # Onglet « 🧭 Assistant » : suivi multi-projets lecture seule (chat, config, init, relais des choix d'agent, tâche #22)
 │       ├── super-agent-context.js # 🧭 : contexte de suivi COURT joint automatiquement à la demande déléguée (pures : projet, tâches, décisions, mémoire)
+│       ├── project-queue-view.js # SOURCE UNIQUE de la file visible d'un projet : composition ordonnée (« en cours » + rangs), texte de /file, vidage tracé /file vide, et RETRAIT CIBLÉ d'UNE mission (`removeProjectQueuedMission`, rang affiché → mission) — la traduction rang→mission n'existe qu'ici
+│       ├── project-task-queue.js # File des commandes manuelles du projet (FIFO, sonde de rejeu, rangs affichés, abandon tracé) — module sans import Tauri
 │       ├── dashboard.js      # Onglet « 📊 Tableau de bord » (issue #51) : métriques projet (stockage, Git, langages, activité)
 │       ├── vault.js          # Onglet « 🔐 Coffre » (issue #52) : coffre fort de mots de passe chiffré (AES-256-GCM)
 │       ├── diff-view.js       # Diff Review (A4) : diff inline + porte pré-écriture (renderEditGateDialog)

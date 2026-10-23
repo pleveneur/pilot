@@ -152,7 +152,7 @@ export function formatQueueReport(view = {}) {
   for (const entry of waiting) lines.push(entryLine(entry, false));
   if (!waiting.length) lines.push("- en attente : aucune demande");
   lines.push(
-    "Une seule tâche tourne à la fois sur le projet : la première demande en attente démarre automatiquement à la libération. `/file vide` abandonne les demandes en attente (le nombre abandonné est annoncé).",
+    "Une seule tâche tourne à la fois sur le projet : la première demande en attente démarre automatiquement à la libération. `/file vide` abandonne les demandes en attente (le nombre abandonné est annoncé). `/file retire <rang>` retire UNE seule mission de l'Assistant, celle de ce rang : les autres restent, dans leur ordre.",
   );
   return lines.join("\n");
 }
@@ -182,7 +182,7 @@ export function formatQueueLines(view = {}, maxWaiting = 4) {
   if (waiting.length > showMax) {
     lines.push(`- … et ${waiting.length - showMax} autre(s) demande(s) en attente`);
   }
-  lines.push("`/file` : voir la file · `/file vide` : abandonner les demandes en attente");
+  lines.push("`/file` : voir la file · `/file vide` : abandonner les demandes en attente · `/file retire <rang>` : retirer UNE seule mission");
   return lines;
 }
 

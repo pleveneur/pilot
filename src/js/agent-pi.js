@@ -100,7 +100,7 @@ import {
   formatQueuedNotice,
   rankLabel,
 } from "./project-task-queue.js";
-import { readProjectQueueView, formatProjectQueueReport, abandonProjectQueue } from "./project-queue-view.js";
+import { readProjectQueueView, formatProjectQueueReport, abandonProjectQueue, removeProjectQueuedMission } from "./project-queue-view.js";
 
 // Mission 380 : la levée d'un verrou de run ORPHELIN avant de refuser une
 // commande manuelle est la définition UNIQUE du bus (`releaseOrphanRunLock`,
@@ -1357,6 +1357,26 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
         appendSystemMessage(messagesEl, manualCommandBlockedMessage());
       }
       return false;
+    }
+    // RETRAIT CIBLE : `/file retire <rang>` retire UNE seule mission de
+    // l'Assistant (celle du rang affiche par `/file`). Les autres restent en
+    // file, dans leur ordre, et la suivante demarre des que le projet est
+    // libre : le verrou du projet n'est ni pris ni relache par ce geste. La
+    // tache EN COURS ne se retire pas par ce chemin (arreter un agent est un
+    // autre geste). Commande LOCALE : jamais transmise au moteur.
+    const oneMissionRetire = text.match(/^\/file\s+retire\s+(\d+)$/i);
+    if (oneMissionRetire) {
+      const queueProject = projectPath || window._pilotProjectPath || ".";
+      inputEl.value = "";
+      autoResizeTextarea();
+      hideAutocomplete();
+      const removed = removeProjectQueuedMission(queueProject, {
+        rank: Number(oneMissionRetire[1]),
+        detected: "file-retire",
+      });
+      appendSystemMessage(messagesEl, removed.message);
+      refreshQueueBlock();
+      return;
     }
     // Mission 385 : file d'attente des tâches du projet. `/file` l'affiche (tâche
     // en cours + demandes en attente avec leur rang) ; `/file vide` abandonne les

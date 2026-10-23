@@ -55,6 +55,12 @@ const GIT_LOG_SENTINEL = "PILOT_ASSISTANT_GIT_LOG::";
 // par le même outil (décision du propriétaire : pas d'outil de lecture séparé,
 // pas de valeur d'état injectée dans le prompt).
 const TELEGRAM_NOTIFY_SENTINEL = "PILOT_ASSISTANT_TELEGRAM_NOTIFY::";
+// Sentinel préfixant le titre d'un `input` de l'outil `remove_queued_mission`.
+// Pilot le détecte, retire UNE seule mission en attente (celle du rang affiché par
+// `/file`, ou celle du numéro de mission donné) et renvoie le résultat en clair
+// comme `value` de la réponse. Un sentinel DISTINCT de l'action « vider la file »
+// (`/file vide`) : les deux gestes ne passent jamais par le même chemin.
+const QUEUE_REMOVE_SENTINEL = "PILOT_ASSISTANT_QUEUE_REMOVE::";
 
 // Garde-fou anti-blocage (bug « agents figés ») : en mode RPC, un `ctx.ui.*`
 // émet un `extension_ui_request` sur stdout et pi attend la réponse SANS
@@ -360,6 +366,38 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text: `${target} a été arrêté.` }] };
       }
       return { content: [{ type: "text", text: "Échec de l'arrêt de l'agent." }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "remove_queued_mission",
+    label: "Remove Queued Mission",
+    description:
+      "Retirer UNE SEULE mission de l'assistant de la file d'attente d'un projet (les autres restent en file, dans leur ordre). À utiliser quand une demande déjà en attente est devenue sans objet, périmée ou remplacée par une autre : elle ne doit pas garder sa place et prendre le projet à son tour. La demande visée se désigne par son RANG affiché par `/file` (la tâche en cours occupe le rang 1, donc la première demande en attente est le rang 2) ou par son NUMÉRO de mission. Ce geste NE VIDE PAS la file et N'ARRÊTE PAS la tâche en cours : pour arrêter ce qui tourne, c'est `stop_agent` ; pour tout abandonner, c'est le geste « vider la file » demandé par l'utilisateur.",
+    promptSnippet: "remove_queued_mission: retirer UNE seule mission en attente (par rang affiché ou numéro de mission), sans toucher aux autres ni à la tâche en cours",
+    promptGuidelines: [
+      "Use remove_queued_mission when ONE specific waiting request has become obsolete or superseded: it removes just that request, and the others keep their place and their order.",
+      "This tool only removes WAITING missions. Never use it to stop the mission that is currently running (use stop_agent for that), and never use it to empty the whole queue.",
+      "Identify the target with `rank` (the rank shown by /file: the running task is rank 1, so the first waiting request is rank 2) or with `mission_id` when the user gives a mission number. If you know neither, ask the user with ask_input instead of guessing.",
+      "After the call, read the returned `ok`, `remaining` and `message`: report in ONE short sentence which request was removed and how many are still waiting. On `ok: false`, say why (nothing was removed) instead of retrying blindly.",
+    ],
+    parameters: Type.Object({
+      rank: Type.Optional(Type.Number({ description: "Rang affiché par /file de la demande à retirer (la tâche en cours occupe le rang 1)" })),
+      mission_id: Type.Optional(Type.Number({ description: "Numéro de mission de la demande à retirer (celui affiché dans les rapports : [mission #7 …])" })),
+      project: Type.Optional(Type.String({ description: "Chemin absolu du projet. Si omis, utilise le projet actif." })),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({
+        project: params.project || null,
+        rank: typeof params.rank === "number" ? params.rank : null,
+        mission_id: typeof params.mission_id === "number" ? params.mission_id : null,
+      });
+      const result = await ctx.ui.input(QUEUE_REMOVE_SENTINEL + payload, "", PILOT_UI_OPTS);
+      if (result == null) {
+        return { content: [{ type: "text", text: "Retrait annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu, la file d'attente est inchangée." }] };
+      }
+      return { content: [{ type: "text", text: String(result) }] };
     },
   });
 

@@ -787,6 +787,70 @@ uniquement un bloc d'instructions dans le prompt système.
   file, un ordre, une réservation ; échoue si une structure recomparait le
   chemin brut).
 
+### Retrait CIBLÉ d'une mission en file (une seule, jamais la file entière)
+- **Besoin** : la file ne savait oublier qu'**en entier**
+  (`abandonProjectMissionQueue`, geste `/file vide`). Une demande devenue
+  périmée gardait sa place et prenait le verrou du projet à son tour — trace
+  `2026-10-22T11:02:54 reason=queue-order-respected detected=admission-fifo`
+  (quatre missions périmées ont bloqué le travail utile).
+- **Point unique** : `removeQueuedMission(projectPath, {id|index|label, reason,
+  detected})` (`super-agent.js`) — **nouvelle fonction**, à côté de
+  `abandonProjectMissionQueue` qui **reste inchangée** (le geste « tout
+  abandonner » n'est pas réécrit). Retrait **atomique** (`splice` d'une seule
+  entrée), ordre des autres **préservé** ; la clé de file est supprimée si elle
+  devient vide. **Le verrou du projet n'est ni pris ni perdu** : le retrait ne
+  pose aucune réservation (`pendingMissionClaims`) et ne touche pas au bus ;
+  `armQueueReplay` est **ré-armé** si des demandes restent, donc la suivante
+  démarre dès que le projet est réellement libre. Les agents **jetables** visés
+  par la mission retirée sont purgés.
+- **Refus explicites, non destructifs** (message « Rien n'a ete retire ») :
+  `no-selector`, `empty`, `mission-running` (le projet a un run en vol ou une
+  réservation vivante : retirer la mission en cours est un **autre** geste),
+  `not-found`. Côté vue de file : `no-rank`, `running` (le rang affiché est celui
+  de la tâche en cours), `not-a-mission` (le rang désigne une commande, une
+  délégation ou un agent).
+- **Rang affiché → mission** : la traduction vit **uniquement** dans
+  `project-queue-view.js` (`removeProjectQueuedMission`), seule source de
+  l'ordre affiché ; elle compte les entrées `kind === "mission"` de
+  `view.waiting` (le rang 1 étant la tâche en cours) puis délègue le `splice` à
+  `super-agent.js`.
+- **Journal** : une ligne `reason=queue-mission-removed` au **même** point que
+  les abandons (`traceQueueAbandon`) — **pas de second journal** — avec
+  `detected` = `file-retire` (commande), `assistant-remove-one` (outil de
+  l'Assistant) ou `remove-one` (appel direct), et le **nom** de la mission
+  retirée (les autres ne sont pas nommées : elles n'ont pas bougé).
+- **Accès** : commande **locale** `/file retire <rang>` (`agent-pi.js`, jamais
+  envoyée au moteur) et outil assistant `remove_queued_mission`
+  (`pilot-assistant-actions.ts`, sentinel
+  `PILOT_ASSISTANT_QUEUE_REMOVE::`, intercepté dans
+  `handleSuperAgentExtensionUiRequest`).
+- **Hors périmètre (question ouverte)** : reconnaître **automatiquement**
+  qu'une mission est **déjà livrée** (livrable déposé, résultat obsolète) et
+  proposer son retrait — non tranché.
+- Preuves : `src/js/file-attente-retrait-mission.test.js` (18 cas : ordre
+  préservé, verrou ni pris ni perdu, journal, refus de la mission en cours,
+  rang affiché, câblage `/file retire` + outil assistant).
+
+<!-- HELP:file-attente-retrait-cible -->
+### Retirer UNE seule demande de la file (sans tout vider)
+- Une demande déjà en attente peut devenir **sans objet** (périmée, remplacée
+  par une autre) : elle ne doit pas garder sa place et prendre le projet à son
+  tour. Pilot sait donc la **retirer seule**.
+- **`/file retire <rang>`** : retire **la mission de l'Assistant** du rang
+  affiché par `/file`. Le rang de la **tâche en cours** est le **1er** : la
+  première demande en attente est donc le **2e** rang. Les **autres** demandes
+  **restent en file, dans leur ordre**, et la tâche en cours **continue**.
+- L'**Assistant** peut faire ce retrait ciblé sur votre demande (il désigne la
+  demande par son rang ou par son numéro de mission).
+- Ce qui n'est **pas** fait : la **tâche en cours** n'est **jamais** retirée par
+  ce geste (pour l'arrêter, c'est l'arrêt de l'agent), aucune **autre** demande
+  n'est supprimée au passage, et `/file vide` (tout abandonner) reste un geste
+  **distinct**.
+- Le retrait est **annoncé** à l'écran et **consigné** dans le journal des
+  arrêts du projet (`queue-mission-removed`) : on sait toujours **quelle**
+  demande a été retirée et **pourquoi**.
+<!-- /HELP:file-attente-retrait-cible -->
+
 <!-- HELP:super-agent-agent-jetable -->
 ### Un agent jetable, juste pour une tâche
 - Vous pouvez demander un travail « comme le ferait un auditeur de sécurité »
@@ -863,7 +927,18 @@ sur le projet), cette demande n'est plus une simple ligne anonyme :
 - la commande **`/file vide`** qui vide la file nomme elle aussi **tout** ce
   qu'elle abandonne (commandes, missions, délégations), **famille par famille**,
   et consigne le motif dans le journal du projet : rien ne disparaît sans
-  laisser de trace.
+  laisser de trace ;
+- **une seule** demande peut être retirée sans toucher aux autres : la commande
+  **`/file retire <rang>`** retire **la mission de l'Assistant** de ce rang
+  (le rang est celui affiché par `/file` : la tâche **en cours** occupe le rang 1,
+  donc la première demande en attente est le rang 2 — `/file` affiche ces rangs).
+  Les **autres** demandes restent en file, **dans leur ordre**, et la tâche en
+  cours **continue** : c'est le geste à utiliser quand une demande déjà en
+  attente est devenue **sans objet** (périmée, remplacée par une autre) et ne
+  doit pas prendre le projet à son tour. Le retrait est **consigné** dans le
+  journal du projet et **annoncé** à l'écran ; le **rang de la tâche en cours**
+  n'est **pas** retirable (arrêter un agent est un autre geste), et l'**Assistant**
+  peut faire ce retrait ciblé à votre demande.
 <!-- /HELP:file-attente-identite-mission -->
 
 - **Un agent ne s'arrête plus tout seul juste après son lancement** : les
@@ -1453,6 +1528,7 @@ donc une ligne AVANT l'arrêt effectif (jamais après) :
 | Fin de SESSION par erreur dans le bus (chaque `failAgentTurn`) | `session-error`, `spawn-failed`, `run-exception` | erreur d'envoi de correction, sortie de processus (boucle / mort), message en erreur, modèle absent, exception du tour |
 | Destruction de la session de l'onglet agent (`stop_agent_session`) | `session-restart` | `quality-gate-toggle`, `reconnect`, `settings-restart` |
 | `/file vide` (familles commandes / missions / délégations) | `queue-abandoned` | `file-vide` |
+| Retrait ciblé d'**une seule** mission en attente (`/file retire <rang>`, outil assistant `remove_queued_mission`) | `queue-mission-removed` | `file-retire`, `assistant-remove-one`, `remove-one` |
 
 - **Arrêt manuel** (bouton « tout arrêter ») : pas de ligne — il est volontaire et
   ne doit pas être présenté comme un arrêt automatique.
