@@ -350,7 +350,7 @@ d'écho, **Pilot se couperait lui-même en boucle**.
 **Pourquoi la page web.** Le navigateur Chrome a **la meilleure annulation
 d'écho** et la page distante existe déjà (`web/js/app.js`). La fenêtre de Pilot
 demande un correctif local du composant d'affichage, **à réappliquer à chaque
-montée de version de Tauri** (`spec_voice_input.md` § 32). Prototyper côté web,
+montée de version de Tauri** (décision 5 de `spec_voice_input.md`). Prototyper côté web,
 c'est ne pas payer cette dette deux fois.
 
 **À essayer tout de suite.** Ouvrir la page distante dans Chrome, autoriser le
