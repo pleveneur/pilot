@@ -9,7 +9,7 @@ import { initSearchPanel } from "./search-panel.js";
 import { openRecentPopover } from "./recent-files.js";
 import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo, showToast } from "./toast.js";
-import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus, setUpdateWorkProbe, recheckPendingUpdateWindow, getPendingUpdateWindow } from "./updater.js";
+import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus, setUpdateWorkProbe, setUpdateWorkHoldersProbe, recheckPendingUpdateWindow, getPendingUpdateWindow } from "./updater.js";
 // FENÊTRE RÉSERVÉE de mise à jour : la sonde « un agent travaille-t-il ? » est
 // installée ICI, au seul endroit qui connaît à la fois le bus d'agents (runs en
 // cours) et l'activité RÉELLE des sessions (agent qui travaille sans run).
@@ -286,6 +286,24 @@ function initUpdateWindowReservation() {
       /* sonde indisponible : le relevé d'activité ci-dessus fait foi */
     }
     return false;
+  });
+
+  // QUI bloque et DEPUIS QUAND : même relevé d'activité que la sonde ci-dessus,
+  // donc aucune requête ni aucun sondage supplémentaire. Sert uniquement à
+  // rendre le blocage visible (« codeur (Pilot) en cours depuis 2 h 13 min ») :
+  // aucune décision d'admission n'en dépend, et une sonde sans information
+  // laisse le rappel dans son texte historique.
+  setUpdateWorkHoldersProbe(() => {
+    const snap = getAgentActivitySnapshot();
+    if (!snap || !Array.isArray(snap.list)) return [];
+    return snap.list.filter(isAgentWorking).map((a) => ({
+      agentId: a.agentId || "",
+      label: a.label || "",
+      project: a.project || "",
+      // Début du travail en cours (ms epoch) mémorisé par le relevé d'activité,
+      // ou null : jamais une durée inventée.
+      since: Number(a.workingSince) > 0 ? Number(a.workingSince) : null,
+    }));
   });
 
   // Le terrain se libère → l'écran de mise à jour EN ATTENTE s'affiche de

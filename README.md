@@ -146,7 +146,7 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 ### Barre de statut
 - Position du curseur (ligne, colonne).
 - Type de fichier et raccourcis disponibles.
-- **« ⬆ Mise à jour en attente (à la fin du travail en cours) »** quand une nouvelle version de Pilot attend qu'un agent termine sa tâche.
+- **« ⬆ Mise à jour en attente (à la fin du travail en cours) »** quand une nouvelle version de Pilot attend qu'un agent termine sa tâche. Le rappel **dit qui bloque et depuis quand** : « ⬆ Mise à jour v0.4.44 en attente — codeur (Pilot) en cours depuis 2 h 13 min » (s'il y a plusieurs travaux, le plus ancien est nommé puis « + N autres »). Sans information disponible, la phrase d'origine reste affichée.
 
 ### Mise à jour de Pilot
 - Pilot vérifie seul s'il existe une version plus récente (au démarrage, toutes les 6 heures, et à chaque retour sur Pilot), puis propose la version, sa date et le récapitulatif des changements.

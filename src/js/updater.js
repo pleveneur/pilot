@@ -23,6 +23,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { showToast, toastError } from "./toast.js";
 import { renderMarkdown } from "./preview.js";
+import { formatElapsed } from "./duree-travail.js";
 import {
   UPDATE_WINDOW_REASONS,
   getUpdateWindowReservation,
@@ -55,6 +56,11 @@ let _installing = false;
 // réservation est posée dans `update-window.js`, consultée par le gardien
 // existant `run-policy.js` (aucun second gardien).
 let _workProbe = null; // sonde « un agent travaille-t-il ? » posée par main.js
+// Sonde « QUI bloque ? » : rend la liste des sessions qui travaillent, avec leur
+// instant de début. Alimentée par main.js à partir du MÊME relevé d'activité que
+// `_workProbe` (aucune requête ni sondage supplémentaire). Tant qu'elle est
+// absente ou vide, le rappel garde son texte historique (aucun nom inventé).
+let _workHoldersProbe = null;
 let _opening = false; // ouverture en cours (anti-double affichage)
 let _announcedWaitingVersion = null; // attente déjà annoncée (un seul toast)
 
@@ -228,6 +234,17 @@ export function setUpdateWorkProbe(probe) {
 }
 
 /**
+ * Installe la sonde « QUI bloque la mise à jour ? ». Elle doit lire les données
+ * DÉJÀ présentes (liste d'activité des agents) : elle n'a le droit de lancer
+ * aucune requête, aucun sondage, aucune commande.
+ * @param {function(): (Array<{label?:string, project?:string, since?:number, agentId?:string}>|Promise<Array>|null)} probe
+ * @returns {void}
+ */
+export function setUpdateWorkHoldersProbe(probe) {
+  _workHoldersProbe = typeof probe === "function" ? probe : null;
+}
+
+/**
  * Un agent travaille-t-il en ce moment ? (règle 1 de la fenêtre réservée)
  * Fail-closed : une sonde en échec est traitée comme « du travail est en
  * cours » — on ne coupe jamais un travail sur une erreur de sonde ; le
@@ -246,15 +263,78 @@ async function isWorkRunning() {
 }
 
 /**
+ * Interroge la sonde « qui bloque ? ». Fail-OPEN et silencieux : une sonde
+ * absente ou en échec rend une liste vide, donc le texte historique — on
+ * n'invente jamais un nom d'agent ni une ancienneté.
+ * @returns {Promise<Array>}
+ */
+async function readWorkHolders() {
+  if (!_workHoldersProbe) return [];
+  try {
+    const res = await _workHoldersProbe();
+    return Array.isArray(res) ? res : [];
+  } catch (e) {
+    console.warn("Sonde « qui bloque la mise à jour » indisponible :", e);
+    return [];
+  }
+}
+
+/**
+ * Texte du rappel de la barre de statut (fonction PURE).
+ *
+ * Sans information sur les sessions qui bloquent, il rend EXACTEMENT le texte
+ * historique. Avec information, il nomme l'agent et son projet qui bloquent, et
+ * dit DEPUIS QUAND ce travail dure — pour qu'un blocage ne soit plus une phrase
+ * muette. Plusieurs sessions bloquent ? La plus ANCIENNE est nommée, les autres
+ * sont comptées (« + N autres »).
+ * @param {string} version version en attente (facultative)
+ * @param {Array<{label?:string, project?:string, since?:number, agentId?:string}>} holders
+ * @param {number} [nowTs] instant de référence (défaut : maintenant)
+ * @returns {string}
+ */
+export function formatWaitingNotice(version, holders, nowTs) {
+  const suffix = version ? ` v${version}` : "";
+  const fallback = `⬆ Mise à jour${suffix} en attente (à la fin du travail en cours)`;
+  const list = (Array.isArray(holders) ? holders : []).filter(
+    (h) => h && typeof h === "object" && (h.label || h.agentId)
+  );
+  if (!list.length) return fallback;
+
+  const startOf = (h) => {
+    const n = Number(h.since);
+    return Number.isFinite(n) && n > 0 ? n : Infinity;
+  };
+  // La plus ANCIENNE d'abord : c'est elle qui explique le blocage le plus long.
+  // Un début inconnu (Infinity) passe après les travaux datés.
+  const sorted = [...list].sort((a, b) => {
+    const sa = startOf(a);
+    const sb = startOf(b);
+    if (sa === sb) return 0;
+    return sa < sb ? -1 : 1;
+  });
+
+  const oldest = sorted[0];
+  const name = String(oldest.label || oldest.agentId || "");
+  const project = oldest.project ? ` (${String(oldest.project)})` : "";
+  const now = Number.isFinite(Number(nowTs)) ? Number(nowTs) : Date.now();
+  const since = startOf(oldest);
+  const age = since === Infinity ? "" : ` en cours depuis ${formatElapsed(now - since)}`;
+  const others = sorted.length - 1;
+  const more = others > 0 ? ` + ${others} autre${others > 1 ? "s" : ""}` : "";
+  return `⬆ Mise à jour${suffix} en attente — ${name}${project}${age}${more}`;
+}
+
+/**
  * Annonce, UNE fois, que la mise à jour attend la fin du travail en cours.
  * Aucune fenêtre : l'information est discrète (toast court + rappel dans la
  * barre de statut), le travail n'est jamais interrompu.
  * @param {object} update
- * @returns {void}
+ * @returns {Promise<void>}
  */
-function announceWaiting(update) {
+async function announceWaiting(update) {
   const version = String((update && update.version) || "");
-  setWaitingNotice(version);
+  // QUI bloque et depuis quand : lu dans le relevé d'activité déjà en mémoire.
+  setWaitingNotice(version, await readWorkHolders());
   if (_announcedWaitingVersion === version) return;
   _announcedWaitingVersion = version;
   showToast(
@@ -268,14 +348,19 @@ function announceWaiting(update) {
  * Rappel VISIBLE et non bloquant dans la barre de statut : la mise à jour est
  * prête et s'affichera dès que le travail en cours sera terminé.
  * @param {string} version
+ * @param {Array} [holders] sessions qui bloquent (voir `formatWaitingNotice`)
  * @returns {void}
  */
-function setWaitingNotice(version) {
+function setWaitingNotice(version, holders) {
   const el = typeof document !== "undefined" && document.getElementById
     ? document.getElementById("status-update-waiting")
     : null;
   if (!el) return;
-  el.textContent = `⬆ Mise à jour${version ? ` v${version}` : ""} en attente (à la fin du travail en cours)`;
+  el.textContent = formatWaitingNotice(version, holders);
+  // Le texte peut être long (« … codeur (Pilot) en cours depuis 2 h 13 min ») :
+  // il est tronqué visuellement par le CSS, la version complète reste lisible
+  // en infobulle (aucune information perdue).
+  el.title = el.textContent;
   el.classList.remove("hidden");
 }
 
@@ -307,12 +392,12 @@ export async function tryOpenUpdateWindow() {
   _opening = true;
   try {
     if (await isWorkRunning()) {
-      announceWaiting(update);
+      await announceWaiting(update);
       return false;
     }
     // Seconde lecture, immédiate : le travail a-t-il repris entre-temps ?
     if (await isWorkRunning()) {
-      announceWaiting(update);
+      await announceWaiting(update);
       return false;
     }
     // Le terrain est libre : il est RÉSERVÉ avant l'affichage, donc aucun

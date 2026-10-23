@@ -667,6 +667,14 @@ body.theme-light.theme-tokyo-day {
   color: var(--accent, #4fc3f7);
   white-space: nowrap;
   font-weight: 500;
+  /* Le rappel nomme désormais l'agent qui bloque et l'ancienneté du travail :
+     il peut être long. Il est tronqué proprement plutôt que de comprimer le
+     reste de la barre de statut (le texte complet reste en infobulle). */
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 #status-version {
