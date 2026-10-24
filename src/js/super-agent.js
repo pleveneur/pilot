@@ -50,6 +50,10 @@ import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, rele
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections } from "./super-agent-schedule.js";
+// MÉNAGE DES RAPPELS : décision UNIQUE (pures) des rappels devenus inutiles —
+// mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
+// « Supprimer les rappels inutiles » de Paramètres → Assistant.
+import { classifyScheduleCleanup, cleanupApplyPayload } from "./super-agent-schedule-cleanup.js";
 import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility } from "./agent-activity.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
@@ -3970,6 +3974,22 @@ let scheduleTicker = null;
 // rappel est marqué livré.
 const pendingReminderIds = new Set();
 
+// MÉNAGE DES RAPPELS : utilité d'une exécution de rappel. Quand un rappel est
+// livré, on retient son id ; les appels d'outils du tour DÉCLENCHÉ par ce rappel
+// sont comptés (un rappel qui ne fait rien est inutile : au bout de 20
+// exécutions stériles consécutives, la règle de ménage n° 3 le désactive — elle
+// ne le supprime pas). En cas de doute (erreur, interruption, relance
+// technique du backend), on ne compte RIEN : le rappel est conservé.
+let reminderUtilityProbe = null;
+
+function noteReminderTurnOutcome() {
+  const probe = reminderUtilityProbe;
+  reminderUtilityProbe = null;
+  if (!probe || probe.doubtful) return;
+  // Fire-and-forget : un échec d'écriture ne doit jamais perturber le chat.
+  invoke("super_agent_schedule_note_run", { id: probe.id, detected: probe.tools > 0 }).catch(() => {});
+}
+
 // RÉGLAGE « Vérifier les points à faire à l'ouverture de la session » : le
 // propriétaire a-t-il LUI-MÊME écrit dans la conversation depuis l'ouverture de
 // cette session ? Faux à chaque ouverture du ticker (donc au démarrage de
@@ -4000,6 +4020,7 @@ async function scheduleTick() {
     for (const d of toInject) {
       pendingReminderIds.add(d.id);
       try {
+        reminderUtilityProbe = { id: d.id, tools: 0, doubtful: false };
         await invoke("send_super_agent_command", {
           command: { type: "prompt", message: `[⏰ Rappel programmé] ${d.prompt}` },
         });
@@ -4016,7 +4037,11 @@ async function scheduleTick() {
         try {
           await invoke("super_agent_schedule_mark_done", { id: d.id });
         } catch (_) { /* échec de marquage : le rappel sera re-renvoyé, pas de blocage */ }
-      } catch (_) { /* un rappel qui échoue ne bloque pas les suivants */ }
+      } catch (_) {
+        // Échec d'injection : aucun tour ne sera déclenché par ce rappel, on
+        // annule la sonde d'utilité (aucune exécution n'est comptée stérile).
+        if (reminderUtilityProbe && reminderUtilityProbe.id === d.id) reminderUtilityProbe = null;
+      }
       pendingReminderIds.delete(d.id);
     }
   } catch (_) { return; }
@@ -4028,6 +4053,34 @@ function startScheduleTicker() {
   // écrit (cf. règle du réglage « points à faire à l'ouverture »).
   ownerEngagedThisSession = false;
   scheduleTicker = setInterval(scheduleTick, SCHEDULE_TICK_INTERVAL_MS);
+  // MÉNAGE DES RAPPELS : une passe automatique par SESSION, bornée à une par
+  // jour côté donnée (assistant_meta.schedule_cleanup_at). Non bloquant et
+  // silencieux : chaque suppression est journalisée côté backend.
+  maybeAutoCleanupSchedules();
+}
+
+/**
+ * Ménage automatique des rappels inutiles (règle 5 : au plus une fois par jour).
+ * Ne décide RIEN ici : lit l'état, laisse `classifyScheduleCleanup` décider,
+ * applique le plan rendu. Une erreur (base indisponible, backend ancien) est
+ * silencieuse — le ménage ne doit jamais gêner le démarrage de l'Assistant.
+ */
+async function maybeAutoCleanupSchedules() {
+  try {
+    const state = await invoke("super_agent_schedule_cleanup_state");
+    const plan = classifyScheduleCleanup({
+      schedules: (state && state.schedules) || [],
+      now: Date.now(),
+      lastCleanupAt: (state && state.lastCleanupAt) || null,
+      // Ménage automatique : jamais deux fois dans la même journée.
+      enforceDailyGuard: true,
+    });
+    if (!plan.run) return;
+    const payload = cleanupApplyPayload(plan);
+    // Même une passe sans rien à faire est appliquée : elle date le ménage (sinon
+    // chaque session recompterait la totalité des rappels).
+    await invoke("super_agent_schedule_cleanup_apply", payload);
+  } catch (_) { /* ménage best-effort : aucun impact sur la conversation */ }
 }
 
 function stopScheduleTicker() {
@@ -4303,6 +4356,9 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     if (!isReadOnlyAgentToolCall(toolName, payload.args)) {
       superLoopToolCalls.push(buildToolLoopFingerprint(toolName, payload.args));
     }
+    // LECTURE comprise : un rappel qui déclenche une consultation n'est pas
+    // stérile (règle de ménage n° 3). Tout appel d'outil compte comme détection.
+    if (reminderUtilityProbe) reminderUtilityProbe.tools += 1;
     maybeDetectSuperAgentLoop(messagesEl);
     if (!currentBody) {
       currentBody = createSuperAgentBlock(messagesEl);
@@ -4394,6 +4450,11 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   }
   if (type === "agent_end") {
     statusEl.textContent = "Prêt";
+    // MÉNAGE DES RAPPELS : le tour déclenché par un rappel peut être relancé par
+    // le backend (willRetry). Seule une fin RÉELLE permet de conclure à une
+    // exécution stérile — sinon on ne compte rien (« en cas de doute : on garde »).
+    if (shouldFinalizeOnAgentEnd(payload)) noteReminderTurnOutcome();
+    else if (reminderUtilityProbe) reminderUtilityProbe.doubtful = true;
     // Chantier #15 : étendre les badges de la bulle de RÉPONSE avec les projets
     // nommés dans le texte de la réponse (en plus du snapshot de la demande).
     // On capture la bulle, les badges de base et le texte AVANT onEnd() (qui
@@ -5736,6 +5797,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             name: String(req.name || ""),
             prompt: String(req.prompt || ""),
             every: Number.isFinite(everySeconds) && everySeconds > 0 ? everySeconds : null,
+            // Relance UNIQUE (`once: true`) : consommée à la première livraison,
+            // puis supprimée par la règle de ménage n° 2 une fois périmée.
+            once: req.once === true,
           });
         } else if (req.op === "list") {
           result = await invoke("super_agent_schedule_list");

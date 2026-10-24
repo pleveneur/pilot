@@ -3697,6 +3697,12 @@ pub fn run() {
             super_agent::super_agent_schedule_mark_done,
             super_agent::super_agent_schedule_list,
             super_agent::super_agent_schedule_tick,
+            // MÉNAGE DES RAPPELS : état (liste enrichie + date du dernier ménage),
+            // application d'un plan (suppressions + désactivations, journalisées),
+            // et note d'utilité d'une exécution (compteur d'exécutions stériles).
+            super_agent::super_agent_schedule_cleanup_state,
+            super_agent::super_agent_schedule_cleanup_apply,
+            super_agent::super_agent_schedule_note_run,
             super_agent::super_agent_create_task,
             super_agent::super_agent_set_task_dependency,
             super_agent::super_agent_update_task,

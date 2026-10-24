@@ -144,6 +144,12 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   mémorisés ne sont pas restaurés sinon) (désactivé par défaut ; l'onglet agent
   reste toujours ouvrable manuellement).
 - **Lancer la commande au démarrage**.
+- **Rappels de l'assistant** : sous le compteur « n sur 20 rappels de surveillance
+  actifs », le bouton **« Supprimer les rappels inutiles »** fait le ménage
+  (rappels désactivés et périmés, rappels uniques déjà consommés, rappels
+  périodiques qui ne détectent plus rien). Le nombre de rappels concernés vous
+  est annoncé **avant** confirmation et chaque suppression est journalisée
+  (détails : ❓ → « Ménage des rappels inutiles »).
 - **Intégrer le terminal** : terminal dans un onglet (xterm.js + PTY) ou fenêtre externe.
 
 ### Barre de statut

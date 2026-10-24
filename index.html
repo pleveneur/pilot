@@ -1016,6 +1016,10 @@
             <div class="setting-row setting-row-indent">
               <span id="setting-superagent-schedule-count" style="font-size:12px;color:var(--text-muted);"></span>
             </div>
+            <div class="setting-row setting-row-indent">
+              <button id="setting-superagent-schedule-cleanup" class="web-btn web-btn-secondary" type="button" title="Supprime les rappels devenus inutiles : rappels désactivés sans exécution depuis plus de 30 jours, relances uniques périmées depuis plus de 30 jours ; désactive les rappels périodiques qui n'ont rien détecté sur leurs 20 dernières exécutions. Le nombre de rappels concernés est annoncé AVANT toute suppression, et chaque suppression est journalisée.">Supprimer les rappels inutiles</button>
+              <span id="setting-superagent-schedule-cleanup-msg" style="font-size:12px;color:var(--text-muted);margin-left:8px;"></span>
+            </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-events-overlay" />
               <label for="setting-superagent-events-overlay" title="Afficher TEMPORAIREMENT au centre de l'écran (au-dessus de tout) chaque événement du suivi du travail (fin de tâche, erreur, agent terminé…), comme la liste des événements du panneau (cercle en haut à droite). Le dernier événement remplace le précédent. Les questions interactives (choix, confirmations) ne sont pas concernées. Désactivé par défaut.">Événements en plein écran (bandeau central temporaire)</label>

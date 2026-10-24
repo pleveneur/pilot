@@ -3,18 +3,28 @@
 // L'assistant (onglet 🧭) peut programmer des rappels qui reviennent dans sa
 // conversation à l'échéance : relance différée (« recheck dans 10 min ») ou
 // périodique (« point toutes les 5 min tant que le codeur tourne »). Trois outils :
-//   - schedule_create(name, prompt, everySeconds?) → crée une relance périodique
-//     (everySeconds OPTIONNEL, >= 60 ; omis = fréquence par défaut des rappels de
-//     surveillance, réglage Paramètres → Assistant). Retourne { id, nextFireAt }.
+//   - schedule_create(name, prompt, everySeconds?, once?) → crée une relance
+//     périodique (everySeconds OPTIONNEL, >= 60 ; omis = fréquence par défaut des
+//     rappels de surveillance, réglage Paramètres → Assistant) ou, avec `once`,
+//     une relance UNIQUE qui s'efface d'elle-même une fois livrée.
+//     Retourne { id, nextFireAt }.
 //   - schedule_list() → liste les planifications actives.
 //   - schedule_delete(id) → supprime une planification.
 //   - schedule_set_enabled(id, enabled) → désactive/réactive une planification
 //     sans la supprimer (pour la réactiver plus tard).
 //
-// Garde-fous (côté Rust, super_agent.rs) : every >= 60 s, max 20 planifications,
-// 1 fire par planification et par tick, pas de tick si la session super-agent est
-// morte. Le ticker frontend (super-agent.js) appelle `super_agent_schedule_tick`
+// Garde-fous (côté Rust, super_agent.rs) : every >= 60 s, max 20 planifications
+// ACTIVES (au-delà, la création est refusée avec la liste des rappels candidats
+// à supprimer, du plus ancien au plus récent), 1 fire par planification et par
+// tick, pas de tick si la session super-agent est morte. Le ticker frontend
+// (super-agent.js) appelle `super_agent_schedule_tick`
 // toutes les 10 s et injecte les rappels dus dans la conversation.
+//
+// MÉNAGE : les rappels inutiles ne s'accumulent plus. Une décision UNIQUE
+// (src/js/super-agent-schedule-cleanup.js) supprime les rappels désactivés
+// périmés et les relances uniques consommées, et désactive les rappels
+// périodiques devenus stériles ; le propriétaire dispose aussi du bouton
+// « Supprimer les rappels inutiles » (Paramètres → Assistant).
 //
 // Mécanisme : les outils envoient la requête via `ctx.ui.input` préfixé par un
 // sentinel. En mode RPC, `ctx.ui.input` émet un `extension_ui_request` sur stdout
@@ -45,17 +55,21 @@ export default function (pi: ExtensionAPI) {
     name: "schedule_create",
     label: "Schedule Create",
     description:
-      "Programmer une relance périodique qui reviendra dans ta conversation à l'échéance. `everySeconds` est OPTIONNEL : si tu ne le donnes pas, la relance prend la fréquence par défaut des rappels de surveillance (réglée par l'utilisateur dans Paramètres → Assistant, 1 heure par défaut). Quand tu le donnes, il doit être >= 60 secondes. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Retourne { id, nextFireAt }.",
-    promptSnippet: "schedule_create: programmer une relance périodique",
+      "Programmer une relance qui reviendra dans ta conversation à l'échéance. `everySeconds` est OPTIONNEL : si tu ne le donnes pas, la relance prend la fréquence par défaut des rappels de surveillance (réglée par l'utilisateur dans Paramètres → Assistant, 1 heure par défaut). Quand tu le donnes, il doit être >= 60 secondes. `once: true` crée une relance UNIQUE (recheck unique) qui s'efface d'elle-même une fois livrée. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Retourne { id, nextFireAt }.",
+    promptSnippet: "schedule_create: programmer une relance (périodique ou unique)",
     promptGuidelines: [
-      "Use schedule_create to program a periodic reminder that will come back in your conversation at the due time. everySeconds is OPTIONAL: if you omit it, the reminder uses the user's default surveillance frequency (1 hour by default). If you pass it, it must be >= 60.",
-      "Max 20 active schedules. Use schedule_list to see existing ones and schedule_delete to remove them.",
+      "Use schedule_create to program a reminder that will come back in your conversation at the due time. everySeconds is OPTIONAL: if you omit it, the reminder uses the user's default surveillance frequency (1 hour by default). If you pass it, it must be >= 60.",
+      "Pass once: true for a reminder that only has to fire ONE time (a one-shot recheck); it is then consumed and cleaned up automatically.",
+      "Max 20 active schedules. Use schedule_list to see existing ones and schedule_delete to remove the ones you no longer need, so the list stays useful.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Nom unique de la planification" }),
       prompt: Type.String({ description: "Texte injecté à l'échéance (ce qu'il faut rechecker)" }),
       everySeconds: Type.Optional(
         Type.Integer({ description: "Intervalle en secondes (>= 60). Omis = fréquence par défaut des rappels de surveillance." })
+      ),
+      once: Type.Optional(
+        Type.Boolean({ description: "true = relance UNIQUE, consommée à la première livraison. Omis/false = relance périodique." })
       ),
     }),
     executionMode: "sequential",
@@ -65,6 +79,7 @@ export default function (pi: ExtensionAPI) {
         name: params.name,
         prompt: params.prompt,
         everySeconds: params.everySeconds,
+        once: params.once,
       });
       const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "", PILOT_UI_OPTS);
       if (result == null) {

@@ -108,6 +108,15 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         );
+        -- MÉNAGE DES RAPPELS : petit magasin clé/valeur de l'Assistant. Il porte
+        -- l'horodatage du DERNIER ménage des rappels (clé
+        -- `schedule_cleanup_at`), qui garantit « au plus un ménage automatique
+        -- par jour », y compris après un redémarrage de Pilot. Table ADDITIVE :
+        -- une base ancienne la crée à l'ouverture, aucune donnée n'est touchée.
+        CREATE TABLE IF NOT EXISTS assistant_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         -- A7 : suivi temporel (jalons). Un jalon marque une étape du projet
         -- (release, milestone, objectif de date). `due_date` au format ISO.
         -- `status` : 'planifie' | 'atteint' | 'annule'.
@@ -187,6 +196,16 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     // base sur les anciennes bases). Les anciens résumés non livrés restent
     // `delivered=0` et seront rejoués à la prochaine opportunité.
     ensure_column(conn, "session_summaries", "delivered", "INTEGER NOT NULL DEFAULT 0")?;
+    // MÉNAGE DES RAPPELS (migration ADDITIVE, idempotente) :
+    //  - `one_shot` : rappel qui ne doit se déclencher qu'UNE fois (il s'auto-
+    //    désactive à la livraison) — la règle de ménage n° 2 supprime ensuite un
+    //    rappel unique périmé depuis plus de 30 jours ;
+    //  - `sterile_runs` : nombre d'exécutions CONSÉCUTIVES sans rien détecter,
+    //    remis à 0 dès qu'une exécution détecte quelque chose. Une base ancienne
+    //    démarre à 0 (= « rien de stérile connu »), donc aucun rappel existant
+    //    n'est désactivé par surprise.
+    ensure_column(conn, "assistant_schedules", "one_shot", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "assistant_schedules", "sterile_runs", "INTEGER NOT NULL DEFAULT 0")?;
     Ok(())
 }
 
@@ -1018,6 +1037,11 @@ pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, Stri
 
 pub(crate) const SCHEDULE_MIN_EVERY_SECS: i64 = 60;
 pub(crate) const SCHEDULE_MAX: i64 = 20;
+/// Clé de `assistant_meta` portant l'horodatage du dernier ménage des rappels.
+pub(crate) const SCHEDULE_CLEANUP_META_KEY: &str = "schedule_cleanup_at";
+/// Statut écrit dans le journal existant (`injection_logs`) pour chaque rappel
+/// supprimé ou désactivé par le ménage.
+pub(crate) const SCHEDULE_CLEANUP_LOG_STATUS: &str = "menage-rappel";
 
 /// Lot A idée 6 : résout la fréquence d'un NOUVEAU rappel.
 ///
@@ -1055,11 +1079,24 @@ impl DueSchedule {
 /// Insère une planification. Valide les garde-fous (every >= 60s, nom/prompt
 /// non vides, max 20). Retourne l'id créé. Fonction pure sur `Connection` pour
 /// être testable (in-memory en test, open_db en production).
+///
+/// `one_shot = true` crée un rappel qui ne doit se déclencher qu'une seule fois :
+/// il s'auto-désactive à la livraison (`schedule_mark_done`).
 pub(crate) fn schedule_insert(
     conn: &Connection,
     name: &str,
     prompt: &str,
     every: i64,
+) -> Result<i64, String> {
+    schedule_insert_with(conn, name, prompt, every, false)
+}
+
+pub(crate) fn schedule_insert_with(
+    conn: &Connection,
+    name: &str,
+    prompt: &str,
+    every: i64,
+    one_shot: bool,
 ) -> Result<i64, String> {
     let name = name.trim();
     let prompt = prompt.trim();
@@ -1082,10 +1119,10 @@ pub(crate) fn schedule_insert(
         .query_row("SELECT COUNT(*) FROM assistant_schedules WHERE enabled = 1", [], |r| r.get(0))
         .map_err(|e| format!("Erreur SQL : {}", e))?;
     if count >= SCHEDULE_MAX {
-        return Err(format!(
-            "schedule : maximum {} planifications atteint",
-            SCHEDULE_MAX
-        ));
+        // Le refus doit être ACTIONNABLE : il nomme les rappels les plus anciens
+        // (du plus ancien au plus récent) pour que l'Assistant sache lesquels
+        // supprimer, et renvoie vers le geste manuel du propriétaire.
+        return Err(schedule_cap_message(conn));
     }
     // Initialise EXPLICITEMENT l'heure de création (et `updated_at`) avec la
     // même horloge UTC que `schedule_due`/`schedule_next_fire`. L'échéance
@@ -1093,9 +1130,9 @@ pub(crate) fn schedule_insert(
     // création, sans dépendre du DEFAULT du schéma (un created_at NULL rendrait
     // la comparaison `datetime(COALESCE(...), ...)` indéfinie → jamais dû).
     conn.execute(
-        "INSERT INTO assistant_schedules (name, prompt, every, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
-        rusqlite::params![name, prompt, every],
+        "INSERT INTO assistant_schedules (name, prompt, every, one_shot, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))",
+        rusqlite::params![name, prompt, every, if one_shot { 1 } else { 0 }],
     )
     .map_err(|e| {
         if e.to_string().contains("UNIQUE") {
@@ -1105,6 +1142,47 @@ pub(crate) fn schedule_insert(
         }
     })?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Message de refus du plafond de rappels ACTIFS : il liste les rappels
+/// candidats à la suppression, **du plus ancien au plus récent** (référence =
+/// dernière exécution, ou création si jamais exécuté), puis indique les deux
+/// gestes possibles (suppression ciblée par l'Assistant, ou ménage groupé du
+/// propriétaire). La FORME de la liste des candidats est décidée ici et nulle
+/// part ailleurs côté backend.
+pub(crate) fn schedule_cap_message(conn: &Connection) -> String {
+    let mut lignes: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id, name, COALESCE(last_run_at, created_at) FROM assistant_schedules \
+         WHERE enabled = 1 ORDER BY COALESCE(last_run_at, created_at) ASC, id ASC LIMIT 5",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+        }) {
+            for row in rows.flatten() {
+                lignes.push(format!(
+                    "  - id {} « {} » (dernière activité : {})",
+                    row.0,
+                    row.1,
+                    row.2.unwrap_or_else(|| "inconnue".to_string())
+                ));
+            }
+        }
+    }
+    let liste = if lignes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nRappels candidats à la suppression, du plus ancien au plus récent :\n{}",
+            lignes.join("\n")
+        )
+    };
+    format!(
+        "schedule : maximum {} planifications actives atteint.{} \
+         Supprime les rappels devenus inutiles (schedule_delete) ; le propriétaire \
+         peut aussi utiliser Paramètres → Assistant → « Supprimer les rappels inutiles ».",
+        SCHEDULE_MAX, liste
+    )
 }
 
 /// Supprime une planification par id.
@@ -1230,11 +1308,162 @@ pub(crate) fn schedule_due(conn: &Connection, now: &str) -> Result<Vec<DueSchedu
 pub(crate) fn schedule_mark_done(conn: &Connection, id: i64, now: &str) -> Result<bool, String> {
     let n = conn
         .execute(
-            "UPDATE assistant_schedules SET last_run_at = ?1, updated_at = ?1 WHERE id = ?2",
+            "UPDATE assistant_schedules SET last_run_at = ?1, updated_at = ?1, \
+             enabled = CASE WHEN one_shot = 1 THEN 0 ELSE enabled END WHERE id = ?2",
             rusqlite::params![now, id],
         )
         .map_err(|e| format!("Erreur SQL : {}", e))?;
     Ok(n > 0)
+}
+
+/// Note le RÉSULTAT d'une exécution de rappel du point de vue de l'utilité :
+/// `detected = true` (l'exécution a fait quelque chose : au moins un outil
+/// appelé) remet le compteur d'exécutions stériles à 0 ; `detected = false`
+/// l'incrémente. Seul producteur de `sterile_runs` : la règle de ménage n° 3
+/// (désactivation d'un rappel périodique devenu stérile) s'appuie dessus.
+/// Retourne false si l'id n'existe pas. Aucune écriture si le rappel a disparu.
+pub(crate) fn schedule_note_run(conn: &Connection, id: i64, detected: bool) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "UPDATE assistant_schedules SET sterile_runs = \
+               CASE WHEN ?1 = 1 THEN 0 ELSE sterile_runs + 1 END WHERE id = ?2",
+            rusqlite::params![if detected { 1 } else { 0 }, id],
+        )
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    Ok(n > 0)
+}
+
+/// Lecture d'une clé du magasin `assistant_meta` (None si absente ou illisible).
+pub(crate) fn meta_get(conn: &Connection, key: &str) -> Option<String> {
+    use rusqlite::OptionalExtension;
+    conn.query_row("SELECT value FROM assistant_meta WHERE key = ?1", [key], |r| r.get(0))
+        .optional()
+        .ok()
+        .flatten()
+}
+
+/// Écriture (idempotente) d'une clé du magasin `assistant_meta`.
+pub(crate) fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO assistant_meta (key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![key, value],
+    )
+    .map_err(|e| format!("Erreur SQL : {}", e))?;
+    Ok(())
+}
+
+/// Rappel tel que nécessaire à la DÉCISION de ménage (frontend pur :
+/// `src/js/super-agent-schedule-cleanup.js`). Ajoute aux champs de
+/// `schedule_list` les deux informations que la décision exige : `created_at`
+/// (référence d'un rappel jamais exécuté) et `sterile_runs` (règle n° 3).
+pub(crate) fn schedule_cleanup_rows(conn: &Connection) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, prompt, every, enabled, last_run_at, created_at, one_shot, sterile_runs \
+             FROM assistant_schedules ORDER BY id",
+        )
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "name": r.get::<_, String>(1)?,
+                "prompt": r.get::<_, String>(2)?,
+                "every": r.get::<_, i64>(3)?,
+                "enabled": r.get::<_, i64>(4)? != 0,
+                "last_run_at": r.get::<_, Option<String>>(5)?,
+                "created_at": r.get::<_, Option<String>>(6)?,
+                "one_shot": r.get::<_, i64>(7)? != 0,
+                "sterile_runs": r.get::<_, i64>(8)?,
+            }))
+        })
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| format!("Erreur SQL : {}", e))?);
+    }
+    Ok(result)
+}
+
+/// Un élément du plan de ménage : identifiant, nom et MOTIF décidé par le module
+/// pur `super-agent-schedule-cleanup.js` (le backend n'invente aucun motif, il
+/// applique et journalise).
+#[derive(serde::Deserialize, Clone)]
+pub struct ScheduleCleanupItem {
+    pub id: i64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// Applique un plan de ménage : supprime les rappels listés, désactive les
+/// autres, JOURNALISE chaque ligne (une par rappel traité, dans le journal
+/// existant `injection_logs` — jamais un second journal) et mémorise la date du
+/// ménage (`assistant_meta.schedule_cleanup_at`, règle « au plus une fois par
+/// jour »). Idempotent : un rappel déjà supprimé n'écrit aucune ligne.
+pub(crate) fn schedule_cleanup_apply(
+    conn: &Connection,
+    deletions: &[ScheduleCleanupItem],
+    disables: &[ScheduleCleanupItem],
+    now: &str,
+) -> Result<Value, String> {
+    // Le journal tient sur UNE ligne par rappel : les retours à la ligne d'un
+    // motif sont neutralisés (le nom, lui, est déjà mono-ligne côté schéma).
+    let one_line = |s: &str| s.replace(['\n', '\r'], " ").trim().to_string();
+    let mut deleted = 0i64;
+    let mut disabled = 0i64;
+    for item in deletions {
+        if schedule_delete(conn, item.id)? {
+            log_injection(
+                conn,
+                None,
+                SCHEDULE_CLEANUP_LOG_STATUS,
+                true,
+                &format!(
+                    "Rappel supprimé « {} » — {}",
+                    one_line(&item.name),
+                    one_line(&item.reason)
+                ),
+            );
+            deleted += 1;
+        }
+    }
+    for item in disables {
+        // Idempotence : un rappel DÉJÀ désactivé n'est ni rejoué ni re-journalisé
+        // (le rejeu d'un même plan ne doit jamais doubler le journal).
+        let deja_desactive: Option<i64> = conn
+            .query_row(
+                "SELECT enabled FROM assistant_schedules WHERE id = ?1",
+                [item.id],
+                |r| r.get(0),
+            )
+            .ok();
+        if deja_desactive.unwrap_or(0) == 0 {
+            continue;
+        }
+        if schedule_set_enabled(conn, item.id, false)? {
+            log_injection(
+                conn,
+                None,
+                SCHEDULE_CLEANUP_LOG_STATUS,
+                true,
+                &format!(
+                    "Rappel désactivé « {} » — {}",
+                    one_line(&item.name),
+                    one_line(&item.reason)
+                ),
+            );
+            disabled += 1;
+        }
+    }
+    meta_set(conn, SCHEDULE_CLEANUP_META_KEY, now)?;
+    Ok(serde_json::json!({
+        "deleted": deleted,
+        "disabled": disabled,
+        "lastCleanupAt": now,
+    }))
 }
 
 // ── Commandes Tauri (appelées depuis super-agent.js / l'extension) ──
@@ -1251,6 +1480,10 @@ pub fn super_agent_schedule_create(
     name: String,
     prompt: String,
     every: Option<i64>,
+    // `once = true` : rappel qui ne se déclenche qu'UNE fois (il s'auto-désactive
+    // à la livraison). Champ optionnel : absent = rappel périodique (comportement
+    // inchangé pour tous les appels existants).
+    once: Option<bool>,
 ) -> Result<Value, String> {
     // Défaut lu à CHAQUE création : le réglage est donc pris en compte à chaud
     // (et relu du disque au démarrage suivant, comme le reste de la config).
@@ -1260,7 +1493,7 @@ pub fn super_agent_schedule_create(
     };
     let resolved = resolve_schedule_every(every, default_secs);
     let conn = open_db(&app)?;
-    let id = schedule_insert(&conn, &name, &prompt, resolved)?;
+    let id = schedule_insert_with(&conn, &name, &prompt, resolved, once.unwrap_or(false))?;
     // Annonce l'échéance réelle du premier déclenchement (created_at + every),
     // calculée par la même expression que le tick de décision.
     let next_fire_at = schedule_next_fire(&conn, id)?
@@ -1329,6 +1562,56 @@ pub async fn super_agent_schedule_tick(state: State<'_, AppState>, app: AppHandl
     let due = schedule_due(&conn, &now)?;
     let due_json: Vec<Value> = due.iter().map(|d| d.to_json()).collect();
     Ok(serde_json::json!({ "alive": true, "due": due_json, "count": due_json.len() }))
+}
+
+/// ÉTAT pour la décision de MÉNAGE des rappels : la liste des rappels enrichie
+/// des deux champs que la décision exige (`created_at`, `one_shot`,
+/// `sterile_runs`) et l'horodatage du dernier ménage (règle « au plus une fois
+/// par jour »). Aucune décision n'est prise ici : elle appartient au module pur
+/// `src/js/super-agent-schedule-cleanup.js`.
+#[tauri::command]
+pub fn super_agent_schedule_cleanup_state(app: AppHandle) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let schedules = schedule_cleanup_rows(&conn)?;
+    let last_cleanup_at = meta_get(&conn, SCHEDULE_CLEANUP_META_KEY);
+    Ok(serde_json::json!({
+        "schedules": schedules,
+        "lastCleanupAt": last_cleanup_at,
+    }))
+}
+
+/// Applique un plan de ménage décidé par le module pur (suppressions +
+/// désactivations), journalise chaque rappel traité et mémorise la date du
+/// ménage. Utilisé par le ménage automatique (une fois par jour) ET par le
+/// bouton « Supprimer les rappels inutiles » : un seul chemin d'écriture.
+#[tauri::command]
+pub fn super_agent_schedule_cleanup_apply(
+    app: AppHandle,
+    deletions: Option<Vec<ScheduleCleanupItem>>,
+    disables: Option<Vec<ScheduleCleanupItem>>,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let now: String = conn
+        .query_row("SELECT datetime('now')", [], |r| r.get(0))
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    schedule_cleanup_apply(
+        &conn,
+        &deletions.unwrap_or_default(),
+        &disables.unwrap_or_default(),
+        &now,
+    )
+}
+
+/// Note si l'exécution d'un rappel a DÉTECTÉ quelque chose (au moins un outil
+/// appelé) ou non. Alimente `sterile_runs`, base de la règle de désactivation
+/// d'un rappel périodique devenu stérile. Appelé par super-agent.js à la fin du
+/// tour déclenché par le rappel ; en cas de doute (erreur, interruption), le
+/// frontend n'appelle PAS cette commande et rien n'est compté.
+#[tauri::command]
+pub fn super_agent_schedule_note_run(app: AppHandle, id: i64, detected: bool) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let noted = schedule_note_run(&conn, id, detected)?;
+    Ok(serde_json::json!({ "ok": noted, "id": id, "detected": detected }))
 }
 
 #[tauri::command]
@@ -6243,6 +6526,9 @@ mod tests {
         schedule_insert, schedule_list, schedule_mark_done, schedule_next_fire,
         schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
         resolve_schedule_every, SCHEDULE_MAX, SCHEDULE_MIN_EVERY_SECS,
+        schedule_insert_with, schedule_cap_message, schedule_note_run,
+        schedule_cleanup_rows, schedule_cleanup_apply, ScheduleCleanupItem,
+        meta_get, meta_set, SCHEDULE_CLEANUP_META_KEY, SCHEDULE_CLEANUP_LOG_STATUS,
         task_counts, project_time_totals, take_trash_entry, trash_entry_preview, validate_export_json,
         list_memory_trash_entries,
         checklist_gate_message, checklist_mode_from_config, db_unchecked_task_check_labels,
@@ -7317,6 +7603,168 @@ mod tests {
             schedule_insert(&conn, &format!("s{}", i), "prompt", 120).unwrap();
         }
         assert!(schedule_insert(&conn, "s21", "prompt", 120).is_err());
+    }
+
+    // ── MÉNAGE DES RAPPELS : plafond actionnable, utilité, journal unique ──
+
+    #[test]
+    fn schedule_cap_message_lists_candidates_oldest_first_and_only_counts_active() {
+        let conn = mem_conn();
+        for i in 0..SCHEDULE_MAX {
+            schedule_insert(&conn, &format!("s{}", i), "prompt", 120).unwrap();
+        }
+        // Le refus du plafond doit être ACTIONNABLE : il nomme les rappels
+        // candidats, du plus ancien au plus récent (règle de ménage n° 4).
+        let message = schedule_cap_message(&conn);
+        assert!(message.contains("maximum 20 planifications actives atteint"), "{}", message);
+        assert!(message.contains("du plus ancien au plus récent"), "{}", message);
+        let pos_s0 = message.find("« s0 »").expect("le plus ancien doit être listé");
+        let pos_s1 = message.find("« s1 »").expect("le suivant doit être listé");
+        assert!(pos_s0 < pos_s1, "ordre du plus ancien au plus récent: {}", message);
+        // Le plafond ne compte que les rappels ACTIFS : désactiver en libère un.
+        let premier: i64 = conn
+            .query_row("SELECT id FROM assistant_schedules ORDER BY id LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert!(schedule_set_enabled(&conn, premier, false).unwrap());
+        assert!(schedule_insert(&conn, "apres desactivation", "prompt", 120).is_ok());
+    }
+
+    #[test]
+    fn schedule_one_shot_is_consumed_and_auto_disabled_after_delivery() {
+        let conn = mem_conn();
+        let unique = schedule_insert_with(&conn, "recheck unique", "prompt", 600, true).unwrap();
+        let actif: i64 = conn
+            .query_row("SELECT enabled FROM assistant_schedules WHERE id = ?1", [unique], |r| r.get(0))
+            .unwrap();
+        assert_eq!(actif, 1, "un rappel unique est actif avant sa première livraison");
+        assert!(schedule_mark_done(&conn, unique, "2026-03-01 12:00:00").unwrap());
+        let (enabled, one_shot, last): (i64, i64, Option<String>) = conn
+            .query_row(
+                "SELECT enabled, one_shot, last_run_at FROM assistant_schedules WHERE id = ?1",
+                [unique],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(enabled, 0, "un rappel unique livré ne se relance jamais");
+        assert_eq!(one_shot, 1);
+        assert_eq!(last.as_deref(), Some("2026-03-01 12:00:00"));
+        // Aucune régression : un rappel PÉRIODIQUE reste actif après livraison.
+        let periodique = schedule_insert_with(&conn, "periodique", "prompt", 600, false).unwrap();
+        assert!(schedule_mark_done(&conn, periodique, "2026-03-01 12:00:00").unwrap());
+        let actif_periodique: i64 = conn
+            .query_row("SELECT enabled FROM assistant_schedules WHERE id = ?1", [periodique], |r| r.get(0))
+            .unwrap();
+        assert_eq!(actif_periodique, 1);
+    }
+
+    #[test]
+    fn schedule_note_run_counts_sterile_runs_and_resets_on_detection() {
+        let conn = mem_conn();
+        let id = schedule_insert(&conn, "veille", "prompt", 600).unwrap();
+        let sterile = |id: i64| -> i64 {
+            conn.query_row("SELECT sterile_runs FROM assistant_schedules WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        // Une base neuve démarre à 0 : aucun rappel existant n'est désactivé par surprise.
+        assert_eq!(sterile(id), 0);
+        for _ in 0..20 {
+            assert!(schedule_note_run(&conn, id, false).unwrap());
+        }
+        assert_eq!(sterile(id), 20, "20 exécutions stériles consécutives = rappel inutile");
+        // Une exécution qui détecte quelque chose remet le compteur à zéro.
+        assert!(schedule_note_run(&conn, id, true).unwrap());
+        assert_eq!(sterile(id), 0);
+        // Id inconnu : aucune écriture, aucune erreur (fail-open côté appelant).
+        assert!(!schedule_note_run(&conn, id + 999, false).unwrap());
+    }
+
+    #[test]
+    fn schedule_cleanup_state_exposes_the_fields_the_decision_needs() {
+        let conn = mem_conn();
+        let id = schedule_insert_with(&conn, "veille", "prompt", 600, true).unwrap();
+        schedule_note_run(&conn, id, false).unwrap();
+        let rows = schedule_cleanup_rows(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        // La décision de ménage (module pur JS) exige ces champs, absents de `schedule_list`.
+        assert!(r.get("created_at").map(|v| !v.is_null()).unwrap_or(false));
+        assert_eq!(r.get("one_shot").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(r.get("sterile_runs").and_then(|v| v.as_i64()), Some(1));
+        assert!(r.get("last_run_at").is_some());
+        // Date du dernier ménage : absente tant qu'aucun ménage n'a eu lieu.
+        assert_eq!(meta_get(&conn, SCHEDULE_CLEANUP_META_KEY), None);
+    }
+
+    #[test]
+    fn schedule_cleanup_apply_journals_every_item_once_in_the_existing_log() {
+        let conn = mem_conn();
+        let a = schedule_insert(&conn, "rapport a", "prompt", 600).unwrap();
+        let b = schedule_insert(&conn, "rapport b", "prompt", 600).unwrap();
+        let c = schedule_insert(&conn, "rapport c", "prompt", 600).unwrap();
+        let deletions = vec![
+            ScheduleCleanupItem { id: a, name: "rapport a".into(), reason: "désactivé depuis 60 jours".into() },
+            ScheduleCleanupItem { id: b, name: "rapport b".into(), reason: "rappel unique périmé".into() },
+        ];
+        let disables = vec![ScheduleCleanupItem {
+            id: c,
+            name: "rapport c".into(),
+            reason: "20 exécutions consécutives sans rien détecter".into(),
+        }];
+        let res = schedule_cleanup_apply(&conn, &deletions, &disables, "2026-03-01 12:00:00").unwrap();
+        assert_eq!(res["deleted"].as_i64(), Some(2));
+        assert_eq!(res["disabled"].as_i64(), Some(1));
+        // Journal EXISTANT (`injection_logs`) : une ligne PAR rappel traité.
+        let mut stmt = conn
+            .prepare("SELECT status, detail FROM injection_logs ORDER BY id")
+            .unwrap();
+        let logs: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(logs.len(), 3, "une ligne de journal par rappel traité");
+        for (status, detail) in &logs {
+            assert_eq!(status, SCHEDULE_CLEANUP_LOG_STATUS);
+            // Une ligne tient sur UNE ligne (nom + motif), jamais un bloc multiligne.
+            assert!(!detail.contains('\n'));
+        }
+        assert!(logs[0].1.contains("Rappel supprimé « rapport a »"));
+        assert!(logs[0].1.contains("désactivé depuis 60 jours"));
+        assert!(logs[2].1.contains("Rappel désactivé « rapport c »"));
+        // « c » n'est PAS supprimé, seulement désactivé (règle 3).
+        let existe_c: i64 = conn
+            .query_row("SELECT COUNT(*) FROM assistant_schedules WHERE id = ?1", [c], |r| r.get(0))
+            .unwrap();
+        assert_eq!(existe_c, 1);
+        let actif_c: i64 = conn
+            .query_row("SELECT enabled FROM assistant_schedules WHERE id = ?1", [c], |r| r.get(0))
+            .unwrap();
+        assert_eq!(actif_c, 0);
+        // Date du ménage mémorisée (règle « au plus une fois par jour »)…
+        assert_eq!(
+            meta_get(&conn, SCHEDULE_CLEANUP_META_KEY).as_deref(),
+            Some("2026-03-01 12:00:00")
+        );
+        // … et rejeu du MÊME plan : idempotent, aucune ligne de journal ajoutée.
+        let res2 = schedule_cleanup_apply(&conn, &deletions, &disables, "2026-03-01 12:00:01").unwrap();
+        assert_eq!(res2["deleted"].as_i64(), Some(0));
+        assert_eq!(res2["disabled"].as_i64(), Some(0));
+        let total_logs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM injection_logs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total_logs, 3, "un rejeu ne double jamais le journal");
+    }
+
+    #[test]
+    fn schedule_cleanup_meta_store_is_idempotent() {
+        let conn = mem_conn();
+        assert_eq!(meta_get(&conn, SCHEDULE_CLEANUP_META_KEY), None);
+        meta_set(&conn, SCHEDULE_CLEANUP_META_KEY, "2026-03-01 12:00:00").unwrap();
+        meta_set(&conn, SCHEDULE_CLEANUP_META_KEY, "2026-03-02 12:00:00").unwrap();
+        assert_eq!(
+            meta_get(&conn, SCHEDULE_CLEANUP_META_KEY).as_deref(),
+            Some("2026-03-02 12:00:00")
+        );
     }
 
     // ── Lot A idée 6 : fréquence par défaut des rappels de surveillance ──

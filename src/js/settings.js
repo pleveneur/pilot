@@ -18,6 +18,16 @@ import { secretStatusLabel } from "./mcp-secret-scope.js";
 // l'extension MCP qui l'écrit.
 import { SCREEN_JOURNAL_RELATIVE_PATH, parseScreenJournal } from "./screen-guard.js";
 import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage, isVrmPath, avatarRejectedMessage } from "./plface-utils.js";
+// MÉNAGE DES RAPPELS : la DÉCISION (quels rappels sont inutiles, dans quel ordre)
+// vit dans UN SEUL module pur, partagé avec le ménage automatique de
+// l'Assistant. Ici on ne fait qu'afficher le plan, demander confirmation et
+// l'appliquer.
+import {
+  classifyScheduleCleanup,
+  cleanupApplyPayload,
+  cleanupConfirmationText,
+  CLEANUP_MAX_ACTIVE,
+} from "./super-agent-schedule-cleanup.js";
 import { layaStatusMessage, layaOutcomeMessage, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
 import { listen } from "@tauri-apps/api/event";
 // T6 : contenu des sélecteurs de niveau de réflexion (socle pur, testé sous Node).
@@ -227,7 +237,9 @@ async function refreshDefaultThinkingLevels(currentConfig, selectEl, noteEl) {
 // Bornes alignées sur le backend (super_agent.rs) : minimum technique 60 s et
 // plafond de 20 rappels ACTIFS. Les valeurs du <select> sont déjà en secondes.
 const SCHEDULE_INTERVAL_DEFAULT_SECS = 3600;
-const SCHEDULE_MAX_ACTIVE = 20;
+// Plafond de rappels ACTIFS : valeur UNIQUE dans `super-agent-schedule-cleanup.js`
+// (miroir de `SCHEDULE_MAX` côté Rust), importée — jamais recopiée ici.
+const SCHEDULE_MAX_ACTIVE = CLEANUP_MAX_ACTIVE;
 
 /**
  * Normalise la fréquence choisie (valeur du <select> ou de la config) :
@@ -255,6 +267,97 @@ async function refreshSuperAgentScheduleCount(el) {
   } catch (e) {
     console.warn("super_agent_schedule_list (Paramètres):", e);
     el.textContent = "";
+  }
+}
+
+/**
+ * Confirmation à l'écran (WebView2 : `window.confirm` est inopérant — il renvoie
+ * toujours false sans rien afficher). Reprend l'habillage des modales de Pilot
+ * et rend `true`/`false`. Le texte est inséré en `textContent` : aucun HTML
+ * n'est interprété (les noms de rappels viennent de la base).
+ */
+function confirmScheduleCleanupDialog(title, texte) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const dlg = document.createElement("div");
+    dlg.className = "modal-dialog";
+    const titre = document.createElement("div");
+    titre.className = "modal-title";
+    titre.textContent = title;
+    const corps = document.createElement("div");
+    corps.className = "modal-body";
+    corps.style.whiteSpace = "pre-wrap";
+    corps.textContent = texte;
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const annuler = document.createElement("button");
+    annuler.className = "web-btn";
+    annuler.textContent = "Annuler";
+    const confirmer = document.createElement("button");
+    confirmer.className = "web-btn web-btn-danger";
+    confirmer.textContent = "Confirmer";
+    actions.append(annuler, confirmer);
+    dlg.append(titre, corps, actions);
+    overlay.appendChild(dlg);
+    document.body.appendChild(overlay);
+    const close = (val) => {
+      overlay.remove();
+      resolve(val);
+    };
+    annuler.addEventListener("click", () => close(false));
+    confirmer.addEventListener("click", () => close(true));
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close(false);
+    });
+  });
+}
+
+/**
+ * Bouton « Supprimer les rappels inutiles » : lit l'état, laisse le module pur
+ * décider, ANNONCE LE NOMBRE avant toute suppression, puis applique le plan
+ * (chaque suppression est journalisée côté backend, dans le journal existant).
+ * Le geste est manuel : la limite « une fois par jour » ne s'applique qu'au
+ * ménage automatique.
+ */
+async function runScheduleCleanup(btn, msgEl, countEl) {
+  if (!btn) return;
+  btn.disabled = true;
+  if (msgEl) msgEl.textContent = "Analyse des rappels…";
+  try {
+    const state = await invoke("super_agent_schedule_cleanup_state");
+    const plan = classifyScheduleCleanup({
+      schedules: (state && state.schedules) || [],
+      now: Date.now(),
+      lastCleanupAt: (state && state.lastCleanupAt) || null,
+      // Geste du propriétaire : mêmes règles, sans attendre 24 h.
+      enforceDailyGuard: false,
+    });
+    const total = plan.delete.length + plan.disable.length;
+    if (total === 0) {
+      if (msgEl) msgEl.textContent = "Aucun rappel inutile : rien à supprimer.";
+      return;
+    }
+    const ok = await confirmScheduleCleanupDialog(
+      `Rappels inutiles : ${total}`,
+      cleanupConfirmationText(plan),
+    );
+    if (!ok) {
+      if (msgEl) msgEl.textContent = "Ménage annulé : aucun rappel n'a été modifié.";
+      return;
+    }
+    const res = await invoke("super_agent_schedule_cleanup_apply", cleanupApplyPayload(plan));
+    const deleted = Number((res && res.deleted) || 0);
+    const disabled = Number((res && res.disabled) || 0);
+    if (msgEl) {
+      msgEl.textContent = `${deleted} rappel${deleted > 1 ? "s" : ""} supprimé${deleted > 1 ? "s" : ""}, ${disabled} désactivé${disabled > 1 ? "s" : ""}.`;
+    }
+  } catch (e) {
+    console.warn("ménage des rappels (Paramètres):", e);
+    if (msgEl) msgEl.textContent = `Ménage impossible : ${String(e)}`;
+  } finally {
+    btn.disabled = false;
+    await refreshSuperAgentScheduleCount(countEl);
   }
 }
 
@@ -673,6 +776,10 @@ const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagen
 // ── Lot A idée 6 : fréquence par défaut des rappels de surveillance ──
 const selectSuperAgentScheduleInterval = document.getElementById("setting-superagent-schedule-interval");
 const superAgentScheduleCount = document.getElementById("setting-superagent-schedule-count");
+// MÉNAGE DES RAPPELS : bouton + ligne de compte rendu (mêmes règles que le
+// ménage automatique, décidées par le module pur partagé).
+const btnSuperAgentScheduleCleanup = document.getElementById("setting-superagent-schedule-cleanup");
+const superAgentScheduleCleanupMsg = document.getElementById("setting-superagent-schedule-cleanup-msg");
 // ── Tâche #160 : overlay plein écran des événements ──
 const chkSuperAgentEventsOverlay = document.getElementById("setting-superagent-events-overlay");
 const inputSuperAgentEventsOverlaySeconds = document.getElementById("setting-superagent-events-overlay-seconds");
@@ -1534,6 +1641,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     selectSuperAgentScheduleInterval.value = String(normalizeScheduleInterval(currentConfig.super_agent_schedule_interval_secs));
   }
   await refreshSuperAgentScheduleCount(superAgentScheduleCount);
+  if (superAgentScheduleCleanupMsg) superAgentScheduleCleanupMsg.textContent = "";
   // ── Tâche #160 : overlay plein écran des événements ──
   if (chkSuperAgentEventsOverlay) chkSuperAgentEventsOverlay.checked = currentConfig.super_agent_events_overlay_enabled === true;
   if (inputSuperAgentEventsOverlaySeconds) inputSuperAgentEventsOverlaySeconds.value = currentConfig.super_agent_events_overlay_seconds ?? 5;
@@ -1635,6 +1743,19 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   if (chkSuperAgentEventsOverlay) {
     chkSuperAgentEventsOverlay.addEventListener("change", () => {
       if (superAgentEventsOverlayDurationRow) superAgentEventsOverlayDurationRow.style.display = chkSuperAgentEventsOverlay.checked ? "" : "none";
+    });
+  }
+  // ── MÉNAGE DES RAPPELS : bouton « Supprimer les rappels inutiles » ──
+  // Mêmes règles que le ménage automatique (module pur partagé) ; le nombre de
+  // rappels concernés est ANNONCÉ avant confirmation, et rien n'est supprimé
+  // sans accord explicite.
+  if (btnSuperAgentScheduleCleanup) {
+    btnSuperAgentScheduleCleanup.addEventListener("click", () => {
+      runScheduleCleanup(
+        btnSuperAgentScheduleCleanup,
+        superAgentScheduleCleanupMsg,
+        superAgentScheduleCount,
+      );
     });
   }
   if (inputAssistantSoundVolume) {

@@ -2613,7 +2613,9 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   plus rien, chantier terminé, condition remplie) via `schedule_set_enabled` au
   lieu de le supprimer, et le **réactive** si le besoin revient.
 - Garde-fous : `every` ≥ 60 s, **max 20** planifications **actives** (un rappel
-  désactivé ne compte pas et libère sa place), **1 fire** par
+  désactivé ne compte pas et libère sa place ; au-delà, la création est refusée
+  par un message qui **nomme les rappels candidats à la suppression**, du plus
+  ancien au plus récent — voir « Ménage des rappels inutiles »), **1 fire** par
   planification et par tick, **au plus UNE relance livrée par passe** (deux
   rappels échus ensemble ne partent plus à la suite : les suivants restent dus et
   partent aux passes suivantes, 10 s plus tard), **pas de tick** si l'onglet 🧭
@@ -2653,6 +2655,45 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   affiché** : il reste consultable **au survol** de la ligne d'événement
   (info-bulle). Si la date est absente ou invalide, seul le marqueur
   « ⏰ relance » s'affiche (jamais « Invalid Date »/« NaN »).
+
+### Ménage des rappels inutiles (automatique + bouton)
+- **Pourquoi** : les rappels s'accumulaient (des centaines de rappels en base,
+  beaucoup désactivés ou périmés) et le plafond de 20 finissait par bloquer
+  toute nouvelle programmation sans dire quoi supprimer.
+- **Décision écrite à UN SEUL endroit** : `classifyScheduleCleanup`
+  (`src/js/super-agent-schedule-cleanup.js`, module pur). Le backend n'invente
+  aucun motif : il applique le plan reçu et le journalise ; les **deux**
+  déclencheurs (ménage automatique, bouton) passent par les mêmes règles.
+- Règles appliquées :
+  1. **désactivé et périmé** — dernière exécution (ou création si le rappel n'a
+     jamais tourné) de plus de **30 jours** → **supprimé** ;
+  2. **rappel unique déjà consommé** (il s'auto-désactive à la livraison) et dont
+     l'échéance est dépassée de plus de **30 jours** → **supprimé** ;
+  3. **périodique stérile** — **20 exécutions consécutives** sans rien détecter
+     (le tour déclenché par le rappel n'appelle aucun outil) → **désactivé**,
+     jamais supprimé ;
+  4. **plafond de 20 rappels actifs** : au-delà, la création est refusée avec un
+     message qui **liste les candidats à supprimer**, du plus ancien au plus
+     récent (ce n'est qu'une proposition : rien n'est supprimé sans vous) ;
+  5. **au plus un ménage automatique par jour** (date mémorisée en base), non
+     bloquant, et **chaque rappel traité est journalisé** (date, nom, motif) dans
+     le **journal existant** de l'assistant (`injection_logs`, statut
+     `menage-rappel`) — jamais un second journal ;
+  6. **garde-fous** : jamais un rappel **actif récent**, jamais un rappel **futur
+     jamais exécuté**, jamais un rappel dont les données sont inexploitables
+     (« en cas de doute : on garde »).
+- **Bouton « Supprimer les rappels inutiles »** dans Paramètres → Assistant, sous
+  le compteur « n sur 20 » : mêmes règles, mais geste **immédiat** (sans attendre
+  les 24 h) ; le **nombre** de rappels concernés est **annoncé avant
+  confirmation**, avec la liste et le motif, et rien n'est modifié sans votre
+  accord.
+- Un rappel **désactivé** par la règle 3 reste **réactivable** ; s'il reste
+  désactivé plus de 30 jours, la règle 1 s'applique ensuite (suppression).
+- Stockage (colonnes **additives**, aucune donnée existante modifiée) :
+  `assistant_schedules.one_shot`, `assistant_schedules.sterile_runs`,
+  `assistant_meta(key, value)` pour la date du dernier ménage. Tests :
+  `src/js/super-agent-schedule-cleanup.test.js` (dont un verrou de branchement)
+  et les tests `schedule_*` de `super_agent.rs`.
 
 ### Règle par défaut — fichier AGENTS.md des projets
 - Quand l'Assistant travaille sur un projet qui **n'a pas de fichier AGENTS.md**
