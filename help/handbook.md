@@ -1875,6 +1875,16 @@ uniquement un bloc d'instructions dans le prompt système.
     communiquée » / « (demande non précisée) ») : **aucun résumé n'est inventé** ;
     le résumé est **conservé avec la tâche**, **en cours ET en attente** (entrée de
     file), pour que la file affiche la même phrase que la mission lancée ;
+    4. **cas de l'Assistant : son `prompt` n'est JAMAIS interprété.** Le message
+    qu'il reçoit contient **tout son prompt système** (rôle + règles figées +
+    contexte) **puis** la demande ; en extraire une mission revient à afficher ses
+    **règles**. Tout prompt envoyé à sa session **joint donc systématiquement** le
+    résumé court de la **demande** (`super_agent_mission_resume` : première ligne
+    utile, détail markdown de tête retiré, plafond 120 car.), et **sans** demande
+    exploitable l'affichage dit « **travail en cours** » (repli neutre et vrai).
+    Défaut corrigé : le panneau affichait « Si une tâche déléguée ou une action
+    échoue… » (règle de résilience) sous l'Assistant ; les agents de projet, dont
+    le prompt porte de vrais titres de section, sont **inchangés** ;
   - **texte de la description** (repli, quand aucun résumé n'est fourni) : c'est
     la **tâche réellement confiée** (le
     dernier prompt réellement envoyé à la session) qui est lue —
@@ -1909,12 +1919,33 @@ uniquement un bloc d'instructions dans le prompt système.
   « Objectif : », « === MISSION === », « Tâche : ») : le préambule de rôle qui
   précède ne consomme plus la fenêtre, donc **la mission est conservée même très
   loin après le rôle** (défaut corrigé : 80 caractères ne contenaient que le
-  rôle). Un prompt plus court est conservé **tel quel** (aucune troncature
-  inutile). Le **prompt entier n'est jamais stocké**. Une commande qui **n'est
-  pas** un prompt (`get_state`, `set_model`, …) **n'écrase jamais** la mission en
-  cours. L'information remonte par les champs **additifs** `prompt` (et
-  `toolInProgress`) de `list_agent_sessions` puis `get_agent_supervision` : les
-  consommateurs existants les ignorent.
+  rôle). Un marqueur ne compte que s'il **commence une ligne** (indentation
+  tolérée) : un titre **cité au milieu d'une phrase** — cas du prompt système de
+  l'Assistant, qui parle de « ## Objectif » dans une règle — **n'ancre rien**
+  (`find_anchor_at_line_start`). Un prompt plus court est conservé **tel quel**
+  (aucune troncature inutile). Le **prompt entier n'est jamais stocké**. Une
+  commande qui **n'est pas** un prompt (`get_state`, `set_model`, …) **n'écrase
+  jamais** la mission en cours. L'information remonte par les champs **additifs**
+  `prompt` (et `toolInProgress`) de `list_agent_sessions` puis
+  `get_agent_supervision` : les consommateurs existants les ignorent.
+- **Mission de l'Assistant (jamais déduite de son prompt système)** : les points
+  d'envoi d'un prompt à sa session (`do_send_super_agent_prompt`, livraison et
+  rejeu des résumés de sessions, initialisation d'un projet, question
+  multi-projets) passent par `superagent_prompt_command(message, demande)`
+  (`super_agent.rs`), qui joint la **mission courte** déduite de la **demande**
+  seule. Le message envoyé au moteur est **rigoureusement inchangé** (prompt
+  système + demande) : rien de son prompt n'est modifié.
+
+<!-- HELP:super-agent-panneau-taches -->
+- Le panneau du suivi (cercle en **haut à droite**, onglet « **Tâches** ») dit,
+  sous chaque agent, **ce qu'il a à faire** en une phrase courte.
+- Pour l'**Assistant**, cette phrase est la **demande** qu'il traite (celle que
+  vous lui avez adressée, ou une remise de compte rendu) ; s'il n'y a rien de
+  précis à dire, la ligne affiche « **travail en cours** ». Elle ne reprend
+  **jamais** un extrait de ses consignes internes.
+- Les **agents de projet** sont inchangés : leur phrase reste l'**objectif** de la
+  tâche qui leur a été confiée.
+<!-- /HELP:super-agent-panneau-taches -->
 - **Alimentation du RÉSUMÉ COURT (Rust)** : le résumé fourni voyage avec la
   commande de prompt sous un champ **propre à Pilot** (`pilotResume`), que
   `AgentService` **extrait** puis **retire** avant l'écriture vers pi (aucun champ

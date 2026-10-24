@@ -309,7 +309,44 @@ const PROMPT_SNAPSHOT_MAX_CHARS: usize = 600;
 /// précis au plus général. La fenêtre conservée est ANCRÉE sur le premier de ces
 /// marqueurs présent après le préambule de rôle : la mission est ainsi toujours
 /// dans le champ transmis au panneau, sans conserver le prompt entier.
+///
+/// ⚠️ Un marqueur ne compte QUE s'il **commence une ligne** (cf.
+/// `find_anchor_at_line_start`) : c'est un titre de section, pas une citation.
+/// Le prompt système de l'assistant CITE « ## Objectif » au milieu d'une phrase
+/// de règle ; ancrer sur cette citation faisait démarrer la fenêtre au beau
+/// milieu des règles et le panneau affichait « Si une tâche déléguée ou une
+/// action échoue… » au lieu d'une tâche (défaut corrigé).
 const MISSION_ANCHORS: [&str; 4] = ["## Objectif", "Objectif :", "=== MISSION ===", "Tâche :"];
+
+/// Position (en CARACTÈRES) de la première occurrence de `anchor` qui **commence
+/// une ligne** — début du texte, ou précédée d'un retour à la ligne (espaces et
+/// tabulations d'indentation tolérés).
+///
+/// Toute autre occurrence (citation d'un titre à l'intérieur d'une phrase, par
+/// exemple « l'enveloppe « ## Objectif/## Consignes » est ajoutée par Pilot »)
+/// est IGNORÉE : un marqueur de structure ne structure rien au milieu d'une
+/// phrase. C'est ce qui empêche l'extraction de mission de tomber dans un bloc
+/// de RÈGLES (cas du prompt de l'assistant).
+fn find_anchor_at_line_start(text: &str, anchor: &str) -> Option<usize> {
+    if anchor.is_empty() {
+        return None;
+    }
+    let mut from = 0usize;
+    while from < text.len() {
+        let idx = from + text[from..].find(anchor)?;
+        // Début de la ligne contenant `idx` : uniquement des espaces/tabulations
+        // entre les deux → l'ancre EST un début de ligne (indentation tolérée).
+        let line_start = text[..idx].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        if text[line_start..idx]
+            .chars()
+            .all(|c| c == ' ' || c == '\t')
+        {
+            return Some(text[..idx].chars().count());
+        }
+        from = idx + anchor.len();
+    }
+    None
+}
 
 /// Nom du champ ADDITIF par lequel l'appelant joint un **RÉSUMÉ COURT** à une
 /// demande (une phrase qui dit la tâche réelle, ≤ `MISSION_RESUME_MAX_CHARS`).
@@ -424,11 +461,11 @@ fn prompt_snapshot(command: &Value) -> Option<String> {
         return Some(text.to_string());
     }
     // Ancrage sur la mission : position (en caractères) du marqueur le plus
-    // précis présent, sinon 0 (début du prompt).
+    // précis présent EN DÉBUT DE LIGNE (un titre de section, jamais une citation
+    // dans une phrase de règle), sinon 0 (début du prompt).
     let start = MISSION_ANCHORS
         .iter()
-        .find_map(|anchor| text.find(anchor))
-        .map(|byte_idx| text[..byte_idx].chars().count())
+        .find_map(|anchor| find_anchor_at_line_start(text, anchor))
         .unwrap_or(0);
     let mut out: String = text.chars().skip(start).take(PROMPT_SNAPSHOT_MAX_CHARS).collect();
     out.push('…');
@@ -5756,6 +5793,80 @@ mod tests {
         assert!(
             !snap.starts_with("Tu es un développeur"),
             "la fenêtre démarre sur la mission, pas sur le préambule de rôle : {snap}"
+        );
+    }
+
+    /// L'ancre de mission est un DÉBUT DE LIGNE : une mention « ## Objectif »
+    /// CITÉE au milieu d'une phrase (règle, exemple, documentation) n'ancre rien.
+    #[test]
+    fn mission_anchor_must_start_a_line() {
+        // Citation dans une phrase : ignorée (défaut du panneau de l'assistant).
+        assert_eq!(
+            find_anchor_at_line_start(
+                "L'enveloppe « ## Contexte/## Objectif/## Consignes » est ajoutée par Pilot.",
+                "## Objectif"
+            ),
+            None
+        );
+        // Vrai titre de section : retenu, avec sa position en CARACTÈRES.
+        let text = "préambule é\n\n## Objectif\nCorriger le panneau";
+        assert_eq!(
+            find_anchor_at_line_start(text, "## Objectif"),
+            Some("préambule é\n\n".chars().count())
+        );
+        // Indentation tolérée (titre de liste indenté), ancre vide ignorée.
+        assert!(find_anchor_at_line_start("  ## Objectif\nX", "## Objectif").is_some());
+        assert_eq!(find_anchor_at_line_start("## Objectif", ""), None);
+        // Une 1re occurrence en pleine phrase n'empêche pas la bonne, plus loin.
+        assert_eq!(
+            find_anchor_at_line_start("voir ## Objectif\n## Objectif\nX", "## Objectif"),
+            Some("voir ## Objectif\n".chars().count())
+        );
+    }
+
+    /// RÉGRESSION du panneau des tâches : le prompt envoyé à l'assistant contient
+    /// TOUT son prompt système (rôle + règles) PUIS la demande. La fenêtre
+    /// conservée ne doit jamais démarrer au milieu des règles à cause d'un
+    /// « ## Objectif » cité dans une phrase de règle — sinon le panneau affichait
+    /// « Si une tâche déléguée ou une action échoue… » à la place d'une tâche.
+    #[test]
+    fn prompt_snapshot_never_anchors_inside_the_assistant_rules() {
+        // Prompt SYSTÈME de la même forme que celui de l'assistant : rôle, puis
+        // blocs de règles, dont la règle de résilience qui CITE « ## Objectif ».
+        let system = format!(
+            "Tu es « Magnus », l'assistant de suivi multi-projets de Pilot. Tu es strictement \
+             en lecture seule : tu ne modifies jamais les fichiers des projets. {}{}{}",
+            "\n\n## Outils d'agents\nTu disposes de `run_agents` et `run_agents_shared`. ".repeat(3),
+            "\n\n## Résilience et anti-boucle — `run_agents`\nConstruis toujours une demande \
+             STRUCTURÉE et COMPLÈTE. L'enveloppe « ## Contexte/## Objectif/## Consignes/## Ce \
+             qu'il ne faut PAS faire » est ajoutée MÉCANIQUEMENT par Pilot : n'insère que le \
+             contenu de la tâche.",
+            "\n\nSi une tâche déléguée ou une action échoue (échec EXPLICITE : compte-rendu reçu), \
+             relance AU MOINS UNE FOIS en changeant d'approche."
+        );
+        let demande = "Peux-tu me faire le point sur les tâches en cours du projet GDS ?";
+        let message = format!("{}\n\n{}", system, demande);
+        assert!(
+            message.chars().count() > PROMPT_SNAPSHOT_MAX_CHARS + 200,
+            "le message de test doit dépasser largement la fenêtre conservée"
+        );
+        let snap = prompt_snapshot(&serde_json::json!({ "type": "prompt", "message": message }))
+            .expect("prompt mémorisé");
+        // La fenêtre ne tombe JAMAIS dans le bloc de règles.
+        assert!(
+            !snap.contains("Si une tâche déléguée ou une action échoue"),
+            "la fenêtre ne doit pas reprendre une règle de l'assistant : {snap}"
+        );
+        assert!(
+            !snap.contains("relance AU MOINS UNE FOIS"),
+            "aucun fragment de règle dans la fenêtre : {snap}"
+        );
+        // Repli documenté quand AUCUNE ancre n'est en début de ligne : la fenêtre
+        // démarre au début du message ; c'est l'appelant (l'assistant) qui joint
+        // sa mission courte, et l'affichage qui applique son repli neutre.
+        assert!(
+            snap.starts_with("Tu es « Magnus »"),
+            "sans ancre en début de ligne, la fenêtre démarre au début : {snap}"
         );
     }
 

@@ -26,6 +26,7 @@ import {
   MISSION_RESUME_MAX_CHARS,
   normalizeMissionResume,
   resolveMissionLabel,
+  MISSION_ASSISTANT_FALLBACK,
   isAgentWorking,
   isWorkingWithoutTab,
   buildBackgroundWorkMissions,
@@ -1153,6 +1154,85 @@ describe("normalizeMissionResume / resolveMissionLabel — résumé fourni", () 
     // Aucun résumé inventé : le libellé de la file est seulement raccourci comme
     // avant (préfixe « Objectif : » retiré par shortMission).
     expect(missions[0].mission).toBe("relire le diff");
+  });
+});
+
+// ── Panneau des tâches : l'ASSISTANT n'affiche jamais un fragment de ses règles ──
+// Son `prompt` n'est pas une demande : c'est TOUT son prompt système (rôle +
+// règles figées + contexte) suivi de la demande. Le lire faisait afficher
+// « Si une tâche déléguée ou une action échoue… » (règle de résilience) au lieu
+// d'une phrase disant ce qu'il fait. La mission est donc fournie à part
+// (`resume`, cf. `super_agent_mission_resume` côté Rust) ; sans elle, l'affichage
+// se replie sur une phrase neutre et vraie, jamais sur les règles.
+const ASSISTANT_PROMPT_SYSTEME =
+  "Tu es « Magnus », l'assistant de suivi multi-projets de Pilot. Tu es strictement en lecture seule : " +
+  "tu ne modifies jamais les fichiers des projets.\n\n" +
+  "## Résilience et anti-boucle — `run_agents`\n" +
+  "Construis toujours une demande STRUCTURÉE et COMPLÈTE. L'enveloppe " +
+  "« ## Contexte/## Objectif/## Consignes/## Ce qu'il ne faut PAS faire » est ajoutée " +
+  "MÉCANIQUEMENT par Pilot : n'insère que le contenu de la tâche.\n\n" +
+  "Si une tâche déléguée ou une action échoue (échec EXPLICITE : compte-rendu reçu — le silence " +
+  "n'est JAMAIS un échec), relance AU MOINS UNE FOIS en changeant d'approche.";
+
+describe("panneau des tâches — l'assistant n'affiche JAMAIS ses règles", () => {
+  it("affiche la DEMANDE portée par l'assistant (résumé fourni)", () => {
+    const got = buildRunningMissions([
+      {
+        label: "Magnus",
+        project: "",
+        kind: "superagent",
+        busy: true,
+        resume: "Faire le point sur les tâches du projet GDS",
+        prompt: ASSISTANT_PROMPT_SYSTEME,
+      },
+    ]);
+    expect(got).toEqual([
+      {
+        agent: "Magnus",
+        project: "Assistant",
+        mission: "Faire le point sur les tâches du projet GDS",
+        waiting: false,
+      },
+    ]);
+  });
+
+  it("sans résumé : repli NEUTRE et VRAI, jamais un extrait des règles", () => {
+    const got = buildRunningMissions([
+      { label: "Magnus", project: "", kind: "superagent", busy: true, prompt: ASSISTANT_PROMPT_SYSTEME },
+    ]);
+    expect(got[0].mission).toBe(MISSION_ASSISTANT_FALLBACK);
+    for (const fragment of [
+      "Si une tâche déléguée",
+      "relance AU MOINS UNE FOIS",
+      "##",
+      "lecture seule",
+      "Résilience",
+      "MÉCANIQUEMENT",
+    ]) {
+      expect(got[0].mission).not.toContain(fragment);
+    }
+    // Le panneau rendu ne laisse RIEN passer des règles non plus.
+    const html = renderMissionsPanelHtml(got);
+    expect(html).toContain(`<div class="sa-task-meta">${MISSION_ASSISTANT_FALLBACK}</div>`);
+    expect(html).not.toContain("Si une tâche déléguée");
+    expect(html).not.toContain("## Objectif");
+  });
+
+  it("ne change RIEN pour un agent de projet (extraction de l'objectif inchangée)", () => {
+    // Prompt de la MÊME FORME que `buildAgentPrompt` : un vrai titre « ## Objectif ».
+    const prompt =
+      "Tu es un développeur. Tu exécutes la micro-tâche reçue.\n\n=== MISSION ===\n" +
+      "## Contexte\nPilot est un éditeur de texte pour agents IA.\n\n" +
+      "## Objectif\nObjectif : afficher la tâche réelle des agents dans le panneau.";
+    const withKind = buildRunningMissions([
+      { label: "codeur", project: "pilot", kind: "agent", busy: true, prompt },
+    ]);
+    const historical = buildRunningMissions([{ label: "codeur", project: "pilot", busy: true, prompt }]);
+    expect(withKind[0].mission).toBe("afficher la tâche réelle des agents dans le panneau.");
+    // Comportement STRICTEMENT inchangé par rapport à l'appel historique (sans kind).
+    expect(withKind).toEqual(historical);
+    // L'extraction directe reste la même (aucun découpage ajouté).
+    expect(resolveMissionLabel("", prompt, "agent")).toBe(shortMission(prompt));
   });
 });
 

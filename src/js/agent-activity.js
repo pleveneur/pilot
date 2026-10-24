@@ -288,7 +288,7 @@ export function buildBackgroundWorkMissions(list) {
       kind: a.kind || "agent",
       agent: a.label || "",
       project: a.project || "Assistant",
-      mission: resolveMissionLabel(a.resume, a.prompt),
+      mission: resolveMissionLabel(a.resume, a.prompt, a.kind),
     }));
 }
 
@@ -347,20 +347,36 @@ export function normalizeMissionResume(value) {
 /**
  * Libellé de mission selon l'ORDRE DE REPLI STRICT (aucun résumé inventé) :
  *  1. le **résumé fourni** avec la demande (`resume`) — affiché tel quel ;
- *  2. sinon l'**extrait de l'objectif** de la demande (`shortMission`, qui porte
+ *  2. pour l'**assistant**, jamais d'interprétation de son `prompt` : ce champ
+ *     contient son message complet, c'est-à-dire TOUT son prompt système de
+ *     règles suivi de la demande. Le lire revenait à afficher un extrait de ses
+ *     règles dans le panneau (« Si une tâche déléguée ou une action échoue… »).
+ *     Sans résumé exploitable, on dit une chose neutre et vraie
+ *     (`MISSION_ASSISTANT_FALLBACK`) ;
+ *  3. sinon l'**extrait de l'objectif** de la demande (`shortMission`, qui porte
  *     déjà ses propres replis honnêtes : « mission non communiquée » quand le
  *     texte n'est que le rôle, « (demande non précisée) » quand il n'y a rien).
  * Fonction PURE : elle ne déduit jamais un résumé par approximation, elle
  * choisit simplement la meilleure source DISPONIBLE.
  * @param {unknown} resume — résumé court fourni avec la demande (facultatif).
  * @param {string} prompt — texte du dernier prompt réellement envoyé.
+ * @param {string} [kind] — `"superagent"` pour l'assistant, `"agent"` sinon.
  * @returns {string} libellé de mission, toujours non vide.
  */
-export function resolveMissionLabel(resume, prompt) {
+export function resolveMissionLabel(resume, prompt, kind) {
   const provided = normalizeMissionResume(resume);
   if (provided) return provided;
+  if (kind === "superagent") return MISSION_ASSISTANT_FALLBACK;
   return shortMission(prompt);
 }
+
+/**
+ * Repli de l'**assistant** quand aucune description fiable n'existe : neutre,
+ * court et vrai. Il ne prétend rien sur la tâche (contrairement à un extrait de
+ * son prompt système, qui parle de ses RÈGLES), et il n'usurpe pas le nom de
+ * l'assistant, réglable par l'utilisateur (la ligne principale l'affiche déjà).
+ */
+export const MISSION_ASSISTANT_FALLBACK = "travail en cours";
 
 /**
  * Repli explicite affiché quand AUCUN résumé utilisable n'existe (le texte
@@ -599,9 +615,11 @@ export function buildRunningMissions(list, queued) {
       agent: a.label || "",
       project: a.project || "Assistant",
       // Ordre de repli strict : résumé FOURNI avec la demande, sinon extrait de
-      // l'objectif du prompt, sinon libellé honnête (shortMission). La forme de
-      // l'entrée reste identique (`resume` n'est pas recopié).
-      mission: resolveMissionLabel(a.resume, a.prompt),
+      // l'objectif du prompt, sinon libellé honnête (shortMission). Pour
+      // l'assistant (`kind === "superagent"`), le prompt n'est JAMAIS interprété
+      // (il contient ses règles) : repli neutre. La forme de l'entrée reste
+      // identique (`resume` n'est pas recopié).
+      mission: resolveMissionLabel(a.resume, a.prompt, a.kind),
       waiting: false,
     };
     // Début du travail en cours : ajouté SEULEMENT quand il est connu (champ

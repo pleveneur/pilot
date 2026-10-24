@@ -13,7 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
-use crate::agent_service::SUPERAGENT_ID;
+use crate::agent_service::{
+    normalize_mission_resume, prompt_command_with_resume, SUPERAGENT_ID,
+};
 use crate::AppState;
 
 // ── Base SQLite ──
@@ -739,6 +741,46 @@ fn assemble_super_agent_system_prompt(blocks: &SuperAgentPromptBlocks) -> String
     full_system
 }
 
+/// MISSION COURTE d'un tour de l'assistant : la **première ligne utile** du
+/// message qui lui est adressé, nettoyée et plafonnée (≤ 120 caractères).
+///
+/// Le prompt de l'assistant est envoyé comme UN SEUL message : tout son prompt
+/// système (rôle + règles figées + contexte) PUIS la demande de l'utilisateur
+/// (cf. `do_send_super_agent_prompt`). Extraire la mission de ce message global
+/// revient à afficher ses RÈGLES dans le panneau des tâches (défaut constaté :
+/// « Si une tâche déléguée ou une action échoue… »). La mission est donc
+/// TOUJOURS prise ici sur la demande elle-même.
+///
+/// Fonction PURE : aucune phrase n'est inventée — le texte de l'utilisateur est
+/// seulement débarrassé de sa décoration markdown de tête et de ses blancs,
+/// puis plafonné sur un mot. Message vide (ou réduit à des blancs / de la
+/// décoration) → `None` : l'affichage applique alors son repli honnête.
+pub fn super_agent_mission_resume(message: &str) -> Option<String> {
+    for line in message.lines() {
+        let clean = line
+            .trim_start_matches(['#', '>', '-', '*', '+', '`'])
+            .trim();
+        if clean.is_empty() {
+            continue;
+        }
+        if let Some(r) = normalize_mission_resume(clean) {
+            return Some(r);
+        }
+    }
+    None
+}
+
+/// Commande de prompt destinée à la session de l'assistant, portant la MISSION
+/// COURTE déduite de `mission_source` (la demande de l'utilisateur) et non du
+/// prompt système fusionné dans `message`.
+///
+/// Le champ `pilotResume` est une donnée PROPRE À PILOT : `AgentService` le
+/// retire avant l'écriture vers pi, et le panneau l'affiche EN PREMIER. Il n'a
+/// donc jamais à interpréter le prompt système de l'assistant.
+pub fn superagent_prompt_command(message: &str, mission_source: &str) -> Value {
+    prompt_command_with_resume(message, super_agent_mission_resume(mission_source).as_deref())
+}
+
 /// Envoie un prompt au super-agent (session RPC dédiée). Helper réutilisable par
 /// la commande Tauri desktop et par le web remote (évolution 2). Démarre
 /// paresseusement la session si nécessaire.
@@ -804,7 +846,10 @@ pub(crate) fn do_send_super_agent_prompt(
     };
     let full_system = assemble_super_agent_system_prompt(&blocks);
     let full_message = format!("{}\n\n{}", full_system, message);
-    let cmd = serde_json::json!({"type": "prompt", "message": full_message});
+    // MISSION COURTE : déduite de la DEMANDE (`message`), jamais du prompt
+    // système de règles qui la précède dans le message envoyé. Sans cela, le
+    // panneau des tâches affichait un extrait des règles de l'assistant.
+    let cmd = superagent_prompt_command(&full_message, &message);
     state.agent_service.send_superagent(cmd)
 }
 
@@ -4318,7 +4363,7 @@ pub fn inject_session_summary(
     // opportunité.
     if superagent_available(state.inner()) {
         let msg = build_capped_injection_message(project_path.as_deref(), &summary);
-        let cmd = serde_json::json!({"type": "prompt", "message": msg});
+        let cmd = superagent_prompt_command(&msg, &msg);
         match state.agent_service.send_superagent(cmd) {
             Ok(()) => {
                 mark_session_summary_delivered(&conn, summary_rowid)?;
@@ -4417,7 +4462,7 @@ fn replay_pending_superagent_summaries_inner(
         let sent = deliver_one_summary(&conn, id, project_id, &summary, |msg| {
             state
                 .agent_service
-                .send_superagent(serde_json::json!({"type": "prompt", "message": msg}))
+                .send_superagent(superagent_prompt_command(msg, msg))
         })?;
         if sent {
             delivered_count += 1;
@@ -4506,7 +4551,7 @@ pub fn initialize_super_agent(
         "Tu es l'assistant de suivi du projet « {} ». Analyse ce projet (structure, documentation, historique) et enregistre dans ton suivi son contexte, ses objectifs et son état d'avancement. Lecture seule : ne modifie aucun fichier du projet.",
         project_path
     );
-    let cmd = serde_json::json!({"type": "prompt", "message": msg});
+    let cmd = superagent_prompt_command(&msg, &msg);
     state.agent_service.send_superagent(cmd)
 }
 
@@ -4516,7 +4561,7 @@ pub fn initialize_super_agent(
 #[tauri::command]
 pub fn query_super_agent(state: State<AppState>, app: AppHandle, question: String) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)?;
-    let cmd = serde_json::json!({"type": "prompt", "message": question});
+    let cmd = superagent_prompt_command(&question, &question);
     state.agent_service.send_superagent(cmd)
 }
 
@@ -6538,10 +6583,64 @@ mod tests {
         resolve_super_agent_thinking_level, MEMORY_FORMAT,
         MEMORY_VERSION, MAX_INJECTED_MESSAGE_CHARS,
         detect_long_task,
+        super_agent_mission_resume, superagent_prompt_command,
         SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_TRASH_FORMAT,
         SESSION_MEMORY_TRASH_LIMIT, SESSION_MEMORY_TRASH_PREVIEW_MAX, SESSION_MEMORY_VERSION,
     };
     use rusqlite::Connection;
+
+    // ── Panneau des tâches : la mission de l'assistant, c'est sa DEMANDE ──
+
+    /// Le message envoyé à l'assistant contient TOUT son prompt système PUIS la
+    /// demande. La mission courte jointe à la commande est déduite de la DEMANDE
+    /// seule : le panneau n'affiche donc jamais un fragment de ses règles.
+    #[test]
+    fn mission_resume_comes_from_the_request_not_from_the_system_prompt() {
+        let system = "Tu es « Magnus », l'assistant de suivi multi-projets de Pilot. \
+                      Tu es strictement en lecture seule.\n\n\
+                      ## Résilience et anti-boucle\nL'enveloppe « ## Contexte/## Objectif » \
+                      est ajoutée par Pilot. Si une tâche déléguée échoue, relance-la.";
+        let demande = "Peux-tu me faire le point sur les tâches du projet GDS ?";
+        let full = format!("{}\n\n{}", system, demande);
+        let cmd = superagent_prompt_command(&full, demande);
+        // Le message envoyé reste EXACTEMENT le même (aucune régression du prompt).
+        assert_eq!(cmd["message"], serde_json::json!(full));
+        assert_eq!(cmd["type"], serde_json::json!("prompt"));
+        // La mission courte est la DEMANDE, mot pour mot.
+        assert_eq!(cmd["pilotResume"], serde_json::json!(demande));
+        // Aucun fragment de règle ne peut y entrer.
+        let resume = cmd["pilotResume"].as_str().unwrap();
+        for interdit in ["##", "Résilience", "lecture seule", "relance-la"] {
+            assert!(!resume.contains(interdit), "résumé pollué par {interdit} : {resume}");
+        }
+    }
+
+    /// Message vide, blancs ou décoration seule → AUCUN résumé inventé :
+    /// l'affichage applique son repli neutre (« travail en cours »).
+    #[test]
+    fn mission_resume_is_none_without_a_usable_request() {
+        for empty in ["", "   ", "\n\t\n"] {
+            assert_eq!(super_agent_mission_resume(empty), None, "cas {:?}", empty);
+            let cmd = superagent_prompt_command(empty, empty);
+            assert!(cmd.get("pilotResume").is_none(), "aucun champ résumé inventé");
+        }
+        // Décoration markdown seule (titre vide, puce vide).
+        assert_eq!(super_agent_mission_resume("#\n-  \n> "), None);
+        // Décoration de tête retirée, texte conservé tel quel.
+        assert_eq!(
+            super_agent_mission_resume("## Demande : corriger la cloche").as_deref(),
+            Some("Demande : corriger la cloche")
+        );
+        // Une 1re ligne vide n'empêche pas de prendre la suivante.
+        assert_eq!(
+            super_agent_mission_resume("\n\nRelancer les tests").as_deref(),
+            Some("Relancer les tests")
+        );
+        // Plafond de longueur respecté (coupe sur un mot + « … »).
+        let long = super_agent_mission_resume(&format!("## {}", "mot ".repeat(80))).unwrap();
+        assert!(long.chars().count() <= 121, "résumé plafonné : {}", long.chars().count());
+        assert!(long.ends_with('…'));
+    }
 
     // ── Issue #88 : modèle par défaut dédié à l'assistant ──
     #[test]
