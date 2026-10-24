@@ -19,8 +19,9 @@ export const REMINDER_MAX_CONSECUTIVE_FAILURES = 3;
 // DÉFAUT 3 — Un rappel est « RETARDATAIRE » quand son échéance est dépassée de
 // plus de DEUX intervalles (cas type : arriéré accumulé pendant que Pilot était
 // fermé). Les retardataires partent GROUPÉS dans UN SEUL message — un seul tour
-// de l'assistant — au lieu d'occuper l'assistant pendant des heures (une
-// relance par passe = un prompt système complet = un tour complet).
+// de l'assistant — au lieu d'occuper l'assistant pendant des heures (sans
+// regroupement, chaque relance coûtait un prompt système complet, donc un tour
+// complet de l'assistant).
 export const REMINDER_LAGGARD_INTERVAL_FACTOR = 2;
 
 // DÉFAUT 3bis (2ᵉ relecture) — Le LOT DE RELANCES était SANS BORNE : il pouvait
@@ -137,31 +138,63 @@ function cutTextAt(texte, keep) {
   return brut;
 }
 
-// Rend UNE relance dans un budget de `budget` caractères : le texte complet s'il
+// Rend UN texte dans un budget de `budget` caractères, enveloppé par `envelopper`
+// (numérotation d'un lot, ou préfixe de la relance seule) : le texte complet s'il
 // tient, sinon un texte coupé sur une frontière SUIVI de l'avis de troncature,
 // l'ensemble restant sous le budget (indentation des lignes suivantes comprise).
-function renderReminderItemWithin(index, prompt, budget) {
+//
+// L'avis compte les caractères OMIS sur le texte RÉELLEMENT rendu (4ᵉ audit,
+// point 3) : `cutTextAt` coupe sur une frontière de mot, donc plus tôt que la
+// longueur visée. L'ancien calcul (sur la longueur visée) annonçait par exemple
+// 2675 caractères omis pour 2678 réellement retirés.
+function renderReminderWithin(envelopper, prompt, budget) {
   const total = Array.from(String(prompt).replace(/\r\n/g, "\n"));
-  if (Array.from(numberReminderLine(index, prompt)).length <= budget) {
-    return { rendered: numberReminderLine(index, prompt), truncated: false, omitted: 0 };
+  const entier = envelopper(total.join(""));
+  if (Array.from(entier).length <= budget) {
+    return { rendered: entier, truncated: false, omitted: 0 };
   }
   let keep = total.length;
   for (;;) {
-    const omitted = total.length - keep;
-    const candidate = cutTextAt(total.join(""), keep) + reminderTruncationNotice(omitted);
-    const rendered = numberReminderLine(index, candidate);
-    const length = Array.from(rendered).length;
-    if (length <= budget) return { rendered, truncated: true, omitted };
-    const shrink = length - budget + 4;
-    if (keep <= 0) return { rendered: numberReminderLine(index, reminderTruncationNotice(total.length)), truncated: true, omitted: total.length };
-    keep = Math.max(0, keep - shrink);
+    const coupe = keep <= 0 ? "" : cutTextAt(total.join(""), keep);
+    const omis = total.length - Array.from(coupe).length;
+    const rendered = envelopper(coupe + reminderTruncationNotice(omis));
+    const longueur = Array.from(rendered).length;
+    if (longueur <= budget || keep <= 0) {
+      return { rendered, truncated: true, omitted: omis };
+    }
+    keep = Math.max(0, keep - (longueur - budget + 4));
   }
 }
 
-// Borne le message RÉELLEMENT versé dans la conversation (relance SEULE : le lot
-// est, lui, borné par relance, cf. `buildReminderInjection`). La troncature est
-// DITE (nombre de caractères omis) et l'avis compte lui-même dans la taille, si
-// bien que le résultat ne dépasse jamais `REMINDER_BATCH_MAX_CHARS`.
+// Rend UNE relance d'un LOT dans son budget (numéro + texte + avis éventuel).
+function renderReminderItemWithin(index, prompt, budget) {
+  return renderReminderWithin((texte) => numberReminderLine(index, texte), prompt, budget);
+}
+
+// Préfixe historique d'une relance livrée SEULE (format d'avant les lots).
+const SINGLE_REMINDER_PREFIX = "[⏰ Rappel programmé] ";
+
+// Rend une relance livrée SEULE dans le MÊME budget par relance que dans un lot
+// (4ᵉ audit, point 3). Sans cette borne, une relance de 20 000 caractères passait
+// par `capReminderMessage`, qui tronquait le MESSAGE à 4000 puis laissait la
+// relance être marquée « envoyée » : la spec et l'aide affirmaient pourtant que
+// « chaque relance est bornée à 450 caractères » et que la troncature du message
+// entier était « structurellement impossible ». La phrase est vraie désormais.
+function renderSingleReminderWithin(prompt, budget) {
+  return renderReminderWithin(
+    (texte) => SINGLE_REMINDER_PREFIX + texte,
+    prompt,
+    budget,
+  );
+}
+
+// Ceinture et bretelles : borne le message RÉELLEMENT versé dans la conversation.
+// Depuis le 4ᵉ audit (point 3), il n'a plus rien à couper — le lot est borné par
+// relance et la relance SEULE passe par le même budget par relance (cf.
+// `buildReminderInjection`) — mais il reste le dernier rempart si une future
+// évolution de la composition le débordait. La troncature est DITE (nombre de
+// caractères omis) et l'avis compte lui-même dans la taille, si bien que le
+// résultat ne dépasse jamais `REMINDER_BATCH_MAX_CHARS`.
 function capReminderMessage(message) {
   const chars = Array.from(message);
   if (chars.length <= REMINDER_BATCH_MAX_CHARS) return message;
@@ -214,9 +247,14 @@ export function buildReminderInjection(items) {
   const capped = list.slice(0, REMINDER_BATCH_MAX_ITEMS);
   const overflow = list.slice(REMINDER_BATCH_MAX_ITEMS);
   if (capped.length === 1) {
-    // Relance SEULE : format historique, texte complet sous le plafond global.
+    // Relance SEULE : format historique conservé, mais SOUMISE à la même borne
+    // par relance que dans un lot (4ᵉ audit, point 3). La troncature éventuelle
+    // est celle de CETTE relance (avis chiffré sur le texte réellement rendu),
+    // donc le message entier n'est plus jamais tronqué par
+    // `capReminderMessage` : il reste la ceinture et les bretelles.
+    const rendu = renderSingleReminderWithin(capped[0].prompt, REMINDER_ITEM_MAX_CHARS);
     return {
-      message: capReminderMessage(`[⏰ Rappel programmé] ${capped[0].prompt}`),
+      message: capReminderMessage(rendu.rendered),
       delivered: capped,
       withheld: overflow,
     };

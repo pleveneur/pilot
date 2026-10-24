@@ -1346,8 +1346,8 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - **Règle d'envoi d'une passe (règle unique, corrigée le 2026-08-29)** :
   **UN SEUL ENVOI par passe** — donc **un seul tour** de l'assistant — et non
   « une relance par passe » comme le disait la version précédente de cette
-  spec, qui se contredisait en posant à la fois un déclenchement unique par
-  tick et un plafond de livraison par passe sans dire lequel prime. L'unité
+  spec, qui se contredisait en posant à la fois « un déclenchement unique par
+  tick » et un plafond de livraison sans dire lequel prime. L'unité
   limitée est le **nombre de tours**, pas le nombre de rappels traités :
   1. les rappels **simplement échus** restent livrés **un par passe** (les
      suivants restent dus et partent aux passes suivantes, 10 s plus tard) ;
@@ -1374,12 +1374,19 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
      suivante. Dans un lot, les lignes suivantes d'un rappel multi-lignes sont
      **indentées sous leur numéro** pour ne pas se confondre avec les items
      suivants.
-  5. **chaque relance est bornée DANS le lot (3ᵉ audit, défaut sérieux)** : le
+  5. **chaque relance est bornée PAR RELANCE (3ᵉ audit, défaut sérieux ; étendu au 4ᵉ audit)** : le
      texte d'une relance est ramené à **450 caractères**
      (`REMINDER_ITEM_MAX_CHARS`, avis de troncature de **cette** relance
      compris) de sorte que le lot maximal (8 relances + en-tête) tienne
      **toujours** sous 4000 : la troncature du **message entier** est donc
-     **structurellement impossible**. Ce qui est réellement rendu est renvoyé
+     **structurellement impossible**. La borne s'applique **aussi à la relance
+     livrée SEULE** (branche « un seul envoi », format historique
+     `[⏰ Rappel programmé] …`) : sans cela, une relance seule de 20 000
+     caractères était coupée par le plafond **global** puis marquée envoyée
+     quand même. Le nombre de caractères **omis** annoncé dans l'avis est
+     calculé sur le texte **réellement rendu** (la coupe se fait à la frontière
+     du mot, donc avant la longueur visée) : il est exact, jamais approximé.
+     Ce qui est réellement rendu est renvoyé
      par `buildReminderInjection` sous forme de `delivered` / `withheld`, et le
      ticker **ne marque comme envoyées que les relances de `delivered`** ; une
      relance retirée redevient **due** et repart à la passe suivante — elle

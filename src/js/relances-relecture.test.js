@@ -49,17 +49,79 @@ const MAIN_SOURCE = readFileSync(resolve(HERE, "main.js"), "utf8").replace(/\r\n
 // tick »). Des MOTIFS, et non une liste de phrases figées : une reformulation
 // (« au plus une relance déclenchée par passe », « 1 exécution/fire max par
 // planification/tick ») doit être attrapée aussi (3ᵉ audit, point 2).
+//
+// 4ᵉ audit, point 1 — les motifs étaient ORDONNÉS (le nom de l'objet avant « par
+// passe ») : 5 reformulations inédites sur 9 passaient au travers (« Chaque passe
+// ne livre qu'une relance. », « Le ticker ne traite qu'un rappel à chaque
+// passe. », « On n'envoie jamais deux relances dans la même passe. », « 1
+// déclenchement de relance par tick. », « Règle : un seul rappel déclenché par
+// passe. »), et une occurrence VIVANTE de la règle remplacée subsistait dans
+// `super-agent-schedule.js` (protégée par un retour à la ligne et un préfixe de
+// commentaire entre les mots). Le verrou est donc :
+//   - INSENSIBLE À L'ORDRE (la passe peut précéder ou suivre le groupe limité) ;
+//   - À SYNONYMES (relance / rappel / déclenchement / fire / exécution) ;
+//   - TOLÉRANT au préfixe de commentaire et au retour à la ligne entre les mots.
+// L'unité limitée par la règle APPLIQUÉE est le nombre d'ENVOIS, pas le nombre de
+// relances : une occurrence qui parle d'« un seul envoi par passe » n'est pas
+// comptée (cf. `occurrencesReglePerimee`).
+const ENTRE_MOTS = String.raw`(?:[\s/*#>|~_-]*)`;
+const QTE = String.raw`(?:au${ENTRE_MOTS}plus${ENTRE_MOTS}(?:d'|de${ENTRE_MOTS})?un[e]?|un[e]?${ENTRE_MOTS}seul[e]?|qu'?un[e]?|jamais${ENTRE_MOTS}deux|\bdeux\b|\b1\b|\bun[e]?\b)`;
+const CIBLE = String.raw`(?:relances?|rappels?|d[ée]clenchements?|fires?|ex[ée]cutions?)`;
+const PASSE = String.raw`(?:passe?s?|ticks?|planifications?)`;
+const LIEN_DROITE = String.raw`(?:par|à${ENTRE_MOTS}chaque|dans${ENTRE_MOTS}la${ENTRE_MOTS}m[êe]me|sur${ENTRE_MOTS}chaque|max(?:imum)?|\/)`;
+
 const MOTIFS_REGLE_PERIMEE = [
-  // « au plus / une seule / qu'une / une … relance … par passe »
-  /au plus (d'une|1)\s+relance[\s\S]{0,80}?par\s+passe/i,
-  /une\s+relance[\s\S]{0,40}?par\s+passe/i,
-  /une\s+seule?\s+relance[\s\S]{0,80}?par\s+passe/i,
-  /qu'une\s+relance[\s\S]{0,80}?par\s+passe/i,
-  /relance\s+livr[ée]e?\s+par\s+passe/i,
-  // « 1 exécution (fire) max … par planification / par tick », « 1 fire/tick »
-  /(1|une)\s+(ex[ée]cution|fire)\b[\s\S]{0,80}?par\s+(tick|planification)/i,
-  /\b1\s*fire\s*\/\s*tick/i,
+  // (a) la restriction porte sur la RELANCE / le RAPPEL / le DÉCLENCHEMENT, et
+  //     la passe est reliée à droite — quel que soit l'ordre des mots.
+  new RegExp(
+    `${QTE}${ENTRE_MOTS}(?:de${ENTRE_MOTS})?${CIBLE}[\\s\\S]{0,40}?${LIEN_DROITE}${ENTRE_MOTS}${PASSE}`,
+    "gi",
+  ),
+  // (b) la PASSE vient d'abord (« Chaque passe ne livre qu'une relance. »,
+  //     « Le ticker ne traite qu'un rappel à chaque passe. »).
+  new RegExp(
+    `(?:chaque|une|la|par|à${ENTRE_MOTS}chaque|toute)${ENTRE_MOTS}${PASSE}\\b[^.;!?]{0,80}?${QTE}${ENTRE_MOTS}${CIBLE}`,
+    "gi",
+  ),
+  // (c) livraison déclarée « par passe » (ancienne formule « relance livrée par
+  //     passe ») — la forme sans restriction de quantité.
+  new RegExp(`${CIBLE}${ENTRE_MOTS}livr[ée]e?s?[\\s\\S]{0,20}?${LIEN_DROITE}${ENTRE_MOTS}${PASSE}`, "gi"),
+  // (d) « 1 fire/tick » (rapport sans espace autour de la barre oblique).
+  new RegExp(`\\b1${ENTRE_MOTS}*fire${ENTRE_MOTS}*\\/${ENTRE_MOTS}*tick`, "gi"),
 ];
+
+// Toutes les occurrences de la règle périmée dans `texte`, avec la tolérance
+// documentée plus haut. Une occurrence qui parle d'« un seul ENVOI par passe »
+// (règle APPLIQUÉE) n'est pas une occurrence périmée : l'unité limitée y est le
+// nombre d'envois, pas le nombre de relances.
+function occurrencesReglePerimee(texte) {
+  const trouvees = [];
+  for (const motif of MOTIFS_REGLE_PERIMEE) {
+    const global = new RegExp(
+      motif.source,
+      motif.flags.includes("g") ? motif.flags : `${motif.flags}g`,
+    );
+    let m;
+    while ((m = global.exec(texte)) !== null) {
+      const avant = texte.slice(Math.max(0, m.index - 60), m.index);
+      if (!/\benvois?\b/i.test(`${avant}${m[0]}`)) {
+        trouvees.push({ index: m.index, texte: m[0], avant });
+      }
+      global.lastIndex = m.index + 1;
+    }
+  }
+  return trouvees;
+}
+
+// Une occurrence CITÉE (présentée comme l'ancienne règle, pour expliquer son
+// remplacement) n'est pas une règle périmée posée comme appliquée. Deux formes :
+// « et non « … » » et une citation entre guillemets français « … ».
+function estCitation(texte, occurrence) {
+  if (/et non\s*«\s*$/.test(occurrence.avant.trimEnd())) return true;
+  const avant = texte.slice(0, occurrence.index);
+  const apres = texte.slice(occurrence.index + occurrence.texte.length);
+  return avant.lastIndexOf("«") > avant.lastIndexOf("»") && apres.indexOf("»") >= 0;
+}
 
 // Découpage de source VÉRIFIÉ : helper partagé `sliceSource` (source-slice.js).
 
@@ -382,6 +444,72 @@ describe("défaut 3 — les retardataires partent groupés (un seul tour, pas N)
     expect(short.length).toBeLessThan(REMINDER_BATCH_MAX_CHARS);
   });
 
+  // ── 4ᵉ audit, point 3 : la branche « une seule relance » échappait aux DEUX
+  // bornes (par relance ET annonce de troncature) ──
+  it("une relance SEULE très longue est bornée PAR RELANCE, comme dans un lot", () => {
+    // Cas MESURÉ par l'audit : une relance seule de 20 000 caractères produisait
+    // un message tronqué à 4 000 par le plafond GLOBAL, avec l'avis « lot
+    // tronqué », alors que la relance était marquée envoyée — donc la spec et
+    // l'aide (« chaque relance est bornée à 450 caractères », « la troncature du
+    // message entier est structurellement impossible ») étaient fausses.
+    expect(REMINDER_ITEM_MAX_CHARS).toBe(450);
+    const injection = buildReminderInjection([{ id: 7, prompt: "mot ".repeat(4000) }]);
+    const message = injection.message;
+    // 1. la relance seule tient dans la borne PAR relance…
+    expect(Array.from(message).length).toBeLessThanOrEqual(REMINDER_ITEM_MAX_CHARS);
+    // 2. … le plafond GLOBAL n'a donc plus rien à couper (aucun avis « lot tronqué »)…
+    expect(message).not.toMatch(/lot tronqué/);
+    // 3. … et la coupure de CETTE relance est dite, chiffrée.
+    expect(message).toMatch(/relance tronquée : \d+ caractère/);
+    expect(message.startsWith("[⏰ Rappel programmé] ")).toBe(true);
+    expect(injection.delivered.map((d) => d.id)).toEqual([7]);
+    expect(injection.withheld).toHaveLength(0);
+    // 4. Une relance seule COURTE garde son préfixe historique et son texte entier.
+    const court = buildReminderInjection([{ id: 8, prompt: "a" }]);
+    expect(court.message).toBe("[⏰ Rappel programmé] a");
+    expect(court.message).not.toMatch(/tronqué/);
+  });
+
+  it("l'avis de troncature annonce les caractères RÉELLEMENT omis (jamais la longueur visée)", () => {
+    // Cas MESURÉ par l'audit : 2 675 caractères annoncés pour 2 678 réellement
+    // omis — l'ancien calcul portait sur la longueur VISÉE (`keep`), alors que la
+    // coupe se fait à la frontière du mot, donc plus tôt. Ici l'annonce est
+    // confrontée au texte réellement rendu, pour plusieurs tailles.
+    const PREFIXE = "[⏰ Rappel programmé] ";
+    for (const taille of [451, 900, 3011, 20000]) {
+      const prompt = "a".repeat(440) + " " + "b".repeat(taille);
+      const message = buildReminderInjection([{ id: 1, prompt }]).message;
+      const avis = message.match(/relance tronquée : (\d+) caractère/);
+      expect(avis, `aucun avis pour ${taille}`).not.toBeNull();
+      const annonce = Number(avis[1]);
+      // Le texte RÉELLEMENT rendu = message − préfixe − avis.
+      const [avantAvis] = message.split("[…relance tronquée");
+      const rendu = avantAvis.slice(PREFIXE.length);
+      const total = Array.from(prompt).length;
+      expect(annonce, `annonce fausse pour ${taille}`).toBe(total - Array.from(rendu).length);
+      expect(total - Array.from(rendu).length).toBeLessThan(total);
+    }
+    // Même exigence dans un LOT (plusieurs relances tronquées) : chaque avis
+    // colle à SA relance.
+    const items = Array.from({ length: 4 }, (_, i) => ({
+      id: i + 1,
+      prompt: `R${i + 1}-` + "abc ".repeat(400),
+    }));
+    const message = buildReminderInjection(items).message;
+    // Un bloc par relance : « N. » en début de ligne (les lignes de continuation
+    // sont INDENTÉES, donc elles ne délimitent pas un bloc).
+    const blocs = message.split(/\n(?=\d+\. )/);
+    for (const d of items) {
+      const bloc = blocs.find((b) => b.startsWith(`${d.id}. `));
+      expect(bloc, `relance ${d.id} absente du lot`).toBeTruthy();
+      const avis = bloc.match(/relance tronquée : (\d+) caractère/);
+      expect(avis, `aucun avis pour la relance ${d.id}`).not.toBeNull();
+      const [avantAvis] = bloc.split("[…relance tronquée");
+      const rendu = avantAvis.slice(`${d.id}. `.length);
+      expect(Number(avis[1])).toBe(Array.from(d.prompt).length - Array.from(rendu).length);
+    }
+  });
+
   it("le contenu RÉELLEMENT LISIBLE est relié au marquage (aucune relance marquée sans être dans le message)", () => {
     // Invariant : pour toute taille de relance, la liste livrée (`delivered`) est
     // exactement celle dont le texte figure dans le message, et une relance
@@ -557,8 +685,14 @@ describe("documentation — la contradiction est levée et la règle réellement
     // et d'un groupe de tests. On cherche donc des MOTIFS, sur un périmètre
     // élargi (le module, son test, les notes de test et le code Rust).
     //
+    // 4ᵉ audit, point 1 : les motifs sont désormais INSENSIBLES À L'ORDRE, à
+    // synonymes et tolérants au préfixe de commentaire — c'est ce qui fait
+    // tomber l'occurrence vivante de `super-agent-schedule.js` (retour à la ligne
+    // + `//` entre « relance » et « par passe »).
+    //
     // Seule tolérance : la CITATION de l'ancienne règle pour expliquer son
-    // remplacement (« et non « … » »).
+    // remplacement (« et non « … » », ou une citation entre guillemets
+    // français « … »).
     const PERIMETRE = [
       ["src-tauri/src/super_agent.rs", RUST_SOURCE],
       ["tests/schedule-tests.md", SCHEDULE_TESTS_DOC],
@@ -568,17 +702,11 @@ describe("documentation — la contradiction est levée et la règle réellement
       ["spec_super_agent.md", SPEC],
     ];
     for (const [nom, texte] of PERIMETRE) {
-      for (const motif of MOTIFS_REGLE_PERIMEE) {
-        const global = new RegExp(motif.source, motif.flags.includes("g") ? motif.flags : `${motif.flags}g`);
-        let m;
-        while ((m = global.exec(texte)) !== null) {
-          const avant = texte.slice(0, m.index).trimEnd();
-          expect(
-            /et non\s*«\s*$/.test(avant),
-            `${nom} : règle périmée posée comme appliquée → « ${m[0].slice(0, 80).replace(/\s+/g, " ")} »`,
-          ).toBe(true);
-          global.lastIndex = m.index + 1;
-        }
+      for (const occurrence of occurrencesReglePerimee(texte)) {
+        expect(
+          estCitation(texte, occurrence),
+          `${nom} : règle périmée posée comme appliquée → « ${occurrence.texte.slice(0, 80).replace(/\s+/g, " ")} »`,
+        ).toBe(true);
       }
     }
     // Et la règle RÉELLEMENT appliquée est écrite là où elle doit l'être.
@@ -591,27 +719,45 @@ describe("documentation — la contradiction est levée et la règle réellement
   it("une REFORMULATION de la règle périmée est attrapée (pas seulement les phrases figées)", () => {
     // Preuve que le verrou mord sur une formulation inédite : motifs appliqués
     // à des textes de synthèse qui n'étaient dans aucune liste.
+    //
+    // Les 4 premières étaient déjà attrapées ; les 5 suivantes sont celles que
+    // le 4ᵉ audit a mesurées comme PASSANT AU TRAVERS de l'ancien verrou ordonné
+    // (5 reformulations inédites sur 9).
     const reformulations = [
+      // ── déjà attrapées (non-régression) ──
       "Règle : au plus une relance déclenchée par passe de tick.",
       "Règle : une seule relance envoyée par passe, pour ne pas empiler les tours.",
       "Limite : 1 fire maximum par planification, et pas davantage.",
       "Garde-fou : 1 exécution/fire max par planification/tick.",
+      // ── 4ᵉ audit, point 1 : ordre inversé et synonymes ──
+      "Chaque passe ne livre qu'une relance.",
+      "Règle : un seul rappel déclenché par passe.",
+      "Le ticker ne traite qu'un rappel à chaque passe.",
+      "On n'envoie jamais deux relances dans la même passe.",
+      "1 déclenchement de relance par tick.",
     ];
-    const MOTIFS_PERIMES = MOTIFS_REGLE_PERIMEE;
     for (const texte of reformulations) {
       expect(
-        MOTIFS_PERIMES.some((m) => m.test(texte)),
+        occurrencesReglePerimee(texte).length > 0,
         `reformulation non attrapée : « ${texte} »`,
       ).toBe(true);
     }
-    // …et la règle appliquée n'est PAS attrapée (aucun faux positif).
+    // …et l'occurrence RÉELLE de `super-agent-schedule.js` (retour à la ligne +
+    // préfixe de commentaire entre les mots) est bien attrapée elle aussi.
+    expect(
+      occurrencesReglePerimee(
+        "(une\n// relance par passe = un prompt système complet)",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      occurrencesReglePerimee("/* une\n * seule relance\n */ par passe").length,
+    ).toBeGreaterThan(0);
+    // …et la règle APPLIQUÉE n'est PAS attrapée (aucun faux positif).
     for (const texte of [
       "un seul ENVOI par passe, un envoi pouvant porter plusieurs relances regroupées",
       "un seul ENVOI par passe : une relance simplement échue part seule, les autres restent dues",
     ]) {
-      for (const m of MOTIFS_PERIMES) {
-        expect(m.test(texte), `faux positif sur « ${texte} »`).toBe(false);
-      }
+      expect(occurrencesReglePerimee(texte), `faux positif sur « ${texte} »`).toEqual([]);
     }
   });
 });

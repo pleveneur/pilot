@@ -103,16 +103,88 @@ export function sliceFrom(src, startAnchor, minLen = 1) {
  * commentaires. Sans cela, un ÉCHANTILLON de code fautif écrit dans une chaîne
  * (comme dans `source-slice.test.js`) serait compté comme un vrai découpage, et
  * un commentaire citant le motif le serait aussi. Les retours à la ligne sont
- * conservés (numéros de ligne stables).
+ * conservés (numéros de ligne stables, une ligne d'entrée = une ligne de
+ * sortie).
+ *
+ * NEUTRALISATION CONSCIENTE DES GUILLEMETS (4ᵉ audit, point 2) : une suite de
+ * remplacements par expressions régulières ne pouvait pas tenir la promesse.
+ * Quand les commentaires étaient retirés AVANT les chaînes, une chaîne
+ * contenant `//` (une URL, un chemin, un extrait de code) faisait effacer la fin
+ * de sa ligne ; les guillemets se déséquilibraient, la « chaîne » suivante
+ * absorbait plusieurs lignes et le remplacement `""` les SUPPRIMAIT. Ces lignes
+ * devenaient invisibles au détecteur : mesuré 35 fichiers de test sur 162
+ * perdaient des lignes, et 23 positions sur 28 échappaient à la détection dans
+ * `relances-relecture.test.js` (lignes 76 à 626) alors que l'inventaire restait
+ * vert. Ici, un seul BALAYAGE caractère par caractère tient l'état courant
+ * (code, commentaire de ligne, commentaire de bloc, chaîne, gabarit) : une
+ * chaîne n'est jamais confondue avec un commentaire, et inversement.
  */
 export function neutraliserSource(source) {
-  const vider = (m) => m.replace(/[^\n]/g, " ");
-  return String(source)
-    .replace(/\/\*[\s\S]*?\*\//g, vider)
-    .replace(/(^|[^:\\])\/\/.*$/gm, "$1")
-    .replace(/`[^`]*`/g, vider)
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/'(?:[^'\\]|\\.)*'/g, "''");
+  const texte = String(source);
+  const sortie = [];
+  const blanc = (c) => (c === "\n" ? "\n" : " ");
+  let i = 0;
+  const n = texte.length;
+  while (i < n) {
+    const c = texte[i];
+    const suiv = texte[i + 1];
+    // Commentaire de bloc : neutralisé jusqu'à `*/` (ou la fin du texte).
+    if (c === "/" && suiv === "*") {
+      sortie.push(" ", " ");
+      i += 2;
+      while (i < n) {
+        if (texte[i] === "*" && texte[i + 1] === "/") {
+          sortie.push(" ", " ");
+          i += 2;
+          break;
+        }
+        sortie.push(blanc(texte[i]));
+        i += 1;
+      }
+      continue;
+    }
+    // Commentaire de ligne : neutralisé jusqu'à la fin de la ligne.
+    if (c === "/" && suiv === "/") {
+      while (i < n && texte[i] !== "\n") {
+        sortie.push(" ");
+        i += 1;
+      }
+      continue;
+    }
+    // Chaîne ou gabarit : neutralisé jusqu'au guillemet fermant. Un `//` ou un
+    // `*` DANS une chaîne n'ouvre donc plus ni commentaire ni erreur d'état.
+    if (c === '"' || c === "'" || c === "`") {
+      const guillemet = c;
+      sortie.push(" ");
+      i += 1;
+      while (i < n) {
+        if (texte[i] === "\\") {
+          // Échappement : deux caractères consommés, deux rendus (les lignes
+          // restent alignées même sur une continuation de ligne).
+          sortie.push(" ", texte[i + 1] === "\n" ? "\n" : " ");
+          i += 2;
+          continue;
+        }
+        if (texte[i] === guillemet) {
+          sortie.push(" ");
+          i += 1;
+          break;
+        }
+        if (texte[i] === "\n") {
+          // Guillemet jamais refermé : on s'arrête à la fin de la ligne. Une
+          // apostrophe isolée (texte français, caractère typographique)
+          // n'efface ainsi jamais des lignes entières de code.
+          break;
+        }
+        sortie.push(" ");
+        i += 1;
+      }
+      continue;
+    }
+    sortie.push(c);
+    i += 1;
+  }
+  return sortie.join("");
 }
 
 /**

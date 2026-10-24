@@ -1,6 +1,7 @@
 // Tests — découpage de source VÉRIFIÉ (`source-slice.js`) : 3ᵉ audit, point 4.
 //
-// Deux verrous :
+// Trois verrous (le troisième depuis le 4ᵉ audit, point 2 : une neutralisation
+// aveugle rendait l'inventaire vert par construction) :
 //   1. le garde-fou de découpage lui-même (`sliceSource`) : ancre absente, ancre
 //      de fin avant le début, fragment trop court → ÉCHEC (et non un fragment
 //      vide qui rendrait une assertion négative vraie par construction) ;
@@ -15,6 +16,7 @@ import {
   sliceSource,
   sliceFrom,
   findUnprotectedSourceSlices,
+  neutraliserSource,
   SourceSliceError,
 } from "./source-slice.js";
 
@@ -129,7 +131,17 @@ describe("findUnprotectedSourceSlices — détecte le motif exact du défaut", (
 // doit être à zéro. Les deux fichiers réparés par ce correctif
 // (`read-aloud.test.js`, `relances-relecture.test.js`) n'y figurent PAS : ils
 // sont tenus à zéro par l'assertion explicite ci-dessous.
+//
+// 4ᵉ audit, point 2 : CINQ relevés ont été recomptés (`panneau-suivi-trois-onglets`
+// 8 → 9, `taille-et-style-panneau` 1 → 6, `updater-attente-terrain` 1 → 2, plus
+// `mcp-client-extension` et `telegram-notify-setting` qui n'avaient aucune
+// entrée). Ce ne sont pas des plafonds desserrés : le détecteur était AVEUGLE sur ces zones
+// (une chaîne contenant `//` faisait effacer la fin de la ligne, puis les
+// lignes suivantes), et ces sites n'avaient donc jamais pu être comptés. Le
+// relevé est désormais EXACT (comparaison d'égalité, pas un plafond) : réparer
+// un site oblige à baisser son compte, en ajouter un fait échouer le test.
 const INVENTAIRE_HISTORIQUE = {
+  "scripts/mcp-client-extension.test.js": 1,
   "scripts/release-workflow.test.js": 1,
   "src/js/agent-hardening.test.js": 1,
   "src/js/agent-scroll.test.js": 1,
@@ -140,18 +152,19 @@ const INVENTAIRE_HISTORIQUE = {
   "src/js/file-attente-fenetre-rejeu.test.js": 1,
   "src/js/file-attente-retrait-mission.test.js": 1,
   "src/js/garde-fou-refus-lecture-seule.test.js": 1,
-  "src/js/panneau-suivi-trois-onglets.test.js": 8,
+  "src/js/panneau-suivi-trois-onglets.test.js": 9,
   "src/js/pi-update-startup.test.js": 1,
   "src/js/planificateur-plan-complet.test.js": 1,
   "src/js/reglage-voix-onglet-assistant.test.js": 2,
   "src/js/super-agent-badges-nom-projet.test.js": 1,
   "src/js/super-agent-schedule.test.js": 1,
-  "src/js/taille-et-style-panneau.test.js": 1,
+  "src/js/taille-et-style-panneau.test.js": 6,
   "src/js/telegram-dialog.test.js": 1,
+  "src/js/telegram-notify-setting.test.js": 1,
   "src/js/travail-visible.test.js": 1,
   "src/js/update-window-bus.test.js": 2,
   "src/js/updater-attente-qui-bloque.test.js": 2,
-  "src/js/updater-attente-terrain.test.js": 1,
+  "src/js/updater-attente-terrain.test.js": 2,
   "src/js/verrou-par-projet.test.js": 4,
   "src/js/voix-locale-choix.test.js": 1,
 };
@@ -184,20 +197,82 @@ describe("inventaire — aucun découpage de source NON PROTÉGÉ ajouté dans l
     expect(fichiers).toContain("src/js/read-aloud.test.js");
   });
 
-  it("aucun fichier ne dépasse son relevé historique, et aucun nouveau site n'apparaît", () => {
-    const trop = [];
+  it("chaque fichier porte EXACTEMENT son relevé (aucun nouveau site, aucun plafond desserré)", () => {
+    const faux = [];
     for (const rel of fichiers) {
       const source = fs.readFileSync(path.join(RACINE, rel), "utf8");
       const sites = findUnprotectedSourceSlices(source);
-      const plafond = INVENTAIRE_HISTORIQUE[rel] ?? 0;
-      if (sites.length > plafond) {
-        trop.push(
-          `${rel} : ${sites.length} découpage(s) non protégé(s) (plafond ${plafond}) → ` +
+      const releve = INVENTAIRE_HISTORIQUE[rel] ?? 0;
+      if (sites.length !== releve) {
+        faux.push(
+          `${rel} : ${sites.length} découpage(s) non protégé(s) mesuré(s), relevé ${releve} → ` +
             sites.map((s) => `l.${s.line} « ${s.text.slice(0, 70)} »`).join(" ; "),
         );
       }
     }
-    expect(trop, trop.join("\n")).toEqual([]);
+    expect(faux, faux.join("\n")).toEqual([]);
+  });
+
+  // ── 4ᵉ audit, point 2 : la neutralisation ne perd plus de LIGNES ─────────
+  it("la neutralisation conserve TOUTES les lignes (mesure : 0 fichier sur 162)", () => {
+    // Avant correctif : 35 fichiers de test sur 162 perdaient des lignes (une
+    // chaîne contenant `//` déséquilibrait les guillemets, et la « chaîne »
+    // suivante absorbait plusieurs lignes, que le remplacement supprimait).
+    // Tout fichier qui perd une ligne rend invisibles les découpages qui s'y
+    // trouvent : l'inventaire devenait alors vert par construction.
+    const perdants = [];
+    for (const rel of fichiers) {
+      const source = fs.readFileSync(path.join(RACINE, rel), "utf8").replace(/\r\n/g, "\n");
+      const neutre = neutraliserSource(source);
+      const attendu = source.split("\n").length;
+      const obtenu = neutre.split("\n").length;
+      if (obtenu !== attendu) perdants.push(`${rel} : ${attendu - obtenu} ligne(s) altérée(s)`);
+    }
+    expect(perdants, perdants.join("\n")).toEqual([]);
+  });
+
+  it("un découpage non protégé INJECTÉ est refusé PARTOUT dans le code des tests", () => {
+    // Contre-épreuve mesurée (« neutralisation faite puis restaurée ») : avec
+    // l'ancienne neutralisation, 108 des 1 005 positions de CODE échantillonnées
+    // échappaient au détecteur ; ici, aucune. Les positions posées dans un
+    // commentaire (ligne commençant par `*`, `/*` ou `//`) sont écartées : un
+    // extrait de code écrit dans un commentaire n'est pas du code exécuté.
+    const injection = 'const zz = src.slice(src.indexOf("a"));';
+    const aveugles = [];
+    let testees = 0;
+    for (const rel of fichiers) {
+      const source = fs.readFileSync(path.join(RACINE, rel), "utf8").replace(/\r\n/g, "\n");
+      const lignes = source.split("\n");
+      for (let i = 15; i < lignes.length; i += 40) {
+        const t = lignes[i].trim();
+        if (t.startsWith("*") || t.startsWith("/*") || t.startsWith("//")) continue;
+        const copie = [...lignes];
+        copie[i] = `${lignes[i]}\n${injection}`;
+        testees += 1;
+        if (findUnprotectedSourceSlices(copie.join("\n")).length === 0) {
+          aveugles.push(`${rel}:${i + 1}`);
+        }
+      }
+    }
+    // Le balayage doit porter sur un vrai volume, sinon le test ne prouve rien.
+    expect(testees).toBeGreaterThan(800);
+    expect(aveugles, `positions aveugles : ${aveugles.slice(0, 20).join(", ")}`).toEqual([]);
+  });
+
+  it("toutes les positions de relances-relecture.test.js sont couvertes (cas mesuré de l'audit)", () => {
+    // Fichier de l'audit : 23 positions sur 28 (lignes 76 à 626) échappaient au
+    // détecteur alors que le test « zéro découpage non protégé » restait vert.
+    const rel = "src/js/relances-relecture.test.js";
+    const source = fs.readFileSync(path.join(RACINE, rel), "utf8").replace(/\r\n/g, "\n");
+    const lignes = source.split("\n");
+    const injection = 'const zz = src.slice(src.indexOf("a"));';
+    const aveugles = [];
+    for (let i = 20; i < lignes.length; i += 20) {
+      const copie = [...lignes];
+      copie[i] = `${lignes[i]}\n${injection}`;
+      if (findUnprotectedSourceSlices(copie.join("\n")).length === 0) aveugles.push(i + 1);
+    }
+    expect(aveugles, `lignes aveugles : ${aveugles.join(", ")}`).toEqual([]);
   });
 
   it("les fichiers réparés par ce correctif sont à ZÉRO découpage non protégé", () => {
