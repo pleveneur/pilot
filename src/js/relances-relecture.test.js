@@ -64,11 +64,20 @@ const MAIN_SOURCE = readFileSync(resolve(HERE, "main.js"), "utf8").replace(/\r\n
 // L'unité limitée par la règle APPLIQUÉE est le nombre d'ENVOIS, pas le nombre de
 // relances : une occurrence qui parle d'« un seul envoi par passe » n'est pas
 // comptée (cf. `occurrencesReglePerimee`).
+//
+// 5ᵉ vérification, point unique — deux trous structurels laissaient passer trois
+// formulations (« Un tick ne peut déclencher qu'une relance, jamais davantage. »,
+// « Le planificateur livre au maximum un rappel dans une même passe. », « Le
+// ticker ne livre jamais deux rappels dans une même passe. ») :
+//   - le lien de droite ne connaissait que « dans LA même » (le lien accepte
+//     désormais « dans la / dans une même ») ;
+//   - le motif (b) exigeait un article juste avant « passe » (« UN tick … » n'en
+//     a pas) : le préfixe accepte donc aussi « un/une ».
 const ENTRE_MOTS = String.raw`(?:[\s/*#>|~_-]*)`;
 const QTE = String.raw`(?:au${ENTRE_MOTS}plus${ENTRE_MOTS}(?:d'|de${ENTRE_MOTS})?un[e]?|un[e]?${ENTRE_MOTS}seul[e]?|qu'?un[e]?|jamais${ENTRE_MOTS}deux|\bdeux\b|\b1\b|\bun[e]?\b)`;
 const CIBLE = String.raw`(?:relances?|rappels?|d[ée]clenchements?|fires?|ex[ée]cutions?)`;
 const PASSE = String.raw`(?:passe?s?|ticks?|planifications?)`;
-const LIEN_DROITE = String.raw`(?:par|à${ENTRE_MOTS}chaque|dans${ENTRE_MOTS}la${ENTRE_MOTS}m[êe]me|sur${ENTRE_MOTS}chaque|max(?:imum)?|\/)`;
+const LIEN_DROITE = String.raw`(?:par|à${ENTRE_MOTS}chaque|dans${ENTRE_MOTS}(?:la|une)${ENTRE_MOTS}m[êe]me|sur${ENTRE_MOTS}chaque|max(?:imum)?|\/)`;
 
 const MOTIFS_REGLE_PERIMEE = [
   // (a) la restriction porte sur la RELANCE / le RAPPEL / le DÉCLENCHEMENT, et
@@ -78,9 +87,11 @@ const MOTIFS_REGLE_PERIMEE = [
     "gi",
   ),
   // (b) la PASSE vient d'abord (« Chaque passe ne livre qu'une relance. »,
-  //     « Le ticker ne traite qu'un rappel à chaque passe. »).
+  //     « Le ticker ne traite qu'un rappel à chaque passe. »), y compris
+  //     introduite par « un/une » nu (« Un tick ne peut déclencher qu'une
+  //     relance. »).
   new RegExp(
-    `(?:chaque|une|la|par|à${ENTRE_MOTS}chaque|toute)${ENTRE_MOTS}${PASSE}\\b[^.;!?]{0,80}?${QTE}${ENTRE_MOTS}${CIBLE}`,
+    `(?:\\bun[e]?|chaque|une|la|par|à${ENTRE_MOTS}chaque|toute)${ENTRE_MOTS}${PASSE}\\b[^.;!?]{0,80}?${QTE}${ENTRE_MOTS}${CIBLE}`,
     "gi",
   ),
   // (c) livraison déclarée « par passe » (ancienne formule « relance livrée par
@@ -735,6 +746,11 @@ describe("documentation — la contradiction est levée et la règle réellement
       "Le ticker ne traite qu'un rappel à chaque passe.",
       "On n'envoie jamais deux relances dans la même passe.",
       "1 déclenchement de relance par tick.",
+      // ── 5ᵉ vérification : les deux trous structurels (lien « dans une même »,
+      //    préfixe « un/une » devant « passe ») ──
+      "Un tick ne peut déclencher qu'une relance, jamais davantage.",
+      "Le planificateur livre au maximum un rappel dans une même passe.",
+      "Le ticker ne livre jamais deux rappels dans une même passe.",
     ];
     for (const texte of reformulations) {
       expect(
@@ -756,6 +772,10 @@ describe("documentation — la contradiction est levée et la règle réellement
     for (const texte of [
       "un seul ENVOI par passe, un envoi pouvant porter plusieurs relances regroupées",
       "un seul ENVOI par passe : une relance simplement échue part seule, les autres restent dues",
+      // 5ᵉ vérification : le lien élargi (« dans une même ») et le préfixe
+      // élargi (« un/une ») ne créent aucun faux positif sur la règle APPLIQUÉE.
+      "un seul ENVOI dans une même passe, un envoi pouvant porter plusieurs relances regroupées",
+      "Règle appliquée : un seul ENVOI par passe — si un tick trouve deux relances dues, elles sont regroupées",
     ]) {
       expect(occurrencesReglePerimee(texte), `faux positif sur « ${texte} »`).toEqual([]);
     }
