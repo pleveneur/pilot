@@ -1,16 +1,19 @@
-// update-window-bus.test.js — FENÊTRE RÉSERVÉE de mise à jour : aucun chemin de
-// LANCEMENT ne démarre pendant la réservation (bus d'agents, files de rejeu).
+// update-window-bus.test.js — mise à jour de Pilot : seul le blocage pendant
+// l'INSTALLATION est garanti (aucun chemin de LANCEMENT ne démarre) ; un écran
+// de mise à jour simplement OUVERT ne bloque plus rien (décision du
+// propriétaire, 2026-11 : décision non bloquante et réversible).
 //
 // Complète `update-window.test.js` (règle pure + écran). Ici on prouve les
 // chemins d'exécution RÉELS :
-//   g. `startAgentsRun` (bus) refuse de démarrer et nomme le motif exact ;
+//   g. `startAgentsRun` (bus) DÉMARRE malgré un écran ouvert, et refuse pendant
+//      une installation en nommant le motif exact ;
 //   h. le rejeu de la file de MISSIONS ne lance pas et ne CONSOMME pas la
-//      mission (elle reste en tête, prête à repartir) ;
-//   i. le rejeu de la file de DÉLÉGATIONS ne transmet rien ;
+//      mission pendant l'installation (elle reste en tête, prête à repartir) ;
+//   i. le rejeu de la file de DÉLÉGATIONS ne transmet rien pendant l'installation ;
 //   j. source : tout point d'admission de mission ET tout rejeu consulte la
 //      réservation (un oubli fait échouer ce test) — pas de second gardien.
 //
-// Ces preuves ÉCHOUENT si l'un des gardes est retiré.
+// Ces preuves ÉCHOUENT si l'un des gardes d'INSTALLATION est retiré.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
@@ -91,6 +94,7 @@ import {
   UPDATE_WINDOW_BLOCKED_MESSAGE,
   UPDATE_WINDOW_REASONS,
   __resetUpdateWindowForTest,
+  isUpdateWindowReserved,
   releaseUpdateWindow,
   reserveUpdateWindow,
 } from "./update-window.js";
@@ -107,10 +111,18 @@ beforeEach(() => {
   globalThis._pilotProjectPath = PROJECT;
 });
 
-describe("g — le bus refuse de démarrer une run pendant la réservation", () => {
-  it("écran ouvert : `startAgentsRun` lève le refus de la fenêtre de mise à jour", async () => {
+describe("g — le bus ne démarre QUE pendant une installation (l'écran ouvert ne bloque rien)", () => {
+  it("écran ouvert : `startAgentsRun` démarre normalement (l'écran n'occupe plus le terrain)", async () => {
     reserveUpdateWindow(UPDATE_WINDOW_REASONS.WINDOW, { version: "0.4.41" });
-    await expect(startAgentsRun("fais ceci")).rejects.toThrow(UPDATE_WINDOW_BLOCKED_MESSAGE);
+    // Le motif `WINDOW` ne réserve RIEN : le bus ne refuse plus.
+    expect(isUpdateWindowReserved()).toBe(false);
+    const res = await startAgentsRun("fais ceci").then(
+      () => "started",
+      (e) => String((e && e.message) || e)
+    );
+    // AVANT correctif : `UPDATE_WINDOW_BLOCKED_MESSAGE` (rien ne démarrait).
+    expect(res).not.toBe(UPDATE_WINDOW_BLOCKED_MESSAGE);
+    expect(res).not.toBe(UPDATE_INSTALLING_BLOCKED_MESSAGE);
   });
 
   it("installation en cours : motif distinct (attendre le redémarrage)", async () => {
@@ -119,9 +131,9 @@ describe("g — le bus refuse de démarrer une run pendant la réservation", () 
     expect(manualCommandBlockedMessage()).toBe(UPDATE_INSTALLING_BLOCKED_MESSAGE);
   });
 
-  it("terrain rendu : le bus redémarre (aucun blocage résiduel)", async () => {
-    reserveUpdateWindow(UPDATE_WINDOW_REASONS.WINDOW);
-    await expect(startAgentsRun("fais ceci")).rejects.toThrow(UPDATE_WINDOW_BLOCKED_MESSAGE);
+  it("installation terminée : le bus redémarre (aucun blocage résiduel)", async () => {
+    reserveUpdateWindow(UPDATE_WINDOW_REASONS.INSTALLING);
+    await expect(startAgentsRun("fais ceci")).rejects.toThrow(UPDATE_INSTALLING_BLOCKED_MESSAGE);
     releaseUpdateWindow();
     // La run démarre réellement (elle échouera plus loin, faute de backend, mais
     // le REFUS de la fenêtre n'est plus la cause).
@@ -135,10 +147,10 @@ describe("g — le bus refuse de démarrer une run pendant la réservation", () 
 });
 
 describe("h — le rejeu de la file de MISSIONS ne lance rien et ne perd rien", () => {
-  it("mission en file + écran ouvert : pas de lancement, mission TOUJOURS en file", async () => {
+  it("mission en file + INSTALLATION en cours : pas de lancement, mission TOUJOURS en file", async () => {
     const launched = vi.fn(async () => {});
     enqueueMissionForProject(PROJECT, launched, "mission de test", allocateMissionIdentity(["codeur"]));
-    reserveUpdateWindow(UPDATE_WINDOW_REASONS.WINDOW);
+    reserveUpdateWindow(UPDATE_WINDOW_REASONS.INSTALLING);
 
     const res = await replayQueuedMissionForProject(PROJECT);
     await flush();
@@ -148,10 +160,10 @@ describe("h — le rejeu de la file de MISSIONS ne lance rien et ne perd rien", 
     expect(getProjectMissionQueue(PROJECT)).toHaveLength(1); // rien de consommé
   });
 
-  it("écran refermé : la mission repart d'elle-même (aucune perte)", async () => {
+  it("installation terminée : la mission repart d'elle-même (aucune perte)", async () => {
     const launched = vi.fn(async () => {});
     enqueueMissionForProject(PROJECT, launched, "mission de test", allocateMissionIdentity(["codeur"]));
-    reserveUpdateWindow(UPDATE_WINDOW_REASONS.WINDOW);
+    reserveUpdateWindow(UPDATE_WINDOW_REASONS.INSTALLING);
     await replayQueuedMissionForProject(PROJECT);
     expect(launched).not.toHaveBeenCalled();
 

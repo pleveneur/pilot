@@ -37,7 +37,6 @@ vi.mock("./preview.js", () => ({ renderMarkdown: (s) => String(s) }));
 
 import {
   UPDATE_WINDOW_REASONS,
-  UPDATE_WINDOW_BLOCKED_MESSAGE,
   UPDATE_INSTALLING_BLOCKED_MESSAGE,
   __resetUpdateWindowForTest,
   getUpdateWindowReservation,
@@ -73,15 +72,22 @@ describe("Règle — la mise à jour réserve le terrain (décideur unique run-p
     expect(manualCommandBlockedMessage()).toBe(MANUAL_COMMAND_BLOCKED_MESSAGE);
   });
 
-  it("b — écran de mise à jour OUVERT : aucun travail ne démarre, message = écran ouvert", () => {
-    reserveUpdateWindow(UPDATE_WINDOW_REASONS.WINDOW, { version: "0.4.41" });
-    // La sonde du bus dit « libre » : c'est bien la mise à jour qui refuse.
-    expect(canStartWork("G:\\IA_PL\\pilot", "write", () => false)).toBe(false);
-    expect(canStartWork("G:\\IA_PL\\pilot", "read", () => false)).toBe(false);
-    expect(canSendManualCommand("G:\\IA_PL\\pilot", () => false)).toBe(false);
-    expect(manualCommandBlockedMessage()).toBe(UPDATE_WINDOW_BLOCKED_MESSAGE);
-    // La règle nomme sa version (informatif, jamais une décision).
-    expect(getUpdateWindowReservation()).toEqual({ reserved: true, reason: "window", version: "0.4.41" });
+  it("b — écran de mise à jour OUVERT : le terrain reste LIBRE (l'écran ne réserve plus rien)", () => {
+    // Décision du propriétaire (2026-11) : la décision de mise à jour est
+    // RÉVERSIBLE et NON BLOQUANTE. Un écran simplement affiché ne doit empêcher
+    // ni l'utilisateur d'envoyer, ni l'assistant de répondre, ni un agent de
+    // démarrer. Le motif `WINDOW` est conservé (compatibilité) mais ne réserve
+    // plus le terrain.
+    const posed = reserveUpdateWindow(UPDATE_WINDOW_REASONS.WINDOW, { version: "0.4.41" });
+    expect(posed).toBe("");
+    expect(isUpdateWindowReserved()).toBe(false);
+    expect(canStartWork("G:\\IA_PL\\pilot", "write", () => false)).toBe(true);
+    expect(canStartWork("G:\\IA_PL\\pilot", "read", () => false)).toBe(true);
+    expect(canSendManualCommand("G:\\IA_PL\\pilot", () => false)).toBe(true);
+    expect(manualCommandBlockedMessage()).toBe(MANUAL_COMMAND_BLOCKED_MESSAGE);
+    expect(updateWindowBlockedMessage()).toBe("");
+    // La version reste connue (informatif, jamais une décision).
+    expect(getUpdateWindowReservation()).toEqual({ reserved: false, reason: "", version: "0.4.41" });
   });
 
   it("c — INSTALLATION en cours : message distinct (l'utilisateur sait qu'il faut attendre le redémarrage)", () => {
@@ -91,8 +97,8 @@ describe("Règle — la mise à jour réserve le terrain (décideur unique run-p
     expect(updateWindowBlockedMessage()).toBe(UPDATE_INSTALLING_BLOCKED_MESSAGE);
   });
 
-  it("la référence est RENDUE à la fermeture de l'écran (le travail repart tout de suite)", () => {
-    reserveUpdateWindow(UPDATE_WINDOW_REASONS.WINDOW);
+  it("la réservation est RENDUE par `releaseUpdateWindow` (le travail repart tout de suite)", () => {
+    reserveUpdateWindow(UPDATE_WINDOW_REASONS.INSTALLING);
     expect(canStartWork("projet", "write", () => false)).toBe(false);
     releaseUpdateWindow();
     expect(isUpdateWindowReserved()).toBe(false);
@@ -133,6 +139,13 @@ describe("Règle — la mise à jour réserve le terrain (décideur unique run-p
       (f) => f !== "update-window.js" && /reserveUpdateWindow\(/.test(readFileSync(new URL(f, dir), "utf8"))
     );
     expect(reservers).toEqual(["updater.js"]);
+    // VERROU : personne ne réserve le terrain pour un écran simplement AFFICHÉ
+    // (le motif `WINDOW` ne réserve plus rien ; ce test échoue si un appel
+    // `reserveUpdateWindow(…WINDOW…)` réapparaît quelque part).
+    const windowReservers = files.filter((f) =>
+      /reserveUpdateWindow\(\s*UPDATE_WINDOW_REASONS\.WINDOW/.test(readFileSync(new URL(f, dir), "utf8"))
+    );
+    expect(windowReservers).toEqual([]);
   });
 });
 
@@ -265,8 +278,11 @@ describe("a — l'écran n'apparaît JAMAIS pendant qu'un agent travaille", () =
 
     expect(modalVisible()).toBe(true);
     expect(els["update-version"].textContent).toBe("v0.4.41");
-    expect(win.isUpdateWindowReserved()).toBe(true);
-    // Le rappel d'attente disparaît une fois l'écran affiché.
+    // L'écran ne réserve RIEN : on peut travailler pendant qu'il est affiché.
+    expect(win.isUpdateWindowReserved()).toBe(false);
+    expect(policy.canStartWork("G:\\IA_PL\\pilot", "write", () => false)).toBe(true);
+    // Le rappel d'attente disparaît une fois l'écran affiché (l'écran porte
+    // désormais l'information) ; il revient si l'écran est écarté.
     expect(els["status-update-waiting"].classList.contains("hidden")).toBe(true);
   });
 
@@ -288,33 +304,41 @@ describe("a — l'écran n'apparaît JAMAIS pendant qu'un agent travaille", () =
   });
 });
 
-describe("b — aucun agent ne démarre pendant que l'écran est affiché", () => {
-  it("écran ouvert ⇒ terrain réservé ⇒ refus de démarrage ; « Plus tard » rend le terrain", async () => {
+describe("b — l'écran OUVERT ne bloque plus rien : la décision est réversible", () => {
+  it("écran ouvert ⇒ on peut envoyer, l'assistant répond, les agents démarrent", async () => {
     updater.setUpdateWorkProbe(async () => false);
     checkMock.mockResolvedValue(makeUpdate("0.4.41"));
     await updater.checkForUpdate(true);
     expect(modalVisible()).toBe(true);
 
-    // Pendant l'affichage, TOUS les chemins de démarrage sont refusés et le
-    // motif affiché est celui de l'écran ouvert.
-    expect(policy.canStartWork("G:\\IA_PL\\pilot", "write", () => false)).toBe(false);
-    expect(policy.canSendManualCommand("G:\\IA_PL\\pilot", () => false)).toBe(false);
-    expect(policy.manualCommandBlockedMessage()).toBe(UPDATE_WINDOW_BLOCKED_MESSAGE);
+    // AVANT correctif : tous ces chemins étaient refusés tant que l'écran
+    // restait ouvert (verrou posé au simple affichage, sans échéance).
+    expect(win.isUpdateWindowReserved()).toBe(false);
+    expect(policy.canStartWork("G:\\IA_PL\\pilot", "write", () => false)).toBe(true);
+    expect(policy.canSendManualCommand("G:\\IA_PL\\pilot", () => false)).toBe(true);
+    expect(policy.manualCommandBlockedMessage()).toBe(MANUAL_COMMAND_BLOCKED_MESSAGE);
+    expect(policy.canAssistantReflect()).toBe(true);
 
-    // « Plus tard » : le travail repart immédiatement (promesse du message).
+    // « Plus tard » ferme l'écran sans rien changer au terrain (déjà libre) et
+    // SANS effacer l'information : le rappel de statut reste visible.
     els["btn-update-later"].__click();
     expect(modalVisible()).toBe(false);
     expect(win.isUpdateWindowReserved()).toBe(false);
     expect(policy.canSendManualCommand("G:\\IA_PL\\pilot", () => false)).toBe(true);
+    expect(els["status-update-waiting"].classList.contains("hidden")).toBe(false);
+    expect(els["status-update-waiting"].textContent).toContain("non installée");
   });
 
-  it("✕ (fermeture) rend aussi le terrain", async () => {
+  it("✕ (fermeture) libère aussi et laisse le rappel visible", async () => {
     updater.setUpdateWorkProbe(async () => false);
     checkMock.mockResolvedValue(makeUpdate("0.4.41"));
     await updater.checkForUpdate(true);
-    expect(win.isUpdateWindowReserved()).toBe(true);
+    expect(modalVisible()).toBe(true);
     els["update-close"].__click();
+    expect(modalVisible()).toBe(false);
     expect(win.isUpdateWindowReserved()).toBe(false);
+    expect(policy.canStartWork("G:\\IA_PL\\pilot", "write", () => false)).toBe(true);
+    expect(els["status-update-waiting"].classList.contains("hidden")).toBe(false);
   });
 });
 
@@ -346,8 +370,29 @@ describe("c — aucun agent ne démarre pendant l'installation", () => {
 
     releaseInstall();
     await vi.advanceTimersByTimeAsync(50);
-    // Même en cas d'échec/relance de l'installation, le terrain reste réservé
-    // tant que l'écran est ouvert : aucun agent ne démarre sous l'installateur.
+    // Installation ALLÉE AU BOUT (ici : installateur simulé, puis redémarrage) :
+    // le terrain reste réservé, aucun agent ne démarre sous l'installateur ni
+    // avant le redémarrage de Pilot.
     expect(win.isUpdateWindowReserved()).toBe(true);
+  });
+
+  it("installation ÉCHOUÉE : le terrain est rendu (on peut travailler) et le rappel dit « non installée »", async () => {
+    const install = vi.fn(async () => {
+      throw new Error("installateur indisponible");
+    });
+    updater.setUpdateWorkProbe(async () => false);
+    checkMock.mockResolvedValue(makeUpdate("0.4.41", { install }));
+    await updater.checkForUpdate(true);
+
+    els["btn-update-install"].__click();
+    await vi.advanceTimersByTimeAsync(50);
+
+    // L'écran reste affiché (on peut réessayer) mais n'occupe plus le terrain :
+    // une décision de mise à jour ne doit jamais bloquer le travail.
+    expect(modalVisible()).toBe(true);
+    expect(win.isUpdateWindowReserved()).toBe(false);
+    expect(policy.canStartWork("G:\\IA_PL\\pilot", "write", () => false)).toBe(true);
+    expect(els["status-update-waiting"].classList.contains("hidden")).toBe(false);
+    expect(els["status-update-waiting"].textContent).toContain("non installée");
   });
 });

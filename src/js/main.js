@@ -233,7 +233,9 @@ async function executeCommand(id, tabs) {
       break;
     }
     case "check-update":
-      await checkForUpdate(false);
+      // Commande MANUELLE : `force` rouvre l'écran même si la version avait été
+      // reportée par « Plus tard » (l'écran reste consultable à la demande).
+      await checkForUpdate(false, { force: true });
       break;
     case "update-status": {
       // Dire QUAND le dernier contrôle a eu lieu et COMMENT il s'est terminé :

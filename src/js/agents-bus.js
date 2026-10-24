@@ -3198,7 +3198,7 @@ export async function startParallelRun(assignments, projectContext = "", options
   // Lecture partagée : une mission de LECTURE cohabite avec d'autres lectures.
   // Le gardien est le décideur UNIQUE `canStartWork` (run-policy.js) : il ajoute
   // à la politique d'admission la réservation du terrain par la mise à jour de
-  // Pilot (écran de mise à jour ouvert ou installation en cours).
+  // Pilot (INSTALLATION en cours uniquement : l'écran ouvert ne bloque rien).
   if (!canStartWork(runProject, nature, isRunInProgress)) {
     throw new Error(workBlockedMessage());
   }

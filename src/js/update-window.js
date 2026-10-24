@@ -3,8 +3,11 @@
 // Règle du propriétaire (non réinterprétée) :
 //   1. l'écran de mise à jour ne s'affiche que sur un terrain LIBRE (aucun agent
 //      ne travaille) ; si du travail est en cours, il attend ;
-//   2. pendant que l'écran est ouvert, ou pendant qu'une mise à jour
-//      s'installe, AUCUN agent ne démarre ;
+//   2. pendant qu'une mise à jour s'INSTALLE, aucun agent ne démarre. L'écran
+//      simplement OUVERT ne réserve RIEN : on peut travailler tout de suite, la
+//      décision de mise à jour est réversible et peut attendre (décision du
+//      propriétaire, 2026-11 : « l'utilisateur fait la mise à jour, soit il ne la
+//      fait pas — mais il ne doit pas être bloqué en attendant de décider ») ;
 //   3. un travail en cours n'est jamais interrompu : rien ne s'affiche tant
 //      qu'il dure, l'écran arrive de lui-même quand le terrain se libère ;
 //   4. pas d'écran fantôme : la règle est vérifiée AU MOMENT D'AFFICHER, pas
@@ -18,13 +21,21 @@
 
 /** Motifs de réservation du terrain (un seul actif à la fois). */
 export const UPDATE_WINDOW_REASONS = Object.freeze({
-  /** L'écran de mise à jour est affiché (changelog visible). */
+  /**
+   * Écran de mise à jour affiché (changelog visible). Motif CONSERVÉ pour la
+   * compatibilité des appels, mais il ne réserve PLUS le terrain : voir
+   * `reserveUpdateWindow`.
+   */
   WINDOW: "window",
   /** Une mise à jour est en cours d'installation (téléchargement/installateur). */
   INSTALLING: "installing",
 });
 
-/** Refus d'un démarrage pendant que l'écran de mise à jour est ouvert. */
+/**
+ * Refus d'un démarrage pendant que l'écran de mise à jour est ouvert. Texte
+ * HISTORIQUE, conservé pour ne casser aucun import : il n'est plus jamais posé
+ * (l'écran ouvert ne réserve plus le terrain).
+ */
 export const UPDATE_WINDOW_BLOCKED_MESSAGE =
   "⏳ Mise à jour de Pilot : l'écran de mise à jour est ouvert, donc aucun agent ne " +
   "démarre. Choisissez « Plus tard » (le travail repart immédiatement) ou " +
@@ -42,15 +53,19 @@ let _version = "";
 
 /**
  * Réserve le terrain au profit de la mise à jour.
- * @param {string} reason - `UPDATE_WINDOW_REASONS.WINDOW` ou `.INSTALLING`
+ * @param {string} reason - `UPDATE_WINDOW_REASONS.INSTALLING` (seul motif qui
+ *   réserve) ou `.WINDOW` (accepté, ne réserve plus rien)
  * @param {{version?: string}} [info]
- * @returns {string} motif effectivement posé
+ * @returns {string} motif effectivement posé ("" = terrain libre)
  */
 export function reserveUpdateWindow(reason, info = {}) {
-  const known = reason === UPDATE_WINDOW_REASONS.WINDOW || reason === UPDATE_WINDOW_REASONS.INSTALLING;
-  _reason = known ? reason : UPDATE_WINDOW_REASONS.WINDOW;
   const version = info && typeof info.version === "string" ? info.version : "";
   if (version) _version = version;
+  // SEULE une INSTALLATION réelle réserve le terrain. Un appel avec le motif
+  // `WINDOW` (écran simplement affiché) est accepté pour compatibilité mais ne
+  // pose AUCUNE réservation : le simple affichage de l'écran ne doit jamais
+  // empêcher l'utilisateur, l'assistant ou les agents de travailler.
+  _reason = reason === UPDATE_WINDOW_REASONS.INSTALLING ? UPDATE_WINDOW_REASONS.INSTALLING : "";
   return _reason;
 }
 
@@ -64,7 +79,7 @@ export function releaseUpdateWindow() {
   _reason = "";
 }
 
-/** true si la mise à jour occupe le terrain (écran ouvert ou installation). */
+/** true si une INSTALLATION de mise à jour occupe le terrain. */
 export function isUpdateWindowReserved() {
   return _reason !== "";
 }

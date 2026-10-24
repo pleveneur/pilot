@@ -667,14 +667,18 @@ body.theme-light.theme-tokyo-day {
   color: var(--accent, #4fc3f7);
   white-space: nowrap;
   font-weight: 500;
-  /* Le rappel nomme désormais l'agent qui bloque et l'ancienneté du travail :
-     il peut être long. Il est tronqué proprement plutôt que de comprimer le
-     reste de la barre de statut (le texte complet reste en infobulle). */
+  /* Le rappel nomme l'agent qui bloque et l'ancienneté du travail, ou dit que
+     la version n'est pas installée : il peut être long. Il est tronqué
+     proprement plutôt que de comprimer le reste de la barre de statut (le
+     texte complet reste en infobulle). Il est CLIQUABLE : il rouvre l'écran de
+     mise à jour resté en attente (aucune information perdue après un report). */
   max-width: 46ch;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 0 1 auto;
   min-width: 0;
+  /* Cliquable : rouvre l'écran de mise à jour resté en attente. */
+  cursor: pointer;
 }
 
 #status-version {

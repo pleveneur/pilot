@@ -244,21 +244,24 @@ travailles t'est donc proposée **sans redémarrer** l'application.
   message discret te prévient (et un rappel « ⬆ Mise à jour en attente » reste
   dans la barre de statut), puis la fenêtre s'affiche **d'elle-même** dès que la
   tâche est terminée. Tu n'as rien à relancer.
-- **La mise à jour passe avant la tâche suivante** : si des tâches s'enchaînent
-  ou attendent en file, la mise à jour en attente **prend la place à la fin de
-  la tâche en cours**, avant le lancement de la suivante (qui reste en file et
-  repart après). Une mise à jour annoncée ne peut donc plus rester « en attente »
-  indéfiniment parce que le travail ne s'arrête jamais.
-- **Et rien ne démarre pendant la mise à jour** : tant que la fenêtre est
-  ouverte, et pendant l'installation, **aucun agent ne démarre** — un lancement
-  est refusé avec un message clair qui dit quoi faire (choisir **Plus tard**, qui
-  libère tout de suite la place, ou installer, auquel cas le travail repart au
-  redémarrage). Une demande déjà en file d'attente **n'est pas perdue** : elle
-  démarre automatiquement quand la mise à jour ne bloque plus.
+- **Tu restes libre de décider plus tard** : la fenêtre **ouverte ne bloque
+  rien**. Tu peux lui laisser prendre tout l'écran et continuer à travailler :
+  envoyer un message, l'assistant répond, les agents et les tâches en attente
+  continuent. La décision attend ton bon vouloir.
+- **Vous pouvez la revoir quand vous voulez** : après « Plus tard », le rappel
+  « ⬆ Mise à jour … disponible — non installée » reste dans la barre de statut.
+  Un clic dessus, ou palette de commandes → **Vérifier les mises à jour**, rouvre
+  la fenêtre. Rien n'est oublié.
+- **Une seule chose bloque : l'installation** : pendant qu'une mise à jour
+  s'installe, **aucun agent ne démarre** (le message de refus explique quoi
+  faire), et le travail repart au redémarrage de Pilot. Une demande déjà en file
+  d'attente **n'est pas perdue** : elle démarre automatiquement quand
+  l'installation ne bloque plus (ou après « Plus tard » si elle n'a pas été
+  lancée).
 - **« Plus tard » est retenu** : une fois la fenêtre reportée (bouton ou ✕),
-  elle **ne revient plus** pour cette version, même à chaque retour sur Pilot —
-  jusqu'au prochain démarrage. Une version **plus récente** t'est en revanche
-  toujours proposée.
+  elle **ne revient plus d'elle-même** pour cette version, même à chaque retour
+  sur Pilot — jusqu'au prochain démarrage. Une version **plus récente** t'est en
+  revanche toujours proposée.
 - **Une seule installation à la fois** : pendant le téléchargement, le bouton
   reste désactivé et la progression visible, quoi qu'il arrive ; si tu recliques,
   Pilot te le dit au lieu de lancer une seconde installation.

@@ -52,7 +52,9 @@ export function canStartMission(nature, runningNatures) {
  *   1. vérification de la version du moteur `pi` en cours, ou son installation
  *      (`pi-startup-gate.js`) — règle du propriétaire : le travail attend la fin
  *      de la vérification, puis celle de l'installation ;
- *   2. mise à jour de Pilot (écran ouvert ou installation en cours).
+ *   2. installation d'une mise à jour de Pilot en cours (`update-window.js`) —
+ *      l'écran simplement ouvert ne réserve RIEN (décision du propriétaire,
+ *      2026-11 : décision de mise à jour non bloquante et réversible).
  * @returns {boolean}
  */
 export function isTerrainReserved() {

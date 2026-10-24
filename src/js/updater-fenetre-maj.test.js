@@ -78,6 +78,7 @@ function buildDom() {
     "update-close",
     "update-progress-fill",
     "update-progress-label",
+    "status-update-waiting",
   ];
   const map = {};
   for (const id of ids) map[id] = fakeEl();
@@ -172,6 +173,39 @@ describe("Défaut 1 — « Plus tard » est mémorisé", () => {
     await updater.checkForUpdate(true);
     expect(modalVisible()).toBe(true);
     expect(els["update-version"].textContent).toBe("v0.4.41");
+  });
+});
+
+describe("Défaut 3 — l'écran reste CONSULTABLE à la demande (décision réversible)", () => {
+  it("après « Plus tard », la commande manuelle de la palette rouvre l'écran", async () => {
+    checkMock.mockResolvedValue(makeUpdate("0.4.40"));
+    await updater.checkForUpdate(true);
+    expect(modalVisible()).toBe(true);
+
+    els["btn-update-later"].__click();
+    expect(modalVisible()).toBe(false);
+
+    // AVANT correctif : `_dismissedVersion` fermait la porte pour toute la
+    // session, y compris à la demande explicite de l'utilisateur.
+    await updater.checkForUpdate(false, { force: true });
+    expect(modalVisible()).toBe(true);
+    expect(els["update-version"].textContent).toBe("v0.4.40");
+  });
+
+  it("le rappel de la barre de statut n'est plus effacé et rouvre l'écran au clic", async () => {
+    checkMock.mockResolvedValue(makeUpdate("0.4.40"));
+    await updater.checkForUpdate(true);
+    els["btn-update-later"].__click();
+
+    // AVANT correctif : le rappel était effacé (`clearWaitingNotice`), donc
+    // l'information « une mise à jour existe » disparaissait sans retour.
+    expect(els["status-update-waiting"].classList.contains("hidden")).toBe(false);
+    expect(els["status-update-waiting"].textContent).toContain("0.4.40");
+    expect(els["status-update-waiting"].textContent).toContain("non installée");
+
+    els["status-update-waiting"].__click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(modalVisible()).toBe(true);
   });
 });
 
