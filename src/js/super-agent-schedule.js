@@ -8,6 +8,61 @@ export function shouldScheduleTick(open) {
   return open === true;
 }
 
+// DÉCISION UNIQUE d'injection des relances dues (une passe de tick).
+//
+// Deux règles, écrites ici et NULLE PART ailleurs (le ticker de super-agent.js
+// ne fait qu'exécuter le plan rendu) :
+//
+//  1. RÉGLAGE DU PROPRIÉTAIRE « Vérifier les points à faire à l'ouverture de la
+//     session (relances programmées) » (`super_agent_auto_check_startup`,
+//     DÉSACTIVÉ par défaut — index.html, case `setting-superagent-auto-check-startup`).
+//     Sa promesse est explicite : désactivé, « l'Assistant ne lance pas
+//     automatiquement un rappel dû au démarrage ». Le tick démarre à l'ouverture
+//     de l'onglet 🧭 (donc au démarrage de Pilot) et rattrape TOUT le retard
+//     accumulé pendant que Pilot était fermé : sans cette règle, un rappel dû
+//     partait tout seul au démarrage et l'assistant se lançait dans un travail
+//     que personne n'avait demandé (constaté : reprise de chantier + mission
+//     de publication au lancement). Tant que le propriétaire n'a pas lui-même
+//     écrit dans cette session (`ownerEngaged`), un rappel reste DÛ (rien n'est
+//     perdu, aucun marquage) et partira dès qu'il ouvrira la conversation — ou
+//     immédiatement si le réglage est activé.
+//  2. UNE SEULE relance par passe : plusieurs rappels échus ensemble (typique
+//     après une fermeture de plusieurs jours) partaient dans la même passe, à
+//     la suite, chacun ouvrant un vrai tour de génération → assistant occupé et
+//     messages du propriétaire refusés. Les suivants restent DUS et partent aux
+//     passes suivantes (10 s), une fois l'assistant redevenu libre.
+//
+// `backendBusy` et `pendingIds` restent les gardes historiques (assistant en
+// train de répondre, injection déjà en vol).
+//
+// @returns {{toInject: object[], held: object[]}} plan de la passe
+//   (`held` = rappels laissés DUS, jamais perdus, jamais marqués).
+export function planDueReminderInjections(opts) {
+  const {
+    due,
+    pendingIds,
+    backendBusy,
+    autoCheckStartup,
+    ownerEngaged,
+  } = opts || {};
+  const list = Array.isArray(due) ? due : [];
+  const pending = pendingIds instanceof Set ? pendingIds : new Set();
+  const held = [];
+  const eligible = [];
+  const startupAllowed = autoCheckStartup === true || ownerEngaged === true;
+  for (const d of list) {
+    if (!d || d.id === undefined || d.id === null) continue;
+    if (!startupAllowed) { held.push(d); continue; }
+    if (backendBusy) { held.push(d); continue; }
+    if (pending.has(d.id)) { held.push(d); continue; }
+    eligible.push(d);
+  }
+  if (eligible.length > 1) {
+    for (const extra of eligible.slice(1)) held.push(extra);
+  }
+  return { toInject: eligible.slice(0, 1), held };
+}
+
 // Validation miroir de la borne Rust (every >= 60 s). Retourne null si valide,
 // sinon un message d'erreur.
 export function parseScheduleEvery(value) {

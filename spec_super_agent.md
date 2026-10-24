@@ -1308,8 +1308,11 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   lieu de le supprimer, et le **réactive** si le besoin revient.
 - Garde-fous : `every` ≥ 60 s, **max 20** planifications **actives** (un rappel
   désactivé ne compte pas et libère sa place), **1 fire** par
-  planification et par tick, **pas de tick** si l'onglet 🧭 est fermé (session
-  morte — les rappels `every` accumulent un retard, repris à la reprise).
+  planification et par tick, **au plus UNE relance livrée par passe** (deux
+  rappels échus ensemble ne partent plus à la suite : les suivants restent dus et
+  partent aux passes suivantes, 10 s plus tard), **pas de tick** si l'onglet 🧭
+  est fermé (session morte — les rappels `every` accumulent un retard, repris à
+  la reprise).
 - **Échéance** : un rappel créé avec `everySeconds = N` se déclenche pour la
   première fois **N secondes après sa création** (référence `created_at` tant
   qu'il n'a jamais été livré, puis `last_run_at`). `schedule_create` renvoie
@@ -1319,9 +1322,15 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   session (démarrage de Pilot). Ce comportement est contrôlé par le réglage
   **Paramètres → Assistant → « Vérifier les points à faire à l'ouverture de la
   session (relances programmées) »** (désactivé par défaut). Tant qu'il est
-  désactivé, les rappels dus ne sont injectés que si l'utilisateur les demande
-  explicitement ; il faut valider ce réglage pour que l'Assistant les vérifie
-  automatiquement à chaque ouverture de session.
+  désactivé, un rappel dû **reste dû** (jamais perdu, jamais marqué) et n'est
+  injecté qu'à partir du moment où **vous avez vous-même écrit** dans la
+  conversation de cette session — c'est vous qui ouvrez le sujet. Il faut
+  valider ce réglage pour que l'Assistant vérifie les rappels dus **dès**
+  l'ouverture de session, sans attendre votre premier message.
+  Décision écrite à **un seul endroit** : `planDueReminderInjections`
+  (`src/js/super-agent-schedule.js`), appliquée par le ticker de
+  `src/js/super-agent.js` ; verrou de branchement dans
+  `src/js/super-agent-schedule.test.js`.
 - Stockage : table `assistant_schedules` de la base `~/.pilot/super-agent.db`.
   Le rappel est injecté dans la conversation de l'assistant à l'échéance (pas de
   notification OS). Son **affichage ne passe pas par une bulle au milieu du

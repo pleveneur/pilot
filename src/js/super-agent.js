@@ -49,7 +49,7 @@ import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from 
 import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
-import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
+import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections } from "./super-agent-schedule.js";
 import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility } from "./agent-activity.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
@@ -3645,6 +3645,11 @@ export async function createSuperAgent(container) {
     if (voiceActive) stopVoiceInput();
     inputEl.value = "";
     inputEl.style.height = "auto";
+    // Le propriétaire a lui-même ouvert la conversation de cette session : les
+    // relances programmées dues peuvent désormais être remises sans attendre
+    // l'activation du réglage « Vérifier les points à faire à l'ouverture »
+    // (décision prise dans `planDueReminderInjections`).
+    ownerEngagedThisSession = true;
     const userBubble = appendMessage(messagesEl, "user", text);
     // Snapshot des badges projet (chantier badge-par-bulle) : capturé ICI, au
     // moment de l'envoi = UNIQUEMENT les projets explicitement nommés dans la
@@ -3965,23 +3970,34 @@ let scheduleTicker = null;
 // rappel est marqué livré.
 const pendingReminderIds = new Set();
 
+// RÉGLAGE « Vérifier les points à faire à l'ouverture de la session » : le
+// propriétaire a-t-il LUI-MÊME écrit dans la conversation depuis l'ouverture de
+// cette session ? Faux à chaque ouverture du ticker (donc au démarrage de
+// Pilot) et dès que l'onglet 🧭 est recréé. Remis à vrai au premier message
+// envoyé par le propriétaire (send()). La décision d'injecter ou de retenir un
+// rappel dû est prise par `planDueReminderInjections` (super-agent-schedule.js),
+// qui est le SEUL endroit où cette règle est écrite.
+let ownerEngagedThisSession = false;
+
 async function scheduleTick() {
   if (!shouldScheduleTick(window._pilotSuperAgentOpen)) return;
-  // Issue #134 : le réglage super_agent_auto_check_startup ne gouverne QUE le
-  // lancement automatique à l'ouverture de session (géré ailleurs), pas le tick
-  // périodique. Le tick doit toujours s'exécuter quand l'onglet assistant est
-  // ouvert.
+  // Issue #134 : le réglage super_agent_auto_check_startup gouverne le lancement
+  // automatique d'un rappel dû AU DÉMARRAGE (promesse du réglage). Le tick
+  // périodique continue de tourner, mais il ne remet une relance due qu'à
+  // l'assistant libre ET — au démarrage — seulement si le propriétaire l'a
+  // demandé (réglage activé) ou s'il a lui-même ouvert la conversation.
   try {
     const res = await invoke("super_agent_schedule_tick");
-    const due = (res && res.due) || [];
-    for (const d of due) {
-      // Issue #135 : ne pas re-injecter un rappel déjà en cours d'injection.
-      if (pendingReminderIds.has(d.id)) continue;
-      // Si l'assistant est occupé (en train de rédiger/afficher sa réponse), on
-      // n'injecte PAS et on ne marque PAS : le rappel reste « dû » et sera
-      // rejoué au tick suivant, une fois l'assistant libre. Évite de perdre le
-      // rappel (le prompt serait ignoré par un assistant occupé).
-      if (backendBusy) continue;
+    const { toInject } = planDueReminderInjections({
+      due: (res && res.due) || [],
+      pendingIds: pendingReminderIds,
+      backendBusy,
+      autoCheckStartup: configCache.super_agent_auto_check_startup === true,
+      ownerEngaged: ownerEngagedThisSession,
+    });
+    // Rien à remettre : les rappels retenus restent DUS (jamais marqués) et
+    // seront représentés à la passe suivante (10 s) dans les mêmes conditions.
+    for (const d of toInject) {
       pendingReminderIds.add(d.id);
       try {
         await invoke("send_super_agent_command", {
@@ -4008,6 +4024,9 @@ async function scheduleTick() {
 
 function startScheduleTicker() {
   if (scheduleTicker) return;
+  // Ouverture d'une SESSION de conversation : le propriétaire n'a encore rien
+  // écrit (cf. règle du réglage « points à faire à l'ouverture »).
+  ownerEngagedThisSession = false;
   scheduleTicker = setInterval(scheduleTick, SCHEDULE_TICK_INTERVAL_MS);
 }
 
