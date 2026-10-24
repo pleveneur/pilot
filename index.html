@@ -1083,7 +1083,15 @@
               <span id="read-aloud-voice-note" role="note">Le bouton &laquo;&nbsp;&Eacute;couter&nbsp;&raquo; lit la seule r&eacute;ponse finale de la conversation, jamais le travail interne. Rien n'est lu automatiquement, et une seule lecture tourne &agrave; la fois.</span>
             </div>
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
-              <span id="read-aloud-local-note" role="note">Voix fran&ccedil;aise locale (hors ligne, sans cl&eacute;, sans carte graphique)&nbsp;: choisissez-la dans la liste ci-dessus. Pilot v&eacute;rifie le moteur et le mod&egrave;le &agrave; l'ouverture des Param&egrave;tres, et indique o&ugrave; les d&eacute;poser s'ils manquent.</span>
+              <span id="read-aloud-local-note" role="note">Voix fran&ccedil;aise locale (hors ligne, sans cl&eacute;, sans carte graphique)&nbsp;: choisissez-la dans la liste ci-dessus. Pilot v&eacute;rifie le moteur et le mod&egrave;le choisi, et peut t&eacute;l&eacute;charger le mod&egrave;le manquant sur votre demande explicite (une seule fois).</span>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="read-aloud-download-state" role="status" aria-live="polite"></span>
+            </div>
+            <div class="setting-row setting-row-indent" style="gap:6px;flex-wrap:wrap;">
+              <button type="button" id="btn-read-aloud-download" class="web-btn" style="display:none;" title="T&eacute;l&eacute;charger le mod&egrave;le de la voix choisie, une seule fois, depuis Internet.">T&eacute;l&eacute;charger le mod&egrave;le</button>
+              <button type="button" id="btn-read-aloud-download-cancel" class="web-btn" style="display:none;" title="Arr&ecirc;ter le t&eacute;l&eacute;chargement en cours. Rien n'est supprim&eacute; : le mod&egrave;le d&eacute;j&agrave; pr&eacute;sent reste en place.">&times; Arr&ecirc;ter le t&eacute;l&eacute;chargement</button>
+              <button type="button" id="btn-read-aloud-recheck" class="web-btn" title="Rev&eacute;rifier maintenant la pr&eacute;sence du moteur et du mod&egrave;le (l'&eacute;tat affich&eacute; peut &ecirc;tre p&eacute;rim&eacute;).">V&eacute;rifier &agrave; nouveau</button>
             </div>
           </div>
           <div class="settings-section">

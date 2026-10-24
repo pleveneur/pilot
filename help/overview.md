@@ -347,16 +347,30 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   reste inactive ; le bouton **« 🔊 Écouter »** reste visible mais **inactif**,
   avec une courte infobulle qui l'explique.
 - **Une vraie voix française, sans Internet** : la liste des voix propose aussi
-  **« Voix française locale »**. Elle fonctionne **hors ligne**, **sans clé** et
-  **sans carte graphique**, avec un moteur et un modèle d'environ **60 Mo**
-  déposés **une seule fois** sur votre ordinateur (Pilot ne télécharge rien).
-  La même section indique **où déposer ces fichiers** et si le moteur est prêt.
+  des **voix françaises locales** (une entrée par voix, avec son **genre** écrit
+  en clair — « voix de femme » ou « voix d'homme » — et sa taille). Elles
+  fonctionnent **hors ligne**, **sans clé** et **sans carte graphique**.
+- **Rien n'est téléchargé sans votre accord** : la section indique si le moteur
+  et le modèle de la voix choisie sont en place, et propose **« Télécharger le
+  modèle »**. Le téléchargement ne part que d'un **geste** (ce bouton, ou le
+  choix d'une voix dont le modèle manque), **un seul modèle à la fois**. Votre
+  choix est enregistré même si le modèle n'est pas encore là, et il reste
+  utilisable dès qu'il est téléchargé.
+- **Le téléchargement s'affiche et s'arrête** : la section montre la **taille**
+  et la **progression** (« 26,0 Mo / 60,6 Mo, 42 % »), puis « installation
+  terminée » ou l'échec. Un bouton **« × Arrêter le téléchargement »**
+  interrompt un téléchargement en cours, et **« Vérifier à nouveau »** revérifie
+  à tout moment la présence du moteur et du modèle. **Rien n'est supprimé** :
+  le fichier déjà présent reste en place, et un téléchargement interrompu
+  reprend là où il s'était arrêté.
 - **Si le moteur local est absent ou échoue**, la lecture ne s'arrête pas : elle
   **continue avec la voix du système** et le dit clairement dans la section,
   avec une ligne dans un **journal** (dossier de la voix locale). Rien ne bloque,
   rien ne plante.
 - **Le choix reste le même qu'avant** : une seule voix à la fois, mémorisée,
   et le texte lu est nettoyé et découpé de la même façon quel que soit le moteur.
+  Une configuration enregistrée avant cette évolution continue de fonctionner
+  telle quelle (elle désigne la voix locale par défaut).
 - **Vos propres messages** et les **événements système** ne portent pas ce
   bouton.
 - **Ce que ça ne fait pas** : enregistrer le son dans un fichier, ni envoyer le

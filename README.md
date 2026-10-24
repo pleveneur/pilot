@@ -102,9 +102,12 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   si la voix choisie disparaît de l'ordinateur, Pilot revient proprement à la voix automatique.
 - Aucune voix installée sur le poste : le réglage est inactif et le bouton reste visible mais
   inactif, avec une phrase qui explique quoi faire.
-- **Vraie voix française, hors ligne** : la liste propose une **voix française locale** (moteur
-  et modèle d'environ **60 Mo**, déposés une fois sur l'ordinateur). Elle fonctionne **sans
-  Internet, sans clé et sans carte graphique** ; la section indique **où déposer les fichiers**.
+- **Vraies voix françaises, hors ligne** : la liste propose des **voix françaises locales** (une entrée
+  par voix, avec son **genre** écrit en clair — voix de femme ou voix d'homme — et sa taille). Elles
+  fonctionnent **sans Internet, sans clé et sans carte graphique**. La section indique **où sont les
+  fichiers**, et un bouton **« Télécharger le modèle »** récupère celui de la voix choisie (**un seul
+  modèle à la fois**, jamais sans votre accord) avec la **taille et la progression** affichées, un bouton
+  **« Arrêter le téléchargement »** et un bouton **« Vérifier à nouveau »**. Rien n'est jamais supprimé.
   Si le moteur manque ou échoue, la lecture **continue avec la voix du système** et le dit
   clairement (aucun blocage, rien ne plante).
 

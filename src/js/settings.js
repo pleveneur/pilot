@@ -40,7 +40,19 @@ import {
 } from "./read-aloud.js";
 // Voix française LOCALE (Piper, hors ligne) : le statut du moteur et le libellé
 // de son choix viennent d'un seul module — aucune valeur recopiée ici.
-import { getLocalVoiceStatus, refreshLocalVoiceStatus } from "./local-voice.js";
+import {
+  LOCAL_VOICE_DOWNLOAD_EVENT,
+  LOCAL_VOICE_MODELS,
+  cancelLocalVoiceDownload,
+  downloadLocalVoiceModel,
+  downloadProgressText,
+  formatMegabytes,
+  isLocalVoiceChoice,
+  localVoiceModelFor,
+  localVoiceStatusFor,
+  refreshLocalVoiceDownloadState,
+  refreshLocalVoiceStatus,
+} from "./local-voice.js";
 
 let currentConfig = null;
 
@@ -484,12 +496,18 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
           ? String(currentConfig.read_aloud_voice)
           : ""
         : String(choice);
-    renderReadAloudVoice(wanted, getLocalVoiceStatus());
-    // Statut du moteur local : demandé UNE fois, puis la section est re-rendue.
-    // Jamais bloquant : sans réponse, la voix du système reste utilisable.
-    if (!getLocalVoiceStatus()) {
-      refreshLocalVoiceStatus().then((status) => {
-        if (status) renderReadAloudVoice(wanted, status);
+    const model = localVoiceModelFor(wanted);
+    renderReadAloudVoice(wanted, model ? localVoiceStatusFor(model) : null);
+    // Statut du moteur pour LA voix concernée : demandé UNE fois, puis la
+    // section est re-rendue. Jamais bloquant : sans réponse, la voix du système
+    // reste utilisable.
+    if (model && !localVoiceStatusFor(model)) {
+      refreshLocalVoiceStatus({ model }).then((status) => {
+        if (status && isLocalVoiceChoice(selectReadAloudVoice.value)) {
+          renderReadAloudVoice(selectReadAloudVoice.value, status);
+        } else if (status) {
+          renderReadAloudVoice(wanted, status);
+        }
       });
     }
   }
@@ -498,7 +516,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
    * Rendu réel de la section « Lecture des réponses » pour un état du moteur
    * local donné (null = pas encore connu).
    * @param {string} wanted valeur demandée (réglage enregistré ou choix en cours)
-   * @param {object|null} local état du moteur de voix locale
+   * @param {object|null} local état du moteur de voix locale (pour ce modèle)
    */
   function renderReadAloudVoice(wanted, local) {
     if (!selectReadAloudVoice) return;
@@ -524,12 +542,13 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
       readAloudLocalNote.dataset.state = local && local.installed ? "ok" : "missing";
     }
     showReadAloudState(lastReadAloudState);
+    showDownloadState(downloadState);
     // Liste vide au premier instant (voix encore en chargement) : on re-tente
     // une fois après l'attente habituelle, sans jamais bloquer la modale.
     if (!voices.length) {
       ensureVoices(globalThis.window ? globalThis.window.speechSynthesis : null, VOICES_WAIT_MS).then((list) => {
         if (list && list.length && selectReadAloudVoice) {
-          renderReadAloudVoice(wanted, getLocalVoiceStatus());
+          renderReadAloudVoice(wanted, local);
         }
       });
     }
@@ -547,6 +566,73 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
       return `${local.hint} Moteur et modèle se trouvent dans « ${local.dir} ».`;
     }
     return local.hint;
+  }
+
+  // ── Téléchargement d'un modèle de voix locale (GESTE EXPLICITE seulement) ──
+  // Aucun téléchargement au démarrage, à l'ouverture des Paramètres, ni pendant
+  // une lecture : il part d'un geste (bouton « Télécharger » ou choix d'une voix
+  // dont le modèle manque). L'état est visible, l'arrêt possible, et la
+  // vérification peut être relancée (un état mémorisé peut être périmé).
+  /** Dernier état de téléchargement connu (null = rien demandé). */
+  let downloadState = null;
+
+  /**
+   * Affiche l'état du téléchargement et l'état des boutons (télécharger,
+   * arrêter, vérifier à nouveau).
+   * @param {object|null} state
+   */
+  function showDownloadState(state) {
+    downloadState = state || null;
+    const running = !!(downloadState && downloadState.running);
+    if (readAloudDownloadState) {
+      readAloudDownloadState.textContent = downloadProgressText(downloadState);
+      readAloudDownloadState.dataset.state = !downloadState
+        ? ""
+        : running
+          ? "running"
+          : downloadState.outcome || "";
+    }
+    const model = currentReadAloudModel();
+    const local = model ? localVoiceStatusFor(model) : null;
+    const missing = !!model && !(local && local.installed);
+    if (btnReadAloudDownload) {
+      btnReadAloudDownload.style.display = missing ? "" : "none";
+      btnReadAloudDownload.disabled = !missing || running;
+      const size = model ? (LOCAL_VOICE_MODELS.find((m) => m.model === model) || {}).bytes : 0;
+      btnReadAloudDownload.title = model
+        ? `Télécharge une seule fois le modèle ${model} (${formatMegabytes(size)}) depuis Internet. Rien n'est téléchargé sans ce geste, et le modèle reste ensuite sur l'ordinateur.`
+        : "";
+    }
+    if (btnReadAloudDownloadCancel) {
+      btnReadAloudDownloadCancel.style.display = running ? "" : "none";
+    }
+    if (btnReadAloudRecheck) btnReadAloudRecheck.disabled = running;
+  }
+
+  /** Modèle local actuellement sélectionné (null si la voix n'est pas locale). */
+  function currentReadAloudModel() {
+    return localVoiceModelFor(selectReadAloudVoice ? selectReadAloudVoice.value : "");
+  }
+
+  /**
+   * Lance le téléchargement du modèle de la voix sélectionnée — uniquement
+   * appelé par un geste de l'utilisateur.
+   * @param {boolean} [gesture] vrai si l'appel vient d'un geste explicite
+   */
+  async function startReadAloudDownload(gesture) {
+    const model = currentReadAloudModel();
+    if (!model || gesture !== true) return;
+    if (downloadState && downloadState.running) return;
+    showDownloadState({ model, running: true, percent: null, bytes: 0, bytes_total: 0 });
+    const state = await downloadLocalVoiceModel(model);
+    showDownloadState(state);
+    const status = await refreshLocalVoiceStatus({ model });
+    if (status) renderReadAloudVoice(selectReadAloudVoice.value, status);
+    if (state && state.outcome === "done") {
+      showToast(`Modèle ${model} installé : lecture hors ligne disponible.`);
+    } else if (state && state.message) {
+      showToast(state.message, state.outcome === "cancelled" ? "warning" : "error");
+    }
   }
   const chkSuperAgentThinking = document.getElementById("setting-superagent-thinking");
   // T6 : niveau de réflexion de l'Assistant ("" = non réglé → repli sur le
@@ -566,6 +652,11 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const readAloudVoiceNote = document.getElementById("read-aloud-voice-note");
   // Ligne d'état du MOTEUR DE VOIX LOCALE (même section, même endroit unique).
   const readAloudLocalNote = document.getElementById("read-aloud-local-note");
+  // Téléchargement du modèle de la voix locale : état, bouton, arrêt, revérif.
+  const readAloudDownloadState = document.getElementById("read-aloud-download-state");
+  const btnReadAloudDownload = document.getElementById("btn-read-aloud-download");
+  const btnReadAloudDownloadCancel = document.getElementById("btn-read-aloud-download-cancel");
+  const btnReadAloudRecheck = document.getElementById("btn-read-aloud-recheck");
   // Dernier etat de lecture connu : la ligne d'etat de la section « Lecture des
   // reponses » le reprend a chaque ouverture de la modale.
   let lastReadAloudState = "";
@@ -1423,6 +1514,11 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   if (assistantSoundVolumeLabel) assistantSoundVolumeLabel.textContent = `${inputAssistantSoundVolume ? inputAssistantSoundVolume.value : 100} %`;
   // Section « Lecture des reponses » : choix de la voix + etat + explication.
   refreshReadAloudVoice(currentConfig && currentConfig.read_aloud_voice);
+  // État du DERNIER téléchargement de modèle : relu, jamais relancé (aucun geste
+  // ici — un téléchargement ne part que d'un clic ou d'un choix de voix).
+  refreshLocalVoiceDownloadState().then((state) => {
+    if (state && (state.running || state.outcome)) showDownloadState(state);
+  });
   if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
   if (chkSuperAgentCoordinator) chkSuperAgentCoordinator.checked = currentConfig.super_agent_coordinator === true;
   if (chkSuperAgentUserFriendly) chkSuperAgentUserFriendly.checked = currentConfig.super_agent_user_friendly === true;
@@ -1563,7 +1659,49 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   if (selectReadAloudVoice) {
     selectReadAloudVoice.addEventListener("change", () => {
       refreshReadAloudVoice(selectReadAloudVoice.value);
+      // GESTE EXPLICITE : choisir une voix locale dont le modèle manque lance son
+      // téléchargement (état visible, arrêt possible). Aucun autre chemin ne
+      // déclenche de téléchargement.
+      const model = currentReadAloudModel();
+      const local = model ? localVoiceStatusFor(model) : null;
+      if (model && !(local && local.installed) && !(downloadState && downloadState.running)) {
+        startReadAloudDownload(true);
+      }
     });
+  }
+  // Bouton « Télécharger le modèle » (geste explicite).
+  if (btnReadAloudDownload) {
+    btnReadAloudDownload.addEventListener("click", () => startReadAloudDownload(true));
+  }
+  // Bouton d'arrêt du téléchargement en cours (rien n'est supprimé).
+  if (btnReadAloudDownloadCancel) {
+    btnReadAloudDownloadCancel.addEventListener("click", async () => {
+      showDownloadState(await cancelLocalVoiceDownload());
+    });
+  }
+  // Bouton « Vérifier à nouveau » : un état mémorisé peut être périmé (fichiers
+  // déposés à la main, modèle installé pendant que Pilot tournait).
+  if (btnReadAloudRecheck) {
+    btnReadAloudRecheck.addEventListener("click", async () => {
+      const model = currentReadAloudModel();
+      const state = await refreshLocalVoiceDownloadState();
+      if (state && (state.running || state.outcome)) showDownloadState(state);
+      if (!model) {
+        const fallback = await refreshLocalVoiceStatus({});
+        if (fallback) renderReadAloudVoice(selectReadAloudVoice.value, fallback);
+        return;
+      }
+      const status = await refreshLocalVoiceStatus({ model });
+      if (status) renderReadAloudVoice(selectReadAloudVoice.value, status);
+    });
+  }
+  // Progression poussée par le moteur local (un seul abonnement, jamais bloquant).
+  const unlistenDownload = listen(LOCAL_VOICE_DOWNLOAD_EVENT, (event) => {
+    if (!event || !event.payload) return;
+    showDownloadState(event.payload);
+  });
+  if (unlistenDownload && typeof unlistenDownload.catch === "function") {
+    unlistenDownload.catch(() => {});
   }
   // Etat de la lecture (ligne de la section) : alimente par read-aloud.js.
   window.addEventListener(READ_ALOUD_STATE_EVENT, (event) => {

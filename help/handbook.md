@@ -342,16 +342,30 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   reste inactive ; le bouton **« 🔊 Écouter »** reste visible mais **inactif**,
   avec une courte infobulle qui l'explique.
 - **Une vraie voix française, sans Internet** : la liste des voix propose aussi
-  **« Voix française locale »**. Elle fonctionne **hors ligne**, **sans clé** et
-  **sans carte graphique**, avec un moteur et un modèle d'environ **60 Mo**
-  déposés **une seule fois** sur votre ordinateur (Pilot ne télécharge rien).
-  La même section indique **où déposer ces fichiers** et si le moteur est prêt.
+  des **voix françaises locales** (une entrée par voix, avec son **genre** écrit
+  en clair — « voix de femme » ou « voix d'homme » — et sa taille). Elles
+  fonctionnent **hors ligne**, **sans clé** et **sans carte graphique**.
+- **Rien n'est téléchargé sans votre accord** : la section indique si le moteur
+  et le modèle de la voix choisie sont en place, et propose **« Télécharger le
+  modèle »**. Le téléchargement ne part que d'un **geste** (ce bouton, ou le
+  choix d'une voix dont le modèle manque), **un seul modèle à la fois**. Votre
+  choix est enregistré même si le modèle n'est pas encore là, et il reste
+  utilisable dès qu'il est téléchargé.
+- **Le téléchargement s'affiche et s'arrête** : la section montre la **taille**
+  et la **progression** (« 26,0 Mo / 60,6 Mo, 42 % »), puis « installation
+  terminée » ou l'échec. Un bouton **« × Arrêter le téléchargement »**
+  interrompt un téléchargement en cours, et **« Vérifier à nouveau »** revérifie
+  à tout moment la présence du moteur et du modèle. **Rien n'est supprimé** :
+  le fichier déjà présent reste en place, et un téléchargement interrompu
+  reprend là où il s'était arrêté.
 - **Si le moteur local est absent ou échoue**, la lecture ne s'arrête pas : elle
   **continue avec la voix du système** et le dit clairement dans la section,
   avec une ligne dans un **journal** (dossier de la voix locale). Rien ne bloque,
   rien ne plante.
 - **Le choix reste le même qu'avant** : une seule voix à la fois, mémorisée,
   et le texte lu est nettoyé et découpé de la même façon quel que soit le moteur.
+  Une configuration enregistrée avant cette évolution continue de fonctionner
+  telle quelle (elle désigne la voix locale par défaut).
 - **Vos propres messages** et les **événements système** ne portent pas ce
   bouton.
 - **Ce que ça ne fait pas** : enregistrer le son dans un fichier, ni envoyer le
@@ -2600,8 +2614,11 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   lieu de le supprimer, et le **réactive** si le besoin revient.
 - Garde-fous : `every` ≥ 60 s, **max 20** planifications **actives** (un rappel
   désactivé ne compte pas et libère sa place), **1 fire** par
-  planification et par tick, **pas de tick** si l'onglet 🧭 est fermé (session
-  morte — les rappels `every` accumulent un retard, repris à la reprise).
+  planification et par tick, **au plus UNE relance livrée par passe** (deux
+  rappels échus ensemble ne partent plus à la suite : les suivants restent dus et
+  partent aux passes suivantes, 10 s plus tard), **pas de tick** si l'onglet 🧭
+  est fermé (session morte — les rappels `every` accumulent un retard, repris à
+  la reprise).
 - **Échéance** : un rappel créé avec `everySeconds = N` se déclenche pour la
   première fois **N secondes après sa création** (référence `created_at` tant
   qu'il n'a jamais été livré, puis `last_run_at`). `schedule_create` renvoie
@@ -2611,9 +2628,15 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   session (démarrage de Pilot). Ce comportement est contrôlé par le réglage
   **Paramètres → Assistant → « Vérifier les points à faire à l'ouverture de la
   session (relances programmées) »** (désactivé par défaut). Tant qu'il est
-  désactivé, les rappels dus ne sont injectés que si l'utilisateur les demande
-  explicitement ; il faut valider ce réglage pour que l'Assistant les vérifie
-  automatiquement à chaque ouverture de session.
+  désactivé, un rappel dû **reste dû** (jamais perdu, jamais marqué) et n'est
+  injecté qu'à partir du moment où **vous avez vous-même écrit** dans la
+  conversation de cette session — c'est vous qui ouvrez le sujet. Il faut
+  valider ce réglage pour que l'Assistant vérifie les rappels dus **dès**
+  l'ouverture de session, sans attendre votre premier message.
+  Décision écrite à **un seul endroit** : `planDueReminderInjections`
+  (`src/js/super-agent-schedule.js`), appliquée par le ticker de
+  `src/js/super-agent.js` ; verrou de branchement dans
+  `src/js/super-agent-schedule.test.js`.
 - Stockage : table `assistant_schedules` de la base `~/.pilot/super-agent.db`.
   Le rappel est injecté dans la conversation de l'assistant à l'échéance (pas de
   notification OS). Son **affichage ne passe pas par une bulle au milieu du

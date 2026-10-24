@@ -72,9 +72,12 @@ import {
   LOCAL_VOICE_VALUE,
   getLocalVoiceStatus,
   isLocalVoiceChoice,
-  isLocalVoiceInstalled,
+  isLocalVoiceInstalledFor,
   localVoiceChoiceLabel,
+  localVoiceChoices,
   localVoiceMissingHint,
+  localVoiceModelFor,
+  localVoiceStatusFor,
   logLocalVoice,
   playLocalChunks,
   refreshLocalVoiceStatus,
@@ -330,10 +333,21 @@ export function voiceChoiceOptions(voices, local) {
   const list = (Array.isArray(voices) ? voices : []).filter(Boolean).slice();
   const autoLabel = "Automatique (voix de la langue de l'interface)";
   const options = [{ value: AUTO_VOICE_VALUE, label: autoLabel }];
-  // Voix francaise LOCALE : proposee juste apres « automatique » des que
-  // l'appelant fournit l'etat du moteur local (Parametres). Le libelle dit
-  // franchement « non installee » quand c'est le cas : aucun choix fantome.
-  if (local) options.push({ value: LOCAL_VOICE_VALUE, label: localVoiceChoiceLabel(local) });
+  // Voix francaises LOCALES : proposees juste apres « automatique » des que
+  // l'appelant fournit l'etat du moteur local (Parametres). Une entree par
+  // modele, libelle en clair (« voix d'homme » / « voix de femme ») : aucun
+  // choix fantome, aucun modele invente. Le premier est celui que designe la
+  // valeur historique du reglage (compatibilite d'une configuration deja
+  // enregistree).
+  if (local) {
+    const statusModel = String((local && local.voice) || "");
+    for (const entry of localVoiceChoices()) {
+      const known = !statusModel || statusModel === entry.model;
+      const label =
+        entry.value === LOCAL_VOICE_VALUE && known ? localVoiceChoiceLabel(local) : entry.label;
+      options.push({ value: entry.value, label });
+    }
+  }
   list.sort((a, b) => {
     const la = String(a.lang || "");
     const lb = String(b.lang || "");
@@ -363,19 +377,24 @@ export function voiceChoiceOptions(voices, local) {
 export function voiceChoiceStatus(voices, choice, local) {
   const list = (Array.isArray(voices) ? voices : []).filter(Boolean);
   const wanted = String(choice == null ? "" : choice).trim();
-  const localInstalled = !!(local && local.installed);
+  const localModel = localVoiceModelFor(wanted);
+  // Un etat de moteur ne concerne qu'UN modele : un etat portant un autre nom de
+  // modele n'est jamais utilise pour juger la voix demandee.
+  const statusModel = String((local && local.voice) || "");
+  const localInstalled =
+    !!(local && local.installed) && (!statusModel || statusModel === localModel);
   // Choix de la voix locale : le choix est CONSERVE (il ne se perd pas si le
-  // moteur est installe plus tard), et la note dit clairement ce qui se passe
+  // modele est telecharge plus tard), et la note dit clairement ce qui se passe
   // pendant ce temps (lecture avec la voix du systeme).
-  if (isLocalVoiceChoice(wanted)) {
+  if (localModel) {
     if (localInstalled) {
-      return { kind: "ok", hint: LOCAL_VOICE_READY_HINT, missing: "", value: LOCAL_VOICE_VALUE };
+      return { kind: "ok", hint: LOCAL_VOICE_READY_HINT, missing: "", value: wanted };
     }
     return {
       kind: "local-missing",
       hint: localVoiceMissingHint(local && local.dir),
       missing: "",
-      value: LOCAL_VOICE_VALUE,
+      value: wanted,
     };
   }
   if (!list.length) {
@@ -651,12 +670,17 @@ export function createSpeaker(win, options = {}) {
     // absent, synthese en echec, audio refuse -> une ligne dans le journal, un
     // etat clair, puis lecture avec la voix du systeme (jamais de blocage).
     if (isLocalVoiceChoice(choice)) {
-      const local = getLocalVoiceStatus() || (await refreshLocalVoiceStatus(options));
+      // Voix locale CHOISIE : chaque modele a son propre etat (un modele present
+      // ne vaut pas pour un autre).
+      const localModel = localVoiceModelFor(choice);
+      const cached = localVoiceStatusFor(localModel);
+      const local = cached || (await refreshLocalVoiceStatus({ ...options, model: localModel }));
       if (token.stopped || currentPlayback !== playback) return false;
       if (local && local.installed) {
         const outcome = await playLocalChunks({
           win: w,
           chunks,
+          model: localModel,
           invoke: options.invoke,
           isCancelled: () => token.stopped || currentPlayback !== playback,
           onStopRegister: (fn) => extraStops.push(fn),
@@ -908,7 +932,7 @@ export function createReadAloudButton({ doc, win, getText, lang, invoke, refresh
     if (list && list.length) return;
     // La voix francaise LOCALE installee rend la lecture possible meme sans
     // aucune voix du systeme : dans ce cas on ne desactive pas le bouton.
-    if (isLocalVoiceChoice(getPreferredVoiceName()) && isLocalVoiceInstalled()) return;
+    if (isLocalVoiceChoice(getPreferredVoiceName()) && isLocalVoiceInstalledFor(localVoiceModelFor(getPreferredVoiceName()))) return;
     // Jamais pendant une lecture : on ne desactive pas un bouton qui parle.
     const state = button.dataset.readState;
     if (state === "speaking" || state === "unavailable") return;
@@ -945,7 +969,7 @@ export function createReadAloudButton({ doc, win, getText, lang, invoke, refresh
   // Statut du moteur de voix locale : demande UNE fois, sans bloquer. Il sert a
   // ne pas desactiver le bouton quand la voix locale est choisie et prete.
   if (isLocalVoiceChoice(getPreferredVoiceName()) && !getLocalVoiceStatus()) {
-    refreshLocalVoiceStatus({ invoke }).then((status) => {
+    refreshLocalVoiceStatus({ invoke, model: localVoiceModelFor(getPreferredVoiceName()) }).then((status) => {
       if (!status || !status.installed) return;
       if (button.dataset.readState !== "novoice") return;
       button.disabled = false;

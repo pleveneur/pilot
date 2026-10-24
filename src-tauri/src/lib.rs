@@ -84,6 +84,7 @@ mod vault;
 // Voix française LOCALE (hors ligne, sans clé, sans GPU) de la lecture à voix
 // haute : moteur Piper + modèle ~63 Mo. Repli visible et journalisé si absent.
 mod tts_local;
+mod tts_local_download;
 mod pi_update;
 mod project_agents;
 mod db;
@@ -3505,6 +3506,9 @@ pub fn run() {
             tts_local::tts_local_status,
             tts_local::tts_local_synthesize,
             tts_local::tts_local_log,
+            tts_local_download::tts_local_download,
+            tts_local_download::tts_local_cancel_download,
+            tts_local_download::tts_local_download_state,
             telegram::telegram_notify,
             telegram::telegram_send_buttons,
             telegram::telegram_edit_message,
