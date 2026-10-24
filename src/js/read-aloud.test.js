@@ -161,7 +161,18 @@ vi.mock("./agents-bus.js", () => ({
 }));
 vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
 vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
-vi.mock("./super-agent-schedule.js", () => ({ shouldScheduleTick: vi.fn(), parseScheduleEvery: vi.fn() }));
+// Mock COMPLET des exports de super-agent-schedule.js : le module reel est
+// importe au chargement et son garde de retenue est cree au niveau module.
+vi.mock("./super-agent-schedule.js", () => ({
+  shouldScheduleTick: vi.fn(),
+  parseScheduleEvery: vi.fn(),
+  formatReminderNotificationLabel: vi.fn(),
+  planDueReminderInjections: vi.fn(() => ({ toInject: [], mode: "none", held: [], waitingForOwner: 0 })),
+  buildReminderInjectionMessage: vi.fn(),
+  formatReminderGroupNotificationLabel: vi.fn(),
+  formatReminderHoldNotice: vi.fn(),
+  createReminderHoldGuard: vi.fn(() => ({ reset() {}, shouldNotify: () => false })),
+}));
 
 const {
   markupToSpeech,

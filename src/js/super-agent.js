@@ -49,7 +49,7 @@ import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from 
 import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
-import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections } from "./super-agent-schedule.js";
+import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections, buildReminderInjectionMessage, formatReminderGroupNotificationLabel, formatReminderHoldNotice, createReminderHoldGuard } from "./super-agent-schedule.js";
 // MÉNAGE DES RAPPELS : décision UNIQUE (pures) des rappels devenus inutiles —
 // mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
 // « Supprimer les rappels inutiles » de Paramètres → Assistant.
@@ -3649,11 +3649,11 @@ export async function createSuperAgent(container) {
     if (voiceActive) stopVoiceInput();
     inputEl.value = "";
     inputEl.style.height = "auto";
-    // Le propriétaire a lui-même ouvert la conversation de cette session : les
-    // relances programmées dues peuvent désormais être remises sans attendre
-    // l'activation du réglage « Vérifier les points à faire à l'ouverture »
-    // (décision prise dans `planDueReminderInjections`).
-    ownerEngagedThisSession = true;
+    // L'ENGAGEMENT du propriétaire (défaut 1 de la relecture) n'est PAS posé ici :
+    // il l'est par le SIGNAL UNIQUE émis côté Rust dans
+    // `do_send_super_agent_prompt` (évènement `pilot-superagent-owner-engaged`),
+    // qui couvre la saisie directe ET le prompt venu du web distant. Un seul
+    // drapeau, un seul posé.
     const userBubble = appendMessage(messagesEl, "user", text);
     // Snapshot des badges projet (chantier badge-par-bulle) : capturé ICI, au
     // moment de l'envoi = UNIQUEMENT les projets explicitement nommés dans la
@@ -3768,6 +3768,17 @@ export async function createSuperAgent(container) {
     } catch (err) {
       console.error("[agent-state-changed] erreur:", err);
     }
+  });
+
+  // DÉFAUT 1 (relecture du correctif d26717e) — SIGNAL UNIQUE d'engagement du
+  // propriétaire. Il est émis par Rust dans `do_send_super_agent_prompt`
+  // (`super_agent.rs`), donc il couvre les DEUX chemins d'écriture qui n'ont
+  // aucun autre point commun : la saisie directe de l'onglet (qui appelle cette
+  // même commande) et le prompt venu du WEB distant (`web_server.rs`). Rien
+  // d'autre ne pose ce drapeau côté desktop (Telegram a son marquage propre, cf.
+  // `injectExternalMessageToSuperAgent`) : un seul drapeau, jamais deux.
+  const unlistenOwnerEngaged = await listen("pilot-superagent-owner-engaged", () => {
+    ownerEngagedThisSession = true;
   });
 
   // Bug #81 : arrêt AUTOMATIQUE de l'agent standard (MainSession) par le
@@ -3908,6 +3919,7 @@ export async function createSuperAgent(container) {
       if (immersiveOverlay) exitImmersive();
       origUnlisten();
       unlistenStateChanged();
+      try { unlistenOwnerEngaged(); } catch (_) {}
       try { unlistenAutoStop(); } catch (_) {}
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
@@ -3993,12 +4005,39 @@ function noteReminderTurnOutcome() {
 // RÉGLAGE « Vérifier les points à faire à l'ouverture de la session » : le
 // propriétaire a-t-il LUI-MÊME écrit dans la conversation depuis l'ouverture de
 // cette session ? Faux à chaque ouverture du ticker (donc au démarrage de
-// Pilot) et dès que l'onglet 🧭 est recréé. Remis à vrai au premier message
-// envoyé par le propriétaire (send()). La décision d'injecter ou de retenir un
-// rappel dû est prise par `planDueReminderInjections` (super-agent-schedule.js),
+// Pilot) et dès que l'onglet 🧭 est recréé. La décision d'injecter ou de retenir
+// un rappel dû est prise par `planDueReminderInjections` (super-agent-schedule.js),
 // qui est le SEUL endroit où cette règle est écrite.
+//
+// DÉFAUT 1 (relecture du correctif d26717e) — UN SEUL SIGNAL pose cet engagement,
+// émis par Rust dans `do_send_super_agent_prompt` (`super_agent.rs`) : il couvre la
+// saisie directe de l'onglet ET le prompt venu du WEB distant, qui n'ont pas
+// d'autre point commun. Auparavant, seul `send()` le posait : un message arrivé
+// par Telegram ou par le web distant laissait les relances retenues alors que le
+// propriétaire avait bel et bien écrit. Écoute :
+// `pilot-superagent-owner-engaged` (createSuperAgent). Telegram marque le MÊME
+// drapeau juste avant de déposer le message (ce chemin n'entre pas par
+// `do_send_super_agent_prompt`) : un seul drapeau, jamais deux.
 let ownerEngagedThisSession = false;
 
+// DÉFAUT 2 — Échecs CONSÉCUTIFS d'envoi par rappel, EN MÉMOIRE (aucune écriture
+// en base). Sert à faire tourner les rappels : celui qui vient d'échouer passe
+// après les autres, et au-delà de `REMINDER_MAX_CONSECUTIVE_FAILURES` il est
+// écarté tant qu'un autre peut partir. La décision reste dans
+// `planDueReminderInjections` ; ici on ne fait que compter et oublier.
+const reminderFailureCounts = new Map();
+
+// DÉFAUT 4 — Le signal de retenue n'est affiché qu'UNE fois par session de
+// conversation : la règle d'unicité vit dans `createReminderHoldGuard`
+// (super-agent-schedule.js), remise à zéro à chaque ouverture du ticker.
+const reminderHoldGuard = createReminderHoldGuard();
+
+/**
+ * Une passe du ticker des relances : interroge Rust, laisse
+ * `planDueReminderInjections` décider (réglage du propriétaire, rotation,
+ * regroupement), puis exécute le plan. Aucun rappel retenu n'est JAMAIS marqué
+ * comme exécuté.
+ */
 async function scheduleTick() {
   if (!shouldScheduleTick(window._pilotSuperAgentOpen)) return;
   // Issue #134 : le réglage super_agent_auto_check_startup gouverne le lancement
@@ -4006,52 +4045,102 @@ async function scheduleTick() {
   // périodique continue de tourner, mais il ne remet une relance due qu'à
   // l'assistant libre ET — au démarrage — seulement si le propriétaire l'a
   // demandé (réglage activé) ou s'il a lui-même ouvert la conversation.
+  let res;
   try {
-    const res = await invoke("super_agent_schedule_tick");
-    const { toInject } = planDueReminderInjections({
-      due: (res && res.due) || [],
-      pendingIds: pendingReminderIds,
-      backendBusy,
-      autoCheckStartup: configCache.super_agent_auto_check_startup === true,
-      ownerEngaged: ownerEngagedThisSession,
-    });
-    // Rien à remettre : les rappels retenus restent DUS (jamais marqués) et
-    // seront représentés à la passe suivante (10 s) dans les mêmes conditions.
-    for (const d of toInject) {
-      pendingReminderIds.add(d.id);
-      try {
-        reminderUtilityProbe = { id: d.id, tools: 0, doubtful: false };
-        await invoke("send_super_agent_command", {
-          command: { type: "prompt", message: `[⏰ Rappel programmé] ${d.prompt}` },
-        });
-        // Issue #36 : le rappel s'affiche dans le panneau Événements (cloche)
-        // et via un toast discret, plus en bulle au milieu du fil. Le prompt
-        // complet reste consultable au survol (title de l'événement).
-        // L'horodatage est celui de la LIVRAISON (maintenant), pas l'échéance
-        // théorique `nextFireAt` : en cas de tick en retard, c'est le moment où
-        // la relance a réellement été remise à l'assistant qui est affiché.
-        const reminderLabel = formatReminderNotificationLabel(new Date());
-        pushSuperAgentSystemEvent("info", reminderLabel, d.prompt);
-        toastInfo(reminderLabel);
-        // Livraison effective → marquer le rappel comme exécuté (issue #135).
-        try {
-          await invoke("super_agent_schedule_mark_done", { id: d.id });
-        } catch (_) { /* échec de marquage : le rappel sera re-renvoyé, pas de blocage */ }
-      } catch (_) {
-        // Échec d'injection : aucun tour ne sera déclenché par ce rappel, on
-        // annule la sonde d'utilité (aucune exécution n'est comptée stérile).
-        if (reminderUtilityProbe && reminderUtilityProbe.id === d.id) reminderUtilityProbe = null;
-      }
-      pendingReminderIds.delete(d.id);
+    res = await invoke("super_agent_schedule_tick");
+  } catch (_) {
+    return;
+  }
+  const due = (res && res.due) || [];
+  // Oubli des compteurs d'échecs des rappels qui ne sont plus dus (livrés,
+  // désactivés, supprimés) : la mémoire ne grossit pas indéfiniment.
+  if (reminderFailureCounts.size > 0) {
+    const dueIds = new Set(due.map((d) => d && d.id));
+    for (const id of [...reminderFailureCounts.keys()]) {
+      if (!dueIds.has(id)) reminderFailureCounts.delete(id);
     }
-  } catch (_) { return; }
+  }
+  const plan = planDueReminderInjections({
+    due,
+    pendingIds: pendingReminderIds,
+    backendBusy,
+    autoCheckStartup: configCache.super_agent_auto_check_startup === true,
+    ownerEngaged: ownerEngagedThisSession,
+    failureCounts: reminderFailureCounts,
+    now: Date.now(),
+  });
+  // DÉFAUT 4 : la retenue n'est plus silencieuse. UN signal système par
+  // session, seulement quand la cause est « le propriétaire n'a pas écrit »
+  // (un assistant occupé se débloque seul : pas de message inutile).
+  if (reminderHoldGuard.shouldNotify(plan.waitingForOwner)) {
+    appendSystemMessage(superMessagesEl, formatReminderHoldNotice(plan.waitingForOwner));
+  }
+  // Rien à remettre : les rappels retenus restent DUS (jamais marqués) et
+  // seront représentés à la passe suivante (10 s) dans les mêmes conditions.
+  const items = plan.toInject;
+  if (items.length === 0) return;
+  for (const d of items) pendingReminderIds.add(d.id);
+  try {
+    // MÉNAGE DES RAPPELS : la sonde d'utilité ne suit qu'UNE relance seule. Un
+    // lot regroupé ne compte RIEN (en cas de doute on conserve le rappel).
+    reminderUtilityProbe = items.length === 1 ? { id: items[0].id, tools: 0, doubtful: false } : null;
+    // DÉFAUT 3 : UN SEUL envoi par passe. Les retardataires sont regroupés dans
+    // ce message (« N relances échues : … »), donc un arriéré n'ouvre plus N
+    // tours successifs de l'assistant.
+    await invoke("send_super_agent_command", {
+      command: { type: "prompt", message: buildReminderInjectionMessage(items) },
+    });
+    // Issue #36 : le rappel s'affiche dans le panneau Événements (cloche)
+    // et via un toast discret, plus en bulle au milieu du fil. Le prompt
+    // complet reste consultable au survol (title de l'événement).
+    // L'horodatage est celui de la LIVRAISON (maintenant), pas l'échéance
+    // théorique `nextFireAt` : en cas de tick en retard, c'est le moment où
+    // la relance a réellement été remise à l'assistant qui est affiché.
+    const deliveredAt = new Date();
+    if (items.length === 1) {
+      const reminderLabel = formatReminderNotificationLabel(deliveredAt);
+      pushSuperAgentSystemEvent("info", reminderLabel, items[0].prompt);
+      toastInfo(reminderLabel);
+    } else {
+      const groupLabel = formatReminderGroupNotificationLabel(items.length, deliveredAt);
+      pushSuperAgentSystemEvent(
+        "info",
+        groupLabel,
+        items.map((d) => d.prompt).join("\n\n"),
+      );
+      toastInfo(groupLabel);
+    }
+    // Livraison effective → marquer chaque rappel du lot comme exécuté
+    // (issue #135). Un rappel RETENU n'arrive jamais ici : il n'est pas marqué.
+    for (const d of items) {
+      try {
+        await invoke("super_agent_schedule_mark_done", { id: d.id });
+      } catch (_) { /* échec de marquage : le rappel sera re-renvoyé, pas de blocage */ }
+      reminderFailureCounts.delete(d.id);
+    }
+  } catch (_) {
+    // Échec d'envoi : aucun tour ne sera déclenché par ce lot, on annule la
+    // sonde d'utilité (aucune exécution n'est comptée stérile) et CHAQUE rappel
+    // du lot compte un échec consécutif — en mémoire seulement.
+    if (reminderUtilityProbe && items.some((d) => d.id === reminderUtilityProbe.id)) {
+      reminderUtilityProbe = null;
+    }
+    for (const d of items) {
+      reminderFailureCounts.set(d.id, (reminderFailureCounts.get(d.id) || 0) + 1);
+    }
+  } finally {
+    for (const d of items) pendingReminderIds.delete(d.id);
+  }
 }
 
 function startScheduleTicker() {
   if (scheduleTicker) return;
   // Ouverture d'une SESSION de conversation : le propriétaire n'a encore rien
-  // écrit (cf. règle du réglage « points à faire à l'ouverture »).
+  // écrit (cf. règle du réglage « points à faire à l'ouverture ») et le signal de
+  // retenue n'a pas encore été affiché pour cette session.
   ownerEngagedThisSession = false;
+  reminderHoldGuard.reset();
+  reminderFailureCounts.clear();
   scheduleTicker = setInterval(scheduleTick, SCHEDULE_TICK_INTERVAL_MS);
   // MÉNAGE DES RAPPELS : une passe automatique par SESSION, bornée à une par
   // jour côté donnée (assistant_meta.schedule_cleanup_at). Non bloquant et
@@ -7342,6 +7431,11 @@ async function sendSuperAgentReport(entry, opts = {}) {
  * @returns {Promise<unknown>}
  */
 export async function injectExternalMessageToSuperAgent(text) {
+  // DÉFAUT 1 (relecture) — Telegram : le propriétaire a LUI-MÊME écrit. Ce
+  // message n'entre pas par `do_send_super_agent_prompt`, donc le signal unique
+  // émis là-bas ne passe pas ici : on marque le MÊME drapeau (jamais un second),
+  // sinon les relances resteraient retenues alors que le propriétaire a écrit.
+  ownerEngagedThisSession = true;
   await superAgentReportGate.deliver({
     summary: text,
     projectPath: null,

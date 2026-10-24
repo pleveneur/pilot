@@ -228,12 +228,17 @@ describe("branchement du ticker des relances (super-agent.js)", () => {
 
   it("le tick n'itère plus la liste brute `due` renvoyée par Rust", () => {
     expect(source).not.toContain("for (const d of due)");
-    expect(source).toContain("for (const d of toInject)");
+    expect(source).toContain("const items = plan.toInject;");
   });
 
-  it("l'engagement du propriétaire est remis à zéro à l'ouverture de session et posé à son envoi", () => {
+  it("l'engagement du propriétaire est remis à zéro à l'ouverture de session et posé par UN SEUL signal (Rust)", () => {
     expect(source).toContain("ownerEngagedThisSession = false;");
+    // Défaut 1 de la relecture : plus de pose locale dans `send()` (elle laissait
+    // les relances retenues quand le message venait de Telegram ou du web).
+    expect(source).toContain('listen("pilot-superagent-owner-engaged"');
     expect(source).toContain("ownerEngagedThisSession = true;");
+    const poses = source.split("ownerEngagedThisSession = true;").length - 1;
+    expect(poses).toBe(2); // l'écoute du signal Rust + le marquage Telegram
   });
 });
 

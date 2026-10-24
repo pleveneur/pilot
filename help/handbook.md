@@ -2673,12 +2673,38 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - Garde-fous : `every` ≥ 60 s, **max 20** planifications **actives** (un rappel
   désactivé ne compte pas et libère sa place ; au-delà, la création est refusée
   par un message qui **nomme les rappels candidats à la suppression**, du plus
-  ancien au plus récent — voir « Ménage des rappels inutiles »), **1 fire** par
-  planification et par tick, **au plus UNE relance livrée par passe** (deux
-  rappels échus ensemble ne partent plus à la suite : les suivants restent dus et
-  partent aux passes suivantes, 10 s plus tard), **pas de tick** si l'onglet 🧭
-  est fermé (session morte — les rappels `every` accumulent un retard, repris à
-  la reprise).
+  ancien au plus récent — voir « Ménage des rappels inutiles »), **pas de tick**
+  si l'onglet 🧭 est fermé (session morte — les rappels `every` accumulent un
+  retard, repris à la reprise).
+- **Règle d'envoi d'une passe (règle unique, corrigée le 2026-08-29)** :
+  **UN SEUL ENVOI par passe** — donc **un seul tour** de l'assistant — et non
+  « une relance par passe » comme le disait la version précédente de cette
+  spec, qui se contredisait en posant à la fois un déclenchement unique par
+  tick et un plafond de livraison par passe sans dire lequel prime. L'unité
+  limitée est le **nombre de tours**, pas le nombre de rappels traités :
+  1. les rappels **simplement échus** restent livrés **un par passe** (les
+     suivants restent dus et partent aux passes suivantes, 10 s plus tard) ;
+  2. les rappels **retardataires** (échéance dépassée de **plus de deux
+     intervalles** — cas type : arriéré accumulé pendant une fermeture de
+     Pilot) partent **REGROUPÉS dans un seul message** (« N relances échues :
+     1. … 2. … ») : un arriéré n'occupe donc plus l'assistant pendant des
+     heures, un tour par relance ;
+  3. **rotation en cas d'échec** : le premier éligible de `schedule_due`
+     (`ORDER BY id`) ne peut plus affamer les autres. Un compteur d'échecs
+     **consécutifs, en mémoire seulement** (jamais en base), fait passer un
+     rappel qui vient d'échouer **après** ceux qui n'ont jamais échoué, et
+     l'**écarte** au-delà de **3 échecs** consécutifs tant qu'un autre peut
+     partir. Aucun rappel n'est jamais perdu : si tous sont écartés, ils sont
+     retentés ensemble à la passe suivante.
+  Décision écrite à **un seul endroit** : `planDueReminderInjections`
+  (`src/js/super-agent-schedule.js`) ; le ticker de `src/js/super-agent.js`
+  n'exécute que le plan rendu. Verrous : `src/js/relances-relecture.test.js`.
+- **Relances retenues : plus de silence** — quand des rappels sont retenus
+  parce que **vous n'avez pas encore écrit** (réglage ci-dessous désactivé), un
+  **signal système** apparaît dans la conversation : « N relances en attente —
+  écrivez, ou activez ⚙️ → Assistant ». Il s'affiche **UNE seule fois par
+  session** (pas à chaque passe de 10 s) et jamais quand la seule cause est un
+  assistant momentanément occupé (cela se débloque tout seul).
 - **Échéance** : un rappel créé avec `everySeconds = N` se déclenche pour la
   première fois **N secondes après sa création** (référence `created_at` tant
   qu'il n'a jamais été livré, puis `last_run_at`). `schedule_create` renvoie
@@ -2693,6 +2719,15 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   conversation de cette session — c'est vous qui ouvrez le sujet. Il faut
   valider ce réglage pour que l'Assistant vérifie les rappels dus **dès**
   l'ouverture de session, sans attendre votre premier message.
+  **« Vous avez écrit » vaut pour TOUS les chemins d'écriture** : la saisie
+  directe de l'onglet 🧭, le prompt envoyé depuis l'**accès web distant**, et le
+  message reçu par **Telegram**. Un **signal unique** est émis par le backend
+  dans `do_send_super_agent_prompt` (`src-tauri/src/super_agent.rs`), point de
+  passage commun de la saisie directe et du web distant, et écouté une seule
+  fois côté interface (évènement `pilot-superagent-owner-engaged`) ; le chemin
+  Telegram marque le **même** drapeau, car son message n'entre pas par là. Il
+  n'existe **qu'un seul drapeau** d'engagement (`ownerEngagedThisSession`),
+  jamais deux.
   Décision écrite à **un seul endroit** : `planDueReminderInjections`
   (`src/js/super-agent-schedule.js`), appliquée par le ticker de
   `src/js/super-agent.js` ; verrou de branchement dans

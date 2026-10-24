@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::agent_service::{
     normalize_mission_resume, prompt_command_with_resume, SUPERAGENT_ID,
@@ -781,6 +781,24 @@ pub fn superagent_prompt_command(message: &str, mission_source: &str) -> Value {
     prompt_command_with_resume(message, super_agent_mission_resume(mission_source).as_deref())
 }
 
+/// Évènement émis quand le PROPRIÉTAIRE a lui-même parlé à l'assistant dans la
+/// session courante. C'est le SIGNAL UNIQUE d'engagement (défaut 1 de la
+/// relecture du correctif `d26717e`) : les relances programmées retenues
+/// (réglage « Vérifier les points à faire à l'ouverture de la session »
+/// désactivé) sont débloquées par ce signal, quel que soit le chemin d'écriture.
+pub const SUPERAGENT_OWNER_ENGAGED_EVENT: &str = "pilot-superagent-owner-engaged";
+
+/// Émet le signal d'engagement du propriétaire. Appelé UNIQUEMENT depuis
+/// `do_send_super_agent_prompt`, qui est le point de passage commun à la saisie
+/// directe de l'onglet 🧭 et au prompt venu du WEB distant (`web_server.rs`).
+/// Le frontend écoute cet évènement et pose son unique drapeau
+/// (`ownerEngagedThisSession`, super-agent.js) ; le message reçu par la
+/// passerelle de messagerie pose ce MÊME drapeau de son côté, car il n'entre pas
+/// par ici (une seule valeur d'engagement, jamais deux).
+pub(crate) fn emit_owner_engaged(app: &AppHandle) {
+    let _ = app.emit(SUPERAGENT_OWNER_ENGAGED_EVENT, ());
+}
+
 /// Envoie un prompt au super-agent (session RPC dédiée). Helper réutilisable par
 /// la commande Tauri desktop et par le web remote (évolution 2). Démarre
 /// paresseusement la session si nécessaire.
@@ -850,7 +868,14 @@ pub(crate) fn do_send_super_agent_prompt(
     // système de règles qui la précède dans le message envoyé. Sans cela, le
     // panneau des tâches affichait un extrait des règles de l'assistant.
     let cmd = superagent_prompt_command(&full_message, &message);
-    state.agent_service.send_superagent(cmd)
+    let sent = state.agent_service.send_superagent(cmd);
+    // SIGNAL UNIQUE d'engagement : le propriétaire a réellement écrit. Émis
+    // seulement si l'envoi a réussi (un envoi raté ne prouve pas qu'il a parlé),
+    // donc après le `send_superagent`.
+    if sent.is_ok() {
+        emit_owner_engaged(app);
+    }
+    sent
 }
 
 #[tauri::command]
@@ -1113,11 +1138,23 @@ pub(crate) struct DueSchedule {
     name: String,
     prompt: String,
     every: i64,
+    /// Échéance qui a rendu le rappel dû (UTC, format `datetime()` de SQLite).
+    /// Sert au frontend à distinguer un rappel simplement échu d'un
+    /// RETARDATAIRE (échéance dépassée de plus de deux intervalles) : les
+    /// retardataires partent regroupés dans un seul message
+    /// (`planDueReminderInjections`). Aucune décision n'est prise ici.
+    next_fire_at: String,
 }
 
 impl DueSchedule {
     fn to_json(&self) -> Value {
-        serde_json::json!({ "id": self.id, "name": self.name, "prompt": self.prompt, "every": self.every })
+        serde_json::json!({
+            "id": self.id,
+            "name": self.name,
+            "prompt": self.prompt,
+            "every": self.every,
+            "nextFireAt": self.next_fire_at
+        })
     }
 }
 
@@ -1322,7 +1359,8 @@ pub(crate) fn schedule_next_fire(conn: &Connection, id: i64) -> Result<Option<St
 pub(crate) fn schedule_due(conn: &Connection, now: &str) -> Result<Vec<DueSchedule>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, prompt, every FROM assistant_schedules \
+            "SELECT id, name, prompt, every, datetime(COALESCE(last_run_at, created_at), \
+               '+' || CAST(every AS TEXT) || ' seconds') FROM assistant_schedules \
              WHERE enabled = 1 AND datetime(COALESCE(last_run_at, created_at), \
                '+' || CAST(every AS TEXT) || ' seconds') <= ?1 \
              ORDER BY id",
@@ -1335,6 +1373,7 @@ pub(crate) fn schedule_due(conn: &Connection, now: &str) -> Result<Vec<DueSchedu
                 name: r.get(1)?,
                 prompt: r.get(2)?,
                 every: r.get(3)?,
+                next_fire_at: r.get(4)?,
             })
         })
         .map_err(|e| format!("Erreur SQL : {}", e))?;
@@ -8041,6 +8080,28 @@ mod tests {
         );
         drop(conn);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn schedule_due_announces_the_deadline_that_made_it_due() {
+        // Relecture du correctif `d26717e` : le frontend a besoin de l'ÉCHÉANCE
+        // qui a rendu le rappel dû pour distinguer un rappel simplement échu
+        // d'un RETARDATAIRE (regroupement des arriérés). Elle doit être
+        // l'échéance théorique, jamais l'instant du tick.
+        let conn = mem_conn();
+        let id = schedule_insert(&conn, "s1", "prompt", 60).unwrap();
+        conn.execute(
+            "UPDATE assistant_schedules SET created_at = '2025-01-01 00:00:00' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+        // Non dû → aucune échéance à annoncer.
+        assert!(schedule_due(&conn, "2025-01-01 00:00:30").unwrap().is_empty());
+        // Dû → échéance = created_at + every (00:01:00), pas l'heure du tick.
+        let due = schedule_due(&conn, "2025-01-01 00:01:30").unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].next_fire_at, "2025-01-01 00:01:00");
+        assert_eq!(due[0].to_json()["nextFireAt"], "2025-01-01 00:01:00");
     }
 
     #[test]
