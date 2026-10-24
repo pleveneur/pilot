@@ -133,7 +133,7 @@ describe("formulation du libellé de relance dans la documentation", () => {
   });
 });
 
-describe("planDueReminderInjections (réglage « points à faire à l'ouverture » + une relance par passe)", () => {
+describe("planDueReminderInjections (réglage « points à faire à l'ouverture » + un seul ENVOI par passe)", () => {
   const due = [
     { id: 987, name: "veille_des_risques", prompt: "Veille des risques…" },
     { id: 988, name: "reprise_chantiers_en_attente", prompt: "Rappel de reprise…" },
@@ -170,10 +170,13 @@ describe("planDueReminderInjections (réglage « points à faire à l'ouverture 
     expect(plan.toInject.map((d) => d.id)).toEqual([987]);
   });
 
-  it("n'injecte qu'UNE relance par passe : les autres restent dues pour la passe suivante", () => {
-    // Plusieurs rappels échus ensemble ne doivent plus partir à la suite dans
-    // la même passe (deux tours de génération empilés → assistant occupé et
-    // messages du propriétaire refusés).
+  it("un seul ENVOI par passe : une relance simplement échue part seule, les autres restent dues", () => {
+    // RÈGLE APPLIQUÉE : la limite porte sur le nombre de TOURS (= d'envois) par
+    // passe, pas sur le nombre de relances traitées — un envoi peut porter
+    // plusieurs retardataires regroupés (cf. la rotation et le regroupement).
+    // Ici, aucun retardataire : une seule relance part, les autres restent dues
+    // pour la passe suivante (deux tours empilés → assistant occupé et messages
+    // du propriétaire refusés).
     const plan = planeSansBusy({ autoCheckStartup: true, ownerEngaged: true });
     expect(plan.toInject).toHaveLength(1);
     expect(plan.toInject[0].id).toBe(987);

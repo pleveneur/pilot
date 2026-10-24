@@ -2707,6 +2707,16 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
      suivante. Dans un lot, les lignes suivantes d'un rappel multi-lignes sont
      **indentées sous leur numéro** pour ne pas se confondre avec les items
      suivants.
+  5. **chaque relance est bornée DANS le lot (3ᵉ audit, défaut sérieux)** : le
+     texte d'une relance est ramené à **450 caractères**
+     (`REMINDER_ITEM_MAX_CHARS`, avis de troncature de **cette** relance
+     compris) de sorte que le lot maximal (8 relances + en-tête) tienne
+     **toujours** sous 4000 : la troncature du **message entier** est donc
+     **structurellement impossible**. Ce qui est réellement rendu est renvoyé
+     par `buildReminderInjection` sous forme de `delivered` / `withheld`, et le
+     ticker **ne marque comme envoyées que les relances de `delivered`** ; une
+     relance retirée redevient **due** et repart à la passe suivante — elle
+     n'est jamais marquée sans être lisible.
   Décision écrite à **un seul endroit** : `planDueReminderInjections`
   (`src/js/super-agent-schedule.js`) ; le ticker de `src/js/super-agent.js`
   n'exécute que le plan rendu. Verrous : `src/js/relances-relecture.test.js`.
@@ -2744,6 +2754,16 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   Telegram marque le **même** drapeau, car son message n'entre pas par là. Il
   n'existe **qu'un seul drapeau** d'engagement (`ownerEngagedThisSession`),
   jamais deux.
+  **Où l'écoute est installée (3ᵉ audit, défaut 3)** : au niveau de
+  **l'application**, dès le démarrage de Pilot (`initOwnerEngagementWatch`,
+  idempotente, appelée par `src/js/main.js` à côté de l'écoute Telegram), et
+  **pas** dans la fabrique de l'onglet 🧭. Motif : l'émission Rust est
+  inconditionnelle (elle ne sait pas si un onglet écoute). Tant que l'écoute
+  vivait dans l'onglet, un prompt venant du **web distant onglet fermé** tombait
+  dans le vide : l'engagement n'était pas posé, les relances restaient retenues
+  et le signal disait « écrivez » alors que vous veniez d'écrire. L'écoute ne
+  dépend donc plus d'un onglet ouvert (même modèle que Telegram), et elle n'est
+  jamais « désabonnée » à la fermeture de l'onglet.
   **Portée du drapeau (2ᵉ relecture, point 1)** : une « session » =
   **une exécution de Pilot** (même unité que la mémoire de session côté Rust,
   qui repart de zéro au redémarrage), et **pas** « l'onglet 🧭 est ouvert ». La
@@ -2754,7 +2774,8 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   relances restaient retenues et le signal disait « écrivez » alors que vous
   veniez d'écrire. Parcours verrouillé par `src/js/relances-relecture.test.js`
   (« message Telegram reçu onglet fermé → ouverture de l'onglet → la relance
-  part »).
+  part »), et par le parcours jumeau du **prompt par accès web onglet fermé**
+  (3ᵉ audit, défaut 3).
   Décision écrite à **un seul endroit** : `planDueReminderInjections`
   (`src/js/super-agent-schedule.js`), appliquée par le ticker de
   `src/js/super-agent.js` ; verrou de branchement dans

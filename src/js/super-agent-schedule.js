@@ -35,8 +35,28 @@ export const REMINDER_LAGGARD_INTERVAL_FACTOR = 2;
 //  - en LONGUEUR (`REMINDER_BATCH_MAX_CHARS`, miroir volontaire de la constante
 //    Rust) : au-delà, le message est tronqué avec un avis EXPLICITE (nombre de
 //    caractères omis), jamais silencieusement.
+//
+// DÉFAUT SÉRIEUX (3ᵉ audit) — la borne en LONGUEUR du MESSAGE ne suffisait pas :
+// quand le lot dépassait `REMINDER_BATCH_MAX_CHARS`, le message était tronqué…
+// puis TOUTES les relances du lot étaient marquées comme envoyées. Mesure de
+// l'audit : 8 relances de 3011 caractères → message de 4000, « 20496 caractère(s)
+// omis », seules les relances 1 et 2 lisibles, et les 8 marquées : six relances
+// disparaissaient pour toujours. La promesse « les relances laissées de côté
+// restent dues » n'était donc tenue que par la borne en NOMBRE.
+//
+// La troncature du MESSAGE est donc rendue STRUCTURELLEMENT IMPOSSIBLE : chaque
+// relance est bornée DANS le lot (`REMINDER_ITEM_MAX_CHARS`, troncature annoncée
+// PAR RELANCE), de sorte que le lot maximal (8 relances + en-tête) tient
+// toujours sous `REMINDER_BATCH_MAX_CHARS`. Le texte réellement rendu (donc
+// lisible) est rendu à l'appelant par `buildReminderInjection` : c'est cette
+// liste-là — et elle seule — qui peut être marquée comme envoyée.
 export const REMINDER_BATCH_MAX_ITEMS = 8;
 export const REMINDER_BATCH_MAX_CHARS = 4000;
+
+// Budget d'UNE relance rendue dans un lot (numéro + texte + avis de troncature
+// éventuel, indentation des lignes suivantes comprise). Marge vérifiée :
+// 8 × 450 + 7 sauts de ligne + en-tête (~190) < 4000.
+export const REMINDER_ITEM_MAX_CHARS = 450;
 
 // Instant (ms epoch) d'une échéance renvoyée par Rust. `datetime('now')` de
 // SQLite produit « 2026-08-29 14:30:00 », c'est-à-dire de l'UTC SANS fuseau :
@@ -92,7 +112,54 @@ function numberReminderLine(index, prompt) {
   return [`${index}. ${first}`, ...rest].join("\n");
 }
 
-// Borne le message RÉELLEMENT versé dans la conversation. La troncature est
+// Avis de troncature d'UNE relance (jamais celle du lot entier) : il dit ce qui
+// manque ET où lire le texte intégral, de sorte qu'une relance tronquée reste
+// honnêtement « livrée » (son contenu utile est là, le reste est consultable).
+function reminderTruncationNotice(omitted) {
+  return (
+    `[…relance tronquée : ${omitted} caractère(s) omis — texte intégral dans la ` +
+    `programmation du rappel (⚙️ → Assistant)]`
+  );
+}
+
+// Coupe un texte sur une frontière lisible (fin de ligne, puis espace) sans
+// jamais dépasser `keep` caractères. Aucune coupe au milieu d'un mot quand une
+// frontière existe dans la fenêtre.
+function cutTextAt(texte, keep) {
+  const chars = Array.from(String(texte).replace(/\r\n/g, "\n"));
+  if (chars.length <= keep) return chars.join("");
+  const window = chars.slice(0, Math.max(0, keep));
+  const brut = window.join("");
+  const ligne = brut.lastIndexOf("\n");
+  if (ligne > keep * 0.6) return brut.slice(0, ligne);
+  const espace = brut.lastIndexOf(" ");
+  if (espace > keep * 0.6) return brut.slice(0, espace);
+  return brut;
+}
+
+// Rend UNE relance dans un budget de `budget` caractères : le texte complet s'il
+// tient, sinon un texte coupé sur une frontière SUIVI de l'avis de troncature,
+// l'ensemble restant sous le budget (indentation des lignes suivantes comprise).
+function renderReminderItemWithin(index, prompt, budget) {
+  const total = Array.from(String(prompt).replace(/\r\n/g, "\n"));
+  if (Array.from(numberReminderLine(index, prompt)).length <= budget) {
+    return { rendered: numberReminderLine(index, prompt), truncated: false, omitted: 0 };
+  }
+  let keep = total.length;
+  for (;;) {
+    const omitted = total.length - keep;
+    const candidate = cutTextAt(total.join(""), keep) + reminderTruncationNotice(omitted);
+    const rendered = numberReminderLine(index, candidate);
+    const length = Array.from(rendered).length;
+    if (length <= budget) return { rendered, truncated: true, omitted };
+    const shrink = length - budget + 4;
+    if (keep <= 0) return { rendered: numberReminderLine(index, reminderTruncationNotice(total.length)), truncated: true, omitted: total.length };
+    keep = Math.max(0, keep - shrink);
+  }
+}
+
+// Borne le message RÉELLEMENT versé dans la conversation (relance SEULE : le lot
+// est, lui, borné par relance, cf. `buildReminderInjection`). La troncature est
 // DITE (nombre de caractères omis) et l'avis compte lui-même dans la taille, si
 // bien que le résultat ne dépasse jamais `REMINDER_BATCH_MAX_CHARS`.
 function capReminderMessage(message) {
@@ -112,28 +179,66 @@ function capReminderMessage(message) {
   }
 }
 
-// Message réellement remis à l'assistant pour un lot de rappels. UN SEUL envoi
-// par passe (donc UN SEUL tour) : soit une relance seule (format historique),
-// soit un lot de retardataires regroupés (« N relances échues : … »). Le texte
-// de chaque rappel est conservé tel quel, numéroté et indenté (cf.
-// `numberReminderLine`), et le lot est borné en nombre puis en longueur.
-export function buildReminderInjectionMessage(items) {
+// En-tête d'un lot de N relances. Sa taille ne dépend que du nombre de chiffres
+// de N (≤ 8 → un chiffre), ce qui rend le budget par relance calculable.
+function groupHeader(n) {
+  return (
+    `[⏰ ${n} relances échues] ${n} relances programmées sont arrivées à échéance ` +
+    `sans avoir pu être livrées (Assistant occupé, onglet fermé). Traite-les ` +
+    `toutes, dans l'ordre, sans les confondre :\n`
+  );
+}
+
+// Compose le message d'un lot. Chaque relance est rendue DANS son budget
+// (`REMINDER_ITEM_MAX_CHARS`) : le message complet ne peut donc pas dépasser le
+// plafond par construction, et aucune relance ne peut être « coupée en silence ».
+function composeGroupMessage(items) {
+  if (items.length === 0) return "";
+  const lines = items.map((d, i) => renderReminderItemWithin(i + 1, d.prompt, REMINDER_ITEM_MAX_CHARS).rendered);
+  return groupHeader(items.length) + lines.join("\n");
+}
+
+// PLAN DE LIVRAISON d'un lot de rappels (3ᵉ audit, défaut sérieux) : rend le
+// message ET la liste des relances RÉELLEMENT LISIBLES dedans (`delivered`),
+// plus celles qui n'ont pas pu être rendues (`withheld`, restant DUES). Le
+// marquage ne doit porter QUE sur `delivered` : c'est ce qui rend impossible de
+// marquer « envoyée » une relance dont le texte n'est pas dans le message.
+export function buildReminderInjection(items) {
   const list = Array.isArray(items)
     ? items.filter((d) => d && typeof d.prompt === "string" && d.prompt.trim() !== "")
     : [];
-  if (list.length === 0) return "";
+  if (list.length === 0) return { message: "", delivered: [], withheld: [] };
   // Ceinture et bretelles : le plan borne déjà la sélection (et retient les
   // relances en trop, jamais marquées) ; on ne dépasse jamais le plafond ici non
   // plus, quel que soit l'appelant.
   const capped = list.slice(0, REMINDER_BATCH_MAX_ITEMS);
-  if (capped.length === 1) return capReminderMessage(`[⏰ Rappel programmé] ${capped[0].prompt}`);
-  const n = capped.length;
-  const lines = capped.map((d, i) => numberReminderLine(i + 1, d.prompt)).join("\n");
-  return capReminderMessage(
-    `[⏰ ${n} relances échues] ${n} relances programmées sont arrivées à échéance ` +
-      `sans avoir pu être livrées (Assistant occupé, onglet fermé). Traite-les ` +
-      `toutes, dans l'ordre, sans les confondre :\n${lines}`,
-  );
+  const overflow = list.slice(REMINDER_BATCH_MAX_ITEMS);
+  if (capped.length === 1) {
+    // Relance SEULE : format historique, texte complet sous le plafond global.
+    return {
+      message: capReminderMessage(`[⏰ Rappel programmé] ${capped[0].prompt}`),
+      delivered: capped,
+      withheld: overflow,
+    };
+  }
+  // Lot : on ne garde que les relances qui tiennent ENTIÈREMENT (chacune déjà
+  // bornée). La boucle est une garantie structurelle : elle vide le lot plutôt
+  // que de couper le message, et ce qui est retiré redevient « dû ».
+  let kept = capped.slice();
+  let message = composeGroupMessage(kept);
+  let removed = [];
+  while (kept.length > 0 && Array.from(message).length > REMINDER_BATCH_MAX_CHARS) {
+    removed = [kept[kept.length - 1], ...removed];
+    kept = kept.slice(0, -1);
+    message = composeGroupMessage(kept);
+  }
+  return { message, delivered: kept, withheld: [...removed, ...overflow] };
+}
+
+// Texte seul (appelants qui n'ont pas de marquage à faire). Le TICKER, lui, doit
+// utiliser `buildReminderInjection` : il a besoin de savoir ce qui est lisible.
+export function buildReminderInjectionMessage(items) {
+  return buildReminderInjection(items).message;
 }
 
 // Libellé du panneau 🔔 / toast pour un LOT livré : « ⏰ 3 relances — 29/08 à

@@ -1098,8 +1098,9 @@ pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, Stri
 //   - UN SEUL ENVOI par passe de tick (côté ticker, `super-agent.js`) : c'est le
 //     nombre de TOURS de l'assistant qui est limité, pas le nombre de rappels
 //     traités — un même envoi peut porter PLUSIEURS relances regroupées
-//     (retardataires). La règle inverse (« 1 exécution max par planification et
-//     par tick ») a été remplacée le 2026-08-29 ; ici, `schedule_due` renvoie au
+//     (retardataires). Cette règle — et non « 1 exécution max par
+//     planification et par tick » — a remplacé l'ancienne le 2026-08-29 ; ici,
+//     `schedule_due` renvoie au
 //     plus UNE ligne par planification et par appel, et `last_run_at` est marqué
 //     à l'émission (issue #135).
 //   - session super-agent morte = pas de tick (super_agent_schedule_tick).

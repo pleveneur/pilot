@@ -14,7 +14,7 @@ import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus,
 // installée ICI, au seul endroit qui connaît à la fois le bus d'agents (runs en
 // cours) et l'activité RÉELLE des sessions (agent qui travaille sans run).
 import { isRunInProgress } from "./agents-bus.js";
-import { isProjectAgentBusy } from "./super-agent.js";
+import { isProjectAgentBusy, initOwnerEngagementWatch } from "./super-agent.js";
 import { getAgentActivitySnapshot, subscribeAgentActivity, isAgentWorking, initAgentActivity } from "./agent-activity.js";
 import { initAnomalyDetection } from "./anomaly.js";
 // Étape 2 Telegram (lot 0) : écoute des messages entrants. Démarrée avec
@@ -427,6 +427,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     initTelegramInbound();
   } catch (e) {
     console.warn("Écoute Telegram indisponible:", e);
+  }
+
+  // 3d-bis. Engagement du propriétaire (3ᵉ audit, défaut 3) : l'écoute du signal
+  // « le propriétaire a écrit » est enregistrée ICI, au démarrage de Pilot, et
+  // non dans la fabrique de l'onglet 🧭 — sinon un prompt envoyé depuis l'ACCÈS
+  // WEB DISTANT pendant que l'onglet est fermé était perdu, et les relances
+  // restaient retenues à la réouverture en affirmant « écrivez ». Comme pour
+  // l'écoute Telegram : aucune dépendance à l'ouverture d'un onglet.
+  try {
+    void initOwnerEngagementWatch();
+  } catch (e) {
+    console.warn("Écoute de l'engagement du propriétaire indisponible:", e);
   }
 
   // 3d-bis. Telegram (étape 2, lot 3) : charger l'état de la communication du

@@ -49,7 +49,7 @@ import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from 
 import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
-import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections, buildReminderInjectionMessage, formatReminderGroupNotificationLabel, formatReminderHoldNotice, createReminderHoldGuard } from "./super-agent-schedule.js";
+import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections, buildReminderInjection, buildReminderInjectionMessage, formatReminderGroupNotificationLabel, formatReminderHoldNotice, createReminderHoldGuard } from "./super-agent-schedule.js";
 // MÉNAGE DES RAPPELS : décision UNIQUE (pures) des rappels devenus inutiles —
 // mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
 // « Supprimer les rappels inutiles » de Paramètres → Assistant.
@@ -3774,13 +3774,17 @@ export async function createSuperAgent(container) {
   // propriétaire. Il est émis par Rust dans `do_send_super_agent_prompt`
   // (`super_agent.rs`), donc il couvre les DEUX chemins d'écriture qui n'ont
   // aucun autre point commun : la saisie directe de l'onglet (qui appelle cette
-  // même commande) et le prompt venu du WEB distant (`web_server.rs`). Rien
-  // d'autre ne pose ce drapeau côté desktop (Telegram a son marquage propre, cf.
-  // `injectExternalMessageToSuperAgent`) : un seul drapeau, jamais deux.
-  const unlistenOwnerEngaged = await listen("pilot-superagent-owner-engaged", () => {
-    ownerEngagedThisSession = true;
-  });
-
+  // même commande) et le prompt venu du WEB distant (`web_server.rs`).
+  //
+  // DÉFAUT 3 (3ᵉ audit) : l'écoute de ce signal est désormais enregistrée AU
+  // NIVEAU DE L'APPLICATION (`initOwnerEngagementWatch`, appelée au démarrage
+  // de Pilot), et NON plus ici. L'enregistrer dans la fabrique d'onglet la
+  // retirait à sa fermeture, alors que l'émission côté Rust est inconditionnelle :
+  // un prompt envoyé depuis l'accès web distant pendant que l'onglet était fermé
+  // était donc perdu, et les relances restaient retenues à la réouverture en
+  // affirmant « écrivez » alors que le propriétaire venait d'écrire. Aucun second
+  // drapeau n'a été créé : c'est le MÊME, posé par le même signal.
+  //
   // Bug #81 : arrêt AUTOMATIQUE de l'agent standard (MainSession) par le
   // moniteur Rust (process pi standard figé vivant). Les agents délégués
   // (run_agents) sont gérés par agents-bus.js (ctx de run) ; ici on ne gère
@@ -3919,7 +3923,6 @@ export async function createSuperAgent(container) {
       if (immersiveOverlay) exitImmersive();
       origUnlisten();
       unlistenStateChanged();
-      try { unlistenOwnerEngaged(); } catch (_) {}
       try { unlistenAutoStop(); } catch (_) {}
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
@@ -4030,10 +4033,41 @@ function noteReminderTurnOutcome() {
 // d'autre point commun. Auparavant, seul `send()` le posait : un message arrivé
 // par Telegram ou par le web distant laissait les relances retenues alors que le
 // propriétaire avait bel et bien écrit. Écoute :
-// `pilot-superagent-owner-engaged` (createSuperAgent). Telegram marque le MÊME
-// drapeau juste avant de déposer le message (ce chemin n'entre pas par
-// `do_send_super_agent_prompt`) : un seul drapeau, jamais deux.
+// `pilot-superagent-owner-engaged`, enregistrée au niveau de l'APPLICATION par
+// `initOwnerEngagementWatch` ci-dessous (plus dans la fabrique d'onglet — cf.
+// défaut 3 du 3ᵉ audit). Telegram marque le MÊME drapeau juste avant de déposer
+// le message (ce chemin n'entre pas par `do_send_super_agent_prompt`) : un seul
+// drapeau, jamais deux.
 let ownerEngagedThisSession = false;
+
+// DÉFAUT 3 (3ᵉ audit) — L'ÉCOUTE DE CE SIGNAL VIT AU NIVEAU DE L'APPLICATION, pas
+// dans la fabrique de l'onglet 🧭. Raison : l'émission est INCONDITIONNELLE côté
+// Rust (`do_send_super_agent_prompt`), donc un prompt envoyé depuis l'ACCÈS WEB
+// DISTANT arrive aussi quand l'onglet est fermé. L'écoute enregistrée dans la
+// fabrique — et retirée à sa fermeture — perdait cet évènement : à la
+// réouverture, les relances restaient retenues et le signal disait « écrivez »
+// alors que le propriétaire venait d'écrire (défaut déjà corrigé pour Telegram,
+// resté ouvert pour le web). Même remède que l'écoute Telegram : un
+// enregistrement qui ne dépend d'AUCUN onglet.
+//
+// Idempotente : un seul enregistrement par exécution de Pilot, quel que soit le
+// nombre d'appels (le drapeau reste UNIQUE, aucun second drapeau, aucun
+// compteur en base).
+let ownerEngagementWatchInstalled = false;
+export async function initOwnerEngagementWatch() {
+  if (ownerEngagementWatchInstalled) return;
+  ownerEngagementWatchInstalled = true;
+  try {
+    await listen("pilot-superagent-owner-engaged", () => {
+      ownerEngagedThisSession = true;
+    });
+  } catch (e) {
+    // Écoute indisponible : on ne garde pas l'état « installée » (une nouvelle
+    // tentative reste possible) et le reste de Pilot continue normalement.
+    ownerEngagementWatchInstalled = false;
+    console.warn("[super-agent] écoute de l'engagement du propriétaire indisponible:", e);
+  }
+}
 
 // DÉFAUT 2 — Échecs CONSÉCUTIFS d'envoi par rappel, EN MÉMOIRE (aucune écriture
 // en base). Sert à faire tourner les rappels : celui qui vient d'échouer passe
@@ -4094,16 +4128,26 @@ async function scheduleTick() {
   // seront représentés à la passe suivante (10 s) dans les mêmes conditions.
   const items = plan.toInject;
   if (items.length === 0) return;
-  for (const d of items) pendingReminderIds.add(d.id);
+  // DÉFAUT SÉRIEUX (3ᵉ audit) : le message du lot est désormais borné PAR
+  // RELANCE, donc la troncature du message entier est structurellement
+  // impossible. `readable` = les relances dont le texte est RÉELLEMENT dans le
+  // message : c'est cette liste-là, et elle seule, que l'on peut marquer comme
+  // envoyées. Une relance retirée faute de place redevient « due » (jamais
+  // marquée, jamais perdue).
+  const injection = buildReminderInjection(items);
+  const readable = injection.delivered;
+  // Seules les relances RÉELLEMENT remises sont marquées « en vol » : une
+  // relance retirée faute de place reste due et repart à la passe suivante.
+  for (const d of readable) pendingReminderIds.add(d.id);
   try {
     // MÉNAGE DES RAPPELS : la sonde d'utilité ne suit qu'UNE relance seule. Un
     // lot regroupé ne compte RIEN (en cas de doute on conserve le rappel).
-    reminderUtilityProbe = items.length === 1 ? { id: items[0].id, tools: 0, doubtful: false } : null;
+    reminderUtilityProbe = readable.length === 1 ? { id: readable[0].id, tools: 0, doubtful: false } : null;
     // DÉFAUT 3 : UN SEUL envoi par passe. Les retardataires sont regroupés dans
     // ce message (« N relances échues : … »), donc un arriéré n'ouvre plus N
     // tours successifs de l'assistant.
     await invoke("send_super_agent_command", {
-      command: { type: "prompt", message: buildReminderInjectionMessage(items) },
+      command: { type: "prompt", message: injection.message },
     });
     // Issue #36 : le rappel s'affiche dans le panneau Événements (cloche)
     // et via un toast discret, plus en bulle au milieu du fil. Le prompt
@@ -4112,22 +4156,23 @@ async function scheduleTick() {
     // théorique `nextFireAt` : en cas de tick en retard, c'est le moment où
     // la relance a réellement été remise à l'assistant qui est affiché.
     const deliveredAt = new Date();
-    if (items.length === 1) {
+    if (readable.length === 1) {
       const reminderLabel = formatReminderNotificationLabel(deliveredAt);
-      pushSuperAgentSystemEvent("info", reminderLabel, items[0].prompt);
+      pushSuperAgentSystemEvent("info", reminderLabel, readable[0].prompt);
       toastInfo(reminderLabel);
     } else {
-      const groupLabel = formatReminderGroupNotificationLabel(items.length, deliveredAt);
+      const groupLabel = formatReminderGroupNotificationLabel(readable.length, deliveredAt);
       pushSuperAgentSystemEvent(
         "info",
         groupLabel,
-        items.map((d) => d.prompt).join("\n\n"),
+        readable.map((d) => d.prompt).join("\n\n"),
       );
       toastInfo(groupLabel);
     }
-    // Livraison effective → marquer chaque rappel du lot comme exécuté
-    // (issue #135). Un rappel RETENU n'arrive jamais ici : il n'est pas marqué.
-    for (const d of items) {
+    // Livraison effective → marquer chaque relance LISIBLE du lot comme exécutée
+    // (issue #135). Une relance RETENUE n'arrive jamais ici : elle n'est ni dans
+    // `readable`, ni marquée.
+    for (const d of readable) {
       try {
         await invoke("super_agent_schedule_mark_done", { id: d.id });
       } catch (_) { /* échec de marquage : le rappel sera re-renvoyé, pas de blocage */ }

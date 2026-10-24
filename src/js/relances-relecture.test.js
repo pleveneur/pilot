@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import {
   planDueReminderInjections,
+  buildReminderInjection,
   buildReminderInjectionMessage,
   formatReminderGroupNotificationLabel,
   formatReminderHoldNotice,
@@ -24,7 +25,14 @@ import {
   REMINDER_LAGGARD_INTERVAL_FACTOR,
   REMINDER_BATCH_MAX_ITEMS,
   REMINDER_BATCH_MAX_CHARS,
+  REMINDER_ITEM_MAX_CHARS,
 } from "./super-agent-schedule.js";
+// Découpage de source VÉRIFIÉ (2ᵉ relecture, point 2 ; puis 3ᵉ audit, point 4) :
+// ancres obligatoires + taille minimale, dans un utilitaire RÉUTILISABLE et
+// testé pour lui-même (`source-slice.test.js`). Un `indexOf` qui ne trouve rien
+// rendait un fragment vide et l'assertion `not.toContain(…)` devenait vraie par
+// construction.
+import { sliceSource } from "./source-slice.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const JS_SOURCE = readFileSync(resolve(HERE, "super-agent.js"), "utf8").replace(/\r\n/g, "\n");
@@ -33,22 +41,27 @@ const RUST_SOURCE = readFileSync(resolve(HERE, "../../src-tauri/src/super_agent.
 const WEB_SOURCE = readFileSync(resolve(HERE, "../../src-tauri/src/web_server.rs"), "utf8").replace(/\r\n/g, "\n");
 const SPEC = readFileSync(resolve(HERE, "../../spec_super_agent.md"), "utf8").replace(/\r\n/g, "\n");
 const SCHEDULE_TESTS_DOC = readFileSync(resolve(HERE, "../../tests/schedule-tests.md"), "utf8").replace(/\r\n/g, "\n");
+const SCHEDULE_SOURCE = readFileSync(resolve(HERE, "super-agent-schedule.js"), "utf8").replace(/\r\n/g, "\n");
+const SCHEDULE_TEST_SOURCE = readFileSync(resolve(HERE, "super-agent-schedule.test.js"), "utf8").replace(/\r\n/g, "\n");
+const MAIN_SOURCE = readFileSync(resolve(HERE, "main.js"), "utf8").replace(/\r\n/g, "\n");
 
-// Découpage de source VÉRIFIÉ (2ᵉ relecture, point 2) : chaque ancre doit
-// EXISTER et le fragment doit être assez long. Sans ces deux gardes, un
-// `indexOf` qui ne trouve rien renvoie −1, `slice` rend une chaîne vide et
-// l'assertion (`not.toContain(…)`) devient vraie par construction : c'est
-// exactement le défaut relevé (« remettre la pose du drapeau dans `send()`
-// laissait 20/20 verts »).
-function sliceSource(src, startAnchor, endAnchor, minLen = 200) {
-  const start = src.indexOf(startAnchor);
-  expect(start, `ancre de début absente : ${startAnchor}`).toBeGreaterThan(-1);
-  const end = src.indexOf(endAnchor, start + startAnchor.length);
-  expect(end, `ancre de fin absente : ${endAnchor}`).toBeGreaterThan(start);
-  const fragment = src.slice(start, end);
-  expect(fragment.length, `fragment trop court (${fragment.length})`).toBeGreaterThanOrEqual(minLen);
-  return fragment;
-}
+// MOTIFS de la règle PÉRIMÉE (« une relance par passe » / « 1 exécution-fire par
+// tick »). Des MOTIFS, et non une liste de phrases figées : une reformulation
+// (« au plus une relance déclenchée par passe », « 1 exécution/fire max par
+// planification/tick ») doit être attrapée aussi (3ᵉ audit, point 2).
+const MOTIFS_REGLE_PERIMEE = [
+  // « au plus / une seule / qu'une / une … relance … par passe »
+  /au plus (d'une|1)\s+relance[\s\S]{0,80}?par\s+passe/i,
+  /une\s+relance[\s\S]{0,40}?par\s+passe/i,
+  /une\s+seule?\s+relance[\s\S]{0,80}?par\s+passe/i,
+  /qu'une\s+relance[\s\S]{0,80}?par\s+passe/i,
+  /relance\s+livr[ée]e?\s+par\s+passe/i,
+  // « 1 exécution (fire) max … par planification / par tick », « 1 fire/tick »
+  /(1|une)\s+(ex[ée]cution|fire)\b[\s\S]{0,80}?par\s+(tick|planification)/i,
+  /\b1\s*fire\s*\/\s*tick/i,
+];
+
+// Découpage de source VÉRIFIÉ : helper partagé `sliceSource` (source-slice.js).
 
 const SEND_FN = () =>
   sliceSource(
@@ -75,9 +88,12 @@ describe("défaut 1 — l'engagement du propriétaire est posé par TOUS les che
     expect(RUST_SOURCE).toContain('pub const SUPERAGENT_OWNER_ENGAGED_EVENT: &str = "pilot-superagent-owner-engaged";');
     expect(RUST_SOURCE).toContain("pub(crate) fn emit_owner_engaged(app: &AppHandle)");
     // Le helper commun est bien le SEUL point d'où part le signal.
-    const body = RUST_SOURCE.slice(RUST_SOURCE.indexOf("fn do_send_super_agent_prompt("));
-    const fnBody = body.slice(0, body.indexOf("\n}\n"));
-    expect(fnBody.length).toBeGreaterThan(500);
+    const fnBody = sliceSource(
+      RUST_SOURCE,
+      "fn do_send_super_agent_prompt(",
+      "\n}\n",
+      500,
+    );
     expect(fnBody).toContain("emit_owner_engaged(app);");
     // …et il n'est émis qu'après un envoi réussi (un envoi raté ne prouve rien).
     expect(fnBody.indexOf("send_superagent(cmd)")).toBeLessThan(fnBody.indexOf("emit_owner_engaged(app)"));
@@ -186,9 +202,13 @@ describe("défaut 2 — un rappel en échec n'affame plus les suivants", () => {
     expect(JS_SOURCE).toContain("const reminderFailureCounts = new Map();");
     expect(RUST_SOURCE).not.toMatch(/consecutive_fail/i);
     // La table des rappels n'a pas gagné de colonne d'échec.
-    const table = RUST_SOURCE.slice(RUST_SOURCE.indexOf("CREATE TABLE IF NOT EXISTS assistant_schedules"));
-    expect(table.length).toBeGreaterThan(100);
-    expect(table.slice(0, table.indexOf(");"))).not.toMatch(/fail/i);
+    const table = sliceSource(
+      RUST_SOURCE,
+      "CREATE TABLE IF NOT EXISTS assistant_schedules",
+      ");",
+      100,
+    );
+    expect(table).not.toMatch(/fail/i);
   });
 
   it("le rappel qui vient d'échouer passe APRÈS celui qui n'a jamais échoué", () => {
@@ -285,7 +305,8 @@ describe("défaut 3 — les retardataires partent groupés (un seul tour, pas N)
     expect(message).toContain("3 relances échues");
     for (const d of due) expect(message).toContain(d.prompt);
     // Le ticker n'envoie qu'UNE commande par passe, quel que soit le lot.
-    expect(TICK_FN()).toContain("items.length === 1");
+    const tick = TICK_FN();
+    expect(tick.split("send_super_agent_command").length - 1).toBe(1);
     expect(formatReminderGroupNotificationLabel(3, new Date())).toContain("3 relances");
   });
 
@@ -318,20 +339,91 @@ describe("défaut 3 — les retardataires partent groupés (un seul tour, pas N)
     ]);
   });
 
-  it("le message du lot est BORNÉ en longueur, et la troncature est DITE", () => {
-    // Même plafond que le reste des injections automatiques côté Rust.
+  // ── 3ᵉ audit, point SÉRIEUX : la troncature du MESSAGE est rendue
+  // STRUCTURELLEMENT IMPOSSIBLE (borne PAR RELANCE), et le contenu réellement
+  // lisible est relié au marquage ──
+  it("la troncature du message est STRUCTURELLEMENT IMPOSSIBLE : chaque relance est bornée DANS le lot", () => {
+    // Cas MESURÉ par l'audit : 8 relances de 3011 caractères. Avant correctif,
+    // le message faisait 4000, annonçait « 20496 caractère(s) omis » et les 8
+    // relances étaient marquées envoyées alors que seules 2 étaient lisibles.
     expect(REMINDER_BATCH_MAX_CHARS).toBe(4000);
+    expect(REMINDER_ITEM_MAX_CHARS).toBeLessThan(REMINDER_BATCH_MAX_CHARS / REMINDER_BATCH_MAX_ITEMS);
     const items = Array.from({ length: REMINDER_BATCH_MAX_ITEMS }, (_, i) => ({
       id: i + 1,
       prompt: `relance ${i + 1}\n` + "x".repeat(3000),
     }));
-    const message = buildReminderInjectionMessage(items);
-    expect(message.length).toBeLessThanOrEqual(REMINDER_BATCH_MAX_CHARS);
-    expect(message).toMatch(/lot tronqué : \d+ caractère/);
-    // Un message de taille normale n'est jamais touché.
+    const injection = buildReminderInjection(items);
+    const message = injection.message;
+    // 1. le message tient sous le plafond…
+    expect(Array.from(message).length).toBeLessThanOrEqual(REMINDER_BATCH_MAX_CHARS);
+    // 2. … sans JAMAIS tronquer le lot (aucun avis « lot tronqué ») :
+    expect(message).not.toMatch(/lot tronqué/);
+    // 3. toutes les relances sont LISIBLES (chacune commence par son texte et
+    //    porte, si besoin, son PROPRE avis de troncature)…
+    expect(injection.delivered.map((d) => d.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(injection.withheld).toHaveLength(0);
+    for (const d of items) {
+      expect(message, `relance ${d.id} absente du message`).toContain(`relance ${d.id}`);
+    }
+    expect((message.match(/relance tronquée : \d+ caractère/g) || []).length).toBe(
+      REMINDER_BATCH_MAX_ITEMS,
+    );
+    // 4. et le lot maximal (8 relances + en-tête) tient TOUJOURS.
+    const maxItems = Array.from({ length: REMINDER_BATCH_MAX_ITEMS }, (_, i) => ({
+      id: 100 + i,
+      prompt: "y".repeat(50000),
+    }));
+    expect(Array.from(buildReminderInjection(maxItems).message).length).toBeLessThanOrEqual(
+      REMINDER_BATCH_MAX_CHARS,
+    );
+    // 5. Un message de taille normale n'est jamais touché.
     const short = buildReminderInjectionMessage([{ prompt: "a" }, { prompt: "b" }]);
     expect(short).not.toContain("tronqué");
     expect(short.length).toBeLessThan(REMINDER_BATCH_MAX_CHARS);
+  });
+
+  it("le contenu RÉELLEMENT LISIBLE est relié au marquage (aucune relance marquée sans être dans le message)", () => {
+    // Invariant : pour toute taille de relance, la liste livrée (`delivered`) est
+    // exactement celle dont le texte figure dans le message, et une relance
+    // retirée (`withheld`) n'y figure pas. Le marquage ne porte que sur
+    // `delivered` (vérifié ci-dessous dans le ticker).
+    for (const taille of [0, 10, 440, 450, 1000, 3011, 20000]) {
+      const items = Array.from({ length: REMINDER_BATCH_MAX_ITEMS }, (_, i) => ({
+        id: i + 1,
+        prompt: `J${i + 1}-` + "z".repeat(taille),
+      }));
+      const { message, delivered, withheld } = buildReminderInjection(items);
+      expect(Array.from(message).length).toBeLessThanOrEqual(REMINDER_BATCH_MAX_CHARS);
+      expect(delivered.length + withheld.length).toBe(items.length);
+      for (const d of delivered) {
+        // Le début du texte est TOUJOURS lisible…
+        expect(message).toContain(d.prompt.slice(0, 4));
+        // … et s'il est coupé, la coupure est DITE pour CETTE relance.
+        if (taille > REMINDER_ITEM_MAX_CHARS) {
+          expect(message).toMatch(/relance tronquée : \d+ caractère/);
+        }
+      }
+      for (const d of withheld) {
+        expect(message).not.toContain(d.prompt.slice(0, 6));
+      }
+    }
+  });
+
+  it("le ticker marque les relances LISIBLES (`injection.delivered`), jamais la liste brute du plan", () => {
+    // C'est ce lien qui rend impossible de marquer « envoyée » une relance dont
+    // le texte n'a pas été remis à l'assistant (défaut sérieux du 3ᵉ audit).
+    const body = TICK_FN();
+    expect(body).toContain("const injection = buildReminderInjection(items);");
+    expect(body).toContain("const readable = injection.delivered;");
+    expect(body).toContain("message: injection.message");
+    // Seules les relances RÉELLEMENT remises sont mises en vol : une relance
+    // retirée faute de place n'y entre pas et reste due (elle repart à la passe
+    // suivante).
+    expect(body).toContain("for (const d of readable) pendingReminderIds.add(d.id);");
+    expect(body).not.toMatch(/for \(const d of (items|injection\.withheld)\) pendingReminderIds\.add/);
+    // La boucle de marquage ne boucle PAS sur `items` (= `plan.toInject`).
+    expect(body).not.toMatch(/for \(const d of items\) \{[\s\S]{0,120}?super_agent_schedule_mark_done/);
+    expect(body).toMatch(/for \(const d of readable\) \{[\s\S]{0,160}?super_agent_schedule_mark_done/);
   });
 
   it("un rappel multi-lignes est indenté sous son numéro (pas mélangé au lot)", () => {
@@ -397,8 +489,10 @@ describe("défaut 4 — la retenue n'est plus silencieuse, mais ne parle qu'une 
 
 describe("un rappel retenu n'est JAMAIS marqué comme exécuté", () => {
   it("le marquage ne porte que sur les rappels effectivement envoyés", () => {
-    // Un seul site de marquage, et il boucle sur `items` (= le lot envoyé), dans
-    // le `try` qui suit l'envoi réussi.
+    // Un seul site de marquage, et il boucle sur les relances RÉELLEMENT
+    // LISIBLES du lot (`injection.delivered`), dans le `try` qui suit l'envoi
+    // réussi (3ᵉ audit, défaut sérieux : `items` = `plan.toInject` pouvait
+    // contenir des relances dont le texte avait été coupé).
     const marks = JS_SOURCE.split("super_agent_schedule_mark_done").length - 1;
     expect(marks).toBe(2); // 1 en commentaire, 1 en appel
     const body = TICK_FN();
@@ -407,7 +501,7 @@ describe("un rappel retenu n'est JAMAIS marqué comme exécuté", () => {
     expect(body.indexOf("const items = plan.toInject;")).toBeLessThan(
       body.indexOf('invoke("super_agent_schedule_mark_done"'),
     );
-    expect(body).toMatch(/for \(const d of items\) \{[\s\S]{0,120}super_agent_schedule_mark_done/);
+    expect(body).toMatch(/for \(const d of readable\) \{[\s\S]{0,160}super_agent_schedule_mark_done/);
     // Le plan ne met JAMAIS un rappel retenu dans `toInject`.
     const due = [
       { id: 1, prompt: "a", every: 600 },
@@ -455,31 +549,151 @@ describe("documentation — la contradiction est levée et la règle réellement
     expect(SPEC).toMatch(/troncature (est )?annoncée|tronqué/i);
   });
 
-  it("plus aucune règle périmée « 1 exécution/fire par tick » dans le code et les notes de test", () => {
-    // 2ᵉ relecture, point 4 : la règle remplacée traînait encore ici et là.
-    // L'ancienne formulation ne peut plus apparaître comme règle appliquée ;
-    // elle n'est tolérée que CITÉE pour expliquer son remplacement (« et non … »).
-    for (const phrase of [
-      "1 exécution max par planification et par tick",
-      "1 exécution (fire) max par planification et par tick",
-      "1 fire/tick",
-    ]) {
-      for (const [nom, texte] of [
-        ["super_agent.rs", RUST_SOURCE],
-        ["tests/schedule-tests.md", SCHEDULE_TESTS_DOC],
-      ]) {
-        let idx = texte.indexOf(phrase);
-        while (idx !== -1) {
-          const avant = texte.slice(0, idx).trimEnd();
+  it("plus aucune règle périmée « 1 exécution/fire par tick » ou « une relance par passe »", () => {
+    // 2ᵉ relecture, point 4, PUIS 3ᵉ audit, point 2 : une LISTE DE PHRASES FIGÉES
+    // ne voyait pas les reformulations (« au plus une relance … par passe »,
+    // « 1 exécution/fire max … par planification/tick »), et seuls deux fichiers
+    // étaient regardés — la même règle traînait encore dans le titre d'un test
+    // et d'un groupe de tests. On cherche donc des MOTIFS, sur un périmètre
+    // élargi (le module, son test, les notes de test et le code Rust).
+    //
+    // Seule tolérance : la CITATION de l'ancienne règle pour expliquer son
+    // remplacement (« et non « … » »).
+    const PERIMETRE = [
+      ["src-tauri/src/super_agent.rs", RUST_SOURCE],
+      ["tests/schedule-tests.md", SCHEDULE_TESTS_DOC],
+      // 3ᵉ audit, point 2 : les deux occurrences oubliées vivaient ici.
+      ["src/js/super-agent-schedule.test.js", SCHEDULE_TEST_SOURCE],
+      ["src/js/super-agent-schedule.js", SCHEDULE_SOURCE],
+      ["spec_super_agent.md", SPEC],
+    ];
+    for (const [nom, texte] of PERIMETRE) {
+      for (const motif of MOTIFS_REGLE_PERIMEE) {
+        const global = new RegExp(motif.source, motif.flags.includes("g") ? motif.flags : `${motif.flags}g`);
+        let m;
+        while ((m = global.exec(texte)) !== null) {
+          const avant = texte.slice(0, m.index).trimEnd();
           expect(
-            /et non «( |\n|\n\s*)?$/.test(avant),
-            `${nom} : règle périmée posée comme appliquée → « ${phrase} »`,
+            /et non\s*«\s*$/.test(avant),
+            `${nom} : règle périmée posée comme appliquée → « ${m[0].slice(0, 80).replace(/\s+/g, " ")} »`,
           ).toBe(true);
-          idx = texte.indexOf(phrase, idx + 1);
+          global.lastIndex = m.index + 1;
         }
       }
     }
+    // Et la règle RÉELLEMENT appliquée est écrite là où elle doit l'être.
     expect(RUST_SOURCE).toMatch(/un seul envoi par passe/i);
     expect(SCHEDULE_TESTS_DOC).toMatch(/un seul envoi par passe/i);
+    expect(SCHEDULE_TEST_SOURCE).toMatch(/un seul ENVOI par passe/i);
+    expect(SPEC).toMatch(/un seul (ENVOI|envoi) par passe/i);
+  });
+
+  it("une REFORMULATION de la règle périmée est attrapée (pas seulement les phrases figées)", () => {
+    // Preuve que le verrou mord sur une formulation inédite : motifs appliqués
+    // à des textes de synthèse qui n'étaient dans aucune liste.
+    const reformulations = [
+      "Règle : au plus une relance déclenchée par passe de tick.",
+      "Règle : une seule relance envoyée par passe, pour ne pas empiler les tours.",
+      "Limite : 1 fire maximum par planification, et pas davantage.",
+      "Garde-fou : 1 exécution/fire max par planification/tick.",
+    ];
+    const MOTIFS_PERIMES = MOTIFS_REGLE_PERIMEE;
+    for (const texte of reformulations) {
+      expect(
+        MOTIFS_PERIMES.some((m) => m.test(texte)),
+        `reformulation non attrapée : « ${texte} »`,
+      ).toBe(true);
+    }
+    // …et la règle appliquée n'est PAS attrapée (aucun faux positif).
+    for (const texte of [
+      "un seul ENVOI par passe, un envoi pouvant porter plusieurs relances regroupées",
+      "un seul ENVOI par passe : une relance simplement échue part seule, les autres restent dues",
+    ]) {
+      for (const m of MOTIFS_PERIMES) {
+        expect(m.test(texte), `faux positif sur « ${texte} »`).toBe(false);
+      }
+    }
+  });
+});
+
+// ── 3ᵉ audit, point 3 : prompt par ACCÈS WEB, onglet 🧭 fermé ────────────────
+describe("prompt par accès web, onglet fermé : l'engagement du propriétaire n'est pas perdu", () => {
+  it("l'écoute « le propriétaire a écrit » est posée AU NIVEAU DE L'APPLICATION, pas dans la fabrique de l'onglet", () => {
+    // 1. L'écoute est déclarée dans une fonction de MODULE dédiée…
+    const watch = sliceSource(
+      JS_SOURCE,
+      "export async function initOwnerEngagementWatch()",
+      "\n}\n",
+      200,
+    );
+    expect(watch).toContain('listen("pilot-superagent-owner-engaged"');
+    expect(watch).toContain("ownerEngagedThisSession = true;");
+    // 2. … et le CORPS de la fabrique d'onglet ne l'enregistre PLUS : c'est cet
+    //    enregistrement-là, retiré à la fermeture de l'onglet, qui perdait
+    //    l'évènement (émission Rust pourtant inconditionnelle).
+    const factory = sliceSource(
+      JS_SOURCE,
+      "export async function createSuperAgent(container) {",
+      "\n// Chantier #13 : ticker des relances programmées",
+      5000,
+    );
+    expect(factory).not.toMatch(/listen\(\s*["']pilot-superagent-owner-engaged["']/);
+    expect(factory).not.toContain("unlistenOwnerEngaged");
+    // 3. Elle est installée au DÉMARRAGE de Pilot, comme l'écoute Telegram
+    //    (modèle suivi : aucune dépendance à l'ouverture d'un onglet).
+    expect(MAIN_SOURCE).toMatch(/import \{[^}]*initOwnerEngagementWatch[^}]*\} from "\.\/super-agent\.js"/);
+    expect(MAIN_SOURCE).toMatch(/^[^\S\n]*void initOwnerEngagementWatch\(\);$/m);
+    expect(MAIN_SOURCE).toMatch(/^[^\S\n]*initTelegramInbound\(\);$/m);
+    // 4. Toujours UN SEUL drapeau, posé à deux endroits au plus (l'écoute
+    //    applicative et l'arrivée Telegram) : aucun second drapeau, aucun
+    //    compteur persistant.
+    const poses = (JS_SOURCE.match(/ownerEngagedThisSession = true;/g) || []).length;
+    expect(poses).toBe(2);
+    expect(JS_SOURCE).not.toMatch(/ownerEngagedThisSession\s*\+=\s*1/);
+  });
+
+  it("prompt web pendant que l'onglet est fermé → ouverture de l'onglet → la relance part", () => {
+    // Séquence réelle : (a) l'accès web distant envoie un prompt, Rust émet le
+    // signal, l'écoute APPLICATIVE pose le drapeau — aucun onglet n'existe ;
+    // (b) l'utilisateur ouvre l'onglet 🧭 : `startScheduleTicker` ne remet JAMAIS
+    // l'engagement à zéro ; (c) la relance échue part, au lieu d'être retenue.
+    let ownerEngaged = false;
+    const signalRust = () => { ownerEngaged = true; }; // = l'écoute applicative
+
+    const ticker = TICKER_FN();
+    expect(ticker).not.toMatch(/ownerEngagedThisSession\s*=\s*false/);
+
+    signalRust();
+    const due = [{ id: 7, prompt: "relance web", every: 600, ...dueAt(5) }];
+    const plan = planDueReminderInjections({
+      due,
+      pendingIds: new Set(),
+      backendBusy: false,
+      autoCheckStartup: false,
+      ownerEngaged,
+      failureCounts: new Map(),
+      now: Date.now(),
+    });
+    expect(plan.waitingForOwner).toBe(0);
+    expect(plan.held).toHaveLength(0);
+    expect(plan.toInject.map((d) => d.id)).toEqual([7]);
+    // Le message remis porte bien le texte de la relance, et c'est lui qui est marqué.
+    const injection = buildReminderInjection(plan.toInject);
+    expect(injection.message).toContain("relance web");
+    expect(injection.delivered.map((d) => d.id)).toEqual([7]);
+
+    // Sans ce signal (onglet fermé, écoute morte comme avant le correctif), la
+    // relance AURAIT été retenue : c'est la contre-épreuve du parcours.
+    const held = planDueReminderInjections({
+      due,
+      pendingIds: new Set(),
+      backendBusy: false,
+      autoCheckStartup: false,
+      ownerEngaged: false,
+      failureCounts: new Map(),
+      now: Date.now(),
+    });
+    expect(held.toInject).toHaveLength(0);
+    expect(held.held.map((d) => d.id)).toEqual([7]);
   });
 });

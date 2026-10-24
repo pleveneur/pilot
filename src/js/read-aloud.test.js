@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
+import { sliceSource } from "./source-slice.js";
 
 // ── DOM minimal (suffisant pour creer et inspecter les bulles) ──────────────
 vi.hoisted(() => {
@@ -654,19 +655,18 @@ describe("presence du bouton dans une reponse reelle", () => {
       // Appel REEL (et non une simple mention dans un commentaire).
       const occurrences = (src.match(/attachReadAloud\(el,/g) || []).length;
       expect(occurrences, `${file} : une seule pose attendue`).toBe(1);
-      const start = src.indexOf(factory);
-      expect(start, `${file} : fabrique introuvable`).toBeGreaterThan(-1);
-      const end = src.indexOf("\n}\n", start);
-      expect(end, `${file} : fin de fabrique introuvable`).toBeGreaterThan(start);
-      expect(src.slice(start, end)).toContain("attachReadAloud(el,");
+      // Découpage VÉRIFIÉ (3ᵉ audit, défaut 4) : une ancre absente levait ici une
+      // erreur silencieuse (fragment de longueur 0), et l'assertion négative qui
+      // suit était vraie PAR CONSTRUCTION.
+      const factoryBody = sliceSource(src, factory, "\n}\n", 200);
+      expect(factoryBody).toContain("attachReadAloud(el,");
       // Aucun autre message ne porte le bouton : les fabriques de message
       // utilisateur / systeme ne mentionnent jamais la pose.
-      const userFactory = src.slice(
-        file.includes("agent-pi") ? src.indexOf("export function appendDelegatedMessage(") : src.indexOf("function appendMessage("),
-      );
-      if (userFactory.length) {
-        expect(userFactory.slice(0, userFactory.indexOf("\n}\n"))).not.toContain("attachReadAloud(");
-      }
+      const userFactory = file.includes("agent-pi")
+        ? "export function appendDelegatedMessage("
+        : "function appendMessage(";
+      const userBody = sliceSource(src, userFactory, "\n}\n", 100);
+      expect(userBody).not.toContain("attachReadAloud(");
     }
   });
 });
@@ -871,13 +871,12 @@ describe("perimetre lu — seule la reponse finale", () => {
     const src = readSource("src/js/read-aloud.js");
     // La lecture passe par les sections de la reponse finale...
     expect(src).toMatch(/export function messageTextOf\(/);
-    const msgStart = src.indexOf("export function messageTextOf(");
-    const msgBody = src.slice(msgStart, src.indexOf("\n}\n", msgStart));
+    // Découpage VÉRIFIÉ (3ᵉ audit, défaut 4) : ancres obligatoires + taille minimale.
+    const msgBody = sliceSource(src, "export function messageTextOf(", "\n}\n", 100);
     expect(msgBody).toContain("finalAnswerSections(messageEl)");
     // ... et la frontiere de la reponse finale est lue dans la STRUCTURE du
     // flux : classes de travail interne + marque de note technique.
-    const start = src.indexOf("export function finalAnswerSections(");
-    const body = src.slice(start, src.indexOf("\n}\n", start));
+    const body = sliceSource(src, "export function finalAnswerSections(", "\n}\n", 100);
     expect(body).toContain("isInternalWorkBlock(child)");
     expect(body).toContain("isInternalNotice(child)");
     expect(body).toContain('classList.contains("agent-text-section")');
