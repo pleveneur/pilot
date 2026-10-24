@@ -1080,6 +1080,13 @@
                 <option value="">Automatique (voix de la langue de l'interface)</option>
               </select>
             </div>
+            <!-- &Eacute;coute d'exemple : une rang&eacute;e par voix propos&eacute;e (remplies par
+                 settings.js &agrave; partir de la M&Ecirc;ME liste que le s&eacute;lecteur). Le
+                 m&ecirc;me bouton devient &laquo;&nbsp;Arr&ecirc;ter&nbsp;&raquo; pendant la lecture. -->
+            <div class="setting-row setting-row-indent" style="flex-direction:column;align-items:stretch;gap:4px;">
+              <span style="font-size:11px;color:var(--text-muted);">&Eacute;coutez chaque voix propos&eacute;e avant de choisir&nbsp;: un clic lit une phrase d'exemple courte, le m&ecirc;me bouton devient &laquo;&nbsp;Arr&ecirc;ter&nbsp;&raquo;, et une seule voix est lue &agrave; la fois.</span>
+              <div id="read-aloud-voice-previews" class="read-aloud-previews"></div>
+            </div>
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
               <span id="read-aloud-state" role="status" aria-live="polite">Aucune lecture en cours.</span>
             </div>

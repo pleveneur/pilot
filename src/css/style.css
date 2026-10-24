@@ -3946,6 +3946,54 @@ body.zen-mode #project-footer {
   align-items: center;
 }
 
+/* Ecoute d'exemple des voix proposees (Parametres → Assistant → Lecture des
+   reponses). Une rangee par voix : le MEME bouton devient « Arreter » pendant
+   la lecture (libelle en texte clair + `aria-pressed`), le libelle de la voix
+   reste lisible, et le message d'echec ou de repli s'affiche sur la rangee
+   (jamais un echec muet). */
+.read-aloud-previews {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.read-aloud-preview-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.read-aloud-preview-btn {
+  flex: 0 0 auto;
+  min-width: 78px;
+}
+
+.read-aloud-preview-btn-speaking,
+.read-aloud-preview-btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-primary);
+  font-weight: var(--fw-semibold);
+}
+
+.read-aloud-preview-label {
+  flex: 1 1 220px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.read-aloud-preview-msg {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--warning);
+}
+
+.read-aloud-preview-msg:empty {
+  display: none;
+}
+
 .agent-model-select {
   padding: 3px 6px;
   font-size: 11px;

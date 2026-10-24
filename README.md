@@ -100,6 +100,10 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   section **« Lecture des réponses »** (choix de la voix, état de la lecture, explication).
   Par défaut : **automatique** (la voix de la langue de l'interface) ; le choix est mémorisé, et
   si la voix choisie disparaît de l'ordinateur, Pilot revient proprement à la voix automatique.
+- **On écoute chaque voix avant de la choisir** : sous la liste, un bouton **« Écouter »** par voix
+  lit une **phrase d'exemple courte** (le même bouton devient **« Arrêter »**, une seule voix à la
+  fois). Une voix dont le modèle n'est pas encore téléchargé n'est **pas** remplacée par la voix du
+  système : la section le dit et propose le téléchargement.
 - Aucune voix installée sur le poste : le réglage est inactif et le bouton reste visible mais
   inactif, avec une phrase qui explique quoi faire.
 - **Vraies voix françaises, hors ligne** : la liste propose des **voix françaises locales** (une entrée

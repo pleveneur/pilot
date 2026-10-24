@@ -54,6 +54,7 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
 | `#read-aloud-local-note` (`role="note"`) | état du **moteur de voix locale**, **dossier où déposer ses fichiers** (chemin réel renvoyé par le moteur, jamais recopié) et ce qui se passe si le modèle manque |
 | `#read-aloud-download-state` (`role="status"`, `aria-live="polite"`) | état du **téléchargement** : taille, progression, terminé / arrêté / impossible |
 | `#btn-read-aloud-download`, `#btn-read-aloud-download-cancel`, `#btn-read-aloud-recheck` | **télécharger le modèle**, **arrêter le téléchargement en cours**, **vérifier à nouveau** la présence du moteur et du modèle |
+| `#read-aloud-voice-previews` | **écoute d'exemple** : une rangée par voix proposée (bouton « ▶ Écouter » ↔ « ⏹ Arrêter », libellé de la voix, message court en cas d'échec) — voir § 2 bis |
 
 - **Aucun doublon** : ce réglage n'existe dans aucun autre onglet des paramètres
   et dans aucune fenêtre par message (vérifié par test).
@@ -61,6 +62,53 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
   ligne d'état (`aria-describedby`), la ligne d'état est annoncée.
 - Le sélecteur est rempli **à l'ouverture de la modale** et **à l'ouverture de
   l'onglet Assistant** (la liste des voix peut se charger entre-temps).
+
+## 2 bis. Écouter les voix avant de choisir (aperçu)
+
+Objectif : ne plus choisir **à l'aveugle**. Chaque voix proposée (voix locale
+installée, voix locale à télécharger, voix du système, « Automatique ») porte un
+bouton d'écoute dans la section, **avant** l'enregistrement du choix.
+
+1. **Un seul chemin de lecture** : `previewVoice(choice, options)`
+   (`read-aloud.js`) crée un lecteur par **`createSpeaker`** — le même que le
+   bouton « 🔊 Écouter » d'une réponse — avec `voiceName` = la valeur du réglage,
+   puis appelle `speak()`. Donc **même nettoyage** (`textForSpeech`), **même
+découpage** par phrase, **même voix**, **même repli journalisé**, **même règle
+« une seule lecture à la fois »**. L'aperçu n'implémente ni synthèse, ni
+nettoyage, ni découpage (verrouillé par test : les compteurs de
+`new Utterance(`, `synth.speak(` et `splitSentences(textForSpeech(` valent 1
+dans `read-aloud.js`, et `settings.js` n'appelle jamais `.speak(`).
+2. **Phrase d'exemple courte** : `VOICE_PREVIEW_SAMPLE` — deux phrases, français
+neutre (« Bonjour, je lis les réponses de Pilot. Cette phrase courte permet de
+juger le rythme et la clarté de cette voix. »). Elle passe par le nettoyage et le
+découpage communs comme n'importe quel texte lu.
+3. **Un seul bouton par voix** : « ▶ Écouter » devient « ⏹ Arrêter » pendant la
+lecture (libellé en clair, `aria-pressed`, encadré accentué — lisible sans
+couleur). Second clic = `stopReading()` (même arrêt que la lecture).
+4. **Une seule lecture à la fois** : lancer l'aperçu d'une autre voix arrête le
+précédent ; **quitter les Paramètres** (Annuler **et** Enregistrer) appelle
+`stopReading()` avant de fermer la modale, et `pagehide` arrête une lecture en
+cours à la fermeture de la fenêtre. Aucun son orphelin.
+5. **Modèle non téléchargé** : l'aperçu vérifie `localVoiceStatusFor(model)`
+(ou `refreshLocalVoiceStatus`) **avant** de lire. Si le modèle manque, il **ne
+joue pas** la voix du système à la place : `previewNotInstalledHint(label)`
+dit que la voix « n'est pas encore installée », où cliquer pour télécharger, et
+que **rien n'est téléchargé sans geste**. Aucun téléchargement n'est déclenché
+par l'aperçu (`downloadLocalVoiceModel` n'apparaît pas dans ce chemin).
+6. **Repli du moteur local** (moteur ou modèle installé mais synthèse en échec) :
+la lecture continue avec la voix du système — comportement du chemin commun —
+et la rangée affiche `readAloudStateLabel("local-fallback")` ; la ligne
+correspondante est écrite dans le **journal existant** (`voix-locale.log`).
+7. **Jamais de blocage ni d'exception** : `previewVoice` ne lève pas (toute
+erreur devient un état), `startVoicePreview` est asynchrone, et les échecs
+visibles (`unavailable`, `no-voice`, `local-fallback`, modèle absent) affichent
+un message court **sur la rangée concernée** (`role="status"`, `aria-live`) ;
+l'écran des Paramètres reste utilisable.
+8. **Une seule liste de voix** : les rangées sont construites à partir du
+résultat **unique** de `voiceChoiceOptions(...)` dans `renderReadAloudVoice`
+(aucun second appel, aucun appel à `availableVoices` dans le rendu des
+rangées) : une voix proposée = une rangée, dans le même ordre, avec le même
+libellé (genre et taille compris).
 
 ## 3. Choix de la voix
 
@@ -200,6 +248,10 @@ automatiquement, aucun enregistrement de ce qui est lu.
 ## 6. Couverture
 
 `src/js/read-aloud.test.js` (lecture, nettoyage, une seule à la fois, voix),
+`src/js/apercu-voix-parametres.test.js` (écoute d'exemple : **un seul chemin de
+lecture** — compteurs de prise de parole et de nettoyage, aucune seconde liste
+de voix —, un seul aperçu à la fois, arrêt à la fermeture des Paramètres, échec
+non silencieux, modèle local absent qui **ne joue pas** la voix du système),
 `src/js/speech-text.test.js` (nettoyage du texte de la voix : cas réels avec
 émojis, gras, bloc de code, tableau, lien, liste ; coupure sur frontière),
 `src/js/reglage-voix-onglet-assistant.test.js` (emplacement unique, absence de

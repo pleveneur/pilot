@@ -45,6 +45,9 @@ import {
   voiceChoiceStatus,
   readAloudStateLabel,
   ensureVoices,
+  previewNotInstalledHint,
+  previewVoice,
+  stopReading,
   VOICES_WAIT_MS,
   READ_ALOUD_STATE_EVENT,
 } from "./read-aloud.js";
@@ -626,13 +629,17 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   function renderReadAloudVoice(wanted, local) {
     if (!selectReadAloudVoice) return;
     const voices = availableVoices();
+    // Liste des voix proposees : calculee UNE fois, et reprise telle quelle par
+    // les rangees d'ecoute (aucune seconde liste dans le fichier).
+    const options = voiceChoiceOptions(voices, local || undefined);
     selectReadAloudVoice.innerHTML = "";
-    for (const opt of voiceChoiceOptions(voices, local || undefined)) {
+    for (const opt of options) {
       const el = document.createElement("option");
       el.value = opt.value;
       el.textContent = opt.label;
       selectReadAloudVoice.appendChild(el);
     }
+    renderVoicePreviews(options);
     const status = voiceChoiceStatus(voices, wanted, local);
     selectReadAloudVoice.value = status.value;
     selectReadAloudVoice.disabled = status.kind === "empty";
@@ -729,6 +736,144 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     return localVoiceModelFor(selectReadAloudVoice ? selectReadAloudVoice.value : "");
   }
 
+  // ── Ecoute d'exemple de chaque voix proposee (apercu avant de choisir) ────
+  // Une rangee par voix proposee, construite a partir de la MEME liste que le
+  // selecteur (`voiceChoiceOptions`). Le clic passe par `previewVoice`
+  // (`read-aloud.js`) : c'est le chemin de lecture du bouton « Ecouter » des
+  // reponses, jamais un second moteur — sinon l'apercu mentirait sur ce que
+  // l'utilisateur entendra vraiment.
+
+  /** Rangees affichees : valeur du reglage -> elements de la rangee. */
+  const previewRows = new Map();
+  /** Signature de la liste affichee : on ne reconstruit que si elle change. */
+  let previewSignature = "";
+
+  /**
+   * Etat d'un bouton d'apercu : le MEME bouton devient « Arreter » (libelle en
+   * texte clair, `aria-pressed`, encadre) — comprehensible sans couleur.
+   * @param {HTMLElement|null} button
+   * @param {"idle"|"speaking"} state
+   */
+  function setPreviewButtonState(button, state) {
+    if (!button) return;
+    const speaking = state === "speaking";
+    button.textContent = speaking ? "Arrêter" : "Écouter";
+    button.dataset.previewState = speaking ? "speaking" : "idle";
+    button.setAttribute("aria-pressed", speaking ? "true" : "false");
+    button.title = speaking
+      ? "Arrêter l'écoute de cet exemple"
+      : "Écouter cette voix avec une phrase d'exemple courte";
+    if (button.classList) {
+      button.classList.toggle("read-aloud-preview-btn-speaking", speaking);
+    }
+  }
+
+  /**
+   * Message court sur une rangee (jamais un echec muet, jamais une exception).
+   * @param {HTMLElement|null} el
+   * @param {string} [text]
+   */
+  function setPreviewMessage(el, text) {
+    if (!el) return;
+    el.textContent = text || "";
+    el.dataset.state = text ? "info" : "";
+  }
+
+  /**
+   * Construit les rangees d'ecoute : une par voix proposee, dans le meme ordre et
+   * avec les memes libelles que le selecteur.
+   * @param {{value: string, label: string}[]} options liste issue de
+   *        `voiceChoiceOptions` (source unique des voix proposees)
+   */
+  function renderVoicePreviews(options) {
+    if (!readAloudPreviewList) return;
+    const list = (Array.isArray(options) ? options : []).map((opt) => ({
+      value: String(opt && opt.value != null ? opt.value : ""),
+      label: String((opt && opt.label) || ""),
+    }));
+    const signature = list.map((opt) => `${opt.value}\u0001${opt.label}`).join("\u0002");
+    // Rien n'a change : on garde les rangees telles quelles (donc un apercu en
+    // cours garde son bouton « Arreter »).
+    if (signature === previewSignature) return;
+    previewSignature = signature;
+    previewRows.clear();
+    readAloudPreviewList.innerHTML = "";
+    for (const opt of list) {
+      const row = document.createElement("div");
+      row.className = "read-aloud-preview-row";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "web-btn read-aloud-preview-btn";
+      button.dataset.voice = opt.value;
+      button.setAttribute("aria-label", `Écouter un exemple avec ${opt.label}`);
+      const label = document.createElement("span");
+      label.className = "read-aloud-preview-label";
+      label.textContent = opt.label;
+      const message = document.createElement("span");
+      message.className = "read-aloud-preview-msg";
+      message.setAttribute("role", "status");
+      message.setAttribute("aria-live", "polite");
+      setPreviewButtonState(button, "idle");
+      button.addEventListener("click", () => startVoicePreview(opt.value, button, message));
+      row.appendChild(button);
+      row.appendChild(label);
+      row.appendChild(message);
+      readAloudPreviewList.appendChild(row);
+      previewRows.set(opt.value, { button, message, label: opt.label });
+    }
+  }
+
+  /**
+   * Ecoute d'exemple d'UNE voix proposee.
+   *  - un seul apercu a la fois : lancer celui-ci arrete le precedent (le chemin
+   *    de lecture commun s'en charge) ;
+   *  - voix locale dont le modele manque : on ne lit PAS la voix du systeme a la
+   *    place, on le dit et on propose le telechargement ;
+   *  - voix locale en echec : la lecture continue avec la voix du systeme et la
+   *    rangee le dit (le journal, lui, existait deja cote chemin commun) ;
+   *  - echec quelconque : message court, les Parametres restent utilisables.
+   * @param {string} value valeur de reglage de la voix
+   * @param {HTMLElement|null} button bouton de la rangee
+   * @param {HTMLElement|null} message message de la rangee
+   */
+  async function startVoicePreview(value, button, message) {
+    const choice = String(value == null ? "" : value);
+    // Second clic sur la meme voix : on arrete (meme arret que la lecture).
+    if (button && button.dataset.previewState === "speaking") {
+      stopReading();
+      return;
+    }
+    // Un seul message a la fois : on repart de rangees propres.
+    for (const row of previewRows.values()) setPreviewMessage(row.message, "");
+    const model = localVoiceModelFor(choice);
+    if (model) {
+      const known = localVoiceStatusFor(model) || (await refreshLocalVoiceStatus({ model }));
+      if (!known || !known.installed) {
+        const row = previewRows.get(choice);
+        setPreviewButtonState(button, "idle");
+        setPreviewMessage(message, previewNotInstalledHint(row ? row.label : ""));
+        return;
+      }
+    }
+    await previewVoice(choice, {
+      onstate: (state) => {
+        if (state === "speaking") {
+          setPreviewButtonState(button, "speaking");
+          setPreviewMessage(message, "");
+          return;
+        }
+        setPreviewButtonState(button, "idle");
+        if (state === "local-fallback") {
+          setPreviewMessage(message, readAloudStateLabel("local-fallback"));
+        } else if (state === "no-voice" || state === "unavailable") {
+          setPreviewMessage(message, readAloudStateLabel(state));
+        } else {
+          setPreviewMessage(message, "");
+        }
+      },
+    });
+  }
+
   /**
    * Lance le téléchargement du modèle de la voix sélectionnée — uniquement
    * appelé par un geste de l'utilisateur.
@@ -771,6 +916,9 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const readAloudVoiceNote = document.getElementById("read-aloud-voice-note");
   // Ligne d'état du MOTEUR DE VOIX LOCALE (même section, même endroit unique).
   const readAloudLocalNote = document.getElementById("read-aloud-local-note");
+  // Rangées d'écoute d'exemple : une par voix proposée (remplies par
+  // `renderVoicePreviews`, à partir de la MÊME liste que le sélecteur).
+  const readAloudPreviewList = document.getElementById("read-aloud-voice-previews");
   // Téléchargement du modèle de la voix locale : état, bouton, arrêt, revérif.
   const readAloudDownloadState = document.getElementById("read-aloud-download-state");
   const btnReadAloudDownload = document.getElementById("btn-read-aloud-download");
@@ -1845,6 +1993,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     const state = event && event.detail ? event.detail.state : "";
     showReadAloudState(state);
   });
+  // Fermer la fenetre arrete une lecture en cours (aperçu compris) : aucun son
+  // ne continue apres la fermeture.
+  window.addEventListener("pagehide", () => stopReading());
 
   // ── Mémoire (transfert de suivi, issue #69) ──
   if (btnMemExport) {
@@ -2331,6 +2482,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     await cancelProvidersIfDirty();
     stopLayaModelPoll();
     stopLayaProgressListener();
+    // Quitter les Paramètres arrête l'écoute en cours (aperçu d'une voix) :
+    // aucun son ne continue une fois la fenetre de reglage fermee.
+    stopReading();
     // Revert l'aperçu en direct : on revient au thème/sous-thème sauvegardé
     applyTheme(savedTheme, savedSubtheme);
     modal.classList.add("hidden");
@@ -2710,6 +2864,8 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     }
     stopLayaModelPoll();
     stopLayaProgressListener();
+    // Enregistrer ferme aussi la modale : on arrete l'ecoute en cours (apercu).
+    stopReading();
     modal.classList.add("hidden");
   });
 

@@ -752,6 +752,77 @@ export function createSpeaker(win, options = {}) {
   return self;
 }
 
+// ── Apercu d'une voix depuis les Parametres ─────────────────────────────────
+//
+// Ecouter une voix AVANT de la choisir (Parametres → Assistant → Lecture des
+// reponses). L'apercu ne parle pas tout seul et surtout il ne dispose PAS d'un
+// moteur a lui : il passe par `createSpeaker`, c'est-a-dire par le MEME chemin
+// que le bouton « Ecouter » pose sous une reponse — meme nettoyage du texte,
+// meme decoupage, memes voix, meme repli journalise, meme regle « une seule
+// lecture a la fois ». Un second chemin donnerait un apercu qui ne correspond
+// pas a ce que l'utilisateur entendra vraiment : ce serait un mensonge.
+
+/**
+ * Phrase d'exemple de l'apercu : COURTE (deux phrases), en francais neutre, ni
+ * publicitaire ni technique. Assez longue pour juger le rythme et la clarte,
+ * assez courte pour ne pas faire attendre. Elle passe par le nettoyage et le
+ * decoupage communs comme n'importe quel texte lu.
+ */
+export const VOICE_PREVIEW_SAMPLE =
+  "Bonjour, je lis les r\u00e9ponses de Pilot. Cette phrase courte permet de juger le rythme et la clart\u00e9 de cette voix.";
+
+/**
+ * Message court quand l'apercu d'une voix locale est demande alors que son
+ * modele n'est pas installe : on ne joue JAMAIS la voix du systeme a la place de
+ * la voix annoncee (ce serait une autre voix), on le dit et on propose le
+ * telechargement — qui reste un geste de l'utilisateur.
+ * @param {string} label libelle de la voix proposee
+ * @returns {string}
+ */
+export function previewNotInstalledHint(label) {
+  const name = String(label == null ? "" : label).trim();
+  return (
+    `Aper\u00e7u impossible : ${name || "cette voix"} n'est pas encore install\u00e9e sur cet ordinateur. ` +
+    "Choisissez-la dans la liste ci-dessus puis cliquez sur \u00ab\u00a0T\u00e9l\u00e9charger le mod\u00e8le\u00a0\u00bb : " +
+    "rien n'est t\u00e9l\u00e9charg\u00e9 sans votre geste."
+  );
+}
+
+/**
+ * Lit la phrase d'exemple avec la voix designee par une valeur du reglage
+ * unique (`read_aloud_voice` : `""`, une voix du systeme, ou une voix locale).
+ *
+ * Meme chemin que la lecture d'une reponse : `createSpeaker` → `speak`. Un
+ * apercu en cours est arrete par le suivant, et un clic sur « Arreter » passe par
+ * `stopReading` (aucun second mecanisme d'arret).
+ *
+ * Ne leve jamais : un echec devient un etat affiche (`unavailable`).
+ * @param {string} choice valeur de voix a ecouter
+ * @param {{win?: Window, doc?: Document, lang?: string, waitMs?: number,
+ *          invoke?: Function, onstate?: (state: string) => void}} [options]
+ * @returns {Promise<{ok: boolean}>}
+ */
+export async function previewVoice(choice, options = {}) {
+  const win = options.win || globalThis.window;
+  const notifyState = typeof options.onstate === "function" ? options.onstate : () => {};
+  try {
+    const speaker = createSpeaker(win, {
+      lang: options.lang || speechLang(options.doc || (win && win.document)),
+      waitMs: options.waitMs,
+      invoke: options.invoke,
+      // La voix ecoutee est EXACTEMENT celle du reglage unique : la meme valeur
+      // que celle qu'enregistrera le bouton « Enregistrer » (aucun autre format).
+      voiceName: String(choice == null ? "" : choice),
+    });
+    const ok = await speaker.speak(VOICE_PREVIEW_SAMPLE, { onstate: notifyState });
+    return { ok: !!ok };
+  } catch (_) {
+    // Jamais d'exception remontee : l'ecran des Parametres doit rester utilisable.
+    safeCall(() => notifyState("unavailable"));
+    return { ok: false };
+  }
+}
+
 /** Conteneur du flux chronologique d'un message de l'assistant. */
 function flowOf(messageEl) {
   const flow = safeCall(() =>

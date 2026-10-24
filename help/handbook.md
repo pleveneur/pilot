@@ -328,6 +328,22 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   **choix de la voix**, l'**état de la lecture** et l'**explication**, regroupés
   au même endroit — ce réglage n'existe nulle part ailleurs (ni dans un autre
   onglet des paramètres, ni dans une fenêtre par message).
+- **Vous écoutez chaque voix avant de choisir** : sous la liste, chaque voix
+  proposée a son bouton **« ▶ Écouter »**, qui lit une **phrase d'exemple courte**
+  en français. Le même bouton devient **« ⏹ Arrêter »** pendant la lecture, et
+  **une seule voix est lue à la fois** : écouter une autre voix coupe la
+  précédente. Quitter les Paramètres ou fermer la fenêtre arrête aussi la
+  lecture.
+- **Ce que vous entendez est exactement ce que vous obtiendrez** : l'exemple
+  passe par le **même chemin** que le bouton « 🔊 Écouter » posé sous les
+  réponses (même voix, même nettoyage du texte, découpage par phrases identique).
+- **Une voix pas encore téléchargée ne se fait pas passer pour une autre** :
+  si son modèle manque, l'exemple ne lit **pas** la voix du système à la place ;
+  la section écrit que cette voix **n'est pas encore installée** et propose
+  « Télécharger le modèle ». Rien n'est téléchargé sans votre geste.
+- **Si la voix locale échoue malgré tout**, l'exemple continue avec la voix du
+  système et l'écrit sous la voix concernée, avec une ligne dans le journal
+  (comme pour la lecture d'une réponse). Rien ne bloque.
 - Par défaut, la voix est sur **« Automatique »** : Pilot prend la voix de la
   langue de l'interface. Si vous choisissez une voix précise, **ce choix est
   mémorisé** et réutilisé aux démarrages suivants.
