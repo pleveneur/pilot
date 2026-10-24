@@ -231,14 +231,24 @@ describe("branchement du ticker des relances (super-agent.js)", () => {
     expect(source).toContain("const items = plan.toInject;");
   });
 
-  it("l'engagement du propriétaire est remis à zéro à l'ouverture de session et posé par UN SEUL signal (Rust)", () => {
-    expect(source).toContain("ownerEngagedThisSession = false;");
-    // Défaut 1 de la relecture : plus de pose locale dans `send()` (elle laissait
-    // les relances retenues quand le message venait de Telegram ou du web).
+  it("l'engagement du propriétaire est remis à zéro au DÉMARRAGE de Pilot et posé par UN SEUL signal (Rust) + le chemin Telegram", () => {
+    // 2ᵉ relecture, point 1 : la remise à zéro ne suit plus l'ouverture de
+    // l'onglet (elle perdait le message reçu par Telegram onglet fermé). Elle est
+    // la valeur INITIALE, posée une seule fois par exécution de Pilot : une
+    // seule occurrence dans tout le fichier.
+    expect(source).toContain("let ownerEngagedThisSession = false;");
+    expect(source.split("ownerEngagedThisSession = false;").length - 1).toBe(1);
     expect(source).toContain('listen("pilot-superagent-owner-engaged"');
     expect(source).toContain("ownerEngagedThisSession = true;");
     const poses = source.split("ownerEngagedThisSession = true;").length - 1;
     expect(poses).toBe(2); // l'écoute du signal Rust + le marquage Telegram
+    // Le ticker (qui suit l'ouverture d'un onglet) ne touche plus au drapeau.
+    const ticker = source.slice(
+      source.indexOf("function startScheduleTicker() {"),
+      source.indexOf("function stopScheduleTicker()"),
+    );
+    expect(ticker.length).toBeGreaterThan(200);
+    expect(ticker).not.toContain("ownerEngagedThisSession");
   });
 });
 

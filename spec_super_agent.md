@@ -1363,6 +1363,17 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
      l'**écarte** au-delà de **3 échecs** consécutifs tant qu'un autre peut
      partir. Aucun rappel n'est jamais perdu : si tous sont écartés, ils sont
      retentés ensemble à la passe suivante.
+  4. **lot borné (2ᵉ relecture, point 3)** : un envoi ne porte jamais plus de
+     **8 relances** (`REMINDER_BATCH_MAX_ITEMS`), et le message est plafonné à
+     **4000 caractères** (`REMINDER_BATCH_MAX_CHARS` — le **même plafond** que
+     toute autre injection automatique dans la conversation,
+     `MAX_INJECTED_MESSAGE_CHARS` côté Rust). Au-delà, la **troncature est
+     annoncée** dans le message lui-même (nombre de caractères omis, et où lire
+     le texte intégral) : jamais de coupe silencieuse. Les relances **en trop
+     ne sont ni marquées ni perdues** : elles restent dues et partent à la passe
+     suivante. Dans un lot, les lignes suivantes d'un rappel multi-lignes sont
+     **indentées sous leur numéro** pour ne pas se confondre avec les items
+     suivants.
   Décision écrite à **un seul endroit** : `planDueReminderInjections`
   (`src/js/super-agent-schedule.js`) ; le ticker de `src/js/super-agent.js`
   n'exécute que le plan rendu. Verrous : `src/js/relances-relecture.test.js`.
@@ -1370,8 +1381,13 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   parce que **vous n'avez pas encore écrit** (réglage ci-dessous désactivé), un
   **signal système** apparaît dans la conversation : « N relances en attente —
   écrivez, ou activez ⚙️ → Assistant ». Il s'affiche **UNE seule fois par
-  session** (pas à chaque passe de 10 s) et jamais quand la seule cause est un
-  assistant momentanément occupé (cela se débloque tout seul).
+  session de conversation** — c'est-à-dire **par ouverture de l'onglet 🧭**
+  (portée réelle, dite ici sans ambiguïté) — et jamais quand la seule cause est
+  un assistant momentanément occupé (cela se débloque tout seul). Pourquoi
+  cette portée : le signal est écrit **dans la conversation**, laquelle est
+  **recréée** à chaque ouverture de l'onglet ; l'annoncer une seule fois pour
+  toute l'exécution de Pilot le rendrait invisible dans la nouvelle
+  conversation alors que des relances restent retenues.
 - **Échéance** : un rappel créé avec `everySeconds = N` se déclenche pour la
   première fois **N secondes après sa création** (référence `created_at` tant
   qu'il n'a jamais été livré, puis `last_run_at`). `schedule_create` renvoie
@@ -1395,6 +1411,17 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   Telegram marque le **même** drapeau, car son message n'entre pas par là. Il
   n'existe **qu'un seul drapeau** d'engagement (`ownerEngagedThisSession`),
   jamais deux.
+  **Portée du drapeau (2ᵉ relecture, point 1)** : une « session » =
+  **une exécution de Pilot** (même unité que la mémoire de session côté Rust,
+  qui repart de zéro au redémarrage), et **pas** « l'onglet 🧭 est ouvert ». La
+  remise à zéro est donc la **valeur initiale** posée une seule fois par
+  démarrage, et elle ne suit **jamais** l'ouverture (ni la recréation) de
+  l'onglet. Motif : l'écoute **Telegram** tourne **sans l'onglet** ; un message
+  reçu onglet fermé était bien traité puis **oublié** à la réouverture — les
+  relances restaient retenues et le signal disait « écrivez » alors que vous
+  veniez d'écrire. Parcours verrouillé par `src/js/relances-relecture.test.js`
+  (« message Telegram reçu onglet fermé → ouverture de l'onglet → la relance
+  part »).
   Décision écrite à **un seul endroit** : `planDueReminderInjections`
   (`src/js/super-agent-schedule.js`), appliquée par le ticker de
   `src/js/super-agent.js` ; verrou de branchement dans

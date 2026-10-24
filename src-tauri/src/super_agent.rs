@@ -1095,8 +1095,13 @@ pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, Stri
 // par le ticker du frontend (super-agent.js, toutes les 10 s). Garde-fous :
 //   - `every` >= 60 s (borne minimale, évite le spam),
 //   - max 20 planifications en parallèle,
-//   - 1 exécution max par planification et par tick (last_run_at marqué
-//     après livraison effective, issue #135),
+//   - UN SEUL ENVOI par passe de tick (côté ticker, `super-agent.js`) : c'est le
+//     nombre de TOURS de l'assistant qui est limité, pas le nombre de rappels
+//     traités — un même envoi peut porter PLUSIEURS relances regroupées
+//     (retardataires). La règle inverse (« 1 exécution max par planification et
+//     par tick ») a été remplacée le 2026-08-29 ; ici, `schedule_due` renvoie au
+//     plus UNE ligne par planification et par appel, et `last_run_at` est marqué
+//     à l'émission (issue #135).
 //   - session super-agent morte = pas de tick (super_agent_schedule_tick).
 //
 // Échéance d'un rappel : `datetime(référence, '+' || every || ' seconds')` où

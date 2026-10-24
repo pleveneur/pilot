@@ -4003,11 +4003,26 @@ function noteReminderTurnOutcome() {
 }
 
 // RÉGLAGE « Vérifier les points à faire à l'ouverture de la session » : le
-// propriétaire a-t-il LUI-MÊME écrit dans la conversation depuis l'ouverture de
-// cette session ? Faux à chaque ouverture du ticker (donc au démarrage de
-// Pilot) et dès que l'onglet 🧭 est recréé. La décision d'injecter ou de retenir
-// un rappel dû est prise par `planDueReminderInjections` (super-agent-schedule.js),
-// qui est le SEUL endroit où cette règle est écrite.
+// propriétaire a-t-il LUI-MÊME écrit dans la conversation depuis le début de
+// cette session ? La décision d'injecter ou de retenir un rappel dû est prise par
+// `planDueReminderInjections` (super-agent-schedule.js), qui est le SEUL endroit
+// où cette règle est écrite.
+//
+// PORTÉE DU DRAPEAU (2ᵉ relecture, point 1) — « une session d'assistant » =
+// **une exécution de Pilot**, pas « l'onglet 🧭 est ouvert ». C'est la même unité
+// que la mémoire de session côté Rust (« après un redémarrage de Pilot, la
+// session repart de zéro », `super_agent_load_session_memory`). La remise à zéro
+// est donc la valeur INITIALE ci-dessous, posée une seule fois par démarrage de
+// Pilot — et NULLE PART ailleurs : ni à l'ouverture, ni à la recréation de
+// l'onglet, ni à l'ouverture du ticker (`startScheduleTicker`), qui suivaient
+// auparavant l'ouverture d'un onglet.
+//
+// Pourquoi : l'écoute Telegram tourne SANS l'onglet. Un message reçu onglet
+// fermé était donc traité (et marquait bien l'engagement), puis OUBLIÉ à la
+// réouverture de l'onglet : les relances restaient retenues et le signal disait
+// « écrivez » alors que le propriétaire venait d'écrire. Parcours verrouillé par
+// `relances-relecture.test.js` (« message Telegram reçu onglet fermé → ouverture
+// de l'onglet → la relance part »).
 //
 // DÉFAUT 1 (relecture du correctif d26717e) — UN SEUL SIGNAL pose cet engagement,
 // émis par Rust dans `do_send_super_agent_prompt` (`super_agent.rs`) : il couvre la
@@ -4135,10 +4150,18 @@ async function scheduleTick() {
 
 function startScheduleTicker() {
   if (scheduleTicker) return;
-  // Ouverture d'une SESSION de conversation : le propriétaire n'a encore rien
-  // écrit (cf. règle du réglage « points à faire à l'ouverture ») et le signal de
-  // retenue n'a pas encore été affiché pour cette session.
-  ownerEngagedThisSession = false;
+  // ATTENTION (2ᵉ relecture, point 1) : l'engagement du propriétaire n'est
+  // SURTOUT PAS remis à zéro ici. Cette fonction suit l'ouverture d'un onglet,
+  // alors que le drapeau vaut pour une SESSION D'ASSISTANT, c'est-à-dire une
+  // exécution de Pilot (cf. sa déclaration) : le remettre à zéro ici perdait le
+  // message reçu par Telegram pendant que l'onglet était fermé.
+  //
+  // Le signal de retenue, LUI, est propre à la SESSION DE CONVERSATION : il est
+  // écrit DANS la conversation (`superMessagesEl`), laquelle est recréée à
+  // chaque ouverture de l'onglet. L'annoncer une seule fois pour toute
+  // l'exécution de Pilot le rendrait invisible dans la nouvelle conversation
+  // alors que des relances restent retenues. Sa portée est donc « au plus une
+  // fois par session de conversation (= par ouverture de l'onglet 🧭) ».
   reminderHoldGuard.reset();
   reminderFailureCounts.clear();
   scheduleTicker = setInterval(scheduleTick, SCHEDULE_TICK_INTERVAL_MS);

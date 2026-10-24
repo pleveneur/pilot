@@ -23,6 +23,21 @@ export const REMINDER_MAX_CONSECUTIVE_FAILURES = 3;
 // relance par passe = un prompt système complet = un tour complet).
 export const REMINDER_LAGGARD_INTERVAL_FACTOR = 2;
 
+// DÉFAUT 3bis (2ᵉ relecture) — Le LOT DE RELANCES était SANS BORNE : il pouvait
+// porter jusqu'à 20 relances (plafond de planifications actives) dont les textes
+// n'ont aucune longueur maximale, alors que tout le reste du projet plafonne ce
+// qu'il verse dans la conversation (référence : `MAX_INJECTED_MESSAGE_CHARS` =
+// 4000, `src-tauri/src/super_agent.rs`). Un lot est donc borné DEUX fois :
+//
+//  - en NOMBRE (`REMINDER_BATCH_MAX_ITEMS`) : la sélection est faite dans
+//    `planDueReminderInjections`, donc les relances en trop restent DÛES (dans
+//    `held`, jamais marquées) et partent à la passe suivante ;
+//  - en LONGUEUR (`REMINDER_BATCH_MAX_CHARS`, miroir volontaire de la constante
+//    Rust) : au-delà, le message est tronqué avec un avis EXPLICITE (nombre de
+//    caractères omis), jamais silencieusement.
+export const REMINDER_BATCH_MAX_ITEMS = 8;
+export const REMINDER_BATCH_MAX_CHARS = 4000;
+
 // Instant (ms epoch) d'une échéance renvoyée par Rust. `datetime('now')` de
 // SQLite produit « 2026-08-29 14:30:00 », c'est-à-dire de l'UTC SANS fuseau :
 // `new Date("2026-08-29 14:30:00")` l'interpréterait en heure locale (décalage
@@ -64,22 +79,60 @@ function reminderFailureCount(failureCounts, id) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+// Numérotation d'un rappel DANS UN LOT. Les lignes suivantes d'un texte
+// multi-lignes sont INDENTÉES sous leur numéro : sans cela, la suite du texte se
+// confondait avec les items suivants du lot (« 2. », « 3. » internes au rappel).
+function numberReminderLine(index, prompt) {
+  const pad = " ".repeat(String(index).length + 2);
+  const lines = String(prompt).replace(/\r\n/g, "\n").split("\n");
+  const first = lines[0].trim();
+  const rest = lines
+    .slice(1)
+    .map((line) => (line.trim() === "" ? "" : `${pad}${line.replace(/\s+$/, "")}`));
+  return [`${index}. ${first}`, ...rest].join("\n");
+}
+
+// Borne le message RÉELLEMENT versé dans la conversation. La troncature est
+// DITE (nombre de caractères omis) et l'avis compte lui-même dans la taille, si
+// bien que le résultat ne dépasse jamais `REMINDER_BATCH_MAX_CHARS`.
+function capReminderMessage(message) {
+  const chars = Array.from(message);
+  if (chars.length <= REMINDER_BATCH_MAX_CHARS) return message;
+  let keep = REMINDER_BATCH_MAX_CHARS;
+  for (;;) {
+    const omitted = chars.length - keep;
+    const notice =
+      `\n\n[…lot tronqué : ${omitted} caractère(s) omis. Le texte intégral de chaque ` +
+      `relance reste enregistré dans sa programmation (⚙️ → Assistant) : traite ` +
+      `d'abord ce qui est lisible ici.]`;
+    const used = keep + Array.from(notice).length;
+    if (used <= REMINDER_BATCH_MAX_CHARS) return chars.slice(0, keep).join("") + notice;
+    keep -= used - REMINDER_BATCH_MAX_CHARS;
+    if (keep <= 0) return notice;
+  }
+}
+
 // Message réellement remis à l'assistant pour un lot de rappels. UN SEUL envoi
 // par passe (donc UN SEUL tour) : soit une relance seule (format historique),
 // soit un lot de retardataires regroupés (« N relances échues : … »). Le texte
-// de chaque rappel est conservé tel quel, numéroté pour ne pas les confondre.
+// de chaque rappel est conservé tel quel, numéroté et indenté (cf.
+// `numberReminderLine`), et le lot est borné en nombre puis en longueur.
 export function buildReminderInjectionMessage(items) {
   const list = Array.isArray(items)
     ? items.filter((d) => d && typeof d.prompt === "string" && d.prompt.trim() !== "")
     : [];
   if (list.length === 0) return "";
-  if (list.length === 1) return `[⏰ Rappel programmé] ${list[0].prompt}`;
-  const n = list.length;
-  const lines = list.map((d, i) => `${i + 1}. ${d.prompt}`).join("\n");
-  return (
+  // Ceinture et bretelles : le plan borne déjà la sélection (et retient les
+  // relances en trop, jamais marquées) ; on ne dépasse jamais le plafond ici non
+  // plus, quel que soit l'appelant.
+  const capped = list.slice(0, REMINDER_BATCH_MAX_ITEMS);
+  if (capped.length === 1) return capReminderMessage(`[⏰ Rappel programmé] ${capped[0].prompt}`);
+  const n = capped.length;
+  const lines = capped.map((d, i) => numberReminderLine(i + 1, d.prompt)).join("\n");
+  return capReminderMessage(
     `[⏰ ${n} relances échues] ${n} relances programmées sont arrivées à échéance ` +
-    `sans avoir pu être livrées (Assistant occupé, onglet fermé). Traite-les ` +
-    `toutes, dans l'ordre, sans les confondre :\n${lines}`
+      `sans avoir pu être livrées (Assistant occupé, onglet fermé). Traite-les ` +
+      `toutes, dans l'ordre, sans les confondre :\n${lines}`,
   );
 }
 
@@ -158,6 +211,12 @@ export function createReminderHoldGuard() {
 //       est ÉCARTÉ tant qu'un autre peut partir — il n'est jamais perdu et il
 //       n'affame plus les suivants (`schedule_due` renvoie toujours `ORDER BY
 //       id`, donc sans cette règle le premier éligible monopolise la passe).
+//  4. LOT BORNÉ (2ᵉ relecture, défaut 3) : un envoi ne porte jamais plus de
+//     `REMINDER_BATCH_MAX_ITEMS` relances, et le message est plafonné à
+//     `REMINDER_BATCH_MAX_CHARS` (même plafond que le reste des injections
+//     automatiques, `MAX_INJECTED_MESSAGE_CHARS` côté Rust). Les relances en
+//     trop ne sont NI marquées NI perdues : elles restent dans `held` et
+//     partent à la passe suivante.
 //
 // `backendBusy` et `pendingIds` restent les gardes historiques (assistant en
 // train de répondre, injection déjà en vol).
@@ -203,7 +262,10 @@ export function planDueReminderInjections(opts) {
   let chosen = [];
   let mode = "none";
   if (laggards.length > 0) {
-    chosen = laggards.map((r) => r.d);
+    // Lot BORNÉ en nombre : les retardataires en trop restent DÛS (ajoutés à
+    // `held` plus bas) et partent à la passe suivante — aucun n'est marqué ni
+    // perdu.
+    chosen = laggards.slice(0, REMINDER_BATCH_MAX_ITEMS).map((r) => r.d);
     mode = chosen.length > 1 ? "group" : "single";
   } else if (healthy.length > 0) {
     chosen = [healthy[0].d];
@@ -211,7 +273,7 @@ export function planDueReminderInjections(opts) {
   } else if (quarantined.length > 0) {
     // Plus rien de sain : on retente ENSEMBLE les rappels écartés. Aucun n'est
     // perdu et aucun ne prend la place d'un autre (aucune famine possible).
-    chosen = quarantined.map((r) => r.d);
+    chosen = quarantined.slice(0, REMINDER_BATCH_MAX_ITEMS).map((r) => r.d);
     mode = chosen.length > 1 ? "group" : "single";
   }
   const chosenIds = new Set(chosen.map((d) => d.id));

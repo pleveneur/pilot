@@ -8,8 +8,12 @@ passent, et les tests JS du ticker sont écrits et verts. Commit :
 
 1. `every` >= 60 s (borne minimale anti-spam)
 2. max 20 planifications en parallèle
-3. 1 exécution (fire) max par planification et par tick (`last_run_at` marqué
-   atomiquement à l'émission)
+3. **un seul ENVOI par passe** de tick — donc un seul **tour** de l'assistant —
+   et non « 1 exécution (fire) max par planification et par tick » (règle
+   remplacée le 2026-08-29) : un même envoi peut porter PLUSIEURS relances
+   regroupées (retardataires). Côté Rust, `schedule_due` renvoie au plus une
+   ligne par planification et par appel, et `last_run_at` est marqué
+   atomiquement à l'émission
 4. session super-agent morte = pas de tick (super_agent_schedule_tick côté
    frontend)
 
@@ -19,7 +23,7 @@ passent, et les tests JS du ticker sont écrits et verts. Commit :
 |---|---|---|---|
 | every >= 60 s | Rust | `src-tauri/src/super_agent.rs` | `schedule_insert` (const `SCHEDULE_MIN_EVERY_SECS`) |
 | max 20 | Rust | id. | `schedule_insert` (const `SCHEDULE_MAX`, `SELECT COUNT(*)`) |
-| 1 fire/tick | Rust | id. | `schedule_due_and_mark` (`UPDATE last_run_at = now`) |
+| 1 envoi/passe | JS | `src/js/super-agent-schedule.js` | `planDueReminderInjections` (un seul envoi, lot groupé borné) ; `schedule_due_and_mark` (Rust) marque `last_run_at` à l'émission |
 | session morte = pas de tick | JS | `src/js/super-agent.js` | `shouldScheduleTick` (super-agent-schedule.js) + ticker 10 s |
 
 Les fonctions pures Rust sont `pub(crate)` : elles ne sont **pas** accessibles
@@ -37,7 +41,7 @@ Helper `mem_conn()` : `Connection::open_in_memory()` + `init_db`.
 | `schedule_rejects_every_below_60` | every >= 60 | `every=59` → erreur contenant `">= 60"` ; `every=60` accepté |
 | `schedule_rejects_empty_name_or_prompt_and_duplicate_name` | nom/prompt non vides, unicité du nom | `"  "` et `"  "` (prompt) rejetés ; 2e `même nom` → erreur (UNIQUE) |
 | `schedule_caps_at_20` | max 20 | 20 inserts OK, le 21e → erreur `"maximum 20 planifications atteint"` |
-| `schedule_due_marks_and_returns_at_most_once_per_tick` | 1 fire/tick | 1er tick → 1 due ; 2e tick immédiat → 0 ; +61 s → 1 à nouveau ; date antérieure → 0 |
+| `schedule_due_marks_and_returns_at_most_once_per_tick` | au plus une ligne par planification et par appel (Rust) — la limite d'ENVOI par passe, elle, est côté ticker | 1er tick → 1 due ; 2e tick immédiat → 0 ; +61 s → 1 à nouveau ; date antérieure → 0 |
 | `schedule_delete_and_list` | delete/list | delete renvoie `true` puis `false` ; list reflète l'état |
 
 Ces 5 tests couvrent intégralement les garde-fous 1, 2 et 3. Le garde-fou 4
