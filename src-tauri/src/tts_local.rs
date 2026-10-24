@@ -132,6 +132,10 @@ pub struct LocalVoiceStatus {
     pub model_bytes: u64,
     /// Vrai si le binaire du moteur est présent.
     pub engine_present: bool,
+    /// Dossier du moteur réellement utilisé (vide s'il est introuvable).
+    pub engine_dir: String,
+    /// Vrai si le moteur vient d'une AUTRE version de Pilot du même ordinateur.
+    pub engine_shared: bool,
     /// Vrai si le modèle ET sa configuration sont présents.
     pub model_present: bool,
     /// Dossier où doivent se trouver les fichiers (affiché à l'utilisateur).
@@ -173,6 +177,81 @@ pub fn piper_exe_name() -> &'static str {
 /// Chemin de l'exécutable Piper.
 pub fn piper_exe(root: &Path) -> PathBuf {
     piper_dir(root).join(piper_exe_name())
+}
+
+/// Racine « produit » d'un identifiant d'application.
+///
+/// La version installée et la version de développement de Pilot
+/// (`com.pilot.editor` / `com.pilot.editor.dev`) sont le **même produit** : elles
+/// partagent donc le même moteur local (un binaire identique sur le même
+/// ordinateur). Sans cela, un moteur installé une fois restait invisible pour
+/// l'autre version, et la lecture retombait **toujours** sur la voix du système
+/// dans le dossier de données qui ne le contenait pas.
+pub fn product_identifier(identifier: &str) -> String {
+    let id = identifier.trim();
+    match id.strip_suffix(".dev") {
+        Some(base) if !base.is_empty() => base.to_string(),
+        _ => id.to_string(),
+    }
+}
+
+/// Vrai si un nom de dossier de données appartient au même produit Pilot
+/// (`com.pilot.editor`, `com.pilot.editor.dev`, …).
+pub fn is_product_data_dir(name: &str, product: &str) -> bool {
+    if product.is_empty() || name.is_empty() {
+        return false;
+    }
+    name == product || name.starts_with(&format!("{}.", product))
+}
+
+/// Dossiers candidats du MOTEUR, dans l'ordre :
+///  1. le dossier de données de CETTE version de Pilot ;
+///  2. ceux des autres versions de Pilot du même ordinateur (triés par nom),
+///     pour réutiliser un moteur déjà installé une fois.
+///
+/// Lecture seule : aucun fichier n'est copié, déplacé ni supprimé.
+pub fn engine_candidate_roots(own_root: &Path, product: &str) -> Vec<PathBuf> {
+    let mut roots = vec![own_root.to_path_buf()];
+    // `own_root` = `<dossier des identifiants>/<identifiant>/voix-locale` : on
+    // regarde les dossiers de données frères, sous le même dossier parent.
+    let Some(data_dir) = own_root.parent() else {
+        return roots;
+    };
+    let own_name = data_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let Some(appdata) = data_dir.parent() else {
+        return roots;
+    };
+    if let Ok(entries) = std::fs::read_dir(appdata) {
+        let mut names: Vec<String> = entries
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().is_dir())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name != &own_name && is_product_data_dir(name, product))
+            .collect();
+        names.sort();
+        for name in names {
+            roots.push(appdata.join(name).join(LOCAL_VOICE_DIR));
+        }
+    }
+    roots
+}
+
+/// Dossier du moteur réellement utilisable pour une instance de Pilot, et
+/// l'information « trouvé ailleurs que dans le dossier courant ».
+///
+/// Le dossier courant est toujours essayé en premier ; à défaut, le moteur d'une
+/// autre version de Pilot du même ordinateur est réutilisé (aucune copie).
+pub fn resolve_engine_root(own_root: &Path, product: &str) -> (PathBuf, bool) {
+    for candidate in engine_candidate_roots(own_root, product) {
+        if piper_exe(&candidate).is_file() {
+            let shared = candidate != own_root;
+            return (candidate, shared);
+        }
+    }
+    (own_root.to_path_buf(), false)
 }
 
 /// Voix demandée, ou voix par défaut si le nom est absent/inconnu (jamais
@@ -222,9 +301,39 @@ pub fn ready_hint(voice: &LocalVoice) -> String {
     )
 }
 
-/// Phrase affichée quand il manque quelque chose (dit aussi OÙ déposer les fichiers
-/// et que Pilot peut les télécharger sur un geste explicite).
-pub fn missing_hint(root: &Path, missing: &[String]) -> String {
+/// Phrase affichée quand le moteur a été trouvé dans une AUTRE version de Pilot
+/// du même ordinateur (aucune copie : le même binaire sert aux deux).
+pub fn ready_hint_shared(voice: &LocalVoice, engine_root: &Path) -> String {
+    format!(
+        "{} Le moteur de lecture déjà installé pour Pilot sur cet ordinateur est réutilisé \
+         (« {} ») : rien n'a été copié ni supprimé.",
+        ready_hint(voice),
+        engine_root.display()
+    )
+}
+
+/// Phrase affichée quand il manque quelque chose.
+///
+/// Deux situations distinctes, dites en clair et **sans jargon** :
+///  - le **moteur** manque → Pilot ne le télécharge pas (aucun téléchargement
+///    automatique) : l'utilisateur dépose le dossier `piper` dans le dossier de
+///    données **réellement utilisé**, puis vérifie à nouveau ;
+///  - seul le **modèle** manque → le bouton « Télécharger » le récupère, sur un
+///    geste explicite.
+/// Dans les deux cas, la lecture utilise la voix du système en attendant (repli
+/// journalisé, jamais muet).
+pub fn missing_hint(root: &Path, missing: &[String], engine_missing: bool) -> String {
+    if engine_missing {
+        return format!(
+            "La voix française locale n'est pas encore installée sur cet ordinateur : il manque le \
+             moteur de lecture ({}), qui n'est jamais téléchargé automatiquement. Déposez le dossier \
+             « {} » (page officielle de Piper) dans « {} », puis cliquez sur « Vérifier à nouveau ». \
+             En attendant, la lecture utilise la voix du système.",
+            piper_exe_name(),
+            PIPER_SUBDIR,
+            root.display()
+        );
+    }
     let mut what = String::new();
     for (index, item) in missing.iter().enumerate() {
         if index > 0 {
@@ -233,19 +342,31 @@ pub fn missing_hint(root: &Path, missing: &[String]) -> String {
         what.push_str(item);
     }
     format!(
-        "Voix française locale non installée : il manque {}. Le bouton « Télécharger » récupère le \
-         modèle depuis Internet, une seule fois et sur votre demande ; vous pouvez aussi déposer \
-         ces fichiers dans « {} » (voir l'aide). En attendant, la lecture utilise la voix du système.",
-        what,
-        root.display()
+        "La voix française locale n'est pas encore installée sur cet ordinateur : il manque {}. \
+         Cliquez sur « Télécharger » pour récupérer cette voix depuis Internet, une seule fois et sur \
+         votre demande ; elle reste ensuite sur l'ordinateur et la lecture se fait hors ligne. \
+         En attendant, la lecture utilise la voix du système.",
+        what
     )
 }
 
 /// État du moteur local pour un dossier donné (fonction sans effet de bord :
 /// testable sur un dossier temporaire, sans lancer Piper).
 pub fn status_for_dir(root: &Path, model: Option<&str>) -> LocalVoiceStatus {
+    status_for_dir_with_engine(root, root, model)
+}
+
+/// État du moteur local pour un dossier de données donné et un dossier de moteur
+/// donné (le moteur peut être celui d'une autre version de Pilot du même
+/// ordinateur : `engine_root != root`, aucun fichier copié).
+pub fn status_for_dir_with_engine(
+    root: &Path,
+    engine_root: &Path,
+    model: Option<&str>,
+) -> LocalVoiceStatus {
     let voice = voice_for(model);
-    let exe = piper_exe(root);
+    let shared = engine_root != root;
+    let exe = piper_exe(engine_root);
     let model_file = model_path(root, voice.model);
     let config = model_config_path(root, voice.model);
     let mut missing = Vec::new();
@@ -268,14 +389,24 @@ pub fn status_for_dir(root: &Path, model: Option<&str>) -> LocalVoiceStatus {
         quality: voice.quality.to_string(),
         model_bytes: voice.onnx_bytes,
         engine_present,
+        engine_dir: if engine_present {
+            engine_root.display().to_string()
+        } else {
+            String::new()
+        },
+        engine_shared: installed && shared,
         model_present: model_file.is_file() && config.is_file(),
         dir: root.display().to_string(),
         exe: exe.display().to_string(),
         model: model_file.display().to_string(),
         hint: if installed {
-            ready_hint(voice)
+            if shared {
+                ready_hint_shared(voice, engine_root)
+            } else {
+                ready_hint(voice)
+            }
         } else {
-            missing_hint(root, &missing)
+            missing_hint(root, &missing, !engine_present)
         },
         missing,
         log: log_path(root).display().to_string(),
@@ -293,6 +424,8 @@ pub fn unavailable_status(reason: &str, model: Option<&str>) -> LocalVoiceStatus
         quality: voice.quality.to_string(),
         model_bytes: voice.onnx_bytes,
         engine_present: false,
+        engine_dir: String::new(),
+        engine_shared: false,
         model_present: false,
         dir: String::new(),
         exe: String::new(),
@@ -344,12 +477,12 @@ pub fn append_log(root: &Path, message: &str) {
 /// bloquer sur le tampon du système), `stdout`/`stderr` sont lus dans des threads
 /// (sinon un flux non drainé bloque le processus). Un plafond de temps
 /// interrompt le moteur : jamais d'attente infinie dans l'interface.
-fn run_piper(root: &Path, model_name: &str, text: &str, out: &Path) -> Result<(), String> {
-    let exe = piper_exe(root);
+fn run_piper(root: &Path, engine_root: &Path, model_name: &str, text: &str, out: &Path) -> Result<(), String> {
+    let exe = piper_exe(engine_root);
     let model = model_path(root, model_name);
     let config = model_config_path(root, model_name);
     let mut cmd = Command::new(&exe);
-    cmd.current_dir(piper_dir(root))
+    cmd.current_dir(piper_dir(engine_root))
         .arg("--model")
         .arg(&model)
         .arg("--config")
@@ -443,11 +576,23 @@ fn run_piper(root: &Path, model_name: &str, text: &str, out: &Path) -> Result<()
 /// claire) puis on renvoie l'erreur ; c'est l'appelant (le front) qui retombe sur
 /// la voix du système et l'annonce à l'utilisateur.
 pub fn synthesize_base64(root: &Path, model: Option<&str>, text: &str) -> Result<String, String> {
+    synthesize_base64_with_engine(root, root, model, text)
+}
+
+/// Comme [`synthesize_base64`], avec un dossier de moteur distinct du dossier de
+/// données (moteur installé pour une autre version de Pilot du même ordinateur :
+/// le binaire est réutilisé, les modèles restent dans le dossier courant).
+pub fn synthesize_base64_with_engine(
+    root: &Path,
+    engine_root: &Path,
+    model: Option<&str>,
+    text: &str,
+) -> Result<String, String> {
     let payload = text.trim();
     if payload.is_empty() {
         return Err("texte vide : rien à synthétiser".to_string());
     }
-    let status = status_for_dir(root, model);
+    let status = status_for_dir_with_engine(root, engine_root, model);
     if !status.installed {
         append_log(root, &format!("Repli sur la voix du système — {}", status.hint));
         return Err(status.hint);
@@ -456,7 +601,7 @@ pub fn synthesize_base64(root: &Path, model: Option<&str>, text: &str) -> Result
     std::fs::create_dir_all(&tmp_dir)
         .map_err(|e| format!("Impossible de créer le dossier temporaire de la voix locale : {}", e))?;
     let out = tmp_dir.join(format!("{}.wav", uuid::Uuid::new_v4()));
-    let result = run_piper(root, &status.voice, payload, &out);
+    let result = run_piper(root, engine_root, &status.voice, payload, &out);
     if let Err(ref reason) = result {
         append_log(
             root,
@@ -487,10 +632,22 @@ pub fn synthesize_base64(root: &Path, model: Option<&str>, text: &str) -> Result
 #[tauri::command]
 pub fn tts_local_status(app: tauri::AppHandle, model: Option<String>) -> LocalVoiceStatus {
     let wanted = model.as_deref();
-    match local_voice_root(&app) {
-        Some(root) => status_for_dir(&root, wanted),
+    match roots_for(&app) {
+        Some((root, engine_root)) => status_for_dir_with_engine(&root, &engine_root, wanted),
         None => unavailable_status("dossier de données de Pilot introuvable", wanted),
     }
+}
+
+/// Dossiers de CETTE instance de Pilot : (dossier de données, dossier du moteur).
+///
+/// Le moteur peut être celui déjà installé pour une autre version de Pilot du
+/// même ordinateur (`com.pilot.editor` ↔ `com.pilot.editor.dev`) : le binaire est
+/// alors réutilisé tel quel — rien n'est copié, déplacé ni supprimé.
+fn roots_for(app: &tauri::AppHandle) -> Option<(PathBuf, PathBuf)> {
+    let own = local_voice_root(app)?;
+    let product = product_identifier(&app.config().identifier);
+    let (engine, _shared) = resolve_engine_root(&own, &product);
+    Some((own, engine))
 }
 
 /// Synthétise un morceau de texte avec la voix française locale (WAV en base64).
@@ -503,11 +660,13 @@ pub async fn tts_local_synthesize(
     text: String,
     model: Option<String>,
 ) -> Result<String, String> {
-    let root = local_voice_root(&app)
+    let (root, engine_root) = roots_for(&app)
         .ok_or_else(|| "dossier de données de Pilot introuvable".to_string())?;
-    tauri::async_runtime::spawn_blocking(move || synthesize_base64(&root, model.as_deref(), &text))
-        .await
-        .map_err(|e| format!("Erreur interne (join) tts_local_synthesize: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || {
+        synthesize_base64_with_engine(&root, &engine_root, model.as_deref(), &text)
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) tts_local_synthesize: {}", e))?
 }
 
 /// Ajoute une ligne au journal de la voix locale (repli décidé côté fenêtre).
@@ -592,10 +751,86 @@ mod tests {
         let status = status_for_dir(&root, None);
         assert!(!status.installed);
         assert_eq!(status.missing.len(), 3);
-        assert!(status.hint.contains("non installée"));
+        assert!(!status.engine_present);
+        assert!(status.engine_dir.is_empty());
+        assert!(!status.engine_shared);
+        // Phrase claire et non technique : « pas encore installée » + où + quoi faire.
+        assert!(status.hint.contains("pas encore installée"));
         assert!(status.hint.contains(&root.display().to_string()));
         assert!(status.hint.contains("voix du système"));
+        // Le moteur ne se télécharge JAMAIS tout seul : la phrase le dit.
+        assert!(status.hint.contains("jamais téléchargé automatiquement"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Prépare un « ordinateur » avec deux versions de Pilot (installée + dev) :
+    /// renvoie (parent, dossier installé, dossier dev).
+    fn deux_versions_de_pilot(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let parent = temp_root(tag);
+        let installed = parent.join("com.pilot.editor").join(LOCAL_VOICE_DIR);
+        let dev = parent.join("com.pilot.editor.dev").join(LOCAL_VOICE_DIR);
+        std::fs::create_dir_all(piper_dir(&installed)).unwrap();
+        std::fs::create_dir_all(dev.join(VOICES_SUBDIR)).unwrap();
+        std::fs::write(piper_exe(&installed), b"fake").unwrap();
+        (parent, installed, dev)
+    }
+
+    #[test]
+    fn le_moteur_de_l_autre_version_de_pilot_est_reutilise() {
+        // Cas réel du poste : le moteur a été installé une seule fois (version
+        // installée), le mode test utilise un AUTRE dossier de données. Sans
+        // réutilisation, la lecture retombait toujours sur la voix du système.
+        let (parent, installed, dev) = deux_versions_de_pilot("partage");
+        std::fs::write(model_path(&dev, "fr_FR-tom-medium"), b"fake").unwrap();
+        std::fs::write(model_config_path(&dev, "fr_FR-tom-medium"), b"{}").unwrap();
+
+        let (engine_root, shared) = resolve_engine_root(&dev, "com.pilot.editor");
+        assert_eq!(engine_root, installed);
+        assert!(shared, "le moteur vient de l'autre version : c'est dit");
+
+        // La voix d'homme choisie devient réellement utilisable…
+        let status = status_for_dir_with_engine(&dev, &engine_root, Some("fr_FR-tom-medium"));
+        assert!(status.installed);
+        assert!(status.engine_present);
+        assert!(status.engine_shared);
+        assert_eq!(status.voice, "fr_FR-tom-medium");
+        assert_eq!(status.gender, "homme");
+        assert!(status.missing.is_empty());
+        // …et le partage est VISIBLE, jamais muet.
+        assert!(status.hint.contains("réutilisé"));
+        assert!(status.hint.contains(&installed.display().to_string()));
+        // Les modèles, eux, restent dans le dossier de données courant.
+        assert_eq!(status.dir, dev.display().to_string());
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn un_dossier_voisin_etranger_n_est_jamais_utilise() {
+        // Garde-fou : on ne prend pas le premier venu sur l'ordinateur.
+        let parent = temp_root("etranger");
+        let etranger = parent.join("com.autre.appli").join(LOCAL_VOICE_DIR);
+        let dev = parent.join("com.pilot.editor.dev").join(LOCAL_VOICE_DIR);
+        std::fs::create_dir_all(piper_dir(&etranger)).unwrap();
+        std::fs::write(piper_exe(&etranger), b"fake").unwrap();
+        std::fs::create_dir_all(&dev).unwrap();
+        let (engine_root, shared) = resolve_engine_root(&dev, "com.pilot.editor");
+        assert_eq!(engine_root, dev, "dossier courant quand aucun moteur n'est trouvé");
+        assert!(!shared);
+        assert!(!status_for_dir(&dev, None).engine_present);
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn le_produit_regroupe_les_identifiants_de_pilot() {
+        assert_eq!(product_identifier("com.pilot.editor.dev"), "com.pilot.editor");
+        assert_eq!(product_identifier("com.pilot.editor"), "com.pilot.editor");
+        assert_eq!(product_identifier("  com.pilot.editor.dev  "), "com.pilot.editor");
+        assert_eq!(product_identifier(".dev"), ".dev", "aucune racine vide");
+        assert!(is_product_data_dir("com.pilot.editor", "com.pilot.editor"));
+        assert!(is_product_data_dir("com.pilot.editor.dev", "com.pilot.editor"));
+        assert!(!is_product_data_dir("com.pilot.editorial", "com.pilot.editor"));
+        assert!(!is_product_data_dir("com.autre.appli", "com.pilot.editor"));
+        assert!(!is_product_data_dir("com.pilot.editor", ""));
     }
 
     #[test]
@@ -646,7 +881,7 @@ mod tests {
     fn synthese_sans_moteur_journalise_le_repli() {
         let root = temp_root("journal");
         let erreur = synthesize_base64(&root, None, "Bonjour.").expect_err("doit échouer");
-        assert!(erreur.contains("non installée"));
+        assert!(erreur.contains("pas encore installée"));
         let journal = std::fs::read_to_string(log_path(&root)).expect("journal écrit");
         assert!(journal.contains("Repli sur la voix du système"));
         // Une seule destination de trace : le même fichier pour les deux entrées.

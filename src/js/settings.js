@@ -54,12 +54,14 @@ import {
   LOCAL_VOICE_DOWNLOAD_EVENT,
   LOCAL_VOICE_MODELS,
   cancelLocalVoiceDownload,
+  downloadDoneMessage,
   downloadLocalVoiceModel,
   downloadProgressText,
   formatMegabytes,
   isLocalVoiceChoice,
   localVoiceModelFor,
   localVoiceStatusFor,
+  logLocalVoice,
   refreshLocalVoiceDownloadState,
   refreshLocalVoiceStatus,
 } from "./local-voice.js";
@@ -666,6 +668,11 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   function localVoiceNoteText(local) {
     if (!local) return "Voix française locale : vérification du moteur en cours\u2026";
     if (local.installed && local.dir) {
+      // Moteur réutilisé depuis une AUTRE version de Pilot du même ordinateur :
+      // l'utilisateur le voit (jamais un partage silencieux).
+      if (local.engine_shared && local.engine_dir) {
+        return `${local.hint} Modèles dans « ${local.dir} », moteur déjà installé pour Pilot dans « ${local.engine_dir} ».`;
+      }
       return `${local.hint} Moteur et modèle se trouvent dans « ${local.dir} ».`;
     }
     return local.hint;
@@ -688,7 +695,12 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     downloadState = state || null;
     const running = !!(downloadState && downloadState.running);
     if (readAloudDownloadState) {
-      readAloudDownloadState.textContent = downloadProgressText(downloadState);
+      // L'état du moteur est passé ici : une fin de téléchargement n'est
+      // annoncée comme réussie que si la voix locale est réellement utilisable.
+      readAloudDownloadState.textContent = downloadProgressText(
+        downloadState,
+        currentReadAloudModel() ? localVoiceStatusFor(currentReadAloudModel()) : null,
+      );
       readAloudDownloadState.dataset.state = !downloadState
         ? ""
         : running
@@ -728,13 +740,17 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     if (downloadState && downloadState.running) return;
     showDownloadState({ model, running: true, percent: null, bytes: 0, bytes_total: 0 });
     const state = await downloadLocalVoiceModel(model);
-    showDownloadState(state);
     const status = await refreshLocalVoiceStatus({ model });
     if (status) renderReadAloudVoice(selectReadAloudVoice.value, status);
-    if (state && state.outcome === "done") {
-      showToast(`Modèle ${model} installé : lecture hors ligne disponible.`);
-    } else if (state && state.message) {
-      showToast(state.message, state.outcome === "cancelled" ? "warning" : "error");
+    // La ligne d'état est affichée avec l'état du moteur APRÈS vérification
+    // (jamais un succès si le moteur manque encore).
+    showDownloadState(state);
+    // Message de fin : succès SEULEMENT si la voix est réellement utilisable
+    // (un modèle téléchargé sans moteur ne fait pas marcher la lecture).
+    const done = downloadDoneMessage(state, status, model);
+    if (done.text) {
+      showToast(done.text, done.level === "success" ? "info" : done.level);
+      if (done.level !== "success") await logLocalVoice(done.text);
     }
   }
   const chkSuperAgentThinking = document.getElementById("setting-superagent-thinking");

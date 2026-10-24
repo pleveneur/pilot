@@ -117,14 +117,28 @@ export const LOCAL_VOICE_ONLY_HINT =
 /**
  * Phrase affichée quand le moteur local n'est pas installé (dit aussi OÙ
  * déposer les fichiers : le chemin réel vient du moteur, jamais recopié ici).
- * @param {string} [dir]
+ *
+ * Phrase courte et **sans jargon** : on dit d'abord que la voix locale n'est pas
+ * encore installée sur CET ordinateur (le dossier de données réellement utilisé
+ * n'est pas celui d'une autre version de Pilot), puis ce qu'il reste à faire.
+ * @param {string} [dir] dossier de données réellement utilisé
+ * @param {{engine_present?: boolean, model_present?: boolean}|null} [status]
  * @returns {string}
  */
-export function localVoiceMissingHint(dir) {
-  const where = dir ? ` dans « ${dir} »` : "";
+export function localVoiceMissingHint(dir, status) {
+  const where = dir ? ` (dossier utilisé : « ${dir} »)` : "";
+  // Le MOTEUR ne se télécharge jamais tout seul : le dire, et dire quoi faire.
+  if (status && status.engine_present === false) {
+    return (
+      `La voix locale n'est pas encore installée sur cet ordinateur${where} : il manque le moteur ` +
+      "de lecture. Déposez le dossier « piper » (page officielle de Piper) dans ce dossier, puis " +
+      "cliquez sur « Vérifier à nouveau ». En attendant, la lecture utilise la voix du système."
+    );
+  }
   return (
-    `Voix française locale non installée${where} : la lecture utilise la voix du système. ` +
-    "Le journal indique ce qui manque."
+    `La voix locale n'est pas encore installée sur cet ordinateur${where} : ` +
+    "cliquez sur « Télécharger » pour récupérer cette voix depuis Internet, une seule fois et sur " +
+    "votre demande. En attendant, la lecture utilise la voix du système."
   );
 }
 
@@ -239,6 +253,7 @@ const localStatusByModel = new Map();
  * @param {object|null} raw
  * @returns {{installed: boolean, engine: string, voice: string, gender: string,
  *            quality: string, model_present: boolean, engine_present: boolean,
+ *            engine_dir: string, engine_shared: boolean,
  *            model_bytes: number, dir: string, missing: string[], hint: string,
  *            log: string}}
  */
@@ -256,6 +271,10 @@ export function normalizeLocalVoiceStatus(raw) {
     quality: String(src.quality || (known ? known.quality : "")),
     model_present: src.model_present === true,
     engine_present: src.engine_present === true,
+    // Moteur trouvé dans une AUTRE version de Pilot du même ordinateur :
+    // l'information est affichée (jamais un partage silencieux).
+    engine_dir: String(src.engine_dir || ""),
+    engine_shared: src.engine_shared === true,
     model_bytes: Number.isFinite(Number(src.model_bytes))
       ? Number(src.model_bytes)
       : known
@@ -438,12 +457,18 @@ export function formatMegabytes(bytes) {
 }
 
 /**
- * Phrase d'état d'un téléchargement (toujours lisible, jamais un pourcentage
- * seul). Vide tant qu'aucun téléchargement n'a été demandé.
- * @param {object|null} state
+ * Texte d'état du téléchargement d'un modèle (toujours lisible, jamais un
+ * pourcentage seul). Vide tant qu'aucun téléchargement n'a été demandé.
+ *
+ * La fin d'un téléchargement ne s'annonce comme un succès **que si la voix locale
+ * est réellement utilisable** : un modèle téléchargé sans moteur ne fait pas
+ * marcher la lecture, et la section doit le dire (jamais un succès mensonger).
+ * @param {object|null} state état du téléchargement
+ * @param {{installed?: boolean, engine_present?: boolean}|null} [status] état du
+ *        moteur après vérification (`null` : pas encore vérifié)
  * @returns {string}
  */
-export function downloadProgressText(state) {
+export function downloadProgressText(state, status) {
   const s = state && typeof state === "object" ? state : null;
   if (!s || (!s.running && !s.outcome && !s.message)) return "";
   if (s.running) {
@@ -455,7 +480,17 @@ export function downloadProgressText(state) {
     return `Téléchargement${label} en cours${percent}${sizes}…`;
   }
   if (s.message) return s.message;
-  if (s.outcome === "done") return "Modèle installé : la lecture se fait désormais hors ligne.";
+  if (s.outcome === "done") {
+    // Succès seulement si la voix locale marche VRAIMENT (moteur + modèle).
+    if (status && status.installed === true) {
+      return "Téléchargement terminé : la lecture se fait désormais hors ligne.";
+    }
+    return (
+      "Modèle téléchargé, mais la voix locale n'est pas encore utilisable" +
+      (status && status.engine_present === false ? " : il manque le moteur de lecture (dossier « piper »)." : ".") +
+      " La lecture utilise la voix du système."
+    );
+  }
   if (s.outcome === "cancelled") {
     return "Téléchargement arrêté : le modèle n'est pas installé, la lecture utilise la voix du système.";
   }
@@ -463,6 +498,59 @@ export function downloadProgressText(state) {
     return "Téléchargement impossible : la lecture utilise la voix du système (voir le journal de la voix locale).";
   }
   return "";
+}
+
+/**
+ * Message de fin de téléchargement d'un modèle — **jamais un succès mensonger**.
+ *
+ * Un modèle téléchargé ne suffit pas : si le MOTEUR manque encore, la voix locale
+ * reste inutilisable et la lecture retombe sur la voix du système. Ce message le
+ * dit, avec le niveau qui convient (`success` seulement si la voix marche
+ * réellement). Il est journalisé par l'appelant quand il n'est pas un succès.
+ * @param {object|null} state état du téléchargement (`outcome`, `message`)
+ * @param {object|null} status état du moteur APRÈS le téléchargement
+ * @param {string} [model] modèle concerné
+ * @returns {{level: "success"|"warning"|"error"|"info", text: string}}
+ */
+export function downloadDoneMessage(state, status, model) {
+  const s = state && typeof state === "object" ? state : {};
+  const name = String(model || s.model || "").trim();
+  const label = name ? localVoiceModelLabel(name) : "La voix locale";
+  if (s.outcome === "cancelled") {
+    return {
+      level: "warning",
+      text: `Téléchargement arrêté : ${label} n'est pas installé, la lecture utilise la voix du système.`,
+    };
+  }
+  if (s.outcome === "failed") {
+    return {
+      level: "error",
+      text:
+        s.message ||
+        "Téléchargement impossible : la lecture utilise la voix du système (voir le journal de la voix locale).",
+    };
+  }
+  if (s.outcome !== "done") return { level: "info", text: "" };
+  // Le seul succès vrai : la voix locale est réellement utilisable.
+  if (status && status.installed === true) {
+    const where = status.engine_shared && status.engine_dir ? ` (moteur déjà installé : « ${status.engine_dir} »)` : "";
+    return {
+      level: "success",
+      text: `${label} est installé${where} : la lecture se fait désormais hors ligne, sans réseau.`,
+    };
+  }
+  if (status && status.engine_present === false) {
+    return {
+      level: "warning",
+      text:
+        `${label} est téléchargé, mais la voix locale n'est pas encore utilisable : il manque le moteur ` +
+        "de lecture (dossier « piper »). La lecture utilise la voix du système.",
+    };
+  }
+  return {
+    level: "warning",
+    text: `${label} est téléchargé, mais la voix locale n'est pas encore utilisable. La lecture utilise la voix du système.`,
+  };
 }
 
 /**

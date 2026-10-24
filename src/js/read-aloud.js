@@ -392,7 +392,7 @@ export function voiceChoiceStatus(voices, choice, local) {
     }
     return {
       kind: "local-missing",
-      hint: localVoiceMissingHint(local && local.dir),
+      hint: localVoiceMissingHint(local && local.dir, local),
       missing: "",
       value: wanted,
     };

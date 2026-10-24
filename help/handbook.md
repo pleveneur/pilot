@@ -351,13 +351,24 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   choix d'une voix dont le modèle manque), **un seul modèle à la fois**. Votre
   choix est enregistré même si le modèle n'est pas encore là, et il reste
   utilisable dès qu'il est téléchargé.
+- **Le moteur, lui, n'est jamais téléchargé par Pilot** : s'il a déjà été
+  installé **une fois** pour Pilot sur cet ordinateur, il est **réutilisé** —
+  y compris par une autre version de Pilot (version installée et version de
+  test partagent le même moteur, rien n'est copié ni supprimé). La section dit
+  **où il se trouve** ; s'il manque vraiment, elle l'écrit en clair (« pas encore
+  installée sur cet ordinateur ») et indique quoi déposer, puis « Vérifier à
+  nouveau ». La lecture ne reste jamais silencieuse : elle continue avec la voix
+  du système et le dit.
 - **Le téléchargement s'affiche et s'arrête** : la section montre la **taille**
   et la **progression** (« 26,0 Mo / 60,6 Mo, 42 % »), puis « installation
   terminée » ou l'échec. Un bouton **« × Arrêter le téléchargement »**
   interrompt un téléchargement en cours, et **« Vérifier à nouveau »** revérifie
   à tout moment la présence du moteur et du modèle. **Rien n'est supprimé** :
   le fichier déjà présent reste en place, et un téléchargement interrompu
-  reprend là où il s'était arrêté.
+  reprend là où il s'était arrêté. **Un modèle téléchargé ne suffit pas** : si le
+  moteur manque encore, Pilot vous le dit franchement (« téléchargé, mais la voix
+  locale n'est pas encore utilisable ») au lieu d'annoncer une réussite, et la
+  lecture reste sur la voix du système en attendant.
 - **Si le moteur local est absent ou échoue**, la lecture ne s'arrête pas : elle
   **continue avec la voix du système** et le dit clairement dans la section,
   avec une ligne dans un **journal** (dossier de la voix locale). Rien ne bloque,

@@ -40,6 +40,8 @@ import {
   normalizeDownloadState,
   refreshLocalVoiceDownloadState,
   refreshLocalVoiceStatus,
+  normalizeLocalVoiceStatus,
+  downloadDoneMessage,
   setLocalVoiceInvoker,
   setLocalVoiceStatus,
 } from "./local-voice.js";
@@ -349,7 +351,15 @@ describe("téléchargement du modèle", () => {
       }),
     ).toMatch(/60,6 Mo/);
     expect(downloadProgressText({ model: "", running: true, percent: 3 })).toMatch(/en cours/);
-    expect(downloadProgressText({ outcome: "done" })).toMatch(/hors ligne/);
+    // Fin de téléchargement : succès SEULEMENT si la voix locale marche vraiment.
+    expect(downloadProgressText({ outcome: "done" }, { installed: true })).toMatch(/hors ligne/);
+    expect(downloadProgressText({ outcome: "done" }, { installed: false, engine_present: false })).toMatch(
+      /pas encore utilisable/,
+    );
+    expect(
+      downloadProgressText({ outcome: "done" }, { installed: false, engine_present: false }),
+    ).not.toMatch(/hors ligne/);
+    expect(downloadProgressText({ outcome: "done" }, null)).toMatch(/voix du système/);
     expect(downloadProgressText({ outcome: "cancelled" })).toMatch(/arrêté/i);
     expect(downloadProgressText({ outcome: "cancelled" })).toMatch(/voix du système/);
     expect(downloadProgressText({ outcome: "failed" })).toMatch(/impossible/i);
@@ -387,5 +397,158 @@ describe("téléchargement du modèle", () => {
     expect(state.running).toBe(false);
     expect(state.outcome).toBeNull();
     expect(normalizeDownloadState({ running: 1 }).running).toBe(false);
+  });
+});
+
+// ── Le moteur installé UNE fois sur l'ordinateur sert à toutes les versions ──
+//
+// Cas réel : le moteur Piper avait été installé à la main dans le dossier de
+// données de la version installée (`com.pilot.editor`), et le mode test utilise
+// un AUTRE dossier (`com.pilot.editor.dev`). Le moteur était donc jugé absent et
+// la lecture retombait toujours sur la voix du système (Hortense), quelle que
+// soit la voix choisie.
+
+/** Voix système française unique du poste de test (Hortense). */
+function FR_VOICE() {
+  return { name: "Microsoft Hortense", lang: "fr-FR", voiceURI: "h", default: false };
+}
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+/** État « moteur trouvé dans l'autre version de Pilot », pour la voix d'homme. */
+function sharedEngineStatus(model = "fr_FR-tom-medium") {
+  return normalizeLocalVoiceStatus({
+    installed: true,
+    voice: model,
+    engine_present: true,
+    engine_shared: true,
+    engine_dir: "C:/Users/x/AppData/Roaming/com.pilot.editor/voix-locale",
+    dir: "C:/Users/x/AppData/Roaming/com.pilot.editor.dev/voix-locale",
+    model_present: true,
+    hint: "Voix française locale prête : lecture hors ligne.",
+  });
+}
+
+describe("moteur déjà installé pour l'autre version de Pilot", () => {
+  it("la voix CHOISIE est réellement parlée (aucun repli sur la voix du système)", async () => {
+    const status = sharedEngineStatus();
+    setLocalVoiceStatus(status);
+    const choice = localVoiceValueFor("fr_FR-tom-medium");
+    const voices = [FR_VOICE()];
+    // Le réglage est CONSERVÉ et la voix est annoncée utilisable…
+    expect(voiceChoiceStatus(voices, choice, status).kind).toBe("ok");
+
+    const { win, synth } = fakeWindow();
+    const { invoke, calls } = fakeInvoke({ status, audio: "UklGRg==" });
+    const speaker = createSpeaker(win, { lang: "fr-FR", invoke, voiceName: choice, waitMs: 0 });
+    const states = [];
+    await speaker.speak("Bonjour.", { onstate: (state) => states.push(state) });
+    await tick();
+
+    // …le MOTEUR LOCAL est appelé, avec LE modèle choisi…
+    const synthesized = calls.filter((c) => c.command === "tts_local_synthesize");
+    expect(synthesized.length).toBeGreaterThan(0);
+    expect(synthesized[0].args.model).toBe("fr_FR-tom-medium");
+    // …et AUCUNE voix du système n'est prononcée (Hortense reste muette).
+    expect(synth.spoken.length).toBe(0);
+    expect(states).not.toContain("local-fallback");
+  });
+
+  it("le partage du moteur est VISIBLE (jamais un partage silencieux)", () => {
+    const status = sharedEngineStatus();
+    expect(status.engine_shared).toBe(true);
+    expect(status.engine_dir).toContain("com.pilot.editor/voix-locale");
+    // Le dossier des modèles reste celui de CETTE version de Pilot.
+    expect(status.dir).toContain("com.pilot.editor.dev/voix-locale");
+    // L'état normalisé d'un moteur absent ne prétend jamais le contraire.
+    const absent = normalizeLocalVoiceStatus({ installed: false, engine_present: false });
+    expect(absent.engine_shared).toBe(false);
+    expect(absent.engine_dir).toBe("");
+  });
+
+  it("le code Rust cherche le moteur du même produit, et lui seul", () => {
+    const rust = read("src-tauri/src/tts_local.rs");
+    expect(rust).toMatch(/fn resolve_engine_root\(/);
+    expect(rust).toMatch(/fn engine_candidate_roots\(/);
+    expect(rust).toMatch(/fn status_for_dir_with_engine\(/);
+    // Un identifiant voisin du même produit est accepté, un autre produit non.
+    expect(rust).toMatch(/name == product \|\| name\.starts_with/);
+    // Aucun fichier copié ni supprimé (le moteur est seulement lu).
+    expect(rust).not.toMatch(/fn resolve_engine_root[\s\S]{0,600}copy\(/);
+  });
+});
+
+// ── Un modèle téléchargé sans moteur ne s'annonce JAMAIS comme un succès ─────
+
+describe("fin de téléchargement : jamais de succès mensonger", () => {
+  it("modèle téléchargé mais moteur absent : avertissement, pas de succès", () => {
+    const status = normalizeLocalVoiceStatus({
+      installed: false,
+      voice: "fr_FR-tom-medium",
+      engine_present: false,
+      dir: "C:/Users/x/AppData/Roaming/com.pilot.editor.dev/voix-locale",
+    });
+    const done = downloadDoneMessage({ outcome: "done" }, status, "fr_FR-tom-medium");
+    expect(done.level).toBe("warning");
+    expect(done.text).not.toMatch(/est installé\s*:/);
+    expect(done.text).not.toMatch(/hors ligne/);
+    expect(done.text).toMatch(/pas encore utilisable/);
+    expect(done.text).toMatch(/voix du système/);
+  });
+
+  it("voix réellement utilisable : succès, et d'où vient le moteur", () => {
+    const shared = downloadDoneMessage({ outcome: "done" }, sharedEngineStatus(), "fr_FR-tom-medium");
+    expect(shared.level).toBe("success");
+    expect(shared.text).toMatch(/hors ligne/);
+    expect(shared.text).toContain("com.pilot.editor/voix-locale");
+    const owned = downloadDoneMessage(
+      { outcome: "done" },
+      normalizeLocalVoiceStatus({ installed: true, voice: "fr_FR-tom-medium", engine_present: true }),
+      "fr_FR-tom-medium",
+    );
+    expect(owned.level).toBe("success");
+    // Arrêt et panne restent des avertissements/erreurs, jamais un succès.
+    expect(downloadDoneMessage({ outcome: "cancelled" }, sharedEngineStatus()).level).toBe("warning");
+    expect(downloadDoneMessage({ outcome: "failed", message: "réseau" }, sharedEngineStatus()).level).toBe(
+      "error",
+    );
+    expect(downloadDoneMessage(null, null).level).toBe("info");
+  });
+
+  it("l'interface n'affiche plus l'ancien succès inconditionnel", () => {
+    const settings = read("src/js/settings.js");
+    expect(settings).not.toMatch(/installé : lecture hors ligne disponible/);
+    expect(settings).toMatch(/downloadDoneMessage\(/);
+    // Un message non-succès est JOURNALISÉ (le repli n'est jamais muet).
+    expect(settings).toMatch(/logLocalVoice\(done\.text\)/);
+  });
+});
+
+// ── La note affichée est claire, et non technique ────────────────────────────
+
+describe("note du moteur local : claire et non technique", () => {
+  it("moteur absent : « pas encore installée » + quoi faire, sans jargon", () => {
+    const hint = voiceChoiceStatus([FR_VOICE()], LOCAL_VOICE_VALUE, {
+      installed: false,
+      engine_present: false,
+      dir: "C:/Users/x/AppData/Roaming/com.pilot.editor.dev/voix-locale",
+    }).hint;
+    expect(hint).toContain("pas encore installée");
+    expect(hint).toContain("Vérifier à nouveau");
+    expect(hint).toContain("voix du système");
+    expect(hint).toContain("com.pilot.editor.dev");
+    // Aucun détail technique dans la phrase montrée à l'utilisateur.
+    expect(hint).not.toMatch(/onnx|\.exe|espeak|DLL|RuntimeError/i);
+  });
+
+  it("moteur présent mais modèle absent : c'est le bouton « Télécharger » qui agit", () => {
+    const hint = voiceChoiceStatus([FR_VOICE()], LOCAL_VOICE_VALUE, {
+      installed: false,
+      engine_present: true,
+      dir: "C:/x",
+    }).hint;
+    expect(hint).toContain("pas encore installée");
+    expect(hint).toContain("Télécharger");
+    expect(hint).toContain("voix du système");
   });
 });

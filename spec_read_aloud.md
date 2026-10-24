@@ -121,6 +121,21 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
    `.../voix-locale/voix/fr_FR-<nom>-<qualité>.onnx` + `.onnx.json`.
    Le chemin exact est **affiché dans les Paramètres**. Le modèle peut être
    **téléchargé depuis les Paramètres** (voir 4) ou déposé à la main.
+
+   **Le MOTEUR est partagé par le produit, pas par l'identifiant de version.**
+   La version installée et la version de test ont deux dossiers de données
+   (`com.pilot.editor` / `com.pilot.editor.dev`) mais **un seul** moteur sur
+   l'ordinateur : `product_identifier` (retire le suffixe `.dev`) et
+   `is_product_data_dir` désignent le produit ; `engine_candidate_roots` liste le
+   dossier courant **puis** les dossiers de données des autres versions de Pilot
+   (triés, aucun autre produit) ; `resolve_engine_root` retient le premier qui
+   contient `piper.exe`. **Aucune copie, aucun déplacement, aucune suppression**
+   (seule une **lecture** de présence), et les **modèles restent dans le dossier de
+   données courant**. Le partage est **dit** (`engine_shared` + `engine_dir`, phrase
+   `ready_hint_shared`) : jamais silencieux. Sans cette règle, un moteur installé
+   une seule fois restait invisible pour l'autre version et la lecture retombait
+   **toujours** sur la voix du système, quelle que soit la voix choisie (incident
+   « joue Hortense »).
 4. **Téléchargement — sur geste explicite seulement** (`tts_local_download.rs`) :
    - **un seul modèle à la fois** (garde atomique), **un seul fichier à la fois** ;
    - URL exactes du dépôt Piper, tailles vérifiées à l'arrivée ;
@@ -134,6 +149,12 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
    Aucun téléchargement au démarrage, à l'ouverture des Paramètres, ni pendant une
    lecture : seul un **clic** (ou le **choix** d'une voix dont le modèle manque)
    le déclenche.
+   - **le moteur n'est jamais téléchargé** (par Pilot). Un modèle téléchargé ne
+     suffit donc pas : `downloadDoneMessage` ne dit « installé / lecture
+     hors ligne » **que si** `installed` est vrai après vérification. Sinon
+     (moteur manquant) : **avertissement** « téléchargé, mais la voix locale n'est
+     pas encore utilisable : il manque le moteur (dossier `piper`) », journalisé
+     (`tts_local_log`) — jamais un succès mensonger, jamais un repli muet.
 5. **Un seul réglage** : le champ `read_aloud_voice` (aucun autre), valeur
    réservée **`local:piper`** définie une seule fois (`LOCAL_VOICE_VALUE`,
    `src/js/local-voice.js`). Le texte nettoyé et le découpage par phrase sont
@@ -148,6 +169,15 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
    - une ligne datée est écrite dans **`<données>/voix-locale/voix-locale.log`**
      (`tts_local_log`, rotation au-delà de 256 Ko) — **un seul journal** ;
    - rien ne bloque, rien ne lève.
+   - **la phrase affichée est non technique** (`missing_hint` côté Rust,
+     `localVoiceMissingHint` côté JS) : « La voix locale n'est pas encore installée
+     sur cet ordinateur (dossier utilisé : …) », puis **quoi faire** selon ce qui
+     manque — moteur absent : déposer le dossier `piper` puis « Vérifier à nouveau »
+     (et il est dit qu'il n'est **jamais téléchargé automatiquement**) ; modèle
+     absent : bouton « Télécharger ». Aucun `onnx`, `.exe`, `espeak` ni code
+     d'erreur dans le texte vu par l'utilisateur.
+   - **à chaque clic**, l'état du modèle est relu (`tts_local_status`) : jamais un
+     cache périmé, le repli est journalisé à chaque fois.
 7. **Côté Rust** : `src-tauri/src/tts_local.rs` — `tts_local_status(model)`
    (présence réelle des fichiers), `tts_local_synthesize(text, model)` (processus
    local en `spawn_blocking`, sans fenêtre, sorties drainées, plafond de temps,
@@ -182,9 +212,22 @@ la première reste historique, état mémorisé **par modèle**, téléchargemen
 **seulement sur geste**, état visible / arrêt / échec, aucun effacement). Côté
 Rust : tests de `tts_local` (statut sur dossier vide/équipé, chemins déduits d'un
 seul dossier, table des voix complète et sans doublon, voix masculine avec ses
-propres fichiers et son propre état, journal du repli) et de
-`tts_local_download` (URL exactes, tailles, `.part` jamais confondu avec le
-fichier final, aucun retéléchargement, dossier absent, état par défaut).
+propres fichiers et son propre état, journal du repli, **moteur de l'autre version
+réutilisé** (`resolve_engine_root` → dossier installé + `engine_shared`, voix
+choisie utilisable, partage visible ; et **un dossier voisin étranger n'est jamais
+utilisé**), identifiants regroupés par produit) et de `tts_local_download` (URL
+exactes, tailles, `.part` jamais confondu avec le fichier final, aucun
+retéléchargement, dossier absent, état par défaut).
+
+`voix-locale-choix.test.js` ajoute les tests qui **mordent** sur cet incident :
+(a) avec un moteur partagé, la voix **choisie** est réellement synthétisée
+(`tts_local_synthesize` reçoit le bon `model`) et **aucune** voix du système n'est
+prononcée, l'état ne passe pas à `local-fallback` ; (b) `downloadDoneMessage`
+refuse de dire « installé / hors ligne » quand `installed` est faux et renvoie un
+message **journalisé** ; (c) la note affichée dit « pas encore installée » +
+« Vérifier à nouveau » sans aucun terme technique. Vérifié par neutralisation :
+`resolve_engine_root` forcé sur le dossier courant fait **échouer** le test Rust ;
+`downloadDoneMessage` forcé en succès fait **échouer** les deux tests JS.
 
 **Règle des tests de lecture (leçon de la CI 0.4.43)** : aucun de ces tests ne
 doit dépendre d'un **délai au temps réel** pour supposer qu'une lecture est
