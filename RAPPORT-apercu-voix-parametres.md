@@ -145,3 +145,100 @@ Aucune erreur sur `previewVoice`, `previewNotInstalledHint` ni `stopReading`.
   trompeur n'est affiché.
 - L'aperçu **parle du texte** : il ne modifie ni le choix enregistré, ni la voix
   utilisée à la lecture d'une réponse (autre mission).
+
+---
+
+## Reprise — vérification indépendante (aucun changement de code)
+
+### Constat de départ (contraire à la demande)
+
+La mission annonçait qu'aucune trace n'avait été laissée. **C'est faux sur le
+disque** : la fonctionnalité est présente, complète, documentée, testée et
+**committée** :
+
+- commit `44ba7ad` — « feat(voix): ecouter chaque voix proposee dans les
+  parametres » ;
+- `src/js/read-aloud.js` : `VOICE_PREVIEW_SAMPLE` (l. 771),
+  `previewNotInstalledHint` (l. 782), `previewVoice` (l. 805) ;
+- `src/js/settings.js` : `renderVoicePreviews` (l. 788) et
+  `startVoicePreview` (l. ~831), qui appelle `previewVoice(` **une seule fois** ;
+- `index.html` : `#read-aloud-voice-previews` (l. 1088) dans la section
+  existante `#settings-section-read-aloud` ;
+- `src/css/style.css` : `.read-aloud-previews`, `.read-aloud-preview-row`,
+  `.read-aloud-preview-btn`, `.read-aloud-preview-btn-speaking`,
+  `.read-aloud-preview-label`, `.read-aloud-preview-msg` (l. 3954+) ;
+- test `src/js/apercu-voix-parametres.test.js` (18 tests) ;
+- documentation : `spec_read_aloud.md` § 2 bis, bloc
+  `<!-- HELP:lire-reponses -->` de `help/overview.md`, `README.md` (l. 103-106).
+
+### Audit des 8 consignes, sur le code réellement présent
+
+| # | Consigne | Où elle est tenue |
+|---|---|---|
+| 1 | Un bouton d'écoute par voix, même bouton → « Arrêter » | `renderVoicePreviews` : une rangée par entrée de `voiceChoiceOptions` (locales installées, locales non téléchargées, voix du système) ; `setPreviewButtonState` change le libellé, `aria-pressed` et la classe |
+| 2 | Phrase d'exemple courte, française, neutre | `VOICE_PREVIEW_SAMPLE` : deux phrases, 128 caractères |
+| 3 | Un seul chemin de lecture | `previewVoice` → `createSpeaker(...).speak(...)` = le chemin du bouton « Écouter » des réponses ; `settings.js` n'appelle jamais `.speak(`, ni `SpeechSynthesisUtterance`, ni `createSpeaker(` |
+| 4 | Une seule lecture à la fois ; arrêt en quittant | `speak()` appelle `stopReading()` avant de parler ; `stopReading()` dans `btnClose`, dans `btnSave` et sur `pagehide` |
+| 5 | Modèle non téléchargé : pas la voix du système en douce | `startVoicePreview` vérifie `localVoiceStatusFor(model)` **avant** `previewVoice(` ; sinon `previewNotInstalledHint(label)` (dit « pas encore installée » et « Télécharger le modèle », « sans votre geste ») |
+| 6 | Repli visible et journalisé | état `local-fallback` affiché sur la rangée + ligne écrite par le chemin commun (`logLocalVoice`) |
+| 7 | Jamais de blocage ni d'exception | `previewVoice` : `try/catch` → état `unavailable`, jamais de rejet |
+| 8 | Aucun téléchargement automatique | `startVoicePreview` ne contient ni `downloadLocalVoiceModel(` ni `startReadAloudDownload(` |
+
+Aucune modification n'a donc été nécessaire : rien n'a été changé dans le code,
+la logique de choix de voix et le partage du moteur n'ont pas été touchés.
+
+### Fichiers touchés par cette reprise
+
+| Fichier | Nature |
+|---|---|
+| `RAPPORT-apercu-voix-parametres.md` | ce rapport (section « Reprise ») — **seul** fichier modifié |
+
+Aucun fichier de code, de style, de documentation ni de test n'a été modifié
+(`git diff --stat` sur `src/`, `index.html`, `spec_*.md`, `help/` : vide).
+
+### Vérifications — chiffres réels de cette reprise
+
+```
+npx vitest run src/js/apercu-voix-parametres.test.js
+  PASS (18) FAIL (0)
+
+npx vitest run src/js/apercu-voix-parametres.test.js src/js/read-aloud.test.js
+  PASS (51) FAIL (0)
+
+npm test
+  Test Files  161 passed (161)
+       Tests  2780 passed (2780)
+    Duration  9.84s
+
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+  cargo test: 722 passed, 1 ignored (1 suite, 10.53s)
+
+npm run build:handbook
+  ✅ help/handbook.md généré (45 blocs, 255342 octets) — aucun diff : l'aide
+     intégrée était déjà à jour (git status inchangé sur help/handbook.md)
+```
+
+### Neutralisations faites puis restaurées (preuve que les tests mordent)
+
+Sauvegarde des deux fichiers hors du dépôt, empreinte `sha256` relevée
+avant/après, restauration par copie (aucune commande Git de réinitialisation) :
+
+| Neutralisation (temporaire) | Résultat avant restauration | Résultat après restauration |
+|---|---|---|
+| **A.** `previewVoice` parle avec sa propre synthèse (`win.speechSynthesis.speak(new win.SpeechSynthesisUtterance(...))`) : un **second** chemin de lecture | `18 tests : 13 verts, 5 échecs` — « le nettoyage du texte n'existe qu'a UN endroit » (`expected … not to contain 'speechSynthesis'`), « l'apercu lit bien par le chemin commun » (`expected '' to be 'fr-FR'`), « un seul apercu a la fois » (`Cannot read properties of null (reading 'name')`), « sans synthese vocale : l'apercu le DIT », « une synthese qui tombe en panne » | `PASS (18) FAIL (0)` — `sha256` identique (`da092f18…105b`) |
+| **B.** `stopReading()` retiré du bouton **Annuler** des Paramètres | `PASS (17) FAIL (1)` — « quitter les Parametres arrete l'ecoute en cours » | `PASS (18) FAIL (0)` — `sha256` identique (`98a7e1b9…64ed`) |
+| **C.** État `unavailable` supprimé de `speak()` (échec muet) | `PASS (50) FAIL (1)` sur les deux fichiers de lecture — « sans synthese vocale : l'apercu le DIT » | `PASS (51) FAIL (0)` — `sha256` identique (`da092f18…105b`) |
+
+Après la troisième restauration, `git diff --stat src/js/read-aloud.js
+src/js/settings.js` est **vide** : le code est exactement celui du commit
+`44ba7ad`.
+
+### Ce qui reste à faire
+
+- **Rien pour cette mission** : la fonctionnalité est complète et couverte.
+- Améliorations possibles, **non demandées** et donc non faites : rendre la
+  ligne « pas encore installée » cliquable pour télécharger directement depuis
+  la rangée de la voix concernée (aujourd'hui il faut la choisir dans la liste,
+  puis cliquer « Télécharger le modèle »).
+- Rappel de périmètre : le fait que la voix choisie soit bien appliquée à la
+  lecture relève de l'autre mission (« voix locale ») ; rien n'a été modifié ici.
