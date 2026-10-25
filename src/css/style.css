@@ -177,6 +177,50 @@ body.theme-light.theme-tokyo-day #window-controls > #win-close:active {
   background: var(--surface-2);
 }
 
+/* --- Finitions de contraste des etats de la bande de fenetre -------------
+   Quatre couples etat / sous-theme restaient sous le seuil de lisibilite ;
+   correction ciblee, avec les jetons DEJA definis par chaque palette (aucune
+   couleur en dur, aucun jeton global touche, aucun autre sous-theme modifie).
+
+   Nord (sombre) : la croix de Fermer au survol donnait 2,11:1 (--danger sur
+   --surface-3), sous le plancher de 3:1 d'un repere non textuel. Le survol
+   prend --surface-1, le gris de surface le plus sombre de cette palette :
+   3,42:1. La croix RESTE --danger et le fond reste un gris de surface (jamais
+   de fond rouge plein). Les trois autres sous-themes sombres tiennent deja le
+   plancher sans regle : One Dark 3,30 ; Dracula 3,42 ; Tokyo Night 4,66.
+
+   Solarized Light : le survol de la bande (icone --text-primary sur
+   --surface-3) donnait 3,28:1. Le survol eclaircit le fond (--surface-2) et
+   l'icone prend --text-secondary, le jeton de texte le PLUS sombre de cette
+   palette : 4,39:1. Reste sous 4,5 : seul un --text-secondary plus sombre y
+   arriverait, or c'est un jeton de palette partage par toute l'application —
+   il n'est donc pas touche (voir RAPPORT-finitions-interface.md).
+
+   Tokyo Night Day : le repos (icone --text-secondary sur --bg-app) donnait
+   3,62:1 et le survol 4,05:1. Le repos prend --text-primary (4,52:1) et le
+   survol eclaircit le fond en --surface-2 (4,84:1). La croix de Fermer au
+   survol garde --surface-2 (3,22:1, deja posee plus haut). */
+body.theme-dark.theme-nord #window-controls > #win-close:hover,
+body.theme-dark.theme-nord #window-controls > #win-close:active {
+  background: var(--surface-1);
+}
+
+body.theme-light.theme-tokyo-day #window-controls > button {
+  color: var(--text-primary);
+}
+
+body.theme-light.theme-solarized #window-controls > button:hover,
+body.theme-light.theme-solarized #window-controls > button:active {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+body.theme-light.theme-tokyo-day #window-controls > button:hover,
+body.theme-light.theme-tokyo-day #window-controls > button:active {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
 /* Etat DESACTIVE : jamais atteint — aucun des trois boutons ne peut etre
    desactive (aucun code ne pose `disabled`). Aucune regle n'est donc ecrite
    pour `:disabled`, volontairement (voir §4.1 du document). */

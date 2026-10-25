@@ -2805,10 +2805,43 @@ fn create_file(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Nom affiche par le systeme pour la fenetre (barre des taches, Alt+Tab).
+///
+/// Decision du proprietaire : la version INSTALLEE s'appelle exactement
+/// « Pilot » ; la version de DEVELOPPEMENT s'appelle « Pilot (dev) » afin
+/// qu'elle se distingue d'un coup d'oeil de la version installee quand les deux
+/// tournent en parallele (issue #25). Le critere de mode developpement est
+/// `debug_assertions` -- le meme que celui qui decale le port web
+/// (`effective_web_port`), donc une seule verite pour « je suis la version de
+/// test ». Un build de production (`npm run tauri build`) retombe sur « Pilot ».
+pub(crate) fn window_title() -> &'static str {
+    if cfg!(debug_assertions) {
+        "Pilot (dev)"
+    } else {
+        "Pilot"
+    }
+}
+
+/// Nom reellement pose pour un titre demande.
+///
+/// Le nom de l'application appartient au produit, pas a l'appelant : les appels
+/// existants demandent « Pilot » (le nom du produit) et c'est ici que le mode
+/// developpement ajoute « (dev) ». Un titre different de « Pilot » reste
+/// respecte tel quel (aucun appelant aujourd'hui) -- le comportement du
+/// selecteur de titre n'est donc pas detourne, il est seulement normalise pour
+/// le nom du produit.
+fn resolve_window_title(demande: &str) -> &str {
+    if demande == "Pilot" {
+        window_title()
+    } else {
+        demande
+    }
+}
+
 #[tauri::command]
 fn set_window_title(app: AppHandle, title: String) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_title(&title);
+        let _ = window.set_title(resolve_window_title(&title));
     }
 }
 
@@ -2872,9 +2905,10 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
         // du 2026-10-21). Les agents continuent en arrière-plan.
         *state.project_path.lock().unwrap() = None;
         *state.active_project.lock().unwrap() = None;
-        // Réinitialiser le titre de la fenêtre
+        // Reinitialiser le titre de la fenetre (« Pilot », ou « Pilot (dev) »
+        // en mode developpement -- source unique : `window_title`).
         if let Some(window) = app.get_webview_window("main") {
-            let _ = window.set_title("Pilot");
+            let _ = window.set_title(window_title());
         }
     }
 
@@ -3432,6 +3466,13 @@ pub fn run() {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.set_decorations(false);
                 }
+            }
+            // Nom affiche par le systeme des le demarrage (« Pilot », ou
+            // « Pilot (dev) » en mode developpement) : la configuration
+            // commune declare « Pilot », la distinction se fait ici, en un
+            // seul endroit (`window_title`).
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_title(window_title());
             }
             Ok(())
         })
