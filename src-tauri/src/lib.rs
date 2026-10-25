@@ -3313,6 +3313,11 @@ pub fn run() {
             // automatique du suivi quand le serveur redevient joignable (accumulation
             // locale en mode déconnecté). Thread autonome, fail-open.
             gds_sync::start_gds_sync_monitor(handle.clone());
+            // GDS étape 4b : PRÉSENCE AUTOMATIQUE du portage. Un seul appel par
+            // cycle (3 min), aucun appel pour un projet que ce poste ne tient pas
+            // (repère local), arrêt propre à la restitution/perte, fail-open : un
+            // échec réseau ne plante pas et ne boucle pas (il est signalé).
+            gds_handover::start_gds_handover_presence_monitor(handle.clone());
             // PLface : au démarrage, Pilot nettoie d'abord un visage resté en vie
             // après une fermeture brutale (il verrouillerait sa propre copie dans
             // le dossier de compilation et empêcherait la préparation du paquet),
@@ -3890,7 +3895,11 @@ pub fn run() {
             // et traduire un refus métier en refus lisible (jamais un plantage).
             gds_handover::gds_handover_take,
             gds_handover::gds_handover_state,
+            // Étape 4b : restitution ORDONNÉE (code → avancement → return),
+            // garde d'écriture hors portage, et cycle de présence immédiat.
             gds_handover::gds_handover_return,
+            gds_handover::gds_handover_can_write,
+            gds_handover::gds_handover_presence_now,
             // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
             gds_sync::gds_sync_tracking,
             // ── GDS Phase C1.4 : mode déconnecté + résumés visuels ──

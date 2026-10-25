@@ -434,6 +434,35 @@ fn set_state(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ── Repères du PORTAGE, rangés dans la table de synchro EXISTANTE (étape 4b) ──
+//
+// Le portage d'un projet a besoin de se souvenir, sur le poste, de deux choses :
+// « ce poste tient ce projet » (pour n'envoyer la présence que dans ce cas) et
+// « où en est la restitution » (pour ne jamais l'annoncer réussie à moitié). Ce
+// n'est PAS un second journal ni un second mécanisme de synchronisation : ce
+// sont la même table `gds_sync_state` (clé/valeur) et les mêmes `get_state` /
+// `set_state` que le watermark de synchro. Une valeur vide efface le repère.
+
+/// Lit un repère de la table de synchro (`gds_sync_state`). Vide si absent.
+pub(crate) fn read_sync_marker(key: &str) -> Result<String, String> {
+    let conn = open_sqlite()?;
+    get_state(&conn, key)
+}
+
+/// Écrit un repère de la table de synchro (`gds_sync_state`). `""` l'efface.
+pub(crate) fn write_sync_marker(key: &str, value: &str) -> Result<(), String> {
+    let conn = open_sqlite()?;
+    if value.is_empty() {
+        conn.execute(
+            "DELETE FROM gds_sync_state WHERE key = ?1",
+            rusqlite::params![key],
+        )
+        .map_err(|e| format!("Effacement repère GDS: {}", e))?;
+        return Ok(());
+    }
+    set_state(&conn, key, value)
+}
+
 /// Compte les lignes locales modifiées depuis le watermark (accumulation en
 /// mode déconnecté). Connexion fournie (déjà ouverte).
 fn pending_count_from_conn(conn: &Connection, watermark: i64) -> Result<i64, String> {
@@ -1083,6 +1112,12 @@ pub async fn gds_force_push_suivi(state: State<'_, AppState>, project: String) -
     if !crate::gds_globally_enabled(&state) {
         return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
     }
+    // Étape 4b (plan §6 d) : publier le suivi d'un projet est une ÉCRITURE du
+    // projet. Elle n'est acceptée que si CE poste tient le projet ; sinon refus
+    // LISIBLE (jamais un plantage, jamais un conflit entre deux postes). La
+    // fonction interne `force_push_tracking` n'est pas gardée : la restitution
+    // l'appelle pendant qu'elle tient le projet.
+    crate::gds_handover::ensure_write_allowed(&project).await?;
     // Pool facultatif (lot 4) : la voie « compte GDS » n'en a aucun besoin.
     let pool = gds::optional_pool(&state, &project, None).await;
     force_push_tracking(pool.as_ref(), &project).await
