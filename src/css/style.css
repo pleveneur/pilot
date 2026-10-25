@@ -1713,10 +1713,21 @@ body.theme-light.theme-tokyo-day {
   z-index: 60;
 }
 
-/* En-tete de groupe : 11 px / 600, jamais --text-muted (regle du lot 1). */
+/* En-tete de groupe — le TITRE de chaque rubrique du menu « Autres ecrans »
+   (Mon projet, Comprendre, Verifier, Collaborer, Sources).
+   Il doit se lire comme un TITRE et non comme du texte courant : meme regle de
+   couleur que les titres de blocs des Parametres (`.settings-section-title`).
+   La couleur vient de `--accent-text`, le jeton du theme fait pour l'accent
+   quand il porte du TEXTE (5.94:1 sur le fond du menu en thème sombre et
+   5.28:1 en thème clair) — et NON de `--accent`, dont le contraste en texte
+   tombe sous le seuil AA en thème clair. Aucune teinte en dur, donc aucun
+   second réglage : le thème clair et le thème sombre sont servis par le meme
+   jeton, et `--accent-text` n'est défini qu'à UN endroit par thème.
+   Jamais --text-muted (regle du lot 1). Taille (11 px), graisse (600),
+   espacement et casse inchangees. */
 .pj-more-group-label {
   padding: 8px 8px 4px;
-  color: var(--text-secondary);
+  color: var(--accent-text);
   font-family: var(--font-ui);
   font-size: var(--font-xs);
   font-weight: var(--fw-semibold);

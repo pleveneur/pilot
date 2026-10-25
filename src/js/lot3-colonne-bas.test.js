@@ -237,7 +237,7 @@ describe("LOT 3 (d) — le menu s'ouvre vers le haut et se ferme", () => {
     expect(declarations(bloc(css, "#project-footer"))).toContain("overflow: visible");
   });
 
-  it("lignes de 28 px, icone secondaire, en-tete de groupe secondaire", () => {
+  it("lignes de 28 px, icone secondaire, en-tete de groupe accentue", () => {
     const d = declarations(bloc(css, ".pj-more-menu .pj-more-item"));
     expect(d).toContain("height: 28px");
     expect(d).toContain("padding: 0 8px");
@@ -247,7 +247,12 @@ describe("LOT 3 (d) — le menu s'ouvre vers le haut et se ferme", () => {
     const g = declarations(bloc(css, ".pj-more-group-label"));
     expect(g).toContain("font-size: var(--font-xs)");
     expect(g).toContain("font-weight: var(--fw-semibold)");
-    expect(g).toContain("color: var(--text-secondary)");
+    // Le TITRE de rubrique se distingue du texte courant : meme regle de
+    // couleur que les titres de blocs des Parametres (`--accent-text`, jeton
+    // du theme pour l'accent en TEXTE). Etait `--text-secondary` avant la
+    // demande du proprietaire (2026-10-25). La taille, la graisse, la casse et
+    // l'espacement restent ceux du lot 3 : seule la couleur change.
+    expect(g).toContain("color: var(--accent-text)");
     expect(g).not.toContain("--text-muted");
   });
 
