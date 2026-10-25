@@ -45,6 +45,7 @@ import {
   renderProjectReleaseConfirmHtml,
   renderProjectsSectionHtml,
 } from "./gds-admin.js";
+import { sliceSource } from "./source-slice.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -544,10 +545,11 @@ describe("gds-admin.js — liberation câblée (bouton, motif relu, trace)", () 
     for (const action of ['"release"', '"release-cancel"', '"release-confirm"']) {
       expect(src).toContain(`action === ${action}`);
     }
-    // La confirmation exige l'administrateur ET un motif.
-    const idx = src.indexOf('if (action === "release-confirm")');
-    expect(idx).toBeGreaterThan(-1);
-    const body = src.slice(idx, idx + 1400);
+    // La confirmation exige l'administrateur ET un motif, et ENVOIE réellement
+    // la libération au socle (étape 5 : plus de trace sans action). Découpage
+    // VÉRIFIÉ (ancre qui bouge → échec, jamais un fragment vide vrai par
+    // construction).
+    const body = sliceSource(src, 'if (action === "release-confirm")', "// ── L4.5", 1200);
     expect(body).toContain("canReleaseProject(service.role)");
     expect(body).toContain("handoverReleaseReasonError(motif)");
     expect(body).toContain("handoverReleaseTraceLine(");

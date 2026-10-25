@@ -215,6 +215,11 @@ pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id
 /// reprise ne change pas de serveur).
 #[tauri::command]
 pub async fn start_agent_process(state: State<'_, AppState>, app: AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool, mcp_server: Option<String>) -> Result<Option<u64>, String> {
+    // Garde du socle (mode réseau multi-postes, étape 5) : LANCER un agent sur un
+    // projet tenu par un autre poste est refusé ici, avec la raison. Fail-open :
+    // GDS absent/désactivé, serveur muet, projet libre ou tenu par ce poste →
+    // lancement exactement comme avant.
+    crate::gds_write_guard::ensure_project_writable(state.inner(), &cwd).await?;
     let agent_service = state.inner().agent_service.clone();
     let app = app.clone();
     let (service, project, agent) = (agent_service.clone(), cwd.clone(), agent_id.clone());

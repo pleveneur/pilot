@@ -100,6 +100,10 @@ mod telegram;
 mod gds;
 mod gds_client;
 mod gds_handover;
+// Garde d'écriture TENUE PAR LE SOCLE (mode réseau multi-postes, étape 5) :
+// un projet tenu par un autre poste refuse l'écriture et le lancement d'agent
+// ICI, et pas seulement à l'écran. Fail-open réseau (une panne ne bloque rien).
+mod gds_write_guard;
 // `gds_db` a été extrait dans le crate partagé `gds-core` (refonte GDS, L1.4)
 // sous le nom `gds_core::db`. Cet alias garde inchangés tous les
 // `use crate::gds_db;` et `gds_db::…` du desk (le code a été déplacé, pas
@@ -2861,7 +2865,8 @@ fn open_explorer(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn create_folder(path: String) -> Result<(), String> {
+async fn create_folder(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    crate::gds_write_guard::ensure_path_writable(state.inner(), &path).await?;
     if std::path::Path::new(&path).exists() {
         return Err(format!("Le dossier '{}' existe déjà.", path));
     }
@@ -2870,7 +2875,8 @@ fn create_folder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn delete_file_or_dir(path: String) -> Result<(), String> {
+async fn delete_file_or_dir(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    crate::gds_write_guard::ensure_path_writable(state.inner(), &path).await?;
     let p = std::path::Path::new(&path);
     if !p.exists() {
         return Err(format!("Le chemin '{}' n'existe pas.", path));
@@ -2884,7 +2890,8 @@ fn delete_file_or_dir(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn create_file(path: String) -> Result<(), String> {
+async fn create_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    crate::gds_write_guard::ensure_path_writable(state.inner(), &path).await?;
     // Créer le fichier vide (sans écraser s'il existe déjà)
     if std::path::Path::new(&path).exists() {
         return Err(format!("Le fichier '{}' existe déjà.", path));
@@ -3186,8 +3193,8 @@ fn restore_open_projects(state: State<AppState>) -> (Vec<String>, Option<String>
 // ── Copie d'image dans le projet (drag & drop / Ctrl+V) ──
 
 #[tauri::command]
-fn copy_image_to_project(
-    state: State<AppState>,
+async fn copy_image_to_project(
+    state: State<'_, AppState>,
     file_name: String,
     data: Vec<u8>,
 ) -> Result<String, String> {
@@ -3199,6 +3206,9 @@ fn copy_image_to_project(
             .ok_or("Aucun projet ouvert")?
             .clone()
     };
+
+    // Garde du socle : coller une image écrit dans le projet.
+    crate::gds_write_guard::ensure_project_writable(state.inner(), &project_path).await?;
 
     // Faire les opérations disque hors du lock
     let images_dir = PathBuf::from(&project_path).join("images");
@@ -3993,6 +4003,11 @@ pub fn run() {
             gds_handover::gds_handover_return,
             gds_handover::gds_handover_can_write,
             gds_handover::gds_handover_presence_now,
+            // Étape 5 : libération FORCÉE d'un projet tenu par un autre poste.
+            // Réservée au rôle `admin` (session d'administration + `require_admin`
+            // du socle), motif obligatoire, tentative TRACÉE localement et auditée
+            // par le serveur. Un non-administrateur reçoit un refus lisible.
+            gds_admin::gds_handover_force,
             // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
             gds_sync::gds_sync_tracking,
             // ── GDS Phase C1.4 : mode déconnecté + résumés visuels ──
@@ -4138,6 +4153,8 @@ async fn rename_file_or_dir(
     new_name: String,
 ) -> Result<String, String> {
     let source = std::path::Path::new(&source_path);
+    // Garde du socle : renommer modifie le projet.
+    crate::gds_write_guard::ensure_path_writable(state.inner(), &source_path).await?;
     let parent = source.parent().ok_or("Chemin invalide")?;
     let dest = parent.join(&new_name);
 

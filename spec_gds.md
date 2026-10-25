@@ -930,12 +930,19 @@ machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
 - **Libérer (administrateur seul)** : dans « 🖥️ GDS Serveur — administration » →
   **Dépôts / projets**, le bouton **« Libérer »** n'apparaît que pour un rôle
   `admin` (même règle que les actions de service) et exige un **motif
-  obligatoire** ; le geste laisse une trace **nommée** (projet + compte + motif),
-  jamais un clic anonyme. **Limite assumée et affichée** : la libération forcée
-  existe côté serveur (`POST /api/gds/handover/force`) et côté poste
-  (`gds_handover::force`), mais **aucune commande Tauri ne l'expose** à ce jour —
-  l'écran demande le motif et **dit qu'il n'a rien libéré** ; il ne fait pas
-  semblant. Exposer le geste demande une commande Rust.
+  obligatoire**. Confirmé, il appelle la commande **`gds_handover_force`**
+  (enregistrée dans `generate_handler!` de `lib.rs`), qui ouvre une session
+  d'administration (`admin_action`, jeton du compte) et poste sur la route du
+  socle `gds_handover::FORCE_PATH` (`POST /api/gds/handover/force`, protégée par
+  `require_admin`). Le motif est contrôlé **avant** l'appel (`force_payload`,
+  refus local sans requête) ; la tentative est **tracée nommément**
+  (`force_trace_line` → `gds_sync::write_sync_marker("handover.force.<projet>")`,
+  poste + projet + compte + motif + résultat `liberee`/`refusee`) et **auditée
+  par le serveur**. Un **non-administrateur** est refusé **proprement** :
+  `canReleaseProject` garde l'écran, et le serveur répond 403 — l'écran affiche
+  la raison (`handoverReleaseTraceLine({applied:false, error})`), jamais une
+  panne, jamais une libération annoncée à tort. La libération ne supprime
+  aucune donnée : elle rend le projet libre.
 - **Modules** : `src/js/gds-status.js` = **source unique** de la lecture des
   réponses de portage et de tous les textes (`mapHandoverState`,
   `formatHandoverUntil`, `handoverBanner`, `handoverLocalWorkNotice`,
@@ -950,6 +957,49 @@ machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
   refus au clic, le travail local, la restitution, la libération réservée à
   l'administrateur, et le **câblage réel** (un geste qui publie sans porte
   d'écriture fait **échouer** le test).
+
+### 5.5 Garde d'écriture tenue par le SOCLE (étape 5)
+
+> Un refus qui n'existe qu'à l'écran n'est pas une garde. La décision est donc
+> prise **dans le cœur**, pas dans l'interface.
+
+- **Module** : `src-tauri/src/gds_write_guard.rs` (déclaré `mod gds_write_guard;`
+  dans `lib.rs`) — **une seule** décision, pure et partagée :
+  `decide(Probe, poste_id) -> GuardDecision{Allow, Refuse(String)}`. Le refus
+  réutilise **les messages du portage** (`gds_handover::write_verdict`) : un seul
+  vocabulaire, aucune seconde formulation inventée.
+- **RÈGLE CARDINALE : jamais de blocage du travail local.** La garde est
+  **fail-open** côté réseau. Elle rend `Allow` sans même interroger le serveur
+  quand : projet vide/absent des projets ouverts, GDS désactivé globalement,
+  `.pilot/gds.json` absent ou `enabled: false`, `poste_id` indisponible ; puis
+  `Probe::Panne` (serveur injoignable, délai de 3 s dépassé, réponse
+  inexploitable) ⇒ `Allow`. Sans réseau configuré ou serveur muet, le
+  comportement est **identique à avant**.
+- **Commandes gardées** (le socle **refuse** si, et seulement si, le serveur a
+  confirmé qu'un **autre** poste tient le projet) :
+  `files::write_file_content`, `files::write_file_binary`, `create_file`,
+  `create_folder`, `delete_file_or_dir`, `rename_file_or_dir`,
+  `copy_image_to_project` (`ensure_path_writable` / `ensure_project_writable`),
+  plus le **lancement d'un agent** (`agents::start_agent_process`,
+  `rpc::start_agent_session`) : un agent qui écrirait sans que le poste tienne
+  le projet contournerait la garde.
+- **Coût** : verdict mémorisé 5 s (`GUARD_TTL`, cache borné à 32 projets),
+  sonde plafonnée à 3 s (`GUARD_TIMEOUT`) — un enregistrement ne paie pas un
+  aller-retour réseau.
+- **Refus lisible** : « Écriture refusée : projet tenu par un autre poste,
+  jusqu'à <échéance> — ce poste est en lecture seule, aucune modification n'est
+  publiée. » (même message qu'à l'écran, plus « la prise en main a expiré » et
+  « aucun poste ne le tient »).
+- **Preuve** (`cargo test --lib gds_write_guard`) : les quatre situations sont
+  jouées **séparément** — tenu par un autre ⇒ **refusé** ; tenu par soi ⇒
+  **accepté** (tolérant casse/espaces) ; libre ⇒ **accepté** ; réseau muet ⇒
+  **accepté** (le test qui tombe si une panne se met à bloquer). Plus : prise
+  expirée ⇒ accepté, refus qui dit la raison, chemin dans/hors projet,
+  séparateurs Windows, sous-projet le plus précis, cache réutilisé puis oublié.
+  Côté interface, `npx vitest run src/js/gds-garde-ecriture.test.js` lit le source
+  et **échoue si la garde devient purement visuelle** (un `ensure_*` retiré d'une
+  commande) ou si `gds_handover_force` **disparaît de `generate_handler!`**
+  (oubli d'enregistrement = échec silencieux).
 
 ---
 

@@ -1,11 +1,19 @@
-// files.rs — Opérations fichiers pures (I/O), sans état applicatif.
+// files.rs — Opérations fichiers pures (I/O), sans état applicatif propre.
 //
 // Domaine extrait de `lib.rs` (2026-08) : lecture/écriture de fichiers,
 // métadonnées (encodage, EOL, mtime), existence, ouverture navigateur.
-// Ces commandes ne dépendent ni de `AppState`, ni du watcher, ni d'un helper
-// — elles sont purement fonctionnelles (path → résultat).
+//
+// EXCEPTION ASSUMÉE (mode réseau multi-postes, étape 5) : les commandes qui
+// ÉCRIVENT reçoivent désormais l'état de l'application pour consulter la garde
+// du socle (`gds_write_guard::ensure_path_writable`) : un projet tenu par un
+// autre poste refuse l'écriture dans le socle, pas seulement à l'écran. La
+// garde est fail-open (GDS absent/désactivé, serveur muet, projet libre ou tenu
+// par ce poste → l'écriture se fait exactement comme avant). Les lectures, elles,
+// restent purement fonctionnelles.
 
+use crate::AppState;
 use std::fs;
+use tauri::State;
 
 /// Lit un fichier binaire (octets bruts).
 #[tauri::command]
@@ -73,7 +81,12 @@ pub fn get_file_info(path: String) -> Result<FileInfo, String> {
 
 /// Écrit un fichier texte.
 #[tauri::command]
-pub fn write_file_content(path: String, content: String) -> Result<(), String> {
+pub async fn write_file_content(
+    state: State<'_, AppState>,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    crate::gds_write_guard::ensure_path_writable(state.inner(), &path).await?;
     fs::write(&path, &content).map_err(|e| format!("Erreur écriture: {}", e))
 }
 
@@ -113,7 +126,12 @@ pub fn write_context_handoff(project_path: String, content: String) -> Result<()
 
 /// Écrit un fichier binaire.
 #[tauri::command]
-pub fn write_file_binary(path: String, data: Vec<u8>) -> Result<(), String> {
+pub async fn write_file_binary(
+    state: State<'_, AppState>,
+    path: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    crate::gds_write_guard::ensure_path_writable(state.inner(), &path).await?;
     fs::write(&path, &data).map_err(|e| format!("Erreur écriture: {}", e))
 }
 

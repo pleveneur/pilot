@@ -370,21 +370,79 @@ async fn resolve(project: &str) -> Result<(ServiceIdentity, String, i64), String
 }
 
 /// `POST /api/gds/handover/force` : libération forcée, **réservée au rôle
-/// `admin`** par le serveur (le poste ne re-décide pas le rôle, le refus 403 est
-/// traduit comme les autres). Motif obligatoire — refus 409 s'il est vide.
-/// Aucune commande de cette étape ne l'expose : c'est une action
-/// d'administration, hors périmètre du portage d'un poste.
-#[allow(dead_code)]
-pub(crate) async fn force(project: &str, reason: &str) -> Result<Value, String> {
-    let (ident, poste_id) = handover_context(project)?;
-    let project_id = server_project_id(&ident, project).await?;
-    let reply =
-        gds_service::post_reply(&ident, FORCE_PATH, force_body(project_id, reason)).await?;
-    handover_value(
-        "force",
-        &poste_id,
-        classify_reply(reply.status, reply.body()),
+/// `admin`** par le serveur (`require_admin` sur la route) — le poste ne
+/// re-décide pas le rôle, il traduit le refus (403) et le motif vide (409) comme
+/// les autres refus métier.
+///
+/// ÉTAPE 5 : la route est désormais ATTEIGNABLE depuis un poste par la commande
+/// `gds_handover_force` (`gds_admin`), qui ouvre une session d'administration (un
+/// compte `dev` ou `standard` y est refusé par le serveur) et envoie cette charge
+/// utile. Le motif est obligatoire, contrôlé AVANT l'appel (`force_payload`) : on
+/// n'envoie pas au serveur une demande qu'il refusera.
+///
+/// Construit la charge utile de la libération forcée. **PURE.**
+///
+/// `project_id` doit être strictement positif (valeur rendue par le serveur) et
+/// le motif ne peut pas être vide : le serveur répondrait 409, on refuse avant.
+pub(crate) fn force_payload(project_id: i64, reason: &str) -> Result<Value, String> {
+    if project_id <= 0 {
+        return Err("Projet invalide".to_string());
+    }
+    if reason.trim().is_empty() {
+        return Err(
+            "Le motif de la libération est obligatoire : dites pourquoi vous libérez ce \
+             projet."
+                .to_string(),
+        );
+    }
+    Ok(force_body(project_id, reason))
+}
+
+/// Clé du repère local de la libération forcée, dans la table de synchro
+/// EXISTANTE (`gds_sync_state`) : une ligne par projet, la dernière tentative.
+pub(crate) fn force_trace_key(project_id: i64) -> String {
+    format!("handover.force.{}", project_id)
+}
+
+/// Ligne TRACÉE d'une libération forcée : elle nomme le poste qui a déclenché le
+/// geste, le projet, le compte administrateur et le motif, et dit si la
+/// libération a abouti. Jamais un geste anonyme. **PURE.**
+///
+/// Un seul séparateur `|` est utilisé entre les champs, et il est retiré des
+/// textes libres (motif, compte) pour que la ligne reste relisible et
+/// analysable même si quelqu'un tape un `|` dans le motif.
+pub(crate) fn force_trace_line(
+    poste_id: &str,
+    project_id: i64,
+    admin: &str,
+    reason: &str,
+    applied: bool,
+    at_epoch: u64,
+) -> String {
+    let propre = |s: &str, defaut: &str| {
+        let t = s.trim().replace('|', "/");
+        if t.is_empty() {
+            defaut.to_string()
+        } else {
+            t
+        }
+    };
+    format!(
+        "{} | poste={} | projet={} | compte={} | resultat={} | motif={}",
+        at_epoch,
+        propre(poste_id, "poste inconnu"),
+        project_id,
+        propre(admin, "compte inconnu"),
+        if applied { "liberee" } else { "refusee" },
+        propre(reason, "(motif vide)")
     )
+}
+
+/// Écrit la ligne de trace locale (best-effort : une trace qu'on ne peut pas
+/// écrire ne fait JAMAIS échouer l'action — mais elle est rendue à l'écran dans
+/// le champ `trace` de la réponse, donc jamais perdue en silence).
+pub(crate) fn trace_force_release(project_id: i64, line: &str) -> Result<(), String> {
+    gds_sync::write_sync_marker(&force_trace_key(project_id), line)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1819,5 +1877,57 @@ mod tests {
             !needs_claim(&autre, "poste-A"),
             "la prise en main d'un AUTRE poste n'est jamais réclamée (409, refus lisible)"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ÉTAPE 5 — LIBÉRATION FORCÉE : charge utile et trace nommée
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Le motif est obligatoire : refusé AVANT l'appel (le serveur répondrait
+    /// 409). Un projet valide et un motif réel donnent le corps exact du socle.
+    #[test]
+    fn force_payload_refuses_an_empty_reason_before_calling_the_server() {
+        assert!(force_payload(7, "").is_err(), "motif vide accepté");
+        assert!(force_payload(7, "   ").is_err(), "motif fait d'espaces accepté");
+        assert!(force_payload(0, "panne").is_err(), "projet 0 accepté");
+        assert!(force_payload(-1, "panne").is_err(), "projet négatif accepté");
+        let payload = force_payload(7, "  poste en panne  ").expect("motif valide refusé");
+        assert_eq!(payload, force_body(7, "poste en panne"));
+        assert_eq!(payload["reason"], "poste en panne");
+    }
+
+    /// La trace nomme TOUJOURS le poste, le projet, le compte et le motif, et dit
+    /// si la libération a abouti : jamais un geste anonyme, jamais un mensonge.
+    #[test]
+    fn force_trace_line_names_everything_and_never_lies() {
+        let refusee = force_trace_line("poste-A", 7, "admin@exemple.com", "panne", false, 1_700_000_000);
+        assert!(refusee.contains("poste=poste-A"));
+        assert!(refusee.contains("projet=7"));
+        assert!(refusee.contains("compte=admin@exemple.com"));
+        assert!(refusee.contains("motif=panne"));
+        assert!(refusee.contains("resultat=refusee"));
+        assert!(!refusee.contains("resultat=liberee"));
+        let liberee = force_trace_line("poste-A", 7, "admin@exemple.com", "panne", true, 1_700_000_000);
+        assert!(liberee.contains("resultat=liberee"));
+    }
+
+    /// Champs absents ou porteurs du séparateur : la ligne reste lisible et
+    /// analysable (aucun champ ne peut casser le format).
+    #[test]
+    fn force_trace_line_survives_empty_and_pipe_values() {
+        let ligne = force_trace_line("  ", 3, "  ", "a | b", false, 0);
+        assert!(ligne.contains("poste=poste inconnu"));
+        assert!(ligne.contains("compte=compte inconnu"));
+        assert!(ligne.contains("motif=a / b"));
+        // Un seul niveau de séparateur : 6 champs, donc 5 séparateurs.
+        assert_eq!(ligne.matches('|').count(), 5, "ligne : {}", ligne);
+    }
+
+    /// Le repère local est unique par projet : deux libérations du même projet
+    /// se remplacent (une ligne par projet, pas une accumulation).
+    #[test]
+    fn force_trace_key_is_unique_per_project() {
+        assert_eq!(force_trace_key(7), "handover.force.7");
+        assert_ne!(force_trace_key(7), force_trace_key(8));
     }
 }

@@ -783,11 +783,18 @@ d'un hébergement externe type GitHub.
   développeur **tient** un projet à la fois. Si un autre le tient, votre écran
   « 🌐 GDS » affiche un **bandeau** : « Ce projet est tenu par un autre
   développeur, **jusqu'à HH:MM** ». Vous pouvez **lire, naviguer, consulter** ;
-  en revanche **rien ne peut être publié** depuis votre poste (code et
-  avancement). Les boutons qui publient (Activer GDS, Ajouter au GDS,
-  Synchroniser, Publier, Retirer du GDS) **vous disent pourquoi ils ne partent
-  pas** au lieu de rester sans effet. Un projet **libre** ou **tenu par vous**
-  n'affiche **aucun bandeau**.
+  en revanche **rien ne peut être publié ni écrit** depuis votre poste (code et
+  avancement). Ce n'est pas seulement un message : **Pilot lui-même refuse
+  d'enregistrer** un fichier, de le créer, de le supprimer, de le renommer, de
+  coller une image, et de **lancer un agent** sur ce projet, en vous disant
+  pourquoi. Les boutons qui publient (Activer GDS, Ajouter au GDS, Synchroniser,
+  Publier, Retirer du GDS) **vous disent aussi pourquoi ils ne partent pas** au
+  lieu de rester sans effet. Un projet **libre** ou **tenu par vous** n'affiche
+  **aucun bandeau** et fonctionne comme d'habitude.
+- **Sans réseau, rien ne change** : si le mode réseau n'est pas configuré, si le
+  serveur GDS ne répond pas ou si vous n'êtes pas connecté, Pilot **écrit
+  normalement** — une panne réseau ne vous empêche **jamais** de travailler sur
+  votre poste.
 - **Votre travail local n'est jamais perdu** : des modifications faites sur votre
   poste **restent** sur votre poste, **rien n'est supprimé ni écrasé**, et elles
   ne peuvent simplement pas être publiées tant que le projet est tenu ailleurs.
@@ -801,9 +808,11 @@ d'un hébergement externe type GitHub.
 - **Libérer un projet (administrateur)** : dans « 🖥️ GDS Serveur —
   administration » → **Dépôts / projets**, un **administrateur** seul voit le
   bouton **« Libérer »** ; un **motif est obligatoire** et le geste est **tracé**
-  (projet + compte + motif). Tant que la commande correspondante n'est pas
-  livrée, l'écran **le dit** après confirmation : il **n'annonce jamais** une
-  libération qui n'a pas eu lieu.
+  (projet + compte + motif). Le bouton **libère réellement** le projet (il
+  redevient libre pour le développeur suivant, aucune donnée n'est supprimée) et
+  l'action est inscrite au **journal d'audit du serveur**. Un compte qui n'est
+  pas administrateur est **refusé avec sa raison** : l'écran ne prétend jamais
+  qu'une libération a eu lieu si elle a échoué.
 - **Documentation technique** : installation du serveur en conteneur dans
   `gds-server/README.md` et `docs/gds-server-setup.md` du dépôt Pilot (dont
   **§9 : modifier le serveur — ce qui change pour le conteneur**, preuves

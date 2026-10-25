@@ -457,8 +457,30 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id
     Ok(false)
 }
 
+/// Ouvre (ou reprend) la session agent du projet.
+///
+/// Commande **async** uniquement pour la GARDE D'ÉCRITURE du socle (mode réseau
+/// multi-postes, étape 5) : lancer un agent sur un projet tenu par un autre poste
+/// est refusé ici, avant tout spawn, avec la raison. Elle est fail-open : GDS
+/// absent ou désactivé, serveur muet, projet libre ou tenu par ce poste →
+/// démarrage exactement comme avant. Le démarrage lui-même reste synchrone
+/// (`do_start_agent_session`), partagé avec les appelants internes (web, file de
+/// missions, inter-projets) qui, eux, REPRENNENT une session déjà vivante.
 #[tauri::command]
-pub fn start_agent_session(state: State<AppState>, app: AppHandle, agent_id: Option<String>, project_path: Option<String>) -> Result<bool, String> {
+pub async fn start_agent_session(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    agent_id: Option<String>,
+    project_path: Option<String>,
+) -> Result<bool, String> {
+    let cible = project_path
+        .as_ref()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .or_else(|| state.project_path.lock().unwrap().clone());
+    if let Some(project) = cible.as_deref() {
+        crate::gds_write_guard::ensure_project_writable(state.inner(), project).await?;
+    }
     do_start_agent_session(state.inner(), &app, agent_id.as_deref(), project_path.as_deref())
 }
 

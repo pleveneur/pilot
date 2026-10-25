@@ -982,6 +982,83 @@ pub async fn gds_admin_project_remove(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ÉTAPE 5 (mode réseau multi-postes) — LIBÉRATION FORCÉE, ENFIN ATTEIGNABLE
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// La règle du socle existait (`POST /api/gds/handover/force`, `require_admin`,
+// motif obligatoire, entrée d'audit serveur) mais AUCUN poste ne pouvait
+// l'appeler : le bouton « Libérer » de l'écran d'administration ne faisait rien
+// et le disait. La commande ci-dessous ferme ce trou.
+//
+// Trois protections, à trois étages, et aucun n'est décoratif :
+//   1. l'écran n'affiche le geste qu'à un administrateur (`canReleaseProject`) ;
+//   2. la SESSION d'administration n'est ouverte qu'après contrôle du rôle par le
+//      serveur (`/api/gds/admin/server` → 403 pour un compte `dev`) ;
+//   3. le SOCLE réapplique `require_admin` sur la route (et `gds_core::roles::
+//      can_force_publish`), seul juge en dernier ressort.
+// Un non-administrateur reçoit donc un refus LISIBLE (`{ ok: false, error }`),
+// jamais une panne — et chaque tentative laisse une trace nommée.
+
+/// Commande Tauri (étape 5) : libère un projet tenu par un autre poste
+/// (`POST /api/gds/handover/force`). Réservée à l'administrateur, motif
+/// OBLIGATOIRE, tentative TRACÉE (poste, projet, compte, motif, résultat) dans le
+/// repère local de synchro et dans le journal d'audit du serveur.
+#[tauri::command]
+pub async fn gds_handover_force(
+    host: String,
+    http_port: String,
+    email: String,
+    password: String,
+    project_id: i64,
+    reason: String,
+) -> Result<Value, String> {
+    blocking_admin(move || {
+        // Motif contrôlé AVANT tout appel réseau : on n'envoie pas au serveur une
+        // demande qu'il refusera par 409.
+        let payload = match crate::gds_handover::force_payload(project_id, &reason) {
+            Ok(p) => p,
+            Err(e) => return json!({ "ok": false, "error": e }),
+        };
+        let mut value = admin_action(&host, &http_port, &email, &password, |client, base, token| {
+            send_post_json(
+                client,
+                &format!("{}{}", base, crate::gds_handover::FORCE_PATH),
+                Some(token),
+                &payload,
+            )
+        });
+        // Trace locale, écrite dans les deux cas (libération ou refus) : un refus
+        // d'administrateur est aussi une action qu'on doit pouvoir relire.
+        let applied = value
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let poste = crate::gds::poste_id().unwrap_or_default();
+        let at_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let line = crate::gds_handover::force_trace_line(
+            &poste,
+            project_id,
+            &email,
+            &reason,
+            applied,
+            at_epoch,
+        );
+        let traced = crate::gds_handover::trace_force_release(project_id, &line).is_ok();
+        // La ligne est rendue à l'écran : elle n'est jamais perdue, même si le
+        // repère local n'a pas pu être écrit.
+        if let Value::Object(map) = &mut value {
+            map.insert("trace".to_string(), json!(line));
+            map.insert("traced".to_string(), json!(traced));
+        }
+        value
+    })
+    .await
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // L4.5 — Espace utilisé + journal + clés SSH (charges utiles pures)
 // ─────────────────────────────────────────────────────────────────────────────
 

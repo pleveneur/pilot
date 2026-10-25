@@ -188,6 +188,8 @@ project_info(
 
 Toute route d'écriture de projet (suivi, informations, restitution) vérifie le portage actif **avant** d'écrire. Le « dernier qui écrit gagne » (`gds-core/src/db.rs`, `spec_gds.md:908`) cesse d'être le mécanisme de cohérence. **Aucun job planifié n'est ajouté** : l'expiration est paresseuse (§6 b).
 
+**Côté poste (étape 5, implémenté)** : la même règle est tenue par le **socle**, pas par l'écran — `src-tauri/src/gds_write_guard.rs`, décision **pure** `decide(Probe, poste_id)`, messages repris de `gds_handover::write_verdict`. Sont gardés : `files::write_file_content`, `files::write_file_binary`, `create_file`, `create_folder`, `delete_file_or_dir`, `rename_file_or_dir`, `copy_image_to_project`, et le **lancement d'un agent** (`agents::start_agent_process`, `rpc::start_agent_session`). **Règle cardinale : fail-open réseau** — projet absent des projets ouverts, GDS désactivé, `.pilot/gds.json` manquant, `poste_id` indisponible, serveur injoignable ou muet (3 s) ⇒ **écriture autorisée**, comportement local identique à avant. Détail et preuves : `spec_gds.md` §5.5.
+
 ## 7. Étapes de réalisation
 
 | # | Livré | Agent | Fichiers | Test qui le prouve |

@@ -755,6 +755,21 @@ export function buildProjectRemoveArgs(conn, projectId, purge) {
 }
 
 /**
+ * Charge utile de la libération forcée d'un projet (pure, testable). Le motif
+ * part ROGNÉ (le serveur exige un motif non vide) et l'identifiant en nombre.
+ * @param {{host?:string, httpPort?:string, email?:string, password?:string}} conn
+ * @param {number|string} projectId
+ * @param {string} reason
+ */
+export function buildProjectReleaseArgs(conn, projectId, reason) {
+  return {
+    ...buildAccountsConnArgs(conn),
+    projectId: Number(projectId),
+    reason: String(reason == null ? "" : reason).trim(),
+  };
+}
+
+/**
  * Texte de confirmation du retrait d'un projet (pure, testable). Dit
  * EXACTEMENT ce qui est détruit, et distingue clairement le retrait (entrées en
  * base) de la purge (dépôt bare sur le disque, irréversible).
@@ -905,10 +920,16 @@ export function handoverReleaseTraceLine(o = {}) {
   if (o.applied) {
     return `${trace} Le projet est redevenu libre ; l'action est inscrite au journal d'audit du serveur.`;
   }
+  // Étape 5 : la libération EXISTE maintenant. Ce message ne dit donc plus
+  // « pas encore installée » (ce serait faux) mais la raison exacte du refus,
+  // quand elle est connue.
+  const raison = String(o.error || "").trim();
+  if (raison) {
+    return `${trace} Rien n'a été libéré : ${raison}`;
+  }
   return (
-    `${trace} Rien n'a été libéré : la libération depuis un poste n'est pas encore ` +
-    "installée dans cette version (elle reste réservée à un administrateur et sera " +
-    "inscrite au journal d'audit du serveur). Aucun autre poste n'a été déconnecté."
+    `${trace} Rien n'a été libéré : la demande n'a pas abouti. Aucun autre poste ` +
+    "n'a été déconnecté."
   );
 }
 
@@ -1744,18 +1765,47 @@ export function createGdsAdmin(container) {
         projects.notice = "";
         return draw();
       }
-      // La libération depuis un poste n'est pas encore installée (aucune
-      // commande côté poste) : on ne fait pas semblant. Le geste laisse une
-      // trace NOMMÉE (projet + administrateur + motif), jamais un clic anonyme.
+      // Étape 5 : la libération passe RÉELLEMENT par le socle
+      // (`POST /api/gds/handover/force`), via la commande `gds_handover_force`
+      // réservée à un administrateur côté serveur. On ne fait pas semblant : le
+      // message affiché est construit à partir de la RÉPONSE (libérée / refusée,
+      // avec la raison du serveur), et la ligne de trace nomme le projet,
+      // l'administrateur et le motif dans les deux cas.
+      const nomProjet = releasing.name;
+      const admin = (state.server && state.server.email) || (adminConn && adminConn.email) || "";
+      projects.busy = String(releasing.project_id);
       projects.releasing = null;
-      projects.notice = handoverReleaseTraceLine({
-        name: releasing.name,
-        reason: motif,
-        admin: (state.server && state.server.email) || (adminConn && adminConn.email) || "",
-        applied: false,
-      });
       projects.error = "";
-      return draw();
+      projects.notice = "";
+      draw();
+      const res = await invokeAccounts(
+        "gds_handover_force",
+        buildProjectReleaseArgs(adminConn, releasing.project_id, motif)
+      );
+      if (disposed) return;
+      projects.busy = "";
+      if (res && res.ok) {
+        projects.notice = handoverReleaseTraceLine({
+          name: nomProjet,
+          reason: motif,
+          admin,
+          applied: true,
+        });
+        projects.error = "";
+      } else {
+        // Refus du socle (compte non administrateur, serveur injoignable, projet
+        // déjà libre…) : on dit la raison du serveur ET on garde la trace nommée.
+        projects.notice = "";
+        projects.error = handoverReleaseTraceLine({
+          name: nomProjet,
+          reason: motif,
+          admin,
+          applied: false,
+          error: (res && res.error) || "",
+        });
+      }
+      await loadProjects({ silent: true });
+      return;
     }
   }
 
