@@ -57,7 +57,7 @@ describe("Retrait de l'ecran Aide (a) — plus aucune porte dans la colonne", ()
     // S'il revient, ce compte passe a 3 et ce test rougit.
     expect(boutons).toHaveLength(2);
     expect(blocActions[1]).toContain("Brouillon");
-    expect(blocActions[1]).toContain("Réglages");
+    expect(blocActions[1]).toContain("Options");
   });
 
   it("aucune place vide n'est reservee a la place du bouton retire", () => {

@@ -1172,7 +1172,7 @@ export class TabsManager {
     }
 
     const id = ++tabIdCounter;
-    const tab = new Tab(id, "", "Réglages", "settings");
+    const tab = new Tab(id, "", "Options", "settings");
 
     tab.wrapper = document.createElement("div");
     tab.wrapper.className = "editor-wrapper settings-wrapper";
@@ -1193,7 +1193,7 @@ export class TabsManager {
       console.error("Erreur onglet Réglages:", e);
       tab.wrapper.innerHTML = `
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
-          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Réglages</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Options</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }

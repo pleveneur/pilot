@@ -93,7 +93,7 @@ externe.
 
 - **Thème** : bascule dark/light depuis les **Paramètres ⚙️** (bouton du panneau
   d'actions) → section « Apparence ». Le thème est mémorisé.
-- **Paramètres ⚙️** : les Réglages s'ouvrent dans un **onglet** (thème, éditeur,
+- **Paramètres ⚙️** : les Options s'ouvrent dans un **onglet** (thème, éditeur,
   agent Pi, accès distant, etc.). Le **✕ de l'onglet** équivaut à **« Annuler »**
   (rien n'est enregistré) ; « Annuler » et « Enregistrer » ne ferment pas
   l'onglet, vous voyez le résultat de ce que vous venez de changer. L'onglet

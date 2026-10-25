@@ -87,7 +87,7 @@ externe.
 
 - **Thème** : bascule dark/light depuis les **Paramètres ⚙️** (bouton du panneau
   d'actions) → section « Apparence ». Le thème est mémorisé.
-- **Paramètres ⚙️** : les Réglages s'ouvrent dans un **onglet** (thème, éditeur,
+- **Paramètres ⚙️** : les Options s'ouvrent dans un **onglet** (thème, éditeur,
   agent Pi, accès distant, etc.). Le **✕ de l'onglet** équivaut à **« Annuler »**
   (rien n'est enregistré) ; « Annuler » et « Enregistrer » ne ferment pas
   l'onglet, vous voyez le résultat de ce que vous venez de changer. L'onglet
@@ -1385,7 +1385,7 @@ apprend et répond.
 
 ### Si l'assistant affiche « Connexion au super-agent perdue »
 - Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).
-  Les **causes les plus fréquentes** : le chemin de l'agent (Réglages → Agent)
+  Les **causes les plus fréquentes** : le chemin de l'agent (Options → Agent)
   pointe vers un **shim npm** (`pi.cmd`) dont le paquet installé est **scopé**
   (`@earendil-works/pi-coding-agent`), ou une **extension projet**
   (`<projet>/.pi/extensions/`) déclare des dépendances manquantes.

@@ -222,6 +222,6 @@ describe("readLayaAnswer / layaOffMessage", () => {
   });
 
   it("indique où régler le service dans le message de panne", () => {
-    expect(layaOffMessage()).toContain("Réglages → Service Laya");
+    expect(layaOffMessage()).toContain("Options → Service Laya");
   });
 });

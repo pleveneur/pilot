@@ -163,7 +163,7 @@ export function layaOffMessage(baseUrl = DEFAULT_LAYA_API_URL, reason = "connexi
   return (
     `Le service Laya ne répond pas sur ${baseUrl} (${reason}). ` +
     "La classification locale est indisponible : donne ta réponse sans elle et " +
-    "signale-le à l'utilisateur (Réglages → Service Laya)."
+    "signale-le à l'utilisateur (Options → Service Laya)."
   );
 }
 

@@ -185,7 +185,7 @@ describe("LOT 2 (c) — « Projets » est un bouton nomme", () => {
 describe("LOT 2 (d) — sept icones nues deviennent deux boutons nommes", () => {
   const PORTES = [
     ["btn-scratchpad", "Brouillon"],
-    ["btn-settings", "Réglages"],
+    ["btn-settings", "Options"],
   ];
 
   it("les deux portes gardent leur identifiant ET portent leur libelle", () => {

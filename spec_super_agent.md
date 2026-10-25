@@ -44,7 +44,7 @@ apprend et répond.
 
 ### Si l'assistant affiche « Connexion au super-agent perdue »
 - Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).
-  Les **causes les plus fréquentes** : le chemin de l'agent (Réglages → Agent)
+  Les **causes les plus fréquentes** : le chemin de l'agent (Options → Agent)
   pointe vers un **shim npm** (`pi.cmd`) dont le paquet installé est **scopé**
   (`@earendil-works/pi-coding-agent`), ou une **extension projet**
   (`<projet>/.pi/extensions/`) déclare des dépendances manquantes.

@@ -144,7 +144,7 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   la même présentation, en thème clair comme en thème sombre.
 
 ### Paramètres (onglet ⚙️)
-- Les Réglages s'ouvrent dans un **onglet** (bouton ⚙️, palette de commandes ou événement externe), pas dans une fenêtre par-dessus votre travail. « Annuler » et « Enregistrer » agissent **sans fermer** l'onglet, donc vous voyez le résultat de ce que vous venez de changer. La **✕ de l'onglet équivaut à « Annuler »** (rien n'est enregistré, l'aperçu de thème est annulé). L'onglet est **transverse** : il reste ouvert quand vous changez de projet.
+- Les Options s'ouvrent dans un **onglet** (bouton ⚙️, palette de commandes ou événement externe), pas dans une fenêtre par-dessus votre travail. « Annuler » et « Enregistrer » agissent **sans fermer** l'onglet, donc vous voyez le résultat de ce que vous venez de changer. La **✕ de l'onglet équivaut à « Annuler »** (rien n'est enregistré, l'aperçu de thème est annulé). L'onglet est **transverse** : il reste ouvert quand vous changez de projet.
 - **Thème** : sombre (défaut) ou clair.
 - **Sous-thème** : 5 palettes par mode (dark : One Dark, Dracula, Nord, Tokyo Night ;
   light : GitHub Light, One Light, Solarized Light, Tokyo Night Day). **Aperçu en direct** :
