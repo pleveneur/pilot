@@ -14,6 +14,11 @@ pub mod config;
 pub mod db;
 pub mod git;
 pub mod git_cmd;
+// Portage d'un projet (mode réseau multi-postes, étape 1) : règles PURES de
+// prise en main, présence, restitution et expiration. Module sans base, sans
+// réseau, sans horloge — la table et l'index unique viennent de la migration
+// `0008_project_handover.sql`.
+pub mod handover;
 pub mod http;
 pub mod proc;
 pub mod rate;
