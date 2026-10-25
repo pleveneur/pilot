@@ -147,6 +147,36 @@ body {
   color: var(--danger);
 }
 
+/* --- LOT 0.4 : plancher de contraste des sous-themes CLAIRS --------------
+   Controle chiffre, sous-theme par sous-theme (mesures :
+   RAPPORT-lot0.4-barre-fenetre.md). Les etats du §4.1 sont tenus dans le
+   theme clair de base, dans GitHub Light et dans One Light ; quatre couples
+   etat / sous-theme passaient SOUS le plancher WCAG 1.4.11 (3:1 pour un
+   repere non textuel). Seuls ceux-la sont corriges, et uniquement ici :
+   jetons DEJA definis par la palette, aucune couleur en dur, aucun jeton
+   global touche (le reste de l'application ne bouge pas).
+     Solarized Light : anneau --accent sur --surface-3 = 2,71:1 -> il prend
+       --accent-hover (3,49:1 sur --surface-3, 4,39:1 sur --bg-app).
+     Tokyo Night Day : anneau --accent sur --surface-3 = 2,78:1 -> il prend
+       --accent-hover (3,82:1 sur --surface-3, 4,27:1 sur --bg-app).
+     One Light : croix --danger sur --surface-3 = 2,91:1 -> le survol prend
+       --surface-2 (3,22:1). La croix reste --danger : jamais de fond rouge.
+     Tokyo Night Day : croix --danger sur --surface-3 = 2,69:1 -> idem
+       --surface-2 (3,22:1).
+   Mesures des autres sous-themes clairs, inchangees : theme clair de base
+   3,49 / 3,19 ; GitHub Light 4,27 / 4,40. Aucune regle ecrite pour eux. */
+body.theme-light.theme-solarized #window-controls > button:focus-visible,
+body.theme-light.theme-tokyo-day #window-controls > button:focus-visible {
+  outline-color: var(--accent-hover);
+}
+
+body.theme-light.theme-one-light #window-controls > #win-close:hover,
+body.theme-light.theme-one-light #window-controls > #win-close:active,
+body.theme-light.theme-tokyo-day #window-controls > #win-close:hover,
+body.theme-light.theme-tokyo-day #window-controls > #win-close:active {
+  background: var(--surface-2);
+}
+
 /* Etat DESACTIVE : jamais atteint — aucun des trois boutons ne peut etre
    desactive (aucun code ne pose `disabled`). Aucune regle n'est donc ecrite
    pour `:disabled`, volontairement (voir §4.1 du document). */
