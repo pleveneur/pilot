@@ -389,7 +389,7 @@ réponde aux questions d'architecture **sans relire les fichiers** (économie de
   (pan/zoom, clic sur un nœud → ouvre le fichier, survol → surligne les connexions,
   coloration par type, filtres par relation/fichier/recherche, sous-graphe du
   fichier actif en option).
-- **Paramètres → Code Graph** :
+- **Options → Code Graph** :
   - *Activer le graphe* : master switch.
   - *Moteur d'extraction* : `heuristique` (rapide, sans dépendance) ou
     `tree-sitter` (plus précis, V2). Un rebuild est requis après changement.

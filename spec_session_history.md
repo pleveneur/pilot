@@ -217,6 +217,6 @@ session.
   `.pilot/sessions.jsonl` au `.gitignore` si vous ne voulez pas le committer.
 - **Purge automatique** : les sessions pi plus anciennes que le délai de
   rétention configuré (défaut 15 jours) sont supprimées automatiquement en
-  arrière-plan. Réglez ce délai dans **Paramètres ⚙️ → Agent Pi → Rétention
+  arrière-plan. Réglez ce délai dans **Options ⚙️ → Agent Pi → Rétention
 des sessions (jours)** (0 = désactivé).
 <!-- /HELP:session-history -->

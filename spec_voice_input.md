@@ -231,7 +231,7 @@ texte à la voix.
 - **Dans l'éditeur / l'agent Pi (desktop)** : bouton 🎙️. Fonctionne en contexte
   sécurisé (HTTPS ou `localhost`).
 - **Sur le web distant** : le micro exige **HTTPS** (Secure Context). Cocher
-  « Exposer en HTTPS automatique (Tailscale Serve) » dans les Paramètres →
+  « Exposer en HTTPS automatique (Tailscale Serve) » dans les Options →
   Accès distant, puis utiliser le bouton 🎙️ depuis le téléphone/autre poste.
 - La transcription alimente directement la zone de saisie active (éditeur ou
   saisie de l'agent).

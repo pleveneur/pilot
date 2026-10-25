@@ -42,7 +42,7 @@ bibliothèque de calcul. Au premier démarrage, il ne manque que le **modèle**
 service. Vous n'avez aucune commande à taper. Le modèle est enregistré dans le
 dossier de **données** de Pilot, jamais dans le dossier du programme.
 
-Réglages disponibles dans **Paramètres → Service Laya** :
+Réglages disponibles dans **Options → Service Laya** :
 
 - **Lancer le service Laya au démarrage** : si activé, Pilot démarre le service
   à son ouverture, uniquement s'il ne répond pas déjà.
@@ -112,8 +112,8 @@ absence de connexion Internet, et inversement ; et si le programme de
 téléchargement n'est pas livré, c'est bien **cette** cause qui est annoncée, pas
 une adresse manquante.
 
-Enregistrez vos réglages avec le bouton **Enregistrer** de la fenêtre des
-Paramètres. Les valeurs sont conservées d'une ouverture à l'autre.
+Enregistrez vos réglages avec le bouton **Enregistrer** du panneau des
+Options. Les valeurs sont conservées d'une ouverture à l'autre.
 <!-- /HELP:laya -->
 
 ---

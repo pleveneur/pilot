@@ -261,7 +261,7 @@ Nouveau bloc « Reviewer » dans la section Orchestration :
 <!-- HELP:orchestration -->
 ### Reviewer indépendant (H2 V1)
 
-- **Opt-in** (Paramètres → Orchestration → Reviewer). Un second agent relit le diff
+- **Opt-in** (Options → Orchestration → Reviewer). Un second agent relit le diff
   de chaque tâche (ou seulement les fichiers sensibles en mode « critical ») avec
   un contexte vierge et répond `APPROVED` ou `CHANGES_REQUESTED`.
 - Désactivé par défaut (coûte un tour cloud par tâche). Modèle reviewer configurable

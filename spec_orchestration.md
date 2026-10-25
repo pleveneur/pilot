@@ -997,13 +997,13 @@ Quand une demande est envoyée en mode Orchestration (construction d'un nouveau 
 <!-- HELP:orchestration -->
 ## Mode Orchestration
 
-Le **Mode Orchestration** (onglet π, activable dans les Paramètres ⚙️) fait
+Le **Mode Orchestration** (onglet π, activable dans les Options ⚙️) fait
 travailler ensemble deux IA :
 - un **orchestrateur** (cloud) qui découpe la demande en micro-tâches et valide
   chaque étape,
 - un **codeur** (local, agent Pi) qui exécute chaque micro-tâche sur le projet.
 
-- Activer dans **Paramètres ⚙️ → Agent Pi → Mode Orchestration**, choisir les
+- Activer dans **Options ⚙️ → Agent Pi → Mode Orchestration**, choisir les
   modèles orchestrateur et codeur, la granularité des tâches.
 - Pose ta demande dans l'onglet π : l'orchestrateur produit un **plan** (panneau
   dédié), puis les tâches s'exécutent l'une après l'autre, avec validation et
@@ -1015,7 +1015,7 @@ travailler ensemble deux IA :
   raison, durée, fichiers modifiés) et détecte les réponses en boucle. Clic sur
   une entrée pour voir l'extrait de la réponse et les erreurs de linting.
 - **Auto-test post-modification (E2)** : option « 🧪 Auto-test » dans les
-  Paramètres → Mode Orchestration. Si activée, après chaque tâche du codeur,
+  Options → Mode Orchestration. Si activée, après chaque tâche du codeur,
   Pilot exécute les tests du projet (`npm test` / `cargo test` / `pytest` /
   `go test`) au lieu de ne valider que la syntaxe. Les échecs déclenchent une
   boucle de correction locale (SELF_FIX). Une baseline mémorise les tests déjà

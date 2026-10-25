@@ -559,7 +559,7 @@ Pilot peut exposer une **interface web distante** pour consulter le travail,
 discuter avec l'agent et dicter du texte depuis un téléphone ou un autre poste,
 via le réseau privé **Tailscale** (WireGuard chiffré).
 
-- **Activer** : Paramètres ⚙️ → « Accès distant » → activer l'accès web, définir
+- **Activer** : Options ⚙️ → « Accès distant » → activer l'accès web, définir
   un **mot de passe distant** (hashé argon2).
 - **Adresse d'écoute** : `127.0.0.1` par défaut. Pour un accès HTTP direct sur
   le mesh, élargir à l'IP Tailscale (mais préférer Tailscale Serve, ci-dessous).

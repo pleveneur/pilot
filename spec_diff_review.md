@@ -130,7 +130,7 @@ LLLM décide write/edit
 <!-- HELP:diff-review -->
 ## Porte pré-écriture (confirmer les modifications de l'agent)
 
-Par défaut, l'agent Pi modifie les fichiers librement. Activez **Paramètres →
+Par défaut, l'agent Pi modifie les fichiers librement. Activez **Options →
 « Porte pré-écriture : confirmer les modifications de fichiers »** pour qu'avant
 chaque `write`/`edit`, Pilot affiche un **diff (avant/après)** et vous demande :
 

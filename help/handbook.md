@@ -110,7 +110,7 @@ agents** et n'écrit aucun réglage : elle explique, elle ne reconfigure rien.
    un lien externe (http/https) s'ouvre dans le navigateur, une ancre (`#section`)
    fait défiler la prévisualisation.
 4. **Sauvegarder** : `Ctrl+S` (sauvegarde auto configurable dans les
-   Paramètres). Enregistrer sous : `Ctrl+Shift+S`.
+   Options). Enregistrer sous : `Ctrl+Shift+S`.
 5. **Fermer un onglet** : `Ctrl+W` ou clic sur la croix de l'onglet. On peut
    **réordonner** les onglets par glisser-déposer, et **renommer** un onglet par
    double-clic sur son titre.
@@ -152,17 +152,17 @@ agents** et n'écrit aucun réglage : elle explique, elle ne reconfigure rien.
 ---
 
 <!-- HELP-TOPIC:theme-parametres -->
-## Thème et paramètres
+## Thème et Options
 
-- **Thème** : bascule dark/light depuis les **Paramètres ⚙️** (bouton du panneau
+- **Thème** : bascule dark/light depuis les **Options ⚙️** (bouton du panneau
   d'actions) → section « Apparence ». Le thème est mémorisé.
-- **Paramètres ⚙️** : les Options s'ouvrent dans un **onglet** (thème, éditeur,
+- **Options ⚙️** : les Options s'ouvrent dans un **onglet** (thème, éditeur,
   agent Pi, accès distant, etc.). Le **✕ de l'onglet** équivaut à **« Annuler »**
   (rien n'est enregistré) ; « Annuler » et « Enregistrer » ne ferment pas
   l'onglet, vous voyez le résultat de ce que vous venez de changer. L'onglet
   reste ouvert quand vous changez de projet. Toute la configuration est
   persistée dans un fichier JSON (`app_data_dir/com.pilot.editor/config.json`).
-- **Avatar (PLface)** : dans **Paramètres ⚙️ → Avatar**, cochez « Lancer mon
+- **Avatar (PLface)** : dans **Options ⚙️ → Avatar**, cochez « Lancer mon
   avatar (PLface) au démarrage ». Le **programme du visage est fourni avec
   Pilot** : laissez le **chemin de l'exécutable** vide pour l'utiliser tel quel,
   ou indiquez votre propre programme (bouton « Parcourir… »). Quand Pilot lance
@@ -189,7 +189,7 @@ agents** et n'écrit aucun réglage : elle explique, elle ne reconfigure rien.
 ## Terminal intégré
 
 - Bouton **Terminal** dans le panneau d'actions (ou palette de commandes).
-- Si le terminal intégré est activé (Paramètres ⚙️ → « Terminal intégré »),
+- Si le terminal intégré est activé (Options ⚙️ → « Terminal intégré »),
   il s'ouvre dans un onglet 🖥️. Sinon, un terminal externe est lancé.
 - Shell par défaut : `cmd.exe` (Windows), `$SHELL`/`/bin/zsh` (macOS),
   `$SHELL`/`/bin/bash` (Linux).
@@ -376,12 +376,12 @@ travailles t'est donc proposée **sans redémarrer** l'application.
 Tu peux ouvrir **plusieurs onglets agent indépendants** sur le même projet,
 chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
 
-- **Activer** : Paramètres ⚙️ → onglet « Agent Pi » → cocher « Multi-onglets
+- **Activer** : Options ⚙️ → onglet « Agent Pi » → cocher « Multi-onglets
   agents ».
 - **Ouvrir un agent** : bouton « + » de la barre d'onglets (toujours en
   première position, avant les autres onglets).
 - **Renommer un onglet** : double-clic sur son nom.
-- **Configurer le nombre et les noms au démarrage** : Paramètres ⚙️ → onglet
+- **Configurer le nombre et les noms au démarrage** : Options ⚙️ → onglet
   « Agent Pi » → section « Agents du projet ». Définis les agents rechargés
   automatiquement à l'ouverture du projet, chacun avec son nom. La
   configuration est enregistrée dans `.pilot/agents.json` du projet (versionnée
@@ -412,16 +412,16 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   **émojis** ne sont pas prononcés non plus : la phrase lue reste naturelle. Le
   texte est découpé **phrase par phrase**, et une coupure tombe toujours sur une
   fin de phrase ou de mot — jamais au milieu d'un mot.
-- **Le choix de la voix se règle à un seul endroit** : ⚙️ **Paramètres → onglet
+- **Le choix de la voix se règle à un seul endroit** : ⚙️ **Options → onglet
   « Assistant »** → section **« Lecture des réponses »**. Vous y trouvez le
   **choix de la voix**, l'**état de la lecture** et l'**explication**, regroupés
   au même endroit — ce réglage n'existe nulle part ailleurs (ni dans un autre
-  onglet des paramètres, ni dans une fenêtre par message).
+  onglet des Options, ni dans une fenêtre par message).
 - **Vous écoutez chaque voix avant de choisir** : sous la liste, chaque voix
   proposée a son bouton **« ▶ Écouter »**, qui lit une **phrase d'exemple courte**
   en français. Le même bouton devient **« ⏹ Arrêter »** pendant la lecture, et
   **une seule voix est lue à la fois** : écouter une autre voix coupe la
-  précédente. Quitter les Paramètres ou fermer la fenêtre arrête aussi la
+  précédente. Quitter les Options ou fermer la fenêtre arrête aussi la
   lecture.
 - **Ce que vous entendez est exactement ce que vous obtiendrez** : l'exemple
   passe par le **même chemin** que le bouton « 🔊 Écouter » posé sous les
@@ -464,7 +464,7 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   installée sur cet ordinateur ») et indique quoi déposer, puis « Vérifier à
   nouveau ». La lecture ne reste jamais silencieuse : elle continue avec la voix
   du système et le dit.
-- **La section se remplit toute seule** : à l'ouverture des Paramètres (et à
+- **La section se remplit toute seule** : à l'ouverture des Options (et à
   l'affichage de l'onglet « Assistant »), Pilot vérifie **une seule fois** si le
   moteur et le modèle sont en place — vous n'avez rien à cliquer. Pendant la
   vérification, la section l'écrit ; si elle n'aboutit pas, la section dit que
@@ -545,7 +545,7 @@ d'un hébergement externe type GitHub.
   **comptes** et les **dépôts** sur tous les projets ; **`dev`** publie et force
   le suivi de **tous** les projets du serveur ; **`standard`** est en
   **lecture seule**. Le premier compte créé est administrateur.
-- **Interrupteur global (Paramètres → GDS)** : un paramètre global **actif par
+- **Interrupteur global (Options → GDS)** : un paramètre global **actif par
   défaut** permet de **couper toutes les opérations GDS** (synchronisation,
   suivi fusionné) d'un coup, indépendamment de l'activation par projet. Quand
   il est désactivé, aucune opération GDS n'est permise.
@@ -877,7 +877,7 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
 - **Démarrer** : bouton **Agent Pi** du panneau d'actions, ou onglet π. Pilot
   lance un processus `pi --mode rpc` en arrière-plan. Si vous changez le
   chemin du backend (ex: `plh` → `pi`) ou le répertoire de session dans les
-  **Paramètres**, l'agent est automatiquement redémarré à chaud (si l'onglet
+  **Options**, l'agent est automatiquement redémarré à chaud (si l'onglet
   est ouvert) — un message « 🔄 Agent redémarré » confirme le basculement.
 - **Poser une question / une tâche** : zone de saisie, `Entrée` pour envoyer
   (`Shift+Entrée` = saut de ligne).
@@ -888,7 +888,7 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   Pilot vérifie que le modèle actif correspond bien au modèle sélectionné et
   le resynchronise (avec un message) si nécessaire.
 - **Niveau de réflexion** : réglable dans ⚙️ (**Niveau de réflexion par défaut**),
-  par agent dans l'éditeur 🎭, et pour l'Assistant dans son onglet de Paramètres.
+  par agent dans l'éditeur 🎭, et pour l'Assistant dans son onglet des Options.
   Seuls les paliers **réellement supportés par le modèle** sont proposés, et le
   niveau demandé est **ajusté** au modèle au lancement : un palier inférieur peut
   être employé (message dans la conversation). Le réglage est **réappliqué quand
@@ -935,13 +935,13 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   l'agent avec votre choix ou votre confirmation. Vous pouvez aussi **valider
   sans rien saisir**, **ou saisir une précision et valider sans cocher d'option**
   (bouton **✓ Valider**).
-- **Notification de fin** : réglable dans **Paramètres ⚙️ → onglet « Agent »**
+- **Notification de fin** : réglable dans **Options ⚙️ → onglet « Agent »**
   via « Notifier quand l'agent a terminé (tâche locale) » — envoie une
   **notification native Windows/OS** à la fin d'une tâche, y compris pour un chat
   local (pas seulement à distance).
 - **Quality-gate** (bouton 🛡️) : active un protocole anti-régression embarqué
   (vérifie que les modifications ne cassent aucune fonctionnalité existante).
-- **Notifications Telegram** (Paramètres ⚙️ → onglet **Agent**) : recevez les
+- **Notifications Telegram** (Options ⚙️ → onglet **Agent**) : recevez les
   avis de Pilot (fin de tâche d'un agent, anomalie, arrêt automatique d'une
   session) sur **Telegram**, même loin de l'ordinateur. Désactivé par défaut :
   tant que l'interrupteur est décoché ou qu'un champ est vide, rien n'est
@@ -960,13 +960,13 @@ L'agent a accès aux fichiers du projet courant (lecture/écriture).
 <!-- HELP-TOPIC:orchestration -->
 ## Mode Orchestration
 
-Le **Mode Orchestration** (onglet π, activable dans les Paramètres ⚙️) fait
+Le **Mode Orchestration** (onglet π, activable dans les Options ⚙️) fait
 travailler ensemble deux IA :
 - un **orchestrateur** (cloud) qui découpe la demande en micro-tâches et valide
   chaque étape,
 - un **codeur** (local, agent Pi) qui exécute chaque micro-tâche sur le projet.
 
-- Activer dans **Paramètres ⚙️ → Agent Pi → Mode Orchestration**, choisir les
+- Activer dans **Options ⚙️ → Agent Pi → Mode Orchestration**, choisir les
   modèles orchestrateur et codeur, la granularité des tâches.
 - Pose ta demande dans l'onglet π : l'orchestrateur produit un **plan** (panneau
   dédié), puis les tâches s'exécutent l'une après l'autre, avec validation et
@@ -978,7 +978,7 @@ travailler ensemble deux IA :
   raison, durée, fichiers modifiés) et détecte les réponses en boucle. Clic sur
   une entrée pour voir l'extrait de la réponse et les erreurs de linting.
 - **Auto-test post-modification (E2)** : option « 🧪 Auto-test » dans les
-  Paramètres → Mode Orchestration. Si activée, après chaque tâche du codeur,
+  Options → Mode Orchestration. Si activée, après chaque tâche du codeur,
   Pilot exécute les tests du projet (`npm test` / `cargo test` / `pytest` /
   `go test`) au lieu de ne valider que la syntaxe. Les échecs déclenchent une
   boucle de correction locale (SELF_FIX). Une baseline mémorise les tests déjà
@@ -1010,7 +1010,7 @@ Pilot peut exposer une **interface web distante** pour consulter le travail,
 discuter avec l'agent et dicter du texte depuis un téléphone ou un autre poste,
 via le réseau privé **Tailscale** (WireGuard chiffré).
 
-- **Activer** : Paramètres ⚙️ → « Accès distant » → activer l'accès web, définir
+- **Activer** : Options ⚙️ → « Accès distant » → activer l'accès web, définir
   un **mot de passe distant** (hashé argon2).
 - **Adresse d'écoute** : `127.0.0.1` par défaut. Pour un accès HTTP direct sur
   le mesh, élargir à l'IP Tailscale (mais préférer Tailscale Serve, ci-dessous).
@@ -1052,7 +1052,7 @@ texte à la voix.
 - **Dans l'éditeur / l'agent Pi (desktop)** : bouton 🎙️. Fonctionne en contexte
   sécurisé (HTTPS ou `localhost`).
 - **Sur le web distant** : le micro exige **HTTPS** (Secure Context). Cocher
-  « Exposer en HTTPS automatique (Tailscale Serve) » dans les Paramètres →
+  « Exposer en HTTPS automatique (Tailscale Serve) » dans les Options →
   Accès distant, puis utiliser le bouton 🎙️ depuis le téléphone/autre poste.
 - La transcription alimente directement la zone de saisie active (éditeur ou
   saisie de l'agent).
@@ -1066,7 +1066,7 @@ texte à la voix.
   **clic-droit sur un fichier `.pdf`** → « 📝 Créer un fichier Markdown ».
   Pilot extrait le texte du PDF puis le fait restructurer en Markdown propre par
   l'IA (agent Pi). Le fichier `.md` est créé à côté du PDF et s'ouvre dans un
-  onglet. Modèle utilisé : Paramètres ⚙️ → « Modèle de conversion PDF → MD ».
+  onglet. Modèle utilisé : Options ⚙️ → « Modèle de conversion PDF → MD ».
 - **Export PDF** : dans l'explorateur, **clic-droit sur un fichier `.md`** →
   « 📕 Exporter en PDF ». Génère un PDF rendu de la prévisualisation Markdown.
 
@@ -1083,7 +1083,7 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
 > nativement. Le Context Engine l'utilise seulement comme index pour charger les
 > specs qu'il référence.
 
-- **Activation** : Paramètres → section « Context Engine ». Désactivable.
+- **Activation** : Options → section « Context Engine ». Désactivable.
 - **Budget** : par défaut 8000 tokens (réglable 1000–32000).
 - **Bouton 📑 Contexte** (toolbar agent) : force la ré-injection au prochain
   envoi (utile après avoir changé de fichier actif ou édité `AGENTS.md`).
@@ -1097,7 +1097,7 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
 - **`.pilot/context.md`** : déposez un fichier contextuel à la racine du projet
   pour ajouter vos propres instructions permanentes (conventions, pièges à
   éviter) — il est injecté en priorité juste après `.pilot/context.md`.
-- **RAG local (V2, optionnel)** : section **Paramètres → RAG (Context Engine V2)**
+- **RAG local (V2, optionnel)** : section **Options → RAG (Context Engine V2)**
   — activez le RAG, saisissez l'**adresse Ollama** (`http://127.0.0.1:11434`) et
   le **modèle d'embedding** (`nomic-embed-text`), puis « Tester la connexion ».
   Pilot indexe alors le projet en vecteurs et sélectionne les passages les plus
@@ -1166,7 +1166,7 @@ réponde aux questions d'architecture **sans relire les fichiers** (économie de
   (pan/zoom, clic sur un nœud → ouvre le fichier, survol → surligne les connexions,
   coloration par type, filtres par relation/fichier/recherche, sous-graphe du
   fichier actif en option).
-- **Paramètres → Code Graph** :
+- **Options → Code Graph** :
   - *Activer le graphe* : master switch.
   - *Moteur d'extraction* : `heuristique` (rapide, sans dépendance) ou
     `tree-sitter` (plus précis, V2). Un rebuild est requis après changement.
@@ -1205,7 +1205,7 @@ réponde aux questions d'architecture **sans relire les fichiers** (économie de
 <!-- HELP-TOPIC:diff-review -->
 ## Porte pré-écriture (confirmer les modifications de l'agent)
 
-Par défaut, l'agent Pi modifie les fichiers librement. Activez **Paramètres →
+Par défaut, l'agent Pi modifie les fichiers librement. Activez **Options →
 « Porte pré-écriture : confirmer les modifications de fichiers »** pour qu'avant
 chaque `write`/`edit`, Pilot affiche un **diff (avant/après)** et vous demande :
 
@@ -1227,7 +1227,7 @@ contexte de l'agent.
 
 - **Bouton 📝** (toolbar agent) : ouvre/édite `PROJECT_MEMORY.md` (créé avec un
   template s'il n'existe pas). Éditable manuellement.
-- **Paramètres → Agent Pi ou PLh** :
+- **Options → Agent Pi ou PLh** :
   - *Mémoire de projet* : active l'injection du fichier avant chaque tâche
     (orchestration) et avant le 1er prompt d'une session (chat).
   - *Extraction auto* : après chaque tâche d'orchestration réussie, l'agent
@@ -1272,7 +1272,7 @@ Voir [`spec_review.md`](spec_review.md) pour le détail technique.
 <!-- HELP-TOPIC:orchestration -->
 ### Reviewer indépendant (H2 V1)
 
-- **Opt-in** (Paramètres → Orchestration → Reviewer). Un second agent relit le diff
+- **Opt-in** (Options → Orchestration → Reviewer). Un second agent relit le diff
   de chaque tâche (ou seulement les fichiers sensibles en mode « critical ») avec
   un contexte vierge et répond `APPROVED` ou `CHANGES_REQUESTED`.
 - Désactivé par défaut (coûte un tour cloud par tâche). Modèle reviewer configurable
@@ -1308,7 +1308,7 @@ session.
   `.pilot/sessions.jsonl` au `.gitignore` si vous ne voulez pas le committer.
 - **Purge automatique** : les sessions pi plus anciennes que le délai de
   rétention configuré (défaut 15 jours) sont supprimées automatiquement en
-  arrière-plan. Réglez ce délai dans **Paramètres ⚙️ → Agent Pi → Rétention
+  arrière-plan. Réglez ce délai dans **Options ⚙️ → Agent Pi → Rétention
 des sessions (jours)** (0 = désactivé).
 
 ---
@@ -1353,7 +1353,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Consulter n'est jamais une boucle** : relire `git status`, `git diff`, `git log`, `ls`, `grep`/`rg`, `sed -n`… entre deux corrections est un travail normal — ces lectures **ne déclenchent aucun arrêt**, quel que soit l'écran d'où la tâche a été lancée (onglet d'agent, bus d'agents, Assistant). Seules les **modifications** (écriture d'un fichier, commande qui écrit ou exécute) et la répétition d'un même **texte** peuvent fonder un arrêt.
 - **Chaque arrêt automatique laisse une trace** dans `.pilot/agent-stops.log` du projet (cause, type de détection, agent, session) : boucle, inactivité, plafond de tours, agent bloqué, libération de verrou. Rien ne s'arrête sans motif écrit.
 - **Un agent qui meurt ne perd plus son travail écrit** : s'il s'arrête brutalement (processus mort, plantage), ce qu'il avait **déjà rédigé** est conservé. Le compte rendu de la tâche affiche ce texte, avec la phrase qui dit que la mission n'est **pas** terminée, et il est écrit dans le **même** journal des arrêts (champ `text=`) — jamais un second journal. Si la mémoire de la session est vide, Pilot relit la session de l'agent **sur le disque** ; s'il n'y a vraiment rien, c'est dit explicitement (« **aucun texte récupéré** »). Ni silence, ni texte inventé, et **aucune relance automatique**.
-- **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (**10 min par défaut**, soit 600 000 ms), la run s'arrête et un message le signale. Réglable dans **Paramètres → Agents** (champ « Timeout d'inactivité (ms) », de 10 s à 30 min) ; la nouvelle valeur est relue à l'ouverture de l'onglet Agents ou au redémarrage de Pilot.
+- **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (**10 min par défaut**, soit 600 000 ms), la run s'arrête et un message le signale. Réglable dans **Options → Agents** (champ « Timeout d'inactivité (ms) », de 10 s à 30 min) ; la nouvelle valeur est relue à l'ouverture de l'onglet Agents ou au redémarrage de Pilot.
 - **⏹ Arrêter** arrête les agents lancés depuis cet écran.
 - **Changer de projet, fermer un projet ou en ouvrir un autre n'arrête JAMAIS un agent en cours** — quel que soit l'écran (agent du projet, agents multi-rôles 🎭, Assistant). L'agent du projet quitté est simplement **mis en pause** et reprend là où il en était au retour sur ce projet ; les agents des autres projets ouverts continuent leur travail. Seul un agent **au repos** (qui ne travaille pas) est libéré à la fermeture de son projet.
 - **Travailler sans onglet reste visible** : dans la **liste des agents** (cercle en haut à droite) et dans le panneau du suivi du travail, une session qui travaille sans onglet ouvert reste **listée** avec son nom et son projet, sa pastille **respirant** — vous voyez qu'elle travaille, sur quel projet, même sans onglet. Cette liste n'affiche **aucune mention « arrière-plan »** (texte ou infobulle) : l'information est portée par la pastille et le nom en gras ; le libellé explicite reste dans la fiche de l'agent et dans le panneau Activité de l'onglet Agents. Elle reste listée **tant qu'elle travaille** (ou que son processus tourne) et **disparaît** dès qu'elle s'arrête : aucune entrée fantôme. Une session simplement **au repos** n'est jamais présentée comme travaillante. Ouvrir son onglet reste **votre** décision (bouton « Afficher l'onglet ») : rien ne s'ouvre ni ne change d'onglet tout seul.
@@ -1524,13 +1524,13 @@ apprend et répond.
   Comportement normal (outils présents) inchangé.
 - **#30 — Restauration au démarrage** : l'onglet 🧭 est **rouvert
   automatiquement au démarrage de Pilot** via le réglage **« Démarrer
-  l'assistant au lancement de Pilot »** (**activé par défaut** — Paramètres
+  l'assistant au lancement de Pilot »** (**activé par défaut** — Options
   ⚙️ → onglet Démarrage). S'ajoute (mécanisme historique conservé) à la
   **reprise de l'état** : si l'onglet était **ouvert à la fermeture** de Pilot,
   il est rouvert aussi (état global persisté dans la config, pas par projet).
   Décochez le réglage si vous préférez ne rouvrir que l'onglet au moment de la
   fermeture.
-- **Niveau de réflexion de l'Assistant** : Paramètres ⚙️ → onglet Assistant →
+- **Niveau de réflexion de l'Assistant** : Options ⚙️ → onglet Assistant →
   « Niveau de réflexion de l'Assistant ». Par défaut **« Non réglé (suit le
   réglage général) »**, c'est-à-dire le niveau par défaut de Pilot, puis celui du
   modèle, puis celui du moteur. Seuls les paliers réellement supportés par le
@@ -1539,7 +1539,7 @@ apprend et répond.
   session (jamais un palier supérieur).
 
 ### Donner un nom à votre assistant
-- **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant
+- **Options ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant
   (ex: « Aria », « Chef de projet »). Ce nom s'affiche dans le titre de l'onglet
   🧭 et dans ses réponses.
 - Le nom est **injecté dans le prompt système** envoyé à chaque tour :
@@ -1569,12 +1569,12 @@ apprend et répond.
   l'alerte reste affichée.
 
 ### Gérer les clients
-- **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
+- **Options ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
   vos clients.
 - **Créer un client à la volée** : dans l'onglet 🧭 Assistant, le bouton **🏢
   (Projets & clients)** permet aussi de **créer un nouveau client** directement
   (champ « Nom du nouveau client » + bouton **+ Ajouter un client**), sans
-  passer par les Paramètres. Le nouveau client est aussitôt disponible dans les
+  passer par les Options. Le nouveau client est aussitôt disponible dans les
   sélecteurs.
 - Chaque projet suivi peut être **attaché à un client** : dans le panneau
   **🏢 (Projets & clients)**, choisissez le client de chaque projet dans le menu
@@ -1590,7 +1590,7 @@ apprend et répond.
   standard** : bulles, cadres, **pensée/réflexion**, **outils utilisés** et
   **boutons de choix** (avec l'accent **violet** dédié à l'Assistant au lieu du
   bleu).
-- **Paramétrer** : **Paramètres ⚙️ → onglet « Assistant »** → cochez/décochez
+- **Paramétrer** : **Options ⚙️ → onglet « Assistant »** → cochez/décochez
   « Afficher la réflexion de l'Assistant » et « Afficher les outils de
   l'Assistant » pour masquer (ou montrer) ces blocs.
 - **Ordre chronologique** : les **messages d'info** de l'Assistant (ex: « ✅
@@ -1645,7 +1645,7 @@ apprend et répond.
   - Les **éléments interactifs** (boutons de choix, confirmations, saisies)
     restent **au centre** de la discussion : ce sont des questions qui
     nécessitent votre action, pas des événements système.
-  - **#160 — Événements en plein écran (optionnel)** : **Paramètres ⚙️ → onglet
+  - **#160 — Événements en plein écran (optionnel)** : **Options ⚙️ → onglet
     « Assistant »** → « Événements en plein écran (bandeau central temporaire) »
     affiche **en plus**, au **centre de l'écran** (au-dessus de tout), chaque
     événement dans un **bandeau temporaire discret** — pratique quand l'onglet
@@ -1655,7 +1655,7 @@ apprend et répond.
     **questions interactives** (choix, confirmations) ne sont **pas** concernées.
 - **Onglet « Tâches » du panneau du suivi du travail** : l'ordre définitif des
   onglets est **« Agents », « Tâches », « Événements »** ; le panneau propose
-  donc l'onglet **« Tâches »** juste après « Agents » (**Paramètres ⚙️ →
+  donc l'onglet **« Tâches »** juste après « Agents » (**Options ⚙️ →
   onglet « Assistant » → « Onglet « Tâches » dans le panneau du suivi du travail
   (missions des agents) »**, **activé par défaut** ; décoché, l'onglet est
   **masqué** et le panneau reste sur les deux autres). Il liste les **missions
@@ -1724,7 +1724,7 @@ apprend et répond.
   la discussion.
 
 ### Notifications natives
-- **Paramètres ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a
+- **Options ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a
   terminé une tâche déléguée ou signale une anomalie »** : recevez une
   **notification native** (bannière OS) quand l'Assistant signale un événement
   **important** : une **tâche déléguée** à un agent du projet **est terminée**, ou
@@ -1741,7 +1741,7 @@ apprend et répond.
   banales de l'Assistant ne déclenchent **aucune** notification.
 
 ### Son de notification
-- **Paramètres ⚙️ → onglet « Assistant » → « Jouer un son de notification »** :
+- **Options ⚙️ → onglet « Assistant » → « Jouer un son de notification »** :
   l'Assistant joue un **son** (via le script `~/.pilot/assistant/notify.ps1`)
   aux moments où il notifie l'utilisateur : **fin de tâche d'agent** (son
   « fin »), **point important / anomalie** (son « point »), **question posée**
@@ -1776,14 +1776,14 @@ apprend et répond.
 - **Désactivé par défaut** (opt-in).
 
 ### Réponses courtes
-- **Paramètres ⚙️ → onglet « Assistant » → « Réponses courtes (informer sans
+- **Options ⚙️ → onglet « Assistant » → « Réponses courtes (informer sans
   détailler, sauf demande explicite) »** : quand activé, l'Assistant répond de
   façon **concise** — il **informe et prend des décisions** sans détailler tout
   ce qui se fait, **sauf si vous lui demandez explicitement** de détailler.
 - **Désactivé par défaut**.
 
 ### Mode user-friendly (langage simple)
-- **Paramètres ⚙️ → onglet « Assistant » → « Mode user-friendly (langage simple,
+- **Options ⚙️ → onglet « Assistant » → « Mode user-friendly (langage simple,
   non technique, sauf demande explicite) »** : quand activé, l'Assistant répond
   en **langage simple et non technique** — il évite le jargon et explique les
   concepts de façon accessible pour un non-spécialiste, **sauf si vous lui
@@ -1791,7 +1791,7 @@ apprend et répond.
 - **Désactivé par défaut**.
 
 ### Mode « Assistant coordinateur pur »
-- **Paramètres ⚙️ → onglet « Assistant » → « Assistant coordinateur
+- **Options ⚙️ → onglet « Assistant » → « Assistant coordinateur
   (déléguer quand il faut réfléchir) »** : quand activé (désactivé
   par défaut), l'Assistant passe en mode **coordinateur pur**. Il **ne modifie
   pas** le mécanisme d'échange assistant↔agents : c'est uniquement un bloc
@@ -1835,7 +1835,7 @@ apprend et répond.
 
 <!-- HELP:super-agent-coordinator -->
 ### Mode « Assistant coordinateur pur »
-Dans **Paramètres → section Assistant**, l'option **« Assistant coordinateur
+Dans **Options → section Assistant**, l'option **« Assistant coordinateur
 (déléguer quand il faut réfléchir) »** (désactivée par défaut) fait passer
 l'Assistant en mode **coordinateur** plutôt qu'exécutant. Tant qu'il est actif,
 il ne réfléchit pas lui-même : **tout travail intellectuel** (analyse,
@@ -1865,7 +1865,7 @@ uniquement un bloc d'instructions dans le prompt système.
   déjà vierge (mécanique bouton « + » : `new_session` + ré-application du
   modèle actif). Chaque demande repart donc d'un contexte vierge au lieu
   d'hériter de tout le fil précédent (délégations « hyper long »).
-- **Réglage** : Paramètres ⚙️ → onglet « Assistant » → « Purger la
+- **Réglage** : Options ⚙️ → onglet « Assistant » → « Purger la
   conversation de l'agent avant chaque demande de l'Assistant » (activé par
   défaut ; désactivable pour retrouver l'accumulation d'historique).
 - **Purge uniquement si nécessaire** : si la conversation est déjà vierge
@@ -1978,14 +1978,14 @@ uniquement un bloc d'instructions dans le prompt système.
   dans `super_agent.rs`, jamais recalculés par l'interface). Pilot **signale et
   propose** de confier la demande à un agent — il ne lance **jamais** d'agent
   tout seul. L'affichage est conditionné par `super_agent_long_tasks_enabled`
-  (Paramètres → Assistant, **activé** par défaut : une clé absente vaut activé).
+  (Options → Assistant, **activé** par défaut : une clé absente vaut activé).
 - **Temps estimé / passé par tâche** (idée 2) : une tâche peut porter un
   **temps prévu** (valeur absolue, `super_agent_task_time_set_estimated`) et un
   **temps passé** (cumul, `super_agent_task_time_add_spent`), relus en base
   (`super_agent_task_time_get`) après chaque opération ; la carte affiche alors
   une pastille « prévu / passé » et la vue d'ensemble un total par projet.
   Tout cet affichage est **conditionné** par le réglage
-  `super_agent_show_time` (Paramètres → Suivi), **désactivé par défaut** : sans
+  `super_agent_show_time` (Options → Suivi), **désactivé par défaut** : sans
   lui, aucun champ, aucune pastille et aucun total ne s'affichent (aucune
   donnée n'est écrite ni perdue).
 - **Checklist de livraison par tâche** (idée 3) : chaque fiche peut porter des
@@ -2518,7 +2518,7 @@ sur le projet), cette demande n'est plus une simple ligne anonyme :
   vierge — départ d'une discussion neuve, **modèle actif préservé** (même
   mécanique que le bouton « + » de l'onglet agent). Chaque demande repart
   ainsi d'un contexte propre au lieu d'hériter de tout l'historique
-  (délégations « hyper long »). Réglage **Paramètres → Assistant → « Purger la
+  (délégations « hyper long »). Réglage **Options → Assistant → « Purger la
   conversation de l'agent avant chaque demande de l'Assistant »** (activé par
   défaut). Vos **messages directs** dans l'onglet agent ne déclenchent
   **jamais** de purge : vos retouches gardent leur fil.
@@ -2765,7 +2765,7 @@ Contrat de durée de vie et d'isolement :
 
 ### Héritage du contexte projet pour les agents spécifiques (#21)
 Quand le paramètre **« Héritage du contexte projet pour les agents
-spécifiques »** est activé (Paramètres → section Assistant, désactivé par
+spécifiques »** est activé (Options → section Assistant, désactivé par
 défaut), les agents spécifiques que l'Assistant utilise (outil `run_agents`)
 héritent du contexte que reçoit l'agent standard du projet : le rôle/prompt ET
 les activations de contexte (RAG / Context Engine, mémoire projet
@@ -2775,7 +2775,7 @@ son rôle propre (comportement actuel).
 
 <!-- HELP:super-agent-inherit-context -->
 ### Hériter du contexte projet pour les agents spécifiques
-Dans **Paramètres → section Assistant**, l'option **« Héritage du contexte
+Dans **Options → section Assistant**, l'option **« Héritage du contexte
 projet pour les agents spécifiques »** (désactivée par défaut) fait hériter
 aux agents spécifiques que l'Assistant utilise (outil `run_agents`) du contexte
 que reçoit l'agent standard du projet : le rôle/prompt, le RAG / Context
@@ -2786,7 +2786,7 @@ spécifique ne reçoit que son rôle propre.
 
 <!-- HELP:super-agent-memory -->
 ### Transférer la mémoire de votre assistant entre deux postes
-Dans **Paramètres ⚙️ → section « Mémoire (transfert de suivi) »**, vous pouvez
+Dans **Options ⚙️ → section « Mémoire (transfert de suivi) »**, vous pouvez
 **exporter** ou **importer** la mémoire de votre assistant (son suivi des
 projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autre.
 
@@ -2946,7 +2946,7 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - **Issue #77 — pas de lancement automatique au démarrage** : par défaut,
   l'Assistant **ne lance pas automatiquement** un rappel dû à l'ouverture de sa
   session (démarrage de Pilot). Ce comportement est contrôlé par le réglage
-  **Paramètres → Assistant → « Vérifier les points à faire à l'ouverture de la
+  **Options → Assistant → « Vérifier les points à faire à l'ouverture de la
   session (relances programmées) »** (désactivé par défaut). Tant qu'il est
   désactivé, un rappel dû **reste dû** (jamais perdu, jamais marqué) et n'est
   injecté qu'à partir du moment où **vous avez vous-même écrit** dans la
@@ -3031,7 +3031,7 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   6. **garde-fous** : jamais un rappel **actif récent**, jamais un rappel **futur
      jamais exécuté**, jamais un rappel dont les données sont inexploitables
      (« en cas de doute : on garde »).
-- **Bouton « Supprimer les rappels inutiles »** dans Paramètres → Assistant, sous
+- **Bouton « Supprimer les rappels inutiles »** dans les Options → Assistant, sous
   le compteur « n sur 20 » : mêmes règles, mais geste **immédiat** (sans attendre
   les 24 h) ; le **nombre** de rappels concernés est **annoncé avant
   confirmation**, avec la liste et le motif, et rien n'est modifié sans votre
@@ -3093,14 +3093,14 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - Un **sélecteur de modèle** est disponible dans la barre d'outils de l'onglet
   🧭 (même liste que les agents de coding). Le changement s'applique à la
   session de l'Assistant.
-- **Modèle par défaut dédié (issue #88)** : **Paramètres ⚙️ → onglet « Modèles
+- **Modèle par défaut dédié (issue #88)** : **Options ⚙️ → onglet « Modèles
   IA » → Modèle par défaut de l'Assistant**. Laisser « Modèle par défaut »
   (valeur vide) pour reprendre le **modèle par défaut global des agents**
   (comportement historique inchangé). Le réglage est prioritaire sur le défaut
   global pour l'Assistant uniquement et s'applique au démarrage suivant de sa
   session (le sélecteur de la barre d'outils reste le modèle **actif**). Le
   choix est **persisté immédiatement** (`set_super_agent_default_model`) et
-  **préservé par l'enregistrement des Paramètres**, qui réécrit pourtant toute
+  **préservé par l'enregistrement des Options**, qui réécrit pourtant toute
   la configuration (`settings.js:1242`).
 - **Reprise du modèle choisi au redémarrage** : le **modèle choisi** dans le
   sélecteur est **réappliqué à l'ouverture** de la session de l'Assistant (il ne
@@ -3109,7 +3109,7 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   le défaut **global** — sans erreur ni blocage du démarrage.
 
 ### Personnaliser le prompt
-- **Paramètres ⚙️ → onglet « Assistant » → Prompt système** : définissez le
+- **Options ⚙️ → onglet « Assistant » → Prompt système** : définissez le
   prompt qui cadre le comportement de l'Assistant à chaque tour (rôle,
   consignes, ton). Il est préfixé à chaque question.
 
@@ -3399,8 +3399,8 @@ rejouer.
   en mode **assistant seul** : tout est masqué (sidebar, explorateur, éditeur,
   onglets, terminal) et seule la discussion de l'Assistant reste visible.
 - **Barre du haut** (maquette V4) : à gauche le bouton **← (retour)** + le titre
-  « **Pilot** » ; à droite **UN SEUL bouton ⚙** qui ouvre les paramètres
-  existants de l'Assistant (modale Paramètres, onglet « Assistant »).
+  « **Pilot** » ; à droite **UN SEUL bouton ⚙** qui ouvre les Options
+  de l'Assistant (onglet « Assistant »).
 - **Résumé des agents (point poignée)** : dans cette barre, juste à gauche
   du bouton ⚙, la liste des agents est **repliée par défaut en un petit point
   unique** : le point **respire** (pulsation douce) quand un agent ou l'
@@ -3512,7 +3512,7 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
   Si désactivé, il choisit et lance seul.
 - L'agent standard du projet garde son comportement historique (1er serveur
   activé au démarrage, local ou distant).
-- **Serveur distant** : dans **Paramètres → Serveurs MCP**, choisissez le type
+- **Serveur distant** : dans **Options → Serveurs MCP**, choisissez le type
   *Distant (adresse)*, renseignez l'adresse réseau (`http`/`https`) et la
   **clé d'accès** : le champ propose **la liste des entrées de votre coffre 🔐**
   (par leur description) ; seule la **référence** de l'entrée choisie est
@@ -3544,7 +3544,7 @@ rappelle ce qui reste à faire et peut empêcher de terminer une tâche trop tô
   nombre total de points). Une tâche sans point n'affiche **aucun compteur**.
 - **Modèle de points** : sur une tâche qui n'a encore **aucun** point, un bouton
   **« Ajouter les points du modèle »** propose d'un clic les points habituels
-  (ceux réglés dans les Paramètres). Rien n'est jamais ajouté tout seul.
+  (ceux réglés dans les Options). Rien n'est jamais ajouté tout seul.
 
 #### Au passage en « Terminé »
 
@@ -3562,7 +3562,7 @@ coup**.
 
 #### Où régler cela
 
-Dans **Paramètres**, rubrique **« Assistant (suivi multi-projets) »** :
+Dans **Options**, rubrique **« Assistant (suivi multi-projets) »** :
 - **« Checklist de livraison obligatoire »** : le mode (Désactivée / Rappel
   simple / Bloquante) ;
 - **« Modèle de checklist par défaut »** : les points proposés par le bouton
@@ -3588,7 +3588,7 @@ d'un coup d'œil **qui a demandé quoi, quand**, sans fouiller les conversations
   **« Aucune livraison enregistrée »**.
 - **Origine inconnue** : si aucune décision n'est reliée à la tâche, la ligne
   porte la mention **« origine non précisée »** — la livraison reste tracée.
-- **Désactiver** : dans **Paramètres → Assistant (suivi multi-projets)**,
+- **Désactiver** : dans **Options → Assistant (suivi multi-projets)**,
   décochez **« Enregistrer une ligne de traçabilité à chaque livraison »**
   (activé par défaut). Décocher **n'efface aucune** ligne déjà enregistrée.
 
@@ -3602,7 +3602,7 @@ pris** aide à mieux estimer les fois suivantes. C'est exactement ce que permet
 le suivi du temps — et il est **masqué par défaut**.
 
 - **À activer d'abord** : tant que le réglage **« Afficher le suivi du temps
-  estimé / passé »** n'est pas coché (**Paramètres → Suivi**), rien n'apparaît :
+  estimé / passé »** n'est pas coché (**Options → Suivi**), rien n'apparaît :
   ni champ de saisie, ni pastille, ni total. C'est le réglage d'usine. Le cocher
   ne change aucune donnée, le décocher n'en fait perdre aucune.
 - **Renseigner les temps** : ouvrez la **fiche d'une tâche** (bouton *éditer* sur
@@ -3639,7 +3639,7 @@ plutôt que de les laisser peser sur l'assistant de suivi.
   La décision reste entièrement la vôtre.
 - **Demande ordinaire** : **rien ne s'affiche** — la carte reste exactement
   comme avant, sans pastille ni infobulle.
-- **Pour éteindre complètement le repérage** : **Paramètres → Assistant
+- **Pour éteindre complètement le repérage** : **Options → Assistant
   (suivi multi-projets)**, décochez **« Détecter les tâches longues et proposer
   un agent »** (activé par défaut). Décocher n'efface aucune donnée et ne change
   rien d'autre.
@@ -3741,7 +3741,7 @@ quelques secondes sur les gros projets (parcours du répertoire + Git).
 
 Le tableau de bord se **rafraîchit automatiquement** tant que son onglet est
 actif : par défaut toutes les **10 secondes**. Vous pouvez désactiver ce
-comportement ou modifier l'intervalle dans **Paramètres → Général** (« Activer
+comportement ou modifier l'intervalle dans **Options → Général** (« Activer
 le rafraîchissement automatique du tableau de bord » + durée en secondes).
 
 ### Suivi multi-projets
@@ -3759,13 +3759,13 @@ ouverts** dans Pilot : leur ligne porte la pastille **« non ouvert »** et leur
 tâches viennent du suivi de l'Assistant. On supervise ainsi d'un coup d'œil
 tous les dossiers suivis, ouverts ou non, et l'activité de leurs agents.
 
-Si le réglage **Paramètres → Assistant → « Afficher le suivi du temps estimé /
+Si le réglage **Options → Assistant → « Afficher le suivi du temps estimé /
 passé »** est activé, une ligne discrète ⏱ rappelle le temps estimé et passé du
 projet (aucun calcul n'est fait par l'interface : les totaux viennent du
 suivi).
 
 ### Afficher le Tableau de bord systématiquement
-Dans **Paramètres → Général**, l'option **« Afficher le Tableau de bord
+Dans **Options → Général**, l'option **« Afficher le Tableau de bord
 systématiquement »** (désactivée par défaut) permet d'ouvrir automatiquement
 l'onglet **📊** au démarrage de Pilot, **uniquement si un projet est ouvert**
 (le tableau de bord est lié au projet actif). Quand elle est activée, l'onglet
@@ -3808,7 +3808,7 @@ passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
   (visible dans tous les projets) ou **📁 spécifique au projet actif**.
 - **Référence** : chaque entrée affiche sa référence technique (`vault:…`) sous
   son login — cliquer dessus la copie. C'est cette référence qu'attend le champ
-  « Clé » de Paramètres → Serveurs MCP (elle y est aussi proposée en liste).
+  « Clé » des Options → Serveurs MCP (elle y est aussi proposée en liste).
 - **Copier** : boutons de copie pour le **login** et pour le **mot de passe**
   (copie dans le presse-papiers).
 - **Masqué par défaut** : les mots de passe sont affichés en `••••••••` ; le
@@ -3909,18 +3909,18 @@ normalement** l'agent au lieu de rester en file derrière un couple
   l'**agent standard** du projet (session principale) ; le reviewer et
   l'Assistant ne sont **jamais** arrêtés automatiquement. Le filet « occupé
   périmé » libère le créneau **sans tuer l'agent**.
-- **Réglages** : dans **Paramètres ⚙️ → Agent**, vous pouvez activer/désactiver
+- **Réglages** : dans **Options ⚙️ → Agent**, vous pouvez activer/désactiver
   la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
   bloqués (délégués + standard)** (seuil 10 min). Activés par
   défaut.
 - **Alerte sur Telegram** : si la passerelle Telegram est activée
-  (**Paramètres ⚙️ → Agent → Notifications Telegram**), ces alertes (anomalie
+  (**Options ⚙️ → Agent → Notifications Telegram**), ces alertes (anomalie
   détectée, arrêt automatique, verrou de run libéré) vous sont **aussi**
   envoyées sur Telegram. Voir la section « Notifications Telegram » de cette
   aide.
 - **Prise en compte immédiate (issue #89)** : ces réglages (seuils et
   activations) sont **relus en continu**, à chaque passage de la surveillance
-  (toutes les **30 s**). Un changement dans les Paramètres s'applique donc
+  (toutes les **30 s**). Un changement dans les Options s'applique donc
   **sans redémarrer Pilot** — au plus tard au passage suivant du moniteur.
 - **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
   n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
@@ -3953,7 +3953,7 @@ même si vous êtes loin de l'ordinateur :
 - **arrêt automatique d'une session** (agent bloqué arrêté, verrou de run
   libéré).
 
-**Réglage** : dans **Paramètres ⚙️ → onglet Assistant**, section
+**Réglage** : dans **Options ⚙️ → onglet Assistant**, section
 **« Notifications Telegram »** :
 
 1. cochez **« Me prévenir sur Telegram »** ;
@@ -3981,7 +3981,7 @@ restent alors visibles **dans Pilot**.
   phrase**, sans vous redemander ;
 - **si vous écrivez au bot sur Telegram**, le réglage se **réactive
   automatiquement** (vous écrivez là, donc vous voulez y être prévenu) : le geste
-  est journalisé et l'interrupteur des Paramètres apparaît coché. Un message
+  est journalisé et l'interrupteur des Options apparaît coché. Un message
   venant d'**une autre personne** ne change jamais ce réglage.
 
 **Ce que vous recevez est court et rangé** :
@@ -4065,7 +4065,7 @@ d'une **autre personne** que vous est **ignoré** (jamais de réponse).
 📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
 petit bouton de discussion permet d'**activer** cette communication. Il
 n'apparaît que si l'envoi Telegram est réellement **en état de fonctionner**
-(case **« Me prévenir sur Telegram »** cochée, jeton et identifiant renseignés — ces réglages restent dans **Paramètres ⚙️ → onglet Assistant**) :
+(case **« Me prévenir sur Telegram »** cochée, jeton et identifiant renseignés — ces réglages restent dans **Options ⚙️ → onglet Assistant**) :
 s'il s'affiche, c'est que vos messages partiront vraiment. Une fois activé, ce que
 l'Assistant écrit vous arrive **aussi sur Telegram**, **résumé en une phrase
 simple**, et **seulement quand cela vous est utile** : réponse à votre question,
@@ -4106,7 +4106,7 @@ bibliothèque de calcul. Au premier démarrage, il ne manque que le **modèle**
 service. Vous n'avez aucune commande à taper. Le modèle est enregistré dans le
 dossier de **données** de Pilot, jamais dans le dossier du programme.
 
-Réglages disponibles dans **Paramètres → Service Laya** :
+Réglages disponibles dans **Options → Service Laya** :
 
 - **Lancer le service Laya au démarrage** : si activé, Pilot démarre le service
   à son ouverture, uniquement s'il ne répond pas déjà.
@@ -4176,5 +4176,5 @@ absence de connexion Internet, et inversement ; et si le programme de
 téléchargement n'est pas livré, c'est bien **cette** cause qui est annoncée, pas
 une adresse manquante.
 
-Enregistrez vos réglages avec le bouton **Enregistrer** de la fenêtre des
-Paramètres. Les valeurs sont conservées d'une ouverture à l'autre.
+Enregistrez vos réglages avec le bouton **Enregistrer** du panneau des
+Options. Les valeurs sont conservées d'une ouverture à l'autre.

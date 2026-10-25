@@ -474,7 +474,7 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
 - **Démarrer** : bouton **Agent Pi** du panneau d'actions, ou onglet π. Pilot
   lance un processus `pi --mode rpc` en arrière-plan. Si vous changez le
   chemin du backend (ex: `plh` → `pi`) ou le répertoire de session dans les
-  **Paramètres**, l'agent est automatiquement redémarré à chaud (si l'onglet
+  **Options**, l'agent est automatiquement redémarré à chaud (si l'onglet
   est ouvert) — un message « 🔄 Agent redémarré » confirme le basculement.
 - **Poser une question / une tâche** : zone de saisie, `Entrée` pour envoyer
   (`Shift+Entrée` = saut de ligne).
@@ -485,7 +485,7 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   Pilot vérifie que le modèle actif correspond bien au modèle sélectionné et
   le resynchronise (avec un message) si nécessaire.
 - **Niveau de réflexion** : réglable dans ⚙️ (**Niveau de réflexion par défaut**),
-  par agent dans l'éditeur 🎭, et pour l'Assistant dans son onglet de Paramètres.
+  par agent dans l'éditeur 🎭, et pour l'Assistant dans son onglet des Options.
   Seuls les paliers **réellement supportés par le modèle** sont proposés, et le
   niveau demandé est **ajusté** au modèle au lancement : un palier inférieur peut
   être employé (message dans la conversation). Le réglage est **réappliqué quand
@@ -532,13 +532,13 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   l'agent avec votre choix ou votre confirmation. Vous pouvez aussi **valider
   sans rien saisir**, **ou saisir une précision et valider sans cocher d'option**
   (bouton **✓ Valider**).
-- **Notification de fin** : réglable dans **Paramètres ⚙️ → onglet « Agent »**
+- **Notification de fin** : réglable dans **Options ⚙️ → onglet « Agent »**
   via « Notifier quand l'agent a terminé (tâche locale) » — envoie une
   **notification native Windows/OS** à la fin d'une tâche, y compris pour un chat
   local (pas seulement à distance).
 - **Quality-gate** (bouton 🛡️) : active un protocole anti-régression embarqué
   (vérifie que les modifications ne cassent aucune fonctionnalité existante).
-- **Notifications Telegram** (Paramètres ⚙️ → onglet **Agent**) : recevez les
+- **Notifications Telegram** (Options ⚙️ → onglet **Agent**) : recevez les
   avis de Pilot (fin de tâche d'un agent, anomalie, arrêt automatique d'une
   session) sur **Telegram**, même loin de l'ordinateur. Désactivé par défaut :
   tant que l'interrupteur est décoché ou qu'un champ est vide, rien n'est

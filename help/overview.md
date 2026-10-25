@@ -114,7 +114,7 @@ agents** et n'écrit aucun réglage : elle explique, elle ne reconfigure rien.
    un lien externe (http/https) s'ouvre dans le navigateur, une ancre (`#section`)
    fait défiler la prévisualisation.
 4. **Sauvegarder** : `Ctrl+S` (sauvegarde auto configurable dans les
-   Paramètres). Enregistrer sous : `Ctrl+Shift+S`.
+   Options). Enregistrer sous : `Ctrl+Shift+S`.
 5. **Fermer un onglet** : `Ctrl+W` ou clic sur la croix de l'onglet. On peut
    **réordonner** les onglets par glisser-déposer, et **renommer** un onglet par
    double-clic sur son titre.
@@ -154,17 +154,17 @@ agents** et n'écrit aucun réglage : elle explique, elle ne reconfigure rien.
 <!-- /HELP:raccourcis -->
 
 <!-- HELP:theme-parametres -->
-## Thème et paramètres
+## Thème et Options
 
-- **Thème** : bascule dark/light depuis les **Paramètres ⚙️** (bouton du panneau
+- **Thème** : bascule dark/light depuis les **Options ⚙️** (bouton du panneau
   d'actions) → section « Apparence ». Le thème est mémorisé.
-- **Paramètres ⚙️** : les Options s'ouvrent dans un **onglet** (thème, éditeur,
+- **Options ⚙️** : les Options s'ouvrent dans un **onglet** (thème, éditeur,
   agent Pi, accès distant, etc.). Le **✕ de l'onglet** équivaut à **« Annuler »**
   (rien n'est enregistré) ; « Annuler » et « Enregistrer » ne ferment pas
   l'onglet, vous voyez le résultat de ce que vous venez de changer. L'onglet
   reste ouvert quand vous changez de projet. Toute la configuration est
   persistée dans un fichier JSON (`app_data_dir/com.pilot.editor/config.json`).
-- **Avatar (PLface)** : dans **Paramètres ⚙️ → Avatar**, cochez « Lancer mon
+- **Avatar (PLface)** : dans **Options ⚙️ → Avatar**, cochez « Lancer mon
   avatar (PLface) au démarrage ». Le **programme du visage est fourni avec
   Pilot** : laissez le **chemin de l'exécutable** vide pour l'utiliser tel quel,
   ou indiquez votre propre programme (bouton « Parcourir… »). Quand Pilot lance
@@ -190,7 +190,7 @@ agents** et n'écrit aucun réglage : elle explique, elle ne reconfigure rien.
 ## Terminal intégré
 
 - Bouton **Terminal** dans le panneau d'actions (ou palette de commandes).
-- Si le terminal intégré est activé (Paramètres ⚙️ → « Terminal intégré »),
+- Si le terminal intégré est activé (Options ⚙️ → « Terminal intégré »),
   il s'ouvre dans un onglet 🖥️. Sinon, un terminal externe est lancé.
 - Shell par défaut : `cmd.exe` (Windows), `$SHELL`/`/bin/zsh` (macOS),
   `$SHELL`/`/bin/bash` (Linux).
@@ -369,12 +369,12 @@ travailles t'est donc proposée **sans redémarrer** l'application.
 Tu peux ouvrir **plusieurs onglets agent indépendants** sur le même projet,
 chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
 
-- **Activer** : Paramètres ⚙️ → onglet « Agent Pi » → cocher « Multi-onglets
+- **Activer** : Options ⚙️ → onglet « Agent Pi » → cocher « Multi-onglets
   agents ».
 - **Ouvrir un agent** : bouton « + » de la barre d'onglets (toujours en
   première position, avant les autres onglets).
 - **Renommer un onglet** : double-clic sur son nom.
-- **Configurer le nombre et les noms au démarrage** : Paramètres ⚙️ → onglet
+- **Configurer le nombre et les noms au démarrage** : Options ⚙️ → onglet
   « Agent Pi » → section « Agents du projet ». Définis les agents rechargés
   automatiquement à l'ouverture du projet, chacun avec son nom. La
   configuration est enregistrée dans `.pilot/agents.json` du projet (versionnée
@@ -404,16 +404,16 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   **émojis** ne sont pas prononcés non plus : la phrase lue reste naturelle. Le
   texte est découpé **phrase par phrase**, et une coupure tombe toujours sur une
   fin de phrase ou de mot — jamais au milieu d'un mot.
-- **Le choix de la voix se règle à un seul endroit** : ⚙️ **Paramètres → onglet
+- **Le choix de la voix se règle à un seul endroit** : ⚙️ **Options → onglet
   « Assistant »** → section **« Lecture des réponses »**. Vous y trouvez le
   **choix de la voix**, l'**état de la lecture** et l'**explication**, regroupés
   au même endroit — ce réglage n'existe nulle part ailleurs (ni dans un autre
-  onglet des paramètres, ni dans une fenêtre par message).
+  onglet des Options, ni dans une fenêtre par message).
 - **Vous écoutez chaque voix avant de choisir** : sous la liste, chaque voix
   proposée a son bouton **« ▶ Écouter »**, qui lit une **phrase d'exemple courte**
   en français. Le même bouton devient **« ⏹ Arrêter »** pendant la lecture, et
   **une seule voix est lue à la fois** : écouter une autre voix coupe la
-  précédente. Quitter les Paramètres ou fermer la fenêtre arrête aussi la
+  précédente. Quitter les Options ou fermer la fenêtre arrête aussi la
   lecture.
 - **Ce que vous entendez est exactement ce que vous obtiendrez** : l'exemple
   passe par le **même chemin** que le bouton « 🔊 Écouter » posé sous les
@@ -456,7 +456,7 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   installée sur cet ordinateur ») et indique quoi déposer, puis « Vérifier à
   nouveau ». La lecture ne reste jamais silencieuse : elle continue avec la voix
   du système et le dit.
-- **La section se remplit toute seule** : à l'ouverture des Paramètres (et à
+- **La section se remplit toute seule** : à l'ouverture des Options (et à
   l'affichage de l'onglet « Assistant »), Pilot vérifie **une seule fois** si le
   moteur et le modèle sont en place — vous n'avez rien à cliquer. Pendant la
   vérification, la section l'écrit ; si elle n'aboutit pas, la section dit que
@@ -536,7 +536,7 @@ d'un hébergement externe type GitHub.
   **comptes** et les **dépôts** sur tous les projets ; **`dev`** publie et force
   le suivi de **tous** les projets du serveur ; **`standard`** est en
   **lecture seule**. Le premier compte créé est administrateur.
-- **Interrupteur global (Paramètres → GDS)** : un paramètre global **actif par
+- **Interrupteur global (Options → GDS)** : un paramètre global **actif par
   défaut** permet de **couper toutes les opérations GDS** (synchronisation,
   suivi fusionné) d'un coup, indépendamment de l'activation par projet. Quand
   il est désactivé, aucune opération GDS n'est permise.

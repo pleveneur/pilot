@@ -320,7 +320,7 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
 > nativement. Le Context Engine l'utilise seulement comme index pour charger les
 > specs qu'il référence.
 
-- **Activation** : Paramètres → section « Context Engine ». Désactivable.
+- **Activation** : Options → section « Context Engine ». Désactivable.
 - **Budget** : par défaut 8000 tokens (réglable 1000–32000).
 - **Bouton 📑 Contexte** (toolbar agent) : force la ré-injection au prochain
   envoi (utile après avoir changé de fichier actif ou édité `AGENTS.md`).
@@ -334,7 +334,7 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
 - **`.pilot/context.md`** : déposez un fichier contextuel à la racine du projet
   pour ajouter vos propres instructions permanentes (conventions, pièges à
   éviter) — il est injecté en priorité juste après `.pilot/context.md`.
-- **RAG local (V2, optionnel)** : section **Paramètres → RAG (Context Engine V2)**
+- **RAG local (V2, optionnel)** : section **Options → RAG (Context Engine V2)**
   — activez le RAG, saisissez l'**adresse Ollama** (`http://127.0.0.1:11434`) et
   le **modèle d'embedding** (`nomic-embed-text`), puis « Tester la connexion ».
   Pilot indexe alors le projet en vecteurs et sélectionne les passages les plus

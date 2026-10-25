@@ -51,7 +51,7 @@ même si vous êtes loin de l'ordinateur :
 - **arrêt automatique d'une session** (agent bloqué arrêté, verrou de run
   libéré).
 
-**Réglage** : dans **Paramètres ⚙️ → onglet Assistant**, section
+**Réglage** : dans **Options ⚙️ → onglet Assistant**, section
 **« Notifications Telegram »** :
 
 1. cochez **« Me prévenir sur Telegram »** ;
@@ -79,7 +79,7 @@ restent alors visibles **dans Pilot**.
   phrase**, sans vous redemander ;
 - **si vous écrivez au bot sur Telegram**, le réglage se **réactive
   automatiquement** (vous écrivez là, donc vous voulez y être prévenu) : le geste
-  est journalisé et l'interrupteur des Paramètres apparaît coché. Un message
+  est journalisé et l'interrupteur des Options apparaît coché. Un message
   venant d'**une autre personne** ne change jamais ce réglage.
 
 **Ce que vous recevez est court et rangé** :
@@ -163,7 +163,7 @@ d'une **autre personne** que vous est **ignoré** (jamais de réponse).
 📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
 petit bouton de discussion permet d'**activer** cette communication. Il
 n'apparaît que si l'envoi Telegram est réellement **en état de fonctionner**
-(case **« Me prévenir sur Telegram »** cochée, jeton et identifiant renseignés — ces réglages restent dans **Paramètres ⚙️ → onglet Assistant**) :
+(case **« Me prévenir sur Telegram »** cochée, jeton et identifiant renseignés — ces réglages restent dans **Options ⚙️ → onglet Assistant**) :
 s'il s'affiche, c'est que vos messages partiront vraiment. Une fois activé, ce que
 l'Assistant écrit vous arrive **aussi sur Telegram**, **résumé en une phrase
 simple**, et **seulement quand cela vous est utile** : réponse à votre question,

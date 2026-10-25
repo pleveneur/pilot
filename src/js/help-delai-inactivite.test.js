@@ -101,7 +101,7 @@ describe("Délai d'inactivité des agents — valeur annoncée = valeur du code"
     expect(normalize(line)).toContain(`${groupDigits(TIMEOUT_MS)} ms`);
     expect(normalize(line)).toContain(`${TIMEOUT_MIN} min par défaut`);
     // Le réglage est bien présenté comme modifiable.
-    expect(line).toContain("Paramètres → Agents");
+    expect(line).toContain("Options → Agents");
     // L'ancienne valeur périmée a disparu.
     expect(line).not.toMatch(/\(\s*5 min par défaut\s*\)/);
   });

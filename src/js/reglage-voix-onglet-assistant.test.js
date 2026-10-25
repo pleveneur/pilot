@@ -307,7 +307,7 @@ describe("comportement — lecture inchangee (pas d'auto, une seule voix)", () =
 // ── 6. Documentation : le chemin exact est ecrit noir sur blanc ───────────
 
 describe("documentation — le chemin exact est indique", () => {
-  it("l'aide integree donne Parametres → onglet Assistant → Lecture des reponses", () => {
+  it("l'aide integree donne Options → onglet Assistant → Lecture des reponses", () => {
     const overview = read("help/overview.md");
     const bloc = overview.slice(
       overview.indexOf("<!-- HELP:lire-reponses -->"),
@@ -315,7 +315,7 @@ describe("documentation — le chemin exact est indique", () => {
     );
     expect(bloc.length).toBeGreaterThan(100);
     // Chemin exact, dans cet ordre.
-    expect(bloc).toMatch(/Paramètres → onglet\s*\n?\s*« Assistant »/);
+    expect(bloc).toMatch(/Options → onglet\s*\n?\s*« Assistant »/);
     expect(bloc).toMatch(/« Lecture des réponses »/);
     // Et les comportements exiges y sont decrits pour l'utilisateur.
     expect(bloc).toMatch(/automatique/i);
@@ -325,7 +325,7 @@ describe("documentation — le chemin exact est indique", () => {
 
   it("le handbook genere reprend ce chemin (aide embarquee a jour)", () => {
     const handbook = read("help/handbook.md");
-    expect(handbook).toContain("Paramètres → onglet");
+    expect(handbook).toContain("Options → onglet");
     expect(handbook).toMatch(/« Lecture des réponses »/);
   });
 

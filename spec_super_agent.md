@@ -18,13 +18,13 @@ apprend et répond.
   Comportement normal (outils présents) inchangé.
 - **#30 — Restauration au démarrage** : l'onglet 🧭 est **rouvert
   automatiquement au démarrage de Pilot** via le réglage **« Démarrer
-  l'assistant au lancement de Pilot »** (**activé par défaut** — Paramètres
+  l'assistant au lancement de Pilot »** (**activé par défaut** — Options
   ⚙️ → onglet Démarrage). S'ajoute (mécanisme historique conservé) à la
   **reprise de l'état** : si l'onglet était **ouvert à la fermeture** de Pilot,
   il est rouvert aussi (état global persisté dans la config, pas par projet).
   Décochez le réglage si vous préférez ne rouvrir que l'onglet au moment de la
   fermeture.
-- **Niveau de réflexion de l'Assistant** : Paramètres ⚙️ → onglet Assistant →
+- **Niveau de réflexion de l'Assistant** : Options ⚙️ → onglet Assistant →
   « Niveau de réflexion de l'Assistant ». Par défaut **« Non réglé (suit le
   réglage général) »**, c'est-à-dire le niveau par défaut de Pilot, puis celui du
   modèle, puis celui du moteur. Seuls les paliers réellement supportés par le
@@ -33,7 +33,7 @@ apprend et répond.
   session (jamais un palier supérieur).
 
 ### Donner un nom à votre assistant
-- **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant
+- **Options ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant
   (ex: « Aria », « Chef de projet »). Ce nom s'affiche dans le titre de l'onglet
   🧭 et dans ses réponses.
 - Le nom est **injecté dans le prompt système** envoyé à chaque tour :
@@ -63,12 +63,12 @@ apprend et répond.
   l'alerte reste affichée.
 
 ### Gérer les clients
-- **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
+- **Options ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
   vos clients.
 - **Créer un client à la volée** : dans l'onglet 🧭 Assistant, le bouton **🏢
   (Projets & clients)** permet aussi de **créer un nouveau client** directement
   (champ « Nom du nouveau client » + bouton **+ Ajouter un client**), sans
-  passer par les Paramètres. Le nouveau client est aussitôt disponible dans les
+  passer par les Options. Le nouveau client est aussitôt disponible dans les
   sélecteurs.
 - Chaque projet suivi peut être **attaché à un client** : dans le panneau
   **🏢 (Projets & clients)**, choisissez le client de chaque projet dans le menu
@@ -84,7 +84,7 @@ apprend et répond.
   standard** : bulles, cadres, **pensée/réflexion**, **outils utilisés** et
   **boutons de choix** (avec l'accent **violet** dédié à l'Assistant au lieu du
   bleu).
-- **Paramétrer** : **Paramètres ⚙️ → onglet « Assistant »** → cochez/décochez
+- **Paramétrer** : **Options ⚙️ → onglet « Assistant »** → cochez/décochez
   « Afficher la réflexion de l'Assistant » et « Afficher les outils de
   l'Assistant » pour masquer (ou montrer) ces blocs.
 - **Ordre chronologique** : les **messages d'info** de l'Assistant (ex: « ✅
@@ -139,7 +139,7 @@ apprend et répond.
   - Les **éléments interactifs** (boutons de choix, confirmations, saisies)
     restent **au centre** de la discussion : ce sont des questions qui
     nécessitent votre action, pas des événements système.
-  - **#160 — Événements en plein écran (optionnel)** : **Paramètres ⚙️ → onglet
+  - **#160 — Événements en plein écran (optionnel)** : **Options ⚙️ → onglet
     « Assistant »** → « Événements en plein écran (bandeau central temporaire) »
     affiche **en plus**, au **centre de l'écran** (au-dessus de tout), chaque
     événement dans un **bandeau temporaire discret** — pratique quand l'onglet
@@ -149,7 +149,7 @@ apprend et répond.
     **questions interactives** (choix, confirmations) ne sont **pas** concernées.
 - **Onglet « Tâches » du panneau du suivi du travail** : l'ordre définitif des
   onglets est **« Agents », « Tâches », « Événements »** ; le panneau propose
-  donc l'onglet **« Tâches »** juste après « Agents » (**Paramètres ⚙️ →
+  donc l'onglet **« Tâches »** juste après « Agents » (**Options ⚙️ →
   onglet « Assistant » → « Onglet « Tâches » dans le panneau du suivi du travail
   (missions des agents) »**, **activé par défaut** ; décoché, l'onglet est
   **masqué** et le panneau reste sur les deux autres). Il liste les **missions
@@ -218,7 +218,7 @@ apprend et répond.
   la discussion.
 
 ### Notifications natives
-- **Paramètres ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a
+- **Options ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a
   terminé une tâche déléguée ou signale une anomalie »** : recevez une
   **notification native** (bannière OS) quand l'Assistant signale un événement
   **important** : une **tâche déléguée** à un agent du projet **est terminée**, ou
@@ -235,7 +235,7 @@ apprend et répond.
   banales de l'Assistant ne déclenchent **aucune** notification.
 
 ### Son de notification
-- **Paramètres ⚙️ → onglet « Assistant » → « Jouer un son de notification »** :
+- **Options ⚙️ → onglet « Assistant » → « Jouer un son de notification »** :
   l'Assistant joue un **son** (via le script `~/.pilot/assistant/notify.ps1`)
   aux moments où il notifie l'utilisateur : **fin de tâche d'agent** (son
   « fin »), **point important / anomalie** (son « point »), **question posée**
@@ -270,14 +270,14 @@ apprend et répond.
 - **Désactivé par défaut** (opt-in).
 
 ### Réponses courtes
-- **Paramètres ⚙️ → onglet « Assistant » → « Réponses courtes (informer sans
+- **Options ⚙️ → onglet « Assistant » → « Réponses courtes (informer sans
   détailler, sauf demande explicite) »** : quand activé, l'Assistant répond de
   façon **concise** — il **informe et prend des décisions** sans détailler tout
   ce qui se fait, **sauf si vous lui demandez explicitement** de détailler.
 - **Désactivé par défaut**.
 
 ### Mode user-friendly (langage simple)
-- **Paramètres ⚙️ → onglet « Assistant » → « Mode user-friendly (langage simple,
+- **Options ⚙️ → onglet « Assistant » → « Mode user-friendly (langage simple,
   non technique, sauf demande explicite) »** : quand activé, l'Assistant répond
   en **langage simple et non technique** — il évite le jargon et explique les
   concepts de façon accessible pour un non-spécialiste, **sauf si vous lui
@@ -285,7 +285,7 @@ apprend et répond.
 - **Désactivé par défaut**.
 
 ### Mode « Assistant coordinateur pur »
-- **Paramètres ⚙️ → onglet « Assistant » → « Assistant coordinateur
+- **Options ⚙️ → onglet « Assistant » → « Assistant coordinateur
   (déléguer quand il faut réfléchir) »** : quand activé (désactivé
   par défaut), l'Assistant passe en mode **coordinateur pur**. Il **ne modifie
   pas** le mécanisme d'échange assistant↔agents : c'est uniquement un bloc
@@ -329,7 +329,7 @@ apprend et répond.
 
 <!-- HELP:super-agent-coordinator -->
 ### Mode « Assistant coordinateur pur »
-Dans **Paramètres → section Assistant**, l'option **« Assistant coordinateur
+Dans **Options → section Assistant**, l'option **« Assistant coordinateur
 (déléguer quand il faut réfléchir) »** (désactivée par défaut) fait passer
 l'Assistant en mode **coordinateur** plutôt qu'exécutant. Tant qu'il est actif,
 il ne réfléchit pas lui-même : **tout travail intellectuel** (analyse,
@@ -359,7 +359,7 @@ uniquement un bloc d'instructions dans le prompt système.
   déjà vierge (mécanique bouton « + » : `new_session` + ré-application du
   modèle actif). Chaque demande repart donc d'un contexte vierge au lieu
   d'hériter de tout le fil précédent (délégations « hyper long »).
-- **Réglage** : Paramètres ⚙️ → onglet « Assistant » → « Purger la
+- **Réglage** : Options ⚙️ → onglet « Assistant » → « Purger la
   conversation de l'agent avant chaque demande de l'Assistant » (activé par
   défaut ; désactivable pour retrouver l'accumulation d'historique).
 - **Purge uniquement si nécessaire** : si la conversation est déjà vierge
@@ -472,14 +472,14 @@ uniquement un bloc d'instructions dans le prompt système.
   dans `super_agent.rs`, jamais recalculés par l'interface). Pilot **signale et
   propose** de confier la demande à un agent — il ne lance **jamais** d'agent
   tout seul. L'affichage est conditionné par `super_agent_long_tasks_enabled`
-  (Paramètres → Assistant, **activé** par défaut : une clé absente vaut activé).
+  (Options → Assistant, **activé** par défaut : une clé absente vaut activé).
 - **Temps estimé / passé par tâche** (idée 2) : une tâche peut porter un
   **temps prévu** (valeur absolue, `super_agent_task_time_set_estimated`) et un
   **temps passé** (cumul, `super_agent_task_time_add_spent`), relus en base
   (`super_agent_task_time_get`) après chaque opération ; la carte affiche alors
   une pastille « prévu / passé » et la vue d'ensemble un total par projet.
   Tout cet affichage est **conditionné** par le réglage
-  `super_agent_show_time` (Paramètres → Suivi), **désactivé par défaut** : sans
+  `super_agent_show_time` (Options → Suivi), **désactivé par défaut** : sans
   lui, aucun champ, aucune pastille et aucun total ne s'affichent (aucune
   donnée n'est écrite ni perdue).
 - **Checklist de livraison par tâche** (idée 3) : chaque fiche peut porter des
@@ -1012,7 +1012,7 @@ sur le projet), cette demande n'est plus une simple ligne anonyme :
   vierge — départ d'une discussion neuve, **modèle actif préservé** (même
   mécanique que le bouton « + » de l'onglet agent). Chaque demande repart
   ainsi d'un contexte propre au lieu d'hériter de tout l'historique
-  (délégations « hyper long »). Réglage **Paramètres → Assistant → « Purger la
+  (délégations « hyper long »). Réglage **Options → Assistant → « Purger la
   conversation de l'agent avant chaque demande de l'Assistant »** (activé par
   défaut). Vos **messages directs** dans l'onglet agent ne déclenchent
   **jamais** de purge : vos retouches gardent leur fil.
@@ -1259,7 +1259,7 @@ Contrat de durée de vie et d'isolement :
 
 ### Héritage du contexte projet pour les agents spécifiques (#21)
 Quand le paramètre **« Héritage du contexte projet pour les agents
-spécifiques »** est activé (Paramètres → section Assistant, désactivé par
+spécifiques »** est activé (Options → section Assistant, désactivé par
 défaut), les agents spécifiques que l'Assistant utilise (outil `run_agents`)
 héritent du contexte que reçoit l'agent standard du projet : le rôle/prompt ET
 les activations de contexte (RAG / Context Engine, mémoire projet
@@ -1269,7 +1269,7 @@ son rôle propre (comportement actuel).
 
 <!-- HELP:super-agent-inherit-context -->
 ### Hériter du contexte projet pour les agents spécifiques
-Dans **Paramètres → section Assistant**, l'option **« Héritage du contexte
+Dans **Options → section Assistant**, l'option **« Héritage du contexte
 projet pour les agents spécifiques »** (désactivée par défaut) fait hériter
 aux agents spécifiques que l'Assistant utilise (outil `run_agents`) du contexte
 que reçoit l'agent standard du projet : le rôle/prompt, le RAG / Context
@@ -1280,7 +1280,7 @@ spécifique ne reçoit que son rôle propre.
 
 <!-- HELP:super-agent-memory -->
 ### Transférer la mémoire de votre assistant entre deux postes
-Dans **Paramètres ⚙️ → section « Mémoire (transfert de suivi) »**, vous pouvez
+Dans **Options ⚙️ → section « Mémoire (transfert de suivi) »**, vous pouvez
 **exporter** ou **importer** la mémoire de votre assistant (son suivi des
 projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autre.
 
@@ -1440,7 +1440,7 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - **Issue #77 — pas de lancement automatique au démarrage** : par défaut,
   l'Assistant **ne lance pas automatiquement** un rappel dû à l'ouverture de sa
   session (démarrage de Pilot). Ce comportement est contrôlé par le réglage
-  **Paramètres → Assistant → « Vérifier les points à faire à l'ouverture de la
+  **Options → Assistant → « Vérifier les points à faire à l'ouverture de la
   session (relances programmées) »** (désactivé par défaut). Tant qu'il est
   désactivé, un rappel dû **reste dû** (jamais perdu, jamais marqué) et n'est
   injecté qu'à partir du moment où **vous avez vous-même écrit** dans la
@@ -1525,7 +1525,7 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   6. **garde-fous** : jamais un rappel **actif récent**, jamais un rappel **futur
      jamais exécuté**, jamais un rappel dont les données sont inexploitables
      (« en cas de doute : on garde »).
-- **Bouton « Supprimer les rappels inutiles »** dans Paramètres → Assistant, sous
+- **Bouton « Supprimer les rappels inutiles »** dans les Options → Assistant, sous
   le compteur « n sur 20 » : mêmes règles, mais geste **immédiat** (sans attendre
   les 24 h) ; le **nombre** de rappels concernés est **annoncé avant
   confirmation**, avec la liste et le motif, et rien n'est modifié sans votre
@@ -1587,14 +1587,14 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - Un **sélecteur de modèle** est disponible dans la barre d'outils de l'onglet
   🧭 (même liste que les agents de coding). Le changement s'applique à la
   session de l'Assistant.
-- **Modèle par défaut dédié (issue #88)** : **Paramètres ⚙️ → onglet « Modèles
+- **Modèle par défaut dédié (issue #88)** : **Options ⚙️ → onglet « Modèles
   IA » → Modèle par défaut de l'Assistant**. Laisser « Modèle par défaut »
   (valeur vide) pour reprendre le **modèle par défaut global des agents**
   (comportement historique inchangé). Le réglage est prioritaire sur le défaut
   global pour l'Assistant uniquement et s'applique au démarrage suivant de sa
   session (le sélecteur de la barre d'outils reste le modèle **actif**). Le
   choix est **persisté immédiatement** (`set_super_agent_default_model`) et
-  **préservé par l'enregistrement des Paramètres**, qui réécrit pourtant toute
+  **préservé par l'enregistrement des Options**, qui réécrit pourtant toute
   la configuration (`settings.js:1242`).
 - **Reprise du modèle choisi au redémarrage** : le **modèle choisi** dans le
   sélecteur est **réappliqué à l'ouverture** de la session de l'Assistant (il ne
@@ -1603,7 +1603,7 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   le défaut **global** — sans erreur ni blocage du démarrage.
 
 ### Personnaliser le prompt
-- **Paramètres ⚙️ → onglet « Assistant » → Prompt système** : définissez le
+- **Options ⚙️ → onglet « Assistant » → Prompt système** : définissez le
   prompt qui cadre le comportement de l'Assistant à chaque tour (rôle,
   consignes, ton). Il est préfixé à chaque question.
 
@@ -1893,8 +1893,8 @@ rejouer.
   en mode **assistant seul** : tout est masqué (sidebar, explorateur, éditeur,
   onglets, terminal) et seule la discussion de l'Assistant reste visible.
 - **Barre du haut** (maquette V4) : à gauche le bouton **← (retour)** + le titre
-  « **Pilot** » ; à droite **UN SEUL bouton ⚙** qui ouvre les paramètres
-  existants de l'Assistant (modale Paramètres, onglet « Assistant »).
+  « **Pilot** » ; à droite **UN SEUL bouton ⚙** qui ouvre les Options
+  de l'Assistant (onglet « Assistant »).
 - **Résumé des agents (point poignée)** : dans cette barre, juste à gauche
   du bouton ⚙, la liste des agents est **repliée par défaut en un petit point
   unique** : le point **respire** (pulsation douce) quand un agent ou l'
@@ -2702,7 +2702,7 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
   Si désactivé, il choisit et lance seul.
 - L'agent standard du projet garde son comportement historique (1er serveur
   activé au démarrage, local ou distant).
-- **Serveur distant** : dans **Paramètres → Serveurs MCP**, choisissez le type
+- **Serveur distant** : dans **Options → Serveurs MCP**, choisissez le type
   *Distant (adresse)*, renseignez l'adresse réseau (`http`/`https`) et la
   **clé d'accès** : le champ propose **la liste des entrées de votre coffre 🔐**
   (par leur description) ; seule la **référence** de l'entrée choisie est
@@ -2733,7 +2733,7 @@ rappelle ce qui reste à faire et peut empêcher de terminer une tâche trop tô
   nombre total de points). Une tâche sans point n'affiche **aucun compteur**.
 - **Modèle de points** : sur une tâche qui n'a encore **aucun** point, un bouton
   **« Ajouter les points du modèle »** propose d'un clic les points habituels
-  (ceux réglés dans les Paramètres). Rien n'est jamais ajouté tout seul.
+  (ceux réglés dans les Options). Rien n'est jamais ajouté tout seul.
 
 #### Au passage en « Terminé »
 
@@ -2751,7 +2751,7 @@ coup**.
 
 #### Où régler cela
 
-Dans **Paramètres**, rubrique **« Assistant (suivi multi-projets) »** :
+Dans **Options**, rubrique **« Assistant (suivi multi-projets) »** :
 - **« Checklist de livraison obligatoire »** : le mode (Désactivée / Rappel
   simple / Bloquante) ;
 - **« Modèle de checklist par défaut »** : les points proposés par le bouton
@@ -2776,7 +2776,7 @@ d'un coup d'œil **qui a demandé quoi, quand**, sans fouiller les conversations
   **« Aucune livraison enregistrée »**.
 - **Origine inconnue** : si aucune décision n'est reliée à la tâche, la ligne
   porte la mention **« origine non précisée »** — la livraison reste tracée.
-- **Désactiver** : dans **Paramètres → Assistant (suivi multi-projets)**,
+- **Désactiver** : dans **Options → Assistant (suivi multi-projets)**,
   décochez **« Enregistrer une ligne de traçabilité à chaque livraison »**
   (activé par défaut). Décocher **n'efface aucune** ligne déjà enregistrée.
 <!-- /HELP:super-agent-tracabilite -->
@@ -2789,7 +2789,7 @@ pris** aide à mieux estimer les fois suivantes. C'est exactement ce que permet
 le suivi du temps — et il est **masqué par défaut**.
 
 - **À activer d'abord** : tant que le réglage **« Afficher le suivi du temps
-  estimé / passé »** n'est pas coché (**Paramètres → Suivi**), rien n'apparaît :
+  estimé / passé »** n'est pas coché (**Options → Suivi**), rien n'apparaît :
   ni champ de saisie, ni pastille, ni total. C'est le réglage d'usine. Le cocher
   ne change aucune donnée, le décocher n'en fait perdre aucune.
 - **Renseigner les temps** : ouvrez la **fiche d'une tâche** (bouton *éditer* sur
@@ -2825,7 +2825,7 @@ plutôt que de les laisser peser sur l'assistant de suivi.
   La décision reste entièrement la vôtre.
 - **Demande ordinaire** : **rien ne s'affiche** — la carte reste exactement
   comme avant, sans pastille ni infobulle.
-- **Pour éteindre complètement le repérage** : **Paramètres → Assistant
+- **Pour éteindre complètement le repérage** : **Options → Assistant
   (suivi multi-projets)**, décochez **« Détecter les tâches longues et proposer
   un agent »** (activé par défaut). Décocher n'efface aucune donnée et ne change
   rien d'autre.

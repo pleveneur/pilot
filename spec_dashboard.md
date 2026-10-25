@@ -56,7 +56,7 @@ quelques secondes sur les gros projets (parcours du répertoire + Git).
 
 Le tableau de bord se **rafraîchit automatiquement** tant que son onglet est
 actif : par défaut toutes les **10 secondes**. Vous pouvez désactiver ce
-comportement ou modifier l'intervalle dans **Paramètres → Général** (« Activer
+comportement ou modifier l'intervalle dans **Options → Général** (« Activer
 le rafraîchissement automatique du tableau de bord » + durée en secondes).
 
 ### Suivi multi-projets
@@ -74,13 +74,13 @@ ouverts** dans Pilot : leur ligne porte la pastille **« non ouvert »** et leur
 tâches viennent du suivi de l'Assistant. On supervise ainsi d'un coup d'œil
 tous les dossiers suivis, ouverts ou non, et l'activité de leurs agents.
 
-Si le réglage **Paramètres → Assistant → « Afficher le suivi du temps estimé /
+Si le réglage **Options → Assistant → « Afficher le suivi du temps estimé /
 passé »** est activé, une ligne discrète ⏱ rappelle le temps estimé et passé du
 projet (aucun calcul n'est fait par l'interface : les totaux viennent du
 suivi).
 
 ### Afficher le Tableau de bord systématiquement
-Dans **Paramètres → Général**, l'option **« Afficher le Tableau de bord
+Dans **Options → Général**, l'option **« Afficher le Tableau de bord
 systématiquement »** (désactivée par défaut) permet d'ouvrir automatiquement
 l'onglet **📊** au démarrage de Pilot, **uniquement si un projet est ouvert**
 (le tableau de bord est lié au projet actif). Quand elle est activée, l'onglet

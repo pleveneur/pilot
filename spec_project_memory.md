@@ -208,7 +208,7 @@ contexte de l'agent.
 
 - **Bouton 📝** (toolbar agent) : ouvre/édite `PROJECT_MEMORY.md` (créé avec un
   template s'il n'existe pas). Éditable manuellement.
-- **Paramètres → Agent Pi ou PLh** :
+- **Options → Agent Pi ou PLh** :
   - *Mémoire de projet* : active l'injection du fichier avant chaque tâche
     (orchestration) et avant le 1er prompt d'une session (chat).
   - *Extraction auto* : après chaque tâche d'orchestration réussie, l'agent

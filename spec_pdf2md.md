@@ -77,7 +77,7 @@ Si la conversion IA échoue (pi non installé, modèle introuvable, timeout), le
   **clic-droit sur un fichier `.pdf`** → « 📝 Créer un fichier Markdown ».
   Pilot extrait le texte du PDF puis le fait restructurer en Markdown propre par
   l'IA (agent Pi). Le fichier `.md` est créé à côté du PDF et s'ouvre dans un
-  onglet. Modèle utilisé : Paramètres ⚙️ → « Modèle de conversion PDF → MD ».
+  onglet. Modèle utilisé : Options ⚙️ → « Modèle de conversion PDF → MD ».
 - **Export PDF** : dans l'explorateur, **clic-droit sur un fichier `.md`** →
   « 📕 Exporter en PDF ». Génère un PDF rendu de la prévisualisation Markdown.
 <!-- /HELP:pdf -->

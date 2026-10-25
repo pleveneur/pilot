@@ -31,7 +31,7 @@ passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
   (visible dans tous les projets) ou **📁 spécifique au projet actif**.
 - **Référence** : chaque entrée affiche sa référence technique (`vault:…`) sous
   son login — cliquer dessus la copie. C'est cette référence qu'attend le champ
-  « Clé » de Paramètres → Serveurs MCP (elle y est aussi proposée en liste).
+  « Clé » des Options → Serveurs MCP (elle y est aussi proposée en liste).
 - **Copier** : boutons de copie pour le **login** et pour le **mot de passe**
   (copie dans le presse-papiers).
 - **Masqué par défaut** : les mots de passe sont affichés en `••••••••` ; le
