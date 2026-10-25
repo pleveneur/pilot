@@ -116,6 +116,9 @@ pub fn admin_actions() -> Vec<String> {
         "project_create",
         "project_open",
         "project_select",
+        // Portage d'un projet (mode réseau multi-postes, étape 3) : la libération
+        // forcée exige un motif et doit rester visible dans le journal.
+        "handover.force_return",
     ]
     .iter()
     .map(|s| s.to_string())

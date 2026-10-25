@@ -3715,7 +3715,7 @@ pub(crate) mod tests {
     /// Garde **STRICTE** des tests de portage : jamais un silence. L'absence de
     /// base est une **erreur explicite** avec le mode d'emploi, parce qu'un
     /// « ok » sans base ne prouve rien (plan §7, décision D3).
-    async fn strict_handover_test_db() -> (PgPool, GdsTestDbGuard) {
+    pub(crate) async fn strict_handover_test_db() -> (PgPool, GdsTestDbGuard) {
         let url = std::env::var("PILOT_GDS_TEST_URL").unwrap_or_default();
         if url.trim().is_empty() {
             panic!(
@@ -3740,7 +3740,7 @@ pub(crate) mod tests {
     }
 
     /// Deux comptes et un projet dans une base jetable migrée.
-    async fn handover_fixture(pool: &PgPool, project_name: &str) -> (i64, i64, i64) {
+    pub(crate) async fn handover_fixture(pool: &PgPool, project_name: &str) -> (i64, i64, i64) {
         let user_a = create_user(pool, "porteur-a@gds.test", "", "", "dev", "active")
             .await
             .expect("compte A");
@@ -3754,7 +3754,7 @@ pub(crate) mod tests {
     }
 
     /// Nombre de lignes **ouvertes** du portage d'un projet.
-    async fn open_handover_count(pool: &PgPool, project_id: i64) -> i64 {
+    pub(crate) async fn open_handover_count(pool: &PgPool, project_id: i64) -> i64 {
         sqlx::query_scalar(
             "SELECT COUNT(*) FROM project_handovers WHERE project_id = $1 AND returned_at IS NULL",
         )
@@ -3765,7 +3765,7 @@ pub(crate) mod tests {
     }
 
     /// Ligne clôturée (la plus récente) d'un projet : `(returned_by, motif, sync_at)`.
-    async fn last_closed_handover(
+    pub(crate) async fn last_closed_handover(
         pool: &PgPool,
         project_id: i64,
     ) -> (Option<String>, Option<String>, Option<DateTime<Utc>>) {

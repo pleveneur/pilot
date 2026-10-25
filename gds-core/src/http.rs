@@ -21,6 +21,7 @@
 use crate::audit::WebAudit;
 use crate::auth::WebAuth;
 use crate::db as gds_db;
+use crate::handover;
 use crate::rate::{token_key, WebGuard};
 use crate::roles;
 use crate::server_status;
@@ -186,6 +187,19 @@ pub fn gds_routes<S: GdsCtx>() -> Router<Arc<S>> {
             post(gds_project_repo_exists::<S>),
         )
         .route("/api/gds/ssh-keys", post(gds_ssh_key_register::<S>))
+        // ── Portage d'un projet : routes du MEMBRE (mode réseau multi-postes,
+        //    étape 3) ──
+        // Prise en main (ou renouvellement, ou refus), présence, restitution et
+        // lecture d'état. Montées ici = derrière `auth_middleware`, comme les
+        // autres routes du socle. La **libération forcée** n'est PAS ici : elle
+        // vit dans `admin_routes` (derrière `require_admin`).
+        .route("/api/gds/handover/take", post(gds_handover_take::<S>))
+        .route(
+            "/api/gds/handover/heartbeat",
+            post(gds_handover_heartbeat::<S>),
+        )
+        .route("/api/gds/handover/return", post(gds_handover_return::<S>))
+        .route("/api/gds/handover/state", get(gds_handover_state::<S>))
 }
 
 /// Assemble le routeur HTTP du **service autonome** `gds-server`.
@@ -299,6 +313,12 @@ pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
             "/api/gds/admin/service/stop",
             post(gds_admin_service_stop::<S>),
         )
+        // ── Portage d'un projet : libération FORCÉE (mode réseau
+        //    multi-postes, étape 3) ──
+        // Montée ici et non dans `gds_routes` : elle exige le rôle `admin`
+        // (`require_admin`), un **motif obligatoire** et laisse une trace
+        // d'audit (`handover.force_return`).
+        .route("/api/gds/handover/force", post(gds_handover_force::<S>))
 }
 
 /// `GET /api/gds/health` — **route publique**.
@@ -2241,6 +2261,408 @@ async fn gds_ssh_key_register<S: GdsCtx>(
     .into_response()
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Portage d'un projet — routes HTTP (mode réseau multi-postes, ÉTAPE 3)
+//
+// PLAN-mode-reseau-multipostes.md §6 b et §7 étape 3. Ces routes n'apportent
+// **aucune règle** : elles valident l'entrée, appellent l'étape 2
+// (`gds_db::handover_*`) et traduisent en réponse HTTP la décision rendue par le
+// module pur `crate::handover`. Les codes de refus viennent **exclusivement** de
+// `http_status()` (409 pour un refus de portage, 403 pour un non-administrateur)
+// — aucun code inventé, aucune panique, jamais de 500 sur un refus métier.
+//
+// Montage : les quatre routes du **membre** (take / heartbeat / return / state)
+// sont dans `gds_routes`, donc derrière `auth_middleware` ; la **libération
+// forcée** (`force`) est dans `admin_routes`, donc derrière `require_admin`.
+//
+// Portée V1, écrite telle quelle (plan §6 b) : « tout membre » signifie ici « tout
+// compte authentifié » — **aucune restriction par projet n'est codée**, elle
+// reste une évolution future. Aucun rate limiting dédié n'est ajouté : la prise
+// en main, la présence et la restitution sont bornées par la règle des 3 min / 15
+// min du module `handover`, pas par un compteur de requêtes.
+
+/// Corps commun aux **trois routes d'écriture** du portage : le projet visé et
+/// l'identifiant **de machine** (généré une seule fois par poste, identique sur
+/// tous ses projets — plan §6 a).
+#[derive(Deserialize)]
+struct HandoverPortageBody {
+    project_id: i64,
+    #[serde(default)]
+    poste_id: String,
+}
+
+/// `poste_id` validé : **non vide après `trim`**. Fonction pure, donc vérifiable
+/// sans base. `None` = entrée invalide (refus 400 explicite, jamais un 500).
+fn handover_poste_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Réponse **400** d'un `poste_id` absent ou vide.
+fn handover_poste_id_required() -> Response {
+    bad_request("poste_id obligatoire (identifiant de machine, non vide)".to_string())
+}
+
+/// Réponse **403** d'une session **sans identité de compte GDS** (`user_id == 0`,
+/// cas du mode remote du poste). `project_handovers.user_id` référence
+/// `users(id)` : une session sans compte ne peut donc pas porter un projet — même
+/// règle et même forme que `POST /api/gds/ssh-keys`, refus explicite plutôt
+/// qu'une erreur de clé étrangère (jamais un 500 pour une précondition d'identité).
+fn handover_identity_required<S: GdsCtx>(ctx: &S, authed: &AuthedClient) -> Response {
+    ctx.audit()
+        .record(&authed.ip, &authed.key, "handover_denied", "sans-identite", false);
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": "Compte GDS requis pour le portage d'un projet" })),
+    )
+        .into_response()
+}
+
+/// Réponse d'un **refus de portage** : le code HTTP est celui du module
+/// `crate::handover` (`http_status()`), jamais une constante locale.
+fn handover_refusal(status: u16, body: serde_json::Value) -> Response {
+    match StatusCode::from_u16(status) {
+        Ok(code) => (code, Json(body)).into_response(),
+        // Inatteignable (les codes viennent de constantes du module) : on ne
+        // panique jamais pour autant — repli sur le refus de portage (409).
+        Err(_) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Refus de portage", "status": status })),
+        )
+            .into_response(),
+    }
+}
+
+/// Garde commune : le projet visé **existe-t-il** ? `None` = oui.
+/// Réutilise la lecture existante `project_name_by_id` (aucune requête
+/// dupliquée) ; un projet inconnu est un **404 explicite**, jamais un 500.
+async fn handover_project_guard(pool: &PgPool, project_id: i64) -> Option<Response> {
+    match gds_db::project_name_by_id(pool, project_id).await {
+        Ok(Some(_)) => None,
+        Ok(None) => Some(
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("Projet introuvable: {}", project_id) })),
+            )
+                .into_response(),
+        ),
+        Err(e) => Some(err_response(e)),
+    }
+}
+
+/// Détail d'audit commun : projet + machine (jamais un jeton, jamais un secret).
+fn handover_audit_detail(project_id: i64, poste_id: &str) -> String {
+    format!("project:{} poste:{}", project_id, poste_id)
+}
+
+/// `POST /api/gds/handover/take` — **route du membre** (authentification seule).
+///
+/// Prend, renouvelle ou reprend la main sur un projet, et refuse si un **autre**
+/// poste le tient encore. Toute la décision vient de `handover::take` via
+/// `gds_db::handover_take` (étape 2) : cette route ne re-décide rien.
+///
+/// Réponses :
+/// - `200 { ok, action, state }` — `action` = `insert` | `renew` |
+///   `close_then_insert` (`TakeDecision::action()`), `state` relu après écriture
+///   (`handover_state`) pour que le poste affiche l'échéance **réellement**
+///   enregistrée ;
+/// - `409 { error, project_id, holder, until }` — projet tenu par un autre poste
+///   (code de `handover::http_status()`) ;
+/// - `400` `poste_id` vide, `403` session sans identité, `404` projet inconnu,
+///   `500` base injoignable.
+async fn gds_handover_take<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<HandoverPortageBody>,
+) -> Response {
+    let poste_id = match handover_poste_id(&body.poste_id) {
+        Some(p) => p,
+        None => return handover_poste_id_required(),
+    };
+    if authed.user_id == 0 {
+        return handover_identity_required(&*ctx, &authed);
+    }
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    if let Some(resp) = handover_project_guard(&pool, body.project_id).await {
+        return resp;
+    }
+    let decision =
+        match gds_db::handover_take(&pool, body.project_id, authed.user_id, &poste_id).await {
+            Ok(d) => d,
+            Err(e) => return err_response(e),
+        };
+    let detail = handover_audit_detail(body.project_id, &poste_id);
+    if let handover::TakeDecision::Refused { holder, until } = &decision {
+        ctx.audit()
+            .record(&authed.ip, &authed.key, "handover_take", &detail, false);
+        return handover_refusal(
+            decision.http_status(),
+            json!({
+                "error": "Projet déjà tenu par un autre poste",
+                "project_id": body.project_id,
+                "holder": holder,
+                "until": until,
+            }),
+        );
+    }
+    match gds_db::handover_state(&pool, body.project_id).await {
+        Ok(state) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, "handover_take", &detail, true);
+            Json(json!({ "ok": true, "action": decision.action(), "state": state }))
+                .into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+/// `POST /api/gds/handover/heartbeat` — **route du membre** (authentification
+/// seule) : présence du porteur, **un seul appel par cycle de 3 minutes**
+/// (plan §6 b). Le portage est repoussé de 15 minutes à partir de l'appel.
+///
+/// Aucune ligne d'audit : un appel toutes les 3 minutes par projet saturerait le
+/// journal pour une action non sensible — le plan ne demande une trace que pour
+/// la libération forcée.
+///
+/// Réponses :
+/// - `200 { ok, state }` ;
+/// - `409 { error, project_id, holder }` — non-porteur (`pas porteur du projet`)
+///   ou porteur **expiré** (la ligne expirée est clôturée par l'étape 2) ;
+/// - `400`, `403`, `404`, `500` comme `take`.
+async fn gds_handover_heartbeat<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<HandoverPortageBody>,
+) -> Response {
+    let poste_id = match handover_poste_id(&body.poste_id) {
+        Some(p) => p,
+        None => return handover_poste_id_required(),
+    };
+    if authed.user_id == 0 {
+        return handover_identity_required(&*ctx, &authed);
+    }
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    if let Some(resp) = handover_project_guard(&pool, body.project_id).await {
+        return resp;
+    }
+    let decision =
+        match gds_db::handover_heartbeat(&pool, body.project_id, authed.user_id, &poste_id).await {
+            Ok(d) => d,
+            Err(e) => return err_response(e),
+        };
+    match &decision {
+        handover::HeartbeatDecision::Refused { reason, holder, .. } => handover_refusal(
+            decision.http_status(),
+            json!({
+                "error": reason.as_str(),
+                "project_id": body.project_id,
+                "holder": holder,
+            }),
+        ),
+        handover::HeartbeatDecision::Accepted { .. } => {
+            match gds_db::handover_state(&pool, body.project_id).await {
+                Ok(state) => Json(json!({ "ok": true, "state": state })).into_response(),
+                Err(e) => err_response(e),
+            }
+        }
+    }
+}
+
+/// `POST /api/gds/handover/return` — **route du membre** (authentification
+/// seule) : restitution volontaire par le porteur actif. La clôture porte
+/// `sync_at` (l'état d'avancement a été poussé par le poste **avant** l'appel,
+/// ordre du plan §6 b — le socle ne publie jamais de code).
+///
+/// Réponses :
+/// - `200 { ok, id, state }` ;
+/// - `409 { error, project_id, holder }` — non-porteur, porteur expiré, ou
+///   restitution **déjà faite** (jamais de double clôture) ;
+/// - `400`, `403`, `404`, `500` comme `take`.
+async fn gds_handover_return<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<HandoverPortageBody>,
+) -> Response {
+    let poste_id = match handover_poste_id(&body.poste_id) {
+        Some(p) => p,
+        None => return handover_poste_id_required(),
+    };
+    if authed.user_id == 0 {
+        return handover_identity_required(&*ctx, &authed);
+    }
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    if let Some(resp) = handover_project_guard(&pool, body.project_id).await {
+        return resp;
+    }
+    let decision =
+        match gds_db::handover_return(&pool, body.project_id, authed.user_id, &poste_id).await {
+            Ok(d) => d,
+            Err(e) => return err_response(e),
+        };
+    let detail = handover_audit_detail(body.project_id, &poste_id);
+    match &decision {
+        handover::ReturnDecision::Refused { reason, holder, .. } => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, "handover_return", &detail, false);
+            handover_refusal(
+                decision.http_status(),
+                json!({
+                    "error": reason.as_str(),
+                    "project_id": body.project_id,
+                    "holder": holder,
+                }),
+            )
+        }
+        handover::ReturnDecision::Closed { id, .. } => {
+            match gds_db::handover_state(&pool, body.project_id).await {
+                Ok(state) => {
+                    ctx.audit()
+                        .record(&authed.ip, &authed.key, "handover_return", &detail, true);
+                    Json(json!({ "ok": true, "id": id, "state": state })).into_response()
+                }
+                Err(e) => err_response(e),
+            }
+        }
+    }
+}
+
+/// Paramètres de `GET /api/gds/handover/state` (optionnel pour rendre un refus
+/// **lisible** plutôt que la réjection brute d'axum).
+#[derive(Deserialize)]
+struct HandoverStateQuery {
+    project_id: Option<i64>,
+}
+
+/// `GET /api/gds/handover/state` — **route du membre**, **LECTURE SEULE** :
+/// libre ou tenu, par qui, jusqu'à quand, expiré ou non. Aucune écriture, aucun
+/// balayage (expiration paresseuse évaluée par l'étape 2), aucune ligne d'audit
+/// (le plan ne demande une trace que pour la libération forcée).
+///
+/// Réponses : `200 { ok, state }`, `400` `project_id` absent, `404` projet
+/// inconnu, `500` base injoignable.
+async fn gds_handover_state<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Query(q): Query<HandoverStateQuery>,
+) -> Response {
+    let project_id = match q.project_id {
+        Some(id) => id,
+        None => return bad_request("project_id obligatoire".to_string()),
+    };
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    if let Some(resp) = handover_project_guard(&pool, project_id).await {
+        return resp;
+    }
+    match gds_db::handover_state(&pool, project_id).await {
+        Ok(state) => Json(json!({ "ok": true, "state": state })).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+/// Corps de `POST /api/gds/handover/force` : projet + **motif obligatoire**.
+#[derive(Deserialize)]
+struct HandoverForceBody {
+    project_id: i64,
+    #[serde(default)]
+    reason: String,
+}
+
+/// `POST /api/gds/handover/force` — **réservée au rôle `admin`** (montée dans
+/// `admin_routes`, donc derrière `require_admin`).
+///
+/// Libération forcée d'un projet tenu par un autre poste : **motif obligatoire**
+/// et non vide, `returned_by = 'admin'`, `sync_at` laissé NULL (aucune
+/// restitution volontaire → aucune poussée d'avancement attestée). Les trois
+/// refus (non-administrateur, motif absent, aucune prise en main ouverte) sont
+/// **décidés par `handover::force_return`** : la route ne re-valide pas le motif
+/// elle-même, elle ne duplique aucune règle.
+///
+/// Réponses :
+/// - `200 { ok, id, returned_by, return_reason, state }` ;
+/// - `403` non-administrateur (garde `require_admin` en amont, puis règle du
+///   module) ;
+/// - `409` motif vide (`motif de libération obligatoire`) ou aucune prise en main
+///   en cours (`aucune prise en main en cours`) ;
+/// - `404` projet inconnu, `500` base injoignable.
+///
+/// Trace d'audit : action `handover.force_return` (réussite **et** refus), comme
+/// le demande le plan §6 b.
+async fn gds_handover_force<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<HandoverForceBody>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    if let Some(resp) = handover_project_guard(&pool, body.project_id).await {
+        return resp;
+    }
+    let decision =
+        match gds_db::handover_force_return(&pool, body.project_id, &authed.role, &body.reason).await
+        {
+            Ok(d) => d,
+            Err(e) => return err_response(e),
+        };
+    let detail = format!("project:{} motif:{}", body.project_id, body.reason.trim());
+    match &decision {
+        handover::ForceReturnDecision::Closed { id, closure } => {
+            match gds_db::handover_state(&pool, body.project_id).await {
+                Ok(state) => {
+                    ctx.audit().record(
+                        &authed.ip,
+                        &authed.key,
+                        "handover.force_return",
+                        &detail,
+                        true,
+                    );
+                    Json(json!({
+                        "ok": true,
+                        "id": id,
+                        "returned_by": closure.returned_by,
+                        "return_reason": closure.return_reason,
+                        "state": state,
+                    }))
+                    .into_response()
+                }
+                Err(e) => err_response(e),
+            }
+        }
+        handover::ForceReturnDecision::Refused { reason } => {
+            ctx.audit().record(
+                &authed.ip,
+                &authed.key,
+                "handover.force_return",
+                &detail,
+                false,
+            );
+            handover_refusal(
+                decision.http_status(),
+                json!({
+                    "error": reason.as_str(),
+                    "project_id": body.project_id,
+                }),
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2591,6 +3013,807 @@ mod tests {
         assert_eq!(
             revalidate_session(&ctx, id, "admin").await,
             SessionRevalidation::Rejected
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ÉTAPE 3 — routes HTTP du portage d'un projet (mode réseau multi-postes)
+    //
+    // Deux familles :
+    //  - **sans base** (toujours exécutées) : validation pure, montage réel des
+    //    routes, authentification obligatoire (401), protection
+    //    d'administration (403), refus lisible d'un `poste_id` vide (400) ;
+    //  - **sur base jetable** (`#[ignore]`, `PILOT_GDS_TEST_URL` + garde stricte
+    //    de l'étape 2, lancées avec `--include-ignored`) : un test par route,
+    //    cas accepté **et** cas refusé, en HTTP réel.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Appels HTTP réels sur le routeur du service : `tower::ServiceExt::oneshot`
+    // (dev-dependency, même mécanisme que les tests du binaire serveur).
+    use tower::ServiceExt;
+
+    /// Contexte **sans base** : seul `pool()` échoue. Il prouve en HTTP réel,
+    /// sans PostgreSQL, le montage des routes, l'authentification et la
+    /// protection d'administration — aucune de ces preuves n'a besoin d'une base.
+    struct NoDbCtx {
+        auth: Arc<WebAuth>,
+        guard: Arc<WebGuard>,
+        audit: Arc<WebAudit>,
+    }
+
+    impl GdsCtx for NoDbCtx {
+        fn pool(&self) -> Result<PgPool, String> {
+            Err("GDS indisponible (test sans base)".to_string())
+        }
+        fn auth(&self) -> &Arc<WebAuth> {
+            &self.auth
+        }
+        fn guard(&self) -> &Arc<WebGuard> {
+            &self.guard
+        }
+        fn audit(&self) -> &Arc<WebAudit> {
+            &self.audit
+        }
+    }
+
+    /// Routeur **du service autonome** (`server_router`) sur un contexte sans
+    /// base : authentification puis `require_admin` sont réellement en place.
+    fn no_db_router() -> (Router, Arc<NoDbCtx>) {
+        let ctx = Arc::new(NoDbCtx {
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+        });
+        (server_router(ctx.clone()), ctx)
+    }
+
+    /// Appel HTTP **réel** sur le routeur du service (même chemin qu'un client :
+    /// `auth_middleware`, puis `require_admin` pour la zone d'administration).
+    /// Renvoie le code et le corps JSON (valeur nulle si le corps n'est pas du
+    /// JSON, cas qui resterait alors une anomalie visible dans les tests).
+    async fn call_route(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<serde_json::Value>,
+    ) -> (u16, serde_json::Value) {
+        let mut builder = Request::builder().method(method).uri(uri);
+        if let Some(t) = token {
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {}", t));
+        }
+        let request = match body {
+            Some(v) => builder
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(v.to_string())),
+            None => builder.body(axum::body::Body::empty()),
+        }
+        .expect("requête de test bien formée");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("le routeur répond toujours");
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("corps de réponse lisible");
+        let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, value)
+    }
+
+    /// Validation **pure** du `poste_id` : non vide après `trim`, et la valeur
+    /// retenue est la version trimée (elle sert de clé d'idempotence).
+    #[test]
+    fn handover_poste_id_is_trimmed_and_never_empty() {
+        assert_eq!(handover_poste_id("  poste-a  "), Some("poste-a".to_string()));
+        assert_eq!(handover_poste_id("poste-a"), Some("poste-a".to_string()));
+        assert_eq!(handover_poste_id("   "), None);
+        assert_eq!(handover_poste_id(""), None);
+        assert_eq!(handover_poste_id("\t\n"), None);
+    }
+
+    /// **Aucun code de statut inventé** : les refus prennent celui du module
+    /// `handover` (`http_status()` / `REFUSED_STATUS`), et l'adaptateur HTTP ne
+    /// transforme jamais un refus métier en 500.
+    #[test]
+    fn handover_refusal_codes_come_from_the_module() {
+        let refused = handover_refusal(handover::REFUSED_STATUS, json!({ "error": "test" }));
+        assert_eq!(refused.status().as_u16(), handover::REFUSED_STATUS);
+        assert_eq!(
+            handover::ForceReturnDecision::Refused {
+                reason: handover::ForceRefusalReason::NotAdmin,
+            }
+            .http_status(),
+            403,
+            "un non-administrateur est refusé en 403 par le module"
+        );
+        assert_eq!(
+            handover::ForceReturnDecision::Refused {
+                reason: handover::ForceRefusalReason::ReasonMissing,
+            }
+            .http_status(),
+            handover::REFUSED_STATUS,
+            "un motif vide est un refus de portage (409), jamais une erreur serveur"
+        );
+    }
+
+    /// Contrôle structurel (CRLF-safe) : les quatre routes du **membre** vivent
+    /// dans `gds_routes`, la libération **forcée** uniquement dans
+    /// `admin_routes` (donc derrière `require_admin`).
+    #[test]
+    fn handover_routes_are_mounted_in_the_right_zone() {
+        let src = include_str!("http.rs").replace("\r\n", "\n");
+        let body_of = |signature: &str| {
+            let start = src
+                .find(signature)
+                .unwrap_or_else(|| panic!("routeur `{}` absent", signature));
+            let body = &src[start..];
+            let end = body
+                .find("\n}")
+                .unwrap_or_else(|| panic!("fin de `{}` introuvable", signature));
+            &body[..end]
+        };
+        let members = body_of("pub fn gds_routes<S: GdsCtx>() -> Router<Arc<S>> {");
+        let admin = body_of("fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {");
+        for route in [
+            "/api/gds/handover/take",
+            "/api/gds/handover/heartbeat",
+            "/api/gds/handover/return",
+            "/api/gds/handover/state",
+        ] {
+            assert!(
+                members.contains(route),
+                "route du membre `{}` absente de `gds_routes`",
+                route
+            );
+            assert!(
+                !admin.contains(route),
+                "route du membre `{}` montée dans la zone d'administration",
+                route
+            );
+        }
+        assert!(
+            admin.contains("/api/gds/handover/force"),
+            "la libération forcée doit être montée dans `admin_routes` (donc \
+             derrière `require_admin`)"
+        );
+        assert!(
+            !members.contains("/api/gds/handover/force"),
+            "la libération forcée ne doit jamais être accessible aux membres"
+        );
+        // Les décisions HTTP viennent du module, pas de constantes locales.
+        for handler in [
+            "async fn gds_handover_take<S: GdsCtx>(",
+            "async fn gds_handover_heartbeat<S: GdsCtx>(",
+            "async fn gds_handover_return<S: GdsCtx>(",
+            "async fn gds_handover_force<S: GdsCtx>(",
+        ] {
+            let body = body_of(handler);
+            assert!(
+                body.contains("http_status()"),
+                "`{}` n'utilise plus les codes de refus du module `handover`",
+                handler
+            );
+            assert!(
+                !body.contains("StatusCode::CONFLICT"),
+                "`{}` code en dur le refus de portage au lieu d'appeler `http_status()`",
+                handler
+            );
+        }
+    }
+
+    /// **Sans base** : les cinq routes exigent une session valide (401).
+    #[tokio::test]
+    async fn handover_routes_require_a_valid_session() {
+        let (app, _ctx) = no_db_router();
+        for (method, uri) in [
+            ("POST", "/api/gds/handover/take"),
+            ("POST", "/api/gds/handover/heartbeat"),
+            ("POST", "/api/gds/handover/return"),
+            ("GET", "/api/gds/handover/state?project_id=1"),
+            ("POST", "/api/gds/handover/force"),
+        ] {
+            let (status, _) = call_route(
+                &app,
+                method,
+                uri,
+                None,
+                Some(json!({ "project_id": 1, "poste_id": "poste-a", "reason": "motif" })),
+            )
+            .await;
+            assert_eq!(status, 401, "{} {} doit exiger une session", method, uri);
+            let (status, _) = call_route(&app, method, uri, Some("jeton-inconnu"), None).await;
+            assert_eq!(
+                status, 401,
+                "{} {} doit refuser un jeton inconnu",
+                method, uri
+            );
+        }
+    }
+
+    /// **Sans base** : `poste_id` vide (ou absent) → 400 explicite, avant toute
+    /// lecture de base (aucune réjection brute d'axum, aucun 500).
+    #[tokio::test]
+    async fn handover_writes_reject_an_empty_poste_id() {
+        let (app, ctx) = no_db_router();
+        let token = ctx
+            .auth
+            .create_session_for(7, "dev", Duration::from_secs(600));
+        for uri in [
+            "/api/gds/handover/take",
+            "/api/gds/handover/heartbeat",
+            "/api/gds/handover/return",
+        ] {
+            for body in [
+                json!({ "project_id": 1, "poste_id": "   " }),
+                json!({ "project_id": 1 }),
+            ] {
+                let (status, value) = call_route(&app, "POST", uri, Some(&token), Some(body)).await;
+                assert_eq!(status, 400, "{} doit refuser un poste_id vide", uri);
+                assert!(
+                    value["error"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("poste_id"),
+                    "le refus de `{}` doit nommer le champ fautif : {}",
+                    uri,
+                    value
+                );
+            }
+        }
+        // `project_id` absent de la lecture d'état : refus lisible également.
+        let (status, value) =
+            call_route(&app, "GET", "/api/gds/handover/state", Some(&token), None).await;
+        assert_eq!(status, 400);
+        assert!(value["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("project_id"));
+    }
+
+    /// **Sans base** : une session **sans identité de compte GDS** (`user_id == 0`,
+    /// mode remote du poste) ne peut pas porter un projet → 403 tracé, jamais une
+    /// erreur de clé étrangère.
+    #[tokio::test]
+    async fn handover_writes_refuse_a_session_without_identity() {
+        let (app, ctx) = no_db_router();
+        let token = ctx
+            .auth
+            .create_session_as("standard", Duration::from_secs(600));
+        let (status, value) = call_route(
+            &app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token),
+            Some(json!({ "project_id": 1, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, 403, "session sans identité : {}", value);
+        assert!(value["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Compte GDS"));
+        let last = ctx.audit.recent(1);
+        assert_eq!(last[0].action, "handover_denied");
+        assert!(!last[0].ok);
+    }
+
+    /// **Sans base** : `POST /api/gds/handover/force` est bien réservée au rôle
+    /// `admin` (`require_admin`), alors que la route du membre jumelle n'exige
+    /// que la session (ici 400 sur entrée invalide, jamais 403).
+    #[tokio::test]
+    async fn handover_force_route_is_reserved_to_administrators() {
+        let (app, ctx) = no_db_router();
+        let token = ctx
+            .auth
+            .create_session_as("dev", Duration::from_secs(600));
+        let (status, value) = call_route(
+            &app,
+            "POST",
+            "/api/gds/handover/force",
+            Some(&token),
+            Some(json!({ "project_id": 1, "reason": "poste hors service" })),
+        )
+        .await;
+        assert_eq!(status, 403, "non-administrateur : {}", value);
+        assert!(value["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("administrateur"));
+        let (status, _) = call_route(
+            &app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token),
+            Some(json!({ "project_id": 1, "poste_id": "" })),
+        )
+        .await;
+        assert_eq!(
+            status, 400,
+            "la route du membre ne doit pas être protégée comme la zone d'administration"
+        );
+        assert!(
+            ctx.audit
+                .recent(20)
+                .iter()
+                .any(|e| e.action == "admin_denied"),
+            "un refus d'administration doit être tracé"
+        );
+    }
+
+    /// Environnement de test **sur base jetable** : routeur complet du service +
+    /// pool + garde de la base. Les deux comptes et le projet viennent du helper
+    /// de l'étape 2 (`handover_fixture`) ; un compte `admin` est ajouté ici.
+    ///
+    /// Ordre des champs : `pool` est fermé **avant** `guard`, qui supprime la base
+    /// (`DROP DATABASE`).
+    struct HandoverRouteEnv {
+        app: Router,
+        ctx: Arc<DbTestCtx>,
+        pool: PgPool,
+        /// Maintenue vivante jusqu'à la fin du test : sa destruction supprime la
+        /// base jetable (jamais lue explicitement, d'où le `_`).
+        _guard: crate::db::tests::GdsTestDbGuard,
+        project_id: i64,
+        user_a: i64,
+        user_b: i64,
+        admin_id: i64,
+    }
+
+    impl HandoverRouteEnv {
+        fn token(&self, user_id: i64, role: &str) -> String {
+            self.ctx
+                .auth
+                .create_session_for(user_id, role, Duration::from_secs(3600))
+        }
+    }
+
+    async fn handover_route_env(project_name: &str) -> HandoverRouteEnv {
+        let (pool, guard) = crate::db::tests::strict_handover_test_db().await;
+        let (project_id, user_a, user_b) =
+            crate::db::tests::handover_fixture(&pool, project_name).await;
+        let admin_id =
+            gds_db::create_user(&pool, "admin-routes@gds.test", "", "", "admin", "active")
+                .await
+                .expect("compte administrateur");
+        let ctx = Arc::new(DbTestCtx {
+            pool: pool.clone(),
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+        });
+        HandoverRouteEnv {
+            app: server_router(ctx.clone()),
+            ctx,
+            pool,
+            _guard: guard,
+            project_id,
+            user_a,
+            user_b,
+            admin_id,
+        }
+    }
+
+    /// Route `take` : prise d'un projet libre (200 + état réel), **refus 409**
+    /// pour un autre poste, renouvellement pour le même couple compte+machine
+    /// (jamais une seconde ligne), 404 pour un projet inconnu.
+    #[ignore = "exige PostgreSQL jetable (PILOT_GDS_TEST_URL) — routes du portage"]
+    #[tokio::test]
+    async fn handover_take_route_accepts_a_free_project_and_refuses_another_poste() {
+        let env = handover_route_env("handover-route-take").await;
+        let token_a = env.token(env.user_a, "dev");
+        let token_b = env.token(env.user_b, "dev");
+
+        // 1) Projet libre : la prise réussit et l'état annoncé est celui du serveur.
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "poste_id": "  poste-a  " })),
+        )
+        .await;
+        assert_eq!(status, 200, "prise sur projet libre : {}", body);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["action"], "insert");
+        assert_eq!(body["state"]["holder"]["user_id"], json!(env.user_a));
+        assert_eq!(
+            body["state"]["holder"]["poste_id"], "poste-a",
+            "le poste_id doit être stocké trimé"
+        );
+        assert_eq!(body["state"]["expired"], false);
+        assert!(body["state"]["expires_at"].is_string(), "{}", body);
+
+        // 2) Autre compte + autre machine : refus 409 avec porteur et échéance.
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token_b),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-b" })),
+        )
+        .await;
+        assert_eq!(status, handover::REFUSED_STATUS, "refus attendu : {}", body);
+        assert_eq!(body["holder"]["user_id"], json!(env.user_a));
+        assert_eq!(body["holder"]["poste_id"], "poste-a");
+        assert!(
+            body["until"].is_string(),
+            "l'échéance doit être annoncée : {}",
+            body
+        );
+
+        // 3) Même compte + même machine : renouvellement, une seule ligne ouverte.
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, 200, "renouvellement : {}", body);
+        assert_eq!(body["action"], "renew");
+        assert_eq!(
+            crate::db::tests::open_handover_count(&env.pool, env.project_id).await,
+            1,
+            "un renouvellement ne doit jamais empiler deux lignes ouvertes"
+        );
+
+        // 4) Projet inconnu : refus explicite, jamais un 500.
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token_a),
+            Some(json!({ "project_id": 999_999, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, 404, "projet inconnu : {}", body);
+        assert!(body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("introuvable"));
+    }
+
+    /// Route `heartbeat` : présence acceptée pour le porteur (échéance repoussée),
+    /// **refus 409** pour un non-porteur et pour un projet libre.
+    #[ignore = "exige PostgreSQL jetable (PILOT_GDS_TEST_URL) — routes du portage"]
+    #[tokio::test]
+    async fn handover_heartbeat_route_accepts_only_the_holder() {
+        let env = handover_route_env("handover-route-heartbeat").await;
+        let token_a = env.token(env.user_a, "dev");
+        let token_b = env.token(env.user_b, "dev");
+
+        let (status, taken) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, 200, "prise : {}", taken);
+        let expires_before = taken["state"]["expires_at"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+
+        // 1) Le porteur prolonge : 200 et échéance repoussée.
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/heartbeat",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, 200, "présence du porteur : {}", body);
+        assert!(body["state"]["expires_at"].is_string(), "{}", body);
+        assert!(
+            body["state"]["expires_at"].as_str().unwrap_or_default() > expires_before.as_str(),
+            "l'échéance doit être repoussée : {} puis {}",
+            expires_before,
+            body["state"]["expires_at"]
+        );
+
+        // 2) Non-porteur : refus 409 avec le libellé du module.
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/heartbeat",
+            Some(&token_b),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-b" })),
+        )
+        .await;
+        assert_eq!(status, handover::REFUSED_STATUS, "non-porteur : {}", body);
+        assert_eq!(body["error"], "pas porteur du projet");
+        assert_eq!(body["holder"]["user_id"], json!(env.user_a));
+
+        // 3) Projet libre : aucune prise en main, donc refus identique.
+        let free_id = gds_db::create_project(
+            &env.pool,
+            "handover-route-heartbeat-libre",
+            "",
+            "",
+            "",
+            "active",
+            "",
+        )
+        .await
+        .expect("projet libre");
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/heartbeat",
+            Some(&token_a),
+            Some(json!({ "project_id": free_id, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, handover::REFUSED_STATUS, "projet libre : {}", body);
+        assert_eq!(body["holder"], serde_json::Value::Null);
+    }
+
+    /// Route `return` : restitution par le porteur seul, clôture `self` avec
+    /// `sync_at`, **refus 409** pour un non-porteur et pour une seconde
+    /// restitution (jamais de double clôture).
+    #[ignore = "exige PostgreSQL jetable (PILOT_GDS_TEST_URL) — routes du portage"]
+    #[tokio::test]
+    async fn handover_return_route_closes_for_the_holder_only() {
+        let env = handover_route_env("handover-route-return").await;
+        let token_a = env.token(env.user_a, "dev");
+        let token_b = env.token(env.user_b, "dev");
+
+        let (status, taken) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, 200, "prise : {}", taken);
+
+        // 1) Un autre poste ne peut pas restituer : 409.
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/return",
+            Some(&token_b),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-b" })),
+        )
+        .await;
+        assert_eq!(status, handover::REFUSED_STATUS, "non-porteur : {}", body);
+        assert_eq!(
+            crate::db::tests::open_handover_count(&env.pool, env.project_id).await,
+            1,
+            "un refus de restitution ne doit rien clôturer"
+        );
+
+        // 2) Le porteur restitue : 200, projet libre, clôture `self` avec `sync_at`.
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/return",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, 200, "restitution du porteur : {}", body);
+        assert!(body["id"].is_i64(), "{}", body);
+        assert_eq!(body["state"]["holder"], serde_json::Value::Null);
+        assert_eq!(body["state"]["open_row_id"], serde_json::Value::Null);
+        assert_eq!(
+            crate::db::tests::open_handover_count(&env.pool, env.project_id).await,
+            0
+        );
+        let (returned_by, _reason, sync_at) =
+            crate::db::tests::last_closed_handover(&env.pool, env.project_id).await;
+        assert_eq!(returned_by.as_deref(), Some("self"));
+        assert!(
+            sync_at.is_some(),
+            "une restitution volontaire atteste la poussée d'avancement"
+        );
+
+        // 3) Seconde restitution : plus rien à clôturer → 409 (jamais deux fois).
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/return",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            handover::REFUSED_STATUS,
+            "double restitution : {}",
+            body
+        );
+        assert_eq!(
+            crate::db::tests::open_handover_count(&env.pool, env.project_id).await,
+            0
+        );
+    }
+
+    /// Route `state` : lecture **sans écriture** (libre, tenu, puis expiré sans
+    /// clôture) et refus explicite pour un projet inconnu.
+    #[ignore = "exige PostgreSQL jetable (PILOT_GDS_TEST_URL) — routes du portage"]
+    #[tokio::test]
+    async fn handover_state_route_reads_without_writing() {
+        let env = handover_route_env("handover-route-state").await;
+        let token_a = env.token(env.user_a, "dev");
+
+        // 1) Projet libre.
+        let uri = format!("/api/gds/handover/state?project_id={}", env.project_id);
+        let (status, body) = call_route(&env.app, "GET", &uri, Some(&token_a), None).await;
+        assert_eq!(status, 200, "état libre : {}", body);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["state"]["holder"], serde_json::Value::Null);
+        assert_eq!(body["state"]["open_row_id"], serde_json::Value::Null);
+        assert_eq!(body["state"]["expired"], false);
+
+        // 2) Projet tenu : porteur et échéance lisibles.
+        let (status, taken) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, 200, "prise : {}", taken);
+        let row_id = taken["state"]["open_row_id"]
+            .as_i64()
+            .expect("ligne ouverte annoncée");
+        let (status, body) = call_route(&env.app, "GET", &uri, Some(&token_a), None).await;
+        assert_eq!(status, 200);
+        assert_eq!(body["state"]["holder"]["user_id"], json!(env.user_a));
+        assert_eq!(body["state"]["expired"], false);
+
+        // 3) Ligne laissée ouverte mais échue : l'état le DIT sans rien clôturer.
+        sqlx::query(
+            "UPDATE project_handovers SET expires_at = now() - interval '1 minute' WHERE id = $1",
+        )
+        .bind(row_id)
+        .execute(&env.pool)
+        .await
+        .expect("vieillissement de la prise en main");
+        let (status, body) = call_route(&env.app, "GET", &uri, Some(&token_a), None).await;
+        assert_eq!(status, 200);
+        assert_eq!(body["state"]["expired"], true);
+        assert_eq!(body["state"]["holder"], serde_json::Value::Null);
+        assert_eq!(
+            body["state"]["open_row_id"],
+            json!(row_id),
+            "la ligne reste ouverte : la lecture n'écrit jamais"
+        );
+        assert_eq!(
+            crate::db::tests::open_handover_count(&env.pool, env.project_id).await,
+            1,
+            "GET /state ne doit rien balayer ni clôturer"
+        );
+
+        // 4) Projet inconnu : 404 explicite.
+        let (status, body) = call_route(
+            &env.app,
+            "GET",
+            "/api/gds/handover/state?project_id=999999",
+            Some(&token_a),
+            None,
+        )
+        .await;
+        assert_eq!(status, 404, "projet inconnu : {}", body);
+    }
+
+    /// Route `force` (zone d'administration) : **refus 403** pour un
+    /// non-administrateur, **refus 409** sans motif et sans prise en main
+    /// ouverte, **clôture `admin`** avec motif recopié (et `sync_at` NULL),
+    /// trace d'audit dans les trois cas.
+    #[ignore = "exige PostgreSQL jetable (PILOT_GDS_TEST_URL) — routes du portage"]
+    #[tokio::test]
+    async fn handover_force_route_requires_admin_and_a_reason() {
+        let env = handover_route_env("handover-route-force").await;
+        let token_a = env.token(env.user_a, "dev");
+        let token_admin = env.token(env.admin_id, "admin");
+
+        let (status, taken) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/take",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "poste_id": "poste-a" })),
+        )
+        .await;
+        assert_eq!(status, 200, "prise : {}", taken);
+
+        // 1) Non-administrateur : 403 (`require_admin`), rien n'est libéré.
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/force",
+            Some(&token_a),
+            Some(json!({ "project_id": env.project_id, "reason": "poste hors service" })),
+        )
+        .await;
+        assert_eq!(status, 403, "non-administrateur : {}", body);
+        assert_eq!(
+            crate::db::tests::open_handover_count(&env.pool, env.project_id).await,
+            1
+        );
+
+        // 2) Administrateur sans motif : 409 (motif obligatoire, libellé du module).
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/force",
+            Some(&token_admin),
+            Some(json!({ "project_id": env.project_id, "reason": "   " })),
+        )
+        .await;
+        assert_eq!(status, handover::REFUSED_STATUS, "motif vide : {}", body);
+        assert_eq!(body["error"], "motif de libération obligatoire");
+        assert_eq!(
+            crate::db::tests::open_handover_count(&env.pool, env.project_id).await,
+            1
+        );
+
+        // 3) Administrateur avec motif : clôture `admin`, motif recopié (trimé).
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/force",
+            Some(&token_admin),
+            Some(json!({ "project_id": env.project_id, "reason": "  poste hors service  " })),
+        )
+        .await;
+        assert_eq!(status, 200, "libération forcée : {}", body);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["returned_by"], "admin");
+        assert_eq!(body["return_reason"], "poste hors service");
+        assert_eq!(body["state"]["holder"], serde_json::Value::Null);
+        assert_eq!(
+            crate::db::tests::open_handover_count(&env.pool, env.project_id).await,
+            0
+        );
+        let (returned_by, reason, sync_at) =
+            crate::db::tests::last_closed_handover(&env.pool, env.project_id).await;
+        assert_eq!(returned_by.as_deref(), Some("admin"));
+        assert_eq!(reason.as_deref(), Some("poste hors service"));
+        assert!(
+            sync_at.is_none(),
+            "une libération forcée n'atteste aucune poussée d'avancement"
+        );
+
+        // 4) Plus rien à libérer : 409 (aucune prise en main en cours).
+        let (status, body) = call_route(
+            &env.app,
+            "POST",
+            "/api/gds/handover/force",
+            Some(&token_admin),
+            Some(json!({ "project_id": env.project_id, "reason": "poste hors service" })),
+        )
+        .await;
+        assert_eq!(status, handover::REFUSED_STATUS, "déjà libre : {}", body);
+        assert_eq!(body["error"], "aucune prise en main en cours");
+
+        // 5) Audit : la libération forcée est tracée, réussite comme refus.
+        let entries = env.ctx.audit.recent(20);
+        let forced: Vec<_> = entries
+            .iter()
+            .filter(|e| e.action == "handover.force_return")
+            .collect();
+        assert_eq!(
+            forced.len(),
+            3,
+            "les trois tentatives de libération forcée doivent être tracées : {:?}",
+            forced
+        );
+        assert!(forced.iter().any(|e| e.ok), "la réussite doit être tracée");
+        assert_eq!(
+            forced.iter().filter(|e| !e.ok).count(),
+            2,
+            "les deux refus doivent être tracés"
         );
     }
 }
