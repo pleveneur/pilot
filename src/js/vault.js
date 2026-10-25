@@ -195,7 +195,7 @@ export function createVault(container) {
       const ref = document.createElement("div");
       ref.className = "vault-row-ref";
       ref.textContent = "vault:" + e.id;
-      ref.title = "Référence de cette entrée, à choisir dans Paramètres › Serveurs MCP. Cliquer pour copier.";
+      ref.title = "Référence de cette entrée, à choisir dans Options › Serveurs MCP. Cliquer pour copier.";
       ref.addEventListener("click", async () => {
         await navigator.clipboard.writeText("vault:" + e.id);
         flash(ref, "✓ référence copiée");

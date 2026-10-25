@@ -42,17 +42,17 @@ export const SCREEN_JOURNAL_SIMULATED = "simulé";
 
 export const SCREEN_DISABLED_MESSAGE =
   "Action sur l'écran refusée : le contrôle de l'écran par les agents est désactivé " +
-  "(Paramètres → Serveurs MCP).";
+  "(Options → Serveurs MCP).";
 
 export const SCREEN_EMERGENCY_MESSAGE =
   "Action sur l'écran refusée : l'arrêt d'urgence du contrôle de l'écran est actif. " +
-  "Rétablissez le contrôle (Paramètres → Serveurs MCP) pour le réautoriser.";
+  "Rétablissez le contrôle (Options → Serveurs MCP) pour le réautoriser.";
 
 export const SCREEN_REFUSED_MESSAGE = "Action sur l'écran refusée par l'utilisateur.";
 
 export const SCREEN_SIMULATION_MESSAGE =
   "Action simulée (mode simulation) : rien n'a été exécuté réellement sur l'écran. " +
-  "Désactivez le mode simulation (Paramètres → Serveurs MCP) pour autoriser une action réelle.";
+  "Désactivez le mode simulation (Options → Serveurs MCP) pour autoriser une action réelle.";
 
 export const SCREEN_NO_UI_MESSAGE =
   "Action sur l'écran refusée : session autonome sans interface pour confirmer l'action.";

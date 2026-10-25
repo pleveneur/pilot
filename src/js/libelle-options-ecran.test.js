@@ -23,6 +23,11 @@
  *       dehors des FAUX AMIS listes ci-dessous ;
  *   (g) l'aide integree (source `help/overview.md` et handbook REGENERE)
  *       redit « les Reglages s'ouvrent » ou « (Reglages → Agent) ».
+ *   (h) l'INFOBULLE du bouton (`title=`) reprend « Parametres » au lieu de
+ *       « Options », ou une autre chaine VUE PAR L'UTILISATEUR qui designe ce
+ *       meme panneau reprend « Parametres » (toast, messages d'agent,
+ *       infobulles) — les faux amis et les messages de console restent
+ *       volontairement hors de ce verrou.
  *
  * Aucun navigateur n'est requis : lecture des fichiers (fins de ligne
  * normalisees, cf. quality-gate 3.4).
@@ -41,6 +46,12 @@ const html = lire("index.html");
 const mainJs = lire("src/js/main.js");
 const tabsJs = lire("src/js/tabs.js");
 const layaJs = lire("src/js/laya-gateway.js");
+const agentsBusJs = lire("src/js/agents-bus.js");
+const faceGatewayJs = lire("src/js/face-gateway.js");
+const mcpSecretScopeJs = lire("src/js/mcp-secret-scope.js");
+const screenGuardJs = lire("src/js/screen-guard.js");
+const vaultJs = lire("src/js/vault.js");
+const superAgentJs = lire("src/js/super-agent.js");
 const overview = lire("help/overview.md");
 const handbook = lire("help/handbook.md");
 const specSuperAgent = lire("spec_super_agent.md");
@@ -71,6 +82,19 @@ describe("(a) le bouton #btn-settings s'appelle « Options »", () => {
     expect(m[0]).toContain('id="btn-settings"');
     expect(m[0]).toContain('class="ga-label"');
     expect(m[0]).toContain('data-lucide="settings"');
+  });
+
+  it("l'INFOBULLE du bouton dit « Options », jamais « Parametres »", () => {
+    const m = html.match(/<button id="btn-settings"[\s\S]*?<\/button>/);
+    expect(m, "bouton #btn-settings introuvable dans index.html").not.toBeNull();
+    // Forme courte et sobre, comme les infobulles voisines (« Brouillon… »).
+    expect(m[0], "l'infobulle du bouton ne dit plus « Options »").toContain(
+      'title="Options"',
+    );
+    expect(
+      m[0],
+      "l'infobulle du bouton dit encore « Parametres »",
+    ).not.toContain("Paramètres");
   });
 });
 
@@ -159,5 +183,57 @@ describe("(g) l'aide integree et le README parlent des Options", () => {
   it("le README utilisateur ne dit plus « Les Reglages s'ouvrent »", () => {
     expect(readme).not.toContain("Les Réglages s'ouvrent");
     expect(readme).toContain("Les Options s'ouvrent");
+  });
+});
+
+/**
+ * (h) Le NOM du panneau, partout ou l'utilisateur le lit.
+ *
+ * Meme decision que le renommage « Reglages » -> « Options » : les chaines
+ * ci-dessous renvoient l'utilisateur VERS ce panneau precis. Elles disent
+ * « Options » et plus « Parametres ». Les faux amis (reglages avances du
+ * service de classification, rubrique de memoire, reglages du systeme) et les
+ * messages de console/commentaires ne sont pas concernes.
+ */
+describe("(h) le panneau s'appelle « Options » dans tout texte vu par l'utilisateur", () => {
+  it("le toast d'agent indisponible renvoie aux « Options »", () => {
+    expect(mainJs).toContain("⚙️ Options pour corriger le chemin");
+    expect(mainJs).not.toContain("⚙️ Paramètres");
+  });
+
+  it("l'ecran guide « agent indisponible » propose « Ouvrir les Options »", () => {
+    // On vise le TEXTE DU BOUTON (pas le commentaire qui cite l'ancien libelle,
+    // laisse tel quel par la consigne « ne pas toucher aux commentaires »).
+    expect(tabsJs).toContain(">⚙️ Ouvrir les Options</button>");
+    expect(tabsJs).not.toContain(">⚙️ Ouvrir les paramètres</button>");
+  });
+
+  it("le message de timeout renvoie a « Options »", () => {
+    expect(agentsBusJs).toContain("dans Options (agent_timeout_ms)");
+  });
+
+  it("le message du visage eteint renvoie a « Options → Avatar »", () => {
+    expect(faceGatewayJs).toContain("(Options → Avatar)");
+    expect(faceGatewayJs).not.toContain("(Paramètres → Avatar)");
+  });
+
+  it("le refus MCP renvoie aux « Options → Serveurs MCP »", () => {
+    expect(mcpSecretScopeJs).toContain("dans les Options → Serveurs MCP");
+    expect(mcpSecretScopeJs).not.toContain("dans les Paramètres");
+  });
+
+  it("les trois messages du garde-fou d'ecran renvoient aux « Options »", () => {
+    expect(screenGuardJs).toContain("(Options → Serveurs MCP)");
+    expect(screenGuardJs).not.toContain("(Paramètres → Serveurs MCP)");
+  });
+
+  it("l'infobulle de la reference du coffre renvoie aux « Options »", () => {
+    expect(vaultJs).toContain("dans Options › Serveurs MCP");
+    expect(vaultJs).not.toContain("dans Paramètres › Serveurs MCP");
+  });
+
+  it("l'infobulle du bouton de l'Assistant dit « Options de l'assistant »", () => {
+    expect(superAgentJs).toContain("title=\"Options de l'assistant\"");
+    expect(superAgentJs).not.toContain("title=\"Paramètres de l'assistant\"");
   });
 });

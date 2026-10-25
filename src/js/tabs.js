@@ -611,7 +611,7 @@ export class TabsManager {
           <div style="font-size:48px;margin-bottom:16px;opacity:.5;">π</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">${agentDisplayLabel()} indisponible</div>
           <div style="font-size:13px;max-width:420px;margin-bottom:18px;opacity:.8;">${reason}</div>
-          <button id="pi-health-open-settings" style="padding:8px 16px;border:1px solid var(--border-color);background:var(--bg-color);color:var(--text-color);border-radius:6px;cursor:pointer;">⚙️ Ouvrir les paramètres</button>
+          <button id="pi-health-open-settings" style="padding:8px 16px;border:1px solid var(--border-color);background:var(--bg-color);color:var(--text-color);border-radius:6px;cursor:pointer;">⚙️ Ouvrir les Options</button>
           <div style="font-size:11px;margin-top:14px;opacity:.5;">Une fois le chemin configuré et enregistré, rouvre cet onglet.</div>
         </div>`;
       const btn = tab.wrapper.querySelector("#pi-health-open-settings");

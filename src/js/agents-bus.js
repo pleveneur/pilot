@@ -1775,7 +1775,7 @@ function resetTimeout(ctx) {
     // émettre l'événement "stop" (sinon l'UI afficherait « Run arrêtée par
     // l'utilisateur. » alors que l'utilisateur n'a rien fait — issue #10).
     const agentId = ctx.currentAgentId;
-    const msg = `Timeout d'inactivité pour ${agentId}. Augmentez le timeout dans Paramètres (agent_timeout_ms).`;
+    const msg = `Timeout d'inactivité pour ${agentId}. Augmentez le timeout dans Options (agent_timeout_ms).`;
     emit("error", { message: msg });
     // Livraison du rapport : la mission qui a lancé la run doit recevoir cette
     // erreur, même si la relance ensuite par stopAgentsRun. Mission 310 : avant

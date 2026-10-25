@@ -3368,7 +3368,7 @@ export async function createSuperAgent(container) {
         <button class="agent-btn sa-immersive-back" data-imm="back" title="Revenir au mode standard"><i data-lucide="arrow-left" class="icon"></i></button>
         <span class="sa-immersive-title">Pilot</span>
         <div class="sa-immersive-agents" data-imm="agents"></div>
-        <button class="agent-btn sa-immersive-settings" data-imm="settings" title="Paramètres de l'assistant"><i data-lucide="settings" class="icon"></i></button>
+        <button class="agent-btn sa-immersive-settings" data-imm="settings" title="Options de l'assistant"><i data-lucide="settings" class="icon"></i></button>
       </div>
       <div class="sa-immersive-hero">
         <div class="sa-immersive-hero-mark"><img src="/logo_pilot_vector.svg" alt="Pilot"></div>

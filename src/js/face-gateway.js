@@ -57,7 +57,7 @@ export function buildFaceRequest(toolName, args = {}) {
 export function faceOffMessage(baseUrl = DEFAULT_FACE_API_URL) {
   return (
     `Le visage ne répond pas sur ${baseUrl}. ` +
-    `Démarre le visage (Paramètres → Avatar) puis réessaie.`
+    `Démarre le visage (Options → Avatar) puis réessaie.`
   );
 }
 
@@ -100,7 +100,7 @@ export async function callFaceApi({
       : "connexion refusée";
     throw new FaceApiError(
       `Le visage ne répond pas sur ${base} (${reason}). ` +
-        `Démarre le visage (Paramètres → Avatar) puis réessaie.`,
+        `Démarre le visage (Options → Avatar) puis réessaie.`,
     );
   } finally {
     clearTimeout(timer);

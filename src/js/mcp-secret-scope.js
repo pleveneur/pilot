@@ -88,7 +88,7 @@ export function scopeMcpSecret(baseEnv, options = {}) {
       blocked: true,
       reason:
         `MCP : le serveur demande la clé du coffre « ${blockRef} », introuvable — lancement refusé en mode strict. ` +
-        `Choisissez une entrée existante du coffre 🔐 ou désactivez le mode strict dans les Paramètres → Serveurs MCP.`,
+        `Choisissez une entrée existante du coffre 🔐 ou désactivez le mode strict dans les Options → Serveurs MCP.`,
       notice: "",
       removedInherited: inherited !== "",
     };

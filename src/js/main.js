@@ -481,7 +481,7 @@ function warnPiUnavailable(h) {
   const reason = h.error === "not_executable" ? `exécutable introuvable ou injoignable : « ${h.path} »`
     : h.error === "probe_failed" ? "sonde du backend échouée"
     : h.error || "raison inconnue";
-  toastWarning(`Agent indisponible — ${reason}. Ouvre les ⚙️ Paramètres pour corriger le chemin.`);
+  toastWarning(`Agent indisponible — ${reason}. Ouvre les ⚙️ Options pour corriger le chemin.`);
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
