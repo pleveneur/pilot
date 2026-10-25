@@ -38,40 +38,39 @@ externe.
 
 ### La toute première ouverture
 
-Sur une installation neuve, Pilot n'a encore aucun réglage : il applique ses
-valeurs par défaut. Une seule chose est à décider avant de commencer, et une
-seule fois :
+Sur une installation neuve, Pilot propose une prise en main **une seule fois** :
+une petite fenêtre, **trois écrans courts**, chacun un simple constat de ce qui
+est réellement là.
 
-1. **Choisir ce que fait « Lancer l'agent »**. Par défaut, ce bouton ouvre un
-   **terminal**. Pour qu'il ouvre l'**agent conversationnel** (l'onglet π, avec
-   la discussion et les réponses de l'IA), ouvrez **Options ⚙️** → onglet
-   **Agent Pi** → cochez la case **« Gestion RPC de l'agent pi ou plh »**.
-   Rien n'est facturé par ce réglage : il indique seulement à Pilot comment
-   lancer l'agent.
-2. **Ouvrir votre premier projet** : bouton **« 📁 Projets ▼ »** → « Ouvrir un
-   dossier… » (voir les étapes ci-dessous).
+1. **Le moteur constaté** : quel agent répond (Pi ou PLh) et sa version. S'il ne
+   répond pas, la fenêtre dit **pourquoi** et **quoi faire** (⚙️ Options →
+   « Agent Pi »), avec un bouton **Revérifier le moteur**.
+2. **Le projet sur lequel on travaille** : le projet ouvert, ou le bouton
+   **Choisir un dossier de projet** pour en ouvrir un tout de suite.
+3. **Le modèle de l'assistant** : la liste des modèles **réellement
+   disponibles**. Vous pouvez en choisir un (facultatif : « Garder le modèle
+   déjà réglé » ne change rien). Si la liste est vide, la fenêtre dit où ajouter
+   un fournisseur et propose **Réessayer**.
 
-Pilot propose cette prise en main **une seule fois**, sur une installation
-neuve, sur deux niveaux :
+Ensuite, deux sorties :
 
-- **Niveau 1 — démarrer utile** : le mode de l'agent (point 1 ci-dessus) et
-  l'ouverture d'un projet. Quelques clics, puis vous travaillez.
-- **Niveau 2 — en option : votre équipe d'agents** : Pilot ouvre l'écran
-  **Équipe d'agents** déjà existant, où vous pouvez nommer des agents et leur
-  donner un rôle. Vous pouvez **passer ce niveau** : Pilot fonctionne très bien
-  sans équipe configurée, et vous pourrez y revenir plus tard depuis
-  **Autres écrans ▾ → Équipe d'agents**.
+- **Terminer** — règle en **une seule fois** ce qui fait que le bouton
+  **« Lancer l'agent »** lance vraiment l'agent (l'onglet de conversation, et
+  non un terminal), puis ferme la fenêtre.
+- **Passer** (ou la touche **Échap**, ou la croix) — note seulement que vous
+  avez vu la prise en main : **rien d'autre ne change**, et elle ne revient
+  plus.
+
+Un bouton **« Je découvre »** affiche trois repères courts (« Lancer l'agent »,
+🧭 Assistant, ⚙️ Options) puis ouvre l'onglet **🧭 Assistant**.
 
 Ce qu'elle ne fait **jamais** : elle n'appelle aucun modèle (donc aucun coût),
-ne règle rien de payant, ne supprime aucun fichier et ne modifie pas
-l'apparence de Pilot. La passer est sans conséquence.
+ne lance aucune session d'agent, ne règle rien de payant, ne supprime aucun
+fichier et ne modifie pas l'apparence de Pilot. La passer est sans conséquence.
 
-**La revoir plus tard** : elle ne revient pas d'elle-même et ne s'affiche que
-sur une installation neuve. Ses deux étapes restent les étapes ci-dessus : le
-réglage se retrouve dans **Options ⚙️ → Agent Pi**, et l'écran **Équipe
-d'agents** dans **Autres écrans ▾**. Si vous ne voyez pas la prise en main à
-l'ouverture (installation déjà utilisée), c'est normal : vos réglages existent
-déjà.
+**La revoir plus tard** : elle ne s'affiche que sur une installation neuve et
+ne revient pas d'elle-même. Ses réglages se retrouvent dans **⚙️ Options →
+Agent Pi**, et le choix du modèle dans **⚙️ Options → Fournisseurs**.
 
 ### Ensuite, pour chaque projet
 

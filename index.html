@@ -1564,6 +1564,71 @@
     </div>
   </div>
 
+  <!-- Modale : prise en main de la PREMIÈRE ouverture (spec_onboarding.md, niveau 1).
+       Réutilise la modale et ses parties existantes (.modal, .modal-content,
+       .modal-header, .modal-actions) : aucun composant nouveau, aucun onglet,
+       aucune navigation. Les trois écrans et les trois repères de « Je découvre »
+       sont ici en clair ; seuls les CONSTATS (moteur, projet, modèles) sont
+       remplis par src/js/onboarding.js, parce qu'ils viennent de la machine. -->
+  <div id="onboarding-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+    <div class="modal-content onboarding-content">
+      <div class="modal-header">
+        <h2 id="onboarding-title"><i data-lucide="sparkles" class="icon-lg"></i> Bienvenue dans Pilot</h2>
+        <button id="onboarding-close" class="modal-close" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
+      </div>
+      <p id="onboarding-step" class="onboarding-step">Étape 1 sur 3</p>
+
+      <!-- Écran 1 — le moteur constaté -->
+      <section class="onboarding-screen" data-onboarding-screen="1">
+        <h3 class="onboarding-screen-title">Le moteur constaté</h3>
+        <div id="onboarding-engine-body" class="onboarding-body" aria-live="polite"></div>
+        <button id="btn-onboarding-engine-retry" class="web-btn onboarding-inline-action hidden">
+          <i data-lucide="rotate-cw" class="icon-sm"></i> Revérifier le moteur
+        </button>
+      </section>
+
+      <!-- Écran 2 — le projet sur lequel on travaille -->
+      <section class="onboarding-screen hidden" data-onboarding-screen="2">
+        <h3 class="onboarding-screen-title">Le projet sur lequel on travaille</h3>
+        <div id="onboarding-project-body" class="onboarding-body" aria-live="polite"></div>
+        <button id="btn-onboarding-choose-project" class="web-btn onboarding-inline-action">
+          <i data-lucide="folder-open" class="icon-sm"></i> Choisir un dossier de projet
+        </button>
+      </section>
+
+      <!-- Écran 3 — le modèle de l'assistant -->
+      <section class="onboarding-screen hidden" data-onboarding-screen="3">
+        <h3 class="onboarding-screen-title">Le modèle de l'assistant</h3>
+        <div id="onboarding-model-body" class="onboarding-body" aria-live="polite"></div>
+        <label class="onboarding-field">
+          <span class="onboarding-field-label">Modèle proposé à l'agent</span>
+          <select id="onboarding-model-select"></select>
+        </label>
+        <button id="btn-onboarding-model-retry" class="web-btn onboarding-inline-action hidden">
+          <i data-lucide="rotate-cw" class="icon-sm"></i> Réessayer
+        </button>
+      </section>
+
+      <!-- « Je découvre » : trois repères courts, puis l'onglet Assistant. -->
+      <section id="onboarding-discover" class="onboarding-screen hidden">
+        <h3 class="onboarding-screen-title">Trois repères pour commencer</h3>
+        <ol class="onboarding-list">
+          <li><strong>« Lancer l'agent »</strong> ouvre la conversation de l'agent du projet (bloc en bas à gauche).</li>
+          <li><strong>🧭 Assistant</strong> suit vos projets et vos tâches ; il ne modifie aucun fichier.</li>
+          <li><strong>⚙️ Options</strong> rassemble tous les réglages ; la documentation se demande à l'Assistant.</li>
+        </ol>
+      </section>
+
+      <p id="onboarding-error" class="onboarding-error hidden" role="alert"></p>
+      <div class="modal-actions onboarding-actions modal-actions-cancel-first">
+        <button id="btn-onboarding-skip" class="modal-action-secondary">Passer</button>
+        <button id="btn-onboarding-discover" class="modal-action-secondary">Je découvre</button>
+        <button id="btn-onboarding-prev" class="modal-action-secondary">Précédent</button>
+        <button id="btn-onboarding-next" class="modal-action-primary">Suivant</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modale : journal d'audit distant (mode remote) -->
   <div id="audit-modal" class="modal hidden">
     <div class="modal-content audit-content">

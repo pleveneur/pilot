@@ -26,6 +26,9 @@ import { initTelegramInbound } from "./telegram-inbound.js";
 import { loadTelegramDialogConfig } from "./telegram-dialog.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
 import { checkPiUpdate, runPiStartupCheck } from "./pi-update.js";
+// Prise en main de la PREMIERE ouverture (spec_onboarding.md, niveau 1) : les
+// trois ecrans et la sortie en UNE seule ecriture de configuration.
+import { initOnboarding } from "./onboarding.js";
 import { initInterproject } from "./interproject.js";
 import { initProjectCommands } from "./project-commands.js";
 import { initGroupAssistant } from "./group-assistant.js";
@@ -511,6 +514,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   // La promesse n'est pas attendue (elle ne retarde pas l'affichage) et le
   // terrain est TOUJOURS rendu : si la vérification échoue ou traîne, le travail
   // reprend normalement et l'utilisateur est informé avec la marche à suivre.
+  // L'instruction reste SEULE sur sa ligne : c'est elle que tient le verrou
+  // `pi-update-startup.test.js`. La prise en main de la première ouverture
+  // (spec_onboarding.md) n'a pas besoin de cette promesse : elle attend que le
+  // terrain soit rendu, c'est-à-dire l'état du gardien unique
+  // `pi-startup-gate.js` (armé par cet appel AVANT toute attente, libéré à la
+  // fin de la séquence ou à son plafond).
   runPiStartupCheck();
 
   // 1. Initialiser le thème
@@ -1343,6 +1352,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Masquer l'écran de chargement une fois tout initialisé
   const bootOverlay = document.getElementById("boot-overlay");
   if (bootOverlay) bootOverlay.classList.add("hidden");
+
+  // 13. Prise en main de la PREMIÈRE ouverture (spec_onboarding.md, niveau 1).
+  // Lancée APRÈS le masquage du chargement et JAMAIS attendue : aucune étape du
+  // démarrage n'en dépend. Le module lit lui-même la décision du socle
+  // (`get_onboarding_state`) — aucun second critère n'est écrit ici — et attend
+  // que le terrain de démarrage soit RENDU (garde `pi-startup-gate.js` libre et
+  // aucune proposition de mise à jour affichée), avec un délai borné, avant de
+  // s'afficher. Aucun appel de modèle, aucune session : la liste des modèles est
+  // lue sur disque, et « Lancer l'agent » lance ensuite vraiment l'agent.
+  void initOnboarding({ tabs, sidebar });
 
   } catch (err) {
     console.error("💥 Erreur initialisation Pilot:", err);

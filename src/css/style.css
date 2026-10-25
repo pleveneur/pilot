@@ -3254,6 +3254,125 @@ mark.search-highlight {
   color: var(--text-primary);
 }
 
+/* ================================================================
+   PRISE EN MAIN DE LA PREMIÈRE OUVERTURE (spec_onboarding.md, niveau 1)
+   La fenêtre RÉUTILISE la modale et ses parties existantes : `.modal`,
+   `.modal-content`, `.modal-header`, `.modal-close`, `.modal-actions`
+   (y compris la désignation LOT 7 du bouton primaire et l'ordre
+   `modal-actions-cancel-first`). Seules les parties propres à CETTE fenêtre
+   sont décrites ici.
+
+   Aucune couleur n'est écrite en dur et aucun token n'est ajouté : les
+   couples texte/fond employés sont ceux des autres fenêtres
+   (--text-primary et --text-secondary sur --surface-floating et --bg-hover,
+   --bg-input pour le champ), donc le contraste déjà vérifié en clair et en
+   sombre reste le même.
+   ================================================================ */
+.modal-content.onboarding-content {
+  width: 560px;
+}
+
+.onboarding-step {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.onboarding-screen-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-base);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+}
+
+/* Le constat (moteur, projet, modèles) : un seul bloc lisible, qui annonce
+   toujours une cause et une marche à suivre quand quelque chose manque. */
+.onboarding-body {
+  min-height: 76px;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-base);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  word-break: break-word;
+}
+.onboarding-body p { margin: 0 0 var(--space-2); }
+.onboarding-body p:last-child { margin-bottom: 0; }
+.onboarding-body strong {
+  color: var(--text-primary);
+  font-weight: var(--fw-semibold);
+}
+
+.onboarding-inline-action {
+  margin-top: var(--space-3);
+}
+
+.onboarding-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+}
+.onboarding-field.hidden { display: none; }
+.onboarding-field-label {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+#onboarding-model-select {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font-family: inherit;
+  font-size: var(--font-base);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+#onboarding-model-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.onboarding-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  font-size: var(--font-base);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.onboarding-list li { margin-bottom: var(--space-2); }
+.onboarding-list strong {
+  color: var(--text-primary);
+  font-weight: var(--fw-semibold);
+}
+
+/* Échec d'écriture : dit en clair, dans la fenêtre, sans rien persister.
+   Bordure --border et texte --text-primary : le rouge --danger reste réservé,
+   il ne porte pas de texte (contraste insuffisant sur les surfaces). */
+.onboarding-error {
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-sm);
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* Pied : « Passer » et « Je découvre » à gauche, la navigation à droite.
+   L'ordre déclaré neutralise le repli « premier bouton = primaire » ; le
+   primaire est celui qui porte `modal-action-primary` (LOT 7). */
+.onboarding-actions {
+  flex-wrap: wrap;
+}
+.onboarding-actions #btn-onboarding-next {
+  margin-left: auto;
+}
+
 /* --- Popup de sélection des modèles Orchestration --- */
 .orch-picker-status {
   min-height: 20px;

@@ -14,6 +14,12 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 
 ## Fonctionnalités
 
+### Prise en main à la première ouverture
+- Sur une **installation neuve**, Pilot affiche **une seule fois** une petite fenêtre en **trois écrans courts** : **le moteur constaté** (quel agent répond, et quoi faire s'il ne répond pas), **le projet sur lequel on travaille** (avec le bouton pour en ouvrir un), puis **le modèle de l'assistant** (la liste des modèles réellement disponibles).
+- Les sorties : **Terminer** règle en une seule fois ce qui fait que « Lancer l'agent » lance vraiment l'agent ; **Passer** (ou Échap, ou la croix) note seulement que la prise en main a été vue et ne change rien d'autre ; **Je découvre** affiche trois repères puis ouvre l'onglet 🧭 Assistant.
+- Elle n'appelle **aucun modèle** (donc aucun coût), ne lance aucune session, ne supprime rien et ne modifie pas l'apparence. Quand quelque chose manque (aucun modèle, moteur introuvable), elle dit **pourquoi** et **quoi faire**, avec un bouton **Réessayer** — jamais de liste vide muette, et **Passer reste toujours actif**.
+- Elle ne s'affiche **jamais** sur une installation existante (le fichier de configuration est déjà là), et jamais par-dessus la vérification de version du moteur : elle attend que celle-ci rende la main.
+
 ### Barre de fenêtre
 - La **barre de titre système** (logo, nom du dossier, boutons Windows) n'est plus affichée, et **Pilot ne dessine plus de bande haute** : la fenêtre commence directement par la rangée d'onglets. L'application gagne ainsi **32 pixels de hauteur utile**.
 - Les trois boutons système forment un groupe fixe **en haut à droite, au bout de la rangée d'onglets** : **Réduire**, **Agrandir / Restaurer** (l'icône suit l'état réel de la fenêtre) et **Fermer** — Fermer garde exactement le comportement habituel (confirmation ou mise en veille de la fenêtre). Leur place est réservée : aucun onglet ne passe dessous.
