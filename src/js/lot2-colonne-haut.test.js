@@ -8,7 +8,9 @@
  *     au-dessus de 13 px de l'application) ;
  *   - le menu « Projets » devient un bouton NOMME « Projets » a chevron ;
  *   - les SEPT icones nues du haut deviennent des boutons NOMMES :
- *     « Brouillon » et « Reglages » (la troisieme porte nommee de l'epoque,
+ *     « Brouillon » et « Options » (le panneau s'appelait « Reglages » a
+ *     l'epoque ; le libelle a ete renomme depuis, l'identifiant `btn-settings`
+ *     est inchange) ; la troisieme porte nommee d'alors,
  *     « Aide », a depuis QUITTE l'ecran : son onglet n'existe plus, c'est
  *     l'Assistant qui repond sur la documentation — voir
  *     `retrait-ecran-aide.test.js`) ;
@@ -21,7 +23,7 @@
  * Ce qui ne doit PAS changer : les identifiants des boutons conserves
  * (`btn-scratchpad`, `btn-settings`), les identifiants des quatre
  * portes retirees (`btn-vault`, `btn-feedback`, `btn-gds-admin`,
- * `btn-gds-params` : elles reviennent dans Reglages au LOT 7), le bouton
+ * `btn-gds-params` : elles reviennent dans Options au LOT 7), le bouton
  * `btn-open-project` et le menu `projects-dropdown` avec ses entrees.
  *
  * Ce fichier echoue si :

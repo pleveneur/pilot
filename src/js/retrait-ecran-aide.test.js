@@ -8,7 +8,7 @@
  *
  * Ce fichier echoue si :
  *   (a) le bouton « Aide » revient dans le haut de la colonne de gauche (le
- *       haut doit garder exactement DEUX boutons nommes : Brouillon, Reglages) ;
+ *       haut doit garder exactement DEUX boutons nommes : Brouillon, Options) ;
  *   (b) un cablage vers l'onglet Aide revient dans `main.js` ;
  *   (c) le mode d'onglet `help` revient dans `tabs.js` (branche d'ouverture,
  *       methode `_openHelp`, nettoyage, table des modes speciaux) ;

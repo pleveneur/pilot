@@ -320,8 +320,8 @@ export class TabsManager {
       return;
     }
 
-    // Onglet Réglages (⚙️) — lot B de docs/proposition-reglages-en-onglet.md :
-    // les Réglages ne sont plus une fenêtre mais un onglet transverse.
+    // Onglet Options (⚙️) — lot B de docs/proposition-reglages-en-onglet.md :
+    // le panneau n'est plus une fenêtre mais un onglet transverse.
     if (mode === "settings") {
       await this._openSettings();
       return;
@@ -1151,7 +1151,7 @@ export class TabsManager {
   }
 
   /**
-   * Ouvre l'onglet Réglages (⚙️) — lot B de docs/proposition-reglages-en-onglet.md.
+   * Ouvre l'onglet Options (⚙️) — lot B de docs/proposition-reglages-en-onglet.md.
    * Le nœud `#settings-modal` cesse d'être une fenêtre et devient le CONTENU de
    * cet onglet (déplacé, jamais recopié). Onglet transverse : il survit à une
    * bascule de projet (tab-scoping.js) et à la fermeture du dernier projet.
@@ -1190,7 +1190,7 @@ export class TabsManager {
       tab.applySettingsDetail = result.applyDetail;
       tab.unlistenSettings = result.unlisten;
     } catch (e) {
-      console.error("Erreur onglet Réglages:", e);
+      console.error("Erreur onglet Options:", e);
       tab.wrapper.innerHTML = `
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Options</div>
@@ -1968,7 +1968,7 @@ export class TabsManager {
       tab.unlistenSuperKanban();
       tab.unlistenSuperKanban = null;
     }
-    // Nettoyage onglet Réglages (⚙️) — lot B : le ✕ de l'onglet vaut
+    // Nettoyage onglet Options (⚙️) — lot B : le ✕ de l'onglet vaut
     // « Annuler » (aucune confirmation, aucune modification non enregistrée
     // n'est perdue en silence) et rend le nœud `#settings-modal` au `body`,
     // masqué. À faire AVANT le retrait du conteneur ci-dessous.
@@ -1976,7 +1976,7 @@ export class TabsManager {
       try {
         await tab.unlistenSettings();
       } catch (e) {
-        console.warn("Fermeture des Réglages:", e);
+        console.warn("Fermeture des Options:", e);
       }
       tab.unlistenSettings = null;
     }
@@ -3014,9 +3014,9 @@ export class TabsManager {
 
   _renderTabButton(tab) {
     const btn = document.createElement("div");
-    // Reglages (lot B de docs/proposition-reglages-en-onglet.md) : le mode
+    // Options (lot B de docs/proposition-reglages-en-onglet.md) : le mode
     // `settings` est declare ici, avec la couleur `.tab-special` des ecrans
-    // transverses et SANS icone (le titre « Reglages » est celui du bouton et de
+    // transverses et SANS icone (le titre « Options » est celui du bouton et de
     // l'en-tete). L'onglet est cree par `_openSettings()` ci-dessous.
     const special = ["agent", "terminal", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard", "gds-admin", "gds-params", "settings"].includes(tab.mode);
     btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}${tab.mode === "dashboard" ? " tab-dashboard" : ""}`;

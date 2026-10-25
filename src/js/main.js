@@ -401,9 +401,9 @@ async function executeCommand(id, tabs) {
       tabs.openFile("Feedback", "feedback");
       break;
     case "settings":
-      // Meme porte que le bouton « Reglages » : un seul chemin d'ouverture
-      // (lecture de la configuration, message d'echec compris). Au lot A elle
-      // ouvre la fenetre ; au lot B, la meme porte ouvrira l'onglet.
+      // Meme porte que le bouton « Options » : un seul chemin d'ouverture
+      // (lecture de la configuration, message d'echec compris). Cette porte
+      // unique ouvre l'ONGLET des Options (`openSettingsTab`).
       document.getElementById("btn-settings")?.click();
       break;
   }
@@ -829,9 +829,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 🔐 Coffre : coffre fort de mots de passe chiffré — issue #52.
   // LOT 2 de la presentation : ce bouton ne vit plus en haut de la colonne.
-  // LOT 7 : il est revenu dans Reglages → Acces directs, avec le MEME
+  // LOT 7 : il est revenu dans Options → Acces directs, avec le MEME
   // identifiant et le MEME effet. Le `?.` reste : il couvre le cas ou la
-  // fenetre des Reglages n'est pas dans le document.
+  // fenetre des Options n'est pas dans le document.
   document.getElementById("btn-vault")?.addEventListener("click", () => {
     tabs.openFile("Coffre", "vault");
   });
@@ -842,21 +842,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // 🖥️ GDS Serveur : onglet transverse d'administration du serveur — LOT 4 (L4.1).
-  // LOT 2 : retire du haut de la colonne. LOT 7 : revenu dans Reglages →
+  // LOT 2 : retire du haut de la colonne. LOT 7 : revenu dans Options →
   // Acces directs (« Serveur GDS »), identifiant et effet inchanges.
   document.getElementById("btn-gds-admin")?.addEventListener("click", () => {
     tabs.openFile("GDS Serveur", "gds-admin");
   });
 
   // ⚙️ GDS Paramétrage : onglet transverse de paramétrage utilisateur — LOT 5 (L5.1).
-  // LOT 2 : retire du haut de la colonne. LOT 7 : revenu dans Reglages →
+  // LOT 2 : retire du haut de la colonne. LOT 7 : revenu dans Options →
   // Acces directs (« GDS mon compte »), identifiant et effet inchanges.
   document.getElementById("btn-gds-params")?.addEventListener("click", () => {
     tabs.openFile("GDS — paramétrage", "gds-params");
   });
 
   // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
-  // LOT 2 : retire du haut de la colonne. LOT 7 : revenu dans Reglages →
+  // LOT 2 : retire du haut de la colonne. LOT 7 : revenu dans Options →
   // Acces directs (« Envoyer une remarque »), identifiant et effet inchanges.
   document.getElementById("btn-feedback")?.addEventListener("click", () => {
     tabs.openFile("Feedback", "feedback");

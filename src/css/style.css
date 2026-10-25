@@ -770,7 +770,7 @@ body.theme-light.theme-tokyo-day {
   align-items: center;
   /* 6 px entre les portes : la rangee tient sur UNE ligne dans une colonne de
      280 px (248 px utiles). Il ne reste que DEUX portes nommees (« Brouillon »,
-     « Reglages ») depuis le retrait de « Aide » : aucune place n'est reservee a
+     « Options ») depuis le retrait de « Aide » : aucune place n'est reservee a
      la troisieme, la rangee se resserre. Si la place manque, elle se replie au
      lieu de couper un libelle. */
   gap: 6px;
@@ -3231,7 +3231,7 @@ mark.search-highlight {
    LOT 7 de la presentation : le primaire est DESIGNE (classe
    `modal-action-primary`), il n'est plus « le premier bouton du pied ». La
    regle de position ci-dessous est donc NEUTRALISEE pour tout pied qui
-   declare son propre ordre (`modal-actions-cancel-first`) : dans Reglages,
+   declare son propre ordre (`modal-actions-cancel-first`) : dans les Options,
    « Annuler » est desormais a GAUCHE et deviendrait primaire sans cela. Les
    autres fenetres, qui gardent l'ordre « action puis Annuler », ne changent
    pas d'un pixel : elles continuent de passer par ce repli. */

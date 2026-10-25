@@ -195,11 +195,17 @@ function hauteurPanneau(vp) {
 
 /**
  * Decalage vertical reel du panneau depuis le haut de la fenetre, MESURE sur
- * l'agencement en vigueur (Chrome, 1654 et 600 px de large) : bande de fenetre
- * 32 px + rangee d'onglets 37 px (36 px de contenu + 1 px de filet bas) = 69 px.
- * Le panneau s'ouvre donc SOUS la rangee (`top: calc(100% + 1px)` depuis
+ * l'agencement en vigueur (Chrome, 1654 et 600 px de large). La fenetre
+ * commence par la rangee d'onglets (36 px de contenu + 1 px de filet bas) : la
+ * bande de fenetre de 32 px n'existe PLUS. La constante ci-dessous vaut
+ * toutefois encore 69 px (32 + 37), heritage de la MESURE faite du temps de
+ * cette bande : c'est un MAJORANT, qui rend le test plus strict qu'il ne le
+ * faudrait (le panneau est compte 32 px plus bas qu'il ne l'est) et ne masque
+ * donc aucun debordement. La valeur exacte serait 37 px ; la changer est un
+ * changement de test, hors du lot de verite (signale dans le rapport).
+ * Le panneau s'ouvre SOUS la rangee (`top: calc(100% + 1px)` depuis
  * `#agent-activity`, qui fait toute la hauteur de la rangee) : il ne recouvre
- * jamais le bouton « Travail » (bas du bouton a 61 px).
+ * jamais le bouton « Travail ».
  * Avant la suppression de la bande de contexte : 30 px (le panneau s'ouvrait
  * juste sous le bouton, dans la bande de 26 px).
  */

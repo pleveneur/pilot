@@ -1,4 +1,4 @@
-// settings.js — Réglages : onglet de configuration (lot B de
+// settings.js — Options : onglet de configuration (lot B de
 // docs/proposition-reglages-en-onglet.md — ce n'est plus une fenêtre : le nœud
 // `#settings-modal` est déplacé dans le conteneur de l'onglet par
 // `createSettings()`, appelé par tabs.js).
@@ -80,7 +80,7 @@ let savedTheme = "dark";
 let savedSubtheme = "default";
 
 // ── LOT B « Reglages en onglet » (docs/proposition-reglages-en-onglet.md) ──
-// Les Reglages ne sont plus une fenetre : leur noeud `#settings-modal` devient
+// Les Options ne sont plus une fenetre : leur noeud `#settings-modal` devient
 // le contenu d'un ONGLET (deplace, jamais recopie). L'ouverture n'a donc qu'UN
 // chemin : `settingsApi`, renseigne une seule fois a la fin de `initSettings()`.
 // Le bouton du haut de colonne, la palette, le badge distant et les evenements
@@ -419,13 +419,13 @@ export async function initSettings() {
   });
   // ── LOT 7 de la presentation (docs/proposition-presentation-ui.md §3.7) ──
   // Les QUATRE acces directs retires du haut de la colonne par le lot 2 vivent
-  // desormais DANS les Reglages : Coffre fort, Envoyer une remarque, Serveur
+  // desormais DANS les Options : Coffre fort, Envoyer une remarque, Serveur
   // GDS, GDS mon compte. Leur EFFET est inchange et reste cable dans main.js,
   // par identifiant (ouverture de l'onglet).
   // LOT B : plus AUCUN ecouteur ici. La fermeture de la fenetre au clic d'un
   // acces direct (`btnClose.click()`) n'avait qu'un motif — l'onglet ouvert
   // serait reste cache derriere la fenetre — et ce motif a disparu avec la
-  // fenetre : les Reglages sont eux-memes un onglet, qui laisse la place.
+  // fenetre : les Options sont eux-memes un onglet, qui laisse la place.
   const selectTheme = document.getElementById("setting-theme");
   const selectSubtheme = document.getElementById("setting-subtheme");
   // Apercu en direct du theme / sous-theme : applique immediatement le choix
@@ -1958,7 +1958,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     try {
       config = await invoke("get_config");
     } catch (e) {
-      // Réserve R-B : sans configuration lisible, ouvrir les Reglages sur un
+      // Réserve R-B : sans configuration lisible, ouvrir les Options sur un
       // objet par défaut ferait persister ces défauts à l'enregistrement (perte
       // de TOUS les réglages). On ANNULE l'ouverture avec un message clair ;
       // l'onglet, lui, affiche l'echec (aucun formulaire trompeur).
@@ -1979,7 +1979,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     }
   }
 
-  /** Active un onglet interne des Reglages (data-settings-tab). */
+  /** Active un onglet interne des Options (data-settings-tab). */
   function activateSettingsPanel(wanted) {
     if (!wanted) return;
     const tabBtn = modal.querySelector(`.settings-tab[data-settings-tab="${wanted}"]`);
@@ -1988,7 +1988,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
 
   // RETOUR A ZERO — exactement « Annuler » : modifs de fournisseurs annulees,
   // sondes Laya arretees, aucune lecture en cours, apercu de theme annule. Quand
-  // on QUITTE les Reglages (bouton « Annuler » ou ✕ de l'onglet), rien ne reste
+  // on QUITTE les Options (bouton « Annuler » ou ✕ de l'onglet), rien ne reste
   // en arriere-plan et aucun reglage n'est perdu en silence.
   async function resetSettingsContent() {
     await cancelProvidersIfDirty();
@@ -2004,7 +2004,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     applyTheme(savedTheme, savedSubtheme);
   }
 
-  // Le bouton du haut de colonne ouvre l'ONGLET des Reglages (plus de fenetre).
+  // Le bouton du haut de colonne ouvre l'ONGLET des Options (plus de fenetre).
   // La palette, le badge distant et `pilot-open-settings` passent par la meme
   // porte (`openSettingsTab`), qui appelle `openSettingsContent` ci-dessus.
   btnSettings.addEventListener("click", () => {
@@ -2629,7 +2629,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   // Ouvrir depuis l'extérieur (ex: gate E4 dans tabs.js → bouton « Ouvrir les
   // paramètres » quand l'agent est indisponible, ou l'onglet 🧭 Assistant avec
   // { tab: "superagent" }). LOT B : meme porte que le bouton du haut de colonne
-  // — l'onglet des Reglages, sur la categorie demandee.
+  // — l'onglet des Options, sur la categorie demandee.
   window.addEventListener("pilot-open-settings", (e) => {
     openSettingsTab(e && e.detail);
   });
@@ -3235,9 +3235,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     } catch (_) { /* ignore */ }
   });
 
-  // ── LOT B : cablage des Reglages avec l'onglet (UNE seule fois) ──
+  // ── LOT B : cablage des Options avec l'onglet (UNE seule fois) ──
   // `createSettings()` (appele par tabs.js) attend cette promesse : il ne peut
-  // donc pas ouvrir les Reglages avant que tous les ecouteurs ci-dessus soient
+  // donc pas ouvrir les Options avant que tous les ecouteurs ci-dessus soient
   // poses, et `initSettings()` n'est jamais rejoue (aucun ecouteur en double).
   settingsApi.open = openSettingsContent;
   settingsApi.reset = resetSettingsContent;
@@ -3246,7 +3246,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
 }
 
 /**
- * Ouvre l'onglet des Reglages depuis n'importe ou (bouton ⚙️, palette, badge
+ * Ouvre l'onglet des Options depuis n'importe ou (bouton ⚙️, palette, badge
  * distant, evenement `pilot-open-settings`). UN SEUL chemin : le gestionnaire
  * d'onglets, qui rappelle `createSettings()` ci-dessous. Un onglet deja ouvert
  * n'est ni recree ni recharge : on y revient (`switchTab`).
@@ -3256,7 +3256,7 @@ function openSettingsTab(detail = null) {
   // Mode « Assistant seul » (overlay plein écran) : il est quitté AVANT
   // d'ouvrir, quel que soit le chemin (⚙ du haut de colonne, palette, ⚙ de
   // l'assistant, evenement externe). L'overlay vit au-dessus de tout (z-index
-  // eleve) : sans cette sortie, l'onglet des Reglages s'ouvrirait DERRIERE lui.
+  // eleve) : sans cette sortie, l'onglet des Options s'ouvrirait DERRIERE lui.
   if (document.body.classList.contains("superagent-immersive-active")) {
     window.dispatchEvent(new CustomEvent("pilot-exit-assistant-only"));
   }
@@ -3264,14 +3264,14 @@ function openSettingsTab(detail = null) {
   if (tabs && typeof tabs.openSettings === "function") {
     return tabs.openSettings(detail);
   }
-  console.error("Onglet des Réglages indisponible : gestionnaire d'onglets absent.");
+  console.error("Onglet des Options indisponible : gestionnaire d'onglets absent.");
   return Promise.resolve();
 }
 
 /**
- * Contenu de l'ONGLET des Reglages (lot B). Le noeud `#settings-modal` est
+ * Contenu de l'ONGLET des Options (lot B). Le noeud `#settings-modal` est
  * DEPLACE tel quel dans le conteneur de l'onglet : son balisage interne ne
- * change pas d'un caractere, donc tout le contenu valide des Reglages est
+ * change pas d'un caractere, donc tout le contenu valide des Options est
  * conserve. La classe `.modal-in-tab` neutralise uniquement le positionnement
  * de fenetre (voile, `position: fixed`, centrage).
  * @param {HTMLElement} container conteneur de l'onglet (`.settings-wrapper`)
@@ -3283,7 +3283,7 @@ export async function createSettings(container, detail = null) {
   if (!modal) throw new Error("noeud #settings-modal introuvable");
   // Attendre le cablage : l'ouverture peut preceder la fin de `initSettings()`.
   await settingsReady;
-  if (!settingsApi.open) throw new Error("Réglages non cables");
+  if (!settingsApi.open) throw new Error("Options non cables");
 
   // Le noeud devient le contenu de l'onglet (deplacement, jamais copie).
   container.appendChild(modal);
@@ -3311,7 +3311,7 @@ export async function createSettings(container, detail = null) {
       try {
         await settingsApi.reset();
       } catch (e) {
-        console.warn("Fermeture des Réglages:", e);
+        console.warn("Fermeture des Options:", e);
       }
       modal.classList.add("hidden");
       modal.classList.remove("modal-in-tab");

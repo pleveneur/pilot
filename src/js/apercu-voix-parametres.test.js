@@ -233,7 +233,7 @@ describe("un seul apercu a la fois", () => {
     expect(VOICE_PREVIEW_SAMPLE).toMatch(/[éèàêûô]/);
   });
 
-  it("quitter les Reglages arrete l'ecoute en cours", () => {
+  it("quitter les Options arrete l'ecoute en cours", () => {
     const settings = readSource("src/js/settings.js");
     // Annuler (btnClose) et le ✕ de l'onglet passent par le MEME retour a zero.
     // Depuis le lot B (Reglages en onglet), ce retour NE MASQUE PLUS rien :

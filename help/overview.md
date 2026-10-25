@@ -255,9 +255,10 @@ parle pas du sujet.
   de la documentation, pas de tes fichiers ni de la conversation de l'onglet π.
 - Si l'Assistant ne trouve pas la réponse, la documentation à jour reste
   consultable dans les fichiers `spec_*.md` du dépôt du projet.
-- Cette documentation est écrite au démarrage de Pilot dans un dossier de
-  fichiers lisibles (sous-dossier `aide` du dossier de données) : elle
-  correspond donc toujours à la version installée.
+- Cette documentation est **embarquée dans le programme** au moment de la
+  compilation (`help/handbook.md` inclus dans le binaire) : elle correspond donc
+  toujours à la version installée, et il n'existe **aucune copie sur le disque**
+  à ouvrir à côté — l'Assistant est le **seul** chemin pour la lire.
 <!-- /HELP:aide -->
 
 <!-- HELP:dev-mode -->
@@ -630,13 +631,13 @@ d'un hébergement externe type GitHub.
     Après un envoi, un ajout ou une **synchronisation** réussis, l'**explorateur
     se rafraîchit tout seul** : fichiers, **marqueurs Git** et « **voir le
     diff Git** » sont à jour sans rien faire.
-- **Deux écrans transverses** (ouverts **sans projet**) — **icônes du haut de la
-  barre latérale gauche**, voisines de Brouillon, Paramètres, Coffre, Remarque et
-  Aide : la **petite tour** 🖥️ ouvre l'administration (infobulle *« GDS Serveur —
-  administration (onglet transverse, hors projet) »*), les **curseurs** ⚙️ le
-  paramétrage (infobulle *« GDS — paramétrage utilisateur (onglet transverse,
-  hors projet) »*) ; l'onglet **« 🌐 GDS »**, lui, reste **dans le projet**
-  (panneau **Vues**) :
+- **Deux écrans transverses** (ouverts **sans projet**) — rangée **Accès
+  directs** de l'onglet **Options ⚙️** : la **petite tour** 🖥️, bouton
+  **« Serveur GDS »** (infobulle *« GDS Serveur — administration (onglet
+  transverse, hors projet) »*), ouvre l'administration, les **curseurs** ⚙️,
+  bouton **« GDS mon compte »** (infobulle *« GDS — paramétrage utilisateur
+  (onglet transverse, hors projet) »*), le paramétrage ; l'onglet **« 🌐 GDS »**,
+  lui, reste **dans le projet** (panneau **Vues**) :
   - **« 🖥️ GDS Serveur — administration »** : écran à **sous-onglets** —
     **Connexion serveur**, **Comptes** (créer, changer le rôle,
     activer/désactiver, réinitialiser un mot de passe), **Dépôts / projets**

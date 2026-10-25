@@ -1,4 +1,4 @@
-// laya-utils.js — Helpers purs pour le réglage « Service Laya » (onglet Réglages
+// laya-utils.js — Helpers purs pour le réglage « Service Laya » (onglet Options
 // → Service Laya). Traduction des états techniques en messages utilisateur.
 //
 // Aucune dépendance DOM/navigateur : ce module est testable en environnement

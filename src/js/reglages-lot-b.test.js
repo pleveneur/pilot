@@ -1,6 +1,6 @@
 // Tests — lot B « Reglages en onglet » (docs/proposition-reglages-en-onglet.md).
 //
-// Le lot B fait des Reglages un ONGLET : le noeud `#settings-modal` est DEPLACE
+// Le lot B fait des Options un ONGLET : le noeud `#settings-modal` est DEPLACE
 // tel quel dans le conteneur d'onglet (jamais recopie), la fenetre disparait
 // (plus de voile, plus de `position: fixed`, plus de fermeture au clic
 // exterieur). Ces tests tiennent les quatre exigences de la bascule :
@@ -9,7 +9,7 @@
 //   2. le contenu n'est jamais masque (`hidden`) : deux endroits ajoutaient
 //      `hidden` a la fermeture — dans un onglet, cela viderait l'ecran ;
 //   3. fermer l'onglet (✕) vaut « Annuler », par le chemin NORMAL de fermeture ;
-//   4. ouvrir les Reglages quitte d'abord le mode « Assistant seul » (sinon
+//   4. ouvrir les Options quitte d'abord le mode « Assistant seul » (sinon
 //      l'onglet s'ouvre sous l'overlay plein ecran).
 import { describe, it, expect } from "vitest";
 import fs from "fs";
@@ -92,7 +92,7 @@ describe("lot B — un seul chemin d'ouverture, vers l'ONGLET", () => {
     expect(body).toContain("container.appendChild(modal);");
     expect(body).toContain('modal.classList.add("modal-in-tab");');
     expect(body).toContain('modal.classList.remove("hidden");');
-    // Le balisage interne des Reglages n'est pas reecrit par le lot B.
+    // Le balisage interne des Options n'est pas reecrit par le lot B.
     expect(body).not.toContain("innerHTML");
   });
 });
@@ -142,7 +142,7 @@ describe("lot B — fermer l'onglet vaut « Annuler », sans confirmation", () =
   });
 });
 
-describe("lot B — ouvrir les Reglages quitte le mode « Assistant seul »", () => {
+describe("lot B — ouvrir les Options quitte le mode « Assistant seul »", () => {
   it("le chemin unique le fait AVANT d'ouvrir, et l'overlay ecoute", () => {
     const body = bodyOf(settings, "function openSettingsTab(detail = null)");
     expect(body).toContain('document.body.classList.contains("superagent-immersive-active")');

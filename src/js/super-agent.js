@@ -3496,7 +3496,7 @@ export async function createSuperAgent(container) {
   };
   document.addEventListener("keydown", onImmersiveKeydown);
 
-  // Lot B « Reglages en onglet » : ouvrir les Reglages quitte D'ABORD le mode
+  // Lot B « Reglages en onglet » : ouvrir les Options quitte D'ABORD le mode
   // assistant seul. L'overlay immersif vit au-dessus de tout : sans cette
   // sortie, l'onglet ouvert s'afficherait DERRIERE lui (voile plein écran).
   // Écouteur unique, retiré avec les autres à la fermeture de l'onglet 🧭.

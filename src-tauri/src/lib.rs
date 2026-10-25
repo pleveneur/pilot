@@ -2678,7 +2678,7 @@ fn laya_service_start(app: AppHandle, state: State<AppState>) -> laya::LayaOutco
 
 /// Modèle Laya : état du modèle en LECTURE SEULE (dossier effectif, fichiers,
 /// téléchargement en cours, raison du dernier échec). Aucune écriture, aucun
-/// réseau : sert à afficher un état clair dans les Réglages.
+/// réseau : sert à afficher un état clair dans les Options.
 #[tauri::command]
 fn laya_model_state(app: AppHandle, state: State<AppState>) -> laya_download::ModelState {
     let cfg = state.config.lock().unwrap().clone();
@@ -3564,10 +3564,12 @@ pub fn run() {
                     });
                 }
             }
-            // Bande de fenetre Pilot (docs/proposition-barre-fenetre.md) : la
+            // Boutons de fenetre Pilot (docs/proposition-barre-fenetre.md) : la
             // fenetre perd son cadre systeme sous Windows et Linux, car ses
-            // trois boutons vivent desormais dans la bande #window-bar. macOS
-            // conserve son cadre natif (feux tricolores, §6 du document).
+            // trois boutons vivent desormais dans la rangee d'onglets
+            // (#tab-row, groupe #window-controls : la bande #window-bar a ete
+            // supprimee). macOS conserve son cadre natif (feux tricolores, §6
+            // du document).
             #[cfg(not(target_os = "macos"))]
             {
                 if let Some(win) = app.get_webview_window("main") {

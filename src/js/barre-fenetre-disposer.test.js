@@ -11,8 +11,8 @@
 //   4. Echap ferme le menu, et un appui hors du menu le ferme aussi ;
 //   5. la fenetre est REELLEMENT placee : restauration si elle est agrandie,
 //      puis position et taille de la cible (plein ecran = agrandissement) ;
-//   6. le menu vit AU-DESSUS de la bande de fenetre (jamais dessous) et suit
-//      les jetons de surface, donc le theme sombre comme le theme clair.
+//   6. le menu s'ouvre AU-DESSUS des boutons de fenetre (jamais dessous) et
+//      suit les jetons de surface, donc le theme sombre comme le theme clair.
 //
 // Tous les decoupages passent par sliceSource (source-slice.js) : une ancre
 // absente fait ECHOUER le test au lieu de rendre une assertion negative vraie
@@ -131,7 +131,7 @@ describe("3. le menu ne s'ouvre QU'AU CLIC DROIT", () => {
     expect(boutonMax).toContain("e.preventDefault()");
   });
 
-  it("aucun autre element de la bande n'ouvre le menu", () => {
+  it("aucun autre element de la rangee d'onglets n'ouvre le menu", () => {
     const init = sliceSource(js, "export function initWindowControls()", "\n  // LOT 0.5 : fermeture du menu", 500);
     for (const ligne of init.split("\n")) {
       if (!ligne.includes("openDisposeMenu(")) continue;

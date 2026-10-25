@@ -46,9 +46,10 @@ use std::os::windows::process::CommandExt;
 /// Toujours synchro avec la version installée.
 pub const HANDBOOK: &str = include_str!("../../help/handbook.md");
 
-/// Un tour de la conversation d'aide (côté frontend). L'historique est géré par
-/// `help.js` et réinjecté à chaque question (le process pi est `--no-session`,
-/// sans mémoire entre les tours).
+/// Un tour de la conversation d'aide. L'historique était géré par l'ancien
+/// module d'écran `help.js` (retiré avec l'écran « ❓ Aide ») et réinjecté à
+/// chaque question (le process pi est `--no-session`, sans mémoire entre les
+/// tours). Il ne sert plus qu'à l'emballage `ask_help`, sans appelant côté écran.
 #[derive(Deserialize, Clone)]
 pub struct HelpTurn {
     pub role: String, // "user" | "assistant"
@@ -66,8 +67,9 @@ pub fn get_handbook() -> String {
 // Cette brique existait déjà, mêlée à l'écran « ❓ Aide » : corpus embarqué +
 // construction du prompt + processus pi temporaire cadré. Elle est désormais
 // **extraite** et rend un résultat **structuré**, pour être utilisable par
-// d'autres appelants (l'Assistant notamment) sans rien réinventer. L'écran Aide
-// reste un simple emballage (`ask_help`), son comportement ne change pas.
+// d'autres appelants (l'Assistant notamment) sans rien réinventer. L'écran
+// « ❓ Aide » a été RETIRÉ : `ask_help` n'est plus qu'un emballage historique
+// conservé, sans appelant côté écran.
 
 /// Plafond de sortie d'une réponse rendue par la brique documentaire.
 pub const MAX_ANSWER_CHARS: usize = 6000;
@@ -327,9 +329,10 @@ pub fn ask_help_doc(
     answer_from_handbook(&state, &question)
 }
 
-/// Commande de l'écran « ❓ Aide » : **simple emballage** de la brique
-/// (`run_help_prompt` + prompt avec historique). Comportement inchangé côté
-/// interface : même modèle (`config.help_model`), même message d'erreur quand
+/// Commande de l'ancien écran « ❓ Aide » (retiré) : **simple emballage** de la
+/// brique (`run_help_prompt` + prompt avec historique). Elle n'a plus
+/// d'appelant côté écran ; son comportement est inchangé quand elle est
+/// appelée : même modèle (`config.help_model`), même message d'erreur quand
 /// aucun modèle n'est choisi, même retour texte.
 #[tauri::command]
 pub fn ask_help(

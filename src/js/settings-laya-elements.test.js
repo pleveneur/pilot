@@ -2,12 +2,12 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 // Garde anti-régression (défaut trouvé le 27/09/2026) : un élément Laya utilisé
-// dans l'enregistrement des Réglages mais jamais DÉCLARÉ faisait échouer TOUS
+// dans l'enregistrement des Options mais jamais DÉCLARÉ faisait échouer TOUS
 // les enregistrements de réglages (ReferenceError sur l'identifiant inconnu),
 // et le bouton « Choisir le programme… » de l'interpréteur restait sans effet.
 const source = readFileSync(new URL("./settings.js", import.meta.url), "utf8");
 
-describe("Réglages — éléments Laya", () => {
+describe("Options — éléments Laya", () => {
   it("déclare chaque élément Laya (input/chk/btn) qu'il utilise", () => {
     const used = [...new Set(source.match(/\b(?:input|chk|btn)Laya[A-Za-z]+/g) || [])].sort();
     const declared = new Set(

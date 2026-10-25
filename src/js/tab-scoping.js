@@ -40,8 +40,8 @@ export function findAgentTab(tabs, agentId, projectPath) {
 // 2026-10-21). Règle propriétaire : l'écran ne commande plus le travail, un
 // changement/une fermeture de projet ne ferme plus cet onglet.
 //
-// `settings` (Reglages) appartient a cette liste depuis le lot B de
-// docs/proposition-reglages-en-onglet.md : les Reglages sont un ONGLET
+// `settings` (Options) appartient a cette liste depuis le lot B de
+// docs/proposition-reglages-en-onglet.md : les Options sont un ONGLET
 // transverse, ouvert sans projet, qui survit donc aux bascules et fermetures de
 // projet (il ne se ferme que par son propre ✕).
 const GLOBAL_TAB_MODES = new Set(["superagent", "dashboard", "gds-admin", "gds-params", "agents", "settings"]);

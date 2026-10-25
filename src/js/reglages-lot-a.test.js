@@ -1,7 +1,7 @@
 // Tests — Reglages en onglet : invariants du lot A
 // (docs/proposition-reglages-en-onglet.md § 7), tenus APRES la bascule du lot B.
 //
-// Le lot B fait des Reglages un ONGLET (le noeud `#settings-modal` y est
+// Le lot B fait des Options un ONGLET (le noeud `#settings-modal` y est
 // deplace). Ces tests tiennent les invariants qui rendent la bascule sure :
 //   1. le remplissage des champs n'existe qu'a UN endroit (il est reutilise,
 //      jamais recopie) ;
@@ -90,7 +90,7 @@ describe("lot A — l'apercu de theme ne s'empile plus", () => {
   });
 });
 
-describe("lot B — les Reglages sont un ONGLET, plus une fenetre", () => {
+describe("lot B — les Options sont un ONGLET, plus une fenetre", () => {
   it("ouvrir DEPLACE le noeud dans l'onglet, puis remplit les champs", () => {
     // Le noeud n'est pas recopie : il est deplace tel quel dans le conteneur de
     // l'onglet et prend la classe qui neutralise le positionnement de fenetre.
@@ -115,7 +115,7 @@ describe("lot B — les Reglages sont un ONGLET, plus une fenetre", () => {
 });
 
 describe("lot A — le mode d'onglet « settings » est declare transverse", () => {
-  it("une bascule de projet ne ferme pas l'onglet des Reglages", () => {
+  it("une bascule de projet ne ferme pas l'onglet des Options", () => {
     expect(shouldCloseTab({ mode: "settings" }, false)).toBe(false);
     expect(shouldCloseTab({ mode: "settings" }, true)).toBe(false);
     // Les onglets lies a un fichier restent fermes : rien n'est relache.
@@ -128,7 +128,7 @@ describe("lot A — le mode d'onglet « settings » est declare transverse", () 
   });
 });
 
-describe("lot A — le style de l'onglet ne touche que les Reglages", () => {
+describe("lot A — le style de l'onglet ne touche que les Options", () => {
   const css = readSource("src/css/style.css");
 
   it("le conteneur d'onglet et le noeud neutralise sont prevus", () => {
