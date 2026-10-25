@@ -1,7 +1,12 @@
-// help.rs — Aide intégrée « ❓ Aide » (spec_help.md).
+// help.rs — Réponse sur la documentation de Pilot (spec_help.md).
 //
-// L'utilisateur pose une question sur l'utilisation/paramétrage de Pilot ; un
-// LLM répond en se basant sur le **handbook** (doc condensée embarquée).
+// On répond à une question sur l'utilisation/paramétrage de Pilot en se basant
+// sur le **handbook** (doc condensée embarquée). Deux usages :
+//   - le socle structuré (`answer_from_handbook` → `ask_help_doc`), appelé par
+//     l'outil `answer_from_documentation` de l'Assistant — c'est le point
+//     d'entrée depuis le retrait de l'écran « ❓ Aide » ;
+//   - l'emballage historique (`ask_help`, avec historique), conservé mais sans
+//     appelant côté écran.
 //
 // Option A (pi cadré) — Niveau 1 : on lance un **processus pi temporaire**
 // `pi --mode rpc --no-session`, on lui envoie un prompt fortement cadré
@@ -258,7 +263,7 @@ pub(crate) fn resolve_help_doc_model(
         .map(|(provider, model_id)| format!("{}/{}", provider, model_id))
         .ok_or_else(|| {
             "Aucun modèle disponible pour répondre à partir de la documentation : choisis un \
-             modèle dans ⚙️ → Assistant (ou dans l'onglet Aide)."
+             modèle dans ⚙️ → Assistant."
                 .to_string()
         })
 }
@@ -334,7 +339,7 @@ pub fn ask_help(
 
     if help_model.trim().is_empty() {
         return Err(
-            "Aucun modèle configuré pour l'aide. Sélectionne un modèle dans la liste déroulante de l'onglet Aide."
+            "Aucun modèle configuré pour l'aide. Choisis un modèle dans ⚙️ → Assistant."
                 .to_string(),
         );
     }
@@ -558,7 +563,8 @@ fn collect_stream(rx: &mpsc::Receiver<String>, timeout: Duration) -> Result<Stri
 /// l'accusé de chacune** avant la suivante, collecte la réponse streamée,
 /// puis tue le process. Le modèle (format "provider/modelId") est obligatoire.
 ///
-/// **Réutilisé** par l'onglet « ❓ Aide » (`ask_help`), l'onglet « 🔍 Review »
+/// **Réutilisé** par l'emballage `ask_help` (historique, sans appelant côté
+/// écran), l'onglet « 🔍 Review »
 /// (`review::ask_review`) et la génération/mise à jour d'`AGENTS.md`
 /// (`agents_md::generate_agents_md`) : tout usage d'un pi temporaire cadré (pas
 /// de session persistante, pas de pollution de la session de coding principale)
@@ -656,7 +662,7 @@ pub fn ask_pi_caged_timed(
             .map_err(|e| format!("Erreur envoi set_model : {}", e))?;
             wait_response(&rx, "set_model", Duration::from_secs(30)).map_err(|e| {
                 format!(
-                    "Modèle d'aide « {} » invalide : {} — sélectionne un autre modèle dans la liste déroulante",
+                    "Modèle d'aide « {} » invalide : {} — choisis un autre modèle dans ⚙️ → Assistant",
                     m, e
                 )
             })?;

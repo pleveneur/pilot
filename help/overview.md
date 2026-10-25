@@ -175,22 +175,21 @@ externe.
   cloud.
 <!-- /HELP:edition-lint -->
 <!-- HELP:aide -->
-## Aide intégrée (❓)
+## Réponses sur la documentation (l'Assistant répond)
 
-Le bouton **❓** du panneau d'actions ouvre l'onglet **Aide** : un assistant
-conversationnel qui répond à tes questions sur l'utilisation et le paramétrage de
-Pilot, **à partir de la documentation embarquée** (handbook généré à la
-compilation depuis les specs).
+Il n'y a **plus d'onglet ni de bouton « Aide »**. Pour une question sur
+l'utilisation ou le paramétrage de Pilot, pose-la à l'**Assistant** (onglet
+🧭) : il répond **à partir de la documentation embarquée** (handbook généré à la
+compilation depuis les specs) et te dit clairement quand la documentation ne
+parle pas du sujet.
 
-- **Liste déroulante de modèle** en haut de l'onglet : choisis le modèle
-  d'inférence utilisé pour l'aide (persisté dans les Paramètres, champ
-  `help_model`). Le 1er modèle disponible est auto-sélectionné au 1er usage.
-- L'aide est **isolée** de l'agent de coding : elle n'a accès ni à tes fichiers, ni
-  à la conversation de l'onglet π — uniquement à la documentation.
-- L'historique de la conversation d'aide est conservé tant que l'onglet est
-  ouvert (réinjecté à chaque question, le process pi étant sans mémoire).
-- Si la réponse est vide ou en erreur, vérifie qu'un **modèle valide** est
-  sélectionné dans la liste déroulante.
+- Rien à régler : l'Assistant choisit lui-même le bon modèle (le réglage
+  `help_model` reste présent en configuration comme repli, il n'est plus édité
+  à l'écran).
+- La réponse est **isolée** de l'agent de coding : elle est construite à partir
+  de la documentation, pas de tes fichiers ni de la conversation de l'onglet π.
+- Si l'Assistant ne trouve pas la réponse, la documentation à jour reste
+  consultable dans les fichiers `spec_*.md` du dépôt du projet.
 <!-- /HELP:aide -->
 
 <!-- HELP:dev-mode -->

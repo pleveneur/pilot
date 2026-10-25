@@ -312,9 +312,10 @@ stable.
 - **Aucun serveur GDS par défaut** et **aucune config GDS globale** de Pilot
   (pas de champ `gds_*` dans la config applicative). Sans activation, le projet
   reste 100 % local (cf. §7.1).
-- **Aide intégrée** : l'aide sur le GDS est **générale à Pilot** (bloc
-  `HELP:gds` de `help/overview.md` → handbook) — **pas** d'aide spécifique
-  par projet.
+- **Réponse sur la documentation** : la réponse sur le GDS est **générale à
+  Pilot** (bloc `HELP:gds` de `help/overview.md` → handbook) — **pas** de
+  réponse spécifique par projet. Elle est servie par l'onglet 🧭 Assistant (il
+  n'y a plus d'onglet « ❓ Aide »).
 
 ---
 

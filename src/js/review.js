@@ -10,7 +10,8 @@
 // fichier du projet (cwd = dossier temporaire). L'historique de revue est géré
 // côté frontend et réinjecté à chaque tour (le process pi est sans mémoire).
 //
-// Réutilise les styles `.help-*` (rendu cohérent avec l'onglet Aide) + un
+// Réutilise les styles `.help-*` (famille des écrans de chat transverses, née
+// avec l'ancien onglet Aide et partagée avec l'Historique des sessions) + un
 // sélecteur de portée (scope) et un bouton « Lancer la revue ».
 
 import { invoke } from "@tauri-apps/api/core";

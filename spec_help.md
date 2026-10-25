@@ -1,12 +1,14 @@
-# Spec — Aide intégrée « ❓ Aide » (LLM sur la documentation Pilot)
+# Spec — Réponse sur la documentation de Pilot (« Aide »)
 
-> Fonctionnalité d'aide en langage naturel : l'utilisateur pose une question sur
-> l'utilisation / le paramétrage de Pilot, un LLM répond en se basant sur le
-> **handbook** (doc condensée, orientée utilisateur, toujours à jour).
+> Répondre en langage naturel à une question sur l'utilisation / le paramétrage
+> de Pilot, à partir du **handbook** (doc condensée, orientée utilisateur,
+> toujours à jour).
 >
-> **Statut : Niveau 1 (MVP) — Option A (pi cadré).**
-> La brique « répondre à partir de la documentation » est désormais un **socle
-> réutilisable** (§4.4), utilisable hors de l'écran Aide (destinée à l'Assistant).
+> **Statut : l'ÉCRAN « ❓ Aide » a été RETIRÉ.** Le bouton du haut de la colonne,
+> l'onglet Aide, son module d'écran et son mode d'onglet n'existent plus (§9).
+> La brique qui répond reste — c'est le **socle** (§4.4) et son **outil pour
+> l'Assistant** (§4.5) : c'est l'onglet **Assistant** qui répond désormais sur
+> la documentation. Ordre décidé : l'outil d'abord, le retrait ensuite.
 
 ---
 
@@ -15,33 +17,34 @@
 Permettre à l'utilisateur d'obtenir de l'aide contextuelle sur Pilot sans
 quitter l'application, en langage naturel. La base de connaissance (handbook)
 est **générée à la compilation** depuis la documentation du projet et reste
-donc synchronisée avec la version installée.
+donc synchronisée avec la version installée. **Le point d'entrée est l'onglet
+Assistant (🧭)**, il n'y a plus d'écran d'aide séparé.
 
-## 2. Architecture (Niveau 1)
+## 2. Architecture
 
 ```
-┌─ Frontend (src/js/help.js) ──────────────────────────────────┐
-│  Onglet « ❓ Aide » (chat conversationnel)                     │
-│  ├─ Historique d'aide (côté frontend, réinjecté à chaque tour)│
-│  └─ invoke("ask_help", { question, history })                │
+┌─ Frontend ────────────────────────────────────────────────────┐
+│  Onglet Assistant (🧭) — src/js/super-agent.js                 │
+│  └─ outil `answer_from_documentation(question)`               │
+│     relayé par le sentinel PILOT_ASSISTANT_DOC:: (§4.5)       │
+│     → invoke("ask_help_doc", { question })                    │
 └────────────────────────┬─────────────────────────────────────┘
                          │
-┌─ Backend (src-tauri/src/help.rs) ────────────────────────────┐
-│  get_handbook → include_str!("../../help/handbook.md")       │
-│  ask_help(app, question, history):                           │
-│    1. Construit le prompt cadré (handbook + cadrage +        │
-│       historique + question)                                  │
-│    2. ask_pi_for_help(cwd, pi_path, prompt):                  │
-│       spawn pi --mode rpc --no-session (PROCESS TEMPORAIRE)  │
-│       → new_session → prompt → collecte → kill               │
-│    3. Retourne le texte de réponse                             │
-└───────────────────────────────────────────────────────────────┘
+┌─ Backend (src-tauri/src/help.rs) ────────────────────────┐
+│  HANDBOOK → include_str!("../../help/handbook.md")      │
+│  answer_from_handbook(state, question) → HandbookAnswer │
+│  ask_help_doc(question)  = la commande du socle          │
+│  ask_help(question, history) = emballage historique      │
+│    (pi --mode rpc --no-session, process TEMPORAIRE)     │
+└─────────────────────────────────────────────────────────┘
 ```
 
-**Isolation** : l'aide utilise un **processus pi temporaire `--no-session`**
-(pattern identique à `convert_text_with_pi` dans `rpc_manager.rs`). La session
-de coding principale (`rpc_state`) n'est **jamais touchée** → aucune pollution,
-aucune modif de `rpc_manager.rs`.
+**Isolation** : un **processus pi temporaire `--no-session`**. La session de
+coding principale (`rpc_state`) n'est **jamais touchée** → aucune pollution.
+
+> L'écran Aide appelait `ask_help` (historique réinjecté côté front). L'écran
+> étant retiré, plus aucun fichier de `src/js/` n'appelle `ask_help` ; la
+> commande reste enregistrée (socle) et n'a **pas** été supprimée.
 
 ## 3. Source de connaissance — le handbook
 
@@ -141,27 +144,22 @@ Nouvelle question : <question>
 ### 4.2 Modèle utilisé
 
 Pi `--no-session` n'a **pas de modèle par défaut** : sans `set_model` explicite,
-le prompt ne produit aucune réponse → erreur « Aucune réponse reçue ».
-L'aide envoie donc un `set_model` avant le prompt, avec le modèle sélectionné
-dans l'UI.
+le prompt ne produit aucune réponse → erreur « Aucune réponse reçue ». Le socle
+résout donc un modèle avant chaque appel (§4.4).
 
-**Sélecteur de modèle** : une liste déroulante en haut de l'onglet Aide, peuplée
-via `get_available_models_list` (modèles de `~/.pi/agent/models.json`). Le choix
-est **persisté** dans la config Pilot (`help_model`, format `provider/modelId`) via
-la commande `set_help_model`.
+**Réglage `help_model` — CONSERVÉ** (ne pas le supprimer, ni le renommer) :
 
-- Si `help_model` est vide à l'ouverture de l'onglet, le **1er modèle** de la
-  liste est auto-sélectionné et persisté (l'aide fonctionne immédiatement, sans
-  action utilisateur).
-- `ask_help` refuse de répondre tant qu'aucun modèle n'est sélectionné (erreur
-  claire côté UI).
-- `set_model` est envoyé après `new_session` et avant le `prompt` (même flux que
-  `convert_text_with_pi`). Un échec `set_model` (modèle invalide) est détecté
-  (event `success:false`) et remonté comme erreur à l'utilisateur.
+- il est toujours **préservé** par `settings.js` dans l'objet config renvoyé à
+  `save_config` (sinon un enregistrement des Paramètres l'écraserait) ;
+- c'est le **repli de la Revue de code** (modèle de revue, sinon `help_model`,
+  sinon premier modèle disponible) ;
+- c'est l'étage intermédiaire de la résolution du socle (modèle de l'Assistant →
+  `help_model` → défaut de la configuration) ;
+- la commande `set_help_model` reste enregistrée.
 
-**Préservation** : `settings.js` inclut `help_model` dans l'objet config renvoyé à
-`save_config` (pour ne pas écraser le modèle choisi à chaque sauvegarde des
-Paramètres).
+> Depuis le retrait de l'écran (§9), **plus aucun écran n'édite `help_model`** :
+> l'ancienne liste déroulante en haut de l'onglet a disparu. La valeur reste
+> lisible en configuration et sert de repli — c'est volontaire.
 
 ### 4.4 Socle réutilisable — « répondre à partir de la documentation »
 
@@ -212,18 +210,20 @@ au tour suivant.
 ### 4.3 Historique multi-tours
 
 Le process pi étant `--no-session` et tué après chaque réponse, il n'a pas de
-mémoire entre les tours. L'historique d'aide est **géré côté frontend**
-(`help.js`) et **réinjecté** dans le prompt à chaque tour → continuité.
+mémoire entre les tours. **Le socle (`ask_help_doc`) n'a volontairement aucun
+historique** : une seule entrée, la question (§4.4). L'emballage `ask_help`
+accepte, lui, un historique — il servait à l'écran Aide, désormais retiré.
 
 ## 5. UX
 
-- Onglet **« ❓ Aide »** dans la barre d'onglets (à côté de « π Agent »).
-- **Liste déroulante de modèle** en haut de l'onglet (choix persisté).
-- Chat conversationnel (même style visuel que l'agent Pi, Markdown rendu).
-- **Pas de FAQ/suggestions** au démarrage (choix utilisateur).
-- **Non-streaming** (Niveau 1) : spinner « thinking » pendant la
-  génération. Le streaming est prévu au Niveau 2.
-- Badge « Basé sur la doc Pilot » (statique, Niveau 1 ; version auto au Niveau 2).
+- **Aucun écran d'aide dédié.** Le point d'entrée est la conversation de
+  l'**Assistant** (🧭) : on lui pose la question, il appelle l'outil
+  `answer_from_documentation` et répond (Markdown, sections recoupées).
+- Le haut de la colonne de gauche ne garde que **deux portes** : « Brouillon » et
+  « Réglages ». Aucune porte de remplacement n'a été ajoutée (aucune place
+  réservée).
+- Quand la documentation ne dit rien, la réponse le dit explicitement ; si elle
+  est trop longue, la coupure est annoncée.
 
 ## 6. Maintenance (mise à jour au fil des évolutions)
 
@@ -260,7 +260,30 @@ mémoire entre les tours. L'historique d'aide est **géré côté frontend**
 | `src-tauri/extensions/pilot-assistant-doc.ts` | Outil `answer_from_documentation` de l'Assistant (§4.5) : une entrée (la question), plafond 1 appel/tour, sortie honnête |
 | `src/js/super-agent.js` | Relais du sentinel `PILOT_ASSISTANT_DOC::` → `ask_help_doc` (point unique) |
 | `src/js/assistant-outil-doc.test.js` | Câblage (extension + déclaration ×2 + relais + sentinel identique) + plafond + sortie honnête |
-| `src/js/help.js` | Onglet Aide : chat, historique, envoi, rendu Markdown |
-| `index.html` | Onglet « ❓ Aide » + zone chat |
-| `src/css/style.css` | Styles (réutilise une partie de agent-pi) |
+| `src/js/help.js` | **Supprimé** — l'onglet Aide n'existe plus (§9) |
+| `index.html` | **Plus de bouton « Aide »** ni de zone chat d'aide (§9) |
+| `src/css/style.css` | Styles `.help-*` — **conservés** : partagés par la Revue (`.review-chat`) et l'Historique (`.history-chat`) |
+| `src/js/retrait-ecran-aide.test.js` | Verrou du retrait : bouton, mode `help`, module, styles partagés, socle |
 | `package.json` | Script `build:handbook` + hook `prebuild` |
+
+## 9. Retrait de l'écran Aide (livré)
+
+| Élément retiré | Détail |
+|---|---|
+| Bouton « Aide » (`#btn-help`) | Retiré de `#global-actions` (`index.html`) ; aucun câblage restant dans `main.js`. |
+| Onglet Aide (mode `help`) | Branche d'ouverture, méthode `_openHelp`, nettoyages `unlistenHelp`, entrée de la table des modes spéciaux et de la garde de renommage : tout a disparu de `tabs.js`. |
+| Module d'écran | `src/js/help.js` supprimé (plus aucun import). |
+
+**Conservé volontairement :**
+
+| Élément | Pourquoi |
+|---|---|
+| Styles `.help-*` | Partagés par la Revue de code et l'Historique des sessions (même en-tête, mêmes bulles, même zone de saisie). |
+| `help_model` + `set_help_model` | Repli de la Revue de code et étage de résolution du modèle du socle. |
+| Socle `answer_from_handbook` / `ask_help_doc`, outil `answer_from_documentation` et son plafond d'appels | C'est ce qui permet à l'Assistant de répondre. |
+| Commandes `ask_help` et `get_handbook` | Restées enregistrées dans le socle : **plus aucun appelant côté écran** (signalé, non supprimées). |
+
+**Comment le retrait est tenu** : `src/js/retrait-ecran-aide.test.js` rougit si le
+bouton revient (le haut repasserait à 3 boutons), si le mode `help` revient dans
+`tabs.js`, si `help.js` réapparaît, ou si un style partagé / le socle est
+supprimé. `src/js/lot2-colonne-haut.test.js` est mis à jour (deux portes nommées).

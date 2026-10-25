@@ -360,12 +360,13 @@ appelé **en tête** des trois fonctions d'avis existantes :
   **rouges** (`expected [] to deeply equal [Array(1)]`), restauration → 13 tests
   **verts**, arbre de travail propre.
 
-## 7. Aide intégrée
+## 7. Documentation embarquée (handbook)
 
 Bloc `<!-- HELP:telegram -->` ci-dessus, agrégé par `scripts/build-handbook.js`
 (source ajoutée à la liste `SOURCES`) puis embarqué via `include_str!` :
-l'onglet ❓ Aide répond donc sur les notifications Telegram. Le réglage associé
-est rangé dans **Paramètres ⚙️ → onglet Assistant**.
+la réponse sur la documentation donnée par l'onglet 🧭 Assistant porte donc
+aussi sur les notifications Telegram (il n'y a plus d'onglet « ❓ Aide »). Le
+réglage associé est rangé dans **Paramètres ⚙️ → onglet Assistant**.
 
 ## 8. Limites assumées
 

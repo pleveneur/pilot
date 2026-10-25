@@ -283,8 +283,8 @@ machine ou ton réseau, au lieu d'un hébergement externe.
 - **Synchronisation sans verrou** : plusieurs postes peuvent travailler en même
   temps sur un projet ; l'écriture la plus récente fait foi et les conflits
   détectés sont **signalés** (jamais d'écrasement totalement silencieux).
-- **Aide intégrée** : le bouton **❓** répond aussi aux questions sur le GDS
-  (rôles, serveur, synchronisation).
+- **Réponse sur la documentation** : l'Assistant (🧭) répond aussi aux questions
+  sur le GDS (rôles, serveur, synchronisation).
 
 ---
 
@@ -302,18 +302,20 @@ version est signée numériquement pour garantir son authenticité.
 
 ---
 
-## Aide intégrée (❓)
+## Réponses sur la documentation
 
-Pilot intègre un **assistant d'aide** : bouton **❓** du panneau d'actions
-(bas de la barre latérale). Pose ta question en langage naturel sur
- l'utilisation ou le paramétrage de l'éditeur (raccourcis, agent Pi, accès
-distant, dictée vocale, PDF, etc.) — l'IA répond à partir de la
-**documentation embarquée** (handbook généré à partir des specs, toujours à jour
-avec ta version de Pilot).
+Demande-le à l'**Assistant** (onglet **🧭 Assistant**) : il sait répondre en
+langage naturel sur l'utilisation ou le paramétrage de l'éditeur (raccourcis,
+agent Pi, accès distant, dictée vocale, lecture à voix haute, PDF, GDS, etc.) à
+partir de la **documentation embarquée** (handbook généré à partir des specs,
+toujours à jour avec ta version de Pilot) — il te suffit de le lui demander, ou
+il va chercher la réponse de lui-même quand ta question porte sur Pilot.
 
-- **Isolée** de l'agent de coding : l'aide n'a accès ni à tes fichiers, ni à la
-  conversation de l'onglet π — uniquement à la documentation.
-- L'historique de la conversation d'aide est conservé tant que l'onglet est ouvert.
+- **Isolé** de l'agent de coding : la réponse est construite uniquement à partir
+  de la documentation, jamais à partir de tes fichiers ni de la conversation de
+  l'onglet π.
+- Il n'y a **plus d'onglet ni de bouton « Aide »** : la question sur Pilot se
+  pose dans la conversation de l'Assistant, comme le reste du suivi.
 - Voir `spec_help.md` pour le détail.
 
 ## Envoyer une remarque ou une idée (💬)
@@ -496,7 +498,7 @@ pilot/
 ├── spec_cinq_regles_chaine_agents.md # Les 5 règles de la chaîne d'agents et leurs tests
 ├── plan_dev.md               # Plan de développement
 ├── README.md                 # Ce fichier
-├── help/                     # Aide intégrée (handbook)
+├── help/                     # Documentation embarquée (handbook généré)
 ├── scripts/                  # Build handbook, release, latest.json
 ├── src/                      # Frontend (HTML/CSS/JS)
 │   ├── css/style.css

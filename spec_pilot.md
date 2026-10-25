@@ -56,7 +56,7 @@ Trois zones : **Barre Latérale** (gauche), **Zone de Travail** (droite), **Pann
 
 ### Features transverses (une spec dédiée par sujet)
 - **Accès distant web** : serveur axum + UI `web/` (consultation, chat, dictée vocale), auth argon2 + token opaque + sessions, rate limiting, audit ; automatisation Tailscale Serve opt-in (HTTPS 443, URL + QR code) → [`spec_web_remote.md`](spec_web_remote.md).
-- **Aide intégrée ❓** : chat LLM sur le handbook embarqué (doc condensée générée à la compilation depuis les blocs HELP des specs) via un process pi temporaire cadré, isolé de l'agent de coding → [`spec_help.md`](spec_help.md).
+- **Réponse sur la documentation** : il n'y a plus d'onglet ni de bouton « Aide » ; c'est l'onglet 🧭 Assistant qui répond sur l'utilisation et le paramétrage de Pilot, à partir du handbook embarqué (doc condensée générée à la compilation depuis les blocs HELP des specs), par son outil dédié — isolé de l'agent de coding → [`spec_help.md`](spec_help.md).
 - **Context Engine 📑** : injection automatique du contexte projet avant le 1er prompt (budget de tokens configurable, bouton de ré-injection) → [`spec_context_engine.md`](spec_context_engine.md).
 - **Mémoire de projet 📝** : `PROJECT_MEMORY.md` tenu par l'agent (conventions, pièges, décisions, dépendances), injecté avant chaque tâche, extraction opt-in après une tâche réussie → [`spec_project_memory.md`](spec_project_memory.md).
 - **Git intégré** : badges de statut dans l'explorateur (`M`/`A`/`D`/`?`, dossiers contenant une modification marqués `•`) + diff visuel read-only (CLI `git`, zéro dépendance Cargo).

@@ -59,7 +59,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Accès distant web | `spec_web_remote.md` |
 | Dictée vocale | `spec_voice_input.md` |
 | Service Laya (classification locale) | `spec_laya.md` |
-| Aide intégrée (LLM sur la doc) | `spec_help.md` |
+| Réponse sur la documentation (ex-aide intégrée ❓) | `spec_help.md` |
 | Revue de code assistée (H5) | `spec_review.md` |
 | Lecture des réponses à voix haute (bouton 🔊, réglage unique de la voix, voix française locale hors ligne) | `spec_read_aloud.md` |
 | Conversation parlée interruptible (couper Pilot en pleine phrase) — document de conception à trancher | `docs/architecture-conversation-vocale-interruptible.md` |
@@ -124,7 +124,7 @@ pilot/
 ├── spec_voice_input.md        # Spécifications dictée vocale (implémenté)
 ├── spec_quality_gate.md       # Spécifications quality-gate interne (implémenté)
 ├── spec_cinq_regles_chaine_agents.md # SOURCE UNIQUE des 5 règles de la chaîne d'agents : garantie + test qui la tient
-├── spec_help.md               # Spécifications aide intégrée (LLM sur la doc)
+├── spec_help.md               # Réponse sur la documentation : socle + outil de l'Assistant (l'écran « Aide » a été retiré)
 ├── spec_review.md             # Spécifications revue de code assistée (H5)
 ├── spec_read_aloud.md         # Lecture des réponses à voix haute (bouton 🔊 + réglage UNIQUE de la voix : Paramètres → Assistant → Lecture des réponses)
 ├── spec_context_engine.md    # Spécifications Context Engine (H1, auto-contexte agent)
@@ -142,7 +142,7 @@ pilot/
 ├── plan_dev.md                # Plan de développement (résumé, ce qui reste)
 ├── idees_evolutions.md        # Idées d'évolutions futures
 ├── README.md                  # Documentation utilisateur
-├── help/                      # Aide intégrée (handbook)
+├── help/                      # Documentation embarquée (handbook généré)
 │   ├── overview.md           # Source des généralités (rédigé, orienté utilisateur)
 │   └── handbook.md           # GÉNÉRÉ (ne pas éditer) — embarqué via include_str!
 ├── scripts/
@@ -188,8 +188,7 @@ pilot/
 │       ├── languages.js       # Multi-langages CodeMirror 6 (lazy loading, folding)
 │       ├── file-list.js       # Liste fichiers pour auto-complétion CodeMirror
 │       ├── settings.js        # Modale des paramètres
-│       ├── help.js           # Onglet « ❓ Aide » : chat LLM sur le handbook
-│       ├── review.js         # Onglet « 🔍 Review » : revue de code assistée (H5, pi temporaire cadré)
+│       ├── review.js         # Onglet « 🔍 Review » : revue de code assistée (H5, pi temporaire cadré ; réutilise les styles .help-*)
 │       ├── context-engine.js  # Context Engine (H1) : injection auto-contexte projet avant 1er prompt
 │       ├── code-graph.js      # Code Graph : bloc graphe injecté + wiki + état/rebuild
 │       ├── code-graph-view.js # Onglet « Graphe » (Option C) : état + boutons + visualisation 2D force-graph
@@ -275,7 +274,7 @@ pilot/
         ├── rpc.rs            # Agent RPC pi : prompts, reviewer, sonde backend (sessions dans l'AgentService)
         ├── agents.rs         # Commandes agents multi-rôles H2 V2 → délèguent à AgentService.start/send/stop
         ├── agents_md.rs      # Génération / mise à jour d'AGENTS.md par l'IA
-        ├── help.rs           # Aide intégrée : handbook (include_str) + ask_help (pi temporaire cadré)
+        ├── help.rs           # Réponse sur la documentation : handbook (include_str) + socle `answer_from_handbook` / `ask_help_doc` (+ `ask_help`/`get_handbook`, sans appelant côté écran depuis le retrait de l'onglet Aide)
         ├── review.rs         # Revue de code (H5) : ask_review (pi temporaire cadré sur diff Git)
         ├── rpc_manager.rs    # Gestion processus pi --mode rpc
         ├── tailscale.rs      # Automatisation Tailscale Serve (HTTPS auto, resync port, QR code)

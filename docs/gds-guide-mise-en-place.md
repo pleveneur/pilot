@@ -1285,4 +1285,4 @@ Voir aussi le **dépannage complet** : `docs/gds-server-setup.md` §6.
 | `docs/gds-server-setup.md` | Mode d'emploi pas à pas du serveur (installation, accès réseau privé, pièges, dépannage, **modifier le serveur** §9). |
 | `gds-server/README.md` | Référence rapide du dossier serveur (volumes, variables, service, banc d'essai). |
 | `spec_gds.md` | Spécification fonctionnelle du GDS (rôles, synchronisation, écrans). |
-| `help/overview.md` (§ `HELP:gds`) | L'aide intégrée de Pilot (onglet « ❓ Aide ») : résumé de ce parcours. |
+| `help/overview.md` (§ `HELP:gds`) | La documentation embarquée de Pilot (servie par l'onglet 🧭 Assistant) : résumé de ce parcours. |

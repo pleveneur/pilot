@@ -26,8 +26,8 @@ aucun token (limite anonyme : 60 req/h/IP, suffisante pour un usage ponctuel).
 
 Onglet **« 💬 Feedback »** ouvert via un bouton du panneau d'actions
 (`#btn-feedback`, icône Lucide `message-square-plus`). **Accessible sans projet
-ouvert** (comme l'onglet Aide). Ouverture aussi via la palette de commandes
-(« Envoyer une remarque… »).
+ouvert**, comme les autres écrans transverses. Ouverture aussi via la palette de
+commandes (« Envoyer une remarque… »).
 
 ### Zone 1 — Envoyer un retour (formulaire)
 

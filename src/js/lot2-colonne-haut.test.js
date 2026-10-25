@@ -7,8 +7,11 @@
  *   - le nom du projet passe de 22 a 15 px (--font-zone : le SEUL texte
  *     au-dessus de 13 px de l'application) ;
  *   - le menu « Projets » devient un bouton NOMME « Projets » a chevron ;
- *   - les SEPT icones nues du haut deviennent TROIS boutons NOMMES
- *     (« Brouillon », « Reglages », « Aide ») ;
+ *   - les SEPT icones nues du haut deviennent des boutons NOMMES :
+ *     « Brouillon » et « Reglages » (la troisieme porte nommee de l'epoque,
+ *     « Aide », a depuis QUITTE l'ecran : son onglet n'existe plus, c'est
+ *     l'Assistant qui repond sur la documentation — voir
+ *     `retrait-ecran-aide.test.js`) ;
  *   - le CADRE bleu du haut disparait (un seul cadre accentue par colonne,
  *     celui du bloc du bas) ;
  *   - le badge « Distant » prend place a droite, avec son mot ;
@@ -16,7 +19,7 @@
  *     DANS le bandeau d'identification (decision Q1 = option b).
  *
  * Ce qui ne doit PAS changer : les identifiants des boutons conserves
- * (`btn-scratchpad`, `btn-settings`, `btn-help`), les identifiants des quatre
+ * (`btn-scratchpad`, `btn-settings`), les identifiants des quatre
  * portes retirees (`btn-vault`, `btn-feedback`, `btn-gds-admin`,
  * `btn-gds-params` : elles reviennent dans Reglages au LOT 7), le bouton
  * `btn-open-project` et le menu `projects-dropdown` avec ses entrees.
@@ -27,7 +30,8 @@
  *   (b) le nom du projet n'est plus en 15 px, ou ne tronque plus (un nom tres
  *       long doit s'arreter par ellipse, pas elargir la colonne) ;
  *   (c) « Projets » n'est plus un bouton nomme, ou perd son etat ouvert ;
- *   (d) les trois portes nommees perdent leur libelle ou leur identifiant ;
+ *   (d) les deux portes nommees perdent leur libelle ou leur identifiant, ou
+ *       une porte « Aide » revient dans le haut ;
  *   (e) une des quatre portes retirees reste dans le haut, ou son retrait
  *       n'est pas tolere par le cablage (demarrage casse) ;
  *   (f) le cadre accent du haut revient, ou celui du bas disparait ;
@@ -178,14 +182,13 @@ describe("LOT 2 (c) — « Projets » est un bouton nomme", () => {
   });
 });
 
-describe("LOT 2 (d) — sept icones nues deviennent trois boutons nommes", () => {
+describe("LOT 2 (d) — sept icones nues deviennent deux boutons nommes", () => {
   const PORTES = [
     ["btn-scratchpad", "Brouillon"],
     ["btn-settings", "Réglages"],
-    ["btn-help", "Aide"],
   ];
 
-  it("les trois portes gardent leur identifiant ET portent leur libelle", () => {
+  it("les deux portes gardent leur identifiant ET portent leur libelle", () => {
     for (const [id, libelle] of PORTES) {
       const m = html.match(new RegExp(`<button id="${id}"[^>]*>([\\s\\S]*?)</button>`));
       expect(m, `bouton ${id} introuvable`).not.toBeNull();
@@ -194,14 +197,24 @@ describe("LOT 2 (d) — sept icones nues deviennent trois boutons nommes", () =>
     }
   });
 
-  it("le haut ne contient plus que trois boutons", () => {
+  it("le haut ne contient plus que deux boutons", () => {
     const bloc_actions = html.match(/<div id="global-actions">([\s\S]*?)\n    <\/div>/);
     expect(bloc_actions, "conteneur #global-actions introuvable").not.toBeNull();
     const boutons = bloc_actions[1].match(/<button /g) || [];
-    expect(boutons).toHaveLength(3);
+    expect(boutons).toHaveLength(2);
   });
 
-  it("les trois portes sont des pastilles de 28 px a libelle 12 px", () => {
+  it("la porte « Aide » ne revient pas dans le haut de la colonne", () => {
+    // Raison : l'onglet Aide a ete retire de l'ecran (l'Assistant repond sur la
+    // documentation). Un bouton « Aide » qui revient ici rouvrirait le neant :
+    // `main.js` n'a plus de cablage et `tabs.js` plus de mode `help`.
+    const bloc_actions = html.match(/<div id="global-actions">([\s\S]*?)\n    <\/div>/);
+    expect(bloc_actions).not.toBeNull();
+    expect(bloc_actions[1]).not.toContain('id="btn-help"');
+    expect(html).not.toContain('id="btn-help"');
+  });
+
+  it("les deux portes sont des pastilles de 28 px a libelle 12 px", () => {
     // Regle d'exception ecrite une seule fois, apres la base 32 px partagee.
     expect(css).toContain("#global-actions button {\n  width: auto;\n  height: 28px;");
     expect(css).toContain("font-size: var(--font-sm)");

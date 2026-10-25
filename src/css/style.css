@@ -768,9 +768,11 @@ body.theme-light.theme-tokyo-day {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  /* 6 px entre les portes : c'est ce qui permet aux trois libelles de tenir
-     sur UNE ligne dans une colonne de 280 px (248 px utiles). Si la place
-     manque, la rangee se replie au lieu de couper un libelle. */
+  /* 6 px entre les portes : la rangee tient sur UNE ligne dans une colonne de
+     280 px (248 px utiles). Il ne reste que DEUX portes nommees (« Brouillon »,
+     « Reglages ») depuis le retrait de « Aide » : aucune place n'est reservee a
+     la troisieme, la rangee se resserre. Si la place manque, elle se replie au
+     lieu de couper un libelle. */
   gap: 6px;
   padding: 0 8px 8px;
 }
@@ -7223,7 +7225,11 @@ body.pilot-loading *::after {
 #tailscale-serve-status { margin-top: 4px; display: block; }
 #tailscale-block { transition: opacity 0.2s; }
 
-/* ── Onglet « ❓ Aide » (spec_help.md) ── */
+/* ── Styles des écrans de chat transverses (famille .help-*) ──
+   L'onglet « ❓ Aide » n'existe plus (spec_help.md §9) : ces styles sont
+   CONSERVÉS parce qu'ils sont partagés par la Revue de code (`.review-chat`)
+   et l'Historique des sessions (`.history-chat`), qui reprennent la même
+   en-tête, les mêmes bulles et la même zone de saisie. Ne pas les supprimer. */
 .help-chat {
   display: flex;
   flex-direction: column;
@@ -7358,7 +7364,7 @@ body.pilot-loading *::after {
   40% { transform: scale(1); opacity: 1; }
 }
 
-/* ── Sélecteur de modèle (onglet Aide) ── */
+/* ── Sélecteur de modèle de l'en-tête (Revue de code ; ancien onglet Aide) ── */
 .help-title-row {
   display: flex;
   align-items: center;
@@ -7861,7 +7867,7 @@ body.pilot-loading *::after {
  * Onglet « 💬 Feedback » — spec_feedback.md
  * Recueil des remarques/évolutions utilisateurs (GitHub + email + lecture
  * des issues existantes). Styles isolés sous .fb-* pour éviter les
- * collisions avec .help-* (onglets Aide/Review).
+ * collisions avec .help-* (famille des écrans de chat transverses).
  * ────────────────────────────────────────────────────────────────── */
 
 .fb-panel {

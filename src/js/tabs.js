@@ -12,7 +12,6 @@ import { createCsvPreview } from "./csv-preview.js";
 import { createTerminal, killTerminal } from "./terminal.js";
 import { createAgentPi, renderMessageHistory, activateAgentTab } from "./agent-pi.js";
 import { agentDisplayLabel, getPiHealthSync, checkPiHealth } from "./backend-info.js";
-import { createHelp } from "./help.js";
 import { createReview } from "./review.js";
 import { createSessionHistory } from "./session-history.js";
 import { createFeedback } from "./feedback.js";
@@ -300,12 +299,6 @@ export class TabsManager {
     // multi-projets, lecture seule, couleur d'accent distincte.
     if (mode === "superagent") {
       await this._openSuperAgent(path || superAgentDisplayLabel());
-      return;
-    }
-
-    // Onglet Aide (❓) — spec_help.md : chat LLM sur le handbook.
-    if (mode === "help") {
-      await this._openHelp(path || "Aide");
       return;
     }
 
@@ -737,45 +730,6 @@ export class TabsManager {
     // Démarre/reprend la session (AgentService::start, idempotent). Aucun Tab
     // créé : la vue n'existe pas, mais l'objet porte loaded=true.
     return await invoke("start_agent_session", { agentId, projectPath: target });
-  }
-
-  /**
-   * Ouvre l'onglet Aide (❓) — chat LLM sur le handbook (spec_help.md).
-   * Pas de session RPC persistante : l'aide lance un process pi temporaire
-   * (--no-session) via la commande ask_help à chaque question.
-   */
-  async _openHelp(label = "Aide") {
-    const existing = this.tabs.find((t) => t.mode === "help");
-    if (existing) {
-      this.switchTab(existing.id);
-      return;
-    }
-
-    const id = ++tabIdCounter;
-    const tab = new Tab(id, "", label, "help");
-
-    tab.wrapper = document.createElement("div");
-    tab.wrapper.className = "editor-wrapper help-wrapper";
-    tab.wrapper.style.display = "none";
-
-    this.container.appendChild(tab.wrapper);
-    this.tabs.push(tab);
-    this._renderTabButton(tab);
-    this.switchTab(id);
-
-    try {
-      const result = createHelp(tab.wrapper);
-      tab.view = result.wrapper;
-      tab.unlistenHelp = result.unlisten;
-    } catch (e) {
-      console.error("Erreur onglet Aide:", e);
-      tab.wrapper.innerHTML = `
-        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
-          <div style="font-size:48px;margin-bottom:16px;">❓</div>
-          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Aide</div>
-          <div style="font-size:13px;">❌ Erreur: ${e}</div>
-        </div>`;
-    }
   }
 
   /**
@@ -1966,11 +1920,6 @@ export class TabsManager {
       tab.unlistenPromptBuilder();
       tab.unlistenPromptBuilder = null;
     }
-    // Nettoyage onglet Aide (❓) — spec_help.md
-    if (tab.mode === "help" && tab.unlistenHelp) {
-      tab.unlistenHelp();
-      tab.unlistenHelp = null;
-    }
     // Nettoyage onglet Review (🔍) — spec_review.md (H5)
     if (tab.mode === "review" && tab.unlistenReview) {
       tab.unlistenReview();
@@ -2118,11 +2067,6 @@ export class TabsManager {
     if (tab.mode === "prompt-builder" && tab.unlistenPromptBuilder) {
       tab.unlistenPromptBuilder();
       tab.unlistenPromptBuilder = null;
-    }
-    // Nettoyage onglet Aide (❓) — spec_help.md
-    if (tab.mode === "help" && tab.unlistenHelp) {
-      tab.unlistenHelp();
-      tab.unlistenHelp = null;
     }
     // Nettoyage onglet Review (🔍) — spec_review.md (H5)
     if (tab.mode === "review" && tab.unlistenReview) {
@@ -3074,7 +3018,7 @@ export class TabsManager {
     // `settings` est declare ici, avec la couleur `.tab-special` des ecrans
     // transverses et SANS icone (le titre « Reglages » est celui du bouton et de
     // l'en-tete). L'onglet est cree par `_openSettings()` ci-dessous.
-    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard", "gds-admin", "gds-params", "settings"].includes(tab.mode);
+    const special = ["agent", "terminal", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard", "gds-admin", "gds-params", "settings"].includes(tab.mode);
     btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}${tab.mode === "dashboard" ? " tab-dashboard" : ""}`;
     btn.dataset.tabId = tab.id;
 
@@ -3332,11 +3276,11 @@ export class TabsManager {
    * Uniquement pour les onglets liés à un fichier (pas agent/terminal/brouillon).
    */
   _startTabRename(btn, tab, nameSpan) {
-    // Les onglets sans fichier (aide, review, terminal, prompt-builder) ne sont
+    // Les onglets sans fichier (review, terminal, prompt-builder) ne sont
     // pas renommables : pas de path sur disque → rename_file_or_dir échouerait.
     // Exception : les onglets agent (multi-onglets agents) sont renommables en
     // simple libellé (pas de fichier sur disque).
-    if (["help", "review", "terminal", "prompt-builder"].includes(tab.mode)) return;
+    if (["review", "terminal", "prompt-builder"].includes(tab.mode)) return;
     const oldName = tab.name;
     const oldPath = tab.path;
     const originalHTML = nameSpan.innerHTML;

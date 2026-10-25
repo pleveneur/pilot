@@ -2,7 +2,7 @@
  * Outil documentaire de l'assistant (`answer_from_documentation`) — câblage,
  * sortie honnête et plafond d'appels.
  *
- * Contexte : le bouton et l'onglet « ❓ Aide » vont disparaître ; c'est
+ * Contexte : le bouton et l'onglet « ❓ Aide » ONT DISPARU de l'écran ; c'est
  * l'ASSISTANT qui répondra aux questions de mode d'emploi. Ce fichier verrouille
  * le lot « l'assistant peut appeler la réponse sur la documentation » :
  *

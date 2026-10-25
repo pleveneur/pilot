@@ -792,12 +792,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // ❓ Aide : onglet d'aide sur Pilot (LLM sur le handbook) — spec_help.md.
-  document.getElementById("btn-help").addEventListener("click", () => {
-    tabs.openFile("Aide", "help");
-  });
-
   // 🔍 Review : onglet de revue de code assistée sur le diff Git — spec_review.md (H5).
+  // (L'ancien bouton « Aide » a disparu du haut de la colonne : l'onglet Aide
+  // n'existe plus, l'Assistant répond sur la documentation — spec_help.md §4.5.)
   document.getElementById("btn-review").addEventListener("click", () => {
     tabs.openFile("Review", "review");
   });

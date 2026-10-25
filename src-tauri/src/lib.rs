@@ -482,9 +482,10 @@ struct AppConfig {
     // et resync au changement de port. Opt-in, exige web_bind == 127.0.0.1.
     #[serde(default)]
     web_tailscale_serve: bool,
-    // Modèle utilisé par l'onglet « ❓ Aide » (spec_help.md). Format "provider/modelId"
-    // (issu de get_available_models_list). Vide = aucun modèle (l'aide refusera
-    // de répondre tant qu'un modèle n'est pas sélectionné dans l'UI d'aide).
+    // Modèle de la réponse sur la documentation (spec_help.md). Format
+    // "provider/modelId" (issu de get_available_models_list). N'est plus édité
+    // par un écran (l'onglet Aide a été retiré) : sert d'étage intermédiaire à
+    // la résolution du socle et de repli à la Revue de code.
     #[serde(default)]
     help_model: String,
     /// Modèle utilisé pour l'onglet « 🔍 Review » (H5, spec_review.md). Format
@@ -2693,7 +2694,10 @@ fn set_sidebar_width(
     Ok(())
 }
 
-/// Persiste le modèle sélectionné pour l'onglet « ❓ Aide » (spec_help.md).
+/// Persiste le modèle de la réponse sur la documentation (spec_help.md).
+/// Plus aucun écran n'écrit ce réglage (l'onglet Aide a été retiré) ; la
+/// commande reste enregistrée et la valeur sert de repli (Revue de code,
+/// résolution du modèle du socle).
 /// Format "provider/modelId" (issu de get_available_models_list).
 #[tauri::command]
 fn set_help_model(
