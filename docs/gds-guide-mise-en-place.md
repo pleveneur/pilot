@@ -834,14 +834,15 @@ local de clonage**, cliquez sur **« Enregistrer la configuration »**, puis
   **vous voyez** une action avec `ok = false` (et, pour la publication forcée
   refusée, l'action `tracking.force.denied`).
 
-### 2.10 — Le suivi partagé et les conflits (sans verrou)
+### 2.10 — Le suivi partagé et les conflits
 
 - **Dans Pilot, vous faites :** depuis deux postes, modifiez le **suivi
   partagé** (un projet, une tâche, une décision) sur le **même** élément, puis
   **Synchroniser** des deux côtés.
-- **Vous voyez :** personne n'est bloqué (il n'y a plus de verrou de projet). La
-  règle est « **le dernier qui écrit gagne** » : la dernière écriture
-  **remplace** la précédente.
+- **Vous voyez :** le pont du suivi applique « **le plus récent gagne** » : la
+  dernière écriture **remplace** la précédente. C'est un **filet** : pour le
+  **projet** lui-même, deux postes n'écrivent plus en même temps (voir **3.4**, le
+  mode réseau multi-postes).
 - **Pour vérifier la trace, dans Pilot :** journal d'audit du serveur (bloc
   « Espace utilisé + journal des connexions », portée *Tout le journal*) —
   **vous voyez** l'action `tracking.conflict` : le conflit n'est **jamais**
@@ -930,14 +931,48 @@ deux cas.
 
 ### 3.3 — Deux personnes modifient le **suivi** en même temps
 
-- **Vous faites :** voir **2.10** : le dernier qui écrit gagne.
+- **Vous faites :** voir **2.10**. Le pont du suivi applique « le plus récent
+  gagne », mais deux postes **n'écrivent plus en même temps sur le projet**
+  (**3.4**) : une modification simultanée ne peut plus porter que sur le suivi,
+  pas sur le code.
 - **Vous voyez :** la ligne `tracking.conflict` dans le journal du serveur
   (**2.10**).
 - **Si ce n'est pas ça :** aucune trace de conflit → les deux postes n'ont pas
   modifié le **même** élément, ou la synchronisation n'a pas été faite des deux
   côtés.
 
-### 3.4 — Le serveur tombe : le local continue
+### 3.4 — Deux postes, un seul écrit sur le projet (mode réseau multi-postes)
+
+- **Dans Pilot, vous faites :** sur le **poste A**, ouvrez le projet connecté et
+  cliquez **« Prendre le projet pour publier »**. Sur le **poste B**, ouvrez le
+  **même** projet (après **Synchroniser**), puis essayez de modifier un fichier et
+  de lancer l'agent du projet.
+- **Vous voyez sur le poste B :** un **bandeau** dans l'onglet « 🌐 GDS » (« projet
+  tenu par un autre développeur, jusqu'à HH:MM »), l'écriture **refusée** avec un
+  message lisible, et le lancement d'agent **refusé** pour la même raison. Le
+  projet reste **lisible** : fichiers, prévisualisation, discussion.
+- **Puis sur le poste A**, cliquez **« Rendre le projet »** : le poste publie le
+  code, pousse l'avancement, **puis** libère le projet. Sur le poste B, après
+  **Synchroniser**, le bandeau a disparu et l'écriture passe.
+- **Si ce n'est pas ça :**
+  - le poste B écrit quand même → les deux postes ne visent pas le **même**
+    serveur ou le **même** projet (comparez les réglages GDS du projet) ;
+  - le poste A n'arrive pas à rendre le projet → **une étape de la restitution a
+    échoué** (publication du code refusée, serveur muet) : le projet **reste tenu**
+    par A, rien n'est perdu, **recommencez** ;
+  - plus personne ne peut écrire et le porteur est absent → au bout de **15
+    minutes** sans activité le projet se libère seul ; sinon un **administrateur**
+    le libère depuis « 🖥️ GDS Serveur — administration » → *Dépôts / projets* →
+    **« Libérer »**, avec un **motif obligatoire** (l'action est tracée dans le
+    journal) ;
+  - le serveur ne répond plus : le poste **continue de travailler localement** (la
+    garde laisse passer quand elle ne peut pas savoir), et rien n'est publié tant
+    que le serveur ne répond pas.
+
+> Ce qui est partagé, ce qui reste privé, ce que le mode **ne fait pas** : c'est
+> décrit dans `spec_reseau.md`.
+
+### 3.5 — Le serveur tombe : le local continue
 
 - **Dans Pilot, vous faites :** sur un poste connecté, **arrêtez le service**
   (**2.11**) ou débranchez le serveur, puis ouvrez le projet et travaillez.
@@ -946,7 +981,7 @@ deux cas.
 - **Si ce n'est pas ça :** au retour du service, une synchronisation fait
   converger les deux côtés (et un conflit éventuel est journalisé, cf. 2.10).
 
-### 3.5 — Vérifier que rien n'a fui côté sécurité
+### 3.6 — Vérifier que rien n'a fui côté sécurité
 
 - **Dans le terminal, vous faites :**
 
@@ -1215,8 +1250,11 @@ docker compose down       # supprime le conteneur — volumes CONSERVÉS
   — il suppose qu'un compte **non administrateur** porte déjà l'e-mail demandé
   (`email` unique en base), état qui ne s'obtient **pas** par l'interface :
   détaillé en **1.6.b**.
-- Les **trois rôles** et la règle « dernier qui écrit gagne + conflits
-  journalisés » sont appliqués **côté serveur** (tests unitaires du socle).
+- Les **trois rôles** et la règle « le plus récent gagne + conflits journalisés »
+  (pont du suivi) sont appliqués **côté serveur** (tests unitaires du socle), de
+  même que l'**exclusivité d'écriture par projet** : un seul porteur à la fois
+  (index unique partiel de la table `project_handovers`), refus **409** pour un
+  second poste, libération réservée à l'administrateur.
 - La **séquence de conteneur** de la partie 4 : chaque affirmation est adossée
   au fichier qui la porte (tableau 4.2).
 - La **commande de rechargement** (4.6) : son enchaînement d'étapes et les
@@ -1272,7 +1310,7 @@ docker compose down       # supprime le conteneur — volumes CONSERVÉS
 | `Racine des dépôts serveur non renseignée` | renseigner `/srv/git/repos` dans la **fiche du serveur** (« ⚙️ GDS — paramétrage » → Serveurs GDS → Modifier), puis « Enregistrer la configuration » dans l'onglet GDS du projet (2.5, 2.6.c) |
 | l'URL Tailscale affiche le mauvais service | le port 443 sert déjà Pilot : utiliser `--https=8443` |
 | « connection timed out » depuis l'autre appareil | appareil hors tailnet, ou ports restés sur `GDS_BIND_ADDR` |
-| détection de conflit / verrou | le verrou n'existe **plus** : « dernier qui écrit gagne », conflits **journalisés** |
+| détection de conflit / verrou | le verrou **global** n'existe **plus** : la coordination est une **prise en main par projet** (un seul poste écrit, **3.4**), le pont du suivi appliquant « le plus récent gagne » avec conflits **journalisés** |
 
 Voir aussi le **dépannage complet** : `docs/gds-server-setup.md` §6.
 

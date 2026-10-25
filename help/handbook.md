@@ -697,12 +697,35 @@ d'un hébergement externe type GitHub.
   le **serveur** qui prépare **sa** base, et son bouton **Appliquer** est
   **actif** ; les fiches écrites avant cette version **gardent** leur bouton
   actif, comme avant.
-- **Synchronisation — sans verrou** : une fois connecté, **Synchroniser**
-  rapatrie le projet depuis le remote `gds` (clone si absent, sinon fetch/pull).
-  Il n'y a **plus de verrou de projet** ni de mode urgent : deux postes peuvent
-  travailler en même temps, la concurrence est assumée en « **dernier qui écrit
-  gagne** » et les conflits détectés du suivi sont **journalisés** (jamais
-  silencieux).
+- **Synchroniser** : une fois connecté, **Synchroniser** rapatrie le projet depuis
+  le serveur (clone s'il est absent, sinon mise à jour).
+- **Un seul poste travaille sur un projet à la fois** : quand un développeur a
+  pris un projet, les autres postes peuvent l'**ouvrir et le consulter**, mais ne
+  le **modifient pas** et n'y lancent **aucun agent**. Un **bandeau**, dans
+  l'onglet « 🌐 GDS », dit que le projet est tenu par un autre développeur et
+  **jusqu'à quelle heure**. Lire, naviguer et consulter restent possibles.
+  - **Prendre le projet** : le bouton **« Prendre le projet pour publier »**
+    apparaît quand le projet est **libre** et que des modifications attendent sur
+    ce poste, ou quand un **autre** poste le tient (pour réessayer). Si le projet
+    est encore tenu, Pilot le dit clairement, avec le motif.
+  - **Rendre le projet** : le bouton **« Rendre le projet »** n'apparaît que si
+    vous tenez le projet. Il publie le code, envoie l'avancement, **puis** libère
+    le projet pour le suivant. Si une étape échoue, le projet **reste à vous**,
+    rien n'est perdu, et vous pouvez recommencer.
+  - **Votre travail déjà fait** n'est **jamais supprimé ni écrasé** : tant que
+    vous ne tenez pas le projet, il **reste sur ce poste** et **n'est pas
+    publié** — l'écran vous indique combien de fichiers sont concernés et vous
+    propose de prendre le projet.
+  - **Projet laissé à l'abandon** : après **15 minutes** sans activité, le projet
+    se libère **tout seul**. Un **administrateur** peut aussi le libérer tout de
+    suite, avec un **motif** obligatoire (l'opération est tracée).
+- **Envoi au fil de l'eau** : l'**avancement** part **tout seul** dès qu'il a
+  changé (Pilot le vérifie toutes les 30 secondes) ; la **prise en main** du projet
+  est renouvelée toutes les **3 minutes**. Aucun clic à faire, et une coupure
+  réseau ne bloque rien : l'envoi est simplement refait ensuite.
+- **Conflits** : deux postes n'écrivent plus en même temps sur un même projet ; si
+  deux écritures se croisent malgré tout, la plus récente s'applique et le conflit
+  est **journalisé** (jamais totalement silencieux).
 - **Autorisation du serveur local — automatique** : sur un serveur GDS
   **installé sur ce poste**, Pilot **autorise lui-même** le dossier des dépôts
   à être servi — une fois à la mise en place, et de nouveau avant la création

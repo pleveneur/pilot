@@ -4,7 +4,7 @@
 > L1 → L7) réalisée ; seule la phase D (composant web, issue #56) reste à faire.**
 >
 > Document de planification. Les **phases A (fondations serveur), B
-> (synchronisation, désormais **sans verrou**) et C (suivi fusionné + assistant
+> (synchronisation, verrou global retiré) et C (suivi fusionné + assistant
 > de groupe)** sont implémentées (voir `spec_gds.md` §PHASE A/§PHASE B/§PHASE C),
 > puis le serveur a été **refondu en 7 lots** (serveur conteneurisé, rôles,
 > écrans transverses, suppression du verrou projet). La **phase D (composant
@@ -103,7 +103,9 @@
 | `gds.rs` | Config GDS, auto-provisioning, enregistrement de projet, états (source de vérité côté VPS) |
 | `gds_db.rs` | Accès **PostgreSQL** (pool sqlx), schéma, migrations |
 | `gds_git.rs` | Gestion des dépôts git serveur (bare), création par projet, hooks (optionnel) |
-| `gds_sync.rs` | Pont de synchronisation du suivi (SQLite ↔ Postgres), publication forcée (rôles) — **sans verrou** |
+| `gds_sync.rs` | Pont de synchronisation du suivi (SQLite ↔ Postgres), publication forcée (rôles) |
+| `gds_handover.rs` | Portage par projet côté poste : prise en main, présence, restitution ordonnée (§3.5) |
+| `gds_write_guard.rs` | Garde d'écriture tenue par le socle, fail-open (§3.5) |
 | `gds_web.rs` | Routes GDS ajoutées à `web_server.rs` (ou module axum dédié) |
 | `gds_client.rs` | Côté **poste de dev** : commandes de sync/push, dossier GDS paramétrable |
 | `group_assistant.rs` | **Assistant de groupe** (lecture seule) : questions sur projets + ajout de demandes au suivi — basé sur `super_agent.rs` |
@@ -166,10 +168,14 @@ git_repos(id, project_id FK UNIQUE, path_on_server, bare_path, created_at)
 session_tracking / audit_gds(ts, ip, subject, action, detail, ok)    -- étendre web_audit
 ```
 
-- **Plus de verrou projet** (refonte, décision 3) : la table `project_locks` est
-  **supprimée** par la migration `0007_drop_project_locks.sql` ; la concurrence
-  est assumée en « **dernier qui écrit gagne** », conflits journalisés
-  (`tracking.conflict`). Le **mode urgent** disparaît avec le verrou.
+- **Plus de verrou global projet** (refonte, décision 3) : la table
+  `project_locks` est **supprimée** par la migration `0007_drop_project_locks.sql` ;
+  le **mode urgent** disparaît avec elle. Ce n'est pas une concurrence libre :
+  la coordination est assurée par une **prise en main par projet** (mode réseau
+  multi-postes, migration `0008_project_handover.sql`, `spec_reseau.md`) — un seul
+  poste tient un projet et écrit dessus à la fois, les autres lisent ; « le plus
+  récent gagne » ne reste que le **filet** du pont du suivi (conflits journalisés
+  `tracking.conflict`).
 - **Rôles** (migration `0006_roles.sql` : `admin` / `dev` / `standard` +
   statuts) : la **lecture** est ouverte aux comptes actifs, l'**écriture** (dont
   la publication forcée du suivi) dépend du **rôle seul** (décision 2026-09 :
@@ -255,21 +261,26 @@ Chaque fonctionnalité : objectif, modules, critère de fin.
 - **Critère de fin** : deux devs avec deux emails se connectent et voient le même
   ensemble de projets.
 
-### 3.5 Synchronisation poste & concurrence (sans verrou)
+### 3.5 Synchronisation poste & portage (un seul porteur par projet)
 - **Objectif** : un dev qui veut **modifier** un projet **synchronise** sur son
   poste (clone/fetch/pull dans le dossier des projets GDS **paramétrable**,
   champ config `gds_local_dir` — §3.6), puis pousse ses commits sur le remote
   `gds` (SSH).
-- **Verrou projet supprimé (refonte, décision 3)** : la table `project_locks`, le
-  **mode urgent** et leurs commandes/routes ont été **retirés** (migration
-  `0007_drop_project_locks.sql`). La concurrence est **assumée** :
-  « **dernier qui écrit gagne** », conflits du suivi **journalisés**
-  (`tracking.conflict`) ; la **publication forcée** est réservée aux comptes
-  habilités (rôle `admin` ou `dev`) — cf. §6.3 de `spec_gds.md`.
+- **Verrou global supprimé, exclusivité par projet** : la table `project_locks`,
+  le **mode urgent** et leurs commandes/routes ont été **retirés** (migration
+  `0007_drop_project_locks.sql`). La coordination n'est plus « le dernier qui
+  écrit gagne » : un **seul poste tient un projet à la fois** (table
+  `project_handovers`, migration `0008_project_handover.sql`, routes
+  `/api/gds/handover/*`, `spec_reseau.md`) ; les autres postes lisent et n'écrivent
+  rien. Le « plus récent gagne » reste le **filet** du pont du suivi (conflits
+  journalisés `tracking.conflict`) ; la **publication forcée** est réservée aux
+  comptes habilités (rôle `admin` ou `dev`) — cf. §6.3 de `spec_gds.md`.
 - **Modules** : `gds_client.rs` (sync), `gds_sync.rs` (pont du suivi),
+  `gds_handover.rs` + `gds_write_guard.rs` (portage et garde d'écriture),
   `gds_web.rs` (route `POST /api/gds/sync`), `gds_git.rs` (dépôt bare, clefs).
-- **Critère de fin** : deux postes synchronisent et poussent le même projet sans
-  blocage, sans conflit **silencieux** ; aucun verrou à libérer.
+- **Critère de fin** : deux postes synchronisent le même projet sans se gêner et
+  **sans jamais écrire en même temps** sur le projet ; un refus est **dit** (jamais
+  silencieux) ; le projet libéré est repris par le poste suivant.
 
 ### 3.6 Dossier des projets GDS paramétrable
 - **Objectif** : le dossier local où les projets GDS sont clonés est configurable
@@ -416,9 +427,10 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 > « synchronisation & verrous » est **caduque** : le
 > **verrou global projet et le mode urgent ont été retirés** (lot L6, décision 3).
 > La synchronisation poste (dossier paramétrable `gds_local_dir`, clone/fetch/pull
-> — `gds_client.rs`, `git.rs::git_fetch`) reste valide, **sans verrou** (§3.5).
+> — `gds_client.rs`, `git.rs::git_fetch`) reste valide ; l'exclusivité d'écriture
+> entre postes est apportée par le **portage par projet** (§3.5, `spec_reseau.md`).
 > Détails : `spec_gds.md` §1.4 (serveur conteneurisé), §2.2 (rôles), §5
-> (concurrence), §11 (phases).
+> (portage et concurrence), §11 (phases).
 
 - **L1 — Serveur GDS autonome** ✅ : workspace Cargo à la racine (`gds-core` lib,
   `gds-server` bin) ; migrations, couche base, git serveur, SSH, auth, routeur
@@ -442,7 +454,9 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   à sa part **projet** (synchro, retrait, config).
 - **L6 — Suppression du verrou projet** ✅ : interface, logique, modèle de données
   (migration `0007_drop_project_locks.sql`) et routes HTTP du verrou retirés ;
-  contrôle exhaustif des appelants restants.
+  contrôle exhaustif des appelants restants. **Remplacé depuis** par le portage par
+  projet (mode réseau multi-postes, migration `0008_project_handover.sql`) :
+  l'exclusivité est par projet, pas globale.
 - **L7 — Documentation & tests de bout en bout** ✅ : L7.1 (`spec_gds.md`),
   L7.2 (ce document), L7.3 (`docs/gds-server-setup.md`), L7.4 (sync assistants
   sans verrou), L7.5 (socle documentaire Pilot), **L7.6 (banc de bout en bout
@@ -586,8 +600,10 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 - **Git serveur** : repos bare centralisés, droits par utilisateur (V1 : tous), hooks
   `post-receive` optionnels (notification, déclencheur d'assistant), gestion des
   gros fichiers (Git LFS si besoin).
-- **Concurrence (sans verrou)** : écritures simultanées **assumées** en
-  « dernier qui écrit gagne » (décision 3) ; conflits du suivi **journalisés**
+- **Concurrence (écriture exclusive par projet)** : les écritures simultanées sur
+  un même projet sont **empêchées** par le **portage** (un seul poste tient le
+  projet, migration `0008_project_handover.sql`, `spec_reseau.md`) ; le pont du
+  suivi garde « le plus récent gagne » comme **filet** avec conflits **journalisés**
   (`tracking.conflict`) ; publication forcée réservée aux comptes habilités.
 - **PostgreSQL** : sauvegardes planifiées (pg_dump), migrations versionnées (sqlx),
   pool configuré (max_connections), index sur `tickets.status` / `tickets.client_id`.
@@ -607,8 +623,9 @@ En plus de la **validation globale de ce document**, je te demande un arbitrage
 sur les points suivants :
 
 1. **Ordre & périmètre V1 du GDS** : découpage A→B→C validé (fondations →
-   synchronisation → suivi/assistant), **sans verrou projet** (retiré par la
-   refonte, décision 3 — cf. §3.5).
+   synchronisation → suivi/assistant), **sans verrou global** (retiré par la
+   refonte, décision 3) mais avec une **prise en main par projet** (portage —
+   cf. §3.5 et `spec_reseau.md`).
 2. **Migration SQLite → Postgres** : Option A (cohabitation + pont de sync) ou
    Option B (migration complète) pour le suivi du super-agent ?
 3. **Transport git poste↔VPS** : SSH par clef (email) ou HTTPS avec token ?

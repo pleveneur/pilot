@@ -286,9 +286,19 @@ machine ou ton réseau, au lieu d'un hébergement externe.
   (serveurs, mon identité, mes clés, mes projets).
 - **Activation projet par projet** : un projet qui n'utilise pas le GDS reste
   100 % local.
-- **Synchronisation sans verrou** : plusieurs postes peuvent travailler en même
-  temps sur un projet ; l'écriture la plus récente fait foi et les conflits
-  détectés sont **signalés** (jamais d'écrasement totalement silencieux).
+- **Un seul poste travaille sur un projet à la fois** : le projet est *tenu* par
+  un poste ; les autres peuvent l'ouvrir et le consulter, mais **ne le modifient
+  pas** et n'y lancent aucun agent (un bandeau dit qui le tient et jusqu'à quelle
+  heure). Tu prends le projet avec **« Prendre le projet pour publier »** et tu le
+  rends avec **« Rendre le projet »**, qui publie le code et l'avancement puis
+  libère le projet pour le suivant. Un projet laissé à l'abandon se libère tout
+  seul au bout de **15 minutes** sans activité ; un administrateur peut aussi le
+  libérer, avec un motif. Le mode réseau complet est décrit dans
+  **`spec_reseau.md`**.
+- **Conflits** : deux postes n'écrivent plus en même temps sur un même projet. Si
+  deux écritures se croisent malgré tout (hors portage), la plus récente
+  s'applique et le conflit est **signalé** — jamais d'écrasement totalement
+  silencieux.
 - **Réponse sur la documentation** : l'Assistant (🧭) répond aussi aux questions
   sur le GDS (rôles, serveur, synchronisation).
 

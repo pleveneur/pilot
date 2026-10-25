@@ -7,13 +7,19 @@
 > s'intègre, pour que l'assistant du poste qui prend le relais soit
 > immédiatement au courant du travail déjà fait.
 >
-> **Mis à jour 2026-08 (refonte GDS, L7.4)** : les **verrous de projet ont été
-> supprimés** du GDS. La synchronisation devient **sans verrou** — le risque de
-> concurrence est **accepté** (« dernier qui écrit gagne »), les conflits restent
-> **journalisés** et **aucune fusion horodatée** n'est réalisée.
+> **Mis à jour (mode réseau multi-postes)** : le **verrou global** supprimé par la
+> refonte (`0007_drop_project_locks.sql`) est **remplacé** par une **prise en main
+> par projet** (migration `0008_project_handover.sql`, `spec_reseau.md`) : un seul
+> poste tient un projet et écrit dessus à la fois, les autres le lisent. « Le plus
+> récent gagne » ne reste que le **filet** du pont du suivi, jamais le mécanisme de
+> cohérence entre postes ; **aucune fusion horodatée** n'est réalisée.
 >
-> **Statut : 🟡 Plan validé avec l'utilisateur — design défini, aucune
-> implémentation.**
+> **Statut : 🟡 Aucune implémentation.** Deux constats distincts, à ne pas
+> confondre : le **portage d'un projet** (exclusivité d'écriture entre postes) est
+> **implémenté** et décrit dans `spec_reseau.md` ; le **partage du contexte de
+> l'assistant** décrit ici reste **à faire**. L'ancienne formule « design défini »
+> est **caduque** : la coordination est désormais l'exclusivité par projet, pas une
+> synchronisation concurrente.
 > **Prérequis : GDS de base (phases A→B→C) en place et stable.**
 > Chaque chantier d'implémentation passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
@@ -47,7 +53,7 @@ le projet** » et un **paramétrage d'envoi/réception par poste**.
 | Donnée | Détail |
 |---|---|
 | **Suivi** | clients, projets, tâches, décisions, jalons |
-| **Historique de sessions** | le fil des sessions d'agents du projet |
+| **Résumé des sessions** | le **résumé** et les **décisions** extraits vers le projet — **jamais** les transcriptions (privées, §1.2) |
 | **Contexte / état de reprise** | « où on en est » : avancement, travail déjà fait, prochaines étapes |
 | **Configuration de l'assistant** | réglages applicables au projet (avec **validation utilisateur**) |
 
@@ -58,6 +64,7 @@ le projet** » et un **paramétrage d'envoi/réception par poste**.
 | **Projets personnels (locaux)** | hors entreprise → jamais envoyés (drapeau déduit) |
 | **Tables de suivi personnelles de l'assistant** | ex: `magnus_*` → propre au poste / à l'utilisateur |
 | **Rappels programmés** | `assistant_schedules` → strictement locaux à l'assistant du poste |
+| **Transcriptions de conversation** | `.pilot/sessions/`, `.pilot/sessions.jsonl` : échanges personnels ; seul le **résumé** part |
 
 **Principe — confidentialité par défaut :** le personnel reste local, le
 partagé se sync par défaut, et l'utilisateur garde toujours le choix. Les
@@ -65,6 +72,10 @@ catégories « toujours locales » ci-dessus sont **protégées par défaut** et
 partent **jamais** ; les catégories synchronisables (§1.1) sont partagées par
 défaut, mais l'utilisateur peut affiner par catégorie (sans pouvoir forcer le
 départ de données protégées).
+
+**Frontière information par information** (ce qui est partagé, ce qui reste
+privé, et pourquoi) : voir le tableau de `spec_reseau.md` §3 — c'est la
+**source unique** de cette frontière.
 
 ---
 
@@ -101,8 +112,8 @@ départ de données protégées).
 
 ## 4. Cycle de vie d'un projet GDS
 
-1. Le **poste A ouvre le projet** (aucun verrou : plusieurs postes peuvent le
-   modifier en parallèle).
+1. Le **poste A prend le projet en main** (un seul porteur à la fois : un autre
+   poste voit le projet en **lecture seule**, `spec_reseau.md`).
 2. Le **poste A travaille** ; son **assistant accumule le contexte**.
 3. **A termine** → **synchronisation automatique** : le **suivi + l'historique**
    du projet **partent au serveur** (selon la **config d'envoi de A**).
@@ -117,15 +128,13 @@ départ de données protégées).
 ## 5. Déclenchement & conflits
 
 - **Déclenchement automatique** : l'assistant lance l'agent dédié à la fin de
-  la session de travail sur un projet GDS (ou dès que le serveur répond). Il
-  n'y a **plus de verrou de projet** (supprimé avec la refonte GDS) : plusieurs
-  postes peuvent travailler **en parallèle** sur le même projet.
-- **Concurrence — risque ACCEPTÉ (« dernier qui écrit gagne »)** : en l'absence
-  de verrou, deux postes qui poussent en même temps peuvent se recouvrir. Ce
-  risque est **accepté** : l'écriture la plus récente **fait foi**. Il n'y a
-  **pas de fusion horodatée** (aucun merge champ par champ, pas de résolution
-  automatique) — ce chantier est **volontairement écarté** avec la suppression
-  des verrous.
+  la session de travail sur un projet GDS (ou dès que le serveur répond).
+- **Concurrence : l'écriture est exclusive, la fusion ne l'est pas** — un seul
+  poste tient le projet à la fois (`spec_reseau.md`), donc deux postes ne
+  poussent plus le même projet en même temps. Il n'y a **pas de fusion
+  horodatée** (aucun merge champ par champ, aucune résolution automatique) : ce
+  chantier reste **volontairement écarté**. Le pont du suivi conserve sa règle
+  « le plus récent gagne » comme **filet** (§6.2 de `spec_gds.md`).
 - **Conflits toujours JOURNALISÉS** : les chevauchements détectés (un côté plus
   récent que l'autre) sont **tracés dans le journal d'audit du GDS**
   (`tracking.conflict`) et **signalés à l'utilisateur**. Jamais d'écrasement

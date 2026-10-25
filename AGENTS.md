@@ -81,7 +81,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Assistant (suivi multi-projets, lecture seule) | `spec_super_agent.md` |
 | Tableau de bord projet (métriques, Git, langages) | `spec_dashboard.md` |
 | Coffre fort de mots de passe (chiffré) | `spec_vault.md` |
-| GDS (gestionnaire de sources) | `plan_gds.md` (roadmap) → `spec_gds.md` (spec détaillée, phases A→B→C) ; mise en place : `docs/gds-server-setup.md` (serveur, référence) + `docs/gds-guide-mise-en-place.md` (parcours de retest complet, checklist serveur → usage à plusieurs) |
+| GDS (gestionnaire de sources) | `plan_gds.md` (roadmap) → `spec_gds.md` (spec détaillée, phases A→B→C) ; **mode réseau multi-postes** (un seul poste tient un projet) : `spec_reseau.md` ; mise en place : `docs/gds-server-setup.md` (serveur, référence) + `docs/gds-guide-mise-en-place.md` (parcours de retest complet, checklist serveur → usage à plusieurs) |
 | Composant web de discussion (issue #56) | `spec_web_component.md` (spec détaillée, phase D) |
 | Les cinq règles de la chaîne d'agents (ce qu'elles garantissent + le test qui les tient) | `spec_cinq_regles_chaine_agents.md` (source unique) |
 | Roadmap restante | `plan_dev.md` + `idees_evolutions.md` |
@@ -223,8 +223,8 @@ pilot/
 │   └── js/ (app, chat, files, projects)
 ├── gds-core/                  # Socle partagé desktop ↔ serveur (aucune dépendance Tauri)
 │   ├── Cargo.toml
-│   ├── migrations/            # Migrations SQL GDS partagées (0001_init → 0007_drop_project_locks)
-│   └── src/                   # config, db (pool sqlx + migrations), auth, roles, git, ssh, audit, service_control…
+│   ├── migrations/            # Migrations SQL GDS partagées (0001_init → 0008_project_handover)
+│   └── src/                   # config, db (pool sqlx + migrations), auth, roles, git, ssh, audit, service_control, handover (règles du portage)…
 ├── gds-server/                # Serveur GDS headless (binaire axum, sans Tauri) + conteneur tout-en-un
 │   ├── Cargo.toml             # dépend de gds-core, axum, sqlx, tokio
 │   ├── src/                   # main.rs (amorçage, routeur, écoute), config.rs
@@ -295,6 +295,8 @@ pilot/
         ├── gds_db.rs         # GDS : pool PostgreSQL sqlx, provision idempotent, migrations, CRUD users/projects/git_repos
         ├── gds_git.rs        # GDS : repo bare par projet, validation chemins, association membre
         ├── gds_web.rs        # GDS : routes axum Phase A (provision, identité, projets, git) + routes B/C réservées
+        ├── gds_handover.rs   # Mode réseau multi-postes (côté poste) : prise en main d'un projet, présence automatique (1 appel / 3 min, repère local), restitution ORDONNÉE (code → avancement → return, reprise sans saut d'étape), verdicts d'écriture lisibles
+        ├── gds_write_guard.rs # Garde d'écriture tenue par le SOCLE (pas par l'écran) : refuse une écriture de fichier / le lancement d'un agent si le serveur a confirmé qu'un AUTRE poste tient le projet — **fail-open** (panne, GDS désactivé, projet libre, prise expirée ⇒ autorisé)
         └── super_agent.rs    # Assistant : session RPC dédiée + base SQLite (clients/projets/tâches)
 ```
 
