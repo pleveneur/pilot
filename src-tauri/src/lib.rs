@@ -3423,6 +3423,16 @@ pub fn run() {
                     });
                 }
             }
+            // Bande de fenetre Pilot (docs/proposition-barre-fenetre.md) : la
+            // fenetre perd son cadre systeme sous Windows et Linux, car ses
+            // trois boutons vivent desormais dans la bande #window-bar. macOS
+            // conserve son cadre natif (feux tricolores, §6 du document).
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_decorations(false);
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -16,6 +16,25 @@
     <div class="boot-label">Chargement de Pilot…</div>
   </div>
 
+  <!-- Bande de fenetre Pilot : remplace la barre de titre systeme (Windows et
+       Linux). 32 px de haut, zone de glissement sur toute la largeur sauf les
+       boutons, trois boutons systeme colles au bord droit (voir
+       docs/proposition-barre-fenetre.md §3.1, §3.2 et §4.1).
+       Ordre du DOM = ordre du Tab : Reduire, Agrandir, Fermer. -->
+  <div id="window-bar">
+    <div id="window-controls">
+      <button id="win-min" type="button" title="Réduire" aria-label="Réduire">
+        <i data-lucide="minus" class="icon-sm"></i>
+      </button>
+      <button id="win-max" type="button" title="Agrandir la fenêtre" aria-label="Agrandir la fenêtre">
+        <i data-lucide="square" class="icon-sm"></i>
+      </button>
+      <button id="win-close" type="button" title="Fermer Pilot" aria-label="Fermer Pilot">
+        <i data-lucide="x" class="icon-sm"></i>
+      </button>
+    </div>
+  </div>
+
   <!-- Corps de l'application : barre latérale + zone de travail (sous la barre
        de titres). Enveloppé dans #app-body pour un layout en colonne. -->
   <div id="app-body">

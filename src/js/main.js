@@ -30,6 +30,9 @@ import { initGroupAssistant } from "./group-assistant.js";
 // appliquee des le demarrage (et a chaque enregistrement des Parametres).
 import { applyVoicePreferenceFromConfig } from "./read-aloud.js";
 import { refreshIcons } from "./icons.js";
+// Bande de fenetre Pilot : glisser, double-clic et les trois boutons systeme
+// (reduire, agrandir/restaurer, fermer) — etats et clavier du lot 0.2.
+import { initWindowControls } from "./window-controls.js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -371,6 +374,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 2. Remplacer les balises <i data-lucide="..."> du HTML statique par des
   // icônes SVG Lucide. À rappeler après toute insertion dynamique d'icônes.
   refreshIcons();
+
+  // 2 bis. Bande de fenetre Pilot : cablage des trois boutons systeme (apres
+  // refreshIcons pour que l'icone « Agrandir / Restaurer » trouve son SVG) et
+  // lecture de l'etat de la fenetre au demarrage (elle demarre agrandie).
+  initWindowControls();
 
   // Enregistrer la position du dernier clic → origine des animations d'ouverture
   // des nouveaux onglets (tabs.js / modal-anim.js). Phase de capture pour couvrir

@@ -195,7 +195,11 @@ describe("(a) plus de panneau cloche en bas a droite : un seul panneau", () => {
     // Position historique du cercle : coin superieur droit (jamais en bas).
     const regleCercle = css.slice(css.indexOf("#agent-activity {"), css.indexOf("#agent-activity-dot {"));
     expect(regleCercle).toMatch(/position:\s*fixed/);
-    expect(regleCercle).toMatch(/top:\s*8px/);
+    // Barre de fenetre Pilot : la pastille se decale SOUS la bande (32 px + le
+    // 8 px d'origine) — sans ce decalage elle passerait dessous (z-index 10000
+    // contre 100001) et deviendrait invisible et non cliquable. L'intention du
+    // verrou est inchangee : coin superieur droit, jamais en bas.
+    expect(regleCercle).toMatch(/top:\s*calc\(var\(--window-bar-height\) \+ 8px\)/);
     expect(regleCercle).toMatch(/right:\s*12px/);
     expect(regleCercle).not.toMatch(/bottom:\s*\d+px/);
   });
