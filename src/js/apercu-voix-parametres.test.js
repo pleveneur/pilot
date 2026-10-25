@@ -233,20 +233,22 @@ describe("un seul apercu a la fois", () => {
     expect(VOICE_PREVIEW_SAMPLE).toMatch(/[éèàêûô]/);
   });
 
-  it("quitter les Parametres arrete l'ecoute en cours", () => {
+  it("quitter les Reglages arrete l'ecoute en cours", () => {
     const settings = readSource("src/js/settings.js");
-    // Annuler (btnClose) : l'arret precede la fermeture de la modale.
-    const closeAt = settings.indexOf('btnClose.addEventListener("click"');
-    const closeHide = settings.indexOf('classList.add("hidden")', closeAt);
-    expect(closeAt).toBeGreaterThan(-1);
-    expect(closeHide).toBeGreaterThan(closeAt);
-    expect(settings.slice(closeAt, closeHide)).toContain("stopReading()");
-    // Enregistrer (btnSave) ferme aussi la modale : meme arret.
-    const saveAt = settings.indexOf('btnSave.addEventListener("click"');
-    const saveHide = settings.indexOf('classList.add("hidden")', saveAt);
-    expect(saveAt).toBeGreaterThan(-1);
-    expect(saveHide).toBeGreaterThan(saveAt);
-    expect(settings.slice(saveAt, saveHide)).toContain("stopReading()");
+    // Annuler (btnClose) et le ✕ de l'onglet passent par le MEME retour a zero.
+    // Depuis le lot B (Reglages en onglet), ce retour NE MASQUE PLUS rien :
+    // ajouter `hidden` viderait l'ecran de l'onglet.
+    const closeBody = bodyOf(settings, 'btnClose.addEventListener("click"');
+    expect(closeBody).toContain("resetSettingsContent()");
+    expect(closeBody).not.toContain('classList.add("hidden")');
+    // Enregistrer arrete aussi l'ecoute en cours (aucun son orphelin), sans
+    // fermer l'onglet : on voit le resultat de ce qu'on vient de changer.
+    const saveBody = bodyOf(settings, 'btnSave.addEventListener("click"');
+    expect(saveBody).toContain("stopReading()");
+    expect(saveBody).not.toContain('classList.add("hidden")');
+    // Le retour a zero contient l'arret de la lecture.
+    const resetBody = bodyOf(settings, "async function resetSettingsContent()");
+    expect(resetBody).toContain("stopReading()");
     // Fermer la fenetre : aucun son orphelin.
     expect(settings).toContain('window.addEventListener("pagehide"');
   });

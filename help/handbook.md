@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-24 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-25 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -82,9 +82,12 @@ externe.
 
 - **Thème** : bascule dark/light depuis les **Paramètres ⚙️** (bouton du panneau
   d'actions) → section « Apparence ». Le thème est mémorisé.
-- **Paramètres ⚙️** : onglet de configuration modale (thème, éditeur, agent Pi,
-  accès distant, etc.). Toute la configuration est persistée dans un fichier
-  JSON (`app_data_dir/com.pilot.editor/config.json`).
+- **Paramètres ⚙️** : les Réglages s'ouvrent dans un **onglet** (thème, éditeur,
+  agent Pi, accès distant, etc.). Le **✕ de l'onglet** équivaut à **« Annuler »**
+  (rien n'est enregistré) ; « Annuler » et « Enregistrer » ne ferment pas
+  l'onglet, vous voyez le résultat de ce que vous venez de changer. L'onglet
+  reste ouvert quand vous changez de projet. Toute la configuration est
+  persistée dans un fichier JSON (`app_data_dir/com.pilot.editor/config.json`).
 - **Avatar (PLface)** : dans **Paramètres ⚙️ → Avatar**, cochez « Lancer mon
   avatar (PLface) au démarrage ». Le **programme du visage est fourni avec
   Pilot** : laissez le **chemin de l'exécutable** vide pour l'utiliser tel quel,

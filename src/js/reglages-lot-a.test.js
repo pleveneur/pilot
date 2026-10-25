@@ -1,14 +1,14 @@
-// Tests — lot A « Reglages en onglet » (docs/proposition-reglages-en-onglet.md § 7).
+// Tests — Reglages en onglet : invariants du lot A
+// (docs/proposition-reglages-en-onglet.md § 7), tenus APRES la bascule du lot B.
 //
-// Le lot A ne change AUCUN comportement visible : la fenetre des Reglages
-// s'ouvre exactement comme avant. Ces tests tiennent donc les invariants qui
-// rendront la bascule (lot B) sure :
-//   1. le remplissage des champs n'existe qu'a UN endroit (le lot B le reutilise,
-//      il ne le recopie pas) ;
+// Le lot B fait des Reglages un ONGLET (le noeud `#settings-modal` y est
+// deplace). Ces tests tiennent les invariants qui rendent la bascule sure :
+//   1. le remplissage des champs n'existe qu'a UN endroit (il est reutilise,
+//      jamais recopie) ;
 //   2. l'apercu de theme est lie UNE seule fois (aucun ecouteur empile par
 //      ouverture) ;
-//   3. la fenetre s'ouvre encore, apres un remplissage complet (lot A) ;
-//   4. l'onglet `settings` est declare TRANSVERSE (il survivra a une bascule de
+//   3. l'ouverture passe par UN SEUL chemin, avec le garde-fou R-B intact ;
+//   4. l'onglet `settings` est declare TRANSVERSE (il survit a une bascule de
 //      projet) ;
 //   5. le style de l'onglet est porte par l'IDENTIFIANT seul : aucune regle
 //      partagee entre modales ne peut changer de sens.
@@ -90,22 +90,26 @@ describe("lot A — l'apercu de theme ne s'empile plus", () => {
   });
 });
 
-describe("lot A — la fenetre des Reglages s'ouvre comme avant", () => {
-  it("ouvrir remplit d'abord, puis affiche la fenetre", () => {
-    expect(settings).toContain(
-      "await fillSettingsFromConfig(config);\n    modal.classList.remove(\"hidden\");\n    animateModalOpen(modal, clickX, clickY);"
-    );
+describe("lot B — les Reglages sont un ONGLET, plus une fenetre", () => {
+  it("ouvrir DEPLACE le noeud dans l'onglet, puis remplit les champs", () => {
+    // Le noeud n'est pas recopie : il est deplace tel quel dans le conteneur de
+    // l'onglet et prend la classe qui neutralise le positionnement de fenetre.
+    expect(settings).toContain("container.appendChild(modal);");
+    expect(settings).toContain('modal.classList.add("modal-in-tab");');
+    expect(settings).toContain("await settingsApi.open(detail);");
+    // Le remplissage reste celui du lot A, appele UNE seule fois (ci-dessus).
+    expect(countOf(settings, "await fillSettingsFromConfig(config);")).toBe(1);
   });
 
   it("un echec de lecture n'ouvre rien et ne remplit rien (reserve R-B intacte)", () => {
     // Decoupage PROTEGE : les deux ancres doivent exister (source-slice.js).
     const open = sliceSource(
       settings,
-      'btnSettings.addEventListener("click"',
+      "async function openSettingsContent(detail) {",
       "await fillSettingsFromConfig(config);",
       100,
     );
-    expect(open).toContain("return;");
+    expect(open).toContain("throw e;");
     expect(open).toContain("alert(");
   });
 });
@@ -137,7 +141,7 @@ describe("lot A — le style de l'onglet ne touche que les Reglages", () => {
     // `modal-in-tab` n'apparait que derriere l'identifiant : jamais sur `.modal`.
     expect(countOf(css, "modal-in-tab")).toBe(2);
     expect(css).not.toContain(".modal.modal-in-tab");
-    // La fenetre reste une fenetre tant que le lot B n'a pas deplace le noeud.
+    // `.modal` reste la fenetre des AUTRES modales : le lot B ne l'a pas touchee.
     expect(css).toContain(".modal {\n  position: fixed;");
   });
 });

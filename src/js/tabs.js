@@ -327,6 +327,13 @@ export class TabsManager {
       return;
     }
 
+    // Onglet Réglages (⚙️) — lot B de docs/proposition-reglages-en-onglet.md :
+    // les Réglages ne sont plus une fenêtre mais un onglet transverse.
+    if (mode === "settings") {
+      await this._openSettings();
+      return;
+    }
+
     // Onglet Agents (🎭) — spec_gestion_agents.md : équipe d'agents multi-rôles.
     if (mode === "agents") {
       await this._openAgents(path || "Agents");
@@ -1191,6 +1198,55 @@ export class TabsManager {
   }
 
   /**
+   * Ouvre l'onglet Réglages (⚙️) — lot B de docs/proposition-reglages-en-onglet.md.
+   * Le nœud `#settings-modal` cesse d'être une fenêtre et devient le CONTENU de
+   * cet onglet (déplacé, jamais recopié). Onglet transverse : il survit à une
+   * bascule de projet (tab-scoping.js) et à la fermeture du dernier projet.
+   * @param {{tab?: string}|null} detail catégorie interne à activer
+   */
+  async openSettings(detail = null) {
+    return await this._openSettings(detail);
+  }
+
+  async _openSettings(detail = null) {
+    const existing = this.tabs.find((t) => t.mode === "settings");
+    if (existing) {
+      // Déjà ouvert : on y revient SANS le recréer ni le recharger ; seule la
+      // catégorie interne demandée peut changer (aucune saisie perdue).
+      this.switchTab(existing.id);
+      if (existing.applySettingsDetail) existing.applySettingsDetail(detail);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", "Réglages", "settings");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper settings-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const { createSettings } = await import("./settings.js");
+      const result = await createSettings(tab.wrapper, detail);
+      tab.view = result.wrapper;
+      tab.applySettingsDetail = result.applyDetail;
+      tab.unlistenSettings = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Réglages:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Réglages</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
    * Ouvre l'onglet GDS (🌐) — spec_gds.md : gestionnaire de sources, PAR
    * PROJET. Alimenté par les commandes Rust gds_* (provision, config,
    * ajout projet, listes).
@@ -1963,6 +2019,18 @@ export class TabsManager {
     if (tab.mode === "superagent-kanban" && tab.unlistenSuperKanban) {
       tab.unlistenSuperKanban();
       tab.unlistenSuperKanban = null;
+    }
+    // Nettoyage onglet Réglages (⚙️) — lot B : le ✕ de l'onglet vaut
+    // « Annuler » (aucune confirmation, aucune modification non enregistrée
+    // n'est perdue en silence) et rend le nœud `#settings-modal` au `body`,
+    // masqué. À faire AVANT le retrait du conteneur ci-dessous.
+    if (tab.mode === "settings" && tab.unlistenSettings) {
+      try {
+        await tab.unlistenSettings();
+      } catch (e) {
+        console.warn("Fermeture des Réglages:", e);
+      }
+      tab.unlistenSettings = null;
     }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
@@ -3008,10 +3076,10 @@ export class TabsManager {
 
   _renderTabButton(tab) {
     const btn = document.createElement("div");
-    // LOT A « Reglages en onglet » : le mode `settings` est declare ici, avec
-    // la couleur `.tab-special` des ecrans transverses et SANS icone (le titre
-    // « Reglages » est celui du bouton et de l'en-tete). Aucun onglet de ce mode
-    // n'est encore cree : le lot B s'en charge.
+    // Reglages (lot B de docs/proposition-reglages-en-onglet.md) : le mode
+    // `settings` est declare ici, avec la couleur `.tab-special` des ecrans
+    // transverses et SANS icone (le titre « Reglages » est celui du bouton et de
+    // l'en-tete). L'onglet est cree par `_openSettings()` ci-dessous.
     const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard", "gds-admin", "gds-params", "settings"].includes(tab.mode);
     btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}${tab.mode === "dashboard" ? " tab-dashboard" : ""}`;
     btn.dataset.tabId = tab.id;

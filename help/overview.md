@@ -88,9 +88,12 @@ externe.
 
 - **Thème** : bascule dark/light depuis les **Paramètres ⚙️** (bouton du panneau
   d'actions) → section « Apparence ». Le thème est mémorisé.
-- **Paramètres ⚙️** : onglet de configuration modale (thème, éditeur, agent Pi,
-  accès distant, etc.). Toute la configuration est persistée dans un fichier
-  JSON (`app_data_dir/com.pilot.editor/config.json`).
+- **Paramètres ⚙️** : les Réglages s'ouvrent dans un **onglet** (thème, éditeur,
+  agent Pi, accès distant, etc.). Le **✕ de l'onglet** équivaut à **« Annuler »**
+  (rien n'est enregistré) ; « Annuler » et « Enregistrer » ne ferment pas
+  l'onglet, vous voyez le résultat de ce que vous venez de changer. L'onglet
+  reste ouvert quand vous changez de projet. Toute la configuration est
+  persistée dans un fichier JSON (`app_data_dir/com.pilot.editor/config.json`).
 - **Avatar (PLface)** : dans **Paramètres ⚙️ → Avatar**, cochez « Lancer mon
   avatar (PLface) au démarrage ». Le **programme du visage est fourni avec
   Pilot** : laissez le **chemin de l'exécutable** vide pour l'utiliser tel quel,
