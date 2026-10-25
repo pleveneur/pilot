@@ -1808,12 +1808,6 @@ let pendingRender = false;
 let lastAssistantRawText = "";
 let superShowThinking = true; // réglage « Afficher la réflexion » (issue #43)
 let superShowTools = false;   // réglage « Afficher les outils » (issue #43)
-// Lot A idée 2, tranche 5 : réglage d'AFFICHAGE du suivi du temps estimé /
-// passé (défaut désactivé). Lu dans la configuration (`show_time`) et appliqué
-// UNIQUEMENT à l'affichage : masqué ⇒ la vue d'ensemble reste exactement comme
-// avant l'idée 2 ; activé ⇒ le total par projet réapparaît. Aucune donnée n'est
-// écrite ni effacée par ce réglage.
-let superShowTime = false;
 // Toggles du bandeau « assistant occupé » et de la teinte « réflexion » de la
 // barre de saisie, exposés au module scope pour que handleSuperAgentEvent (qui
 // est au niveau module) puisse les appeler. Assigned dans createSuperAgent
@@ -2102,9 +2096,6 @@ const INVISIBLE_LOOP_BUFFER_MIN = 200;
 function refreshSuperRenderOptions() {
   superShowThinking = configCache.show_thinking !== false;
   superShowTools = configCache.show_tools === true;
-  // Lot A idée 2, tranche 5 : le suivi du temps n'est affiché que s'il est
-  // explicitement activé (champ absent ⇒ masqué, comme avant l'idée 2).
-  superShowTime = configCache.show_time === true;
 }
 
 // ── Rendu de messages (même structure DOM que l'agent standard agent-pi.js) ──
@@ -2664,58 +2655,6 @@ async function checkSuperAgentTools(bannerEl) {
   if (bannerEl) bannerEl.hidden = !noTools;
 }
 
-// ── Temps du suivi (Lot A, idée 2, tranche 4c) ──
-// Formatage PUR des totaux de temps d'un projet, utilisé par la vue d'ensemble
-// du suivi (`loadSuperTracking`). Les totaux viennent du SERVEUR (agrégat Rust,
-// tranche 4b) : l'interface n'additionne jamais rien, elle ne fait que formater.
-//
-// Règles (rapport de la tranche 4, § « Règles d'affichage ») :
-//  - la PRÉSENCE d'un temps se lit sur `estimated_set` / `spent_set`, jamais sur
-//    la valeur (`0` est faux en JavaScript) : un `0` renseigné s'affiche donc
-//    « 0 min » et reste un temps renseigné ;
-//  - aucun des deux temps renseigné → chaîne vide, la ligne du projet garde
-//    exactement son apparence actuelle ;
-//  - 60 minutes et plus → « 2 h 15 », « 4 h 05 », « 4 h » ; en dessous →
-//    « 45 min », « 1 min ».
-
-/** Minutes entières positives ; toute valeur absente ou douteuse retombe à 0. Pur. */
-function normalizeTrackingMinutes(value) {
-  const n = Math.round(Number(value));
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-
-/** Formate un total de minutes : « 45 min », « 2 h 15 », « 4 h ». Pur. */
-function formatTrackingMinutes(minutes) {
-  const total = normalizeTrackingMinutes(minutes);
-  if (total < 60) return `${total} min`;
-  const hours = Math.floor(total / 60);
-  const rest = total % 60;
-  return rest ? `${hours} h ${String(rest).padStart(2, "0")}` : `${hours} h`;
-}
-
-/**
- * Fragment « temps » d'une ligne projet : « 2 h 15 passées · 4 h prévues », ou
- * chaîne VIDE quand RIEN n'est renseigné (aucune mention). Pur.
- * @param {object|null|undefined} project projet de la réponse de suivi
- * @returns {string}
- */
-function projectTrackingTimeFragment(project) {
-  const p = project || {};
-  const spentSet = p.spent_set === true;
-  const estimatedSet = p.estimated_set === true;
-  if (!spentSet && !estimatedSet) return "";
-  const parts = [];
-  if (spentSet) {
-    const minutes = normalizeTrackingMinutes(p.spent_minutes);
-    parts.push(`${formatTrackingMinutes(minutes)} passée${minutes === 1 ? "" : "s"}`);
-  }
-  if (estimatedSet) {
-    const minutes = normalizeTrackingMinutes(p.estimated_minutes);
-    parts.push(`${formatTrackingMinutes(minutes)} prévue${minutes === 1 ? "" : "s"}`);
-  }
-  return parts.join(" · ");
-}
-
 // ── Création de l'interface ──
 
 export async function createSuperAgent(container) {
@@ -2783,7 +2722,6 @@ export async function createSuperAgent(container) {
     <button class="agent-btn" data-action="initialize" title="Initialiser le suivi du projet actif"><i data-lucide="sparkles" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="projects" title="Projets & clients (associer un projet à un client)"><i data-lucide="building-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="config" title="Configurer (nom, clients, prompt)"><i data-lucide="settings" class="icon-sm"></i></button>
-    <button class="agent-btn" data-action="tracking" title="Afficher/masquer le suivi multi-projets"><i data-lucide="layout-dashboard" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="period-report" title="Bilan de période (tâches terminées, décisions, jalons, blocages)"><i data-lucide="calendar-range" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="analyze-data" title="Analyser et ranger mes données (analyse en lecture seule : rapport + proposition de rangement)"><i data-lucide="folder-search" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="telegram-dialog" id="superagent-telegram-btn" title="Communication Telegram" aria-label="Communication Telegram" hidden><i data-lucide="message-circle" class="icon-sm"></i></button>
@@ -2908,12 +2846,6 @@ export async function createSuperAgent(container) {
 
   container.appendChild(wrapper);
 
-  // Tableau de bord de suivi multi-projets (get_project_tracking).
-  const trackingEl = document.createElement("div");
-  trackingEl.id = "super-tracking";
-  trackingEl.className = "super-tracking hidden";
-  container.appendChild(trackingEl);
-
   // ── Bilan de période (Idée 5, Lot A) ──
   // Panneau de la vue de suivi : choix de la période (semaine en cours / semaine
   // dernière / période libre), affichage du bilan mis en forme et bouton
@@ -3034,62 +2966,6 @@ export async function createSuperAgent(container) {
   // ONGLET DÉDIÉ de Pilot (mode `superagent-kanban`) via le bouton #btn-superkanban
   // de la sidebar, onglet Assistant (spec_super_agent.md). Elle n'occupe plus
   // le panneau inférieur.
-
-  // Rendu du tableau de bord de suivi multi-projets.
-  async function loadSuperTracking() {
-    if (!trackingEl) return;
-    if (trackingEl.classList.contains("hidden")) return;
-    trackingEl.innerHTML = `<div class="dash-loading">Chargement du suivi…</div>`;
-    try {
-      const data = await invoke("get_super_agent_tracking");
-      const clients = (data && data.clients) || [];
-      if (!clients.length) {
-        trackingEl.innerHTML = `<div class="dash-muted">Aucun client suivi pour l'instant. Utilisez « Initialiser » ou « Projets & clients » pour démarrer le suivi.</div>`;
-        return;
-      }
-      let html = "";
-      for (const client of clients) {
-        const projects = (client.projects || [])
-          .map((p) => {
-            // Temps par projet (Lot A, idée 2, tranche 4c) : ajouté à côté des
-            // compteurs existants, et SEULEMENT si au moins un des deux temps est
-            // renseigné (`*_set`) — sinon la ligne garde son apparence actuelle.
-            // Tranche 5 : rien de tout cela n'est affiché si le réglage
-            // d'affichage du suivi du temps est désactivé (défaut) : la vue
-            // d'ensemble redevient exactement celle d'avant l'idée 2.
-            const time = superShowTime ? projectTrackingTimeFragment(p) : "";
-            return `<div class="super-tracking-project">
-                 <span class="super-tracking-project-name">${escapeHtmlForSuper(p.name || p.path || "")}</span>
-                 <span class="dash-muted">${p.tasks_en_cours ?? 0} en cours · ${p.tasks_terminees ?? 0} terminées</span>
-                 ${time ? `<span class="dash-muted super-tracking-project-time">${escapeHtmlForSuper(time)}</span>` : ""}
-               </div>`;
-          })
-          .join("");
-        const decisions = (client.decisions_recentes || [])
-          .map((d) => `<li>${escapeHtmlForSuper(d)}</li>`)
-          .join("");
-        const sessions = (client.sessions_recentes || [])
-          .map((s) => `<li>${escapeHtmlForSuper(s)}</li>`)
-          .join("");
-        html += `<div class="super-tracking-client dash-card">
-          <div class="dash-card-head"><i data-lucide="building-2" class="icon-sm"></i> ${escapeHtmlForSuper(client.name || "")}</div>
-          <div class="dash-card-body">
-            <div class="super-tracking-projects">${projects || `<div class="dash-muted">Aucun projet</div>`}</div>
-            <div class="super-tracking-section"><strong>Décisions récentes</strong><ul>${decisions || `<li class="dash-muted">Aucune</li>`}</ul></div>
-            <div class="super-tracking-section"><strong>Sessions récentes</strong><ul>${sessions || `<li class="dash-muted">Aucune</li>`}</ul></div>
-          </div>
-        </div>`;
-      }
-      trackingEl.innerHTML = html;
-      refreshIcons(trackingEl);
-    } catch (err) {
-      console.error("Erreur get_project_tracking:", err);
-      trackingEl.innerHTML = `<div class="dash-error">Erreur de chargement du suivi : ${escapeHtmlForSuper(String(err))}</div>`;
-    }
-  }
-
-  // Recharger le suivi quand l'onglet Assistant devient actif (hook exposé
-  // via le retour de createSuperAgent, appelé par tabs.js switchTab).
 
   refreshIcons(wrapper);
 
@@ -3662,23 +3538,10 @@ export async function createSuperAgent(container) {
       await showProjectsPanel(messagesEl, state);
     } else if (action === "config") {
       window.dispatchEvent(new CustomEvent("pilot-open-settings", { detail: { tab: "superagent" } }));
-    } else if (action === "tracking") {
-      // La vue liste (suivi multi-projets) reste dans le panneau inférieur de
-      // l'onglet. La vue Kanban s'ouvre dans un onglet dédié via le bouton
-      // #btn-superkanban de la sidebar, onglet Assistant (spec_super_agent.md).
-      if (trackingEl.classList.contains("hidden")) {
-        trackingEl.classList.remove("hidden");
-        periodReportEl.classList.add("hidden");
-        loadSuperTracking();
-      } else {
-        trackingEl.classList.add("hidden");
-      }
     } else if (action === "period-report") {
-      // Bilan de période (Idée 5, Lot A) : panneau d'affichage + copie. Un
-      // seul panneau de suivi à la fois — on masque la liste multi-projets.
+      // Bilan de période (Idée 5, Lot A) : panneau d'affichage + copie.
       if (periodReportEl.classList.contains("hidden")) {
         periodReportEl.classList.remove("hidden");
-        trackingEl.classList.add("hidden");
         loadPeriodReport();
       } else {
         periodReportEl.classList.add("hidden");
@@ -3990,7 +3853,6 @@ export async function createSuperAgent(container) {
 
   return {
     wrapper,
-    superTrackingRefresh: loadSuperTracking,
     unlisten: async () => {
       clearInterval(superStatusPoll);
       // Tâche #160 : retirer l'overlay plein écran + ses minuteurs (sinon

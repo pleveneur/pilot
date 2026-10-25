@@ -210,6 +210,137 @@ function metric(label, value, sub) {
   return el;
 }
 
+// ── Suivi multi-projets : temps estimé / passé (Lot A, idée 2) ──
+// Ces trois fonctions viennent de l'onglet Assistant 🧭 : leur seul affichage
+// était la vue de suivi, qui rejoint désormais cette carte du tableau de bord
+// (décision du propriétaire). Le format est donc repris à l'identique, sans
+// second réglage ni seconde règle d'affichage.
+//
+// Formatage PUR des totaux de temps d'un projet. Les totaux viennent du SERVEUR
+// (agrégat Rust, tranche 4b) : l'interface n'additionne jamais rien, elle ne
+// fait que formater.
+//
+// Règles (rapport de la tranche 4, § « Règles d'affichage ») :
+//  - la PRÉSENCE d'un temps se lit sur `estimated_set` / `spent_set`, jamais sur
+//    la valeur (`0` est faux en JavaScript) : un `0` renseigné s'affiche donc
+//    « 0 min » et reste un temps renseigné ;
+//  - aucun des deux temps renseigné → chaîne vide, la ligne du projet garde
+//    exactement son apparence actuelle ;
+//  - 60 minutes et plus → « 2 h 15 », « 4 h 05 », « 4 h » ; en dessous →
+//    « 45 min », « 1 min ».
+
+/** Minutes entières positives ; toute valeur absente ou douteuse retombe à 0. Pur. */
+export function normalizeTrackingMinutes(value) {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Formate un total de minutes : « 45 min », « 2 h 15 », « 4 h ». Pur. */
+export function formatTrackingMinutes(minutes) {
+  const total = normalizeTrackingMinutes(minutes);
+  if (total < 60) return `${total} min`;
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  return rest ? `${hours} h ${String(rest).padStart(2, "0")}` : `${hours} h`;
+}
+
+/**
+ * Fragment « temps » d'une ligne projet : « 2 h 15 passées · 4 h prévues », ou
+ * chaîne VIDE quand RIEN n'est renseigné (aucune mention). Pur.
+ * @param {object|null|undefined} project projet de la réponse de suivi
+ * @returns {string}
+ */
+export function projectTrackingTimeFragment(project) {
+  const p = project || {};
+  const spentSet = p.spent_set === true;
+  const estimatedSet = p.estimated_set === true;
+  if (!spentSet && !estimatedSet) return "";
+  const parts = [];
+  if (spentSet) {
+    const minutes = normalizeTrackingMinutes(p.spent_minutes);
+    parts.push(`${formatTrackingMinutes(minutes)} passée${minutes === 1 ? "" : "s"}`);
+  }
+  if (estimatedSet) {
+    const minutes = normalizeTrackingMinutes(p.estimated_minutes);
+    parts.push(`${formatTrackingMinutes(minutes)} prévue${minutes === 1 ? "" : "s"}`);
+  }
+  return parts.join(" · ");
+}
+
+// ── Suivi multi-projets : regroupement PAR CLIENT (fonctions PURES) ──
+// Deux commandes disent des choses différentes et sont donc croisées ici :
+//  - `get_super_agent_tracking` (base de suivi de l'assistant) connaît TOUS les
+//    projets suivis, y compris ceux qui ne sont PAS ouverts, rangés par client,
+//    avec leurs compteurs de tâches ;
+//  - `get_project_tracking` (tableau de bord) ne connaît que les projets
+//    OUVERTS, mais c'est elle qui porte l'activité de l'agent (pastille
+//    occupé/prêt) et la dernière session indexée.
+// Aucune ligne ne doit disparaître : un projet ouvert que le suivi de
+// l'assistant ne connaît pas encore rejoint le groupe « Sans client ».
+
+/** Clé de rapprochement d'un chemin : casse et séparateurs ignorés, pas de
+ * séparateur final (les deux commandes ne viennent pas de la même source). Pur. */
+export function trackingPathKey(path) {
+  return String(path || "")
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+/**
+ * Range les projets suivis PAR CLIENT, dans l'ordre reçu du serveur. Pur.
+ * @param {Array} clients  clients de `get_super_agent_tracking`
+ * @param {Array} openProjects  projets de `get_project_tracking`
+ * @returns {Array<{client: string, decisions: Array, sessions: Array,
+ *   projects: Array<{name: string, path: string, client: string,
+ *   open: object|null, tracked: object|null}>}>}
+ */
+export function buildTrackingGroups(clients, openProjects) {
+  const openByPath = new Map();
+  for (const p of openProjects || []) openByPath.set(trackingPathKey(p.path), p);
+  const groups = [];
+  const placed = new Set();
+  for (const client of clients || []) {
+    const projects = [];
+    for (const tracked of client.projects || []) {
+      const key = trackingPathKey(tracked.path);
+      const open = openByPath.get(key) || null;
+      if (open) placed.add(key);
+      projects.push({
+        name: (open && open.name) || tracked.name || tracked.path || "",
+        path: (open && open.path) || tracked.path || "",
+        client: client.name || "",
+        open,
+        tracked,
+      });
+    }
+    groups.push({
+      client: client.name || "Sans client",
+      decisions: client.decisions_recentes || [],
+      sessions: client.sessions_recentes || [],
+      projects,
+    });
+  }
+  const rest = (openProjects || []).filter((p) => !placed.has(trackingPathKey(p.path)));
+  if (rest.length) {
+    let group = groups.find((g) => g.client === "Sans client");
+    if (!group) {
+      group = { client: "Sans client", decisions: [], sessions: [], projects: [] };
+      groups.push(group);
+    }
+    for (const open of rest) {
+      group.projects.push({
+        name: open.name || open.path || "",
+        path: open.path || "",
+        client: open.client || "",
+        open,
+        tracked: null,
+      });
+    }
+  }
+  return groups.filter((g) => g.projects.length > 0);
+}
+
 /** Crée le tableau de bord dans `container`. */
 export function createDashboard(container) {
   container.classList.add("dashboard-view");
@@ -243,12 +374,18 @@ export function createDashboard(container) {
     refreshStatusEl.textContent = "⏳ Analyse…";
     refreshBtn.disabled = true;
     try {
-      const [data, tracking, supervision] = await Promise.all([
+      const [data, tracking, supervision, assistantTracking, cfg] = await Promise.all([
         invoke("get_project_dashboard"),
         invoke("get_project_tracking").catch(() => ({ projects: [] })),
         invoke("get_agent_supervision").catch(() => ({ projects: [] })),
+        // Suivi complet de l'assistant : TOUS les projets suivis, groupés par
+        // client, y compris ceux qui ne sont pas ouverts (la commande
+        // get_project_tracking, elle, ne connaît que les projets ouverts).
+        invoke("get_super_agent_tracking").catch(() => ({ clients: [] })),
+        // Réglage d'affichage du suivi du temps (Paramètres → Assistant).
+        invoke("get_config").catch(() => ({})),
       ]);
-      render(data, tracking, supervision);
+      render(data, tracking, supervision, assistantTracking, cfg);
       refreshStatusEl.textContent = `✓ ${data.project?.refreshed_at || ""}`;
     } catch (e) {
       contentEl.innerHTML = `<div class="dash-error">❌ ${e}</div>`;
@@ -378,7 +515,7 @@ export function createDashboard(container) {
   const onProjectSensitivity = () => refreshIfProjectChanged();
   document.addEventListener("pilot-project-sensitivity", onProjectSensitivity);
 
-  function render(data, tracking, supervision) {
+  function render(data, tracking, supervision, assistantTracking, cfg) {
     const hasProject = data.has_project !== false;
     const p = data.project || {};
     subtitleEl.textContent = hasProject
@@ -480,13 +617,28 @@ export function createDashboard(container) {
     }
     grid.appendChild(act.el);
 
-    // ── Suivi multi-projets (via commande Rust get_project_tracking) ──
-    // Affiché dès qu'au moins un projet est connu du suivi. Présente un tableau
-    // récapitulatif : client, statut, tâches (ouvertes/total), activité de
-    // l'agent et dernière session indexée. Permet de superviser tous les
-    // projets ouverts d'un coup d'œil.
+    // ── Suivi multi-projets (get_super_agent_tracking + get_project_tracking) ──
+    // Décision du propriétaire : le suivi PAR CLIENT rejoint le Tableau de bord
+    // et la table est alimentée par TOUS les projets suivis. Les deux commandes
+    // ne disent pas la même chose, elles sont donc croisées :
+    //  - `get_super_agent_tracking` (base de suivi de l'assistant) connaît tous
+    //    les projets suivis, y compris ceux qui ne sont PAS ouverts, rangés par
+    //    client, avec leurs compteurs de tâches et les décisions/sessions
+    //    récentes du client ;
+    //  - `get_project_tracking` (tableau de bord) ne connaît que les projets
+    //    OUVERTS, mais c'est elle qui porte l'activité de l'agent et la dernière
+    //    session indexée.
+    // Un projet non ouvert n'est plus absent : il garde sa ligne et porte la
+    // pastille « non ouvert » (`dash-chip`, même composant que les autres
+    // statuts). Colonnes, tailles `dash-tracking-*`, tri et couleurs des lignes
+    // sont inchangés.
     const trackingProjects = (tracking && tracking.projects) || [];
-    if (trackingProjects.length > 0) {
+    const assistantClients = (assistantTracking && assistantTracking.clients) || [];
+    const trackingGroups = buildTrackingGroups(assistantClients, trackingProjects);
+    if (trackingGroups.length > 0) {
+      // Réglage « Suivre le temps » de l'onglet Assistant : il ne gouverne que
+      // l'AFFICHAGE (aucune donnée n'est écrite ni effacée).
+      const showTime = (cfg || {}).super_agent_show_time === true;
       const tr = card("Suivi multi-projets", "folders");
       // Sur grand écran, la table de suivi occupe toute la largeur (A12).
       tr.el.classList.add("dash-card-wide");
@@ -497,77 +649,137 @@ export function createDashboard(container) {
       head.className = "dash-tracking-row dash-tracking-head";
       head.innerHTML = `<span>Projet</span><span>Client</span><span>Statut</span><span>Tâches</span><span>Agent</span><span>Dernière session</span>`;
       tbl.appendChild(head);
-      for (const p of trackingProjects) {
-        const row = document.createElement("div");
-        row.className = "dash-tracking-row" + (p.active ? " dash-tracking-active" : "");
-        const nameCell = document.createElement("span");
-        nameCell.className = "dash-tracking-name";
-        nameCell.innerHTML = `${p.active ? "📍 " : ""}${p.name || ""}<span class="dash-tracking-path" title="${p.path || ""}">${p.path || ""}</span>`;
-        const clientCell = document.createElement("span");
-        clientCell.textContent = p.client || "—";
-        const statusCell = document.createElement("span");
-        statusCell.className = "dash-chip";
-        statusCell.textContent = p.status || "suivi";
-        const tasksCell = document.createElement("span");
-        tasksCell.textContent = `${p.open_tasks || 0}/${p.task_count || 0}`;
-        const agentCell = document.createElement("span");
-        agentCell.className = "dash-tracking-agent" + (p.agent_busy ? " busy" : "");
-        agentCell.innerHTML = p.agent_busy ? '<i data-lucide="loader" class="icon-sm"></i> En cours' : '✓ Prêt';
-        const lastCell = document.createElement("span");
-        lastCell.className = "dash-muted";
-        lastCell.textContent = p.last_session ? String(p.last_session).slice(0, 10) : "—";
-        row.appendChild(nameCell);
-        row.appendChild(clientCell);
-        row.appendChild(statusCell);
-        row.appendChild(tasksCell);
-        row.appendChild(agentCell);
-        row.appendChild(lastCell);
-        tbl.appendChild(row);
-        // Détail : décisions et sessions récentes du projet (base de
-        // l'assistant). Affiché uniquement si au moins un élément est
-        // présent. Ligne pleine largeur sous la ligne du projet.
-        const dec = Array.isArray(p.decisions_recentes) ? p.decisions_recentes : [];
-        const ses = Array.isArray(p.sessions_recentes) ? p.sessions_recentes : [];
-        if (dec.length || ses.length) {
-          const detail = document.createElement("div");
-          detail.className = "dash-tracking-detail";
-          detail.style.cssText =
-            "padding:4px 8px 8px;border-radius:6px;" +
-            "background:color-mix(in srgb,var(--surface-2,#1c2029) 40%,transparent);" +
-            "font-size:11px;color:var(--text-secondary,#a0a6b4);";
-          const mkBlock = (label, items) => {
-            if (!items.length) return null;
-            const wrap = document.createElement("div");
-            wrap.style.cssText = "margin-top:4px;";
-            const t = document.createElement("div");
-            t.style.cssText =
-              "font-weight:600;color:var(--text-muted,#6b7280);text-transform:uppercase;" +
-              "letter-spacing:0.03em;font-size:10px;";
-            t.textContent = label;
-            wrap.appendChild(t);
-            const ul = document.createElement("ul");
-            ul.style.cssText = "margin:2px 0 0;padding-left:16px;line-height:1.4;";
-            for (const it of items) {
-              const li = document.createElement("li");
-              const txt = String(it || "");
-              // Tronquer les résumés trop longs (max ~140 caractères).
-              li.textContent = txt.length > 140 ? txt.slice(0, 137) + "…" : txt;
-              ul.appendChild(li);
-            }
-            wrap.appendChild(ul);
-            return wrap;
-          };
-          const dBlock = mkBlock("Décisions", dec);
-          const sBlock = mkBlock("Sessions", ses);
+      // Bloc de détail (ligne pleine largeur) — UNE seule recette, partagée par
+      // le détail d'un projet et celui d'un client.
+      const mkDetail = () => {
+        const detail = document.createElement("div");
+        detail.className = "dash-tracking-detail";
+        detail.style.cssText =
+          "padding:4px 8px 8px;border-radius:6px;" +
+          "background:color-mix(in srgb,var(--surface-2,#1c2029) 40%,transparent);" +
+          "font-size:11px;color:var(--text-secondary,#a0a6b4);";
+        return detail;
+      };
+      const mkBlock = (label, items) => {
+        if (!items.length) return null;
+        const wrap = document.createElement("div");
+        wrap.style.cssText = "margin-top:4px;";
+        const t = document.createElement("div");
+        t.style.cssText =
+          "font-weight:600;color:var(--text-muted,#6b7280);text-transform:uppercase;" +
+          "letter-spacing:0.03em;font-size:10px;";
+        t.textContent = label;
+        wrap.appendChild(t);
+        const ul = document.createElement("ul");
+        ul.style.cssText = "margin:2px 0 0;padding-left:16px;line-height:1.4;";
+        for (const it of items) {
+          const li = document.createElement("li");
+          const txt = String(it || "");
+          // Tronquer les résumés trop longs (max ~140 caractères).
+          li.textContent = txt.length > 140 ? txt.slice(0, 137) + "…" : txt;
+          ul.appendChild(li);
+        }
+        wrap.appendChild(ul);
+        return wrap;
+      };
+      for (const group of trackingGroups) {
+        // En-tête de groupe PAR CLIENT : même recette que les autres titres de
+        // rubrique du produit (`.dash-tracking-client`, couleur `--accent-text`).
+        const groupHead = document.createElement("div");
+        groupHead.className = "dash-tracking-client";
+        groupHead.textContent = group.client;
+        tbl.appendChild(groupHead);
+        for (const entry of group.projects) {
+          const open = entry.open || {};
+          const tracked = entry.tracked || {};
+          const row = document.createElement("div");
+          row.className = "dash-tracking-row" + (open.active ? " dash-tracking-active" : "");
+          // Temps estimé / passé du projet (Lot A, idée 2) : son seul affichage
+          // était l'ancien panneau de l'onglet 🧭, il est donc repris ici, avec
+          // la même règle : SEULEMENT si le réglage est activé et si au moins un
+          // des deux temps est renseigné (sinon la ligne garde son apparence).
+          const time = showTime ? projectTrackingTimeFragment(tracked) : "";
+          const nameCell = document.createElement("span");
+          nameCell.className = "dash-tracking-name";
+          nameCell.innerHTML =
+            `${open.active ? "📍 " : ""}${entry.name}` +
+            `<span class="dash-tracking-path" title="${entry.path}">${entry.path}</span>` +
+            (time ? `<span class="dash-tracking-time">⏱ ${time}</span>` : "");
+          const clientCell = document.createElement("span");
+          clientCell.textContent = entry.client || "—";
+          const statusCell = document.createElement("span");
+          statusCell.className = "dash-chip";
+          statusCell.textContent = entry.open ? open.status || "suivi" : "non ouvert";
+          const tasksCell = document.createElement("span");
+          if (entry.open) {
+            tasksCell.textContent = `${open.open_tasks || 0}/${open.task_count || 0}`;
+          } else {
+            // Projet suivi mais non ouvert : les compteurs viennent du suivi de
+            // l'assistant (en cours / en cours + terminées), même lecture que
+            // l'ancien panneau de l'onglet 🧭.
+            const enCours = Number(tracked.tasks_en_cours) || 0;
+            const terminees = Number(tracked.tasks_terminees) || 0;
+            tasksCell.textContent = `${enCours}/${enCours + terminees}`;
+          }
+          const agentCell = document.createElement("span");
+          if (entry.open) {
+            agentCell.className = "dash-tracking-agent" + (open.agent_busy ? " busy" : "");
+            agentCell.innerHTML = open.agent_busy ? '<i data-lucide="loader" class="icon-sm"></i> En cours' : '✓ Prêt';
+          } else {
+            // Aucun agent ne tourne sur un projet qui n'est pas ouvert : aucune
+            // activité n'est inventée.
+            agentCell.className = "dash-tracking-agent";
+            agentCell.textContent = "—";
+          }
+          const lastCell = document.createElement("span");
+          lastCell.className = "dash-muted";
+          lastCell.textContent = open.last_session ? String(open.last_session).slice(0, 10) : "—";
+          row.appendChild(nameCell);
+          row.appendChild(clientCell);
+          row.appendChild(statusCell);
+          row.appendChild(tasksCell);
+          row.appendChild(agentCell);
+          row.appendChild(lastCell);
+          tbl.appendChild(row);
+          // Détail du projet : décisions et sessions récentes (base de
+          // l'assistant). Affiché uniquement si au moins un élément est présent.
+          const dec = Array.isArray(open.decisions_recentes) ? open.decisions_recentes : [];
+          const ses = Array.isArray(open.sessions_recentes) ? open.sessions_recentes : [];
+          if (dec.length || ses.length) {
+            const detail = mkDetail();
+            const dBlock = mkBlock("Décisions", dec);
+            const sBlock = mkBlock("Sessions", ses);
+            if (dBlock) detail.appendChild(dBlock);
+            if (sBlock) detail.appendChild(sBlock);
+            tbl.appendChild(detail);
+          }
+        }
+        // Détail du CLIENT : décisions et sessions récentes, repris de l'ancien
+        // panneau de l'onglet 🧭 (mêmes libellés, même recette).
+        if (group.decisions.length || group.sessions.length) {
+          const detail = mkDetail();
+          const dBlock = mkBlock("Décisions", group.decisions);
+          const sBlock = mkBlock("Sessions", group.sessions);
           if (dBlock) detail.appendChild(dBlock);
           if (sBlock) detail.appendChild(sBlock);
           tbl.appendChild(detail);
         }
       }
       tr.body.appendChild(tbl);
-      const openCount = trackingProjects.reduce((s, p) => s + (p.open_tasks || 0), 0);
-      const busyCount = trackingProjects.filter((p) => p.agent_busy).length;
-      tr.body.appendChild(insight(`${trackingProjects.length} projet(s) suivi(s) — ${openCount} tâche(s) ouverte(s), ${busyCount} agent(s) actif(s).`));
+      const allEntries = trackingGroups.reduce((acc, g) => acc.concat(g.projects), []);
+      const openCount = allEntries.reduce((s, e) => {
+        if (e.open) return s + (e.open.open_tasks || 0);
+        return s + (Number((e.tracked || {}).tasks_en_cours) || 0);
+      }, 0);
+      const busyCount = allEntries.filter((e) => e.open && e.open.agent_busy).length;
+      const nonOpenCount = allEntries.filter((e) => !e.open).length;
+      tr.body.appendChild(
+        insight(
+          `${trackingGroups.length} client(s), ${allEntries.length} projet(s) suivi(s)` +
+            `${nonOpenCount ? ` (dont ${nonOpenCount} non ouvert(s))` : ""} — ` +
+            `${openCount} tâche(s) ouverte(s), ${busyCount} agent(s) actif(s).`
+        )
+      );
       grid.insertBefore(tr.el, grid.firstChild);
     }
 

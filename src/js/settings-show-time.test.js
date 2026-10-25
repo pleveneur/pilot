@@ -1,7 +1,7 @@
 // settings-show-time.test.js — Lot A idée 2, tranche 5 : le réglage
 // « Afficher le suivi du temps estimé / passé » doit être LISIBLE et ÉCRIT par
 // la modale des Paramètres (section « Suivi »), et l'affichage du temps doit le
-// CONSULTER partout (fiche, cartes, vue d'ensemble).
+// CONSULTER partout (fiche, cartes, carte de suivi du Tableau de bord).
 //
 // Défaut = DÉSACTIVÉ : `super_agent_show_time` absent de la configuration (toutes
 // les configs existantes) masque entièrement le suivi du temps — ni champs dans
@@ -94,12 +94,14 @@ describe("tranche 5 — ligne de réglage dans les Paramètres", () => {
 });
 
 describe("tranche 5 — l'affichage du suivi du temps CONSULTE le réglage", () => {
-  it("la vue d'ensemble ne pose le fragment de temps que si le réglage est actif", () => {
-    const js = read("src/js/super-agent.js");
-    // Lecture du réglage exposé par get_super_agent_config (« show_time »).
-    expect(js).toMatch(/superShowTime\s*=\s*(?:configCache|\(configCache \|\| \{\}\))\.show_time === true/);
+  it("la carte de suivi du Tableau de bord ne pose le fragment de temps que si le réglage est actif", () => {
+    // La vue d'ensemble du suivi a quitté l'onglet Assistant 🧭 pour la carte
+    // « Suivi multi-projets » du Tableau de bord 📊 : c'est donc là que se lit
+    // désormais le réglage, avec la MÊME clé de configuration.
+    const js = read("src/js/dashboard.js");
+    expect(js).toMatch(/const showTime = \(cfg \|\| \{\}\)\.super_agent_show_time === true;/);
     // Branchement : le fragment par projet n'est produit que si activé.
-    expect(js).toMatch(/const time = superShowTime \? projectTrackingTimeFragment\(p\) : "";/);
+    expect(js).toMatch(/const time = showTime \? projectTrackingTimeFragment\(tracked\) : "";/);
   });
 
   it("les cartes du Kanban ne posent une pastille que si le réglage est actif", () => {

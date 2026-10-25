@@ -1,16 +1,22 @@
-// Tests unitaires — temps estimé / passé au niveau PROJET dans la vue
-// d'ensemble du suivi (Lot A, idée 2, tranche 4c).
+// Tests unitaires — temps estimé / passé au niveau PROJET dans la carte
+// « Suivi multi-projets » du Tableau de bord (Lot A, idée 2, tranche 4c).
 //
-// `src/js/super-agent.js` est un module à DOM (importe Tauri, markdown-it…)
+// La vue d'ensemble du suivi a quitté l'onglet Assistant 🧭 : elle vit désormais
+// dans la carte « Suivi multi-projets » du Tableau de bord 📊. Les trois helpers
+// PURS de formatage ont suivi le déménagement — ils ne sont donc plus lus dans
+// `src/js/super-agent.js` mais dans `src/js/dashboard.js`, où ils restent la
+// SEULE source de ce formatage (aucune copie, aucun second réglage).
+//
+// `src/js/dashboard.js` est un module à DOM (importe Tauri, markdown-it…)
 // impossible à charger dans l'environnement vitest `node` sans jsdom. Les tests
 // procèdent donc par LECTURE DE SOURCE, comme les autres tests de câblage du
 // dépôt :
-//   1. les trois helpers PURS de formatage ajoutés au module sont extraits de
-//      la source (accolades appairées) puis évalués pour être exercés
-//      RÉELLEMENT (valeurs → chaînes), et non seulement cherchés au texte ;
-//   2. le branchement dans `loadSuperTracking` est verrouillé sur la source :
-//      lecture des quatre champs, mention conditionnée à la présence, compteurs
-//      existants intacts.
+//   1. les trois helpers PURS de formatage sont extraits de la source (accolades
+//      appairées) puis évalués pour être exercés RÉELLEMENT (valeurs → chaînes),
+//      et non seulement cherchés au texte ;
+//   2. le branchement dans la carte du Tableau de bord est verrouillé sur la
+//      source : lecture des quatre champs, mention conditionnée à la présence,
+//      compteurs existants intacts.
 //
 // Contrat de la tranche 2/4b : la PRÉSENCE d'un temps se lit sur `*_set`, jamais
 // sur la valeur (`0` est faux en JavaScript) ; les totaux viennent du serveur et
@@ -18,7 +24,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 
-const SUPER_AGENT_SRC = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
+const DASHBOARD_SRC = readFileSync(new URL("./dashboard.js", import.meta.url), "utf8");
 
 // ── Extraction des helpers purs (lecture de source) ─────────────────────────
 
@@ -42,9 +48,9 @@ function extractFunction(src, name) {
 }
 
 const HELPERS_SRC = [
-  extractFunction(SUPER_AGENT_SRC, "normalizeTrackingMinutes"),
-  extractFunction(SUPER_AGENT_SRC, "formatTrackingMinutes"),
-  extractFunction(SUPER_AGENT_SRC, "projectTrackingTimeFragment"),
+  extractFunction(DASHBOARD_SRC, "normalizeTrackingMinutes"),
+  extractFunction(DASHBOARD_SRC, "formatTrackingMinutes"),
+  extractFunction(DASHBOARD_SRC, "projectTrackingTimeFragment"),
 ].join("\n");
 
 const { normalizeTrackingMinutes, formatTrackingMinutes, projectTrackingTimeFragment } =
@@ -52,14 +58,16 @@ const { normalizeTrackingMinutes, formatTrackingMinutes, projectTrackingTimeFrag
     `${HELPERS_SRC}\nreturn { normalizeTrackingMinutes, formatTrackingMinutes, projectTrackingTimeFragment };`
   )();
 
-// Fenêtre de source de `loadSuperTracking` (de sa déclaration au commentaire qui
-// suit la fonction), normalisée pour s'affranchir des retours à la ligne.
-function loadSuperTrackingSource() {
-  const start = SUPER_AGENT_SRC.indexOf("async function loadSuperTracking(");
+// Fenêtre de source du bloc « Suivi multi-projets » de la carte du Tableau de
+// bord, normalisée pour s'affranchir des retours à la ligne.
+function trackingCardSource() {
+  const start = DASHBOARD_SRC.indexOf(
+    "// ── Suivi multi-projets (get_super_agent_tracking + get_project_tracking) ──"
+  );
   expect(start).toBeGreaterThan(-1);
-  const end = SUPER_AGENT_SRC.indexOf("// Recharger le suivi quand l'onglet Assistant devient actif", start);
+  const end = DASHBOARD_SRC.indexOf("grid.insertBefore(tr.el, grid.firstChild);", start);
   expect(end).toBeGreaterThan(start);
-  return SUPER_AGENT_SRC.slice(start, end).replace(/\s+/g, " ");
+  return DASHBOARD_SRC.slice(start, end).replace(/\s+/g, " ");
 }
 
 // ── Règle 1 : aucune mention quand rien n'est renseigné ─────────────────────
@@ -180,30 +188,33 @@ describe("formatTrackingMinutes — heures et minutes", () => {
 
 // ── Règle 4 : branchement dans la vue d'ensemble ────────────────────────────
 
-describe("loadSuperTracking — branchement de l'affichage", () => {
+describe("carte « Suivi multi-projets » du Tableau de bord — branchement", () => {
   it("lit les quatre champs de temps par le helper pur", () => {
-    const win = loadSuperTrackingSource();
-    expect(win).toContain("projectTrackingTimeFragment(p)");
+    const win = trackingCardSource();
+    expect(win).toContain("projectTrackingTimeFragment(tracked)");
     // Le helper lit bien les quatre champs (source des helpers).
     for (const field of ["estimated_minutes", "spent_minutes", "estimated_set", "spent_set"]) {
-      expect(SUPER_AGENT_SRC).toContain(`p.${field}`);
+      expect(DASHBOARD_SRC).toContain(`p.${field}`);
     }
   });
 
   it("n'ajoute la mention que si le fragment est non vide", () => {
-    const win = loadSuperTrackingSource();
-    expect(win).toContain("${time ? `<span class=\"dash-muted super-tracking-project-time\">${escapeHtmlForSuper(time)}</span>` : \"\"}");
+    const win = trackingCardSource();
+    expect(win).toContain('(time ? `<span class="dash-tracking-time">⏱ ${time}</span>` : "")');
   });
 
   it("ne touche pas aux compteurs existants de la ligne projet", () => {
-    const win = loadSuperTrackingSource();
-    expect(win).toContain("${p.tasks_en_cours ?? 0} en cours · ${p.tasks_terminees ?? 0} terminées");
-    expect(win).toContain('<span class="super-tracking-project-name">');
-    expect(win).toContain('<div class="super-tracking-project">');
+    const win = trackingCardSource();
+    // Projet ouvert : mêmes compteurs qu'avant, dans les mêmes cellules.
+    expect(win).toContain("`${open.open_tasks || 0}/${open.task_count || 0}`");
+    // Projet suivi mais non ouvert : compteurs du suivi de l'assistant.
+    expect(win).toContain("`${enCours}/${enCours + terminees}`");
+    expect(win).toContain("dash-tracking-name");
+    expect(win).toContain("dash-tracking-path");
   });
 
-  it("n'additionne jamais les temps dans la vue d'ensemble", () => {
-    const win = loadSuperTrackingSource();
+  it("n'additionne jamais les temps dans la carte de suivi", () => {
+    const win = trackingCardSource();
     expect(win).not.toContain("spent_minutes +");
     expect(win).not.toContain("estimated_minutes +");
   });

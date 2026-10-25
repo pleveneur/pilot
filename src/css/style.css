@@ -8602,7 +8602,10 @@ body.pilot-loading *::after {
   gap: 10px;
 }
 
-/* Tableau de bord de suivi multi-projets (Assistant 🧭) */
+/* Panneau inférieur de l'onglet Assistant 🧭 : il ne reste que le bilan de
+   période. La liste de suivi multi-projets n'y est plus : elle vit désormais
+   dans la carte « Suivi multi-projets » du Tableau de bord 📊
+   (`.dash-tracking-*`, plus bas), donc une seule fois dans le produit. */
 .super-tracking {
   display: flex;
   flex-direction: column;
@@ -8612,39 +8615,6 @@ body.pilot-loading *::after {
 }
 .super-tracking.hidden {
   display: none;
-}
-.super-tracking-client {
-  margin-bottom: 4px;
-}
-.super-tracking-projects {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.super-tracking-project {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 13px;
-}
-.super-tracking-project-name {
-  font-weight: 500;
-  color: var(--text-primary, #e6e8ee);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.super-tracking-section {
-  font-size: 12px;
-  color: var(--text-secondary, #9aa0aa);
-}
-.super-tracking-section ul {
-  margin: 4px 0 0;
-  padding-left: 16px;
-}
-.super-tracking-section li {
-  margin-bottom: 2px;
 }
 
 /* Bilan de période (Idée 5, Lot A) — panneau de la vue de suivi 🧭 */
@@ -9564,6 +9534,20 @@ body.pilot-loading *::after {
   border-radius: 0;
   padding-bottom: 6px;
 }
+/* En-tête de groupe PAR CLIENT (suivi multi-projets). Même recette que les
+   autres titres de rubrique du produit (`.settings-tabs-group-title`,
+   `.pj-more-group-label`) : petites majuscules, graisse 600, espacement 0.04em,
+   padding vertical court — et la MÊME couleur `--accent-text`, le jeton du
+   thème prévu pour l'accent quand il porte du TEXTE (défini une seule fois par
+   thème : aucune teinte en dur, aucun second réglage à maintenir). */
+.dash-tracking-client {
+  padding: 8px 8px 2px;
+  font-size: var(--font-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
 .dash-tracking-active {
   box-shadow: inset 2px 0 0 var(--accent, #6b8cff);
 }
@@ -9581,6 +9565,13 @@ body.pilot-loading *::after {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Temps estimé / passé d'un projet : même registre discret que le chemin,
+   affiché seulement si le réglage « Suivre le temps » est activé. */
+.dash-tracking-time {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-secondary);
 }
 .dash-tracking-agent {
   display: inline-flex;

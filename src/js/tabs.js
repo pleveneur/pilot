@@ -814,7 +814,6 @@ export class TabsManager {
     try {
       const result = await createSuperAgent(tab.wrapper);
       tab.view = result.wrapper;
-      tab.superTrackingRefresh = result.superTrackingRefresh;
       tab.unlistenSuperAgent = result.unlisten;
     } catch (e) {
       console.error("Erreur onglet Assistant:", e);
@@ -2368,11 +2367,6 @@ export class TabsManager {
       if (tab.gdsSetActive) tab.gdsSetActive(true);
     }
 
-    // Tableau de bord de suivi multi-projets (Assistant 🧭) : recharger à
-    // chaque activation de l'onglet.
-    if (tab.mode === "superagent" && tab.superTrackingRefresh) {
-      tab.superTrackingRefresh();
-    }
   }
 
   _updateCursorPos(view) {

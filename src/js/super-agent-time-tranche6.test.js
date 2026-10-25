@@ -4,11 +4,12 @@
 //
 // Méthode : `super-agent-kanban.js` est importable (fonctions pures exportées,
 // sans DOM ni invoke) → on les exerce DIRECTEMENT. `super-agent.js`,
-// `super-agent-kanban-view.js` et le cœur Rust sont des modules à DOM /
-// AppHandle : leurs branchements sont verrouillés par LECTURE DE SOURCE, méthode
-// déjà employée par `super-agent-tracking-time.test.js` et
-// `super-agent-task-time.test.js`. Les helpers purs de `super-agent.js` sont en
-// plus EXTRAITS puis évalués, pour les exercer réellement.
+// `super-agent-kanban-view.js`, `dashboard.js` et le cœur Rust sont des modules
+// à DOM / AppHandle : leurs branchements sont verrouillés par LECTURE DE SOURCE,
+// méthode déjà employée par `super-agent-tracking-time.test.js` et
+// `super-agent-task-time.test.js`. Les helpers purs de `dashboard.js` (le total
+// par projet y a déménagé avec la carte de suivi multi-projets) sont en plus
+// EXTRAITS puis évalués, pour les exercer réellement.
 //
 // Contrat verrouillé : la PRÉSENCE d'un temps se lit sur `*_set`, jamais sur la
 // valeur (`0` est faux en JavaScript) ; quand le réglage d'affichage est éteint
@@ -32,7 +33,7 @@ const read = (p) => readFileSync(resolve(root, p), "utf8");
 
 const KANBAN_SRC = read("src/js/super-agent-kanban.js");
 const VIEW_SRC = read("src/js/super-agent-kanban-view.js");
-const SUPER_SRC = read("src/js/super-agent.js");
+const DASHBOARD_SRC = read("src/js/dashboard.js");
 const RUST_SRC = read("src-tauri/src/super_agent.rs");
 const LIB_SRC = read("src-tauri/src/lib.rs");
 
@@ -58,9 +59,9 @@ function extractFunction(src, name) {
 }
 
 const HELPERS_SRC = [
-  extractFunction(SUPER_SRC, "normalizeTrackingMinutes"),
-  extractFunction(SUPER_SRC, "formatTrackingMinutes"),
-  extractFunction(SUPER_SRC, "projectTrackingTimeFragment"),
+  extractFunction(DASHBOARD_SRC, "normalizeTrackingMinutes"),
+  extractFunction(DASHBOARD_SRC, "formatTrackingMinutes"),
+  extractFunction(DASHBOARD_SRC, "projectTrackingTimeFragment"),
 ].join("\n");
 
 const { projectTrackingTimeFragment } = new Function(
@@ -141,7 +142,7 @@ describe("réglage éteint (`super_agent_show_time`, défaut) — rien ne s'affi
   // Normalisation : on ignore les espaces/retours à la ligne pour verrouiller
   // l'esprit du branchement sans dépendre de la mise en forme exacte.
   const flatView = VIEW_SRC.replace(/\s+/g, " ");
-  const flatSuper = SUPER_SRC.replace(/\s+/g, " ");
+  const flatDashboard = DASHBOARD_SRC.replace(/\s+/g, " ");
 
   it("la pastille des cartes est conditionnée au réglage", () => {
     expect(flatView).toContain('const timeLabel = showTime ? taskTimePillLabel(taskTimes.get(t.id)) : "";');
@@ -162,8 +163,14 @@ describe("réglage éteint (`super_agent_show_time`, défaut) — rien ne s'affi
     );
   });
 
-  it("le total par projet de la vue d'ensemble exige le réglage", () => {
-    expect(flatSuper).toContain('const time = superShowTime ? projectTrackingTimeFragment(p) : "";');
+  it("le total par projet de la carte de suivi du Tableau de bord exige le réglage", () => {
+    // La vue d'ensemble a quitté l'onglet Assistant : c'est la carte « Suivi
+    // multi-projets » du Tableau de bord qui porte ce total, et elle consulte le
+    // MÊME réglage (`super_agent_show_time`, via get_config).
+    expect(flatDashboard).toContain(
+      'const showTime = (cfg || {}).super_agent_show_time === true;'
+    );
+    expect(flatDashboard).toContain('const time = showTime ? projectTrackingTimeFragment(tracked) : "";');
   });
 });
 

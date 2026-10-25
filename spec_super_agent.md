@@ -383,9 +383,13 @@ uniquement un bloc d'instructions dans le prompt système.
   « 🗂 Kanban », même pattern que les onglets outil Review / Historique /
   Dashboard / Coffre). Cliquer sur « Vues » focalise l'onglet Kanban s'il est
   déjà ouvert, ou le crée sinon.
-- La vue **liste** du suivi multi-projets reste dans le **panneau inférieur** de
-  l'onglet 🧭 (bouton « suivi multi-projets »), strictement inchangée : le
-  bouton « Vues » ne bascule plus cette liste, il ouvre l'onglet Kanban dédié.
+- La vue **liste** du suivi multi-projets **n'est plus dans l'onglet 🧭** : elle
+  est devenue la carte « Suivi multi-projets » du **Tableau de bord 📊**
+  (`spec_dashboard.md`), où elle est rangée **par client** et affiche **aussi**
+  les projets suivis non ouverts. Le panneau inférieur de l'onglet 🧭 ne garde
+  que le **bilan de période** : il n'y a plus de bouton « suivi multi-projets »
+  (8 boutons dans la barre d'outils), plus de panneau `#super-tracking`, et le
+  crochet de rechargement de `tabs.js` a disparu avec lui.
 - **Sélecteur de projet** en haut de l'onglet : **« Tous les projets »** (défaut)
   ou **un projet précis**. Le choix est **conservé d'une ouverture à l'autre**
   (localStorage `pilot:kanban:project`) ; un projet mémorisé qui n'existe plus

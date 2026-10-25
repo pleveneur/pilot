@@ -60,11 +60,24 @@ comportement ou modifier l'intervalle dans **Paramètres → Général** (« Act
 le rafraîchissement automatique du tableau de bord » + durée en secondes).
 
 ### Suivi multi-projets
-Quand plusieurs projets sont ouverts, une section **Suivi multi-projets**
-apparaît en tête du tableau de bord : un tableau récapitulatif (projet, client,
-statut, tâches ouvertes/total, agent occupé ou prêt, dernière session). Le
-projet actif est mis en évidence (📍). Cela permet de superviser d'un coup
- d'œil tous les projets en cours et l'activité de leurs agents respectifs.
+La **première carte** du tableau de bord est le **suivi multi-projets** : le
+tableau récapitulatif (projet, statut, tâches ouvertes/total, agent occupé ou
+prêt, dernière session, décisions et sessions récentes). Le projet actif est
+mis en évidence (📍).
+
+Les projets y sont **rangés par client**, avec un **en-tête de groupe** au nom
+du client au-dessus de ses projets (petites majuscules). Un projet **sans
+client** apparaît sous l'en-tête « Sans client ».
+
+**Tous les projets suivis sont affichés**, y compris ceux qui ne sont **pas
+ouverts** dans Pilot : leur ligne porte la pastille **« non ouvert »** et leurs
+tâches viennent du suivi de l'Assistant. On supervise ainsi d'un coup d'œil
+tous les dossiers suivis, ouverts ou non, et l'activité de leurs agents.
+
+Si le réglage **Paramètres → Assistant → « Afficher le suivi du temps estimé /
+passé »** est activé, une ligne discrète ⏱ rappelle le temps estimé et passé du
+projet (aucun calcul n'est fait par l'interface : les totaux viennent du
+suivi).
 
 ### Afficher le Tableau de bord systématiquement
 Dans **Paramètres → Général**, l'option **« Afficher le Tableau de bord
@@ -144,11 +157,33 @@ projet (ouverture, fermeture, bascule).
   grâce `ACTIVITY_GRACE_SECS`), `task_count` / `open_tasks` (depuis la base de
   l'assistant `super_agent::open_db`), `status` et `last_session` (dernier
   horodatage indexé via `session_history::read_session_index`).
-- **Frontend** (`src/js/dashboard.js`) : section « Suivi multi-projets » rendue
-  en tête de grille dès qu'au moins un projet est suivi. Tableau récapitulatif
-  (projet, client, statut, tâches ouvertes/total, agent occupé/prêt, dernière
-  session) + ligne d'insight (nombre de projets, tâches ouvertes, agents
-  actifs). Styles `.dash-tracking-*` dans `src/css/style.css`.
+- **Commande Rust** `get_super_agent_tracking` (`src-tauri/src/super_agent.rs`) :
+  le suivi de l'Assistant (clients → projets, décisions et sessions récentes).
+  Elle sert **deux** usages, sans duplication : le contexte des tâches déléguées
+  de l'onglet 🧭 et la carte du tableau de bord.
+- **Frontend** (`src/js/dashboard.js`) : carte « Suivi multi-projets » rendue en
+  **tête de grille** dès qu'au moins un projet est suivi. Les **deux** réponses
+  sont croisées (`buildTrackingGroups`, pure) pour n'afficher **qu'un seul**
+  tableau : tous les projets suivis, groupés par **client**, chaque projet ouvert
+  étant rapproché par son chemin (`trackingPathKey` : casse, séparateurs et
+  séparateur final ignorés). Un projet non ouvert reste affiché avec la pastille
+  `dash-chip` **« non ouvert »** ; un projet ouvert absent du suivi tombe dans
+  « Sans client » — **aucune ligne ne disparaît**. En-tête de groupe
+  `.dash-tracking-client` : couleur `--accent-text` (le jeton de thème prévu pour
+  l'accent portant du texte, contraste ≥ 5.5:1 en clair comme en sombre),
+  majuscules, `--font-xs`, graisse 600, espacement 0.04em — **une seule** couleur,
+  aucune teinte en dur, aucun sous-thème. Ligne d'insight : projets suivis, non
+  ouverts, tâches ouvertes, agents actifs. Styles `.dash-tracking-*` dans
+  `src/css/style.css`. Le réglage `super_agent_show_time` (Paramètres →
+  Assistant) conditionne la ligne ⏱ : éteint, rien ne s'affiche.
+- **Une seule maison** : la liste du suivi n'existe **plus** dans l'onglet 🧭
+  Assistant. Le panneau inférieur de cet onglet ne garde que le **bilan de
+  période** ; le bouton de suivi, le panneau `#super-tracking`, son chargeur et
+  son crochet de rechargement (`tabs.js`) ont été retirés.
+- **Couverture** : `src/js/suivi-multi-projets-dashboard.test.js` (en-tête de
+  groupe, couleur et contraste mesurés dans les deux thèmes, pastille
+  « non ouvert », croisement des deux commandes, retrait côté 🧭 et contexte des
+  tâches déléguées intact).
 - **Réutilisabilité** : `super_agent::open_db` est `pub(crate)` ;
   `rpc::ACTIVITY_GRACE_SECS` est `pub(crate)` (partagé avec le tableau de bord).
 

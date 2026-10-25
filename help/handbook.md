@@ -1719,9 +1719,13 @@ uniquement un bloc d'instructions dans le prompt système.
   « 🗂 Kanban », même pattern que les onglets outil Review / Historique /
   Dashboard / Coffre). Cliquer sur « Vues » focalise l'onglet Kanban s'il est
   déjà ouvert, ou le crée sinon.
-- La vue **liste** du suivi multi-projets reste dans le **panneau inférieur** de
-  l'onglet 🧭 (bouton « suivi multi-projets »), strictement inchangée : le
-  bouton « Vues » ne bascule plus cette liste, il ouvre l'onglet Kanban dédié.
+- La vue **liste** du suivi multi-projets **n'est plus dans l'onglet 🧭** : elle
+  est devenue la carte « Suivi multi-projets » du **Tableau de bord 📊**
+  (`spec_dashboard.md`), où elle est rangée **par client** et affiche **aussi**
+  les projets suivis non ouverts. Le panneau inférieur de l'onglet 🧭 ne garde
+  que le **bilan de période** : il n'y a plus de bouton « suivi multi-projets »
+  (8 boutons dans la barre d'outils), plus de panneau `#super-tracking`, et le
+  crochet de rechargement de `tabs.js` a disparu avec lui.
 - **Sélecteur de projet** en haut de l'onglet : **« Tous les projets »** (défaut)
   ou **un projet précis**. Le choix est **conservé d'une ouverture à l'autre**
   (localStorage `pilot:kanban:project`) ; un projet mémorisé qui n'existe plus
@@ -3549,11 +3553,24 @@ comportement ou modifier l'intervalle dans **Paramètres → Général** (« Act
 le rafraîchissement automatique du tableau de bord » + durée en secondes).
 
 ### Suivi multi-projets
-Quand plusieurs projets sont ouverts, une section **Suivi multi-projets**
-apparaît en tête du tableau de bord : un tableau récapitulatif (projet, client,
-statut, tâches ouvertes/total, agent occupé ou prêt, dernière session). Le
-projet actif est mis en évidence (📍). Cela permet de superviser d'un coup
- d'œil tous les projets en cours et l'activité de leurs agents respectifs.
+La **première carte** du tableau de bord est le **suivi multi-projets** : le
+tableau récapitulatif (projet, statut, tâches ouvertes/total, agent occupé ou
+prêt, dernière session, décisions et sessions récentes). Le projet actif est
+mis en évidence (📍).
+
+Les projets y sont **rangés par client**, avec un **en-tête de groupe** au nom
+du client au-dessus de ses projets (petites majuscules). Un projet **sans
+client** apparaît sous l'en-tête « Sans client ».
+
+**Tous les projets suivis sont affichés**, y compris ceux qui ne sont **pas
+ouverts** dans Pilot : leur ligne porte la pastille **« non ouvert »** et leurs
+tâches viennent du suivi de l'Assistant. On supervise ainsi d'un coup d'œil
+tous les dossiers suivis, ouverts ou non, et l'activité de leurs agents.
+
+Si le réglage **Paramètres → Assistant → « Afficher le suivi du temps estimé /
+passé »** est activé, une ligne discrète ⏱ rappelle le temps estimé et passé du
+projet (aucun calcul n'est fait par l'interface : les totaux viennent du
+suivi).
 
 ### Afficher le Tableau de bord systématiquement
 Dans **Paramètres → Général**, l'option **« Afficher le Tableau de bord
