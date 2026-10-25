@@ -145,13 +145,19 @@
       <button id="agent-activity-dot" title="Suivi du travail" aria-label="Suivi du travail" aria-haspopup="true" aria-expanded="false"><span id="agent-activity-badge" hidden>0</span></button>
       <div id="agent-activity-dropdown" class="hidden">
         <div class="sa-events-header">
+          <!-- LOT 5 de la presentation : le panneau s'annonce par un TITRE (il ne
+               se presentait que par ses trois onglets). Identifiants et attributs
+               d'accessibilite des onglets inchanges. -->
+          <span class="sa-events-title">Travail</span>
           <div class="sa-events-tabs" role="tablist" aria-label="Suivi du travail">
             <button type="button" class="sa-events-tab active" role="tab" id="agent-activity-tab-agents" data-agent-panel-tab="agents" aria-controls="agent-activity-pane-agents" aria-selected="true" tabindex="0">Agents</button>
             <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-tasks" data-agent-panel-tab="tasks" aria-controls="agent-activity-pane-tasks" aria-selected="false" tabindex="-1">Tâches</button>
             <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-events" data-agent-panel-tab="events" aria-controls="agent-activity-pane-events" aria-selected="false" tabindex="-1">Événements</button>
           </div>
+          <!-- LOT 5 : un SEUL bouton a droite de l'en-tete (le ×). « Tout
+               effacer » quitte l'en-tete : il passe en mot, en pied du seul
+               onglet Evenements (voir plus bas). -->
           <div class="sa-events-header-actions">
-            <button type="button" class="agent-btn" id="agent-activity-panel-clear" title="Tout effacer" aria-label="Tout effacer" hidden><i data-lucide="trash-2" class="icon-sm"></i></button>
             <button type="button" class="agent-btn" id="agent-activity-panel-close" title="Fermer" aria-label="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
           </div>
         </div>
@@ -163,6 +169,13 @@
         </div>
         <div class="agent-activity-pane sa-events-pane hidden" id="agent-activity-pane-events" role="tabpanel" aria-labelledby="agent-activity-tab-events">
           <div class="sa-events-list"></div>
+          <!-- LOT 5 : « Tout effacer » en MOT (plus une icone seule) et eloigne de
+               « Fermer » : il vit en pied de l'onglet Evenements, aligne a droite.
+               Identifiant et comportement `hidden` inchanges (l'onglet Events est
+               le seul a le montrer). -->
+          <div class="sa-events-footer">
+            <button type="button" class="sa-events-clear" id="agent-activity-panel-clear" hidden>Tout effacer</button>
+          </div>
         </div>
       </div>
       <div id="agent-activity-card" class="hidden"></div>

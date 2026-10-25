@@ -4548,9 +4548,28 @@ body.zen-mode #project-footer {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
+  /* LOT 5 : en-tete de 32 px (titre a gauche, onglets au centre, UN bouton a
+     droite). Padding vertical nul : la hauteur est portee par la regle. */
+  height: 32px;
+  /* Padding vertical ecrit `0px` : le verrou des dimensions evalue CHAQUE
+     valeur de ce raccourci, un `0` sans unite n'y est pas reconnu. */
+  padding: 0px 8px 0px 12px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-2);
+}
+/* LOT 5 : le panneau s'annonce par un TITRE, a gauche de l'en-tete. 12 px / 600
+   comme les cadres de la colonne. Seul element de la ligne qui peut se retirer
+   (ellipsis) quand la fenetre est etroite : les onglets, eux, ne se coupent
+   jamais. Couleurs par jetons (AA dans les deux themes), aucune couleur en dur. */
+.sa-events-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-primary);
 }
 .sa-events-header-actions {
   display: flex;
@@ -4634,15 +4653,26 @@ body.zen-mode #project-footer {
    (`max-height` héritée du panneau). */
 .sa-events-tabs {
   display: flex;
-  align-items: center;
+  /* LOT 5 : la hauteur des onglets (24 px) est portee UNE SEULE FOIS ici, par la
+     barre, et les onglets la prennent par etirement : aucune hauteur n'est
+     declaree sur `.sa-events-tab` (un verrou y interdit toute hauteur). */
+  align-items: stretch;
+  height: 24px;
   gap: 4px;
   min-width: 0;
   /* Une SEULE ligne d'onglets, toujours : la barre ne se replie jamais sur deux
      lignes, meme fenetre etroite. Verrou : src/js/taille-et-style-panneau.test.js */
   flex-wrap: nowrap;
+  /* Les onglets gardent leur largeur naturelle : c'est le titre qui cede. */
+  flex: 0 0 auto;
 }
 .sa-events-tab {
-  padding: 3px 8px;
+  /* LOT 5 : onglet de 24 px de haut (hauteur donnee par la barre, voir
+     `.sa-events-tabs`), texte centre, cible de clic agrandie. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -4652,7 +4682,7 @@ body.zen-mode #project-footer {
      Verrou : src/js/panneau-suivi-trois-onglets.test.js */
   color: var(--text-secondary);
   font-size: var(--font-sm);
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
   /* Jamais de libelle coupe ni comprime : l'onglet garde sa largeur naturelle
      sur une seule ligne (`white-space: nowrap`). C'est le panneau qui est
@@ -4665,14 +4695,48 @@ body.zen-mode #project-footer {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+/* LOT 5 : l'onglet ACTIF se marque par un FILET BAS de 2 px a la couleur
+   d'accent (et le texte primaire), au lieu d'un fond plein qui se confondait
+   avec le reste de la barre. `box-shadow` interne : la hauteur de 24 px ne
+   bouge pas (une bordure l'aurait fait grandir de 2 px). */
 .sa-events-tab.active {
-  background: var(--bg-input);
+  background: transparent;
   color: var(--text-primary);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .sa-events-tab[hidden] { display: none; }
 /* Le bouton « tout effacer » vaut pour les événements seulement : `hidden` doit
-   gagner sur le display de `.sa-events-header-actions .agent-btn`. */
-.sa-events-header-actions .agent-btn[hidden] { display: none; }
+   gagner sur le display du bouton de pied de volet. */
+.sa-events-footer .sa-events-clear[hidden] { display: none; }
+/* LOT 5 : pied du seul onglet « Evenements » — « Tout effacer » en MOT, aligne a
+   droite, eloigne de « Fermer » (l'icone poubelle collee a la croix de l'en-tete
+   n'existe plus). Filet haut discret, survol en --danger : une action qui efface
+   ne se confond pas avec une action de lecture. */
+.sa-events-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.sa-events-clear {
+  border: none;
+  background: transparent;
+  /* Cible de clic confortable (20 px de haut) sans elargir le pied. */
+  padding: 4px 2px;
+  font-size: var(--font-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+/* Survol : le mot prend la couleur « danger » ET un soulignement — l'information
+   ne repose pas sur la seule couleur (et le survol clair reste lisible). */
+.sa-events-clear:hover {
+  color: var(--danger);
+  text-decoration: underline;
+}
 .sa-events-pane {
   flex: 1;
   min-height: 0;
