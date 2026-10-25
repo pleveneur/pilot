@@ -320,6 +320,13 @@ apprend et répond.
   l'Assistant traite son message EN PRIORITÉ (réponse immédiate, signale que
   la délégation continue en arrière-plan, puis revient dessus à la fin).
 
+### Une question de mode d'emploi
+- Une question qui demande **comment faire** dans Pilot reçoit une **réponse
+  directe** de l'Assistant : il y répond lui-même, il ne la **délègue jamais**
+  à un agent.
+- Une telle question **n'entre pas** dans la mémoire de suivi des projets :
+  elle ne crée **ni tâche, ni décision, ni projet**.
+
 <!-- HELP:super-agent-coordinator -->
 ### Mode « Assistant coordinateur pur »
 Dans **Paramètres → section Assistant**, l'option **« Assistant coordinateur
@@ -2632,10 +2639,11 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   tronque les descriptions longues à 100 caractères (fin de mot + `…`). Un test
   garde-fou (`super_agent_fixed_prompt_stays_under_budget`) échoue si le total
   des textes fixes dépasse le plafond `SUPER_AGENT_FIXED_PROMPT_BUDGET`
-  (**5 850** caractères : mesure **5 532** + 5 % arrondi au multiple de 50
+  (**6 150** caractères : mesure **5 839** + 5 % arrondi au multiple de 50
   supérieur). Le plafond était monté à 6 250 pour faire tenir le bloc
-  « documentation lisible sur disque » ; il a été **recalculé sur le prompt
-  réel** après le retrait de ce bloc (§ ci-dessous et spec_help.md §4.6).
+  « documentation lisible sur disque », puis ramené à 5 850 après son retrait ;
+  il est **recalculé sur la mesure réelle** à chaque évolution du prompt fixe
+  (les deux règles de mode d'emploi ci-dessous ajoutent 307 caractères).
 - **Réponse sur le mode d'emploi : UN SEUL chemin (spec_help.md §4.6)** : le
   prompt de l'assistant ne désigne **aucun fichier** de documentation. Il n'y a
   plus de copie de la documentation sur disque (`<app_data_dir>/aide/`) ni de
@@ -2643,14 +2651,16 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   `answer_from_documentation` (socle `ask_help_doc`, corpus embarqué, **1 appel
   par tour**, « la documentation ne dit rien » s'il ne sait pas). Le bloc avait
   été ajouté après l'outil : il faisait doublon et alourdissait chaque message.
-  Conséquence assumée du retour au contenu d'avant : la règle « une question de
-  mode d'emploi ne se délègue jamais à un agent » n'est plus énoncée dans le
-  prompt — elle n'est pas réintroduite ici (ce serait un autre lot) ; l'outil
-  reste le point d'entrée, et son refus explicite au 2ᵉ appel comme sa réponse
-  « la documentation ne dit rien » viennent de lui. Verrou :
-  `assistant_prompt_designates_no_doc_files` (échoue si le bloc revient : aucun
-  `index.md`, aucune « lisible sur disque », prompt complet = exactement les
-  textes figés connus).
+  Verrou : `assistant_prompt_designates_no_doc_files` (échoue si le bloc
+  revient : aucun `index.md`, aucune « lisible sur disque », prompt complet =
+  exactement les textes figés connus).
+- **Deux règles de conduite des questions de mode d'emploi** (spec_help.md
+  §4.7) : le bloc figé `SUPER_AGENT_HOWTO_PROMPT` (**307 caractères**, aucun
+  fichier ni chemin nommé) énonce que (1) une question de **mode d'emploi**
+  reçoit une réponse **directe** et n'est **jamais** déléguée à un agent, et
+  (2) une telle question **n'entre pas** dans la mémoire de suivi des projets
+  (ni tâche, ni décision, ni projet). Ces deux règles venaient du bloc retiré
+  avec le second chemin (§ ci-dessus) ; elles sont réintroduites **seules**.
 - **Garde-fou du livrable (défaut « l'agent rend un plan »)** : deux verrous
   ferment le trou où une demande d'écriture rendait un texte et Pilot annonçait
   « terminé » sans fichier.

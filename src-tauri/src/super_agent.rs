@@ -532,6 +532,13 @@ const SUPER_AGENT_AGENTSMD_PROMPT: &str = "\n\n## Règle par défaut — fichier
 /// progression via la dernière activité (`lastActivity`).
 const SUPER_AGENT_NO_WAIT_PROMPT: &str = "\n\n## Supervision des agents — ni attente temps réel, ni relance à tort\nNe surveille JAMAIS un agent en temps réel et ne bloque JAMAIS la conversation en attendant sa fin. Après un lancement (`run_agents` / délégation), rends immédiatement la main à l'utilisateur avec un statut court (« travail lancé en arrière-plan »). Pas de `sleep` ni d'attente active, pas de vérifications répétées de `list_agent_sessions`, `get_delegation_result` ou `git_status` juste après un lancement, et AUCUN rappel `schedule_create` pour suivre un agent : le compte-rendu de fin (succès ou échec) t'est déposé AUTOMATIQUEMENT ici.\n\nTant que ce compte-rendu n'est pas arrivé, la mission est EN COURS : ne la relance pas, ne l'arrête pas, ne la redélègue pas — même si l'agent est silencieux longtemps (build, tests, analyse). Un agent qui travaille n'a pas besoin d'onglet ouvert ni de sortie visible.\n\nNe consulte un résultat de délégation (`get_delegation_result`) QUE si l'utilisateur le demande, ou quand il est déjà disponible. Si l'utilisateur écrit pendant qu'un travail tourne, réponds-lui immédiatement et signale que le travail continue en arrière-plan.\n\nPour décider d'ARRÊTER un agent, juge sa progression via `list_agent_sessions` (`lastActivity`/`lastActivityRelative`/`lastEvent`) : une activité RÉCENTE signifie qu'il travaille encore ; n'envisage l'arrêt que pour un agent réellement inactif (dernière activité ancienne).\n";
 
+/// Bloc d'instructions injecté dans le prompt système de l'assistant : les deux
+/// règles de conduite d'une question de **mode d'emploi** (comment faire dans
+/// Pilot). Ce sont des règles de COMPORTEMENT : elles ne désignent aucun
+/// fichier et ne rouvrent pas le second chemin de réponse sur la documentation
+/// (spec_help.md §4.6).
+const SUPER_AGENT_HOWTO_PROMPT: &str = "\n\n## Questions de mode d'emploi\nUne question de mode d'emploi (comment faire dans Pilot) reçoit une réponse DIRECTE : tu y réponds toi-même, tu ne la délègues JAMAIS à un agent.\n\nUne question de mode d'emploi n'entre PAS dans la mémoire de suivi des projets : elle ne crée ni tâche, ni décision, ni projet.\n";
+
 /// Prompt guidant l'assistant sur la mémoire de session réinjectée au premier
 /// message après redémarrage. En-tête du bloc « Mémoire de session (reprise) »
 /// ajouté dans `do_send_super_agent_prompt` quand un résumé est disponible.
@@ -552,10 +559,11 @@ const SUPER_AGENT_ROLE_TEMPLATE: &str = "Tu es « {} », l'assistant de suivi mu
 /// système de l'assistant (rôle, règles figées et voix permanente), injectés à
 /// chaque message indépendamment des données et des toggles. Fixé au total
 /// mesuré après nettoyage, majoré de 5 % (arrondi au multiple de 50 supérieur).
-/// Dernière valeur mesurée : 5 532 caractères (le bloc « documentation lisible
-/// sur disque » a été retiré : le prompt est revenu à son contenu d'avant ce
-/// bloc), majorée de 5 % et arrondie au multiple de 50 supérieur → 5 850.
-const SUPER_AGENT_FIXED_PROMPT_BUDGET: usize = 5850;
+/// Dernière valeur mesurée : 5 839 caractères (les deux règles de conduite des
+/// questions de mode d'emploi ont été réintroduites dans un bloc de 307
+/// caractères ; le bloc « documentation lisible sur disque » reste retiré),
+/// majorée de 5 % et arrondie au multiple de 50 supérieur → 6 150.
+const SUPER_AGENT_FIXED_PROMPT_BUDGET: usize = 6150;
 
 #[tauri::command]
 pub async fn start_super_agent_session(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
@@ -718,6 +726,7 @@ fn assemble_super_agent_system_prompt(blocks: &SuperAgentPromptBlocks) -> String
     full_system.push_str(SUPER_AGENT_RESILIENCE_PROMPT);
     full_system.push_str(SUPER_AGENT_AGENTSMD_PROMPT);
     full_system.push_str(SUPER_AGENT_NO_WAIT_PROMPT);
+    full_system.push_str(SUPER_AGENT_HOWTO_PROMPT);
     if !blocks.custom_prompt.trim().is_empty() {
         full_system.push_str("\n\n");
         full_system.push_str(blocks.custom_prompt.trim());
@@ -8471,6 +8480,7 @@ mod tests {
             + super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count()
             + super::SUPER_AGENT_AGENTSMD_PROMPT.chars().count()
             + super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count()
+            + super::SUPER_AGENT_HOWTO_PROMPT.chars().count()
             + super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()
             + super::voice_guideline().chars().count();
         let fixed_parts: Vec<(&str, usize)> = vec![
@@ -8483,6 +8493,10 @@ mod tests {
             (
                 "SUPERVISION (NO_WAIT+SESSIONS)",
                 super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count(),
+            ),
+            (
+                "MODE D'EMPLOI",
+                super::SUPER_AGENT_HOWTO_PROMPT.chars().count(),
             ),
             ("SCHEDULE", super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()),
             ("VOICE", super::voice_guideline().chars().count()),
@@ -8585,11 +8599,12 @@ mod tests {
         // être exactement leur concaténation (toute insertion silencieuse, dont
         // un bloc de doc, fait échouer ce test).
         let expected = format!(
-            "{}{}{}{}{}{}",
+            "{}{}{}{}{}{}{}",
             super::SUPER_AGENT_TOOLS_PROMPT,
             super::SUPER_AGENT_RESILIENCE_PROMPT,
             super::SUPER_AGENT_AGENTSMD_PROMPT,
             super::SUPER_AGENT_NO_WAIT_PROMPT,
+            super::SUPER_AGENT_HOWTO_PROMPT,
             super::SUPER_AGENT_SCHEDULE_PROMPT,
             super::voice_guideline(),
         );
@@ -8610,6 +8625,7 @@ mod tests {
             + super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count()
             + super::SUPER_AGENT_AGENTSMD_PROMPT.chars().count()
             + super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count()
+            + super::SUPER_AGENT_HOWTO_PROMPT.chars().count()
             + super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()
             + super::voice_guideline().chars().count();
         let budget = super::SUPER_AGENT_FIXED_PROMPT_BUDGET;

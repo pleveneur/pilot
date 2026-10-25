@@ -1766,6 +1766,13 @@ apprend et répond.
   l'Assistant traite son message EN PRIORITÉ (réponse immédiate, signale que
   la délégation continue en arrière-plan, puis revient dessus à la fin).
 
+### Une question de mode d'emploi
+- Une question qui demande **comment faire** dans Pilot reçoit une **réponse
+  directe** de l'Assistant : il y répond lui-même, il ne la **délègue jamais**
+  à un agent.
+- Une telle question **n'entre pas** dans la mémoire de suivi des projets :
+  elle ne crée **ni tâche, ni décision, ni projet**.
+
 <!-- HELP:super-agent-coordinator -->
 ### Mode « Assistant coordinateur pur »
 Dans **Paramètres → section Assistant**, l'option **« Assistant coordinateur

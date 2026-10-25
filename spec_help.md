@@ -249,9 +249,11 @@ arrête de les écrire, on ne supprime aucune donnée.
 
 **Budget du prompt** : le plafond anti-regonflement
 (`SUPER_AGENT_FIXED_PROMPT_BUDGET`) avait été relevé pour faire tenir ce bloc ;
-il revient à une valeur **recalculée sur le prompt réel** : **5 532 caractères**
-mesurés (contre **6 213** avec le bloc), majorés de 5 % et arrondis au multiple
-de 50 supérieur → **5 850**.
+il est **recalculé sur le prompt réel** à chaque évolution du prompt fixe. Le
+retrait du bloc a ramené la mesure à **5 532 caractères** (contre **6 213** avec
+le bloc) ; la réintroduction des **deux règles de conduite des questions de
+mode d'emploi** (§4.7) ajoute **307 caractères** → mesure actuelle **5 839**,
+majorée de 5 % et arrondie au multiple de 50 supérieur → **6 150**.
 
 **Tests** :
 
@@ -261,8 +263,25 @@ de 50 supérieur → **5 850**.
 | `help::tests::le_decoupage_par_theme_suit_les_marqueurs_du_handbook` | **Retiré** : verrouillait le découpage supprimé. |
 | `help::tests::le_nom_de_fichier_dun_theme_est_sur` | **Retiré** : verrouillait la fabrication des noms de fichiers supprimée. |
 | `help::tests::lecriture_au_demarrage_est_branchee_dans_le_setup` | **Retiré** : verrouillait un branchement qui n'existe plus. |
-| `super_agent::tests::assistant_prompt_designates_no_doc_files` | **Ajouté** : échoue si le bloc de doc **revient** (aucun `index.md`, aucune mention « lisible sur disque », aucune consigne de lecture de la doc ; prompt complet = exactement les textes figés connus). |
+| `super_agent::tests::assistant_prompt_designates_no_doc_files` | **Ajouté** : échoue si le bloc de doc **revient** (aucun `index.md`, aucune mention « lisible sur disque », aucune consigne de lecture de la doc ; prompt complet = exactement les textes figés connus, mis à jour pour inclure le bloc des deux règles de mode d'emploi). |
 | `super_agent::tests::super_agent_fixed_prompt_stays_under_budget` | **Conservé** : garde-fou de budget (valeur recalculée ci-dessus). |
+
+### 4.7 Deux règles de conduite des questions de mode d'emploi (réintroduites)
+
+Le bloc de prompt retiré en §4.6 portait aussi **deux règles de conduite** qui
+n'ont rien à voir avec des fichiers. Elles sont **réintroduites seules**, dans un
+bloc figé dédié (`SUPER_AGENT_HOWTO_PROMPT`, **307 caractères**) :
+
+1. une question de **mode d'emploi** reçoit une réponse **directe** — elle n'est
+   **jamais** déléguée à un agent ;
+2. une question de **mode d'emploi** **n'entre pas** dans la mémoire de suivi
+   des projets (ni tâche, ni décision, ni projet).
+
+Ce bloc ne désigne **aucun fichier** de documentation, aucun dossier, aucun
+chemin : le second chemin de réponse reste retiré, et le garde-fou
+`assistant_prompt_designates_no_doc_files` reste **vert** et continue de
+**mordre** (vérifié : un nom de fichier de doc injecté dans le prompt le fait
+échouer).
 
 ### 4.3 Historique multi-tours
 
