@@ -106,7 +106,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - Sur un projet, **une seule tâche tourne à la fois**. Les demandes suivantes ne sont **pas perdues** : elles **attendent leur tour** et démarrent **automatiquement** dès que la place se libère.
 - **L'ordre d'arrivée est respecté à l'admission** : une demande déposée alors qu'une autre attend déjà ne passe **jamais devant** — elle se place **derrière** et démarre à son tour. Une seule nuance, écrite noir sur blanc dans les **limites connues** (aucune perte, aucun doublon) : une mission **déjà sortie de file** qui ne peut pas démarrer repart **derrière** les suivantes. L'écran vous le dit (« N demande(s) attendent déjà — votre demande est mise en file DERRIÈRE elles ») et la raison reste écrite dans `.pilot/agent-stops.log`.
 - Un **bloc discret** sous la barre d'outils de l'onglet de l'agent montre la file : la tâche **en cours**, puis les demandes **en attente** avec leur rang et **l'agent qui va les traiter** (« en attente (2e) : mission « … » · agent : Codeur »). Il n'apparaît que s'il y a quelque chose à dire.
-- **Chaque demande en attente dit quel agent la traite** : l'agent est celui **enregistré avec la demande** au moment de sa mise en file (jamais un nom supposé à l'affichage). Si l'agent n'est pas connu, la ligne l'écrit noir sur blanc (« agent : agent non défini ») : **jamais un blanc** à la place du nom. La tâche **en cours** garde son affichage habituel.
+- **Chaque demande en attente dit quel agent la traite** : l'agent est celui **enregistré avec la demande** au moment de sa mise en file (jamais un nom supposé à l'affichage). L'agent **principal du projet** (celui que Pilot ouvre pour chaque projet) s'affiche « agent : principal du projet » — son identifiant technique (`default`) n'est jamais montré. Si l'agent n'est pas connu, la ligne l'écrit noir sur blanc (« agent : agent non défini ») : **jamais un blanc** à la place du nom. La tâche **en cours** garde son affichage habituel.
 - La commande **`/file`** affiche la file complète du projet dans la discussion (mêmes rangs, mêmes agents) ; **`/file vide`** abandonne les demandes **en attente** et annonce **combien** ont été abandonnées (la tâche en cours n'est jamais arrêtée).
 - **Aucune demande ne disparaît en silence** : une demande en attente dont la tâche porteuse s'est arrêtée reste **visible** et **relançable** ; si elle est abandonnée (par vous, par le chien de garde ou par « tout arrêter »), son libellé est écrit dans `.pilot/agent-stops.log` et l'écran vous le signale.
 <!-- /HELP:agents -->
@@ -500,7 +500,14 @@ La file **n'invente aucune file parallèle** : elle compose celles qui existent
   (`delegationState(p).queue`) ou d'une demande d'agent en file d'exclusivité
   (`listProjectExclusivityEntries`). Aucun nom n'est **déduit** ni **inventé** à
   l'affichage ; quand la demande ne porte aucun agent, la ligne affiche
-  `AGENT_UNKNOWN_LABEL` (« agent non défini ») — **jamais un vide**. La ligne
+  `AGENT_UNKNOWN_LABEL` (« agent non défini ») — **jamais un vide**. Seule
+  traduction d'identifiant : `agentIdLabel` (`project-task-queue.js`) rend
+  `AGENT_DEFAULT_ID` (`default`, l'agent **principal du projet**, hors
+  `.pilot/agents.json`) sous la formule `AGENT_MAIN_LABEL` (« principal du
+  projet ») ; l'identité **stockée** avec la demande n'est jamais réécrite et
+  tout autre identifiant est affiché tel quel (son nom configuré demanderait
+  une lecture disque : la file reste **pure et synchrone**, aucun accès Tauri).
+  La ligne
   « en cours » est **inchangée** (elle ne reçoit pas de suffixe d'agent).
   Point d'affichage **unique** : `entryLine` (`project-task-queue.js`), partagé
   par le bloc de l'onglet et `/file` — aucune seconde copie du format.

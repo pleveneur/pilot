@@ -18,7 +18,10 @@
 // `project-queue-wiring.test.js`).
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
+  AGENT_DEFAULT_ID,
+  AGENT_MAIN_LABEL,
   AGENT_UNKNOWN_LABEL,
+  agentIdLabel,
   buildProjectQueueView,
   formatQueueLines,
   formatQueueReport,
@@ -183,5 +186,80 @@ describe("e. l'ordre, les rangs et le nombre de demandes sont inchanges", () => 
     expect(view.isEmpty).toBe(true);
     expect(formatQueueReport(view)).toContain("vide");
     expect(formatQueueLines(view).join("\n")).not.toContain("agent :");
+  });
+});
+
+// ── f. « default » n'est pas un nom pour un utilisateur ───────────────────
+// L'identifiant enregistre `default` designe l'agent PRINCIPAL du projet
+// (l'onglet agent standard, hors `.pilot/agents.json`). Affiche tel quel, il ne
+// dit rien a l'utilisateur : la file doit le rendre lisible, sans inventer de
+// nom pour les autres agents.
+describe("f. l'agent principal du projet ne s'affiche pas « default »", () => {
+  /** Lignes AFFICHEES par les deux points d'affichage (rapport `/file` + bloc). */
+  function shownLines(view) {
+    return formatQueueReport(view).split("\n").concat(formatQueueLines(view));
+  }
+
+  it("aucune ligne affichee ne montre l'identifiant brut « default »", () => {
+    const view = buildProjectQueueView({
+      project: PROJECT,
+      manual: [{ label: "commande de l'agent principal", agentId: "default" }],
+      missions: [{ label: "mission de l'agent principal", agentIds: ["default"] }],
+      delegations: [{ label: "delegation a l'agent principal", agentId: "default" }],
+      agents: [{ label: "agent principal en file", agentId: "default" }],
+    });
+    const lines = shownLines(view).filter((line) => line.includes("agent :"));
+    expect(lines.length, "aucune ligne d'agent : le point d'affichage a disparu").toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line, `identifiant brut affiche : ${line}`).not.toContain("default");
+      expect(line, `libelle d'agent vide : ${line}`).toMatch(/agent : [^ ·]+/);
+    }
+  });
+
+  it("l'agent principal s'affiche avec une formule lisible en francais", () => {
+    const view = buildProjectQueueView({
+      project: PROJECT,
+      manual: [{ label: "commande de l'agent principal", agentId: AGENT_DEFAULT_ID }],
+    });
+    // Formule courte et vraie : la ligne dit deja « agent : », elle n'est pas
+    // repetee (« agent : agent principal du projet »).
+    expect(AGENT_DEFAULT_ID).toBe("default");
+    expect(AGENT_MAIN_LABEL).toBe("principal du projet");
+    expect(queueAgentLabel({ agentId: AGENT_DEFAULT_ID })).toBe(AGENT_MAIN_LABEL);
+    expect(agentIdLabel(AGENT_DEFAULT_ID)).toBe(AGENT_MAIN_LABEL);
+    expect(formatQueueReport(view)).toContain(`· agent : ${AGENT_MAIN_LABEL}`);
+    expect(formatQueueLines(view).join("\n")).toContain(`· agent : ${AGENT_MAIN_LABEL}`);
+  });
+
+  it("un melange d'agents garde l'ordre et ne traduit que l'agent principal", () => {
+    const view = buildProjectQueueView({
+      project: PROJECT,
+      missions: [{ label: "mission a deux agents", agentIds: [AGENT_DEFAULT_ID, "codeur"] }],
+    });
+    expect(queueAgentLabel(view.waiting[0])).toBe(`${AGENT_MAIN_LABEL}, codeur`);
+  });
+
+  it("l'identite ENREGISTREE avec la demande n'est pas reecrite (registre inchange)", () => {
+    enqueueProjectCommand({ project: PROJECT, text: "commande sans agent precis", launch: async () => true });
+    const view = buildProjectQueueView({ project: PROJECT, manual: listProjectCommands(PROJECT) });
+    expect(view.waiting[0].agentIds).toEqual([AGENT_DEFAULT_ID]);
+    expect(formatQueueReport(view)).toContain(`· agent : ${AGENT_MAIN_LABEL}`);
+  });
+
+  it("les AUTRES identifiants restent tels quels (aucun nom invente)", () => {
+    const view = buildProjectQueueView({
+      project: PROJECT,
+      manual: [{ label: "commande du codeur", agentId: "codeur" }],
+      missions: [{ label: "mission d'un agent configure", agentIds: ["agent-1"] }],
+    });
+    // Le nom reel d'un agent configure vit dans `.pilot/agents.json` (lecture
+    // disque interdite ici) : on n'invente donc RIEN, on affiche l'identifiant.
+    expect(agentIdLabel("codeur")).toBe("codeur");
+    expect(agentIdLabel("agent-1")).toBe("agent-1");
+    expect(agentIdLabel("")).toBe("");
+    expect(agentIdLabel(null)).toBe("");
+    const report = formatQueueReport(view);
+    expect(report).toContain("· agent : codeur");
+    expect(report).toContain("· agent : agent-1");
   });
 });

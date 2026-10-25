@@ -13,7 +13,9 @@
 //     `/file`). Chaque demande EN ATTENTE y dit aussi QUEL agent la traitera,
 //     à partir de l'agent enregistré AVEC la demande (`agentIds` / `agentId`) :
 //     point d'affichage UNIQUE (`entryLine`), jamais de nom vide
-//     (`AGENT_UNKNOWN_LABEL`) ni de nom inventé.
+//     (`AGENT_UNKNOWN_LABEL`) ni de nom inventé. L'identifiant enregistré
+//     `default` désigne l'agent PRINCIPAL du projet : il ne s'affiche jamais
+//     tel quel, mais sous une formule lisible (`AGENT_MAIN_LABEL`).
 //
 //  2. ÉTAT de la file des COMMANDES MANUELLES du chat d'agent. C'est la seule
 //     famille de demandes qui n'avait AUCUNE file : une commande tapée pendant
@@ -82,6 +84,44 @@ function familyNoun(kind) {
 export const AGENT_UNKNOWN_LABEL = "agent non défini";
 
 /**
+ * Identifiant ENREGISTRÉ de l'agent principal d'un projet : l'onglet agent
+ * standard (celui qui existe pour chaque projet), qui n'est pas géré par la
+ * configuration `.pilot/agents.json` (cf. `tabs.js` / `_openAgent`, dont le
+ * paramètre `agentId` vaut ce littéral par défaut).
+ */
+export const AGENT_DEFAULT_ID = "default";
+
+/**
+ * Formule affichée pour l'agent principal du projet. Courte et vraie : la ligne
+ * de la file dit déjà « agent : », donc la répéter donnerait
+ * « agent : agent principal du projet ».
+ */
+export const AGENT_MAIN_LABEL = "principal du projet";
+
+/**
+ * Seule table de correspondance identifiant → libellé affiché. Volontairement
+ * minuscule : on n'y met QUE ce que le code du projet nomme déjà lui-même.
+ * Aucun autre nom n'y entre — un nom d'agent configuré (`.pilot/agents.json`,
+ * session, renommage manuel) demanderait une lecture disque : la file reste
+ * pure et synchrone, donc elle affiche l'identifiant tel qu'il est enregistré.
+ */
+const AGENT_LABELS = new Map([[AGENT_DEFAULT_ID, AGENT_MAIN_LABEL]]);
+
+/**
+ * Libellé AFFICHÉ d'un identifiant d'agent enregistré (fonction pure).
+ * `default` → « principal du projet » ; tout autre identifiant est rendu tel
+ * quel, sans être réécrit ni deviné. Chaîne vide → chaîne vide (l'appelant dit
+ * alors l'inconnu avec `AGENT_UNKNOWN_LABEL`).
+ * @param {unknown} agentId - identifiant enregistré avec la demande
+ * @returns {string}
+ */
+export function agentIdLabel(agentId) {
+  const clean = typeof agentId === "string" ? agentId.trim() : "";
+  if (!clean) return "";
+  return AGENT_LABELS.get(clean) || clean;
+}
+
+/**
  * Agents réellement enregistrés AVEC une demande de la file (lecture seule, pure).
  *
  * Aucun nom n'est inventé ici : on ne lit que ce que la demande mise en file
@@ -107,14 +147,18 @@ export function queueAgentIds(entry) {
 
 /**
  * Nom de l'agent visé par une demande, lisible en clair sur une ligne.
- * Jamais une chaîne vide : sans agent connu, la fonction renvoie
- * `AGENT_UNKNOWN_LABEL` (la file le dit au lieu de laisser un blanc).
+ * L'identifiant enregistré passe par `agentIdLabel` : l'agent principal du
+ * projet ne s'affiche donc jamais `default`. Jamais une chaîne vide : sans
+ * agent connu, la fonction renvoie `AGENT_UNKNOWN_LABEL` (la file le dit au lieu
+ * de laisser un blanc).
  * @param {object|null|undefined} entry - entrée de file
  * @returns {string}
  */
 export function queueAgentLabel(entry) {
   const ids = queueAgentIds(entry);
-  return ids.length > 0 ? ids.join(", ") : AGENT_UNKNOWN_LABEL;
+  // Seul point de traduction identifiant → libellé : `entryLine`, partagé par
+  // `/file` et par le bloc de l'onglet, hérite donc de la même formule.
+  return ids.length > 0 ? ids.map(agentIdLabel).join(", ") : AGENT_UNKNOWN_LABEL;
 }
 
 function normalizeEntries(entries, kind) {
