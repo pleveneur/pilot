@@ -413,6 +413,18 @@ export async function initSettings() {
   }
   const selectTheme = document.getElementById("setting-theme");
   const selectSubtheme = document.getElementById("setting-subtheme");
+  // Apercu en direct du theme / sous-theme : applique immediatement le choix
+  // (sans enregistrer), annule a la fermeture si non sauvegarde. Lies UNE SEULE
+  // FOIS ici : les lier a chaque ouverture empilait un ecouteur de plus par
+  // ouverture (piege 2 de docs/proposition-reglages-en-onglet.md).
+  selectTheme.addEventListener("change", () => {
+    const t = selectTheme.value;
+    populateSubthemeSelect(selectSubtheme, t, "default");
+    applyTheme(t, selectSubtheme.value);
+  });
+  selectSubtheme.addEventListener("change", () => {
+    applyTheme(selectTheme.value, selectSubtheme.value);
+  });
   const inputCmd = document.getElementById("setting-command");
   const chkAutoLoad = document.getElementById("setting-auto-load");
   const chkAutoRun = document.getElementById("setting-auto-run");
@@ -1639,19 +1651,13 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     try { await invoke("web_audit_clear"); await loadAudit(); } catch (e) { alert('Erreur : ' + e); }
   });
 
-  // Ouvrir la modale
-  btnSettings.addEventListener("click", async (e) => {
-    const clickX = e.clientX, clickY = e.clientY;
-    try {
-      currentConfig = await invoke("get_config");
-    } catch (e) {
-      // Réserve R-B : sans configuration lisible, ouvrir la modale sur un objet
-      // par défaut ferait persister ces défauts à l'enregistrement (perte de TOUS
-      // les réglages). On ANNULE l'ouverture avec un message clair.
-      console.error("get_config (Paramètres):", e);
-      alert("Configuration indisponible pour le moment. Réessayez dans un instant : aucun réglage n'a été modifié.");
-      return;
-    }
+  // ── Lot A « Reglages en onglet » (docs/proposition-reglages-en-onglet.md) ──
+  // Le REMPLISSAGE des champs est extrait de l'ouverture de la fenetre : une
+  // seule source, reutilisable telle quelle par l'onglet (lot B). Aucune ligne
+  // de logique n'est reecrite : le corps lisait deja `currentConfig`, on le
+  // renseigne ici a partir de la configuration lue.
+  async function fillSettingsFromConfig(config) {
+    currentConfig = config;
     // Agents du projet (issue #35) : charger la config du projet actif.
     await loadProjectAgents();
     await loadMcp();
@@ -1866,16 +1872,25 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     savedTheme = currentConfig.theme || "dark";
     savedSubtheme = currentConfig.subtheme || "default";
     populateSubthemeSelect(selectSubtheme, savedTheme, savedSubtheme);
-    // Aperçu en direct : applique immédiatement le thème/sous-thème choisi
-    // (sans enregistrer) ; revert à la fermeture si non sauvegardé.
-    selectTheme.addEventListener("change", () => {
-      const t = selectTheme.value;
-      populateSubthemeSelect(selectSubtheme, t, "default");
-      applyTheme(t, selectSubtheme.value);
-    });
-    selectSubtheme.addEventListener("change", () => {
-      applyTheme(selectTheme.value, selectSubtheme.value);
-    });
+  }
+
+  // Ouvrir la fenetre des Reglages — comportement INCHANGE au lot A : l'onglet
+  // prendra le relais au lot B. Les deux temps restent distincts : lire la
+  // configuration (echec = on n'ouvre pas), PUIS remplir les champs.
+  btnSettings.addEventListener("click", async (e) => {
+    const clickX = e.clientX, clickY = e.clientY;
+    let config;
+    try {
+      config = await invoke("get_config");
+    } catch (e) {
+      // Réserve R-B : sans configuration lisible, ouvrir la modale sur un objet
+      // par défaut ferait persister ces défauts à l'enregistrement (perte de TOUS
+      // les réglages). On ANNULE l'ouverture avec un message clair.
+      console.error("get_config (Paramètres):", e);
+      alert("Configuration indisponible pour le moment. Réessayez dans un instant : aucun réglage n'a été modifié.");
+      return;
+    }
+    await fillSettingsFromConfig(config);
     modal.classList.remove("hidden");
     animateModalOpen(modal, clickX, clickY);
   });

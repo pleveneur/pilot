@@ -72,6 +72,11 @@ const COMMANDS = [
   { id: "update-status", label: "État des mises à jour", key: "", icon: "🕓", category: "Réglages" },
   { id: "recent-files", label: "Fichiers récents…", key: "Ctrl+Alt+R", icon: "🕘", category: "Projet" },
   { id: "feedback", label: "Envoyer une remarque…", key: "", icon: "💬", category: "Réglages" },
+  // LOT A « Reglages en onglet » (docs/proposition-reglages-en-onglet.md § 1) :
+  // la commande existe deja dans la palette ; elle emprunte la MEME porte que
+  // le bouton d'acces (#btn-settings), donc le meme garde-fou de lecture de la
+  // configuration. Elle n'ajoute aucun second chemin.
+  { id: "settings", label: "Ouvrir les Réglages", key: "", icon: "⚙", category: "Réglages" },
 ];
 
 let paletteActiveIndex = 0;
@@ -390,6 +395,12 @@ async function executeCommand(id, tabs) {
       break;
     case "feedback":
       tabs.openFile("Feedback", "feedback");
+      break;
+    case "settings":
+      // Meme porte que le bouton « Reglages » : un seul chemin d'ouverture
+      // (lecture de la configuration, message d'echec compris). Au lot A elle
+      // ouvre la fenetre ; au lot B, la meme porte ouvrira l'onglet.
+      document.getElementById("btn-settings")?.click();
       break;
   }
 }

@@ -39,15 +39,20 @@ export function findAgentTab(tabs, agentId, projectPath) {
 // projet quitté, du projet ouvert ET d'un troisième projet (diagnostic du
 // 2026-10-21). Règle propriétaire : l'écran ne commande plus le travail, un
 // changement/une fermeture de projet ne ferme plus cet onglet.
-const GLOBAL_TAB_MODES = new Set(["superagent", "dashboard", "gds-admin", "gds-params", "agents"]);
+//
+// `settings` (Reglages) rejoint cette liste en PREPARATION (lot A de
+// docs/proposition-reglages-en-onglet.md) : les Reglages deviennent un onglet
+// transverse le jour ou ils quittent leur fenetre (lot B). Tant qu'aucun onglet
+// de ce mode n'existe, l'ajout est sans effet.
+const GLOBAL_TAB_MODES = new Set(["superagent", "dashboard", "gds-admin", "gds-params", "agents", "settings"]);
 
 /**
  * T2 : détermine si un onglet doit être fermé lors d'un changement de projet.
  * `keepAgents=true` conserve les onglets agents (scopés par projet) ; seuls les
  * onglets edit/preview/terminal sont fermés. Les onglets transverses/globaux
- * (superagent, dashboard, gds-admin, gds-params, agents) ne sont jamais fermés
- * ici : ils persistent à travers les bascules et les fermetures de projets
- * (ouverts sans projet).
+ * (superagent, dashboard, gds-admin, gds-params, agents, settings) ne sont
+ * jamais fermés ici : ils persistent à travers les bascules et les fermetures
+ * de projets (ouverts sans projet).
  */
 export function shouldCloseTab(tab, keepAgents) {
   if (GLOBAL_TAB_MODES.has(tab.mode)) return false;

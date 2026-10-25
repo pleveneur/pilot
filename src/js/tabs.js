@@ -3008,7 +3008,11 @@ export class TabsManager {
 
   _renderTabButton(tab) {
     const btn = document.createElement("div");
-    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard", "gds-admin", "gds-params"].includes(tab.mode);
+    // LOT A « Reglages en onglet » : le mode `settings` est declare ici, avec
+    // la couleur `.tab-special` des ecrans transverses et SANS icone (le titre
+    // « Reglages » est celui du bouton et de l'en-tete). Aucun onglet de ce mode
+    // n'est encore cree : le lot B s'en charge.
+    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard", "gds-admin", "gds-params", "settings"].includes(tab.mode);
     btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}${tab.mode === "dashboard" ? " tab-dashboard" : ""}`;
     btn.dataset.tabId = tab.id;
 

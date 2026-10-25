@@ -3067,6 +3067,22 @@ mark.search-highlight {
    restent visibles en fenetre etroite. */
 .modal-content.settings-content { width: 920px; max-width: 92vw; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
 
+/* LOT A « Reglages en onglet » (docs/proposition-reglages-en-onglet.md § 6) :
+   neutralise UNIQUEMENT le positionnement de fenetre, pour que le meme noeud
+   tienne dans un conteneur d'onglet. Tout est porte par l'identifiant : les
+   regles partagees (.modal, .modal-content, .modal-actions) ne sont pas
+   touchees. INERTE tant que le noeud n'est pas deplace dans un onglet (lot B). */
+.editor-wrapper.settings-wrapper { overflow: hidden; }
+#settings-modal.modal-in-tab {
+  position: static; inset: auto; z-index: auto;
+  background: none; backdrop-filter: none; animation: none;
+  flex: 1; min-height: 0;
+}
+#settings-modal.modal-in-tab > .modal-content.settings-content {
+  width: 100%; max-width: none; max-height: none; height: 100%; margin: 0;
+  border: 0; border-radius: 0; box-shadow: none; background: transparent; animation: none;
+}
+
 /* Modale : mise à jour disponible (updater) */
 .modal-content.update-content { width: 640px; max-width: 95vw; max-height: 80vh; display: flex; flex-direction: column; }
 .modal-content.update-content .update-notes-wrap { overflow-y: auto; flex: 1; border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
