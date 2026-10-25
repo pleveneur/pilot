@@ -5,6 +5,8 @@
 > **handbook** (doc condensée, orientée utilisateur, toujours à jour).
 >
 > **Statut : Niveau 1 (MVP) — Option A (pi cadré).**
+> La brique « répondre à partir de la documentation » est désormais un **socle
+> réutilisable** (§4.4), utilisable hors de l'écran Aide (destinée à l'Assistant).
 
 ---
 
@@ -161,6 +163,31 @@ la commande `set_help_model`.
 `save_config` (pour ne pas écraser le modèle choisi à chaque sauvegarde des
 Paramètres).
 
+### 4.4 Socle réutilisable — « répondre à partir de la documentation »
+
+La brique qui existait à l'intérieur de l'écran Aide est **extraite** et rend un
+résultat **structuré** (`help::HandbookAnswer`), sans écran :
+`answer = texte`, `cited_sections`, `insufficient`, `truncated`.
+
+| Élément | Valeur / règle |
+|---|---|
+| Cœur | `help::answer_from_handbook(state, question)` — **une seule entrée** (la question) : aucun chemin de projet, aucun historique, aucun fichier. |
+| Commande | `ask_help_doc(question)` → `HandbookAnswer` (enregistrée à côté des autres). |
+| Écran Aide | `ask_help(question, history)` reste un **simple emballage** de la même brique (`run_help_prompt` + prompt avec historique) : même modèle `help_model`, même message d'erreur, même retour texte. |
+| Marqueur d'insuffisance | Le prompt impose `DOCUMENTATION_INSUFFISANTE:` **en tête** de réponse quand la doc ne dit rien. Le programme **retire** le marqueur et lève `insufficient` — déterministe, testable sans modèle. Un marqueur au milieu du texte n'est pas interprété. |
+| Plafond de sortie | `MAX_ANSWER_CHARS = 6000`. Au-delà : coupure **propre** (fin de phrase, sinon fin de mot, jamais dans un mot), `truncated = true`, et la coupure est **dite dans le texte** rendu. |
+| Sections citées | Calculées **par le programme** (jamais déclarées par le modèle) : recoupement des `##`/`###` du corpus avec le texte rendu, donc toujours des titres qui **existent** dans le handbook. **Approximatif par construction** — ne jamais le présenter comme une « source exacte ». |
+| Modèle | Repli : modèle de l'Assistant → réglage d'aide existant (`help_model`) → défaut de la configuration, via `super_agent::resolve_super_agent_model`. Aucun modèle → **erreur explicite** (jamais un échec silencieux) : la brique ne dépend plus d'un réglage que seul l'écran Aide écrivait. |
+
+**Tests purs, sans modèle** (`help::tests`) : marqueur → drapeau + retrait ;
+réponse trop longue → coupure propre + drapeau + coupure dite ; toute section
+citée existe dans le corpus ; résolution du modèle (3 étages + cas « rien
+disponible » → erreur). Ces tests échouent si l'un des gestes est retiré.
+
+> Le réglage `help_model` est **conservé** (la Revue s'en sert comme repli), et
+> le style de l'écran Aide n'est pas touché (partagé par la Revue et
+> l'Historique).
+
 ### 4.3 Historique multi-tours
 
 Le process pi étant `--no-session` et tué après chaque réponse, il n'a pas de
@@ -208,7 +235,7 @@ mémoire entre les tours. L'historique d'aide est **géré côté frontend**
 | `help/overview.md` | Source aide : généralités (rédigé, orienté utilisateur) |
 | `help/handbook.md` | **Généré** (ne pas éditer) — embarqué via `include_str!` |
 | `scripts/build-handbook.js` | Agrégation des blocs HELP |
-| `src-tauri/src/help.rs` | `HANDBOOK` (const), commande `get_handbook`, commande `ask_help`, `ask_pi_for_help` |
+| `src-tauri/src/help.rs` | `HANDBOOK` (const), socle structuré (`answer_from_handbook`, `finish_help_answer`, `resolve_help_doc_model`), commandes `get_handbook`, `ask_help_doc`, `ask_help`, `ask_pi_caged`/`ask_pi_caged_timed` |
 | `src/js/help.js` | Onglet Aide : chat, historique, envoi, rendu Markdown |
 | `index.html` | Onglet « ❓ Aide » + zone chat |
 | `src/css/style.css` | Styles (réutilise une partie de agent-pi) |

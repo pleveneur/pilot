@@ -3709,6 +3709,7 @@ pub fn run() {
             web_commands::reload_web_server,
             help::get_handbook,
             help::ask_help,
+            help::ask_help_doc,
             review::ask_review,
             agents_md::generate_agents_md,
             tailscale::tailscale_status,

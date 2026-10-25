@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 #[cfg(windows)]
@@ -51,12 +51,276 @@ pub fn get_handbook() -> String {
     HANDBOOK.to_string()
 }
 
-/// Commande principale de l'aide : pose une question à pi (process temporaire
-/// cadré) en injectant le handbook + l'historique d'aide, retourne la réponse.
+// ── Socle réutilisable : « répondre à partir de la documentation » ──
+//
+// Cette brique existait déjà, mêlée à l'écran « ❓ Aide » : corpus embarqué +
+// construction du prompt + processus pi temporaire cadré. Elle est désormais
+// **extraite** et rend un résultat **structuré**, pour être utilisable par
+// d'autres appelants (l'Assistant notamment) sans rien réinventer. L'écran Aide
+// reste un simple emballage (`ask_help`), son comportement ne change pas.
+
+/// Plafond de sortie d'une réponse rendue par la brique documentaire.
+pub const MAX_ANSWER_CHARS: usize = 6000;
+
+/// Radical du marqueur que le modèle doit placer en TÊTE de réponse quand la
+/// documentation intégrée ne permet pas de répondre. Le côté programme retire
+/// le marqueur et positionne le drapeau : c'est **déterministe**, donc testable
+/// sans appeler de modèle.
+pub const INSUFFICIENT_KEY: &str = "DOCUMENTATION_INSUFFISANTE";
+
+/// Marqueur complet, tel qu'imposé dans le prompt (majuscules + deux-points).
+pub const INSUFFICIENT_MARKER: &str = "DOCUMENTATION_INSUFFISANTE:";
+
+/// Résultat structuré de la brique documentaire (indépendant de tout écran).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct HandbookAnswer {
+    /// Texte de la réponse : marqueur retiré, coupure éventuelle **dite** dedans.
+    pub answer: String,
+    /// Titres de la documentation réellement cités dans le texte rendu.
+    /// Calculés **par le programme** (jamais déclarés par le modèle) et
+    /// recoupés avec les titres qui existent vraiment dans le corpus.
+    pub cited_sections: Vec<String>,
+    /// Vrai si le modèle a signalé que la documentation ne dit rien.
+    pub insufficient: bool,
+    /// Vrai si la réponse a été coupée au plafond de sortie.
+    pub truncated: bool,
+}
+
+/// Variante **pure** de `handbook_sections` (testable sur un corpus arbitraire).
+/// `handbook_sections_of(HANDBOOK)` = les titres réellement présents dans la
+/// documentation embarquée.
+pub fn handbook_sections_of(corpus: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_fence = false;
+    for line in corpus.lines() {
+        let trimmed_start = line.trim_start();
+        if trimmed_start.starts_with("```") || trimmed_start.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        let rest = match line.strip_prefix("### ") {
+            Some(r) => r,
+            None => match line.strip_prefix("## ") {
+                Some(r) => r,
+                None => continue,
+            },
+        };
+        let title = rest.trim();
+        if !title.is_empty() && !out.iter().any(|s| s == title) {
+            out.push(title.to_string());
+        }
+    }
+    out
+}
+
+/// Normalise un texte pour comparer des titres : minuscules + espaces réduits.
+fn normalize_for_match(s: &str) -> String {
+    s.to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Sections de la documentation citées dans `answer` : recoupement fait **par
+/// le programme** avec les titres réels du corpus embarqué (`HANDBOOK`).
 ///
-/// Le modèle utilisé est lu depuis `config.help_model` (format "provider/modelId",
-/// peuplé par le sélecteur de l'UI d'aide). Pi `--no-session` n'a pas de modèle
-/// par défaut : sans `set_model` explicite, le prompt ne produit aucune réponse.
+/// Limite assumée : ce recoupement est **approximatif par construction** (on ne
+/// reconnaît qu'une citation littérale du titre) — il ne doit jamais être
+/// présenté comme une « source exacte ».
+pub fn cited_sections_in_corpus(corpus: &str, answer: &str) -> Vec<String> {
+    let haystack = normalize_for_match(answer);
+    if haystack.is_empty() {
+        return Vec::new();
+    }
+    handbook_sections_of(corpus)
+        .into_iter()
+        .filter(|title| haystack.contains(&normalize_for_match(title)))
+        .collect()
+}
+
+/// Longueur (en octets) du marqueur d'insuffisance placé en TÊTE de `text`,
+/// `0` s'il est absent. Tolère l'habillage Markdown courant (`**`, `>`, `#`,
+/// `-`, backtick) et un espace avant le deux-points ; un marqueur au milieu du
+/// texte n'est **pas** interprété (signal honnête, pas de détection opportuniste).
+fn insufficient_marker_len(text: &str) -> usize {
+    let mut start = 0usize;
+    for (i, c) in text.char_indices() {
+        if c.is_whitespace() || matches!(c, '*' | '_' | '#' | '>' | '-' | '`') {
+            start = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    let rest = &text[start..];
+    if !rest.to_uppercase().starts_with(INSUFFICIENT_KEY) {
+        return 0;
+    }
+    let mut i = INSUFFICIENT_KEY.len();
+    while i < rest.len() && rest.as_bytes()[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if rest.as_bytes().get(i) == Some(&b':') {
+        start + i + 1
+    } else {
+        0
+    }
+}
+
+/// Coupe `text` au plafond `MAX_ANSWER_CHARS`, **proprement** : sur une fin de
+/// phrase si possible, sinon sur une fin de mot — jamais au milieu d'un mot.
+/// Retourne `None` si le texte tient dans le plafond.
+fn cut_at_cap(text: &str) -> Option<String> {
+    if text.chars().count() <= MAX_ANSWER_CHARS {
+        return None;
+    }
+    let head: String = text.chars().take(MAX_ANSWER_CHARS).collect();
+    let min_keep = MAX_ANSWER_CHARS * 3 / 4;
+    // 1. Dernière fin de phrase (ponctuation forte suivie d'un blanc) assez
+    //    proche du plafond pour ne pas amputer la réponse inutilement.
+    let mut sentence_cut: Option<String> = None;
+    for (pos, (i, c)) in head.char_indices().enumerate() {
+        if matches!(c, '.' | '!' | '?' | '…') {
+            let after = head[i + c.len_utf8()..].chars().next();
+            let boundary = after.map(|a| a.is_whitespace()).unwrap_or(true);
+            if boundary && pos + 1 >= min_keep {
+                sentence_cut = Some(head[..i + c.len_utf8()].trim_end().to_string());
+            }
+        }
+    }
+    if let Some(kept) = sentence_cut {
+        return Some(kept);
+    }
+    // 2. Sinon, dernière fin de mot (dernier blanc du plafond).
+    match head.rfind(|c: char| c.is_whitespace()) {
+        Some(idx) if idx > 0 => Some(head[..idx].trim_end().to_string()),
+        _ => Some(head.trim_end().to_string()),
+    }
+}
+
+/// Mention explicite de coupure, ajoutée au texte rendu (la coupure est dite).
+fn truncation_notice() -> String {
+    format!(
+        "_… Réponse tronquée à {} caractères : la documentation intégrée contient davantage de \
+         contenu sur ce sujet. Demande une précision pour obtenir la suite._",
+        MAX_ANSWER_CHARS
+    )
+}
+
+/// Finition d'une réponse brute du modèle : drapeau d'insuffisance + marqueur
+/// retiré, plafond appliqué avec coupure **dite**, sections citées recoupées
+/// avec le corpus embarqué. **Fonction pure** : aucun appel de modèle.
+pub fn finish_help_answer(raw: &str) -> HandbookAnswer {
+    finish_help_answer_from_corpus(raw, HANDBOOK)
+}
+
+/// Variante **pure** de `finish_help_answer` (corpus arbitraire, testable).
+pub fn finish_help_answer_from_corpus(raw: &str, corpus: &str) -> HandbookAnswer {
+    let text = raw.trim();
+    let marker_len = insufficient_marker_len(text);
+    let mut answer = if marker_len > 0 {
+        text[marker_len..].trim().to_string()
+    } else {
+        text.to_string()
+    };
+    let mut truncated = false;
+    if let Some(kept) = cut_at_cap(&answer) {
+        truncated = true;
+        answer = format!("{}\n\n{}", kept, truncation_notice());
+    }
+    let cited_sections = cited_sections_in_corpus(corpus, &answer);
+    HandbookAnswer {
+        answer,
+        cited_sections,
+        insufficient: marker_len > 0,
+        truncated,
+    }
+}
+
+/// Résolution du **modèle** de la brique documentaire, par repli : modèle de
+/// l'Assistant → réglage d'aide existant → défaut de la configuration.
+///
+/// Condition de survie : plus aucun écran n'écrit forcément le réglage d'aide,
+/// donc la brique ne peut pas en dépendre seule. `Err` = message **explicite et
+/// lisible**, jamais un échec silencieux.
+///
+/// `available` = spécifications installées ("provider/modelId") ; `None` = liste
+/// illisible → aucune validation (fail-open, cf. `resolve_super_agent_model`).
+pub(crate) fn resolve_help_doc_model(
+    assistant_model: &str,
+    help_model: &str,
+    global: Option<(String, String)>,
+    available: Option<&[String]>,
+) -> Result<String, String> {
+    crate::super_agent::resolve_super_agent_model(assistant_model, help_model, global, available)
+        .map(|(provider, model_id)| format!("{}/{}", provider, model_id))
+        .ok_or_else(|| {
+            "Aucun modèle disponible pour répondre à partir de la documentation : choisis un \
+             modèle dans ⚙️ → Assistant (ou dans l'onglet Aide)."
+                .to_string()
+        })
+}
+
+/// Lance la brique sur un prompt déjà construit et rend le résultat structuré.
+fn run_help_prompt(
+    cwd: &str,
+    pi_path: &str,
+    prompt: &str,
+    model: &str,
+) -> Result<HandbookAnswer, String> {
+    let raw = ask_pi_caged(cwd, pi_path, prompt, Some(model))?;
+    Ok(finish_help_answer(&raw))
+}
+
+/// **Cœur de la brique** : répond à `question` à partir de la documentation
+/// embarquée. Une seule entrée (la question) : aucun chemin de projet, aucun
+/// historique, aucun fichier.
+pub fn answer_from_handbook(
+    state: &crate::AppState,
+    question: &str,
+) -> Result<HandbookAnswer, String> {
+    let question = question.trim();
+    if question.is_empty() {
+        return Err("Question vide : précise ce que tu veux savoir sur Pilot.".to_string());
+    }
+
+    let cfg = state.config_snapshot();
+    let pi_path = cfg.rpc_pi_path.clone();
+    let global = crate::super_agent::default_model_from_config(&pi_path);
+    let available = crate::agents::available_model_specs(&pi_path).ok();
+    let model = resolve_help_doc_model(
+        &cfg.super_agent_model,
+        &cfg.help_model,
+        global,
+        available.as_deref(),
+    )?;
+
+    let prompt = build_help_prompt(question, &[]);
+
+    // Cwd neutre (dossier temporaire) : pi --no-session ne charge pas de session
+    // projet, et un cwd vide évite tout scan de fichiers.
+    let cwd = std::env::temp_dir().to_string_lossy().to_string();
+
+    run_help_prompt(&cwd, &pi_path, &prompt, &model)
+}
+
+/// Commande **destinée à l'Assistant** : une seule entrée (la question), aucun
+/// chemin de projet, aucun historique, aucun fichier. Rend le résultat
+/// structuré (texte, sections citées, drapeaux).
+#[tauri::command]
+pub fn ask_help_doc(
+    state: State<crate::AppState>,
+    question: String,
+) -> Result<HandbookAnswer, String> {
+    answer_from_handbook(&state, &question)
+}
+
+/// Commande de l'écran « ❓ Aide » : **simple emballage** de la brique
+/// (`run_help_prompt` + prompt avec historique). Comportement inchangé côté
+/// interface : même modèle (`config.help_model`), même message d'erreur quand
+/// aucun modèle n'est choisi, même retour texte.
 #[tauri::command]
 pub fn ask_help(
     state: State<crate::AppState>,
@@ -81,7 +345,7 @@ pub fn ask_help(
     // charge pas de session projet, et un cwd vide évite tout scan de fichiers.
     let cwd = std::env::temp_dir().to_string_lossy().to_string();
 
-    ask_pi_caged(&cwd, &pi_path, &prompt, Some(&help_model))
+    run_help_prompt(&cwd, &pi_path, &prompt, &help_model).map(|r| r.answer)
 }
 
 /// Construit le prompt cadré envoyé à pi : consigne « assistant d'aide », le
@@ -93,7 +357,12 @@ fn build_help_prompt(question: &str, history: &[HelpTurn]) -> String {
          Réponds UNIQUEMENT à partir du HANDBOOK ci-dessous. N'utilise AUCUN outil,\n\
          ne lis ni ne modifie aucun fichier, n'exécute aucune commande. Si la question\n\
          sort du cadre de Pilot, dis-le clairement et oriente l'utilisateur vers la\n\
-         documentation. Réponds en français, de façon claire et concise, en Markdown.\n\n",
+         documentation. Réponds en français, de façon claire et concise, en Markdown.\n\
+         Cite les titres de sections du HANDBOOK que tu utilises.\n\
+         Si le HANDBOOK ne contient pas de quoi répondre, commence IMPÉRATIVEMENT\n\
+         ta réponse par le marqueur DOCUMENTATION_INSUFFISANTE: seul en tête, puis\n\
+         explique en une phrase ce qui manque. Ne mets ce marqueur dans AUCUN\n\
+         autre cas.\n\n",
     );
     s.push_str("=== HANDBOOK ===\n");
     s.push_str(HANDBOOK);
@@ -430,6 +699,143 @@ pub fn ask_pi_caged_timed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Socle documentaire : tests PURS, sans appel de modèle ──
+
+    /// (a) Le marqueur d'insuffisance lève le drapeau ET disparaît du texte.
+    /// Ce test échoue si on retire le traitement du marqueur.
+    #[test]
+    fn marqueur_dinsuffisance_leve_le_drapeau_et_quitte_le_texte() {
+        let a = finish_help_answer(
+            "DOCUMENTATION_INSUFFISANTE: la documentation ne couvre pas ce sujet.",
+        );
+        assert!(a.insufficient, "drapeau insuffisante attendu");
+        assert!(!a.answer.contains(INSUFFICIENT_MARKER));
+        assert!(!a.answer.contains(INSUFFICIENT_KEY));
+        assert!(a.answer.starts_with("la documentation ne couvre pas"));
+
+        // Habillage Markdown toléré (`**MARQUEUR :**`) → même verdict.
+        let b = finish_help_answer("**DOCUMENTATION_INSUFFISANTE :** rien sur ce point.");
+        assert!(b.insufficient);
+        assert!(!b.answer.contains(INSUFFICIENT_KEY));
+
+        // Réponse normale : aucun drapeau, texte intact.
+        let c = finish_help_answer("## Pilot en bref\n\nPilot est un éditeur.");
+        assert!(!c.insufficient);
+        assert!(!c.truncated);
+        assert_eq!(c.answer, "## Pilot en bref\n\nPilot est un éditeur.");
+
+        // Marqueur au milieu du texte : pas interprété (signal honnête).
+        let d = finish_help_answer("Voici la réponse. DOCUMENTATION_INSUFFISANTE: non.");
+        assert!(!d.insufficient);
+    }
+
+    /// (b) Réponse trop longue → coupure propre + drapeau + coupure DITE.
+    /// Ce test échoue si on retire le plafond.
+    #[test]
+    fn reponse_trop_longue_est_coupee_proprement_et_la_coupure_est_dite() {
+        let phrase = "Pilot affiche la documentation dans un onglet. ";
+        let raw = phrase.repeat(400); // ≈ 18 800 caractères
+        assert!(raw.chars().count() > MAX_ANSWER_CHARS);
+
+        let a = finish_help_answer(&raw);
+        assert!(a.truncated, "drapeau tronquée attendu");
+        assert!(a.answer.contains("tronquée"), "la coupure doit être dite : {}", a.answer);
+        assert!(a.answer.contains(&MAX_ANSWER_CHARS.to_string()));
+
+        // Coupure sur une fin de phrase (pas au milieu d'un mot).
+        let kept = a.answer.split("\n\n_…").next().unwrap();
+        assert!(kept.ends_with('.'), "coupure attendue sur une fin de phrase : …{:?}", &kept[kept.len().saturating_sub(40)..]);
+        assert!(raw.starts_with(kept), "le texte gardé doit être un début du texte brut");
+        assert!(
+            kept.chars().count() <= MAX_ANSWER_CHARS,
+            "le texte gardé dépasse le plafond"
+        );
+
+        // Sans ponctuation de phrase : coupure sur une fin de MOT (jamais au
+        // milieu d'un mot).
+        let raw_words = "mot ".repeat(2000);
+        let b = finish_help_answer(&raw_words);
+        assert!(b.truncated);
+        let kept_words = b.answer.split("\n\n_…").next().unwrap();
+        assert!(raw_words.starts_with(kept_words));
+        assert!(
+            raw_words[kept_words.len()..].starts_with(' '),
+            "la coupure doit tomber sur un blanc (fin de mot)"
+        );
+    }
+
+    /// (c) Toute section citée existe réellement dans le corpus embarqué, et le
+    /// recoupement est fait par le programme. Ce test échoue si on retire le
+    /// calcul des sections citées.
+    #[test]
+    fn les_sections_citees_existent_dans_le_corpus() {
+        let corpus = handbook_sections_of(HANDBOOK);
+        assert!(corpus.len() > 50, "corpus inattendu : {} titres", corpus.len());
+
+        let some_title = corpus
+            .iter()
+            .find(|t| t.as_str() == "Terminal intégré")
+            .cloned()
+            .expect("titre « Terminal intégré » attendu dans le handbook");
+        let a = finish_help_answer(&format!(
+            "Ouvre le panneau et clique sur « {} » (voir ## {}).",
+            some_title, some_title
+        ));
+        assert!(
+            a.cited_sections.contains(&some_title),
+            "section réelle non détectée : {:?}",
+            a.cited_sections
+        );
+        for s in &a.cited_sections {
+            assert!(corpus.contains(s), "section inventée (absente du corpus) : {}", s);
+        }
+
+        // Un titre qui n'existe pas dans le corpus n'est JAMAIS cité.
+        let b = finish_help_answer("Voir ## Section totalement inventée par le modèle.");
+        assert!(!b.cited_sections.iter().any(|s| s.contains("inventée")));
+        assert!(b.cited_sections.iter().all(|s| corpus.contains(s)));
+    }
+
+    /// (d) Résolution du modèle : assistant → réglage d'aide → défaut, et cas
+    /// « rien disponible » → erreur explicite. Ce test échoue si on retire la
+    /// résolution par repli.
+    #[test]
+    fn le_modele_est_resolu_par_repli_avec_erreur_explicite_si_rien() {
+        let global = Some(("plh".to_string(), "defaut-global".to_string()));
+
+        // 1. modèle de l'Assistant prioritaire.
+        assert_eq!(
+            resolve_help_doc_model("plh/assistant", "plh/aide", global.clone(), None).unwrap(),
+            "plh/assistant"
+        );
+        // 2. sinon le réglage d'aide existant.
+        assert_eq!(
+            resolve_help_doc_model("", "plh/aide", global.clone(), None).unwrap(),
+            "plh/aide"
+        );
+        // 3. sinon le défaut de la configuration.
+        assert_eq!(
+            resolve_help_doc_model("", "   ", global.clone(), None).unwrap(),
+            "plh/defaut-global"
+        );
+
+        // Un modèle de l'Assistant disparu du registre retombe sur le réglage
+        // d'aide (jamais un modèle inexistant).
+        let available = vec!["plh/aide".to_string()];
+        assert_eq!(
+            resolve_help_doc_model("plh/supprime", "plh/aide", None, Some(&available)).unwrap(),
+            "plh/aide"
+        );
+
+        // Rien de disponible → erreur explicite et lisible (jamais silencieux).
+        let err = resolve_help_doc_model("", "  ", None, None).unwrap_err();
+        assert!(
+            err.to_lowercase().contains("aucun modèle"),
+            "message d'erreur inattendu : {}",
+            err
+        );
+    }
 
     /// Test d'intégration (ignoré par défaut) : nécessite pi dans le PATH et un
     /// modèle local lancé (llama-cpp/ornith). Lancer avec :
