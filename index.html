@@ -96,37 +96,76 @@
     </div>
 
     <!-- Boutons du PROJET (en bas de la liste des fichiers, visibles si projet ouvert)
-         Système à onglets (v8) : rangée d'onglets Projet / Vues / Assistant + panneau de l'onglet actif. -->
+         LOT 3 de la presentation (docs/proposition-presentation-ui.md §3.3 et lot 3
+         du §6) : les TROIS sous-onglets « Projet / Vues / Assistant » et leurs
+         QUATORZE lignes sont remplaces par QUATRE lignes de 32 px, toujours les
+         memes, dans l'ordre fige :
+
+             Assistant · Terminal · Lancer l'agent (en evidence) · Autres écrans ▾
+
+         « Lancer l'agent » est la ligne principale du bloc (13 px / 600, icone
+         accent) ; « Autres écrans » ouvre un menu VERS LE HAUT qui accueille les
+         ecrans consultes occasionnellement.
+         Les IDENTIFIANTS et les FONCTIONS des quatorze entrees sont ceux d'avant :
+         aucun ecran ne devient inaccessible et le cablage (`main.js`,
+         `project-commands.js`, `interproject.js`) n'a pas bouge d'une ligne.
+         Le cadre accent — le SEUL de l'interface — reste celui de ce bloc. -->
     <div id="project-footer" class="project-only hidden">
-      <!-- Rangée d'onglets : Projet / Vues / Assistant -->
-      <div class="pj-tabs" role="tablist">
-        <button class="pj-tab active" data-tab="projet" role="tab" aria-selected="true">Projet</button>
-        <button class="pj-tab" data-tab="vues" role="tab" aria-selected="false">Vues</button>
-        <button class="pj-tab" data-tab="assistant" role="tab" aria-selected="false">Assistant</button>
-      </div>
-      <!-- Onglet Projet (actif par défaut) : 6 boutons nommés (étape 1 de la
-           navigation) : icône + libellé court, identifiants inchangés. -->
-      <div class="pj-panel" data-panel="projet">
-        <button id="btn-explorer" class="project-only hidden" title="Ouvrir le dossier dans l'explorateur"><i data-lucide="folder-open" class="icon"></i><span class="pj-btn-label">Ouvrir le dossier</span></button>
-        <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal"><i data-lucide="terminal" class="icon"></i><span class="pj-btn-label">Terminal</span></button>
-        <button id="btn-terminal-cmd" class="project-only hidden" title="Agent / Terminal"><i data-lucide="bot" class="icon"></i><span class="pj-btn-label">Agent / Terminal</span></button>
-        <button id="btn-commands" class="project-only hidden" title="Commandes du projet (lancer une commande paramétrée)"><i data-lucide="square-terminal" class="icon"></i><span class="pj-btn-label">Commandes du projet</span></button>
-        <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder"><i data-lucide="puzzle" class="icon"></i><span class="pj-btn-label">Prompt Builder</span></button>
-        <button id="btn-dashboard" class="project-only hidden" title="Tableau de bord du projet (métriques, Git, langages, activité)"><i data-lucide="gauge" class="icon"></i><span class="pj-btn-label">Tableau de bord</span></button>
-      </div>
-      <!-- Onglet Vues : 4 boutons nommés -->
-      <div class="pj-panel" data-panel="vues" style="display:none;">
-        <button id="btn-code-graph" class="project-only hidden" title="Graphe du projet (visualisation 2D du Code Graph)"><i data-lucide="network" class="icon"></i><span class="pj-btn-label">Graphe du projet</span></button>
-        <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon"></i><span class="pj-btn-label">Revue de code</span></button>
-        <button id="btn-history" class="project-only hidden" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon"></i><span class="pj-btn-label">Historique des sessions</span></button>
-        <button id="btn-gds" class="project-only hidden" title="GDS (gestionnaire de sources)"><i data-lucide="database" class="icon"></i><span class="pj-btn-label">GDS du projet</span></button>
-      </div>
-      <!-- Onglet Assistant : 4 boutons nommés -->
-      <div class="pj-panel" data-panel="assistant" style="display:none;">
-        <button id="btn-agents" class="project-only hidden" title="Équipe d'agents multi-rôles (H2 V2)"><i data-lucide="users" class="icon"></i><span class="pj-btn-label">Équipe d'agents</span></button>
+      <!-- Un seul panneau, plus de rangee d'onglets : `role="tablist"` disparait
+           avec les sous-onglets. -->
+      <div class="pj-panel">
+        <!-- 1. Assistant : toujours visible, 1 clic (etait cache derriere un
+             sous-onglet). -->
         <button id="btn-superagent" class="project-only hidden" title="Assistant : suivi multi-projets (lecture seule)"><i data-lucide="compass" class="icon"></i><span class="pj-btn-label">Assistant</span></button>
-        <button id="btn-superkanban" class="project-only hidden" title="Ouvrir la vue Kanban (tâches de suivi)"><i data-lucide="columns-3" class="icon"></i><span class="pj-btn-label">Kanban</span></button>
-        <button id="btn-interproject" class="project-only hidden" title="Discussion inter-projets (lier des projets, envoyer une tâche)"><i data-lucide="link" class="icon"></i><span class="pj-btn-label">Discussion inter-projets</span></button>
+        <!-- 2. Terminal integre. -->
+        <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal"><i data-lucide="terminal" class="icon"></i><span class="pj-btn-label">Terminal</span></button>
+        <!-- 3. LIGNE PRINCIPALE : lancer l'agent (meme identifiant, meme effet
+             qu'avant : conversation de l'agent, sinon terminal, sinon terminal
+             systeme). Le libelle dit enfin ce que fait le bouton. -->
+        <button id="btn-terminal-cmd" class="project-only hidden pj-row-main" title="Lancer l'agent : ouvrir la conversation de l'agent"><i data-lucide="bot" class="icon"></i><span class="pj-btn-label">Lancer l'agent</span></button>
+
+        <!-- ===== MENU « Autres écrans » (lot 3 de la presentation) =====
+             Le document de conception (`docs/proposition-presentation-ui.md` §3.3)
+             le veut ouvert VERS LE HAUT : le bloc est en bas de colonne, un menu
+             qui descendrait sortirait de la fenetre.
+             Il accueille les ecrans qui ne se consultent pas tous les jours, en
+             GROUPES NOMMES (§ 4.3 du doc de navigation).
+             CHAQUE ENTREE GARDE SON IDENTIFIANT ET SA FONCTION : le cablage de
+             `main.js`, de `project-commands.js` et de `interproject.js` les
+             retrouve tels quels, sans une ligne de changement.
+             Il est ici, DANS la colonne de 280 px : sa largeur est celle du cadre,
+             ses couleurs viennent des jetons de theme (sombre ET clair). -->
+        <div id="pj-more-wrap" class="pj-more-wrap">
+          <button id="btn-more-screens" class="project-only hidden" type="button" title="Autres écrans" aria-haspopup="menu" aria-expanded="false" aria-controls="pj-more-menu"><i data-lucide="more-horizontal" class="icon"></i><span class="pj-btn-label">Autres écrans</span><span class="pj-more-chevron"><i data-lucide="chevron-down" class="icon-sm"></i></span></button>
+          <div id="pj-more-menu" class="pj-more-menu hidden" role="menu" aria-label="Autres écrans">
+            <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-projet">
+              <div class="pj-more-group-label" id="pj-more-groupe-projet">Mon projet</div>
+              <button id="btn-explorer" class="pj-more-item" role="menuitem" title="Ouvrir le dossier dans l'explorateur"><i data-lucide="folder-open" class="icon-sm"></i><span class="pj-btn-label">Ouvrir le dossier</span></button>
+              <button id="btn-commands" class="pj-more-item" role="menuitem" title="Commandes du projet (lancer une commande paramétrée)"><i data-lucide="square-terminal" class="icon-sm"></i><span class="pj-btn-label">Commandes du projet</span></button>
+              <button id="btn-prompt-builder" class="pj-more-item" role="menuitem" title="Prompt Builder"><i data-lucide="puzzle" class="icon-sm"></i><span class="pj-btn-label">Prompt Builder</span></button>
+            </div>
+            <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-comprendre">
+              <div class="pj-more-group-label" id="pj-more-groupe-comprendre">Comprendre</div>
+              <button id="btn-dashboard" class="pj-more-item" role="menuitem" title="Tableau de bord du projet (métriques, Git, langages, activité)"><i data-lucide="gauge" class="icon-sm"></i><span class="pj-btn-label">Tableau de bord</span></button>
+              <button id="btn-code-graph" class="pj-more-item" role="menuitem" title="Graphe du projet (visualisation 2D du Code Graph)"><i data-lucide="network" class="icon-sm"></i><span class="pj-btn-label">Graphe du projet</span></button>
+              <button id="btn-history" class="pj-more-item" role="menuitem" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon-sm"></i><span class="pj-btn-label">Historique des sessions</span></button>
+            </div>
+            <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-verifier">
+              <div class="pj-more-group-label" id="pj-more-groupe-verifier">Vérifier</div>
+              <button id="btn-review" class="pj-more-item" role="menuitem" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon-sm"></i><span class="pj-btn-label">Revue de code (diff Git)</span></button>
+            </div>
+            <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-collaborer">
+              <div class="pj-more-group-label" id="pj-more-groupe-collaborer">Collaborer</div>
+              <button id="btn-agents" class="pj-more-item" role="menuitem" title="Équipe d'agents multi-rôles (H2 V2)"><i data-lucide="users" class="icon-sm"></i><span class="pj-btn-label">Équipe d'agents</span></button>
+              <button id="btn-superkanban" class="pj-more-item" role="menuitem" title="Ouvrir la vue Kanban (tâches de suivi)"><i data-lucide="columns-3" class="icon-sm"></i><span class="pj-btn-label">Kanban</span></button>
+              <button id="btn-interproject" class="pj-more-item" role="menuitem" title="Discussion inter-projets (lier des projets, envoyer une tâche)"><i data-lucide="link" class="icon-sm"></i><span class="pj-btn-label">Discussion inter-projets</span></button>
+            </div>
+            <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-sources">
+              <div class="pj-more-group-label" id="pj-more-groupe-sources">Sources</div>
+              <button id="btn-gds" class="pj-more-item" role="menuitem" title="GDS (gestionnaire de sources)"><i data-lucide="database" class="icon-sm"></i><span class="pj-btn-label">GDS du projet</span></button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </aside>

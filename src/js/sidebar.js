@@ -238,8 +238,10 @@ class Sidebar {
     // Séparateur sidebar draggable + persistance
     this._initSidebarResize();
 
-    // Barre de boutons projet : bascule des onglets Projet / Vues / Assistant
-    this._initProjectTabs();
+    // LOT 3 de la presentation : le menu « Autres ecrans » du bas de la colonne
+    // (les trois sous-onglets Projet / Vues / Assistant ont disparu : les quatre
+    // lignes du bloc sont toujours visibles et le menu porte le reste).
+    this._initProjectFooterMenu();
 
     // Bouton Projets → toggle dropdown
     this.btnOpen.addEventListener("click", (e) => {
@@ -1619,44 +1621,68 @@ class Sidebar {
   }
 
   /**
-   * Barre de boutons projet (v8) : bascule des onglets Projet / Vues / Assistant.
-   * Un seul panneau visible à la fois ; l'onglet actif est marqué (accent).
-   * Navigation clavier basique : ←/→ pour changer d'onglet quand un onglet a le focus.
+   * LOT 3 de la presentation : le MENU « Autres ecrans » du bas de la colonne
+   * (docs/proposition-presentation-ui.md §3.3 et lot 3 du §6).
+   *
+   * Le declencheur `#btn-more-screens` ouvre VERS LE HAUT le panneau
+   * `#pj-more-menu`, qui accueille les ecrans consultes occasionnellement.
+   * Regles tenues ici, et nulle part ailleurs :
+   *   - etat ouvert = la seule classe `hidden` du panneau ; `aria-expanded` et
+   *     la classe `open` (chevron retourne) n'en sont que le reflet ;
+   *   - fermeture a Echap (focus rendu au declencheur), au clic exterieur et
+   *     apres le choix d'une ligne ;
+   *   - aucune ligne n'est interceptee : chacune garde SON gestionnaire
+   *     (`main.js`, `project-commands.js`, `interproject.js`), qui s'execute
+   *     avant la fermeture. Le menu ne decide donc jamais a la place d'un ecran.
    */
-  _initProjectTabs() {
-    const footer = document.getElementById("project-footer");
-    if (!footer) return;
-    const tabs = footer.querySelectorAll(".pj-tab");
-    const panels = footer.querySelectorAll(".pj-panel");
-    if (tabs.length === 0 || panels.length === 0) return;
+  _initProjectFooterMenu() {
+    const btn = document.getElementById("btn-more-screens");
+    const menu = document.getElementById("pj-more-menu");
+    if (!btn || !menu) return;
 
-    const activate = (tab) => {
-      const name = tab.getAttribute("data-tab");
-      tabs.forEach((t) => {
-        const on = t === tab;
-        t.classList.toggle("active", on);
-        t.setAttribute("aria-selected", on ? "true" : "false");
-      });
-      panels.forEach((p) => {
-        p.style.display = p.getAttribute("data-panel") === name ? "" : "none";
-      });
+    const estOuvert = () => !menu.classList.contains("hidden");
+    const setOuvert = (ouvert) => {
+      menu.classList.toggle("hidden", !ouvert);
+      btn.classList.toggle("open", ouvert);
+      btn.setAttribute("aria-expanded", ouvert ? "true" : "false");
+    };
+    const fermer = () => {
+      if (estOuvert()) setOuvert(false);
     };
 
-    tabs.forEach((tab) => {
-      tab.addEventListener("click", () => activate(tab));
-      tab.addEventListener("keydown", (e) => {
-        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-        e.preventDefault();
-        const idx = Array.prototype.indexOf.call(tabs, tab);
-        const next =
-          e.key === "ArrowRight"
-            ? (idx + 1) % tabs.length
-            : (idx - 1 + tabs.length) % tabs.length;
-        tabs[next].focus();
-        activate(tabs[next]);
-      });
+    btn.addEventListener("click", () => setOuvert(!estOuvert()));
+
+    // Ligne choisie : le gestionnaire de la ligne s'execute d'abord (c'est lui
+    // qui ouvre l'ecran), puis le menu se referme.
+    menu.addEventListener("click", (e) => {
+      if (e.target.closest(".pj-more-item")) fermer();
+    });
+
+    // Clic exterieur : en phase de CAPTURE, le menu se referme sans jamais
+    // empecher le clic de faire son travail.
+    document.addEventListener(
+      "click",
+      (e) => {
+        if (!estOuvert()) return;
+        if (menu.contains(e.target) || btn.contains(e.target)) return;
+        fermer();
+      },
+      true
+    );
+
+    // Echap : referme et rend le focus au declencheur (jamais l'inverse).
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !estOuvert()) return;
+      fermer();
+      btn.focus();
     });
   }
+
+  // LOT 3 de la presentation : la methode `_initProjectTabs` (bascule des trois
+  // sous-onglets Projet / Vues / Assistant) est supprimee avec les sous-onglets.
+  // Les quatre lignes du bloc du bas sont toujours visibles et le menu
+  // « Autres ecrans » porte le reste (cf. `_initProjectFooterMenu` ci-dessus).
+  // Le cablage des ecrans, lui, n'a pas change d'une ligne.
 
   /** Initialise le drag du séparateur sidebar avec persistance */
   _initSidebarResize() {

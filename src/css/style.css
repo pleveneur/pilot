@@ -731,18 +731,32 @@ body.theme-light.theme-tokyo-day {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  overflow-y: auto;
+  /* LOT 3 : `visible` et non plus `auto` — le menu « Autres ecrans » s'ouvre
+     VERS LE HAUT, donc AU-DESSUS du cadre : un conteneur qui rogne le
+     masquerait entierement. Le contenu du bloc ne deborde jamais (4 lignes de
+     32 px, cf. `.pj-panel`), il n'y a donc rien a faire defiler. */
+  overflow: visible;
+  /* Le plafond de 40 % reste en place (aucune dimension existante n'est
+     changee) ; il ne contraint plus rien : 164 px < 40 % des que la fenetre
+     depasse 410 px de haut, et le bloc tient dans 500 px (plafond 200 px). */
   max-height: 40%;
-  /* Un seul cadre pour onglets + boutons (v9) : la bordure accent, le fond
-     léger et le rayon qui étaient portés par .pj-panel montent ici pour
-     entourer aussi la rangée d'onglets. */
+  /* Un seul cadre pour les QUATRE lignes du bas : la bordure accent, le fond
+     léger et le rayon restent ici (c'est le SEUL cadre accentue de l'interface). */
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border: 1px solid var(--accent);
   border-radius: var(--radius-lg);
-  padding: 6px;
+  /* LOT 3 : plus de padding horizontal — les lignes occupent toute la largeur
+     du cadre et leurs fonds de survol touchent la bordure (inset 30 -> 16 px).
+     8 px en haut et en bas : 2 + 16 + 4 x 32 + 3 x 6 = 164 px. */
+  padding: 8px 0;
 }
 
-/* --- Barre de boutons projet : système à onglets (v8) --- */
+/* --- Barre de boutons projet : systeme a onglets (v8) ---
+   LOT 3 de la presentation : la rangee de sous-onglets « Projet / Vues /
+   Assistant » N'EXISTE PLUS (les quatre lignes du bloc sont toujours visibles
+   et le menu « Autres ecrans » porte le reste). Les regles `.pj-tabs` et
+   `.pj-tab` sont conservees telles quelles : elles ne s'appliquent a aucun
+   element, et la regle d'etats partagee du lot 1 les cite encore. */
 .pj-tabs {
   display: flex;
   gap: 4px;
@@ -792,18 +806,19 @@ body.theme-light.theme-tokyo-day {
 }
 
 .pj-panel {
-  /* Etape 1 de la navigation : chaque bouton porte desormais son libelle court
-     a cote de son icone. Une seule colonne de lignes pleine largeur : aucun
-     libelle tronque, aucun retour a la ligne, largeur de la colonne inchangee
-     (280 px au minimum). */
+  /* LOT 3 de la presentation : les QUATRE lignes du bas sont toujours visibles,
+     dans l'ordre fige Assistant · Terminal · Lancer l'agent · Autres écrans.
+     Une seule colonne de lignes pleine largeur (aucun libelle tronque, aucune
+     retour a la ligne, colonne inchangee a 280 px) ; 6 px entre les lignes.
+     Cadre + fond portes par #project-footer (un seul bloc visuel) : le panel ne
+     garde que sa mise en page interne, sans padding (les fonds de survol
+     touchent la bordure du cadre). */
   display: flex;
   flex-direction: column;
   flex-wrap: nowrap;
   align-items: stretch;
-  gap: 4px;
-  padding: 8px;
-  /* Cadre + fond portes par #project-footer (un seul bloc visuel) :
-     le panel ne garde que sa mise en page interne. */
+  gap: 6px;
+  padding: 0;
 }
 
 #main-area {
@@ -1618,6 +1633,18 @@ body.theme-light.theme-tokyo-day {
   text-align: left;
 }
 
+/* LOT 3 de la presentation : « Lancer l'agent » est LA ligne principale du bloc
+   du bas (13 px / 600, icone accent) — les trois autres restent a 12 px / 400.
+   Seul ecart de taille du bloc, volontaire : c'est l'action la plus frequente. */
+.pj-panel button.pj-row-main {
+  font-size: var(--font-base);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+}
+.pj-panel button.pj-row-main .icon {
+  color: var(--accent-text);
+}
+
 /* LOT 2 de la presentation : les TROIS portes globales sont nommees. Format
    « pastille » : hauteur 28 px, largeur au contenu, icone 16 px (`.icon`) et
    libelle 12 px / 500. Les lignes du panneau projet (`.pj-panel button`)
@@ -1644,6 +1671,90 @@ body.theme-light.theme-tokyo-day {
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: left;
+}
+
+/* --- MENU « Autres ecrans » (LOT 3 de la presentation) ---
+   Reference : docs/proposition-presentation-ui.md §3.3.
+   Le bloc du bas etant en bas de la colonne, le panneau s'ouvre VERS LE HAUT
+   (`bottom: calc(100% + 4px)`), sinon il sortirait de la fenetre. Sa largeur est
+   celle du cadre : la colonne ne s'elargit jamais. Toutes les couleurs viennent
+   des jetons de theme (thème sombre ET clair), aucune valeur en dur. */
+.pj-more-wrap {
+  position: relative;
+}
+
+.pj-more-chevron {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  color: var(--text-secondary);
+  transition: transform var(--transition-fast);
+}
+
+/* Etat ouvert du declencheur : chevron retourne (meme convention que le
+   bouton « Projets » du haut de la colonne). */
+#btn-more-screens.open .pj-more-chevron {
+  transform: rotate(180deg);
+}
+
+.pj-more-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  /* Au-dessus de l'arborescence des fichiers, qu'il recouvre en s'ouvrant. */
+  z-index: 60;
+}
+
+/* En-tete de groupe : 11 px / 600, jamais --text-muted (regle du lot 1). */
+.pj-more-group-label {
+  padding: 8px 8px 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--font-xs);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Ligne du menu : 28 px, icone 14 px secondaire, libelle 12 px primaire.
+   La specificite (deux classes) est necessaire pour reprendre la main sur la
+   regle partagee `.pj-panel button` (32 px, texte secondaire). */
+.pj-more-menu .pj-more-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  gap: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--font-sm);
+  text-align: left;
+}
+
+.pj-more-menu .pj-more-item:hover {
+  background: var(--surface-3);
+}
+
+.pj-more-menu .pj-more-item:active {
+  transform: scale(0.97);
+}
+
+.pj-more-menu .pj-more-item .icon-sm {
+  color: var(--text-secondary);
 }
 
 /* --- Bande de contexte (LOT 4 de la presentation) ---
