@@ -209,8 +209,9 @@ describe("(a) plus de panneau cloche en bas a droite : un seul panneau", () => {
     // RANGEE D'ONGLETS (bande de contexte de 26 px supprimee, cf.
     // docs/proposition-bande-contexte-allegee.md §4) : une rangee de 36 px,
     // dans #main-area, qui porte la barre d'onglets PUIS l'entree « Travail »,
-    // dans un conteneur SEPARE (#tab-bar est remplie par tabs.js : ses enfants
-    // sont « les onglets + le bouton d'ajout d'agent »).
+    // puis les trois boutons de fenetre (#window-controls), chacun dans un
+    // conteneur SEPARE (#tab-bar est remplie par tabs.js : ses enfants sont
+    // « les onglets + le bouton d'ajout d'agent »).
     const rangee = html.indexOf('<div id="tab-row">');
     const barreOnglets = html.indexOf('<div id="tab-bar">');
     const zoneTravail = html.indexOf('<main id="main-area">');
@@ -218,6 +219,10 @@ describe("(a) plus de panneau cloche en bas a droite : un seul panneau", () => {
     expect(barreOnglets).toBeGreaterThan(rangee);
     // Le conteneur du suivi du travail est DANS la rangee, APRES la barre.
     expect(debut).toBeGreaterThan(barreOnglets);
+    // Les boutons de fenetre aussi, tout au bout : ils ne passent pas sous les
+    // onglets, ils occupent leur propre place dans la rangee.
+    const boutonsFenetre = html.indexOf('<div id="window-controls">');
+    expect(boutonsFenetre).toBeGreaterThan(debut);
     const finRangee = html.indexOf('<div id="main-content">');
     expect(finRangee).toBeGreaterThan(debut);
     // Aucun vestige de la bande supprimee : ni HTML, ni CSS.

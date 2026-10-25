@@ -67,46 +67,44 @@ body {
 }
 
 /* ================================================================
-   BANDE DE FENETRE PILOT
-   Remplace la barre de titre systeme (voir
-   docs/proposition-barre-fenetre.md §3.1, §3.2 et §4.1).
-   Premier bloc du corps : #app-body garde `flex: 1` et se place dessous.
+   BOUTONS DE FENETRE PILOT (dans la rangee d'onglets)
+   La bande de fenetre de 32 px a ete SUPPRIMEE (decision du proprietaire,
+   Q1). Les trois boutons systeme sont maintenant un groupe fixe en haut a
+   DROITE, au bout de la rangee d'onglets (#tab-row), dont ils sont le
+   dernier enfant : leur place est donc RESERVEE dans le flux, aucun onglet
+   ne passe dessous et aucune marge de reservation n'est necessaire.
+   Reference : docs/proposition-barre-fenetre.md §2 (option sans cadre, les
+   boutons dans la rangee d'onglets), etats et mesures §3.2 / §4.1.
    Aucune couleur en dur : uniquement des jetons, donc les 8 sous-themes
    (sombres et clairs) suivent sans une ligne de plus.
    ================================================================ */
-#window-bar {
-  flex: 0 0 auto;
-  height: var(--window-bar-height);
-  display: flex;
-  align-items: stretch;
-  justify-content: flex-end;
-  padding: 0;
-  margin: 0;
-  background: var(--bg-app);
-  border-bottom: 1px solid var(--border-subtle);
-  /* Au-dessus de l'ecran de chargement (99999) et des dialogues d'agent
-     (100000) : la fenetre reste deplacable et fermable pendant un
-     chargement ou pendant une question d'agent. */
-  position: relative;
-  z-index: 100001;
-  /* Zone de glissement : pas de selection de texte parasite pendant le
-     deplacement de la fenetre. */
-  user-select: none;
-}
 
-/* Groupe des trois boutons : colle au bord droit, aucun espacement, 138 px
-   au total (3 x 46 px). */
+/* Groupe des trois boutons : colle au bord droit de la fenetre, aucun
+   espacement, 138 px de large au total (3 x 46 px). Il ne se comprime jamais
+   (`flex: 0 0 auto`) : c'est lui qui reserve sa place dans la rangee. */
 #window-controls {
   display: flex;
   align-items: stretch;
   gap: 0;
+  flex: 0 0 auto;
+  align-self: stretch;
   margin-right: 0;
+  /* Les boutons de fenetre restent AU-DESSUS de l'ecran de chargement
+     (99999), des dialogues d'agent (100000) et de l'overlay du mode
+     immersif (99990) : la fenetre reste fermable et deplacable dans tous
+     les cas, et le mode immersif demarre tout en haut sans les cacher.
+     Aucun ancetre de ce bloc ne cree de contexte d'empilement : la valeur
+     joue donc bien dans le contexte racine. */
+  position: relative;
+  z-index: 100001;
 }
 
-/* Taille exacte 46 x 32 px, zone de clic = toute la surface. */
+/* Largeur 46 px, zone de clic = toute la surface. La HAUTEUR est celle de la
+   rangee d'onglets (36 px), et non plus 32 px : les boutons occupent toute la
+   hauteur du mobilier ou ils vivent, sans bande vide autour d'eux. */
 #window-controls > button {
   width: 46px;
-  height: var(--window-bar-height);
+  height: 100%;
   padding: 0;
   border: 0;
   border-radius: var(--radius-xs);
@@ -177,7 +175,7 @@ body.theme-light.theme-tokyo-day #window-controls > #win-close:active {
   background: var(--surface-2);
 }
 
-/* --- Finitions de contraste des etats de la bande de fenetre -------------
+/* --- Finitions de contraste des etats des boutons de fenetre -------------
    Quatre couples etat / sous-theme restaient sous le seuil de lisibilite ;
    correction ciblee, avec les jetons DEJA definis par chaque palette (aucune
    couleur en dur, aucun jeton global touche, aucun autre sous-theme modifie).
@@ -189,7 +187,7 @@ body.theme-light.theme-tokyo-day #window-controls > #win-close:active {
    de fond rouge plein). Les trois autres sous-themes sombres tiennent deja le
    plancher sans regle : One Dark 3,30 ; Dracula 3,42 ; Tokyo Night 4,66.
 
-   Solarized Light : le survol de la bande (icone --text-primary sur
+   Solarized Light : le survol des boutons (icone --text-primary sur
    --surface-3) donnait 3,28:1. Le survol eclaircit le fond (--surface-2) et
    l'icone prend --text-secondary, le jeton de texte le PLUS sombre de cette
    palette : 4,39:1. Reste sous 4,5 : seul un --text-secondary plus sombre y
@@ -226,7 +224,7 @@ body.theme-light.theme-tokyo-day #window-controls > button:active {
    `context-menu` : il reprend donc EXACTEMENT l'apparence des menus
    contextuels existants (--surface-floating, --border-subtle, --text-primary,
    survol --surface-3) et suit les 8 sous-themes sans une ligne de plus.
-   Une seule chose lui est propre : il doit vivre AU-DESSUS de la bande de
+   Une seule chose lui est propre : il doit vivre AU-DESSUS des boutons de
    fenetre (z-index 100001), sinon il passerait dessous. Un selecteur d'ID
    (specificite superieure a `.context-menu`) garantit cette valeur quel que
    soit l'ordre des regles dans ce fichier. */
@@ -250,11 +248,10 @@ body.theme-light.theme-tokyo-day #window-controls > button:active {
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
   --space-4: 16px; --space-5: 20px; --space-6: 24px;
 
-  /* Hauteur de la bande de fenetre (remplace la barre de titre systeme).
-     Ecrite UNE seule fois ici : la bande la consomme, et la pastille du suivi
-     du travail s'en decale (voir #agent-activity). 32 px n'existe pas comme
-     jeton d'espacement, d'ou cette variable dediee. */
-  --window-bar-height: 32px;
+  /* `--window-bar-height` (32 px) est SUPPRIMEE avec la bande de fenetre
+     qu'elle mesurait : plus aucun bloc n'en depend. Les boutons de fenetre
+     prennent la hauteur de la rangee d'onglets, qui porte deja sa propre valeur
+     de hauteur (36 px) : aucune hauteur nouvelle n'est donc inventee ici. */
 
   /* Typographie */
   --font-ui: "Inter", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -976,7 +973,11 @@ body.theme-light.theme-tokyo-day {
 /* --- Project Selector --- */
 /* LOT 2 de la presentation : bandeau d'identification de 48 px (au lieu de
    72) — logo 20 px, nom du projet 15 px / 600 et sous-titre du moteur 11 px
-   sur deux lignes. Inset de gauche 16 px (grille § 4.2), filet bas conserve. */
+   sur deux lignes. Inset de gauche 16 px (grille § 4.2), filet bas conserve.
+   Depuis la suppression de la bande de fenetre, ce bandeau est l'une des DEUX
+   zones qui deplacent la fenetre (glisser + double-clic) : `user-select: none`
+   evite qu'un double-clic selectionne le nom du projet au lieu d'agrandir la
+   fenetre. Aucun texte de ce bandeau n'a besoin d'etre copie. */
 #project-selector {
   height: 48px;
   padding: 8px 8px 8px 16px;
@@ -986,6 +987,7 @@ body.theme-light.theme-tokyo-day {
   align-items: center;
   gap: 8px;
   position: relative;
+  user-select: none;
 }
 
 /* Identite du projet : nom + sous-titre du moteur. Le bloc prend la place
@@ -1769,15 +1771,16 @@ body.theme-light.theme-tokyo-day {
 }
 
 /* --- Rangee d'onglets (bande de contexte supprimee) ---
-   Une seule rangee de 36 px EN HAUT de la zone de travail, dans le flux
-   normal : elle s'empile sous la bande de fenetre (32 px) et porte, de gauche
-   a droite, la barre d'onglets (#tab-bar, qui prend toute la largeur
-   restante) puis l'entree « Travail » (#agent-activity, dans son PROPRE
-   conteneur : elle ne peut pas entrer dans #tab-bar, dont les enfants sont
-   « les onglets + le bouton d'ajout d'agent » pour tabs.js).
+   Une seule rangee de 36 px EN HAUT de la fenetre et de la zone de travail,
+   dans le flux normal : plus aucune bande de fenetre au-dessus d'elle. Elle
+   porte, de gauche a droite, la barre d'onglets (#tab-bar, qui prend toute la
+   largeur restante), l'entree « Travail » (#agent-activity) et les trois
+   boutons de fenetre (#window-controls) : chacun dans son PROPRE conteneur
+   (aucun d'eux ne peut entrer dans #tab-bar, dont les enfants sont « les
+   onglets + le bouton d'ajout d'agent » pour tabs.js).
    Hauteur peinte : 36 px de contenu + 1 px de filet = 37 px, contre 63 px
    avant (bande de 26 px + barre de 37 px) : les 26 px sont rendus a
-   #main-content.
+   #main-content, et les 32 px de la bande de fenetre le sont aussi.
    Reference : docs/proposition-bande-contexte-allegee.md §4. */
 #tab-row {
   display: flex;
@@ -1801,6 +1804,11 @@ body.theme-light.theme-tokyo-day {
   min-height: 36px;
   padding: 4px 6px;
   gap: 2px;
+  /* Le VIDE de la rangee (a droite du dernier onglet) est la seconde zone de
+     glissement de la fenetre : `user-select: none` evite qu'un double-clic y
+     selectionne du texte au lieu d'agrandir la fenetre (l'ancienne bande
+     portait la meme regle). Les onglets n'ont rien a copier. */
+  user-select: none;
 }
 
 #tab-bar::-webkit-scrollbar { height: 4px; }
@@ -1946,9 +1954,9 @@ body.theme-light.theme-tokyo-day {
   --agent-activity-panel-alpha: 94%;
   position: absolute;
   /* Sous la rangee d'onglets, jamais dessus : le panneau s'ouvre exactement
-     sous le bouton (bas de #agent-activity + 1 px), sans le recouvrir.
-     Decalage vertical MESURE : bande de fenetre 32 px + rangee d'onglets
-     37 px (36 de contenu + 1 de filet) = 69 px.
+     sous le bouton (bas de #agent-activity + 1 px), sans le recouvrir. Il
+     est ancre sur son conteneur : la disparition de la bande de fenetre ne
+     change donc RIEN a ce decalage (aucune valeur absolue ici).
      Verrou : src/js/taille-et-style-panneau.test.js. */
   top: calc(100% + 1px);
   right: 0;
@@ -10575,20 +10583,17 @@ body.pilot-loading *::after {
 .superagent-immersive-active {
   overflow: hidden;
 }
-/* LOT 0.3 - mode immersif (docs/proposition-barre-fenetre.md §5.3) : deux
-   regles, et deux seulement.
-   1. #window-bar garde `z-index: 100001` (defini dans le bloc de la bande) :
+/* Mode immersif (docs/proposition-barre-fenetre.md §5.3) : une seule regle
+   desormais, et elle est deja ecrite plus haut.
+   1. #window-controls garde `z-index: 100001` (defini dans son propre bloc) :
       les trois boutons restent visibles et actifs AU-DESSUS de l'overlay
-      (99990). Sans cela : impossible de fermer ou de deplacer Pilot sans
-      sortir du mode. Aucune regle de ce mode ne touche a ce z-index.
-   2. L'overlay est `inset: 0` : il recouvrait la bande de fenetre, donc la
-      sienne (`.sa-immersive-top`, 58 px, avec son bouton retour). On decale
-      seulement le HAUT de l'overlay sous la bande (`bottom: 0` est conserve
-      par `inset: 0` : la hauteur se reduit d'elle-meme de 32 px). Le bouton
-      retour commence ainsi a 32 px du haut, entierement degage. */
-body.superagent-immersive-active .superagent-immersive {
-  top: var(--window-bar-height);
-}
+      (99990). Sans cela : impossible de fermer Pilot sans sortir du mode.
+      Aucune regle de ce mode ne touche a ce z-index.
+   2. PLUS AUCUN DECALAGE : la bande de fenetre de 32 px a disparu, donc
+      l'overlay demarre TOUT EN HAUT (`inset: 0`, deja pose ci-dessus) et sa
+      propre barre (`.sa-immersive-top`, 58 px, avec son bouton retour)
+      occupe les premiers pixels. La regle `top: var(--window-bar-height)`
+      qui reservait la bande a ete retiree avec elle. */
 /* En mode assistant seul, les modales (Paramètres ⚙ notamment) et les toasts
    s'affichent AU-DESSUS de l'overlay. En mode normal, z-index inchangés
    (100 / 9999) : aucune régression hors de ce mode. */

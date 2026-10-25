@@ -208,20 +208,20 @@ describe("5. chaque entree place la fenetre", () => {
   });
 });
 
-// --- 6. Le menu reste au-dessus de la bande, en sombre comme en clair ----
-describe("6. placement du menu : au-dessus de la bande, jetons de surface", () => {
-  it("le menu passe AU-DESSUS de la bande de fenetre (sinon il serait cache)", () => {
-    const bande = sliceSource(css, "#window-bar {", "}", 100);
-    const zBande = Number(bande.match(/z-index:\s*(\d+)/)[1]);
+// --- 6. Le menu reste au-dessus des boutons de fenetre, sombre comme clair --
+describe("6. placement du menu : au-dessus des boutons, jetons de surface", () => {
+  it("le menu passe AU-DESSUS des boutons de fenetre (sinon il serait cache)", () => {
+    const boutons = sliceSource(css, "#window-controls {", "}", 100);
+    const zBoutons = Number(boutons.match(/z-index:\s*(\d+)/)[1]);
     const menu = sliceSource(css, "#dispose-menu {", "}", 20);
     const zMenu = Number(menu.match(/z-index:\s*(\d+)/)[1]);
-    expect(zBande).toBe(100001);
-    expect(zMenu).toBeGreaterThan(zBande);
+    expect(zBoutons).toBe(100001);
+    expect(zMenu).toBeGreaterThan(zBoutons);
   });
 
-  it("le menu est garde sous la bande a l'ouverture (jamais derriere elle)", () => {
+  it("le menu est garde sous les boutons a l'ouverture (jamais derriere eux)", () => {
     const ouverture = sliceSource(js, "export function openDisposeMenu(win, x, y) {", "\n}\n", 200);
-    expect(ouverture).toContain("bandHeight() + marge");
+    expect(ouverture).toContain("controlsHeight() + marge");
     expect(ouverture).toContain("Math.max(hautMini, y)");
   });
 

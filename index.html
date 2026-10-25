@@ -16,27 +16,17 @@
     <div class="boot-label">Chargement de Pilot…</div>
   </div>
 
-  <!-- Bande de fenetre Pilot : remplace la barre de titre systeme (Windows et
-       Linux). 32 px de haut, zone de glissement sur toute la largeur sauf les
-       boutons, trois boutons systeme colles au bord droit (voir
-       docs/proposition-barre-fenetre.md §3.1, §3.2 et §4.1).
-       Ordre du DOM = ordre du Tab : Reduire, Agrandir, Fermer. -->
-  <div id="window-bar">
-    <div id="window-controls">
-      <button id="win-min" type="button" title="Réduire" aria-label="Réduire">
-        <i data-lucide="minus" class="icon-sm"></i>
-      </button>
-      <button id="win-max" type="button" title="Agrandir la fenêtre" aria-label="Agrandir la fenêtre">
-        <i data-lucide="square" class="icon-sm"></i>
-      </button>
-      <button id="win-close" type="button" title="Fermer Pilot" aria-label="Fermer Pilot">
-        <i data-lucide="x" class="icon-sm"></i>
-      </button>
-    </div>
-  </div>
+  <!-- Bande de fenetre de 32 px SUPPRIMEE (decision du proprietaire, Q1) :
+       #app-body commence maintenant en haut de la fenetre. Les trois boutons
+       systeme (#window-controls) sont devenus un groupe fixe en haut a DROITE,
+       au bout de la rangee d'onglets (voir plus bas, dans #tab-row).
+       Ordre du DOM = ordre du Tab : Reduire, Agrandir, Fermer.
+       Reference : docs/proposition-barre-fenetre.md §2 (option sans cadre, les
+       boutons dans la rangee d'onglets). -->
 
-  <!-- Corps de l'application : barre latérale + zone de travail (sous la barre
-       de titres). Enveloppé dans #app-body pour un layout en colonne. -->
+  <!-- Corps de l'application : barre latérale + zone de travail. Enveloppé
+       dans #app-body pour un layout en colonne (il occupe toute la hauteur :
+       plus aucune bande au-dessus). -->
   <div id="app-body">
 
   <!-- Barre Latérale (Gauche) -->
@@ -175,12 +165,18 @@
   <main id="main-area">
     <!-- RANGEE D'ONGLETS (remplace la bande de contexte de 26 px, supprimee :
          docs/proposition-bande-contexte-allegee.md §4). Une seule rangee de
-         36 px, dans le flux : bande de fenetre (32 px) -> rangee d'onglets
-         (36 px) -> contenu. Elle porte la barre d'onglets et, a DROITE, dans
-         un conteneur SEPARE, l'entree « Travail » : l'entree ne peut donc pas
-         aller dans `#tab-bar` (tabs.js suppose que ses enfants sont « les
-         onglets + le bouton d'ajout d'agent ») ni dans la colonne de gauche
-         (masquee en mode zen, l'entree deviendrait inaccessible). Aucun
+         36 px, dans le flux : elle commence EN HAUT de la fenetre (la bande de
+         fenetre de 32 px a disparu) puis vient le contenu. Elle porte, de
+         gauche a droite : la barre d'onglets, l'entree « Travail » et, tout a
+         DROITE, les trois boutons systeme (#window-controls). Chaque bloc est
+         dans un conteneur SEPARE : ni l'entree ni les boutons ne peuvent aller
+         dans `#tab-bar` (tabs.js suppose que ses enfants sont « les onglets +
+         le bouton d'ajout d'agent »), et la colonne de gauche est masquee en
+         mode zen. La place des boutons est RESERVEE dans le flux : aucun
+         onglet ne passe dessous, meme a la largeur minimale, et le defilement
+         horizontal de #tab-bar est conserve. Les zones de glissement de la
+         fenetre sont desormais le bandeau du nom de projet (colonne de gauche)
+         et le vide de cette rangee (src/js/window-controls.js). Aucun
          recouvrement : rien n'est en position fixe ici. -->
     <div id="tab-row">
       <div id="tab-bar"></div>
@@ -237,6 +233,25 @@
         </div>
       </div>
         <div id="agent-activity-card" class="hidden"></div>
+      </div>
+      <!-- Boutons de fenetre : groupe fixe en haut a DROITE, AU BOUT de la
+           rangee d'onglets (decision du proprietaire, Q1 : plus de bande de
+           32 px). Dernier enfant de #tab-row : leur place est RESERVEE dans le
+           flux (aucun onglet ne passe dessous) et Fermer touche le bord droit
+           de la fenetre, comme le faisait la barre systeme.
+           Ordre du DOM = ordre du Tab : Reduire, Agrandir, Fermer.
+           Libelles (title ET aria-label) inchanges : ils sont la seule source
+           de verite, verifiee par src/js/barre-fenetre-etats.test.js. -->
+      <div id="window-controls">
+        <button id="win-min" type="button" title="Réduire" aria-label="Réduire">
+          <i data-lucide="minus" class="icon-sm"></i>
+        </button>
+        <button id="win-max" type="button" title="Agrandir la fenêtre" aria-label="Agrandir la fenêtre">
+          <i data-lucide="square" class="icon-sm"></i>
+        </button>
+        <button id="win-close" type="button" title="Fermer Pilot" aria-label="Fermer Pilot">
+          <i data-lucide="x" class="icon-sm"></i>
+        </button>
       </div>
     </div>
     <div id="main-content">

@@ -1,6 +1,11 @@
-// barre-fenetre-etats.test.js — Verrou du LOT 0.2 de la barre de fenetre.
+// barre-fenetre-etats.test.js — Verrou des boutons de fenetre et de leurs gestes.
 //
-// Ce que ce fichier garantit (docs/proposition-barre-fenetre.md §4.1 et §4.2) :
+// Depuis la suppression de la bande de 32 px (decision du proprietaire, Q1 ;
+// docs/proposition-barre-fenetre.md §2), les trois boutons vivent au BOUT de la
+// rangee d'onglets (#tab-row) : ce fichier verrouille donc la nouvelle
+// structure, et continue de verrouiller ce qui ne change pas.
+//
+// Ce que ce fichier garantit :
 //   1. les CINQ etats d'un bouton sont ecrits avec les jetons prescrits
 //      (survol, appui, focus clavier, survol de Fermer, et jamais de desactive) ;
 //   2. les CONTRASTES reels de ces etats, calcules depuis style.css, en theme
@@ -9,11 +14,15 @@
 //   3. le survol de Fermer n'utilise JAMAIS un fond rouge plein (croix blanche
 //      sur --danger = 2.77:1 en sombre : illisible) ;
 //   4. les trois boutons sont de vrais <button>, nommes (title + aria-label),
-//      dans l'ordre du DOM Reduire → Agrandir → Fermer, sans tabindex ;
+//      dans l'ordre du DOM Reduire → Agrandir → Fermer, sans tabindex, et
+//      places en DERNIER enfant de la rangee d'onglets ;
 //   5. l'icone « Agrandir / Restaurer » est synchronisee dans les DEUX sens :
 //      etat lu au demarrage, relu a chaque redimensionnement, et le libelle suit
 //      la meme valeur que l'icone ;
-//   6. Fermer appelle close() — jamais destroy().
+//   6. Fermer appelle close() — jamais destroy() ;
+//   7. la bande de 32 px a bien DISPARU (ni HTML, ni CSS, ni variable) et les
+//      gestes sont reportes sur les zones restantes, sans toucher aux elements
+//      cliquables.
 //
 // Tous les decoupages passent par sliceSource / sliceFrom (source-slice.js) :
 // une ancre absente fait ECHOUER le test au lieu de rendre une assertion
@@ -24,7 +33,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { sliceSource, sliceFrom } from "./source-slice.js";
-import { WINDOW_LABELS, maxButtonIcon, maxButtonLabel } from "./window-controls.js";
+import {
+  WINDOW_LABELS,
+  WINDOW_DRAG_ZONE_IDS,
+  WINDOW_GESTURE_BLOCKLIST,
+  isWindowGestureTarget,
+  maxButtonIcon,
+  maxButtonLabel,
+} from "./window-controls.js";
 
 const ici = dirname(fileURLToPath(import.meta.url));
 // Lecture normalisee : un worktree en CRLF ne doit pas faire echouer les ancres.
@@ -66,27 +82,42 @@ const palettes = [
 /** Regle CSS complete d'un selecteur (de son debut a l'accolade fermante). */
 const regle = (selecteur) => sliceSource(css, selecteur, "}", 20);
 
-// Toute la section de la bande de fenetre (du titre de section aux jetons).
-const sectionBande = sliceSource(css, "BANDE DE FENETRE PILOT", "/* --- Design Tokens", 400);
+// Toute la section des boutons de fenetre (du titre de section aux jetons).
+const sectionBande = sliceSource(css, "BOUTONS DE FENETRE PILOT", "/* --- Design Tokens", 400);
 const reglesBoutons = sliceFrom(sectionBande, "#window-controls {", 100);
 
 describe("1. les cinq etats du bouton (§4.1)", () => {
-  it("la bande est au-dessus du chargement et des dialogues, et sur 32 px", () => {
-    const bande = regle("#window-bar {");
-    expect(bande).toMatch(/height:\s*var\(--window-bar-height\)/);
-    expect(bande).toMatch(/z-index:\s*100001/);
-    // Une seule source pour la hauteur.
-    expect(css.match(/--window-bar-height:\s*32px/g)).toHaveLength(1);
+  it("le groupe de boutons est au-dessus du chargement, des dialogues et du mode immersif", () => {
+    const groupe = regle("#window-controls {");
+    // z 100001 > 99999 (chargement), 100000 (dialogues), 99990 (immersif).
+    expect(groupe).toMatch(/z-index:\s*100001/);
+    expect(groupe).toMatch(/position:\s*relative/);
+    // Il ne se comprime jamais : c'est lui qui reserve sa place dans la rangee.
+    expect(groupe).toMatch(/flex:\s*0 0 auto/);
+    expect(groupe).toMatch(/align-self:\s*stretch/);
   });
 
-  it("un bouton fait exactement 46 x 32 px, sans bordure ni marge interne", () => {
+  it("la bande de 32 px a disparu : ni HTML, ni CSS, ni variable de hauteur", () => {
+    expect(html).not.toContain('id="window-bar"');
+    expect(css).not.toMatch(/#window-bar\s*\{/);
+    expect(css).not.toMatch(/--window-bar-height\s*:/);
+  });
+
+  it("un bouton fait 46 px de large et toute la hauteur de la rangee", () => {
     const bouton = regle("#window-controls > button {");
     expect(bouton).toMatch(/width:\s*46px/);
-    expect(bouton).toMatch(/height:\s*var\(--window-bar-height\)/);
+    // La hauteur n'est plus 32 px : les boutons occupent la hauteur du
+    // mobilier ou ils vivent (la rangee d'onglets).
+    expect(bouton).toMatch(/height:\s*100%/);
     expect(bouton).toMatch(/border:\s*0/);
     expect(bouton).toMatch(/padding:\s*0/);
     expect(bouton).toMatch(/border-radius:\s*var\(--radius-xs\)/);
     expect(bouton).toMatch(/color:\s*var\(--text-secondary\)/);
+  });
+
+  it("la rangee qui les porte garde sa hauteur de 36 px (aucune hauteur nouvelle)", () => {
+    const rangee = regle("#tab-row {");
+    expect(rangee).toMatch(/min-height:\s*36px/);
   });
 
   it("survol et appui : fond --surface-3, icone --text-primary", () => {
@@ -142,11 +173,21 @@ describe("2. contrastes reels des cinq etats (§4.1)", () => {
 });
 
 describe("3. les trois boutons : ordre, noms, clavier (§3.2)", () => {
-  it("la bande precede #app-body dans le DOM", () => {
-    const bande = html.indexOf('id="window-bar"');
-    const corps = html.indexOf('id="app-body"');
-    expect(bande).toBeGreaterThan(-1);
-    expect(corps).toBeGreaterThan(bande);
+  it("les boutons sont en DERNIER enfant de la rangee d'onglets", () => {
+    const rangee = html.indexOf('id="tab-row"');
+    const barre = html.indexOf('id="tab-bar"');
+    const travail = html.indexOf('id="agent-activity"');
+    const boutons = html.indexOf('id="window-controls"');
+    const contenu = html.indexOf('id="main-content"');
+    expect(rangee).toBeGreaterThan(-1);
+    expect(barre).toBeGreaterThan(rangee);
+    // Ordre du DOM : rangee -> barre d'onglets -> entree « Travail » -> boutons.
+    expect(travail).toBeGreaterThan(barre);
+    expect(boutons).toBeGreaterThan(travail);
+    // ... et tout cela reste DANS la rangee (avant le contenu de l'editeur).
+    expect(contenu).toBeGreaterThan(boutons);
+    // La fenetre n'a plus de bande : #app-body est le premier bloc du corps.
+    expect(html).not.toContain('id="window-bar"');
   });
 
   it("les trois boutons existent dans l'ordre Reduire, Agrandir, Fermer", () => {
@@ -174,7 +215,7 @@ describe("3. les trois boutons : ordre, noms, clavier (§3.2)", () => {
   });
 
   it("les trois boutons sont atteignables au clavier : vrais <button>, sans tabindex", () => {
-    const bloc = sliceSource(html, '<div id="window-controls">', 'id="app-body"', 100);
+    const bloc = sliceSource(html, '<div id="window-controls">', 'id="main-content"', 100);
     expect(bloc.match(/<button /g)).toHaveLength(3);
     expect(bloc).not.toMatch(/tabindex/);
     expect(bloc).not.toMatch(/disabled/);
@@ -218,10 +259,37 @@ describe("4. icone « Agrandir / Restaurer » synchronisee dans les deux sens (�
 });
 
 describe("5. gestes et fermeture (§3.3)", () => {
-  it("glisser et double-clic ignorent les boutons", () => {
+  it("glisser et double-clic sont cables sur les zones restantes, pas sur une bande", () => {
+    // Zones restantes : bandeau du nom de projet + vide de la rangee d'onglets.
+    expect(WINDOW_DRAG_ZONE_IDS).toEqual(["project-selector", "tab-row"]);
+    // Les gestes sont poses en boucle sur ces zones, une seule fois chacune.
+    const init = sliceFrom(js, "export function initWindowControls", 100);
+    expect(init).toMatch(/for \(const id of WINDOW_DRAG_ZONE_IDS\)/);
+    expect(init).toMatch(/zone\.addEventListener\("mousedown"/);
+    expect(init).toMatch(/zone\.addEventListener\("dblclick"/);
+    expect(init).toMatch(/win\.startDragging\(\)/);
     expect(js).toMatch(/startDragging\(\)/);
-    expect(js.match(/closest\("button"\)/g)).toHaveLength(2);
     expect(js).toMatch(/dblclick/);
+    // Aucune reference a l'ancienne bande.
+    expect(js).not.toContain('"window-bar"');
+  });
+
+  it("aucun geste ne part d'un element cliquable (garde-fou unique)", () => {
+    // Le garde-fou est ecrit UNE fois et couvre les deux gestes.
+    expect(WINDOW_GESTURE_BLOCKLIST).toContain("button");
+    expect(WINDOW_GESTURE_BLOCKLIST).toContain(".tab");
+    expect(WINDOW_GESTURE_BLOCKLIST).toContain("#window-controls");
+    expect(WINDOW_GESTURE_BLOCKLIST).toContain("#agent-activity");
+    expect(WINDOW_GESTURE_BLOCKLIST).toContain(".projects-dropdown");
+    // Comportement de la fonction pure, sur de faux noeuds (aucun DOM requis).
+    const noeud = (bloque) => ({ closest: () => (bloque ? {} : null) });
+    expect(isWindowGestureTarget(noeud(false))).toBe(true);
+    expect(isWindowGestureTarget(noeud(true))).toBe(false);
+    expect(isWindowGestureTarget(null)).toBe(false);
+    expect(isWindowGestureTarget({})).toBe(false);
+    // Les deux gestionnaires l'appellent (glisser et double-clic).
+    const init = sliceFrom(js, "export function initWindowControls", 100);
+    expect(init.match(/isWindowGestureTarget\(e\.target\)/g)).toHaveLength(2);
   });
 
   it("Fermer appelle close() et jamais destroy()", () => {

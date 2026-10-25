@@ -1,18 +1,21 @@
-// window-controls.js — Bande de fenetre Pilot : gestes et boutons systeme.
+// window-controls.js — Boutons de fenetre Pilot et gestes de deplacement.
 //
-// La bande remplace la barre de titre systeme (Windows et Linux) : elle est une
-// zone de glissement, son double-clic agrandit/restaure, et trois boutons
-// collent au bord droit (reduire, agrandir/restaurer, fermer). Reference :
-// docs/proposition-barre-fenetre.md (§3.3 pour les gestes, §4.1 et §4.2 pour
-// les etats — c'est le LOT 0.2).
+// La bande de fenetre de 32 px a ete SUPPRIMEE (decision du proprietaire, Q1) :
+// les trois boutons systeme (reduire, agrandir/restaurer, fermer) forment
+// maintenant un groupe fixe en haut a DROITE, au bout de la rangee d'onglets
+// (#tab-row). Reference : docs/proposition-barre-fenetre.md §2 (option sans
+// cadre, boutons dans la rangee d'onglets), §3.3 pour les gestes, §4.1 / §4.2
+// pour les etats, §8.2 pour le menu « Disposer ».
 //
-// Ce que porte ce fichier pour le lot 0.2 :
+// Ce que porte ce fichier :
 //   - les LIBELLES des trois boutons (title + aria-label) : chacun est nomme
 //     pour la lecture d'ecran ;
 //   - la SYNCHRONISATION de l'icone « Agrandir / Restaurer » dans les DEUX
 //     sens : etat lu AU DEMARRAGE (la fenetre demarre agrandie) puis relu a
 //     CHAQUE redimensionnement ;
-//   - le cablage des gestes (glisser, double-clic, les trois clics).
+//   - le cablage des gestes : glisser et double-clic sur les ZONES RESTANTES
+//     (bandeau du nom de projet a gauche, vide de la rangee d'onglets) et les
+//     trois clics.
 //
 // Le FOCUS CLAVIER ne demande aucun code : les trois boutons sont de vrais
 // <button type="button">, donc atteignables par Tab dans l'ordre du DOM et
@@ -41,6 +44,36 @@ export const WINDOW_LABELS = {
   restore: "Restaurer la fenêtre",
   close: "Fermer Pilot",
 };
+
+// Ids des ZONES qui deplacent la fenetre. La bande de 32 px n'existe plus :
+// il reste deux surfaces NON cliquees de l'interface, toutes deux dans le flux
+// et jamais recouvertes —
+//   1. « project-selector » : le bandeau du nom de projet (colonne de gauche) ;
+//   2. « tab-row » : la rangee d'onglets, dans son VIDE (les onglets, l'entree
+//      « Travail » et les trois boutons en sont exclus par le garde-fou).
+// Le bandeau de gauche disparait en mode zen : le vide de la rangee d'onglets
+// reste alors toujours disponible, donc la fenetre reste deplacable.
+export const WINDOW_DRAG_ZONE_IDS = ["project-selector", "tab-row"];
+
+// Garde-fou UNIQUE du glisser et du double-clic : aucun geste de fenetre ne
+// part d'un element cliquable (bouton, onglet, champ, lien, entree de menu) ni
+// des deux blocs de droite de la rangee (entree « Travail », boutons de
+// fenetre) ni du menu des projets. `closest` remonte les ancetres : un clic sur
+// l'icone d'un bouton est donc bloque comme un clic sur le bouton.
+export const WINDOW_GESTURE_BLOCKLIST =
+  "button, a, input, select, textarea, .tab, .projects-dropdown, " +
+  "#agent-activity, #window-controls, [role='button'], [role='tab'], [role='menuitem']";
+
+/**
+ * true si un geste de fenetre (glisser ou double-clic) peut partir de cette
+ * cible. Pure : ne lit ni le DOM ni la configuration.
+ * @param {EventTarget|null} target
+ * @returns {boolean}
+ */
+export function isWindowGestureTarget(target) {
+  if (!target || typeof target.closest !== "function") return false;
+  return !target.closest(WINDOW_GESTURE_BLOCKLIST);
+}
 
 // Nom de l'icone Lucide du bouton du milieu selon l'etat de la fenetre.
 export function maxButtonIcon(maximized) {
@@ -130,17 +163,17 @@ export function isDisposeMenuOpen() {
   return !!(disposeMenu && disposeMenu.isConnected && !disposeMenu.classList.contains("hidden"));
 }
 
-/** Hauteur reelle de la bande de fenetre (repli : sa valeur de reference). */
-function bandHeight() {
-  const bar = document.getElementById("window-bar");
-  return (bar && bar.offsetHeight) || 32;
+/** Hauteur reelle des boutons de fenetre (repli : celle de la rangee). */
+function controlsHeight() {
+  const controls = document.getElementById("window-controls");
+  return (controls && controls.offsetHeight) || 36;
 }
 
 /**
  * Construit (une seule fois) le menu « Disposer » et l'ajoute au document.
  * Il reprend l'apparence des menus contextuels existants (`context-menu`), donc
  * il suit les jetons de surface : identique en theme sombre et en theme clair.
- * La seule regle propre au menu (vivre AU-DESSUS de la bande de fenetre) est
+ * La seule regle propre au menu (vivre AU-DESSUS des boutons de fenetre) est
  * dans src/css/style.css.
  * @param {object} win — fenetre courante (getCurrentWindow())
  */
@@ -174,7 +207,7 @@ function ensureDisposeMenu(win) {
 
 /**
  * Ouvre le menu a la position du clic, en le gardant entierement visible et
- * SOUS la bande de fenetre (jamais derriere elle, jamais hors de l'ecran).
+ * SOUS les boutons de fenetre (jamais derriere eux, jamais hors de l'ecran).
  * @param {object} win
  * @param {number} x — clientX du clic droit
  * @param {number} y — clientY du clic droit
@@ -186,7 +219,7 @@ export function openDisposeMenu(win, x, y) {
   const largeur = menu.offsetWidth || 0;
   const hauteur = menu.offsetHeight || 0;
   const marge = 8;
-  const hautMini = bandHeight() + marge;
+  const hautMini = controlsHeight() + marge;
   const maxX = Math.max(marge, window.innerWidth - largeur - marge);
   const maxY = Math.max(hautMini, window.innerHeight - hauteur - marge);
   menu.style.left = Math.min(Math.max(marge, x), maxX) + "px";
@@ -284,13 +317,14 @@ async function toggleMaximize(win) {
 let initialized = false;
 
 /**
- * Cable la bande de fenetre. Idempotent. Sans effet si la bande n'est pas dans
- * le DOM (aucune exception : la fonction est sans danger hors application).
+ * Cable les boutons de fenetre et les gestes. Idempotent. Sans effet si le
+ * groupe de boutons n'est pas dans le DOM (aucune exception : la fonction est
+ * sans danger hors application).
  */
 export function initWindowControls() {
   if (initialized) return;
-  const bar = document.getElementById("window-bar");
-  if (!bar) return;
+  const controls = document.getElementById("window-controls");
+  if (!controls) return;
   initialized = true;
 
   const win = getCurrentWindow();
@@ -302,7 +336,8 @@ export function initWindowControls() {
 
   // Etat relu a chaque redimensionnement : agrandir puis restaurer remet
   // l'icone juste dans les deux sens, y compris si la fenetre est agrandie par
-  // un autre chemin (double-clic sur la bande, agencement du systeme).
+  // un autre chemin (double-clic sur une zone de glissement, agencement du
+  // systeme).
   try {
     const suivi = win.onResized(() => {
       syncMaxButton(win);
@@ -314,22 +349,32 @@ export function initWindowControls() {
     console.warn("[window-controls] onResized indisponible :", e);
   }
 
-  // Glisser : toute la bande SAUF les boutons (garde-fou unique).
-  bar.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    if (e.target.closest("button")) return;
-    try {
-      win.startDragging();
-    } catch (err) {
-      console.warn("[window-controls] startDragging indisponible :", err);
-    }
-  });
+  // Glisser et double-clic : reportes sur les ZONES RESTANTES (bandeau du nom
+  // de projet, vide de la rangee d'onglets). Le garde-fou est le MEME que
+  // celui qui existait sur la bande, etendu aux elements cliquables de ces
+  // zones (bouton « Projets », menu des projets, onglets, entree « Travail »,
+  // boutons de fenetre). Une zone absente est simplement ignoree.
+  for (const id of WINDOW_DRAG_ZONE_IDS) {
+    const zone = document.getElementById(id);
+    if (!zone) continue;
 
-  // Double-clic sur la bande SAUF les boutons : agrandir / restaurer.
-  bar.addEventListener("dblclick", (e) => {
-    if (e.target.closest("button")) return;
-    toggleMaximize(win);
-  });
+    // Glisser : bouton gauche uniquement, jamais depuis un element cliquable.
+    zone.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      if (!isWindowGestureTarget(e.target)) return;
+      try {
+        win.startDragging();
+      } catch (err) {
+        console.warn("[window-controls] startDragging indisponible :", err);
+      }
+    });
+
+    // Double-clic : agrandir / restaurer, meme garde-fou.
+    zone.addEventListener("dblclick", (e) => {
+      if (!isWindowGestureTarget(e.target)) return;
+      toggleMaximize(win);
+    });
+  }
 
   const btnMin = document.getElementById("win-min");
   const btnMax = document.getElementById("win-max");

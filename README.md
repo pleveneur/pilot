@@ -15,9 +15,9 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 ## Fonctionnalités
 
 ### Barre de fenêtre
-- La **barre de titre système** (logo, nom du dossier, boutons Windows) n'est plus affichée : Pilot dessine sa propre **bande de fenêtre** de 32 px en haut, qui suit le thème sombre/clair.
-- Les trois boutons système vivent dans l'interface, collés au bord droit : **Réduire**, **Agrandir / Restaurer** (l'icône suit l'état réel de la fenêtre) et **Fermer** — Fermer garde exactement le comportement habituel (confirmation ou mise en veille de la fenêtre).
-- **Glisser** la fenêtre depuis toute la bande (hors boutons) ; **double-clic** sur la bande = agrandir / restaurer. Le nom donné au système (barre des tâches, Alt+Tab) est toujours `Pilot`.
+- La **barre de titre système** (logo, nom du dossier, boutons Windows) n'est plus affichée, et **Pilot ne dessine plus de bande haute** : la fenêtre commence directement par la rangée d'onglets. L'application gagne ainsi **32 pixels de hauteur utile**.
+- Les trois boutons système forment un groupe fixe **en haut à droite, au bout de la rangée d'onglets** : **Réduire**, **Agrandir / Restaurer** (l'icône suit l'état réel de la fenêtre) et **Fermer** — Fermer garde exactement le comportement habituel (confirmation ou mise en veille de la fenêtre). Leur place est réservée : aucun onglet ne passe dessous.
+- **Déplacer la fenêtre** : glissez depuis le **bandeau du nom de projet** (en haut de la colonne de gauche) ou depuis **l'espace vide de la rangée d'onglets** ; un **double-clic** à ces endroits agrandit / restaure. Les onglets, boutons et menus ne déplacent jamais la fenêtre. Le nom donné au système (barre des tâches, Alt+Tab) est toujours `Pilot`.
 - **Menu « Disposer »** : un **clic droit** sur le bouton **Agrandir** ouvre les trois placements — **Moitié gauche de l'écran**, **Moitié droite de l'écran**, **Plein écran**. Le clic gauche garde son effet habituel (agrandir / restaurer).
 - **Toujours accessibles** : les trois boutons restent visibles quand la fenêtre est agrandie (mode immersif).
 
