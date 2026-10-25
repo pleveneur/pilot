@@ -316,9 +316,12 @@
   <!-- Palette de commandes -->
   <div id="command-palette" class="hidden">
     <div class="palette-backdrop"></div>
+    <!-- LOT 6 de la presentation : le champ annonce ce qu'on peut taper
+         (ecran ou commande) et un pied indique comment sortir. -->
     <div class="palette-content">
-      <input type="text" id="palette-input" placeholder="Tapez une commande…" autocomplete="off" />
+      <input type="text" id="palette-input" placeholder="Nom d'un écran ou d'une commande…" autocomplete="off" />
       <ul id="palette-list"></ul>
+      <div class="palette-footer">Échap pour fermer · ↑ ↓ pour choisir</div>
     </div>
   </div>
 

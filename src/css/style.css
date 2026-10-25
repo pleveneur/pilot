@@ -5925,7 +5925,16 @@ body.pilot-loading *::after {
 
 /* Theme light — toasts (les tokens sémantiques sont déjà adaptés au thème) */
 
-/* --- Command Palette --- */
+/* --- Command Palette ---
+   LOT 6 de la presentation (docs/proposition-presentation-ui.md § 3.8).
+   Avant : bloc 480 x 360 px, padding-top 120 px, lignes de 8/16 px sans
+   icone, survol = texte blanc sur --accent plein (3,08:1 en sombre,
+   4,28:1 en clair : illisible dans les deux themes).
+   Apres : bloc 560 x 420 px, padding-top 88 px, lignes de 30 px avec
+   colonne d'icone FIXE (les libelles sont alignes), etiquette de categorie,
+   survol = fond accent 18 % + filet gauche 2 px accent SANS changer la
+   couleur du texte (10,02:1 en sombre, 12,06:1 en clair), pied de sortie,
+   lignes indisponibles grisees et expliquees. Aucune couleur en dur. */
 #command-palette {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
@@ -5933,7 +5942,7 @@ body.pilot-loading *::after {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 120px;
+  padding-top: 88px;
 }
 
 #command-palette.hidden {
@@ -5948,27 +5957,28 @@ body.pilot-loading *::after {
 
 .palette-content {
   position: relative;
-  width: 480px;
-  max-height: 360px;
-  background: var(--bg-secondary, #1e1e2e);
-  border: 1px solid var(--border, #333);
-  border-radius: 10px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  width: min(560px, 92vw);
+  max-height: min(420px, 80vh);
+  background: var(--bg-secondary, var(--surface-2));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
 #palette-input {
+  flex: 0 0 auto;
   width: 100%;
   padding: 12px 16px;
-  font-size: 14px;
-  background: var(--bg-secondary, #1e1e2e);
+  font-size: var(--font-md);
+  background: var(--bg-secondary, var(--surface-2));
   /* Aucune couleur en dur : --text n'est jamais defini, le repli #d4d4d4
      donnait 1.31:1 en theme clair (lot 1 de la presentation). */
   color: var(--text-primary);
   border: none;
-  border-bottom: 1px solid var(--border, #333);
+  border-bottom: 1px solid var(--border-subtle);
   outline: none;
   box-sizing: border-box;
 }
@@ -5980,36 +5990,127 @@ body.pilot-loading *::after {
 #palette-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 4px 0;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  max-height: 300px;
 }
 
 #palette-list li {
-  padding: 8px 16px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-primary);
+  list-style: none;
+}
+
+/* En-tete de categorie : non focalisable, jamais survole. */
+#palette-list li.palette-group {
+  padding: 8px 12px 4px;
+  font-size: var(--font-xs);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+/* Ligne de commande : 30 px, icone alignee, libelle, categorie, raccourci. */
+#palette-list li.palette-item {
+  height: 30px;
+  padding: 0 12px;
+  gap: 10px;
+  border-radius: var(--radius-sm);
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  font-size: var(--font-base);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-#palette-list li:hover,
-#palette-list li.active {
-  background: var(--accent);
-  color: #fff;
+/* Survol et selection : meme repere (fond accent 18 % + filet gauche),
+   couleur du texte INCHANGEE — le survol ne change pas le sens. */
+#palette-list li.palette-item:hover,
+#palette-list li.palette-item.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--text-primary);
 }
 
-#palette-list li .palette-label {
-  flex: 1;
+/* Colonne d'icone FIXE : c'est elle qui aligne les libelles. */
+#palette-list li.palette-item .palette-icon {
+  flex: 0 0 18px;
+  width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-secondary);
 }
 
-#palette-list li .palette-key {
-  font-size: 11px;
-  opacity: 0.6;
-  margin-left: 12px;
-  flex-shrink: 0;
+#palette-list li.palette-item .palette-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+/* Etiquette de categorie de la ligne (le groupe est aussi en en-tete). */
+#palette-list li.palette-item .palette-tag {
+  flex: 0 0 auto;
+  font-size: var(--font-xs);
+  font-weight: var(--fw-normal);
+  color: var(--text-secondary);
+}
+
+/* Raison d'indisponibilite : meme taille que l'etiquette, dite en clair. */
+#palette-list li.palette-item .palette-reason {
+  flex: 0 0 auto;
+  font-size: var(--font-xs);
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+/* Raccourci : 11 px, jamais une couleur en dur, jamais un texte attenue. */
+#palette-list li.palette-item .palette-key {
+  flex: 0 0 auto;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Ligne INDISPONIBLE : grisee, expliquee, non activable (aucun survol,
+   aucun clic). Le gris vient de --text-secondary et NON d'une opacite :
+   l'opacite .45 des boutons desactives tombe a 2,76:1 en theme clair, or
+   la raison ecrite sur la ligne est l'information nouvelle du lot — elle
+   doit rester lisible (5,50:1 clair / 6,60:1 sombre). */
+#palette-list li.palette-item--off {
+  cursor: not-allowed;
+}
+
+#palette-list li.palette-item--off .palette-icon,
+#palette-list li.palette-item--off .palette-label,
+#palette-list li.palette-item--off .palette-key,
+#palette-list li.palette-item--off .palette-reason {
+  color: var(--text-secondary);
+}
+
+#palette-list li.palette-item--off:hover {
+  background: none;
+  box-shadow: none;
+}
+
+/* Pied de la palette : la sortie reste toujours visible. */
+.palette-footer {
+  flex: 0 0 auto;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 12px;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* --- Recent files popover (C4) --- */

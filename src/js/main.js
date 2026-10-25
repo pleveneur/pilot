@@ -40,31 +40,113 @@ import { getVersion } from "@tauri-apps/api/app";
 import { animateModalOpen } from "./modal-anim.js";
 
 // --- Palette de commandes ---
+//
+// LOT 6 de la presentation (docs/proposition-presentation-ui.md § 3.8) :
+// chaque commande porte en plus sa CATEGORIE (affichee sur la ligne et en
+// en-tete de groupe) et, si elle en depend, ce qui lui est necessaire pour
+// pouvoir s'executer (`needs`). Une commande indisponible n'est jamais
+// supprimee ni renommee : elle est grisee ET expliquee dans la palette.
+
+/** Ordre d'affichage des groupes de la palette (jamais l'ordre des commandes). */
+const PALETTE_CATEGORIES = ["Édition", "Projet", "Travail", "Réglages"];
 
 const COMMANDS = [
-  { id: "save", label: "Sauvegarder le fichier", key: "Ctrl+S", icon: "💾" },
-  { id: "save-as", label: "Enregistrer sous…", key: "Ctrl+Shift+S", icon: "📋" },
-  { id: "close-tab", label: "Fermer l'onglet", key: "Ctrl+W", icon: "✕" },
-  { id: "toggle-split", label: "Basculer mode split", key: "Ctrl+Shift+E", icon: "◧" },
-  { id: "toggle-outline", label: "Table des matières", key: "Ctrl+Shift+O", icon: "📑" },
-  { id: "global-search", label: "Recherche globale", key: "Ctrl+Shift+F", icon: "🔍" },
-  { id: "go-to-line", label: "Aller à la ligne…", key: "Ctrl+G", icon: "↕" },
-  { id: "zen-mode", label: "Mode Zen", key: "F11", icon: "⛶" },
-  { id: "focus-filter", label: "Filtrer les fichiers", key: "Ctrl+P", icon: "📁" },
-  { id: "bold", label: "Gras (Markdown)", key: "Ctrl+B", icon: "B" },
-  { id: "italic", label: "Italique (Markdown)", key: "Ctrl+I", icon: "I" },
-  { id: "link", label: "Lien (Markdown)", key: "Ctrl+K", icon: "🔗" },
-  { id: "toggle-favorite", label: "Ajouter aux favoris", key: "Ctrl+Shift+B", icon: "⭐" },
-  { id: "scratchpad", label: "Ouvrir le brouillon", key: "Ctrl+Shift+N", icon: "📝" },
-  { id: "toggle-word-wrap", label: "Renvoi à la ligne automatique", key: "Alt+Z", icon: "↩" },
-  { id: "check-update", label: "Vérifier les mises à jour", key: "", icon: "⬆" },
-  { id: "update-status", label: "État des mises à jour", key: "", icon: "🕓" },
-  { id: "recent-files", label: "Fichiers récents…", key: "Ctrl+Alt+R", icon: "🕘" },
-  { id: "feedback", label: "Envoyer une remarque…", key: "", icon: "💬" },
+  { id: "save", label: "Sauvegarder le fichier", key: "Ctrl+S", icon: "💾", category: "Édition", needs: "editor" },
+  { id: "save-as", label: "Enregistrer sous…", key: "Ctrl+Shift+S", icon: "📋", category: "Édition", needs: "editor" },
+  { id: "close-tab", label: "Fermer l'onglet", key: "Ctrl+W", icon: "✕", category: "Édition", needs: "tab" },
+  { id: "toggle-split", label: "Basculer mode split", key: "Ctrl+Shift+E", icon: "◧", category: "Édition", needs: "split" },
+  { id: "toggle-outline", label: "Table des matières", key: "Ctrl+Shift+O", icon: "📑", category: "Édition" },
+  { id: "global-search", label: "Recherche globale", key: "Ctrl+Shift+F", icon: "🔍", category: "Projet" },
+  { id: "go-to-line", label: "Aller à la ligne…", key: "Ctrl+G", icon: "↕", category: "Édition", needs: "editor" },
+  { id: "zen-mode", label: "Mode Zen", key: "F11", icon: "⛶", category: "Travail" },
+  { id: "focus-filter", label: "Filtrer les fichiers", key: "Ctrl+P", icon: "📁", category: "Projet" },
+  { id: "bold", label: "Gras (Markdown)", key: "Ctrl+B", icon: "B", category: "Édition", needs: "editor" },
+  { id: "italic", label: "Italique (Markdown)", key: "Ctrl+I", icon: "I", category: "Édition", needs: "editor" },
+  { id: "link", label: "Lien (Markdown)", key: "Ctrl+K", icon: "🔗", category: "Édition", needs: "editor" },
+  { id: "toggle-favorite", label: "Ajouter aux favoris", key: "Ctrl+Shift+B", icon: "⭐", category: "Projet", needs: "file" },
+  { id: "scratchpad", label: "Ouvrir le brouillon", key: "Ctrl+Shift+N", icon: "📝", category: "Travail" },
+  { id: "toggle-word-wrap", label: "Renvoi à la ligne automatique", key: "Alt+Z", icon: "↩", category: "Édition" },
+  { id: "check-update", label: "Vérifier les mises à jour", key: "", icon: "⬆", category: "Réglages" },
+  { id: "update-status", label: "État des mises à jour", key: "", icon: "🕓", category: "Réglages" },
+  { id: "recent-files", label: "Fichiers récents…", key: "Ctrl+Alt+R", icon: "🕘", category: "Projet" },
+  { id: "feedback", label: "Envoyer une remarque…", key: "", icon: "💬", category: "Réglages" },
 ];
 
 let paletteActiveIndex = 0;
 let paletteFiltered = [];
+
+/**
+ * Etat d'une commande dans la palette : disponible, ou indisponible AVEC sa
+ * raison en clair. Purement descriptif — aucune commande n'est retiree.
+ * Les causes sont celles du code reel : sans onglet d'edition, les commandes
+ * de document ne font STRICTEMENT RIEN (save, save-as, aller a la ligne, gras,
+ * italique, lien) — elles etaient silencieuses jusqu'ici. Aucune commande qui
+ * produit encore un effet visible n'est grisee : la recherche globale et le
+ * filtre de l'explorateur restent donc TOUJOURS disponibles (meme effet).
+ *
+ * @param {{needs?: string}} cmd
+ * @param {object} tabs gestionnaire d'onglets
+ * @returns {{ok: boolean, reason: string}}
+ */
+function paletteCommandState(cmd, tabs) {
+  if (!cmd.needs) return { ok: true, reason: "" };
+  const tab = tabs && typeof tabs.getActiveTab === "function" ? tabs.getActiveTab() : null;
+  const sansFichier = "aucun fichier ouvert dans l'editeur";
+
+  if (cmd.needs === "tab") {
+    return tab ? { ok: true, reason: "" } : { ok: false, reason: "aucun onglet ouvert" };
+  }
+  if (cmd.needs === "editor") {
+    const ok = !!(tab && tab.mode === "edit" && tab.view);
+    return ok ? { ok: true, reason: "" } : { ok: false, reason: sansFichier };
+  }
+  if (cmd.needs === "file") {
+    const ok = !!(tab && tab.path);
+    return ok ? { ok: true, reason: "" } : { ok: false, reason: sansFichier };
+  }
+  if (cmd.needs === "split") {
+    // Meme condition, au caractere pres, que tabs.toggleSplitMode().
+    const ok = !!(tab && tab.mode === "edit"
+      && ((tab.path && String(tab.path).endsWith(".md")) || tab.isScratchpad));
+    return ok ? { ok: true, reason: "" } : { ok: false, reason: "aucun fichier Markdown ouvert" };
+  }
+  return { ok: true, reason: "" };
+}
+
+/**
+ * Tri par categorie, dans l'ordre de PALETTE_CATEGORIES, en gardant l'ordre
+ * de declaration DANS chaque categorie (tri stable). C'est ce tri qui fait
+ * coincider l'ordre VISUEL des lignes (regroupees) et l'ordre de parcours des
+ * fleches : sans lui, ↓ sauterait d'un groupe a l'autre.
+ *
+ * @param {Array<object>} liste
+ * @returns {Array<object>} la meme liste, triee sur place
+ */
+function sortPaletteByCategory(liste) {
+  const rang = (cmd) => {
+    const i = PALETTE_CATEGORIES.indexOf(cmd.category || "Autres");
+    return i === -1 ? PALETTE_CATEGORIES.length : i;
+  };
+  return liste.sort((a, b) => rang(a) - rang(b));
+}
+
+/** Premier index SELECTIONNABLE (les lignes indisponibles sont sautees). */
+function paletteFirstSelectable(tabs) {
+  for (let i = 0; i < paletteFiltered.length; i++) {
+    if (paletteCommandState(paletteFiltered[i], tabs).ok) return i;
+  }
+  return -1;
+}
+
+/** Index suivant / precedent selectionnable ; au bord, l'index ne bouge pas. */
+function paletteStepIndex(from, dir, tabs) {
+  let i = from;
+  while (true) {
+    i += dir;
+    if (i < 0 || i >= paletteFiltered.length) return from;
+    if (paletteCommandState(paletteFiltered[i], tabs).ok) return i;
+  }
+}
 
 function openCommandPalette(tabs) {
   const palette = document.getElementById("command-palette");
@@ -74,8 +156,8 @@ function openCommandPalette(tabs) {
 
   palette.classList.remove("hidden");
   input.value = "";
-  paletteActiveIndex = 0;
-  paletteFiltered = [...COMMANDS];
+  paletteFiltered = sortPaletteByCategory([...COMMANDS]);
+  paletteActiveIndex = paletteFirstSelectable(tabs);
   renderPaletteList(list, tabs);
   setTimeout(() => input.focus(), 0);
 }
@@ -87,13 +169,61 @@ function closeCommandPalette() {
 
 function renderPaletteList(list, tabs) {
   list.innerHTML = "";
+  if (paletteFiltered.length === 0) return;
+
+  // Regroupement par categorie, dans l'ordre de PALETTE_CATEGORIES : une
+  // categorie inconnue reste affichee a la suite, jamais perdue.
+  const groupes = new Map();
   paletteFiltered.forEach((cmd, i) => {
-    const li = document.createElement("li");
-    if (i === paletteActiveIndex) li.classList.add("active");
-    li.innerHTML = `<span class="palette-label">${cmd.icon} ${cmd.label}</span><span class="palette-key">${cmd.key}</span>`;
-    li.addEventListener("click", () => executeCommand(cmd.id, tabs));
-    list.appendChild(li);
+    const cat = cmd.category || "Autres";
+    if (!groupes.has(cat)) groupes.set(cat, []);
+    groupes.get(cat).push(i);
   });
+  const ordre = PALETTE_CATEGORIES.filter((c) => groupes.has(c));
+  for (const c of groupes.keys()) if (!ordre.includes(c)) ordre.push(c);
+
+  for (const cat of ordre) {
+    const entete = document.createElement("li");
+    entete.className = "palette-group";
+    entete.textContent = cat;
+    entete.setAttribute("aria-hidden", "true");
+    list.appendChild(entete);
+
+    for (const i of groupes.get(cat)) {
+      const cmd = paletteFiltered[i];
+      const etat = paletteCommandState(cmd, tabs);
+      const li = document.createElement("li");
+      li.className = "palette-item";
+      li.dataset.index = String(i);
+      // Libelle complet au survol : utile si la fenetre est etroite et que le
+      // libelle est tronque (les lignes restent lisibles sans le tronquer).
+      li.title = etat.ok ? cmd.label : `${cmd.label} — ${etat.reason}`;
+      // Colonne d'icone fixe + libelle + etiquette de categorie (ou, si la
+      // ligne est indisponible, la RAISON a la place de la categorie : le
+      // groupe est deja donne par l'en-tete).
+      const etiquette = etat.ok
+        ? `<span class="palette-tag">${cmd.category}</span>`
+        : `<span class="palette-reason">${etat.reason}</span>`;
+      li.innerHTML = `<span class="palette-icon">${cmd.icon}</span>`
+        + `<span class="palette-label">${cmd.label}</span>`
+        + etiquette
+        + `<span class="palette-key">${cmd.key}</span>`;
+
+      if (etat.ok) {
+        if (i === paletteActiveIndex) li.classList.add("active");
+        li.addEventListener("click", () => executeCommand(cmd.id, tabs));
+      } else {
+        // Ligne INDISPONIBLE : grisee, expliquee, non activable.
+        li.classList.add("palette-item--off");
+        li.setAttribute("aria-disabled", "true");
+      }
+      list.appendChild(li);
+      if (etat.ok && i === paletteActiveIndex) {
+        // Defilement propre : la ligne choisie au clavier reste visible.
+        li.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }
 }
 
 async function executeCommand(id, tabs) {
@@ -579,33 +709,39 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Fermer la palette en cliquant sur le backdrop
   paletteEl.querySelector(".palette-backdrop").addEventListener("click", closeCommandPalette);
 
-  // Filtrer les commandes en temps réel
+  // Filtrer les commandes en temps réel (libellé, raccourci, catégorie)
   paletteInput.addEventListener("input", () => {
     const q = paletteInput.value.toLowerCase().trim();
-    paletteFiltered = COMMANDS.filter((cmd) =>
-      cmd.label.toLowerCase().includes(q) || cmd.key.toLowerCase().includes(q)
-    );
-    paletteActiveIndex = 0;
+    paletteFiltered = sortPaletteByCategory(COMMANDS.filter((cmd) =>
+      cmd.label.toLowerCase().includes(q) ||
+      cmd.key.toLowerCase().includes(q) ||
+      (cmd.category || "").toLowerCase().includes(q)
+    ));
+    // La sélection repart sur la 1re ligne REELLEMENT disponible.
+    paletteActiveIndex = paletteFirstSelectable(tabs);
     renderPaletteList(paletteListEl, tabs);
   });
 
-  // Navigation clavier dans la palette
+  // Navigation clavier dans la palette (comportement de capture inchangé :
+  // tant qu'elle est ouverte, la frappe lui appartient ; les lignes
+  // indisponibles sont simplement sautées).
   paletteInput.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       e.preventDefault();
       closeCommandPalette();
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      paletteActiveIndex = Math.min(paletteActiveIndex + 1, paletteFiltered.length - 1);
+      paletteActiveIndex = paletteStepIndex(paletteActiveIndex, 1, tabs);
       renderPaletteList(paletteListEl, tabs);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      paletteActiveIndex = Math.max(paletteActiveIndex - 1, 0);
+      paletteActiveIndex = paletteStepIndex(paletteActiveIndex, -1, tabs);
       renderPaletteList(paletteListEl, tabs);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (paletteFiltered[paletteActiveIndex]) {
-        executeCommand(paletteFiltered[paletteActiveIndex].id, tabs);
+      const cmd = paletteFiltered[paletteActiveIndex];
+      if (cmd && paletteCommandState(cmd, tabs).ok) {
+        executeCommand(cmd.id, tabs);
       }
     }
   });
