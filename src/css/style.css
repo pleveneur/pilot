@@ -3362,14 +3362,23 @@ mark.search-highlight {
 .settings-section + .settings-section {
   margin-top: var(--space-4);
 }
+/* Titre de chaque bloc de reglages (panneau de droite des Parametres).
+   Il doit se lire comme un TITRE et non comme du texte courant : d'ou une
+   couleur accentuee. On prend --accent-text (l'accent quand il porte du
+   TEXTE, 5.94:1 sur le fond de la carte en sombre et 5.28:1 en clair) et
+   NON --accent, dont le contraste tombait sous le seuil AA — meme choix que
+   les onglets speciaux (lot 1 de la presentation). Aucune teinte en dur : la
+   couleur suit automatiquement le theme clair et le theme sombre, et
+   l'icone (currentColor) prend la meme teinte que le libelle.
+   Taille et disposition inchangees. */
 .settings-section-title {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   margin: 0 0 var(--space-3) 0;
-  color: var(--text-primary);
+  color: var(--accent-text);
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border);
 }
