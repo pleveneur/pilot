@@ -9992,6 +9992,20 @@ body.pilot-loading *::after {
 .superagent-immersive-active {
   overflow: hidden;
 }
+/* LOT 0.3 - mode immersif (docs/proposition-barre-fenetre.md §5.3) : deux
+   regles, et deux seulement.
+   1. #window-bar garde `z-index: 100001` (defini dans le bloc de la bande) :
+      les trois boutons restent visibles et actifs AU-DESSUS de l'overlay
+      (99990). Sans cela : impossible de fermer ou de deplacer Pilot sans
+      sortir du mode. Aucune regle de ce mode ne touche a ce z-index.
+   2. L'overlay est `inset: 0` : il recouvrait la bande de fenetre, donc la
+      sienne (`.sa-immersive-top`, 58 px, avec son bouton retour). On decale
+      seulement le HAUT de l'overlay sous la bande (`bottom: 0` est conserve
+      par `inset: 0` : la hauteur se reduit d'elle-meme de 32 px). Le bouton
+      retour commence ainsi a 32 px du haut, entierement degage. */
+body.superagent-immersive-active .superagent-immersive {
+  top: var(--window-bar-height);
+}
 /* En mode assistant seul, les modales (Paramètres ⚙ notamment) et les toasts
    s'affichent AU-DESSUS de l'overlay. En mode normal, z-index inchangés
    (100 / 9999) : aucune régression hors de ce mode. */
