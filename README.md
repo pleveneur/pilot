@@ -109,7 +109,7 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - Chaque réponse de l'agent (onglet **π**) et de l'Assistant (onglet **🧭**) porte un bouton
   **« 🔊 Écouter »** : un clic lit la réponse à voix haute, un second l'arrête. Rien ne se lit
   tout seul, et une seule lecture tourne à la fois.
-- **Le réglage de la voix vit à un seul endroit** : ⚙️ **Paramètres → onglet « Assistant »** →
+- **Le réglage de la voix vit à un seul endroit** : ⚙️ **Options → onglet « Assistant »** →
   section **« Lecture des réponses »** (choix de la voix, état de la lecture, explication).
   Par défaut : **automatique** (la voix de la langue de l'interface) ; le choix est mémorisé, et
   si la voix choisie disparaît de l'ordinateur, Pilot revient proprement à la voix automatique.
@@ -149,7 +149,7 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   seule la liste défile, et le panneau reste entièrement visible. Les trois listes ont exactement
   la même présentation, en thème clair comme en thème sombre.
 
-### Paramètres (onglet ⚙️)
+### Options (onglet ⚙️)
 - Les Options s'ouvrent dans un **onglet** (bouton ⚙️, palette de commandes ou événement externe), pas dans une fenêtre par-dessus votre travail. « Annuler » et « Enregistrer » agissent **sans fermer** l'onglet, donc vous voyez le résultat de ce que vous venez de changer. La **✕ de l'onglet équivaut à « Annuler »** (rien n'est enregistré, l'aperçu de thème est annulé). L'onglet est **transverse** : il reste ouvert quand vous changez de projet.
 - **Thème** : sombre (défaut) ou clair.
 - **Sous-thème** : 5 palettes par mode (dark : One Dark, Dracula, Nord, Tokyo Night ;
@@ -227,7 +227,7 @@ procédure à reproduire sur chaque poste qui héberge Pilot :
    - **HTTPS Certificates** (Settings → HTTPS certificates)
    - **Tailscale Serve** (Settings → Tailscale Serve / Funnel)
 
-3. **Configurer Pilot** : ouvrir les **Paramètres** ⚙️ → section **« Accès distant »** :
+3. **Configurer Pilot** : ouvrir les **Options** ⚙️ → section **« Accès distant »** :
    - Activer l'accès web.
    - Définir un **mot de passe** distant (hashé argon2).
    - **Adresse d'écoute (`web_bind`) = `127.0.0.1`** ⚠️ — *impératif* :
@@ -246,11 +246,11 @@ procédure à reproduire sur chaque poste qui héberge Pilot :
      automatiquement** (plus aucune commande à taper).
    - La **première fois**, Tailscale peut afficher un lien d'activation par nœud
      (`https://login.tailscale.com/f/serve?node=...`) — l'ouvrir, autoriser,
-     puis cliquer **« 🔄 Reconfigurer maintenant »** dans les Paramètres.
+     puis cliquer **« 🔄 Reconfigurer maintenant »** dans les Options.
 
 5. **Se connecter depuis l'autre appareil** (téléphone/tablette/autre PC) :
    - Tailscale installé et actif sur cet appareil.
-   - Scanner le **QR code** affiché dans les Paramètres (ou ouvrir
+   - Scanner le **QR code** affiché dans les Options (ou ouvrir
      `https://<nom-magicdns>.ts.net/`) dans le navigateur.
    - Se logger avec le mot de passe défini à l'étape 3.
 

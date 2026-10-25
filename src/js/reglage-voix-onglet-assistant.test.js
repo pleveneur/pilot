@@ -331,7 +331,7 @@ describe("documentation — le chemin exact est indique", () => {
 
   it("le README indique le meme chemin unique", () => {
     const readme = read("README.md");
-    expect(readme).toMatch(/Paramètres → onglet « Assistant »/);
+    expect(readme).toMatch(/Options → onglet « Assistant »/);
     expect(readme).toMatch(/« Lecture des réponses »/);
   });
 
@@ -339,7 +339,7 @@ describe("documentation — le chemin exact est indique", () => {
     const spec = read("spec_read_aloud.md");
     expect(spec).toContain("read_aloud_voice");
     expect(spec).toContain("reglage-voix-onglet-assistant.test.js");
-    expect(spec).toMatch(/Paramètres → onglet « Assistant »/);
+    expect(spec).toMatch(/Options → onglet « Assistant »/);
   });
 });
 

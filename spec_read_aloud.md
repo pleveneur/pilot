@@ -42,7 +42,7 @@ Bouton **« 🔊 Écouter » / « ⏹ Arrêter »** sous chaque réponse de l'ag
 
 ## 2. Réglage de la voix — un seul endroit
 
-⚙️ **Paramètres → onglet « Assistant »** → section **« Lecture des réponses à voix
+⚙️ **Options → onglet « Assistant »** → section **« Lecture des réponses à voix
 haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
 `#settings-section-read-aloud`). Elle regroupe, au même endroit :
 
@@ -86,7 +86,7 @@ découpage communs comme n'importe quel texte lu.
 lecture (libellé en clair, `aria-pressed`, encadré accentué — lisible sans
 couleur). Second clic = `stopReading()` (même arrêt que la lecture).
 4. **Une seule lecture à la fois** : lancer l'aperçu d'une autre voix arrête le
-précédent ; **quitter les Paramètres** (Annuler **et** Enregistrer) appelle
+précédent ; **quitter les Options** (Annuler **et** Enregistrer) appelle
 `stopReading()` avant de fermer la modale, et `pagehide` arrête une lecture en
 cours à la fermeture de la fenêtre. Aucun son orphelin.
 5. **Modèle non téléchargé** : l'aperçu vérifie `localVoiceStatusFor(model)`
@@ -103,7 +103,7 @@ correspondante est écrite dans le **journal existant** (`voix-locale.log`).
 erreur devient un état), `startVoicePreview` est asynchrone, et les échecs
 visibles (`unavailable`, `no-voice`, `local-fallback`, modèle absent) affichent
 un message court **sur la rangée concernée** (`role="status"`, `aria-live`) ;
-l'écran des Paramètres reste utilisable.
+l'écran des Options reste utilisable.
 8. **Une seule liste de voix** : les rangées sont construites à partir du
 résultat **unique** de `voiceChoiceOptions(...)` dans `renderReadAloudVoice`
 (aucun second appel, aucun appel à `availableVoices` dans le rendu des
@@ -113,7 +113,7 @@ libellé (genre et taille compris).
 ## 2 ter. État du moteur : chargement AUTOMATIQUE de la section
 
 Décision du propriétaire : « là faut juste charger en automatique ». Ouvrir les
-Paramètres (ou afficher l'onglet « Assistant ») **suffit** — aucun clic,
+Options (ou afficher l'onglet « Assistant ») **suffit** — aucun clic,
 notamment avec le réglage par défaut `read_aloud_voice: ""` (défaut
 `lib.rs:1207`). Avant, l'état n'était demandé que si la valeur enregistrée était
 **déjà** une voix locale : avec « Automatique », `localVoiceModelFor("")` =
@@ -133,7 +133,7 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
    `refreshLocalVoiceStatus` pour la voix concernée, puis re-rendre). Le bouton,
    le chargement automatique et le choix d'une voix l'appellent tous : aucun
    second mécanisme, aucune commande Rust nouvelle.
-3. **Coût : au plus une fois par ouverture des Paramètres.** Drapeau
+3. **Coût : au plus une fois par ouverture des Options.** Drapeau
    `localVoiceAutoChecked` remis à `false` dans `resetSettingsContent` (donc à
    chaque ouverture), et une seule demande en vol (`localVoiceCheckInFlight`).
    Jamais à chaque rendu, jamais en boucle, **aucune minuterie** (`setInterval` /
@@ -211,8 +211,8 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
 3. **Dépôt des fichiers** : `<dossier de données de Pilot>/voix-locale/piper/`
    (binaire + DLL + données eSpeak) et
    `.../voix-locale/voix/fr_FR-<nom>-<qualité>.onnx` + `.onnx.json`.
-   Le chemin exact est **affiché dans les Paramètres**. Le modèle peut être
-   **téléchargé depuis les Paramètres** (voir 4) ou déposé à la main.
+   Le chemin exact est **affiché dans les Options**. Le modèle peut être
+   **téléchargé depuis les Options** (voir 4) ou déposé à la main.
 
    **Le MOTEUR est partagé par le produit, pas par l'identifiant de version.**
    La version installée et la version de test ont deux dossiers de données
@@ -238,7 +238,7 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
    - **arrêt** (`tts_local_cancel_download`) : le téléchargement s'arrête, rien
      n'est effacé ;
    - progression poussée par l'évènement `tts-local-download-progress` (taille + %).
-   Aucun téléchargement au démarrage, à l'ouverture des Paramètres, ni pendant une
+   Aucun téléchargement au démarrage, à l'ouverture des Options, ni pendant une
    lecture : seul un **clic** (ou le **choix** d'une voix dont le modèle manque)
    le déclenche.
    - **le moteur n'est jamais téléchargé** (par Pilot). Un modèle téléchargé ne
@@ -294,7 +294,7 @@ automatiquement, aucun enregistrement de ce qui est lu.
 `src/js/read-aloud.test.js` (lecture, nettoyage, une seule à la fois, voix),
 `src/js/apercu-voix-parametres.test.js` (écoute d'exemple : **un seul chemin de
 lecture** — compteurs de prise de parole et de nettoyage, aucune seconde liste
-de voix —, un seul aperçu à la fois, arrêt à la fermeture des Paramètres, échec
+de voix —, un seul aperçu à la fois, arrêt à la fermeture des Options, échec
 non silencieux, modèle local absent qui **ne joue pas** la voix du système),
 `src/js/speech-text.test.js` (nettoyage du texte de la voix : cas réels avec
 émojis, gras, bloc de code, tableau, lien, liste ; coupure sur frontière),
