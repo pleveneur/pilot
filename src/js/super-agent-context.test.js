@@ -261,22 +261,35 @@ describe("branchement dans super-agent.js", () => {
     expect(normalizedSource()).toContain("prefixDelegationContext");
   });
 
-  it("joint le contexte sur l'agent du PROJET (run_agents, projet cible)", () => {
+  // BUG « une tâche mise en file exécute la tâche précédente » : le contexte de
+  // suivi d'une mission est désormais joint AU LANCEMENT (chemin par lequel passe
+  // aussi le rejeu de la file), plus à l'ARRIVÉE de la demande. Les ancres
+  // ci-dessous vérifient donc que le contexte est relu dans le lancement — et que
+  // l'arrivée ne transmet plus qu'un brief de BASE (sans contexte figé).
+  it("joint le contexte sur l'agent du PROJET (run_agents, projet cible) AU LANCEMENT", () => {
     const win = branchWindow(
       "if (title.startsWith(RUN_AGENTS_SENTINEL)) {",
       "if (title.startsWith(RUN_ASSISTANT_AGENTS_SENTINEL)) {"
     );
-    expect(win).toContain("attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(task, {");
-    expect(win).toContain("targetProject || window._pilotProjectPath || null, task)");
+    expect(win).toContain("refreshAssignmentsBrief(assignments, baseBrief, targetProject || window._pilotProjectPath || null, task)");
+    // Le brief figé à l'arrivée ne porte AUCUN contexte de suivi.
+    expect(win).toContain("brief: baseBrief,");
+    expect(win, "le brief ne doit plus être lu à l'arrivée de la demande")
+      .not.toContain("brief: await attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(task, {");
+    // … et il est relu dans le CHEMIN DE LANCEMENT (`launchRun`).
+    const launch = branchWindow("const launchRun = () =>", "const launchOrQueue = async (launchOpts = {}) => {");
+    expect(launch).toContain("attachLaunchContext()");
   });
 
-  it("joint le contexte sur l'agent HORS projet (run_assistant_agents, sans projet)", () => {
+  it("joint le contexte sur l'agent HORS projet (run_assistant_agents, sans projet) AU LANCEMENT", () => {
     const win = branchWindow(
       "if (title.startsWith(RUN_ASSISTANT_AGENTS_SENTINEL)) {",
       "if (title.startsWith(SESSIONS_SENTINEL)) {"
     );
-    expect(win).toContain("attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(task, {");
-    expect(win).toContain("}), null, task)");
+    expect(win).toContain("refreshAssignmentsBrief(assignments, baseBrief, null, task)");
+    expect(win).toContain("brief: baseBrief,");
+    // Relu au démarrage réel de la run d'assistant (donc aussi au rejeu).
+    expect(win).toContain("await attachLaunchContext();");
   });
 
   it("joint le contexte sur la délégation directe (delegate_to_coder)", () => {
@@ -284,8 +297,20 @@ describe("branchement dans super-agent.js", () => {
       '} else if (action === "delegate_to_coder") {',
       '} else if (action === "purge_agent_conversation") {'
     );
-    expect(win).toContain("attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(info.request, {");
-    expect(win).toContain("projectPath");
+    expect(win).toContain("attachDelegationContext(messagesEl, baseRequest, projectPath, delegationTask)");
+    // Le brief de base voyage AVEC l'entrée de file : le contexte sera relu à la
+    // transmission, jamais celui de l'arrivée.
+    expect(win).toContain("ds.queue.push({ request, baseRequest,");
+    expect(win).toContain("task: delegationTask,");
+  });
+
+  it("le rejeu de la file de délégations relit le contexte à la transmission", () => {
+    const win = branchWindow(
+      "function flushDelegationQueue(projectPath) {",
+      "// ── Agent invisible : suivi en arrière-plan (évolution 64) ──"
+    );
+    expect(win).toContain("refreshAssignmentsBrief([], next.baseRequest, next.projectPath || null, String(next.task || \"\"))");
+    expect(win).toContain("requestNow");
   });
 
   it("le contexte est lu depuis le suivi ET la mémoire de session, en fail-open", () => {

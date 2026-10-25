@@ -1106,6 +1106,12 @@ sur le projet), cette demande n'est plus une simple ligne anonyme :
   l'Assistant **préfixe à la demande un bloc de contexte COURT**, construit à
   partir de **son propre suivi** : projet concerné, tâches suivies, décisions
   et sessions récentes, sujet et chantiers en cours (mémoire de session).
+- **Le bloc est relu AU LANCEMENT, jamais figé à l'arrivée de la demande.** Une
+  demande mise en file derrière une mission en cours ne peut donc pas emporter
+  le contexte de la mission **précédente** : à sa sortie de file, le suivi est
+  relu (`refreshAssignmentsBrief`) et c'est l'état du moment qui part. Même
+  règle pour la file de délégations (`delegate_to_coder`), relue à la
+  transmission.
 - But : l'agent part **au courant** de ce qui a déjà été fait, décidé ou réglé —
   il ne refait pas et ne contredit pas l'existant (moins d'allers-retours).
 - Le bloc est **bref et borné** (plafond **700 caractères**, troncature
@@ -1114,16 +1120,19 @@ sur le projet), cette demande n'est plus une simple ligne anonyme :
 - **Rien d'inventé** : si l'Assistant ne sait rien du projet (projet non suivi,
   mémoire vide), **aucun bloc** n'est ajouté — la demande part inchangée.
 - Il est **visible** dans la conversation : le message « 🧠 Contexte de suivi
-  joint à la demande de l'agent. » signale l'ajout.
+  joint à la demande de l'agent. » signale l'ajout (au **lancement** de la
+  mission, donc au démarrage réel et non à son arrivée).
 - Les décisions récentes sont exposées par la base de suivi **par client** :
   quand le client suit **plusieurs projets**, le bloc le dit explicitement
   (« Décisions récentes (client X) ») au lieu de les faire passer pour celles
   du projet.
 - Technique (module **pur** `src/js/super-agent-context.js`, I/O et branchement
-  dans `super-agent.js` — `loadDelegationContext` / `attachDelegationContext`) :
+  dans `super-agent.js` — `loadDelegationContext` / `attachDelegationContext` /
+  `refreshAssignmentsBrief`) :
   lecture de `get_super_agent_tracking` + `super_agent_load_session_memory`,
   **fail-open** (toute erreur → aucun bloc, la délégation n'est jamais
-  bloquée). Couverture : `src/js/super-agent-context.test.js`.
+  bloquée). Couverture : `src/js/super-agent-context.test.js` +
+  `src/js/file-attente-contexte-au-lancement.test.js`.
 
 <!-- HELP:super-agent-delegation-context -->
 ### Le contexte que l'assistant joint à la demande qu'il délègue
@@ -1138,7 +1147,9 @@ Ce rappel est **volontairement bref** (quelques lignes, longueur plafonnée et
 troncature annoncée) et **distinct de votre demande**, qui suit. L'Assistant
 n'invente rien : s'il ne sait rien de ce projet, **il n'ajoute aucun rappel**.
 Vous voyez, dans la conversation, le message « 🧠 Contexte de suivi joint à la
-demande de l'agent. » lorsqu'un rappel a été ajouté.
+demande de l'agent. » lorsqu'un rappel a été ajouté — au moment où la mission
+démarre réellement (une demande qui patiente en file est donc annoncée quand
+son tour arrive, avec le contexte de **sa** tâche).
 <!-- /HELP:super-agent-delegation-context -->
 
 ### L'Assistant, coordinateur de la redistribution des tâches

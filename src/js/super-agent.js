@@ -1644,6 +1644,51 @@ async function attachDelegationContext(messagesEl, brief, projectPath, task) {
   return prefixDelegationContext(brief, context);
 }
 
+/**
+ * BUG « une tâche mise en file exécute la tâche précédente » — le CONTEXTE DE
+ * SUIVI d'une mission est relu AU LANCEMENT, jamais figé à l'ARRIVÉE.
+ *
+ * Le contexte de suivi (projet, tâches suivies, décisions, sessions, mémoire de
+ * session) est un INSTANTANÉ : il décrit « où en est le chantier ». Lu à
+ * l'ARRIVÉE de la demande, il décrit la mission qui tourne à ce moment-là. Une
+ * demande mise en file l'emportait donc jusqu'à son tour — et comme ce bloc est
+ * PREFIXÉ au brief (donc lu en premier par l'agent), l'agent commençait par
+ * exécuter l'étape PRÉCÉDENTE alors que son objectif, plus bas dans le prompt,
+ * était bien le sien.
+ *
+ * Le brief de BASE (enveloppe structurée + consigne quality-gate) ne dépend pas
+ * du suivi : il est calculé une fois. Ici, seul le contexte est relu — au moment
+ * où la mission sort RÉELLEMENT de la file — et réappliqué à toutes les
+ * affectations, qui portent donc toujours le brief réellement envoyé aux agents.
+ *
+ * Fail-open : une lecture impossible laisse le brief de base intact (aucun
+ * contexte inventé, aucune exception). Ne touche ni la file, ni son ordre, ni
+ * ses rangs, ni le principe « une seule tâche à la fois par projet ».
+ * @param {Array<object>} assignments - affectations de la mission (mutées sur place)
+ * @param {string} baseBrief - brief SANS contexte de suivi
+ * @param {string|null} projectPath - projet cible (null = hors projet)
+ * @param {string} task - demande déléguée
+ * @param {{loadContext?: (projectPath: string|null, task: string) => Promise<string>}} [deps]
+ *   injection de la LECTURE du contexte (tests ; en production : lecture réelle)
+ * @returns {Promise<string>} brief réellement porté par les affectations
+ */
+export async function refreshAssignmentsBrief(assignments, baseBrief, projectPath, task, deps = {}) {
+  const base = String(baseBrief == null ? "" : baseBrief);
+  const load = deps && typeof deps.loadContext === "function" ? deps.loadContext : loadDelegationContext;
+  let context = "";
+  try {
+    context = String((await load(projectPath, task)) || "");
+  } catch (_) {
+    context = ""; // suivi indisponible : la demande part inchangée
+  }
+  const brief = prefixDelegationContext(base, context);
+  const list = Array.isArray(assignments) ? assignments : [];
+  for (const item of list) {
+    if (item && typeof item === "object") item.brief = brief;
+  }
+  return brief;
+}
+
 /** Recharge la config (nom, clients, prompt, options) depuis Rust. */
 export async function refreshSuperAgentConfig() {
   try {
@@ -5239,14 +5284,21 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // l'enveloppe, pas le bus. + purge de la conversation de chaque agent
         // avant la run (contexte vierge). Le CONTEXTE DE SUIVI de l'assistant
         // (projet, tâches, décisions, sessions, mémoire) est joint
-        // automatiquement ici, sur le projet cible.
-        const brief = await attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(task, {
+        // automatiquement AU LANCEMENT, sur le projet cible (`attachLaunchContext`
+        // ci-dessous) — jamais figé ici : une demande mise en file derrière une
+        // autre ne doit pas emporter le contexte de la mission PRÉCÉDENTE.
+        const baseBrief = applyAssistantBriefEnvelope(task, {
           forceStructured: configCache.super_agent_force_structured_brief !== false,
           qualityGate: configCache.super_agent_quality_gate !== false,
-        }), targetProject || window._pilotProjectPath || null, task);
+        });
+        // BUG « une tâche mise en file exécute la tâche précédente » : le contexte
+        // de suivi est relu DANS LE CHEMIN DE LANCEMENT (`attachLaunchContext`,
+        // appelé par `launchOrQueue` au moment réel du démarrage, donc aussi au
+        // rejeu de la file). À l'arrivée, seule l'enveloppe (qui ne dépend pas du
+        // suivi) est appliquée.
         const assignments = agentIds.map((aid) => ({
           agentId: aid,
-          brief,
+          brief: baseBrief,
           project: targetProject,
           mcp_server: mcpServer,
           resume,
@@ -5257,6 +5309,18 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           expectedFiles,
           expectedFilesBase: targetProject || window._pilotProjectPath || null,
         }));
+        // CONTEXTE DE SUIVI relu AU LANCEMENT (voir `refreshAssignmentsBrief`) :
+        // la mission peut avoir attendu en file, le suivi a changé depuis son
+        // arrivée. Appelé dans le chemin de lancement, jamais à l'arrivée.
+        let launchContextAnnounced = false;
+        const attachLaunchContext = async () => {
+          const brief = await refreshAssignmentsBrief(assignments, baseBrief, targetProject || window._pilotProjectPath || null, task);
+          if (brief !== baseBrief && !launchContextAnnounced) {
+            launchContextAnnounced = true;
+            appendSystemMessage(messagesEl, "🧠 Contexte de suivi joint à la demande de l'agent.");
+          }
+          return brief;
+        };
         // Nature de la mission : LECTURE seulement si TOUS les agents demandés
         // sont en lecture seule (registre des agents, champ `readonly`). Une
         // mission de LECTURE est partagée ; une MODIFICATION est exclusive sur
@@ -5379,7 +5443,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // la préparation échoue, on rapporte un ÉCHEC DE LANCEMENT (défaut « faux
         // succès de lancement » : l'assistant annonçait « lancé » alors que rien
         // n'avait démarré).
-        const launchRun = () => new Promise((resolve) => {
+        const launchRun = () => attachLaunchContext().then(() => new Promise((resolve) => {
           let startReported = false;
           const reportStart = (started, error) => {
             if (startReported) return;
@@ -5417,7 +5481,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             settleRun(false, `[Échec de la préparation de la run agents] ${e}`);
             reportStart(false, e && e.message ? e.message : String(e));
           });
-        });
+        }));
 
         // MISSION 381 — AUCUNE ESTIMATION PRÉALABLE AUTOMATIQUE.
         // Le lancement démarre EXACTEMENT les agents demandés : aucun agent
@@ -5716,16 +5780,17 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // Enveloppe de brief STRUCTURÉ (même mécanisme que run_agents) pour que
         // l'agent d'assistant réussisse du premier coup. Aucun projet cible ici
         // (agent hors projet) : seul le suivi de session de l'assistant est
-        // joint, et rien du tout s'il ne sait rien.
-        const brief = await attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(task, {
+        // joint, AU LANCEMENT (voir `attachLaunchContext`), et rien du tout s'il
+        // ne sait rien.
+        const baseBrief = applyAssistantBriefEnvelope(task, {
           forceStructured: configCache.super_agent_force_structured_brief !== false,
           qualityGate: configCache.super_agent_quality_gate !== false,
-        }), null, task);
+        });
         // Projet réservé : l'agent d'assistant n'est lié à aucun projet.
         const target = ASSISTANT_SPACE;
         const assignments = agentIds.map((aid) => ({
           agentId: aid,
-          brief,
+          brief: baseBrief,
           project: target,
           mcp_server: mcpServer,
           resume,
@@ -5734,6 +5799,17 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           expectedFiles,
           expectedFilesBase: expectedFilesBase || null,
         }));
+        // CONTEXTE DE SUIVI relu AU LANCEMENT (bug « une tâche mise en file
+        // exécute la tâche précédente », même correctif que `run_agents`).
+        let launchContextAnnounced = false;
+        const attachLaunchContext = async () => {
+          const brief = await refreshAssignmentsBrief(assignments, baseBrief, null, task);
+          if (brief !== baseBrief && !launchContextAnnounced) {
+            launchContextAnnounced = true;
+            appendSystemMessage(messagesEl, "🧠 Contexte de suivi joint à la demande de l'agent.");
+          }
+          return brief;
+        };
         const projectPath = window._pilotProjectPath || null;
         let runSettled = false;
         // RÈGLE 4 : identité de la mission d'assistant (même mécanisme que
@@ -5813,6 +5889,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             return false; // PAS lancée maintenant : RÉELLEMENT mise en file
           }
           runAgentsInFlightByProject[inFlightKey(target)] = true;
+          // Le contexte de suivi est relu ICI, au moment réel du démarrage (donc
+          // aussi au rejeu depuis la file), jamais celui figé à l'arrivée.
+          await attachLaunchContext();
           runAgentsForAssistantAsync(
             assignments,
             (result) => {
@@ -6215,10 +6294,18 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // déléguée, en plus de la consigne quality-gate (config). Ne duplique pas
       // les sections que l'assistant aurait déjà rédigées. Le CONTEXTE DE SUIVI
       // de l'assistant est joint au préalable (mêmes données que `run_agents`).
-      const request = await attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(info.request, {
+      const baseRequest = applyAssistantBriefEnvelope(info.request, {
         forceStructured: configCache.super_agent_force_structured_brief !== false,
         qualityGate: configCache.super_agent_quality_gate !== false,
-      }), projectPath, String(info.request || ""));
+      });
+      // Demande réellement transmise maintenant (= brief de base + contexte de
+      // suivi lu à l'instant). Si la demande est MISE EN FILE, c'est ce même
+      // brief de base qui part avec l'entrée et le contexte sera RELU à la
+      // transmission (voir `flushDelegationQueue`) : une demande en file ne doit
+      // jamais décrire la tâche précédente (bug « une tâche mise en file exécute
+      // la tâche précédente »).
+      const delegationTask = String(info.request || "");
+      const request = await attachDelegationContext(messagesEl, baseRequest, projectPath, delegationTask);
       appendSystemMessage(messagesEl, `🤖 Je lance l'agent du projet et lui transmets la demande…`);
       const tabs = window._pilotTabs;
       if (!tabs) {
@@ -6294,7 +6381,19 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // jamais de perte).
       const busy = ds.busy || isTerrainReserved() || await isProjectAgentBusy(projectPath);
       if (busy) {
-        ds.queue.push({ request, projectPath, agentId, messagesEl, invisible, forceInvisible, agentTabOpen });
+        // `baseRequest` + `task` voyagent AVEC l'entrée de file : le contexte de
+        // suivi est relu au moment de la transmission, jamais figé à l'arrivée.
+        ds.queue.push({
+          request,
+          baseRequest,
+          task: delegationTask,
+          projectPath,
+          agentId,
+          messagesEl,
+          invisible,
+          forceInvisible,
+          agentTabOpen,
+        });
         // POINT C : la demande en file est TOUJOURS rejouée (sonde réelle de
         // l'agent cible) — jamais de blocage silencieux si l'agent_end n'arrive
         // pas (prompt distant, session figée…).
@@ -6643,26 +6742,42 @@ function flushDelegationQueue(projectPath) {
   }
   const next = ds.queue.shift();
   ds.busy = true;
+  // BUG « une tâche mise en file exécute la tâche précédente » : le CONTEXTE DE
+  // SUIVI de la demande en file est RELU MAINTENANT — au moment de sa
+  // transmission — et non celui figé à son arrivée (il décrivait alors la tâche
+  // qui tournait, donc la tâche PRÉCÉDENTE). Une entrée historique sans
+  // `baseRequest` part inchangée (comportement antérieur préservé).
+  const requestNow = next.baseRequest != null
+    ? refreshAssignmentsBrief([], next.baseRequest, next.projectPath || null, String(next.task || ""))
+    : Promise.resolve(next.request);
   // Transmettre la demande suivante (fire-and-forget : le résultat sera
   // reporté dans le chat via transmitDelegationToAgent).
-  transmitDelegationToAgent({
-    request: next.request,
-    projectPath: next.projectPath,
-    agentId: next.agentId,
-    messagesEl: next.messagesEl,
-    tabs,
-    invisible: next.invisible,
-    forceInvisible: next.forceInvisible,
-    agentTabOpen: next.agentTabOpen,
-  }).then((ok) => {
-    if (ok) {
-      appendSystemMessage(next.messagesEl, "📋 Demande mise en file transmise à l'agent (la tâche précédente est terminée).");
-    } else {
-      // Échec de la transmission : on libère et on essaie la suite.
+  requestNow
+    .then((request) => transmitDelegationToAgent({
+      request,
+      projectPath: next.projectPath,
+      agentId: next.agentId,
+      messagesEl: next.messagesEl,
+      tabs,
+      invisible: next.invisible,
+      forceInvisible: next.forceInvisible,
+      agentTabOpen: next.agentTabOpen,
+    }))
+    .then((ok) => {
+      if (ok) {
+        appendSystemMessage(next.messagesEl, "📋 Demande mise en file transmise à l'agent (la tâche précédente est terminée).");
+      } else {
+        // Échec de la transmission : on libère et on essaie la suite.
+        ds.busy = false;
+        flushDelegationQueue(next.projectPath);
+      }
+    })
+    .catch((e) => {
+      // Jamais de demande perdue en silence : on libère la place et on réessaie.
+      console.warn("[delegation-queue] transmission de la demande en file en échec :", e);
       ds.busy = false;
-      flushDelegationQueue(next.projectPath);
-    }
-  });
+      armDelegationQueueReplay(next.projectPath);
+    });
 }
 
 // ── Agent invisible : suivi en arrière-plan (évolution 64) ──
