@@ -18,9 +18,11 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - La **barre de titre système** (logo, nom du dossier, boutons Windows) n'est plus affichée : Pilot dessine sa propre **bande de fenêtre** de 32 px en haut, qui suit le thème sombre/clair.
 - Les trois boutons système vivent dans l'interface, collés au bord droit : **Réduire**, **Agrandir / Restaurer** (l'icône suit l'état réel de la fenêtre) et **Fermer** — Fermer garde exactement le comportement habituel (confirmation ou mise en veille de la fenêtre).
 - **Glisser** la fenêtre depuis toute la bande (hors boutons) ; **double-clic** sur la bande = agrandir / restaurer. Le nom donné au système (barre des tâches, Alt+Tab) est toujours `Pilot`.
+- **Menu « Disposer »** : un **clic droit** sur le bouton **Agrandir** ouvre les trois placements — **Moitié gauche de l'écran**, **Moitié droite de l'écran**, **Plein écran**. Le clic gauche garde son effet habituel (agrandir / restaurer).
+- **Toujours accessibles** : les trois boutons restent visibles quand la fenêtre est agrandie (mode immersif).
 
 ### Animations d'ouverture
-- **Modales** : les modales (Paramètres ⚙️, raccourcis, commandes projet, inter-projets, etc.) s'ouvrent avec une **animation de zoom** depuis le point de clic (bouton ou option de menu) jusqu'à leur taille finale. Les **modales et dialogues de l'agent** (Code Graph 📊, sélection des modèles d'orchestration 🧠, confirmations/choix/saisies demandés par l'agent) bénéficient de la même animation.
+- **Modales** : les modales (raccourcis, commandes projet, inter-projets, etc.) s'ouvrent avec une **animation de zoom** depuis le point de clic (bouton ou option de menu) jusqu'à leur taille finale. Les **modales et dialogues de l'agent** (Code Graph 📊, sélection des modèles d'orchestration 🧠, confirmations/choix/saisies demandés par l'agent) bénéficient de la même animation.
 - **Nouveaux onglets** : l'ouverture d'un **nouvel onglet** (fichier dans l'explorateur, bouton du panneau bas, bascule vers un onglet jamais encore affiché) bénéficie du même **zoom depuis le point cliqué**, appliqué au contenu. La bascule vers un onglet déjà affiché reste instantanée.
 - **Paramètre ⚙️ → Général → Apparence → « Animer l'ouverture des modales »** : force les animations même si la **réduction de mouvement** est active côté système. **Activé par défaut** (y compris après mise à jour d'une ancienne version, pour laquelle le paramètre n'existait pas encore). Le désactiver restore le respect strict de l'accessibilité.
 
@@ -120,17 +122,18 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   Si le moteur manque ou échoue, la lecture **continue avec la voix du système** et le dit
   clairement (aucun blocage, rien ne plante).
 
-### Suivre le travail (cercle en haut à droite)
-- Le **cercle en haut à droite** de la fenêtre est le **seul endroit** où se suit le travail :
-  il respire quand des agents travaillent, et un clic l'ouvre. Un **second panneau**
-  (l'ancienne « cloche ») n'existe plus : tout est réuni ici.
+### Suivre le travail (entrée « Travail » à droite de la barre d'onglets)
+- L'entrée **« Travail »**, à droite de la barre d'onglets, est le **seul endroit** où se suit le travail :
+  sa pastille s'anime quand des agents travaillent, et un clic ouvre le panneau. Un **second panneau**
+  (l'ancienne « cloche ») n'existe plus : tout est réuni ici. Elle reste atteignable même quand la
+  colonne de gauche est masquée, et ne recouvre plus le contenu.
 - Le panneau a **trois onglets**, dans cet ordre : **« Agents »** (qui travaille, sur quel projet),
   **« Tâches »** (les missions en cours et celles qui attendent leur tour, avec la mention « en attente »)
   et **« Événements »** (démarrages, fins de tâche, erreurs, connexions).
-- Une **pastille sur le cercle** indique les événements que vous n'avez pas encore vus ;
+- Une **pastille sur l'entrée « Travail »** indique les événements que vous n'avez pas encore vus ;
   ouvrir l'onglet « Événements » l'éteint. Le panneau s'ouvre sur **« Agents »** tant que vous
   n'avez pas choisi d'onglet, puis se rouvre sur l'onglet où vous l'avez laissé ; il se ferme par
-  **Échap**, la **croix** ou un clic sur le cercle.
+  **Échap**, la **croix** ou un second clic sur l'entrée « Travail ».
 - **Une demande en attente devenue inutile se retire seule** : la commande **`/file retire <rang>`**
   retire **une seule** demande de la file (le rang affiché par `/file` — la tâche en cours occupe le
   1er rang), les autres restent dans leur ordre et la tâche en cours continue. `/file vide` continue
@@ -140,7 +143,8 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   seule la liste défile, et le panneau reste entièrement visible. Les trois listes ont exactement
   la même présentation, en thème clair comme en thème sombre.
 
-### Paramètres (modale ⚙️)
+### Paramètres (onglet ⚙️)
+- Les Réglages s'ouvrent dans un **onglet** (bouton ⚙️, palette de commandes ou événement externe), pas dans une fenêtre par-dessus votre travail. « Annuler » et « Enregistrer » agissent **sans fermer** l'onglet, donc vous voyez le résultat de ce que vous venez de changer. La **✕ de l'onglet équivaut à « Annuler »** (rien n'est enregistré, l'aperçu de thème est annulé). L'onglet est **transverse** : il reste ouvert quand vous changez de projet.
 - **Thème** : sombre (défaut) ou clair.
 - **Sous-thème** : 5 palettes par mode (dark : One Dark, Dracula, Nord, Tokyo Night ;
   light : GitHub Light, One Light, Solarized Light, Tokyo Night Day). **Aperçu en direct** :
