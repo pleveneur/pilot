@@ -36,6 +36,11 @@ import {
   buildBackgroundWorkMissions,
   renderBackgroundWorkersHtml,
 } from "./agent-activity.js";
+// Niveau 2 de la prise en main (FACULTATIF) : ce même écran est le point
+// d'entrée durable de « comment organiser mon équipe d'agents ». Le module ne
+// s'ouvre que sur un clic (`gesture: true`), ne modifie aucun agent et n'écrit
+// aucune configuration (spec_onboarding.md § Niveau 2).
+import { openOnboardingTeamModal } from "./onboarding-niveau2.js";
 
 export async function createAgents(container) {
   const wrapper = document.createElement("div");
@@ -50,6 +55,12 @@ export async function createAgents(container) {
         <button class="agent-btn" id="btn-agents-add" title="Ajouter un agent"><i data-lucide="plus" class="icon-sm"></i></button>
       </div>
       <div class="agents-list" id="agents-list"></div>
+      <!-- Point d'entrée DISCRET du niveau 2 (facultatif) : il apprend à
+           organiser l'équipe, sans jargon et sans rien imposer. -->
+      <button class="agents-learn-link" id="btn-agents-learn" title="À quoi sert une équipe d'agents, et quel premier geste faire">
+        <i data-lucide="book-open" class="icon-sm"></i>
+        <span>Apprendre à organiser mon équipe d'agents</span>
+      </button>
     </div>
     <div class="agents-activity">
       <div class="agents-activity-header">
@@ -68,6 +79,7 @@ export async function createAgents(container) {
   const stopBtn = wrapper.querySelector("#btn-agents-stop");
   const addBtn = wrapper.querySelector("#btn-agents-add");
   const resetBtn = wrapper.querySelector("#btn-agents-reset");
+  const learnBtn = wrapper.querySelector("#btn-agents-learn");
 
   let registry = { version: 1, agents: [] };
   let availableModels = [];
@@ -622,6 +634,12 @@ export async function createAgents(container) {
   // dans l'en-tête du panneau d'activité (garde-fou conservé).
   stopBtn.addEventListener("click", () => {
     stopAgentsRun();
+  });
+  // Niveau 2 (facultatif) : ouvert UNIQUEMENT sur ce clic. Le registre déjà en
+  // mémoire est passé en LECTURE (aucune relecture, aucune écriture, aucune
+  // modification d'agent) ; l'utilisateur est déjà sur l'écran d'équipe.
+  learnBtn?.addEventListener("click", () => {
+    void openOnboardingTeamModal({ gesture: true, registry: () => registry });
   });
   addBtn.addEventListener("click", () => openEditor(""));
   resetBtn.addEventListener("click", async () => {

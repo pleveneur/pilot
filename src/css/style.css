@@ -11167,3 +11167,65 @@ summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ================================================================
+   PRISE EN MAIN — NIVEAU 2 : l'équipe d'agents (spec_onboarding.md)
+   Deux écrans FACULTATIFS qui apprennent, à la demande, comment se sert
+   l'équipe d'agents. Ils réutilisent les classes de la prise en main
+   (niveau 1) : seules sont décrites ici les deux entrées DISCRÈTES, celle
+   de la fenêtre de première ouverture et celle de l'écran « Équipe
+   d'agents » existant.
+
+   Aucune couleur en dur, aucun token nouveau : le texte secondaire est lu
+   sur les surfaces partagées de l'application (--bg-secondary, --bg-hover,
+   --surface-floating), donc le contraste déjà vérifié en clair et en
+   sombre reste le même.
+   ================================================================ */
+
+/* Entrée discrète de l'écran « Équipe d'agents » : une ligne de texte sous
+   la liste, qui ne concurrence pas les boutons de la barre du haut. */
+.agents-learn-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: calc(100% - var(--space-4));
+  margin: var(--space-2) var(--space-2) var(--space-3);
+  padding: var(--space-2);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  line-height: 1.35;
+  text-align: left;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.agents-learn-link:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-subtle);
+}
+
+/* Entrée discrète de la fenêtre de première ouverture : un lien souligné,
+   jamais un bouton d'action parmi ceux de la sortie. */
+.onboarding-aside {
+  margin: var(--space-3) 0 0;
+}
+.onboarding-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  font-family: inherit;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.onboarding-link-btn:hover {
+  color: var(--text-primary);
+}

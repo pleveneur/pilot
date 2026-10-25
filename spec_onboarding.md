@@ -1,8 +1,8 @@
 # Spec — Prise en main à la première ouverture
 
-> **Statut : niveau 1 ✅ implémenté** (trois écrans + sortie en une écriture).
-> Le **niveau 2** (équipe d'agents) reste hors de ce lot : il réutilisera
-> l'écran « Équipe d'agents » existant, sans écran dédié.
+> **Statut : niveaux 1 et 2 ✅ implémentés** (niveau 1 : trois écrans + sortie
+> en une écriture ; niveau 2 : l'équipe d'agents, à la demande, sans écran
+> dédié).
 
 ## Le besoin
 
@@ -106,14 +106,55 @@ et la vérification du moteur reste l'instruction première et non attendue.
 
 ## Ce qui reste à faire
 
-**Niveau 2 (optionnel)** : l'équipe d'agents, en réutilisant l'écran existant
-[`spec_gestion_agents.md`](./spec_gestion_agents.md) — aucun écran dédié.
+Rien sur ce lot : les deux niveaux sont livrés.
+
+## Niveau 2 — l'équipe d'agents (facultatif, à la demande)
+
+But : apprendre **plus tard et à la demande** à se servir de l'équipe d'agents,
+sans jamais rien imposer ni rouvrir quoi que ce soit au démarrage.
+
+**Réutilisation stricte.** Le niveau 2 ne crée **aucun** écran de gestion, **aucun**
+onglet, **aucun** bouton dans la colonne de gauche. Il réutilise l'écran
+« Équipe d'agents » existant (`agents-ui.js`, mode d'onglet `agents` de
+`tabs.js`) et, pour la forme, la modale et les classes du niveau 1
+(`.modal`, `.modal-content`, `.onboarding-*`). À la fin, l'utilisateur **arrive
+sur cet écran existant** : jamais une impasse.
+
+**Jamais tout seul.** `openOnboardingTeamModal` exige `gesture: true` — la garde
+est la **première** instruction, avant tout accès au document ; aucun autre
+argument, aucun état d'équipe, aucune minuterie ne l'ouvre. Le démarrage de
+Pilot ne connaît pas ce module. Deux points d'entrée **discrets**, tous deux sur
+un clic : le lien « Apprendre à organiser mon équipe d'agents » de la fenêtre de
+première ouverture (`#btn-onboarding-team-learn`) et le bouton du même nom en bas
+de l'écran d'équipe (`#btn-agents-learn`).
+
+**Deux écrans au maximum** (`ONBOARDING_TEAM_SCREENS = 2`) :
+
+1. **À quoi sert une équipe, et comment elle se compose** — constat réel du
+   registre (lu par `loadAgentRegistry`, sans session). Équipe déjà en place :
+   le constat le dit et **n'exige aucune modification**. Équipe vide ou registre
+   illisible : la **cause** et la **marche à suivre** (↻, +) sont dites, avec
+   « Réessayer » vivant.
+2. **Le premier geste** — ouvrir une fiche pour **lire** son rôle (rien n'est
+   lancé, rien n'est modifié), puis confier une tâche à 🧭 Assistant.
+
+**Ce qu'il ne fait jamais** : aucune écriture de configuration, aucune
+modification d'agent (lecture seule), aucun appel de modèle, aucune session
+d'agent (jamais `list_agent_sessions`, qui bloque la file), aucune couleur en
+dur, aucun token nouveau.
+
+Échap dans le niveau 2 est traité par le niveau 2 : la prise en main de niveau 1
+ne doit pas refermer les deux fenêtres d'un coup en écrivant « déjà vu ».
 
 ## Couverture
 
-`src/js/onboarding-niveau1.test.js` (fonctions pures + câblage), plus le socle
-`src/js/settings-onboarding.test.js` (critère, commande de lecture seule,
-préservation du champ). Les tests échouent si la fenêtre s'ouvre alors que le
-socle dit non, si « Passer » écrit autre chose que « déjà vu », si l'écriture
-n'est pas unique, si un cas devient muet, ou si l'écran appelle un modèle ou
-lance une session.
+`src/js/onboarding-niveau1.test.js` (fonctions pures + câblage du niveau 1),
+`src/js/onboarding-niveau2.test.js` (niveau 2 : garde du geste, absence d'écran
+de navigation, lecture seule, cas non muets, sortie vers l'écran d'équipe,
+tokens), plus le socle `src/js/settings-onboarding.test.js` (critère, commande
+de lecture seule, préservation du champ). Les tests échouent si la fenêtre
+s'ouvre alors que le socle dit non, si « Passer » écrit autre chose que
+« déjà vu », si l'écriture n'est pas unique, si un cas devient muet, si l'écran
+appelle un modèle ou lance une session — et, pour le niveau 2, s'il s'ouvre sans
+geste de l'utilisateur, s'il crée un écran de navigation, s'il écrit une
+configuration ou s'il modifie un agent.

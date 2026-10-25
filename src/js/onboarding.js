@@ -33,6 +33,9 @@ import { animateModalOpen } from "./modal-anim.js";
 import { toastError, toastSuccess } from "./toast.js";
 import { checkPiHealth, getBackendInfoSync, getPiHealthSync } from "./backend-info.js";
 import { isPiStartupGateBlocking } from "./pi-startup-gate.js";
+// Niveau 2 (FACULTATIF) : l'équipe d'agents. Ce module ne s'ouvre que sur un
+// geste de l'utilisateur ; la prise en main ne fait que fournir son lien.
+import { ONBOARDING_TEAM_MODAL_ID, openOnboardingTeamModal } from "./onboarding-niveau2.js";
 
 /** Fenêtre de la prise en main. */
 export const ONBOARDING_MODAL_ID = "onboarding-modal";
@@ -429,6 +432,9 @@ export async function openOnboardingModal(ctx = {}) {
   const prevBtn = el("btn-onboarding-prev");
   const nextBtn = el("btn-onboarding-next");
   const closeBtn = el("onboarding-close");
+  // Point d'entrée DISCRET du niveau 2 (équipe d'agents) : facultatif, jamais
+  // ouvert tout seul, et sans aucune écriture de configuration.
+  const teamLearnBtn = el("btn-onboarding-team-learn");
   const screens = Array.from(modal.querySelectorAll("[data-onboarding-screen]"));
 
   const view = { screen: 1, discover: false, model: NO_MODEL_OPTION, busy: false };
@@ -619,6 +625,10 @@ export async function openOnboardingModal(ctx = {}) {
   // ── câblage ──────────────────────────────────────────────────────────────
   const onKeydown = (event) => {
     if (event.key !== "Escape") return;
+    // La fenêtre du niveau 2, si elle est ouverte PAR-DESSUS, traite Échap
+    // elle-même : sans cette garde, Échap fermerait le niveau 2 ET marquerait
+    // la prise en main comme vue, ce qui n'est pas le geste de l'utilisateur.
+    if (isModalVisible(ONBOARDING_TEAM_MODAL_ID)) return;
     event.preventDefault();
     void skip();
   };
@@ -646,6 +656,11 @@ export async function openOnboardingModal(ctx = {}) {
     void finish();
   });
   engineRetry?.addEventListener("click", () => void recheckEngine());
+  teamLearnBtn?.addEventListener("click", () => {
+    // Geste EXPLICITE (`gesture: true`) : c'est la seule façon d'ouvrir le
+    // niveau 2. La prise en main reste ouverte derrière, et rien n'est écrit.
+    void openOnboardingTeamModal({ gesture: true, tabs: ctx.tabs });
+  });
   modelRetry?.addEventListener("click", () => void loadModels());
   modelSelect?.addEventListener("change", () => {
     view.model = modelSelect.value || NO_MODEL_OPTION;

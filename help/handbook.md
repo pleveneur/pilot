@@ -68,6 +68,33 @@ fichier et ne modifie pas l'apparence de Pilot. La passer est sans conséquence.
 ne revient pas d'elle-même. Ses réglages se retrouvent dans **⚙️ Options →
 Agent Pi**, et le choix du modèle dans **⚙️ Options → Fournisseurs**.
 
+### L'équipe d'agents, apprise plus tard et à la demande
+
+Une équipe d'agents, c'est plusieurs agents qui se partagent le travail :
+chacun a un **rôle**, un **modèle**, et parfois des compétences. C'est
+🧭 Assistant qui répartit les demandes : vous décrivez la tâche, il choisit qui
+travaille et dans quel ordre.
+
+Pour apprendre à s'en servir, un **lien discret** « Apprendre à organiser mon
+équipe d'agents » se trouve dans la fenêtre de première ouverture, et un **bouton
+discret du même nom** en bas de l'écran **Équipe d'agents**. Tous deux ouvrent
+**deux écrans courts** :
+
+1. **À quoi sert une équipe** — ce qu'elle permet, et l'état réel de la vôtre.
+   Si votre équipe est **déjà en place**, la fenêtre le dit et ne demande aucune
+   modification. Si elle est **vide** ou si sa liste n'a pas pu être lue, elle
+dit **pourquoi** et **quoi faire** (bouton ↻ pour remettre les agents fournis,
+bouton + pour en ajouter) et propose **Réessayer**.
+2. **Votre premier geste** — celui qui marche du premier coup : ouvrir une fiche
+   d'agent pour **lire son rôle** (rien n'est lancé, rien n'est modifié tant que
+   vous n'enregistrez pas), puis confier une tâche à 🧭 Assistant en une phrase.
+
+À la fin, vous arrivez sur l'écran **Équipe d'agents** lui-même. Cette fenêtre
+**ne s'ouvre jamais toute seule** et ne revient pas au démarrage ; on peut la
+fermer à tout moment (bouton **Fermer**, croix, ou **Échap**) sans rien perdre.
+Elle n'appelle aucun modèle, ne lance aucun agent, **ne modifie aucun de vos
+agents** et n'écrit aucun réglage : elle explique, elle ne reconfigure rien.
+
 ### Ensuite, pour chaque projet
 
 1. **Ouvrir un projet** : bouton **« 📁 Projets ▼ »** en haut de la barre

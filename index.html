@@ -1619,12 +1619,62 @@
         </ol>
       </section>
 
+      <!-- Point d'entrée DISCRET du niveau 2 (l'équipe d'agents) : FACULTATIF,
+           il n'ouvre rien tout seul et ne s'impose jamais. Libellé en français
+           simple, sans jargon (spec_onboarding.md § Niveau 2). -->
+      <p class="onboarding-aside">
+        <button type="button" id="btn-onboarding-team-learn" class="onboarding-link-btn">
+          <i data-lucide="users" class="icon-sm"></i> Apprendre à organiser mon équipe d'agents
+        </button>
+      </p>
+
       <p id="onboarding-error" class="onboarding-error hidden" role="alert"></p>
       <div class="modal-actions onboarding-actions modal-actions-cancel-first">
         <button id="btn-onboarding-skip" class="modal-action-secondary">Passer</button>
         <button id="btn-onboarding-discover" class="modal-action-secondary">Je découvre</button>
         <button id="btn-onboarding-prev" class="modal-action-secondary">Précédent</button>
         <button id="btn-onboarding-next" class="modal-action-primary">Suivant</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modale : prise en main NIVEAU 2 — l'équipe d'agents (spec_onboarding.md).
+       FACULTATIVE : elle ne s'ouvre JAMAIS seule. Deux points d'entrée discrets,
+       tous deux sur un geste de l'utilisateur : le lien de la prise en main
+       ci-dessus et le bouton de l'écran « Équipe d'agents » existant. Elle
+       réutilise la modale et ses parties (.modal, .modal-content, .modal-header,
+       .modal-close, .modal-actions) et les classes de la prise en main : aucun
+       composant nouveau, AUCUN onglet, AUCUN écran de navigation. Elle n'écrit
+       aucune configuration et ne modifie aucun agent : seuls les CONSTATS
+       (composition de l'équipe, premier geste) sont remplis par
+       src/js/onboarding-niveau2.js. -->
+  <div id="onboarding-team-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="onboarding-team-title">
+    <div class="modal-content onboarding-content">
+      <div class="modal-header">
+        <h2 id="onboarding-team-title"><i data-lucide="users" class="icon-lg"></i> Votre équipe d'agents</h2>
+        <button id="onboarding-team-close" class="modal-close" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
+      </div>
+      <p id="onboarding-team-step" class="onboarding-step">Étape 1 sur 2</p>
+
+      <!-- Écran 1 — à quoi sert une équipe, et comment elle se compose -->
+      <section class="onboarding-screen" data-onboarding-team-screen="1">
+        <h3 class="onboarding-screen-title">À quoi sert une équipe</h3>
+        <div id="onboarding-team-role-body" class="onboarding-body" aria-live="polite"></div>
+        <button id="btn-onboarding-team-retry" class="web-btn onboarding-inline-action hidden">
+          <i data-lucide="rotate-cw" class="icon-sm"></i> Réessayer
+        </button>
+      </section>
+
+      <!-- Écran 2 — le premier geste concret, celui qui marche du premier coup -->
+      <section class="onboarding-screen hidden" data-onboarding-team-screen="2">
+        <h3 class="onboarding-screen-title">Votre premier geste</h3>
+        <div id="onboarding-team-gesture-body" class="onboarding-body" aria-live="polite"></div>
+      </section>
+
+      <div class="modal-actions onboarding-actions modal-actions-cancel-first">
+        <button id="btn-onboarding-team-skip" class="modal-action-secondary">Fermer</button>
+        <button id="btn-onboarding-team-prev" class="modal-action-secondary">Précédent</button>
+        <button id="btn-onboarding-team-next" class="modal-action-primary">Suivant</button>
       </div>
     </div>
   </div>
