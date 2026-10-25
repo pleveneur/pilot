@@ -221,6 +221,26 @@ body.theme-light.theme-tokyo-day #window-controls > button:active {
   color: var(--text-primary);
 }
 
+/* --- LOT 0.5 : menu « Disposer » (clic droit sur Agrandir) --------------
+   Le menu est cree par src/js/window-controls.js et porte la classe
+   `context-menu` : il reprend donc EXACTEMENT l'apparence des menus
+   contextuels existants (--surface-floating, --border-subtle, --text-primary,
+   survol --surface-3) et suit les 8 sous-themes sans une ligne de plus.
+   Une seule chose lui est propre : il doit vivre AU-DESSUS de la bande de
+   fenetre (z-index 100001), sinon il passerait dessous. Un selecteur d'ID
+   (specificite superieure a `.context-menu`) garantit cette valeur quel que
+   soit l'ordre des regles dans ce fichier. */
+#dispose-menu {
+  z-index: 100002;
+  min-width: 210px;
+}
+
+/* Entrees du menu : zone de clic pleine largeur et curseur explicite (le
+   reste vient de `.context-menu button`). */
+#dispose-menu > button {
+  cursor: pointer;
+}
+
 /* Etat DESACTIVE : jamais atteint — aucun des trois boutons ne peut etre
    desactive (aucun code ne pose `disabled`). Aucune regle n'est donc ecrite
    pour `:disabled`, volontairement (voir §4.1 du document). */
