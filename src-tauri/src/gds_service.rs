@@ -345,6 +345,64 @@ impl ServiceSession {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Appels authentifiés BRUTS (statut HTTP conservé)
+//
+// `ServiceSession::post`/`get` aplatissent la réponse en `{…}` ou en message :
+// suffisant pour les opérations « tout ou rien » existantes, insuffisant pour le
+// portage d'un projet (étape 4a), où un **refus métier** (409 : projet tenu par
+// un autre poste, 403 : compte sans identité) doit être distingué d'une **panne
+// technique** — un refus n'est pas un plantage. Ces deux fonctions rendent donc
+// la réponse telle quelle (`Reply`), avec le jeton du compte GDS de toujours :
+// aucune nouvelle autorité, aucun secret renvoyé, même politique de session
+// (401 → session oubliée pour que l'appel suivant se reconnecte).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `POST` authentifié : réponse du service telle quelle (statut + corps).
+pub(crate) async fn post_reply(
+    ident: &ServiceIdentity,
+    path: &str,
+    body: Value,
+) -> Result<Reply, String> {
+    let ident = ident.clone();
+    let path = path.to_string();
+    blocking(move || {
+        let session = ServiceSession::open(&ident)?;
+        let client = http_client()?;
+        let reply = send_post_json(
+            &client,
+            &format!("{}{}", session.base, path),
+            Some(&session.token()?),
+            &body,
+        )?;
+        if reply.status == 401 {
+            drop_token(&session.key);
+        }
+        Ok(reply)
+    })
+    .await
+}
+
+/// `GET` authentifié : réponse du service telle quelle (statut + corps).
+pub(crate) async fn get_reply(ident: &ServiceIdentity, path: &str) -> Result<Reply, String> {
+    let ident = ident.clone();
+    let path = path.to_string();
+    blocking(move || {
+        let session = ServiceSession::open(&ident)?;
+        let client = http_client()?;
+        let reply = send_get(
+            &client,
+            &format!("{}{}", session.base, path),
+            Some(&session.token()?),
+        )?;
+        if reply.status == 401 {
+            drop_token(&session.key);
+        }
+        Ok(reply)
+    })
+    .await
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Opération 0 — Lire les projets d'un serveur CHOISI (« ajouter un projet
 // depuis le GDS ») : aucun projet ouvert n'est requis, le serveur est désigné
 // par sa FICHE ENREGISTRÉE, jamais par la configuration d'un projet. Lecture

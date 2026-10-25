@@ -187,6 +187,14 @@ impl Reply {
     pub(crate) fn json(&self) -> Value {
         serde_json::from_str(&self.body).unwrap_or(Value::Null)
     }
+    /// Corps brut de la réponse du serveur. Ajouté pour le portage d'un projet
+    /// (étape 4a), qui distingue un **refus métier** d'une panne technique : la
+    /// classification se fait sur (statut, corps) au lieu d'un message déjà
+    /// aplati. Le corps vient du serveur, jamais de la requête : aucun secret
+    /// ne s'y trouve.
+    pub(crate) fn body(&self) -> &str {
+        &self.body
+    }
     pub(crate) fn error(&self) -> String {
         admin_error_message(self.status, &self.body)
     }

@@ -179,6 +179,17 @@ pub(crate) struct GdsSecrets {
     /// comme vide.
     #[serde(default)]
     pub identity_email: String,
+    /// Identifiant **de MACHINE** (mode réseau multi-postes, étape 4a) : UUID
+    /// généré UNE SEULE fois pour ce poste, puis recopié à l'identique dans
+    /// chaque appel de portage, quel que soit le projet. Il vit ici (fichier de
+    /// config GDS **de la machine**) et non dans `.pilot/gds.json` (config PAR
+    /// projet) : c'est la machine qui est identifiée, pas le dossier ouvert.
+    /// Vide = jamais généré (le premier appel le crée et l'écrit, voir
+    /// [`poste_id`]). Non sensible, mais rangé avec le reste de la config GDS
+    /// locale. Migration tolérante serde default : un fichier existant sans ce
+    /// champ le lit comme vide et se voit attribuer un identifiant stable.
+    #[serde(default)]
+    pub poste_id: String,
 }
 
 /// Chemin du fichier de secrets (`~/.pilot/gds_secrets.json`).
@@ -280,6 +291,66 @@ pub(crate) fn write_gds_secrets(secrets: &GdsSecrets) -> Result<(), String> {
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
     Ok(())
+}
+
+// ── Identifiant de MACHINE (`poste_id`) — mode réseau multi-postes, étape 4a ──
+//
+// Décision ferme du plan (§6 a) : UN identifiant par **poste**, généré une
+// seule fois, le même sur tous les projets de la machine. Il est rangé dans le
+// fichier de config GDS de la machine (`~/.pilot/gds_secrets.json`), avec la
+// même mécanique que les autres valeurs locales (défaut serde, écriture disque,
+// relecture) — jamais dans `.pilot/gds.json`, qui est PAR projet (deux postes
+// ouverts sur le même projet doivent porter des identifiants différents).
+//
+// L'idempotence de la prise en main est faite projet par projet côté serveur
+// (même `poste_id` + même compte = renouvellement) : c'est pour cela que la
+// valeur ne doit JAMAIS être régénérée ni dériver du projet.
+
+/// Verrou du cycle « lire → générer si absent → écrire » : deux appels
+/// simultanés (deux projets) ne doivent pas produire deux identifiants dont un
+/// seul serait conservé. Tolérant à l'empoisonnement.
+static POSTE_ID_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Identifiant de machine déjà mémorisé, ou celui fourni par `generate` s'il
+/// est absent. Écrit la valeur calculée dans `secrets` et dit si le fichier doit
+/// être enregistré. **Fonction pure** (le générateur est injecté) : testable
+/// sans disque, sans UUID aléatoire. Un identifiant mémorisé est rogné mais
+/// jamais régénéré.
+pub(crate) fn poste_id_from(
+    secrets: &mut GdsSecrets,
+    generate: impl FnOnce() -> String,
+) -> (String, bool) {
+    let kept = secrets.poste_id.trim();
+    if !kept.is_empty() {
+        return (kept.to_string(), false);
+    }
+    let fresh = generate();
+    secrets.poste_id = fresh.clone();
+    (fresh, true)
+}
+
+/// Identifiant **de machine**, créé au premier besoin puis stable pour toujours.
+///
+/// * deux lectures successives renvoient la MÊME valeur (elle est écrite sur
+///   disque dès la première) ;
+/// * la valeur ne dépend d'AUCUN projet : elle est lue une fois pour le poste ;
+/// * un échec d'écriture n'est pas silencieux (l'identifiant serait alors
+///   régénéré au prochain démarrage et le serveur verrait un « autre poste »).
+///
+/// Aucun secret n'est manipulé ici : seul le champ `poste_id` est touché.
+pub(crate) fn poste_id() -> Result<String, String> {
+    let _guard = POSTE_ID_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut secrets = read_gds_secrets()?;
+    let (id, created) = poste_id_from(&mut secrets, || uuid::Uuid::new_v4().to_string());
+    if created {
+        write_gds_secrets(&secrets).map_err(|e| {
+            format!(
+                "Identifiant de poste non enregistré ({}). Le portage d'un projet exige une identité de machine stable.",
+                e
+            )
+        })?;
+    }
+    Ok(id)
 }
 
 /// Enregistre les mots de passe d'un projet dans le fichier de secrets.

@@ -99,6 +99,7 @@ mod anomaly;
 mod telegram;
 mod gds;
 mod gds_client;
+mod gds_handover;
 // `gds_db` a été extrait dans le crate partagé `gds-core` (refonte GDS, L1.4)
 // sous le nom `gds_core::db`. Cet alias garde inchangés tous les
 // `use crate::gds_db;` et `gds_db::…` du desk (le code a été déplacé, pas
@@ -3882,6 +3883,14 @@ pub fn run() {
             gds::gds_delete_saved_server,
             // ── GDS Phase B : synchronisation (verrou retiré en L6) ──
             gds_client::gds_sync_project,
+            // ── GDS : portage d'un projet, côté POSTE (mode réseau multi-postes,
+            // étape 4a). Prendre en main / consulter l'état / rendre. Les routes
+            // et les règles sont celles du socle (`gds-core/src/http.rs`) ; le
+            // poste ne fait que les appeler avec le compte GDS de l'utilisateur
+            // et traduire un refus métier en refus lisible (jamais un plantage).
+            gds_handover::gds_handover_take,
+            gds_handover::gds_handover_state,
+            gds_handover::gds_handover_return,
             // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
             gds_sync::gds_sync_tracking,
             // ── GDS Phase C1.4 : mode déconnecté + résumés visuels ──
