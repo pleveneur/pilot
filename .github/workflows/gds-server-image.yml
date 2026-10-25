@@ -114,7 +114,12 @@ jobs:
       - name: Run gds-core unit tests
         env:
           PILOT_GDS_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/pilot_gds_test_ci
-        run: cargo test -p gds-core --lib
+        # `--include-ignored` : les tests qui EXIGENT la base (portage d'un
+        # projet, mode réseau multi-postes) sont `#[ignore]` pour que
+        # `cargo test --lib` reste vert sur un poste sans PostgreSQL ; ici la
+        # base jetable est fournie, donc ils doivent réellement s'exécuter.
+        # Sans base, ces tests ÉCHOUENT bruyamment (aucun saut silencieux).
+        run: cargo test -p gds-core --lib -- --include-ignored
 
       - name: Run gds-server unit tests
         run: cargo test -p gds-server

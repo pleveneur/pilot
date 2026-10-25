@@ -16,10 +16,12 @@
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha384};
 use sqlx::migrate::{MigrateError, Migrator};
-use sqlx::postgres::{PgPool, PgPoolOptions};
-use sqlx::Row;
+use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
+use sqlx::{Postgres, Row, Transaction};
 use std::collections::HashMap;
 use std::time::Duration;
+
+use crate::handover;
 
 /// Nom de la base applicative GDS.
 pub const GDS_DB_NAME: &str = "pilot_gds";
@@ -1861,6 +1863,498 @@ pub async fn ensure_can_add_project(
     ))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Portage d'un projet — la prise en main EN BASE
+// (mode réseau multi-postes, étape 2 — PLAN-mode-reseau-multipostes.md §6 b,
+//  §7 étape 2).
+//
+// Ce bloc **exécute** ce que `crate::handover` a **décidé** : il ne re-décide
+// rien. Chaque appel lit la ligne ouverte du projet (`returned_at IS NULL`), la
+// remet aux fonctions pures du module `handover`, puis écrit **exactement** les
+// valeurs qu'elles renvoient (aucune constante réinventée ici : les motifs, les
+// valeurs de `returned_by` et les durées viennent toutes de `crate::handover`).
+//
+// Expiration **paresseuse** : `expires_at < now()` est évalué à chaque lecture
+// et à chaque écriture. **Aucun job planifié, aucun balayage**, et une lecture
+// ne clôture rien (seul un chemin d'écriture clôture la ligne expirée).
+//
+// L'exclusivité vient de la BASE : l'index unique partiel
+// `project_handovers_active_key … WHERE returned_at IS NULL` (migration 0008)
+// interdit deux porteurs actifs. Le code ne se contente pas de « lire puis
+// écrire » : la violation de contrainte est **rattrapée** et traduite en refus
+// ordinaire (le refus déjà écrit dans `crate::handover`), jamais en panique.
+// Preuves : `handover_two_concurrent_takes_leave_exactly_one_holder` (deux
+// prises simultanées) et `handover_active_index_is_enforced_by_the_database`
+// (index vérifié à nu, sans passer par ces fonctions).
+
+/// Code SQLSTATE PostgreSQL d'une violation d'unicité.
+const PG_UNIQUE_VIOLATION: &str = "23505";
+
+/// Nom de l'index unique partiel qui garantit l'exclusivité du portage
+/// (`gds-core/migrations/0008_project_handover.sql`).
+const HANDOVER_ACTIVE_INDEX: &str = "project_handovers_active_key";
+
+/// Colonnes de `project_handovers`, dans l'ordre de [`handover_row_from_pg`].
+const HANDOVER_COLUMNS: &str = "id, project_id, user_id, poste_id, taken_at, heartbeat_at, \
+     expires_at, returned_at, returned_by, return_reason, sync_at";
+
+/// La violation d'index unique du portage : un **autre** porteur a gagné la
+/// prise en main. C'est la base qui a tranché, pas le code — on ne panique
+/// jamais pour autant.
+fn handover_is_active_key_violation(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db) => {
+            db.code().as_deref() == Some(PG_UNIQUE_VIOLATION)
+                && db.constraint() == Some(HANDOVER_ACTIVE_INDEX)
+        }
+        _ => false,
+    }
+}
+
+/// Relecture d'une ligne de `project_handovers` vers la structure du module
+/// `handover`. `returned_by` est relu **sans deviner** : une valeur hors
+/// vocabulaire est une erreur explicite, jamais une conversion silencieuse.
+fn handover_row_from_pg(row: &PgRow) -> Result<handover::HandoverRow, String> {
+    let returned_by_raw: Option<String> = row
+        .try_get("returned_by")
+        .map_err(|e| format!("Lecture returned_by: {}", e))?;
+    let returned_by = match returned_by_raw.as_deref() {
+        None => None,
+        Some(value) => Some(handover::ReturnedBy::parse(value).ok_or_else(|| {
+            format!("Valeur returned_by inattendue en base: {:?}", value)
+        })?),
+    };
+    Ok(handover::HandoverRow {
+        id: row.get("id"),
+        project_id: row.get("project_id"),
+        user_id: row.get("user_id"),
+        poste_id: row.get("poste_id"),
+        taken_at: row.get("taken_at"),
+        heartbeat_at: row.get("heartbeat_at"),
+        expires_at: row.get("expires_at"),
+        returned_at: row.get("returned_at"),
+        returned_by,
+        return_reason: row.get("return_reason"),
+        sync_at: row.get("sync_at"),
+    })
+}
+
+/// Ligne **ouverte** du portage d'un projet (`returned_at IS NULL`), ou `None`.
+///
+/// Lecture seule, sans verrou, et **sans clôture** : l'expiration paresseuse est
+/// évaluée (`handover::is_expired`) mais une lecture n'écrit jamais. Utilisée par
+/// la lecture d'état et par la traduction d'un conflit d'exclusivité.
+pub async fn handover_active_row(
+    pool: &PgPool,
+    project_id: i64,
+) -> Result<Option<handover::HandoverRow>, String> {
+    let sql = format!(
+        "SELECT {} FROM project_handovers WHERE project_id = $1 AND returned_at IS NULL",
+        HANDOVER_COLUMNS
+    );
+    let row = sqlx::query(&sql)
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture du portage en cours: {}", e))?;
+    match row {
+        Some(r) => Ok(Some(handover_row_from_pg(&r)?)),
+        None => Ok(None),
+    }
+}
+
+/// Ligne **ouverte** du portage, verrouillée pour la transaction en cours
+/// (`SELECT … FOR UPDATE`) : deux écritures concurrentes sur le MÊME projet
+/// passent l'une après l'autre au lieu de se marcher dessus.
+///
+/// Ce verrou ne suffit pas pour un projet **libre** (aucune ligne à verrouiller) :
+/// c'est l'index unique partiel qui tranche alors — d'où le rattrapage de
+/// contrainte dans [`handover_take`].
+async fn handover_open_row_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: i64,
+) -> Result<Option<handover::HandoverRow>, String> {
+    let sql = format!(
+        "SELECT {} FROM project_handovers \
+         WHERE project_id = $1 AND returned_at IS NULL FOR UPDATE",
+        HANDOVER_COLUMNS
+    );
+    let row = sqlx::query(&sql)
+        .bind(project_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| format!("Lecture verrouillée du portage: {}", e))?;
+    match row {
+        Some(r) => Ok(Some(handover_row_from_pg(&r)?)),
+        None => Ok(None),
+    }
+}
+
+/// Insertion d'une ligne de portage. L'erreur `sqlx` est **rendue telle quelle**
+/// pour que l'appelant puisse reconnaître la violation d'exclusivité.
+async fn handover_insert_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &handover::NewHandover,
+) -> Result<i64, sqlx::Error> {
+    let rec = sqlx::query(
+        "INSERT INTO project_handovers \
+         (project_id, user_id, poste_id, taken_at, heartbeat_at, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+    )
+    .bind(row.project_id)
+    .bind(row.user_id)
+    .bind(&row.poste_id)
+    .bind(row.taken_at)
+    .bind(row.heartbeat_at)
+    .bind(row.expires_at)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(rec.get::<i64, _>("id"))
+}
+
+/// Renouvellement (présence ou nouvelle prise du même couple) : uniquement sur
+/// une ligne encore **ouverte** (`returned_at IS NULL`) — une ligne clôturée
+/// n'est jamais ressuscitée.
+async fn handover_renew_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    renewal: &handover::Renewal,
+) -> Result<(), String> {
+    let affected = sqlx::query(
+        "UPDATE project_handovers SET heartbeat_at = $2, expires_at = $3 \
+         WHERE id = $1 AND returned_at IS NULL",
+    )
+    .bind(renewal.id)
+    .bind(renewal.heartbeat_at)
+    .bind(renewal.expires_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Renouvellement du portage: {}", e))?
+    .rows_affected();
+    if affected != 1 {
+        return Err(format!(
+            "Renouvellement du portage: {} ligne(s) touchée(s) au lieu d'une",
+            affected
+        ));
+    }
+    Ok(())
+}
+
+/// Clôture de la ligne **ouverte** d'un projet, avec les valeurs calculées par le
+/// module `handover` (reprise après expiration). Cible le projet et non un `id` :
+/// l'index unique partiel garantit qu'il y a au plus une ligne ouverte.
+async fn handover_close_open_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: i64,
+    closure: &handover::Closure,
+) -> Result<(), String> {
+    let affected = sqlx::query(
+        "UPDATE project_handovers \
+         SET returned_at = $2, returned_by = $3, return_reason = $4, sync_at = $5 \
+         WHERE project_id = $1 AND returned_at IS NULL",
+    )
+    .bind(project_id)
+    .bind(closure.returned_at)
+    .bind(closure.returned_by.as_str())
+    .bind(closure.return_reason.as_deref())
+    .bind(closure.sync_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Clôture du portage: {}", e))?
+    .rows_affected();
+    if affected != 1 {
+        return Err(format!(
+            "Clôture du portage: {} ligne(s) touchée(s) au lieu d'une",
+            affected
+        ));
+    }
+    Ok(())
+}
+
+/// Clôture d'une ligne précise (restitution du porteur, libération forcée).
+async fn handover_close_by_id_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    id: i64,
+    closure: &handover::Closure,
+) -> Result<(), String> {
+    let affected = sqlx::query(
+        "UPDATE project_handovers \
+         SET returned_at = $2, returned_by = $3, return_reason = $4, sync_at = $5 \
+         WHERE id = $1 AND returned_at IS NULL",
+    )
+    .bind(id)
+    .bind(closure.returned_at)
+    .bind(closure.returned_by.as_str())
+    .bind(closure.return_reason.as_deref())
+    .bind(closure.sync_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| format!("Clôture du portage: {}", e))?
+    .rows_affected();
+    if affected != 1 {
+        return Err(format!(
+            "Clôture du portage: {} ligne(s) touchée(s) au lieu d'une",
+            affected
+        ));
+    }
+    Ok(())
+}
+
+/// Traduction d'un échec d'écriture d'une prise en main.
+///
+/// Si la **base** a refusé pour cause d'exclusivité (`project_handovers_active_key`),
+/// l'appelant reçoit le **refus déjà défini** par `crate::handover` (porteur réel +
+/// échéance) : même code, même forme, aucun code inventé, aucune panique. Toute
+/// autre erreur est remontée telle quelle (erreur technique, pas un refus).
+async fn handover_take_conflict_outcome(
+    pool: &PgPool,
+    project_id: i64,
+    err: &sqlx::Error,
+) -> Result<handover::TakeDecision, String> {
+    if !handover_is_active_key_violation(err) {
+        return Err(format!("Prise en main: {}", err));
+    }
+    match handover_active_row(pool, project_id).await? {
+        Some(row) => Ok(handover::TakeDecision::Refused {
+            holder: handover::holder_of(&row),
+            until: row.expires_at,
+        }),
+        None => Err(format!(
+            "Prise en main concurrente perdue (ligne gagnante introuvable, {}) : \
+             rejouez la prise en main",
+            err
+        )),
+    }
+}
+
+/// **`take`** — prise en main d'un projet, **en une seule transaction**.
+///
+/// Cas couverts, tous décidés par `handover::take` (règles pures, étape 1) et
+/// seulement **recopiés** ici :
+/// - projet libre → insertion d'une ligne ouverte (échéance `now + 15 min`) ;
+/// - projet tenu par le **même** `(user_id, poste_id)` → renouvellement de la
+///   ligne existante (`heartbeat_at`, `expires_at`), **même si l'échéance est
+///   passée** : jamais de deuxième ligne ;
+/// - projet dont le porteur est **expiré** → la ligne expirée est clôturée dans
+///   la **même** transaction (`returned_at`, `returned_by = 'expiration'`,
+///   `return_reason` = constante du module, `sync_at` laissé NULL) **puis** la
+///   nouvelle ligne est insérée ;
+/// - projet tenu par quelqu'un d'autre, **non expiré** → refus (409 côté route,
+///   étape 3) avec le porteur et son échéance.
+///
+/// Concurrence : deux prises simultanées sur un projet libre ne peuvent pas
+/// réussir toutes les deux — la seconde est arrêtée par l'index unique partiel,
+/// rattrapé par [`handover_take_conflict_outcome`].
+pub async fn handover_take(
+    pool: &PgPool,
+    project_id: i64,
+    user_id: i64,
+    poste_id: &str,
+) -> Result<handover::TakeDecision, String> {
+    let now = Utc::now();
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Transaction de prise en main: {}", e))?;
+    let active = handover_open_row_tx(&mut tx, project_id).await?;
+    let decision = handover::take(project_id, user_id, poste_id, active.as_ref(), now);
+
+    match &decision {
+        handover::TakeDecision::Take { row } => {
+            if let Err(e) = handover_insert_tx(&mut tx, row).await {
+                // La transaction est annulée au `Drop` : rien ne reste à moitié écrit.
+                return handover_take_conflict_outcome(pool, project_id, &e).await;
+            }
+        }
+        handover::TakeDecision::Renew { renewal } => handover_renew_tx(&mut tx, renewal).await?,
+        handover::TakeDecision::Replace { close, row } => {
+            handover_close_open_tx(&mut tx, project_id, close).await?;
+            if let Err(e) = handover_insert_tx(&mut tx, row).await {
+                return handover_take_conflict_outcome(pool, project_id, &e).await;
+            }
+        }
+        handover::TakeDecision::Refused { .. } => {}
+    }
+
+    match tx.commit().await {
+        Ok(()) => Ok(decision),
+        Err(e) => handover_take_conflict_outcome(pool, project_id, &e).await,
+    }
+}
+
+/// **`heartbeat`** — présence du porteur (un seul appel par cycle de 3 minutes).
+///
+/// Repousse `expires_at` (15 min) et met à jour `heartbeat_at`, mais **uniquement**
+/// si la ligne ouverte appartient bien au couple `(user_id, poste_id)`. Un
+/// non-porteur est refusé ; un porteur dont l'échéance est passée est refusé
+/// **et** la ligne expirée est clôturée dans la même transaction (expiration
+/// paresseuse : c'est une écriture, elle clôture).
+pub async fn handover_heartbeat(
+    pool: &PgPool,
+    project_id: i64,
+    user_id: i64,
+    poste_id: &str,
+) -> Result<handover::HeartbeatDecision, String> {
+    let now = Utc::now();
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Transaction de présence: {}", e))?;
+    let active = handover_open_row_tx(&mut tx, project_id).await?;
+    let decision = handover::heartbeat(active.as_ref(), user_id, poste_id, now);
+
+    match &decision {
+        handover::HeartbeatDecision::Accepted { renewal } => {
+            handover_renew_tx(&mut tx, renewal).await?
+        }
+        handover::HeartbeatDecision::Refused {
+            close: Some(closure),
+            ..
+        } => handover_close_open_tx(&mut tx, project_id, closure).await?,
+        handover::HeartbeatDecision::Refused { close: None, .. } => {}
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Validation de la présence: {}", e))?;
+    Ok(decision)
+}
+
+/// **`return`** — restitution volontaire par le porteur actif.
+///
+/// Clôture la ligne avec `returned_by = 'self'` **et** `sync_at = now()` : la
+/// restitution n'a lieu qu'après la publication du code et la poussée de l'état
+/// d'avancement (ordre imposé côté poste, plan §6 b, étape 4). Aucune publication
+/// de code, aucun appel réseau sortant n'est fait ici : le socle ne le peut pas.
+///
+pub async fn handover_return(
+    pool: &PgPool,
+    project_id: i64,
+    user_id: i64,
+    poste_id: &str,
+) -> Result<handover::ReturnDecision, String> {
+    let now = Utc::now();
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Transaction de restitution: {}", e))?;
+    let active = handover_open_row_tx(&mut tx, project_id).await?;
+    let decision = handover::return_project(active.as_ref(), user_id, poste_id, now);
+
+    match &decision {
+        handover::ReturnDecision::Closed { id, closure } => {
+            handover_close_by_id_tx(&mut tx, *id, closure).await?
+        }
+        handover::ReturnDecision::Refused {
+            close: Some(closure),
+            ..
+        } => handover_close_open_tx(&mut tx, project_id, closure).await?,
+        handover::ReturnDecision::Refused { close: None, .. } => {}
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Validation de la restitution: {}", e))?;
+    Ok(decision)
+}
+
+/// **`force_return`** — libération par un **administrateur** (motif obligatoire).
+///
+/// Arbitrages appliqués tels quels (mission, plan §3 réglage 4) : rôle `admin`
+/// seul, motif obligatoire non vide, `returned_by = 'admin'`, et **`sync_at`
+/// laissé à NULL** (aucune restitution volontaire → aucune poussée d'avancement
+/// attestée). L'écriture du journal d'audit (`handover.force_return`) reste à la
+/// charge de l'appelant (route de l'étape 3), comme l'annonce `handover`.
+pub async fn handover_force_return(
+    pool: &PgPool,
+    project_id: i64,
+    role: &str,
+    reason: &str,
+) -> Result<handover::ForceReturnDecision, String> {
+    let now = Utc::now();
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Transaction de libération forcée: {}", e))?;
+    let active = handover_open_row_tx(&mut tx, project_id).await?;
+    let decision = handover::force_return(active.as_ref(), role, reason, now);
+
+    if let handover::ForceReturnDecision::Closed { id, closure } = &decision {
+        handover_close_by_id_tx(&mut tx, *id, closure).await?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Validation de la libération forcée: {}", e))?;
+    Ok(decision)
+}
+
+/// État du portage d'un projet, lu **sans rien écrire** (aucun balayage).
+///
+/// `holder` n'est renseigné que si la ligne ouverte est encore **valide** : une
+/// ligne dont l'échéance est dépassée est dite `expired` et ne tient plus le
+/// projet (elle sera clôturée à la prochaine écriture, pas ici).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct HandoverState {
+    pub project_id: i64,
+    /// Identifiant de la ligne ouverte (portage non clôturé), même expiré.
+    pub open_row_id: Option<i64>,
+    /// Porteur **actif** : `Some` seulement si la ligne est ouverte ET non expirée.
+    pub holder: Option<handover::Holder>,
+    pub taken_at: Option<DateTime<Utc>>,
+    pub heartbeat_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+    /// Ligne ouverte dont l'échéance est dépassée (expiration paresseuse).
+    pub expired: bool,
+}
+
+impl HandoverState {
+    /// Aucune ligne ouverte : personne n'a le projet (rien à clôturer).
+    pub fn is_free(&self) -> bool {
+        self.open_row_id.is_none()
+    }
+
+    /// Un porteur détient réellement le projet (ligne ouverte, non expirée).
+    pub fn is_held(&self) -> bool {
+        self.holder.is_some()
+    }
+}
+
+/// **Lecture d'état** du portage (`GET /api/gds/handover/state` à l'étape 3) :
+/// libre / tenu, par qui, jusqu'à quand, expiré ou non. Évaluation
+/// **paresseuse** de l'expiration (`expires_at < now()`) ; **aucune écriture**,
+/// aucun balayage, aucun job planifié.
+pub async fn handover_state(pool: &PgPool, project_id: i64) -> Result<HandoverState, String> {
+    let now = Utc::now();
+    let row = handover_active_row(pool, project_id).await?;
+    Ok(match row {
+        None => HandoverState {
+            project_id,
+            open_row_id: None,
+            holder: None,
+            taken_at: None,
+            heartbeat_at: None,
+            expires_at: None,
+            expired: false,
+        },
+        Some(row) => {
+            let expired = handover::is_expired(&row, now);
+            HandoverState {
+                project_id,
+                open_row_id: Some(row.id),
+                holder: if expired {
+                    None
+                } else {
+                    Some(handover::holder_of(&row))
+                },
+                taken_at: Some(row.taken_at),
+                heartbeat_at: Some(row.heartbeat_at),
+                expires_at: Some(row.expires_at),
+                expired,
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -3203,6 +3697,546 @@ pub(crate) mod tests {
         assert!(
             body.contains("roles::can_add_project("),
             "un projet NEUF doit garder la règle d'ajout (administrateur ou développeur)"
+        );
+    }
+
+    // ── Portage d'un projet EN BASE (mode réseau multi-postes, étape 2) ──
+    //
+    // Ces tests EXIGENT PostgreSQL : ils sont donc `#[ignore]` — sans base,
+    // `cargo test -p gds-core --lib` reste vert et ils apparaissent
+    // visiblement **ignorés** (jamais « verts sans rien avoir testé »). Ils
+    // s'exécutent réellement avec `--include-ignored`, en local comme en CI
+    // (job `tests` de `.github/workflows/gds-server-image.yml`).
+    //
+    // Garde STRICTE (décision D3 du plan §7) : pas de `return` silencieux. Sans
+    // `PILOT_GDS_TEST_URL`, [`strict_handover_test_db`] **échoue** avec le mode
+    // d'emploi (commande de conteneur jetable + nom de la variable).
+
+    /// Garde **STRICTE** des tests de portage : jamais un silence. L'absence de
+    /// base est une **erreur explicite** avec le mode d'emploi, parce qu'un
+    /// « ok » sans base ne prouve rien (plan §7, décision D3).
+    async fn strict_handover_test_db() -> (PgPool, GdsTestDbGuard) {
+        let url = std::env::var("PILOT_GDS_TEST_URL").unwrap_or_default();
+        if url.trim().is_empty() {
+            panic!(
+                "REFUS: les tests de portage exigent une base PostgreSQL \
+                 (variable PILOT_GDS_TEST_URL, voir docs/gds-server-setup.md §11).\n\
+                 Base jetable, dans un premier terminal :\n\
+                 docker run --rm --name pilot-gds-test-db \\\n\
+                   -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \\\n\
+                   -e POSTGRES_DB=pilot_gds_test_local -p 55433:5432 postgres:16\n\
+                 Puis : export PILOT_GDS_TEST_URL=\"postgres://postgres:postgres@127.0.0.1:55433/pilot_gds_test_local\"\n\
+                 et : cargo test -p gds-core --lib -- --include-ignored"
+            );
+        }
+        match fresh_migrated_test_db().await {
+            Some(pair) => pair,
+            None => panic!(
+                "REFUS: PILOT_GDS_TEST_URL est fournie mais inexploitable \
+                 (base visée non `pilot_gds_test_*`, URL invalide, ou serveur \
+                 injoignable) — voir docs/gds-server-setup.md §11"
+            ),
+        }
+    }
+
+    /// Deux comptes et un projet dans une base jetable migrée.
+    async fn handover_fixture(pool: &PgPool, project_name: &str) -> (i64, i64, i64) {
+        let user_a = create_user(pool, "porteur-a@gds.test", "", "", "dev", "active")
+            .await
+            .expect("compte A");
+        let user_b = create_user(pool, "porteur-b@gds.test", "", "", "dev", "active")
+            .await
+            .expect("compte B");
+        let project_id = create_project(pool, project_name, "", "", "", "active", "")
+            .await
+            .expect("projet");
+        (project_id, user_a, user_b)
+    }
+
+    /// Nombre de lignes **ouvertes** du portage d'un projet.
+    async fn open_handover_count(pool: &PgPool, project_id: i64) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM project_handovers WHERE project_id = $1 AND returned_at IS NULL",
+        )
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .expect("comptage des portages ouverts")
+    }
+
+    /// Ligne clôturée (la plus récente) d'un projet : `(returned_by, motif, sync_at)`.
+    async fn last_closed_handover(
+        pool: &PgPool,
+        project_id: i64,
+    ) -> (Option<String>, Option<String>, Option<DateTime<Utc>>) {
+        sqlx::query_as(
+            "SELECT returned_by, return_reason, sync_at FROM project_handovers \
+             WHERE project_id = $1 AND returned_at IS NOT NULL \
+             ORDER BY returned_at DESC, id DESC LIMIT 1",
+        )
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .expect("ligne de portage clôturée")
+    }
+
+    /// Exclusivité RÉELLE : deux prises **simultanées** (deux tâches, pas deux
+    /// appels qui se suivent) sur le même projet libre. Une seule réussit,
+    /// l'autre reçoit un **refus** (jamais une erreur technique), et la base ne
+    /// contient qu'**une** ligne ouverte.
+    #[ignore = "exige PostgreSQL (PILOT_GDS_TEST_URL) — docs/gds-server-setup.md §11"]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handover_two_concurrent_takes_leave_exactly_one_holder() {
+        let (pool, _guard) = strict_handover_test_db().await;
+        let (project_id, user_a, user_b) = handover_fixture(&pool, "proj-portage-concurrent").await;
+
+        // Deux tâches lancées EN MÊME TEMPS, chacune avec son compte et sa machine.
+        let pool_1 = pool.clone();
+        let t1 = tokio::spawn(async move {
+            handover_take(&pool_1, project_id, user_a, "poste-a").await
+        });
+        let pool_2 = pool.clone();
+        let t2 = tokio::spawn(async move {
+            handover_take(&pool_2, project_id, user_b, "poste-b").await
+        });
+        let d1 = t1
+            .await
+            .expect("tâche 1 terminée")
+            .expect("la prise 1 ne doit jamais échouer en erreur technique");
+        let d2 = t2
+            .await
+            .expect("tâche 2 terminée")
+            .expect("la prise 2 ne doit jamais échouer en erreur technique");
+
+        let wins = [&d1, &d2]
+            .iter()
+            .filter(|d| !matches!(d, handover::TakeDecision::Refused { .. }))
+            .count();
+        assert_eq!(
+            wins, 1,
+            "exactement UNE prise doit réussir (décisions : {d1:?} / {d2:?})"
+        );
+        assert_eq!(
+            open_handover_count(&pool, project_id).await,
+            1,
+            "la base ne doit contenir qu'une seule ligne ouverte"
+        );
+
+        // Le refus porte le porteur réel et son échéance (rien d'inventé).
+        let refused = match (&d1, &d2) {
+            (handover::TakeDecision::Refused { holder, until }, _) => (holder.clone(), *until),
+            (_, handover::TakeDecision::Refused { holder, until }) => (holder.clone(), *until),
+            other => panic!("une des deux prises devait être refusée : {other:?}"),
+        };
+        let active = handover_active_row(&pool, project_id)
+            .await
+            .expect("lecture du portage")
+            .expect("une ligne ouverte");
+        assert_eq!(
+            refused.0,
+            handover::holder_of(&active),
+            "le refus doit annoncer le porteur réellement inscrit"
+        );
+        assert_eq!(refused.1, active.expires_at, "le refus annonce l'échéance");
+    }
+
+    /// Course **réelle et déterministe** sur l'index : une session A insère une
+    /// ligne active **sans valider**, la prise en main publique de B ne peut donc
+    /// pas la voir ; B décide d'insérer, se bloque sur l'index, puis A valide. B
+    /// reçoit alors une violation d'unicité — que le code **rattrape** en refus
+    /// ordinaire portant le vrai porteur. C'est le chemin d'exclusivité de la
+    /// base exercé de bout en bout, à travers l'API publique.
+    #[ignore = "exige PostgreSQL (PILOT_GDS_TEST_URL) — docs/gds-server-setup.md §11"]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handover_take_rescues_a_lost_race_into_a_clean_refusal() {
+        let (pool, _guard) = strict_handover_test_db().await;
+        let (project_id, user_a, user_b) = handover_fixture(&pool, "proj-portage-course").await;
+
+        // Session A : ligne active insérée, PAS validée (l'index est déjà occupé).
+        let mut tx_a = pool.begin().await.expect("transaction A");
+        sqlx::query(
+            "INSERT INTO project_handovers              (project_id, user_id, poste_id, taken_at, heartbeat_at, expires_at)              VALUES ($1, $2, 'poste-a', now(), now(), now() + interval '15 minutes')",
+        )
+        .bind(project_id)
+        .bind(user_a)
+        .execute(&mut *tx_a)
+        .await
+        .expect("insertion non validée de A");
+
+        // Session B : prise en main publique, en parallèle.
+        let pool_b = pool.clone();
+        let take_b =
+            tokio::spawn(async move { handover_take(&pool_b, project_id, user_b, "poste-b").await });
+
+        // Attend que B soit RÉELLEMENT bloquée sur l'index (preuve par
+        // `pg_stat_activity`), puis seulement valide A : aucune fenêtre de course
+        // n'est laissée au hasard.
+        let mut blocked = false;
+        for _ in 0..120 {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pg_stat_activity                  WHERE datname = current_database()                    AND wait_event_type = 'Lock'                    AND query ILIKE '%INSERT INTO project_handovers%'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("lecture de pg_stat_activity");
+            if waiting > 0 {
+                blocked = true;
+                break;
+            }
+            // Bloque ce fil d'exécution : le runtime multi-fils continue de
+            // faire avancer la tâche B sur son autre fil.
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            blocked,
+            "la prise B devait être bloquée sur project_handovers_active_key              avant la validation de A"
+        );
+        tx_a.commit().await.expect("validation de A");
+
+        let decision = take_b
+            .await
+            .expect("tâche B terminée")
+            .expect("une course perdue est un REFUS, jamais une erreur technique");
+        match &decision {
+            handover::TakeDecision::Refused { holder, .. } => {
+                assert_eq!(holder.user_id, user_a, "le refus annonce le porteur réel");
+                assert_eq!(holder.poste_id, "poste-a");
+            }
+            other => panic!("attendu Refused après course perdue, obtenu {other:?}"),
+        }
+        assert_eq!(
+            open_handover_count(&pool, project_id).await,
+            1,
+            "une seule ligne ouverte après la course"
+        );
+    }
+
+    /// Preuve « index à nu » : l'exclusivité vient de la BASE. Deux `INSERT`
+    /// directs de lignes actives, **sans passer par nos fonctions** : le second
+    /// est refusé par l'index unique partiel `project_handovers_active_key`.
+    #[ignore = "exige PostgreSQL (PILOT_GDS_TEST_URL) — docs/gds-server-setup.md §11"]
+    #[tokio::test]
+    async fn handover_active_index_is_enforced_by_the_database() {
+        let (pool, _guard) = strict_handover_test_db().await;
+        let (project_id, user_a, user_b) = handover_fixture(&pool, "proj-portage-index").await;
+
+        let insert = |user_id: i64, poste: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO project_handovers \
+                     (project_id, user_id, poste_id, taken_at, heartbeat_at, expires_at) \
+                     VALUES ($1, $2, $3, now(), now(), now() + interval '15 minutes')",
+                )
+                .bind(project_id)
+                .bind(user_id)
+                .bind(poste)
+                .execute(&pool)
+                .await
+            }
+        };
+
+        insert(user_a, "poste-a").await.expect("premier INSERT direct");
+        let err = insert(user_b, "poste-b")
+            .await
+            .expect_err("le second INSERT doit être refusé par la base");
+        assert!(
+            handover_is_active_key_violation(&err),
+            "le refus doit venir de l'index project_handovers_active_key, pas d'autre chose : {err:?}"
+        );
+        assert_eq!(open_handover_count(&pool, project_id).await, 1);
+
+        // Et le **rattrapage** de cette contrainte produit un refus ordinaire
+        // (aucune panique, aucune erreur technique) qui porte le porteur réel.
+        let winner = handover_active_row(&pool, project_id)
+            .await
+            .expect("lecture du portage")
+            .expect("ligne gagnante");
+        let rescued = handover_take_conflict_outcome(&pool, project_id, &err)
+            .await
+            .expect("le rattrapage d'exclusivité ne doit jamais remonter d'erreur");
+        match rescued {
+            handover::TakeDecision::Refused { holder, until } => {
+                assert_eq!(holder.user_id, user_a, "le refus annonce le porteur réel");
+                assert_eq!(holder.poste_id, "poste-a");
+                assert_eq!(until, winner.expires_at, "et son échéance réelle");
+            }
+            other => panic!("attendu Refused après rattrapage, obtenu {other:?}"),
+        }
+    }
+
+    /// Reprise après expiration : la ligne expirée est clôturée **dans la même
+    /// transaction** que l'insertion de la nouvelle (une seule ligne ouverte à
+    /// la fin), avec les valeurs figées du module `handover`.
+    #[ignore = "exige PostgreSQL (PILOT_GDS_TEST_URL) — docs/gds-server-setup.md §11"]
+    #[tokio::test]
+    async fn handover_take_closes_the_expired_row_then_reinserts() {
+        let (pool, _guard) = strict_handover_test_db().await;
+        let (project_id, user_a, user_b) = handover_fixture(&pool, "proj-portage-expiration").await;
+
+        let first = handover_take(&pool, project_id, user_a, "poste-a")
+            .await
+            .expect("prise A");
+        assert!(
+            matches!(first, handover::TakeDecision::Take { .. }),
+            "première prise sur un projet libre : {first:?}"
+        );
+
+        // Vieillit la ligne : plus de présence depuis 20 minutes (échéance passée).
+        sqlx::query(
+            "UPDATE project_handovers \
+             SET taken_at = now() - interval '20 minutes', \
+                 heartbeat_at = now() - interval '20 minutes', \
+                 expires_at = now() - interval '5 minutes' \
+             WHERE project_id = $1 AND returned_at IS NULL",
+        )
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("vieillissement de la ligne");
+
+        // La lecture d'état dit la vérité : expiré, plus tenu, mais PAS encore
+        // clôturé (une lecture n'écrit jamais).
+        let state = handover_state(&pool, project_id).await.expect("état");
+        assert!(state.expired, "l'échéance dépassée doit être vue comme expirée");
+        assert!(!state.is_held(), "un portage expiré ne tient plus le projet");
+        assert!(
+            !state.is_free(),
+            "la ligne expirée n'est pas clôturée par une lecture"
+        );
+
+        // B reprend : clôture de l'expirée PUIS insertion, même transaction.
+        let second = handover_take(&pool, project_id, user_b, "poste-b")
+            .await
+            .expect("prise B");
+        match &second {
+            handover::TakeDecision::Replace { close, row } => {
+                assert_eq!(
+                    close.returned_by,
+                    handover::ReturnedBy::Expiration,
+                    "motif de clôture : expiration"
+                );
+                assert_eq!(
+                    close.return_reason.as_deref(),
+                    Some(handover::EXPIRATION_REASON),
+                    "motif d'expiration : constante unique du module"
+                );
+                assert!(
+                    close.sync_at.is_none(),
+                    "expiration : aucune restitution volontaire, donc aucun sync_at"
+                );
+                assert_eq!(row.user_id, user_b);
+                assert_eq!(row.poste_id, "poste-b");
+            }
+            other => panic!("attendu Replace (clôture puis insertion), obtenu {other:?}"),
+        }
+        assert_eq!(
+            open_handover_count(&pool, project_id).await,
+            1,
+            "une seule ligne ouverte après la reprise"
+        );
+
+        let (returned_by, reason, sync_at) = last_closed_handover(&pool, project_id).await;
+        assert_eq!(returned_by.as_deref(), Some("expiration"));
+        assert_eq!(reason.as_deref(), Some(handover::EXPIRATION_REASON));
+        assert!(sync_at.is_none(), "expiration : sync_at reste NULL");
+
+        // Et l'historique est bien conservé : la ligne expirée n'est pas supprimée.
+        let total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM project_handovers WHERE project_id = $1")
+                .bind(project_id)
+                .fetch_one(&pool)
+                .await
+                .expect("comptage total");
+        assert_eq!(total, 2, "historique conservé : 1 clôturée + 1 ouverte");
+    }
+
+    /// Restitution volontaire (`return`) : clôture avec `returned_by = 'self'` et
+    /// `sync_at`, puis reprise par un **autre** porteur.
+    #[ignore = "exige PostgreSQL (PILOT_GDS_TEST_URL) — docs/gds-server-setup.md §11"]
+    #[tokio::test]
+    async fn handover_return_frees_the_project_for_the_next_poste() {
+        let (pool, _guard) = strict_handover_test_db().await;
+        let (project_id, user_a, user_b) = handover_fixture(&pool, "proj-portage-restitution").await;
+
+        handover_take(&pool, project_id, user_a, "poste-a")
+            .await
+            .expect("prise A");
+        let state = handover_state(&pool, project_id).await.expect("état");
+        assert!(state.is_held(), "A tient le projet après sa prise");
+        assert_eq!(
+            state.holder.as_ref().map(|h| h.poste_id.as_str()),
+            Some("poste-a")
+        );
+
+        // Un AUTRE couple ne peut ni signaler sa présence ni restituer.
+        let heartbeat_b = handover_heartbeat(&pool, project_id, user_b, "poste-b")
+            .await
+            .expect("présence B");
+        assert!(
+            matches!(heartbeat_b, handover::HeartbeatDecision::Refused { .. }),
+            "la présence d'un non-porteur est refusée : {heartbeat_b:?}"
+        );
+        let return_b = handover_return(&pool, project_id, user_b, "poste-b")
+            .await
+            .expect("restitution B");
+        assert!(
+            matches!(return_b, handover::ReturnDecision::Refused { .. }),
+            "un non-porteur ne restitue pas : {return_b:?}"
+        );
+        assert_eq!(open_handover_count(&pool, project_id).await, 1);
+
+        // A restitue : clôture `self` + `sync_at`.
+        let returned = handover_return(&pool, project_id, user_a, "poste-a")
+            .await
+            .expect("restitution A");
+        match &returned {
+            handover::ReturnDecision::Closed { closure, .. } => {
+                assert_eq!(closure.returned_by, handover::ReturnedBy::SelfReturn);
+                assert!(closure.return_reason.is_none(), "restitution : aucun motif");
+                assert!(
+                    closure.sync_at.is_some(),
+                    "restitution volontaire : sync_at posé"
+                );
+            }
+            other => panic!("attendu Closed, obtenu {other:?}"),
+        }
+        assert_eq!(
+            open_handover_count(&pool, project_id).await,
+            0,
+            "plus aucune ligne ouverte après la restitution"
+        );
+        assert!(
+            handover_state(&pool, project_id)
+                .await
+                .expect("état")
+                .is_free(),
+            "le projet est libre après la restitution"
+        );
+        let (returned_by, reason, sync_at) = last_closed_handover(&pool, project_id).await;
+        assert_eq!(returned_by.as_deref(), Some("self"));
+        assert!(reason.is_none());
+        assert!(sync_at.is_some(), "sync_at écrit en base");
+
+        // Une seconde restitution ne rejoue rien (jamais de double clôture).
+        let again = handover_return(&pool, project_id, user_a, "poste-a")
+            .await
+            .expect("seconde restitution");
+        assert!(
+            matches!(again, handover::ReturnDecision::Refused { .. }),
+            "pas de double clôture : {again:?}"
+        );
+
+        // B reprend à son tour.
+        let next = handover_take(&pool, project_id, user_b, "poste-b")
+            .await
+            .expect("prise B");
+        assert!(
+            matches!(next, handover::TakeDecision::Take { .. }),
+            "le projet libéré est pris par B : {next:?}"
+        );
+        assert_eq!(open_handover_count(&pool, project_id).await, 1);
+        let state = handover_state(&pool, project_id).await.expect("état");
+        assert_eq!(
+            state.holder.as_ref().map(|h| h.poste_id.as_str()),
+            Some("poste-b"),
+            "le porteur affiché est bien B"
+        );
+    }
+
+    /// Présence (`heartbeat`) et libération forcée (`force_return`) : présence
+    /// repoussée pour le porteur seul, libération réservée à l'administrateur
+    /// avec motif obligatoire et `sync_at` laissé à NULL.
+    #[ignore = "exige PostgreSQL (PILOT_GDS_TEST_URL) — docs/gds-server-setup.md §11"]
+    #[tokio::test]
+    async fn handover_heartbeat_and_admin_force_return() {
+        let (pool, _guard) = strict_handover_test_db().await;
+        let (project_id, user_a, _user_b) = handover_fixture(&pool, "proj-portage-presence").await;
+
+        handover_take(&pool, project_id, user_a, "poste-a")
+            .await
+            .expect("prise A");
+        let before = handover_state(&pool, project_id)
+            .await
+            .expect("état")
+            .expires_at
+            .expect("échéance");
+
+        // Présence du porteur : échéance repoussée de 15 min depuis maintenant.
+        let beat = handover_heartbeat(&pool, project_id, user_a, "poste-a")
+            .await
+            .expect("présence A");
+        assert!(
+            matches!(beat, handover::HeartbeatDecision::Accepted { .. }),
+            "le porteur actif voit sa présence acceptée : {beat:?}"
+        );
+        let after = handover_state(&pool, project_id)
+            .await
+            .expect("état")
+            .expires_at
+            .expect("échéance");
+        assert!(
+            after >= before,
+            "la présence repousse l'échéance ({before:?} → {after:?})"
+        );
+
+        // Libération forcée : refusée au non-admin ET sans motif.
+        let not_admin = handover_force_return(&pool, project_id, "dev", "motif")
+            .await
+            .expect("libération forcée par un dev");
+        assert!(
+            matches!(
+                not_admin,
+                handover::ForceReturnDecision::Refused {
+                    reason: handover::ForceRefusalReason::NotAdmin
+                }
+            ),
+            "la libération forcée est réservée à l'administrateur : {not_admin:?}"
+        );
+        let no_reason = handover_force_return(&pool, project_id, "admin", "   ")
+            .await
+            .expect("libération forcée sans motif");
+        assert!(
+            matches!(
+                no_reason,
+                handover::ForceReturnDecision::Refused {
+                    reason: handover::ForceRefusalReason::ReasonMissing
+                }
+            ),
+            "le motif est obligatoire : {no_reason:?}"
+        );
+        assert_eq!(
+            open_handover_count(&pool, project_id).await,
+            1,
+            "aucun refus ne doit clôturer la ligne"
+        );
+
+        // Libération par l'administrateur, motif fourni.
+        let forced = handover_force_return(&pool, project_id, "admin", "poste abandonné")
+            .await
+            .expect("libération forcée");
+        match &forced {
+            handover::ForceReturnDecision::Closed { closure, .. } => {
+                assert_eq!(closure.returned_by, handover::ReturnedBy::Admin);
+                assert_eq!(closure.return_reason.as_deref(), Some("poste abandonné"));
+                assert!(
+                    closure.sync_at.is_none(),
+                    "libération forcée : sync_at reste NULL (aucune restitution volontaire)"
+                );
+            }
+            other => panic!("attendu Closed, obtenu {other:?}"),
+        }
+        assert_eq!(open_handover_count(&pool, project_id).await, 0);
+        let (returned_by, reason, sync_at) = last_closed_handover(&pool, project_id).await;
+        assert_eq!(returned_by.as_deref(), Some("admin"));
+        assert_eq!(reason.as_deref(), Some("poste abandonné"));
+        assert!(sync_at.is_none(), "sync_at NULL en base pour un admin");
+        assert!(
+            handover_state(&pool, project_id)
+                .await
+                .expect("état")
+                .is_free(),
+            "le projet est libre après la libération forcée"
         );
     }
 }
