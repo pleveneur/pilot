@@ -58,6 +58,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` + `spec_orchestration_autotest.md` + `spec_orchestration_snapshots.md` + `spec_orchestration_reviewer.md` |
 | Accès distant web | `spec_web_remote.md` |
 | Dictée vocale | `spec_voice_input.md` |
+| Prise en main à la première ouverture | `spec_onboarding.md` |
 | Service Laya (classification locale) | `spec_laya.md` |
 | Réponse sur la documentation (ex-aide intégrée ❓) | `spec_help.md` |
 | Revue de code assistée (H5) | `spec_review.md` |

@@ -2850,6 +2850,12 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         // Champ absent du DOM ⇒ vrai (défaut, mode proposer), pour ne jamais
         // désactiver un réglage que l'utilisateur n'a pas touché.
         super_agent_long_tasks_enabled: chkSuperAgentLongTasks ? chkSuperAgentLongTasks.checked !== false : true,
+        // ── Prise en main à la première ouverture (spec_onboarding.md) ──
+        // Réglage SANS UI : il n'existe qu'un seul champ pour dire « déjà vu ».
+        // `save_config` réécrit TOUTE la configuration → on préserve explicitement
+        // la valeur courante, sinon un enregistrement des Paramètres remettrait le
+        // champ à faux et la prise en main réapparaîtrait.
+        onboarding_seen: currentConfig?.onboarding_seen === true,
       };
     try {
       await invoke("save_config", { config });

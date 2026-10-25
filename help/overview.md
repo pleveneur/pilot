@@ -36,6 +36,45 @@ externe.
 <!-- HELP:demarrage -->
 ## Démarrer un projet
 
+### La toute première ouverture
+
+Sur une installation neuve, Pilot n'a encore aucun réglage : il applique ses
+valeurs par défaut. Une seule chose est à décider avant de commencer, et une
+seule fois :
+
+1. **Choisir ce que fait « Lancer l'agent »**. Par défaut, ce bouton ouvre un
+   **terminal**. Pour qu'il ouvre l'**agent conversationnel** (l'onglet π, avec
+   la discussion et les réponses de l'IA), ouvrez **Options ⚙️** → onglet
+   **Agent Pi** → cochez la case **« Gestion RPC de l'agent pi ou plh »**.
+   Rien n'est facturé par ce réglage : il indique seulement à Pilot comment
+   lancer l'agent.
+2. **Ouvrir votre premier projet** : bouton **« 📁 Projets ▼ »** → « Ouvrir un
+   dossier… » (voir les étapes ci-dessous).
+
+Pilot propose cette prise en main **une seule fois**, sur une installation
+neuve, sur deux niveaux :
+
+- **Niveau 1 — démarrer utile** : le mode de l'agent (point 1 ci-dessus) et
+  l'ouverture d'un projet. Quelques clics, puis vous travaillez.
+- **Niveau 2 — en option : votre équipe d'agents** : Pilot ouvre l'écran
+  **Équipe d'agents** déjà existant, où vous pouvez nommer des agents et leur
+  donner un rôle. Vous pouvez **passer ce niveau** : Pilot fonctionne très bien
+  sans équipe configurée, et vous pourrez y revenir plus tard depuis
+  **Autres écrans ▾ → Équipe d'agents**.
+
+Ce qu'elle ne fait **jamais** : elle n'appelle aucun modèle (donc aucun coût),
+ne règle rien de payant, ne supprime aucun fichier et ne modifie pas
+l'apparence de Pilot. La passer est sans conséquence.
+
+**La revoir plus tard** : elle ne revient pas d'elle-même et ne s'affiche que
+sur une installation neuve. Ses deux étapes restent les étapes ci-dessus : le
+réglage se retrouve dans **Options ⚙️ → Agent Pi**, et l'écran **Équipe
+d'agents** dans **Autres écrans ▾**. Si vous ne voyez pas la prise en main à
+l'ouverture (installation déjà utilisée), c'est normal : vos réglages existent
+déjà.
+
+### Ensuite, pour chaque projet
+
 1. **Ouvrir un projet** : bouton **« 📁 Projets ▼ »** en haut de la barre
    latérale → « Ouvrir un dossier… » (ou via la palette de commandes
    `Ctrl+Shift+P`).

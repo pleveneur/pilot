@@ -960,6 +960,15 @@ struct AppConfig {
     // système (donc : aucun Node.js installé n'empêche pas la chaîne de marcher).
     #[serde(default)]
     laya_node_path: String,
+    // ── Prise en main à la première ouverture (spec_onboarding.md) ──
+    // UN SEUL champ pour dire « déjà vu » : ABSENT d'une configuration ancienne
+    // ⇒ pas encore vu ; présent (`true`) ⇒ vu. Il survit à un redémarrage (JSON)
+    // et il fait partie de la liste explicite de `config_is_default`, sinon le
+    // chargement paresseux pourrait l'écraser par les valeurs du disque. Ce
+    // champ N'AFFICHE rien : la décision d'affichage est la fonction PURE
+    // `onboarding_should_show` (fichier de configuration absent ET jamais vu).
+    #[serde(default)]
+    onboarding_seen: bool,
 }
 
 fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
@@ -1247,6 +1256,8 @@ impl Default for AppConfig {
             laya_model_base_url: String::new(),
             laya_fetch_path: String::new(),
             laya_node_path: String::new(),
+            // Prise en main à la première ouverture : jamais vue au départ.
+            onboarding_seen: false,
         }
     }
 }
@@ -1268,6 +1279,51 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Erreur chemin config: {}", e))?;
     fs::create_dir_all(&dir).map_err(|e| format!("Erreur création dossier config: {}", e))?;
     Ok(dir.join("config.json"))
+}
+
+// ── Prise en main à la première ouverture (spec_onboarding.md) ──
+//
+// Ce lot ne montre RIEN : il pose le socle invisible (un champ de configuration,
+// la décision d'affichage, une commande de lecture). Le critère d'affichage est
+// UNIQUE et vérifiable : la prise en main ne s'affiche que si le fichier de
+// configuration N'EXISTE PAS ENCORE (première ouverture certaine). Une
+// installation existante a forcément ce fichier : elle ne doit JAMAIS voir la
+// modale. Aucune migration, aucun faisceau d'indices.
+
+/// Décision d'affichage de la prise en main à la première ouverture.
+///
+/// **Fonction pure** : elle ne lit aucun fichier, n'écrit rien, ne dépend
+/// d'aucun état global. Deux faits suffisent :
+/// - `config_file_exists` : le fichier de configuration existe-t-il déjà ?
+/// - `onboarding_seen` : le champ « déjà vu » est-il posé ?
+///
+/// Les deux conditions sont **cumulatives** : le drapeau seul ne suffit pas.
+/// Une installation existante (fichier présent) est forcément dépourvue du
+/// champ (il n'existait pas encore) — avec un simple `!onboarding_seen`, la
+/// modale réapparaîtrait chez un utilisateur qui travaille déjà.
+fn onboarding_should_show(config_file_exists: bool, onboarding_seen: bool) -> bool {
+    !config_file_exists && !onboarding_seen
+}
+
+/// État de la prise en main, tel que l'écran le lira (LECTURE SEULE).
+#[derive(Debug, Serialize, Clone)]
+struct OnboardingState {
+    /// Le fichier de configuration existe-t-il déjà ?
+    config_file_exists: bool,
+    /// Le champ « déjà vu » est-il posé ?
+    onboarding_seen: bool,
+    /// Faut-il afficher la prise en main ? (calculé par la fonction pure)
+    show: bool,
+}
+
+impl OnboardingState {
+    fn from_facts(config_file_exists: bool, onboarding_seen: bool) -> Self {
+        Self {
+            config_file_exists,
+            onboarding_seen,
+            show: onboarding_should_show(config_file_exists, onboarding_seen),
+        }
+    }
 }
 
 /// Vrai si la configuration en mémoire est encore « par défaut » (aucun réglage
@@ -1296,6 +1352,12 @@ fn config_is_default(config: &AppConfig) -> bool {
         && config.telegram_chat_id == default.telegram_chat_id
         && config.telegram_dialog_enabled == default.telegram_dialog_enabled
         && config.pdf_md_model == default.pdf_md_model
+        // Prise en main (spec_onboarding.md) : le champ « déjà vu » fait partie
+        // de la décision « configuration restée par défaut ». Sans cette ligne,
+        // une configuration dont SEUL ce champ est posé serait jugée « par
+        // défaut » et pourrait être écrasée par le chargement paresseux — la
+        // prise en main réapparaîtrait après un redémarrage.
+        && config.onboarding_seen == default.onboarding_seen
 }
 
 /// Charge la config depuis le disque si elle est encore le défaut (chargement
@@ -2077,6 +2139,31 @@ fn get_config_read(config: &Mutex<AppConfig>, app: &AppHandle) -> Result<AppConf
 fn get_config(state: State<AppState>, app: AppHandle) -> Result<AppConfig, String> {
     ensure_config_loaded(&state.config, || load_config_disk(&app));
     get_config_read(&state.config, &app)
+}
+
+/// Commande de **LECTURE SEULE** : renvoie l'état de la prise en main à la
+/// première ouverture (le fichier de configuration existe-t-il déjà ? le champ
+/// « déjà vu » est-il posé ?) et la décision d'affichage qui en découle.
+///
+/// Elle n'écrit rien, ne crée que le dossier de données (jamais le fichier de
+/// configuration), et n'affiche rien : les écrans viennent aux lots suivants.
+///
+/// La lecture se fait sur le **disque** (autoritaire : toute écriture y passe
+/// avant l'état mémoire) plutôt que dans l'état mémoire, pour que le critère
+/// « fichier absent » reste exact même si la configuration n'a pas encore été
+/// chargée par le chargement paresseux.
+#[tauri::command]
+fn get_onboarding_state(app: AppHandle) -> Result<OnboardingState, String> {
+    let (config_file_exists, onboarding_seen) = match load_config_disk_if_present(&app) {
+        Ok(Some(cfg)) => (true, cfg.onboarding_seen),
+        // Aucune configuration sur le disque : première ouverture possible.
+        Ok(None) => (false, false),
+        // Fichier PRÉSENT mais illisible/invalide : il compte comme présent,
+        // donc l'écran ne s'affiche pas — jamais de modale sur une installation
+        // existante dont la configuration serait corrompue.
+        Err(_) => (true, false),
+    };
+    Ok(OnboardingState::from_facts(config_file_exists, onboarding_seen))
 }
 
 #[tauri::command]
@@ -3567,6 +3654,7 @@ pub fn run() {
             files::get_file_size,
             open_terminal,
             get_config,
+            get_onboarding_state,
             save_config,
             set_sidebar_width,
             play_assistant_sound,
@@ -4456,6 +4544,97 @@ mod tests {
     /// Contrôle (c) : coupé par défaut, activé après un aller-retour de
     /// sérialisation (le fichier de configuration est du JSON), et absent d'une
     /// configuration ancienne ⇒ coupé (jamais allumé par accident).
+    // ── Prise en main à la première ouverture (spec_onboarding.md) ──
+
+    /// Le champ « déjà vu » est UNIQUE, il survit à un redémarrage (le fichier de
+    /// configuration est du JSON) et les deux états sont persistants.
+    #[test]
+    fn onboarding_seen_field_survives_restart() {
+        // Départ : jamais vu.
+        assert!(!super::AppConfig::default().onboarding_seen);
+        // Vu → écrit sur disque → relu (redémarrage) : toujours vu.
+        let mut seen = super::AppConfig::default();
+        seen.onboarding_seen = true;
+        let json = serde_json::to_string(&seen).expect("sérialisation");
+        assert!(
+            json.contains("\"onboarding_seen\":true"),
+            "le champ doit être écrit dans le fichier de configuration : {}",
+            json
+        );
+        let back: super::AppConfig = serde_json::from_str(&json).expect("relecture");
+        assert!(
+            back.onboarding_seen,
+            "le champ doit survivre à un redémarrage"
+        );
+        // Le retour arrière est persistant aussi (aucun champ irréversible).
+        let mut off = seen.clone();
+        off.onboarding_seen = false;
+        let back_off: super::AppConfig =
+            serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
+        assert!(!back_off.onboarding_seen);
+    }
+
+    /// Une configuration ANCIENNE (le champ n'existait pas encore) reste lisible,
+    /// ses autres réglages sont conservés, et le champ reprend « pas encore vu ».
+    #[test]
+    fn onboarding_absent_from_old_config_means_not_seen() {
+        let old: super::AppConfig =
+            serde_json::from_str(r#"{"theme":"light","auto_save":true}"#)
+                .expect("une configuration ancienne doit rester lisible");
+        assert!(
+            !old.onboarding_seen,
+            "un champ absent doit valoir « pas encore vu »"
+        );
+        assert_eq!(old.theme, "light", "les autres réglages sont conservés");
+        assert!(old.auto_save);
+
+        // La sentinelle « configuration restée par défaut » tient compte du
+        // champ : posé, il ne peut plus être écrasé par le chargement paresseux
+        // (sinon la prise en main réapparaîtrait après un redémarrage).
+        let mut only_seen = super::AppConfig::default();
+        assert!(super::config_is_default(&only_seen));
+        only_seen.onboarding_seen = true;
+        assert!(
+            !super::config_is_default(&only_seen),
+            "le champ « déjà vu » doit sortir la configuration de l'état « par défaut »"
+        );
+    }
+
+    /// La décision d'affichage dépend de DEUX faits. Le cas « fichier présent +
+    /// jamais vu » est celui qui tombe si le critère est réduit au seul drapeau
+    /// (`!onboarding_seen`) : c'est donc lui qui interdit cette simplification.
+    #[test]
+    fn onboarding_show_criterion_needs_the_absent_config_file() {
+        // SEUL cas d'affichage : aucune configuration sur le disque et jamais vu.
+        assert!(super::onboarding_should_show(false, false));
+        // Fichier PRÉSENT (installation existante) + champ absent ⇒ pas d'écran.
+        assert!(
+            !super::onboarding_should_show(true, false),
+            "une installation existante ne doit jamais voir la prise en main"
+        );
+        // Déjà vu ⇒ pas d'écran, même si le fichier a été supprimé à la main.
+        assert!(!super::onboarding_should_show(false, true));
+        assert!(!super::onboarding_should_show(true, true));
+    }
+
+    /// L'état exposé à l'écran porte les DEUX faits ET la décision, cohérente
+    /// avec la fonction pure (aucun calcul parallèle côté écran).
+    #[test]
+    fn onboarding_state_exposes_both_facts_and_the_decision() {
+        let first = super::OnboardingState::from_facts(false, false);
+        assert!(first.show);
+        assert!(!first.config_file_exists);
+        assert!(!first.onboarding_seen);
+
+        let existing = super::OnboardingState::from_facts(true, false);
+        assert!(!existing.show, "installation existante : aucun écran");
+        assert!(existing.config_file_exists);
+
+        let late = super::OnboardingState::from_facts(false, true);
+        assert!(!late.show, "déjà vu : aucun écran");
+        assert!(late.onboarding_seen);
+    }
+
     #[test]
     fn telegram_notify_setting_survives_restart_and_defaults_off() {
         // Défaut : coupé (aucune surprise pour une installation neuve).
