@@ -3367,12 +3367,6 @@ pub fn run() {
             let config = load_config_disk(&handle).unwrap_or_default();
             let state: State<'_, AppState> = app.state();
             *state.config.lock().unwrap() = config;
-            // Documentation de Pilot LISIBLE sur disque (spec_help.md §4.6) :
-            // l'Assistant (onglet 🧭) la lit pour répondre aux questions de
-            // mode d'emploi. Contenu = le handbook embarqué, découpé par thème
-            // et écrit dans `<app_data_dir>/aide/` (idempotent). Fail-open :
-            // un échec d'écriture ne bloque JAMAIS le démarrage.
-            help::write_startup_docs(&handle);
             // 5.1 : poser le handle d'application sur l'AgentService pour permettre
             // l'émission des événements `agent-state-changed` depuis les transitions
             // de session (start/pause/stop).

@@ -2632,23 +2632,25 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   tronque les descriptions longues à 100 caractères (fin de mot + `…`). Un test
   garde-fou (`super_agent_fixed_prompt_stays_under_budget`) échoue si le total
   des textes fixes dépasse le plafond `SUPER_AGENT_FIXED_PROMPT_BUDGET`
-  (6 250 caractères, mesuré à 6 213 — dont ~680 pour le bloc « documentation
-  lisible » ci-dessous ; le plafond valait 5 550 avant ce bloc).
-- **Documentation de Pilot lisible sur disque (spec_help.md §4.6)** : le prompt
-  porte le **chemin exact** de la documentation écrite au démarrage par
-  `help::write_startup_docs` dans `<app_data_dir>/aide/` (un fichier par thème +
-  `index.md`), et **deux règles** : (a) une question de **mode d'emploi** se
-  répond **directement**, jamais déléguée à un agent — même quand le mode
-  coordinateur ou la délégation sont actifs ; (b) si la documentation **ne dit
-  rien**, le dire au lieu d'inventer. Le bloc porte aussi le **garde-fou
-  mémoire** : une question de mode d'emploi ne laisse **rien** dans la mémoire
-  de suivi (ni tâche, ni décision, ni note de projet, ni mémoire de session ou
-  utilisateur) — la mémoire n'étant écrite que par les outils de l'Assistant,
-  la règle de prompt est la voie unique, sans second mécanisme. Bloc
-  `SUPER_AGENT_DOC_PROMPT` (chemin injecté), mesuré sur
-  `SUPER_AGENT_DOC_PATH_SAMPLE`. Verrou :
-  `assistant_prompt_names_readable_docs_path_and_both_rules` (échoue si le bloc
-  disparaît).
+  (**5 850** caractères : mesure **5 532** + 5 % arrondi au multiple de 50
+  supérieur). Le plafond était monté à 6 250 pour faire tenir le bloc
+  « documentation lisible sur disque » ; il a été **recalculé sur le prompt
+  réel** après le retrait de ce bloc (§ ci-dessous et spec_help.md §4.6).
+- **Réponse sur le mode d'emploi : UN SEUL chemin (spec_help.md §4.6)** : le
+  prompt de l'assistant ne désigne **aucun fichier** de documentation. Il n'y a
+  plus de copie de la documentation sur disque (`<app_data_dir>/aide/`) ni de
+  bloc `SUPER_AGENT_DOC_PROMPT` : la réponse passe uniquement par l'**outil**
+  `answer_from_documentation` (socle `ask_help_doc`, corpus embarqué, **1 appel
+  par tour**, « la documentation ne dit rien » s'il ne sait pas). Le bloc avait
+  été ajouté après l'outil : il faisait doublon et alourdissait chaque message.
+  Conséquence assumée du retour au contenu d'avant : la règle « une question de
+  mode d'emploi ne se délègue jamais à un agent » n'est plus énoncée dans le
+  prompt — elle n'est pas réintroduite ici (ce serait un autre lot) ; l'outil
+  reste le point d'entrée, et son refus explicite au 2ᵉ appel comme sa réponse
+  « la documentation ne dit rien » viennent de lui. Verrou :
+  `assistant_prompt_designates_no_doc_files` (échoue si le bloc revient : aucun
+  `index.md`, aucune « lisible sur disque », prompt complet = exactement les
+  textes figés connus).
 - **Garde-fou du livrable (défaut « l'agent rend un plan »)** : deux verrous
   ferment le trou où une demande d'écriture rendait un texte et Pilot annonçait
   « terminé » sans fichier.

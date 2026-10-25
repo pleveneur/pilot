@@ -9,8 +9,11 @@
 > La brique qui répond reste — c'est le **socle** (§4.4) et son **outil pour
 > l'Assistant** (§4.5) : c'est l'onglet **Assistant** qui répond désormais sur
 > la documentation. Ordre décidé : l'outil d'abord, le retrait ensuite.
-> Depuis §4.6, la documentation est en plus **écrite en fichiers lisibles** au
-> démarrage, que l'Assistant peut ouvrir directement.
+> **Un seul chemin** (§4.6) : la réponse sur le mode d'emploi passe uniquement
+> par l'**outil** `answer_from_documentation` du socle, sur le corpus embarqué.
+> L'ancienne copie de la documentation en fichiers sur disque et le bloc de
+> prompt de l'assistant qui la désignait ont été **retirés** (deux chemins
+> divergeaient, et le bloc alourdissait chaque message).
 
 ---
 
@@ -209,51 +212,57 @@ de l'interface manque / utilise un sentinel **différent** ; le **test du plafon
 échoue si le 2ᵉ appel n'est plus refusé ou si le compteur n'est plus remis à zéro
 au tour suivant.
 
-### 4.6 Documentation de Pilot LISIBLE sur disque (l'Assistant la consulte)
+### 4.6 Un seul chemin pour répondre sur la documentation (second chemin retiré)
 
-L'Assistant ne pouvait répondre aux questions de mode d'emploi qu'en passant par
-l'outil documentaire (`answer_from_documentation`). Il peut désormais **lire la
-documentation comme des fichiers**, sans rien réécrire ni dupliquer.
+La réponse sur le mode d'emploi de Pilot a compté **deux** chemins :
 
-| Élément | Valeur / règle |
+1. **l'outil `answer_from_documentation`** (§4.5) : le socle documentaire, le
+   corpus **embarqué** (`HANDBOOK`), plafonné à **un appel par tour**, qui dit
+   « la documentation ne dit rien » quand il ne sait pas ;
+2. **une copie de la documentation en fichiers sur le disque**, écrite au
+   démarrage (`<app_data_dir>/aide/`, un fichier par thème + `index.md`), **plus
+   un bloc du prompt de l'assistant** lui désignant ces fichiers pour qu'il les
+   lise lui-même.
+
+Le **second chemin est retiré**. Deux raisons : deux chemins pour la même
+question finissent par **diverger**, et le bloc alourdissait le prompt de
+l'assistant à **chaque** message (donc chaque échange coûtait plus cher). Il ne
+reste que **l'outil**, qui porte lui-même ses garanties : corpus embarqué
+unique, un seul appel par tour, refus explicite au 2ᵉ appel, et « la
+documentation ne dit rien » au lieu d'inventer.
+
+| Retiré | Pourquoi c'était possible |
 |---|---|
-| Où | `<app_data_dir>/aide/` (dossier de données de l'application, sous-dossier `aide`). Chemin **annoncé** à l'Assistant = chemin **écrit**, même fonction `help::doc_dir`. |
-| Quoi | `index.md` (sommaire cliquable) + **un fichier par thème** (`overview.md`, `agent-pi.md`, `super-agent.md`…). |
-| Contenu | Le bloc du handbook **tel quel** — aucune réécriture de fond, aucun second contenu. Deux blocs déclarant le **même** thème sont fusionnés dans le fichier de ce thème. |
-| Découpage | Sur les marqueurs `<!-- HELP-TOPIC:<slug> -->` que `scripts/build-handbook.js` place devant chaque bloc. Le séparateur `---` ne peut pas servir de frontière : un bloc peut légitimement en contenir un. |
-| Quand | **Au démarrage** (`setup` de `run()` → `help::write_startup_docs`, appel direct vérifié par un test). |
-| Idempotent | Un fichier dont le contenu est déjà exact n'est **pas réécrit** (0 écriture) ; seule une différence provoque une écriture. |
-| Fail-open | Un échec d'écriture est signalé (`eprintln`) et **ne bloque jamais** le démarrage. Aucun réseau. |
-| Sécurité | Le slug d'un thème est réduit aux caractères sûrs : aucun séparateur de chemin ne peut venir du handbook. |
+| L'écriture au démarrage (`help::write_startup_docs`, appel du `setup` de `run()`) et tout son découpage (`handbook_topics`, `doc_files_of`, `doc_file_name`, `doc_title`, `doc_dir`, `doc_dir_for`, constantes du dossier et de l'index) | Son **unique** consommateur était le bloc de prompt ci-dessous : vérifié, rien d'autre ne lit ce dossier, ni côté Rust ni côté `src/js/`. |
+| Le bloc `SUPER_AGENT_DOC_PROMPT` du prompt de l'assistant (chemin exact, `index.md`, consigne de lire avec `read`, règles « répondre directement / ne rien inventer », garde-fou mémoire) — et le champ `doc_dir` qui l'alimentait | Il désignait la copie disque. Les garanties qu'il énonçait vivent dans **l'outil** et dans ses propres consignes (`pilot-assistant-doc.ts`) : la documentation intégrée est la **seule** source, « dire quand elle ne dit rien, ne jamais inventer », « un appel par tour ». |
 
-**Prompt de l'Assistant** (`SUPER_AGENT_DOC_PROMPT` dans `super_agent.rs`) : il
-porte le **chemin exact**, la nature du contenu (`index.md` + un fichier par
-thème) et les **deux règles** exigées :
+**Ce qui n'a pas changé** : l'outil et son plafond, le socle
+(`answer_from_handbook`, `ask_help_doc`, marqueur `DOCUMENTATION_INSUFFISANTE`,
+plafond de sortie, résolution du modèle), et la génération de la documentation
+(`npm run build:handbook` : **aucun contenu du handbook ne change** ; les
+marqueurs `<!-- HELP-TOPIC:… -->` restent dans le fichier généré, désormais sans
+consommateur).
 
-1. une question de **mode d'emploi** se répond **directement**, avec ce que dit
-   la documentation — elle n'est **jamais** déléguée à un agent ;
-2. si la documentation **ne dit rien** sur le point demandé, le dire clairement
-   **au lieu d'inventer**.
+**Rien n'est nettoyé chez l'utilisateur** : les fichiers déjà écrits par
+l'ancien mécanisme (`<app_data_dir>/aide/`) ne sont **pas** supprimés — on
+arrête de les écrire, on ne supprime aucune donnée.
 
-**Garde-fou mémoire** : la mémoire de suivi n'est écrite que par les outils de
-l'Assistant lui-même (`update_session_memory`, `create_task`, `add_decision`…).
-La voie la plus simple ET la plus sûre est donc une **règle explicite dans le
-prompt** : une question de mode d'emploi ne laisse **rien** dans la mémoire
-(aucune tâche, décision, note de projet, mémoire de session ni utilisateur).
-Aucune modification du code d'écriture de la mémoire — aucun second mécanisme.
+**Budget du prompt** : le plafond anti-regonflement
+(`SUPER_AGENT_FIXED_PROMPT_BUDGET`) avait été relevé pour faire tenir ce bloc ;
+il revient à une valeur **recalculée sur le prompt réel** : **5 532 caractères**
+mesurés (contre **6 213** avec le bloc), majorés de 5 % et arrondis au multiple
+de 50 supérieur → **5 850**.
 
-> L'écran, le bouton et l'onglet Aide restent retirés (§9) et `help_model` reste
-> tel quel (repli de la Revue). Rien d'autre ne bouge.
+**Tests** :
 
-**Tests** (tous **échouent** si le geste est retiré) :
-
-| Test | Ce qu'il verrouille |
+| Test | Sort |
 |---|---|
-| `help::tests::la_documentation_est_ecrite_en_fichiers_lisibles_au_bon_endroit` | Fichiers produits dans `<app_data_dir>/aide/`, index complet dont chaque lien existe, contenu réel, idempotence (0 puis 1 écriture). |
-| `help::tests::le_decoupage_par_theme_suit_les_marqueurs_du_handbook` | Découpage par marqueur (`---` interne non coupant), en-tête hors thème, fusion des thèmes homonymes, handbook sans marqueur → erreur explicite. |
-| `help::tests::le_nom_de_fichier_dun_theme_est_sur` | Aucun chemin ne peut sortir du dossier. |
-| `help::tests::lecriture_au_demarrage_est_branchee_dans_le_setup` | L'appel `help::write_startup_docs(&handle);` existe **non commenté** dans `lib.rs`. |
-| `super_agent::tests::assistant_prompt_names_readable_docs_path_and_both_rules` | Le prompt contient le **chemin**, `index.md`, `read`, la règle (a), la règle (b) et le garde-fou mémoire. |
+| `help::tests::la_documentation_est_ecrite_en_fichiers_lisibles_au_bon_endroit` | **Retiré** : verrouillait l'écriture disque supprimée. |
+| `help::tests::le_decoupage_par_theme_suit_les_marqueurs_du_handbook` | **Retiré** : verrouillait le découpage supprimé. |
+| `help::tests::le_nom_de_fichier_dun_theme_est_sur` | **Retiré** : verrouillait la fabrication des noms de fichiers supprimée. |
+| `help::tests::lecriture_au_demarrage_est_branchee_dans_le_setup` | **Retiré** : verrouillait un branchement qui n'existe plus. |
+| `super_agent::tests::assistant_prompt_designates_no_doc_files` | **Ajouté** : échoue si le bloc de doc **revient** (aucun `index.md`, aucune mention « lisible sur disque », aucune consigne de lecture de la doc ; prompt complet = exactement les textes figés connus). |
+| `super_agent::tests::super_agent_fixed_prompt_stays_under_budget` | **Conservé** : garde-fou de budget (valeur recalculée ci-dessus). |
 
 ### 4.3 Historique multi-tours
 
@@ -303,9 +312,9 @@ accepte, lui, un historique — il servait à l'écran Aide, désormais retiré.
 |---|---|
 | `help/overview.md` | Source aide : généralités (rédigé, orienté utilisateur) |
 | `help/handbook.md` | **Généré** (ne pas éditer) — embarqué via `include_str!` |
-| `scripts/build-handbook.js` | Agrégation des blocs HELP + marqueurs `<!-- HELP-TOPIC:x -->` (frontières des fichiers lisibles, §4.6) |
-| `src-tauri/src/help.rs` | `HANDBOOK` (const), **documentation lisible** (`handbook_topics`, `doc_files_of`, `write_doc_files`, `write_startup_docs`, `doc_dir`), socle structuré (`answer_from_handbook`, `finish_help_answer`, `resolve_help_doc_model`), commandes `get_handbook`, `ask_help_doc`, `ask_help`, `ask_pi_caged`/`ask_pi_caged_timed` |
-| `src-tauri/src/lib.rs` | `setup` de `run()` : `help::write_startup_docs(&handle);` (écriture au démarrage, fail-open) |
+| `scripts/build-handbook.js` | Agrégation des blocs HELP + marqueurs `<!-- HELP-TOPIC:x -->` (provenance des blocs ; **aucun consommateur** depuis le retrait du second chemin, §4.6) |
+| `src-tauri/src/help.rs` | `HANDBOOK` (const), socle structuré (`answer_from_handbook`, `finish_help_answer`, `resolve_help_doc_model`), commandes `get_handbook`, `ask_help_doc`, `ask_help`, `ask_pi_caged`/`ask_pi_caged_timed` — **plus aucune copie de la documentation sur disque** (§4.6) |
+| `src-tauri/src/lib.rs` | `setup` de `run()` : **plus d'écriture de documentation au démarrage** (§4.6) |
 | `src-tauri/extensions/pilot-assistant-doc.ts` | Outil `answer_from_documentation` de l'Assistant (§4.5) : une entrée (la question), plafond 1 appel/tour, sortie honnête |
 | `src/js/super-agent.js` | Relais du sentinel `PILOT_ASSISTANT_DOC::` → `ask_help_doc` (point unique) |
 | `src/js/assistant-outil-doc.test.js` | Câblage (extension + déclaration ×2 + relais + sentinel identique) + plafond + sortie honnête |

@@ -98,10 +98,13 @@ function main() {
     "",
   ].join("\n");
 
-  // Marqueur de thème devant chaque bloc : c'est la frontière que lit le
-  // programme (Rust : `help::handbook_topics`) pour écrire la documentation
-  // LISIBLE sur disque, un fichier par thème. Le séparateur `---` du corps ne
-  // peut pas servir de frontière : un bloc peut légitimement en contenir un.
+  // Marqueur de thème devant chaque bloc. Il ne servait qu'à la copie de la
+  // documentation sur disque (un fichier par thème), retirée : la réponse sur le
+  // mode d'emploi passe par UN SEUL chemin, l'outil `answer_from_documentation`
+  // (handbook embarqué). Le marqueur est conservé tel quel (aucun contenu du
+  // handbook ne change) : il documente la provenance de chaque bloc.
+  // Le séparateur `---` du corps ne peut pas servir de frontière : un bloc peut
+  // légitimement en contenir un.
   const body = all
     .map((b) => `<!-- HELP-TOPIC:${b.topic} -->\n${b.body}`)
     .join("\n\n---\n\n");
