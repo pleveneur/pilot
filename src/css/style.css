@@ -79,8 +79,16 @@ body {
    (sombres et clairs) suivent sans une ligne de plus.
    ================================================================ */
 
-/* Groupe des trois boutons : colle au bord droit de la fenetre, aucun
-   espacement, 138 px de large au total (3 x 46 px). Il ne se comprime jamais
+/* Groupe des trois boutons : il reste au BOUT DROIT de la rangee (aucun
+   espacement entre les touches, `gap: 0`) mais il prend de l'AIR dans l'angle
+   haut droit : 4 px en haut, 4 px a droite et 4 px en bas DU GROUPE. Ce
+   remplissage est la SEULE source de cet air (les boutons, eux, gardent
+   `height: 100%`) : la rangee garde sa hauteur (36 px + filet), et rien n'est
+   ajoute au-dessus d'elle. Largeur du groupe : 3 x 46 px + 4 px d'air a
+   droite = 142 px, dont 4 px pris sur la place des onglets.
+   L'air fait partie du groupe, qui est dans `WINDOW_GESTURE_BLOCKLIST` : il ne
+   deplace donc PAS la fenetre (les zones de glissement restent le bandeau du
+   nom de projet et le vide de la rangee). Il ne se comprime jamais
    (`flex: 0 0 auto`) : c'est lui qui reserve sa place dans la rangee. */
 #window-controls {
   display: flex;
@@ -88,6 +96,7 @@ body {
   gap: 0;
   flex: 0 0 auto;
   align-self: stretch;
+  padding: 4px 4px 4px 0;
   margin-right: 0;
   /* Les boutons de fenetre restent AU-DESSUS de l'ecran de chargement
      (99999), des dialogues d'agent (100000) et de l'overlay du mode
@@ -99,9 +108,12 @@ body {
   z-index: 100001;
 }
 
-/* Largeur 46 px, zone de clic = toute la surface. La HAUTEUR est celle de la
-   rangee d'onglets (36 px), et non plus 32 px : les boutons occupent toute la
-   hauteur du mobilier ou ils vivent, sans bande vide autour d'eux. */
+/* Largeur 46 px, zone de clic = toute la surface (aucune reduction). La
+   HAUTEUR est celle de la LIGNE DES ONGLETS (28 px), et non plus toute la
+   hauteur de la rangee (36 px) : les 4 px d'air en haut et en bas viennent du
+   remplissage du groupe, ce qui laisse les trois touches alignees sur les
+   onglets, sans bande vide au-dessus de la rangee. L'anneau de focus reste
+   inscrit dans la touche (`outline-offset: -2px`). */
 #window-controls > button {
   width: 46px;
   height: 100%;

@@ -163,7 +163,9 @@ export function isDisposeMenuOpen() {
   return !!(disposeMenu && disposeMenu.isConnected && !disposeMenu.classList.contains("hidden"));
 }
 
-/** Hauteur reelle des boutons de fenetre (repli : celle de la rangee). */
+/** Hauteur reelle du GROUPE des boutons de fenetre (repli : celle de la rangee).
+ *  Le groupe mesure la rangee (36 px) remplissage compris : le menu « Disposer »
+ *  s'ouvre donc sous la rangee, jamais sur les touches (28 px). */
 function controlsHeight() {
   const controls = document.getElementById("window-controls");
   return (controls && controls.offsetHeight) || 36;

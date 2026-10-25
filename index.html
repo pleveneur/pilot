@@ -256,8 +256,11 @@
       <!-- Boutons de fenetre : groupe fixe en haut a DROITE, AU BOUT de la
            rangee d'onglets (decision du proprietaire, Q1 : plus de bande de
            32 px). Dernier enfant de #tab-row : leur place est RESERVEE dans le
-           flux (aucun onglet ne passe dessous) et Fermer touche le bord droit
-           de la fenetre, comme le faisait la barre systeme.
+           flux (aucun onglet ne passe dessous). Le groupe prend 4 px d'air en
+           haut, a droite et en bas (padding du groupe dans style.css) : Fermer
+           ne touche donc plus le bord droit de la fenetre, et les touches
+           prennent la hauteur de la ligne des onglets (28 px) sans changer la
+           hauteur de la rangee (36 px).
            Ordre du DOM = ordre du Tab : Reduire, Agrandir, Fermer.
            Libelles (title ET aria-label) inchanges : ils sont la seule source
            de verite, verifiee par src/js/barre-fenetre-etats.test.js. -->

@@ -103,11 +103,13 @@ describe("1. les cinq etats du bouton (§4.1)", () => {
     expect(css).not.toMatch(/--window-bar-height\s*:/);
   });
 
-  it("un bouton fait 46 px de large et toute la hauteur de la rangee", () => {
+  it("un bouton fait 46 px de large et la hauteur de la LIGNE des onglets", () => {
     const bouton = regle("#window-controls > button {");
     expect(bouton).toMatch(/width:\s*46px/);
-    // La hauteur n'est plus 32 px : les boutons occupent la hauteur du
-    // mobilier ou ils vivent (la rangee d'onglets).
+    // La hauteur n'est plus 32 px, et ce n'est plus non plus toute la hauteur
+    // de la rangee (36 px) : le groupe prend 4 px d'air en haut et en bas, donc
+    // les boutons prennent la hauteur de la LIGNE des onglets. `height: 100%`
+    // resout sur la boite de contenu du groupe, qui vaut rangee - 2 x air.
     expect(bouton).toMatch(/height:\s*100%/);
     expect(bouton).toMatch(/border:\s*0/);
     expect(bouton).toMatch(/padding:\s*0/);
@@ -118,6 +120,32 @@ describe("1. les cinq etats du bouton (§4.1)", () => {
   it("la rangee qui les porte garde sa hauteur de 36 px (aucune hauteur nouvelle)", () => {
     const rangee = regle("#tab-row {");
     expect(rangee).toMatch(/min-height:\s*36px/);
+  });
+
+  it("le groupe prend 4 px d'air en haut, a droite et en bas (coin haut droit)", () => {
+    // L'air est porte par le REMPLISSAGE du groupe, seule source : si on le
+    // retire, les boutons reprennent 36 px et retouchent les bords haut et
+    // droit — les deux assertions ci-dessous echouent.
+    const groupe = regle("#window-controls {");
+    const rem = groupe.match(/padding:\s*([^;]+);/);
+    expect(rem, "remplissage du groupe introuvable").not.toBeNull();
+    const [haut, droite, bas, gauche] = rem[1].trim().split(/\s+/);
+    expect(haut).toBe("4px");
+    expect(droite).toBe("4px");
+    expect(bas).toBe("4px");
+    // Aucun air a gauche : la place des onglets n'est pas rognee plus que les
+    // 4 px de droite (l'entree « Travail » a deja sa marge).
+    expect(gauche).toBe("0");
+    // Largeur totale = 3 boutons + l'air de droite (recompte depuis le disque).
+    const largeur = Number(regle("#window-controls > button {").match(/width:\s*(\d+)px/)[1]);
+    const air = Number(droite.replace("px", ""));
+    expect(largeur * 3 + air).toBe(142);
+    // La rangee ne bouge pas : 36 px de contenu, filet bas compris a part.
+    const rangee = regle("#tab-row {");
+    expect(rangee).toMatch(/min-height:\s*36px/);
+    // Les boutons prennent la hauteur de la ligne des onglets : 36 - 2 x 4 = 28.
+    const hauteurRangee = Number(rangee.match(/min-height:\s*(\d+)px/)[1]);
+    expect(hauteurRangee - 2 * Number(haut.replace("px", ""))).toBe(28);
   });
 
   it("survol et appui : fond --surface-3, icone --text-primary", () => {
