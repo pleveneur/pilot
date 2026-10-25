@@ -1251,8 +1251,48 @@ describe("isAgentWorking / isWorkingWithoutTab — travail effectif", () => {
   it("un agent qui produit, ou dont un outil est en cours, travaille", () => {
     expect(isAgentWorking({ busy: true })).toBe(true);
     expect(isAgentWorking({ busy: false, toolInProgress: true })).toBe(true);
-    expect(isAgentWorking({ busy: false, isWorking: true })).toBe(true);
     expect(isAgentWorking({ working: true })).toBe(true);
+  });
+
+  // Fenetre backend de 2 minutes (`isWorking`, WORKING_RECENT_WINDOW_SECS =
+  // 120 dans agent_service.rs) : elle reste vraie 120 s apres la fin d'un tour,
+  // alors que `state` publie deja « idle ». L'interface ne doit PAS la lire :
+  // c'est elle qui faisait « respirer » la barre de saisie de l'assistant et
+  // les pastilles alors que plus rien ne tournait.
+  it("la fenetre « actif recemment » (isWorking) n'est PAS du travail : idle + isWorking = repos", () => {
+    const agentRecemmentActif = {
+      state: "idle",
+      alive: true,
+      busy: false,
+      toolInProgress: false,
+      isWorking: true,
+    };
+    // 1. La fonction pure de verite ne le compte pas comme travaillant.
+    expect(isAgentWorking(agentRecemmentActif)).toBe(false);
+    expect(anyBusy([agentRecemmentActif])).toBe(false);
+    // 2. La liste aplatie non plus (c'est elle que consomme super-agent.js
+    //    pour la classe `superagent-input-reflecting` et les pastilles).
+    const list = flattenAgents(makeSupervision([session(agentRecemmentActif)]));
+    expect(list).toHaveLength(1);
+    expect(list[0].working).toBe(false);
+    expect(list[0].workingSince).toBeNull();
+    expect(isAgentWorking(list[0])).toBe(false);
+    expect(anyBusy(list)).toBe(false);
+    expect(isWorkingWithoutTab(list[0])).toBe(false);
+  });
+
+  it("un agent REELLEMENT au travail s'allume toujours (busy, puis outil long)", () => {
+    const enProduction = { state: "running", alive: true, busy: true, toolInProgress: false, isWorking: true };
+    expect(isAgentWorking(enProduction)).toBe(true);
+    const listProd = flattenAgents(makeSupervision([session(enProduction)]));
+    expect(listProd[0].working).toBe(true);
+    expect(anyBusy(listProd)).toBe(true);
+    // Outil long et silencieux : `busy` faux mais un outil tourne reellement.
+    const outilLong = { state: "idle", alive: true, busy: false, toolInProgress: true, isWorking: true };
+    expect(isAgentWorking(outilLong)).toBe(true);
+    const listOutil = flattenAgents(makeSupervision([session(outilLong)]));
+    expect(listOutil[0].working).toBe(true);
+    expect(anyBusy(listOutil)).toBe(true);
   });
 
   it("un agent vivant AU REPOS ne travaille pas", () => {

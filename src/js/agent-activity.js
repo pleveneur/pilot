@@ -133,14 +133,18 @@ export function flattenAgents(supervision, lastActivityMap, workingSinceMap) {
       const label = a.name || a.agent || "";
       const state = a.state || "stopped";
       const busy = state === "running" || state === "compacting";
-      // Travail EFFECTIF de la session : soit l'agent produit (busy), soit un
-      // outil long est en cours (compilation, tests : silencieux mais reel),
-      // soit le backend l'annonce (isWorking, champ additif optionnel).
-      // C'est la SEULE verite de « il travaille » : jamais « un onglet est
-      // ouvert ». Fonction pure partagee (isAgentWorking).
+      // Travail EFFECTIF de la session, lu sur l'ACTIVITE REELLE : soit l'agent
+      // produit (busy), soit un outil long est en cours (compilation, tests :
+      // silencieux mais reel). C'est la SEULE verite de « il travaille » :
+      // jamais « un onglet est ouvert ».
+      // Le champ backend `isWorking` N'ENTRE PAS dans cette verite : il reste
+      // vrai 120 s apres la fin d'un tour (fenetre « actif recemment ») alors
+      // que l'etat publie est deja « idle » — il faisait « respirer » a tort
+      // la barre de saisie et les pastilles pendant 2 minutes. Il reste
+      // publie par le backend pour les sondes, mais l'affichage ne s'en sert
+      // plus. Fonction pure partagee (isAgentWorking).
       const toolInProgress = a.toolInProgress === true;
-      const isWorkingFlag = a.isWorking === true;
-      const working = busy || toolInProgress || isWorkingFlag;
+      const working = busy || toolInProgress;
       // Regle 1 : une session qui TRAVAILLE est TOUJOURS listee, qu'elle ait un
       // onglet ouvert ou non (agent lance en arriere-plan, onglet ferme).
       // Une session qui NE travaille pas n'apparait que si elle a un onglet
@@ -244,9 +248,12 @@ export function anyBusy(list) {
  * true si la session TRAVAILLE reellement a cet instant. Fonction PURE.
  *  - `busy` : l'agent produit une reponse (ou compacte) ;
  *  - `toolInProgress` : un outil long est en cours (build, tests, install) ;
- *  - `isWorking` : travail effectif annonce par le backend (champ additif
- *    optionnel, absent des charges anciennes) ;
  *  - `working` : resultat deja calcule par flattenAgents.
+ * Le champ backend `isWorking` est VOLONTAIREMENT ignore : il vaut vrai pendant
+ * 120 s apres la fin d'un tour (fenetre « actif recemment ») alors que la
+ * session est deja au repos, ce qui faisait respirer l'indicateur et la barre
+ * de saisie sans aucun travail. L'etat se lit sur l'ACTIVITE REELLE, jamais sur
+ * une fenetre de temps.
  * Un agent vivant mais AU REPOS n'est jamais « travaillant ».
  * @param {object} agent entree de liste (flattenAgents) ou objet partiel.
  * @returns {boolean}
@@ -256,8 +263,7 @@ export function isAgentWorking(agent) {
   return (
     agent.working === true ||
     agent.busy === true ||
-    agent.toolInProgress === true ||
-    agent.isWorking === true
+    agent.toolInProgress === true
   );
 }
 

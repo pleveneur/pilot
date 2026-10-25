@@ -168,11 +168,15 @@ projet (ouverture, fermeture, bascule).
   clic (poll 2 s de `get_agent_supervision` + push `agent-state-changed`),
   avec fiche et bouton « Afficher l'onglet ». **Filtrage de la liste** : la
   vérité est « la session **travaille** », jamais « un onglet est ouvert ».
-  Une session qui **travaille** (`busy`, ou `toolInProgress`, ou `isWorking`
-  annoncé par le backend — fonction pure `isAgentWorking`) est **toujours
-  listée**, onglet ou non : l'entrée dit d'un coup d'œil l'agent et son projet
-  (pastille respirante + nom ; nom en gras quand la session travaille sans
-  onglet, `isWorkingWithoutTab`). **Aucune mention « arrière-plan »** n'est
+  Une session qui **travaille** (`busy`, ou `toolInProgress` — fonction pure
+  `isAgentWorking`) est **toujours listée**, onglet ou non : l'entrée dit d'un
+  coup d'œil l'agent et son projet (pastille respirante + nom ; nom en gras
+  quand la session travaille sans onglet, `isWorkingWithoutTab`). Le champ
+  backend `isWorking` (vrai 120 s après la fin d'un tour, alors que `state`
+  vaut déjà `idle`) n'entre pas dans cette vérité d'affichage : le travail se
+  lit sur l'activité RÉELLE, jamais sur une fenêtre de temps. Il reste publié
+  pour les sondes qui, elles, ont besoin d'« actif récemment ».
+  **Aucune mention « arrière-plan »** n'est
   affichée dans cette liste, ni en texte, ni en infobulle (décision du
   propriétaire : information inutile ; le repère explicite reste dans la fiche
   de l'agent et dans le panneau Activité de l'onglet 🎭 Agents). Une session qui
