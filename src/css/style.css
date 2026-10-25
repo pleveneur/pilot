@@ -1757,116 +1757,62 @@ body.theme-light.theme-tokyo-day {
   color: var(--text-secondary);
 }
 
-/* --- Bande de contexte (LOT 4 de la presentation) ---
-   Bande de 26 px EN HAUT de la zone de travail, dans le flux normal : elle
-   s'empile sous la bande de fenetre (32 px) et AU-DESSUS de la barre d'onglets,
-   qu'elle ne recouvre jamais (rien n'est en position fixe ici). Elle porte a
-   gauche le fil d'Ariane « Projet > <projet> > <onglet> » et a droite l'entree
-   « Travail » nommee (voir #agent-activity).
-   Reference : docs/proposition-presentation-ui.md §3.4 et lot 4 du §6. */
-#context-bar {
+/* --- Rangee d'onglets (bande de contexte supprimee) ---
+   Une seule rangee de 36 px EN HAUT de la zone de travail, dans le flux
+   normal : elle s'empile sous la bande de fenetre (32 px) et porte, de gauche
+   a droite, la barre d'onglets (#tab-bar, qui prend toute la largeur
+   restante) puis l'entree « Travail » (#agent-activity, dans son PROPRE
+   conteneur : elle ne peut pas entrer dans #tab-bar, dont les enfants sont
+   « les onglets + le bouton d'ajout d'agent » pour tabs.js).
+   Hauteur peinte : 36 px de contenu + 1 px de filet = 37 px, contre 63 px
+   avant (bande de 26 px + barre de 37 px) : les 26 px sont rendus a
+   #main-content.
+   Reference : docs/proposition-bande-contexte-allegee.md §4. */
+#tab-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  /* 26 px, filet bas INCLUS (box-sizing: border-box) : 25 px de contenu
-     + 1 px de filet. */
-  height: 26px;
+  align-items: stretch;
   flex: 0 0 auto;
-  padding: 0 8px 0 16px;
+  min-height: 36px;
   background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border-subtle);
-  /* Ancre du panneau deroulant de l'entree « Travail ». Aucun z-index : la
-     bande ne cree pas de contexte d'empilement, le panneau (10001) reste
-     au-dessus de l'editeur et sous la bande de fenetre (100001). */
-  position: relative;
-  user-select: none;
-}
-/* Fil d'Ariane : une seule ligne, tronquee par ellipse du cote des noms
-   (jamais la bande qui s'elargit, jamais la colonne qui pousse). */
-#context-breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  font-family: var(--font-ui);
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
-}
-/* 1er segment : cliquable, ouvre le menu « Projets » (meme bouton que le
-   bandeau de la colonne de gauche : un seul comportement). */
-#context-breadcrumb-project {
-  flex: 0 0 auto;
-  height: 18px;
-  padding: 0 4px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  font-family: var(--font-ui);
-  font-size: var(--font-xs);
-  cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-#context-breadcrumb-project:hover { background: var(--surface-2); color: var(--text-primary); }
-#context-breadcrumb-project[aria-expanded="true"] { color: var(--text-primary); }
-#context-breadcrumb-project:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* Separateurs : decoratifs (aria-hidden), donc --text-muted est autorise. */
-.context-breadcrumb-sep {
-  flex: 0 0 auto;
-  color: var(--text-muted);
-}
-/* Nom du projet et nom de l'onglet actif : ellipse si c'est trop long. Le
-   dernier segment est le seul en evidence (11 px / 600, texte primaire). */
-#context-breadcrumb-name,
-#context-breadcrumb-tab {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-#context-breadcrumb-name { max-width: 280px; }
-#context-breadcrumb-tab {
-  max-width: 240px;
-  font-weight: 600;
-  color: var(--text-primary);
 }
 
 /* --- Tab Bar --- */
+/* Elle ne peint plus ni le fond ni le filet bas (portes par #tab-row) et prend
+   la largeur restante (`min-width: 0` : sans cela, une fenetre etroite ferait
+   sortir l'entree « Travail » de l'ecran). Elle garde son defilement
+   horizontal : les onglets ne passent jamais a la ligne. */
 #tab-bar {
   display: flex;
-  background: var(--bg-sidebar);
-  border-bottom: 1px solid var(--border-subtle);
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   min-height: 36px;
-  flex-shrink: 0;
   padding: 4px 6px;
   gap: 2px;
 }
 
 #tab-bar::-webkit-scrollbar { height: 4px; }
 
-/* --- Suivi du travail (entree « Travail » de la bande de contexte) ---
+/* --- Suivi du travail (entree « Travail », a droite de la rangee d'onglets) ---
    Reflete l'activite de TOUS les agents (assistant + codeurs) : la pastille
-   « respire » des qu'un agent travaille. Le cercle flottant d'avant a laisse
-   place a un bouton NOMME place a droite de la bande de contexte (LOT 4) : il
-   ne peut plus chevaucher la barre d'onglets, puisqu'il est dans le flux.
+   « respire » des qu'un agent travaille. L'entree vit dans son PROPRE conteneur
+   de la rangee d'onglets (#tab-row), jamais dans #tab-bar : elle ne defile pas
+   avec les onglets et ne perturbe pas leur ordre.
    Au clic : UN SEUL panneau (fond subtillement translucide, teinte violet) a
    trois onglets, dans l'ordre definitif « Agents », « Taches », « Evenements »
    — plus la fiche agent.
    Il n'existe qu'un endroit d'affichage du travail : aucun second panneau. */
 #agent-activity {
-  /* LOT 4 : l'entree « Travail » vit DANS la bande de contexte (flux normal) :
-     plus aucune position fixe, donc plus AUCUN chevauchement possible avec la
-     barre d'onglets (c'etait le defaut d'origine). `position: relative` ne sert
-     plus qu'a ancrer le panneau deroulant sous le bouton. */
+  /* Entree « Travail » : place RESERVEE a droite de la rangee d'onglets, dans
+     le flux (aucune position fixe : aucun chevauchement possible). `relative`
+     ne sert qu'a ancrer le panneau deroulant et la fiche sous le bouton. */
   position: relative;
   flex: 0 0 auto;
+  align-self: stretch;
   display: flex;
   align-items: center;
+  margin: 0 6px 0 4px;
   /* DIMENSIONS DU PANNEAU : reglages UNIQUES (decisions du proprietaire),
      ecrits ici une seule fois et consommes par `#agent-activity-dropdown`.
      Aucune de ces valeurs n'est recopiee ailleurs dans la feuille.
@@ -1894,7 +1840,7 @@ body.theme-light.theme-tokyo-day {
   --agent-activity-panel-margin: 32px;
 }
 #agent-activity-entry {
-  /* Bouton NOMME « Travail » (LOT 4) : hauteur 22 px dans la bande de 26 px,
+  /* Bouton NOMME « Travail » : hauteur 22 px dans la rangee de 36 px,
      pastille d'etat a gauche, libelle a droite. Etats : repos, survol, ouvert
      (l'ouverture est publiee par `aria-expanded`, donc aucun etat a maintenir
      en double dans le JS). */
@@ -1925,8 +1871,8 @@ body.theme-light.theme-tokyo-day {
 .agent-activity-entry-label { white-space: nowrap; }
 /* Pastille d'etat : ELLE SEULE respire (aucun autre element de l'entree ne
    bouge) et garde ses couleurs d'etat. Contenu du bouton, jamais cliquable a
-   part. Elle reste 8 px : dans une bande de 26 px, un cercle de 14 px mangerait
-   toute la hauteur. */
+   part. Elle reste 8 px : une pastille plus grosse mangerait la hauteur du
+   bouton, qui fait 22 px. */
 #agent-activity-dot {
   position: relative;
   flex: 0 0 auto;
@@ -1988,7 +1934,12 @@ body.theme-light.theme-tokyo-day {
   --agent-activity-panel-base: color-mix(in srgb, var(--superagent-accent) 16%, var(--surface-3));
   --agent-activity-panel-alpha: 94%;
   position: absolute;
-  top: 22px;
+  /* Sous la rangee d'onglets, jamais dessus : le panneau s'ouvre exactement
+     sous le bouton (bas de #agent-activity + 1 px), sans le recouvrir.
+     Decalage vertical MESURE : bande de fenetre 32 px + rangee d'onglets
+     37 px (36 de contenu + 1 de filet) = 69 px.
+     Verrou : src/js/taille-et-style-panneau.test.js. */
+  top: calc(100% + 1px);
   right: 0;
   /* Largeur : les valeurs nommees de `#agent-activity` (une seule source). */
   width: clamp(
@@ -2141,7 +2092,8 @@ body.theme-light.theme-tokyo-day {
 }
 #agent-activity-card {
   position: absolute;
-  top: 22px;
+  /* Meme ancrage que le panneau : sous la rangee d'onglets, a droite. */
+  top: calc(100% + 1px);
   right: 0;
   width: 240px;
   background: var(--surface-2);
@@ -10976,19 +10928,4 @@ textarea:focus-visible,
 summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-
-/* ── Fenetre etroite (LOT 4 de la presentation, §4.5 du document) ──
-   La bande de contexte garde le fil UTILE « Projet > onglet » ; le nom du
-   projet, deja tronque par ellipse, disparait en premier (avec son
-   separateur). Aucun autre element de la bande ne change : l'entree
-   « Travail » reste entiere et cliquable, et rien ne se superpose.
-   Placee EN FIN de feuille : les verrous existants qui prennent la PREMIERE
-   `@media (max-width: ...)` du fichier (editeur d'agent) ne doivent pas la
-   rencontrer avant la leur. */
-@media (max-width: 999px) {
-  #context-breadcrumb-name,
-  #context-breadcrumb-name + .context-breadcrumb-sep {
-    display: none;
-  }
 }

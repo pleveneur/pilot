@@ -16,8 +16,9 @@ import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus,
 import { isRunInProgress } from "./agents-bus.js";
 import { isProjectAgentBusy, initOwnerEngagementWatch } from "./super-agent.js";
 import { getAgentActivitySnapshot, subscribeAgentActivity, isAgentWorking, initAgentActivity } from "./agent-activity.js";
-// LOT 4 de la presentation : bande de contexte (fil Projet > projet > onglet).
-import { initContextBar, refreshContextBar } from "./context-bar.js";
+// Bande de contexte supprimee (docs/proposition-bande-contexte-allegee.md) :
+// le fil « Projet > projet > onglet » n'existe plus. L'entree « Travail » vit
+// desormais a droite de la rangee d'onglets (#tab-row, index.html).
 import { initAnomalyDetection } from "./anomaly.js";
 // Étape 2 Telegram (lot 0) : écoute des messages entrants. Démarrée avec
 // l'application, INDÉPENDAMMENT de l'ouverture de l'onglet 🧭 Assistant.
@@ -535,18 +536,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Exposé globalement pour la prévisualisation Markdown (issue #22) :
   // le handler de clic sur les liens internes ouvre le fichier cible via tabs.openFile.
   window._pilotTabs = tabs;
-  // Suivi du travail (haut droite) : cercle respirant + UN SEUL panneau à trois
-  // onglets (Agents, Tâches, Événements) + fiche agent. Unique endroit où le
-  // travail se suit dans l'interface. Le bouton « Afficher l'onglet » de la fiche
-  // appelle tabs._openAgent / tabs.openFile.
+  // Suivi du travail (haut droite, a droite de la rangee d'onglets) : pastille
+  // respirante + UN SEUL panneau a trois onglets (Agents, Taches, Evenements)
+  // + fiche agent. Unique endroit ou le travail se suit dans l'interface. Le
+  // bouton « Afficher l'onglet » de la fiche appelle tabs._openAgent /
+  // tabs.openFile.
   initAgentActivity(tabs);
-  // LOT 4 de la presentation : la bande de contexte (26 px) affiche le fil
-  // « Projet > <projet> > <onglet> » et porte l'entree « Travail » nommee.
-  // Branchee APRES les onglets (elle lit leur etat) et avant la barre laterale
-  // (elle se rafraichit seule des que le projet change).
-  initContextBar();
-  // Expose pour les changements de projet hors DOM (bascule par l'Assistant).
-  window._pilotRefreshContextBar = refreshContextBar;
   // Exposé pour la vérification de mise à jour de Pi à l'ouverture de l'onglet
   // agent (issue #26) : appelé depuis tabs.js _openAgent après le health check.
   window._pilotCheckPiUpdate = checkPiUpdate;

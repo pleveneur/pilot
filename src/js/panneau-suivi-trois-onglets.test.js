@@ -185,7 +185,7 @@ describe("(a) plus de panneau cloche en bas a droite : un seul panneau", () => {
     expect(css).not.toContain(".sa-events-badge");
   });
 
-  it("le panneau est celui de l'entree « Travail » de la bande de contexte", () => {
+  it("le panneau est celui de l'entree « Travail » de la rangee d'onglets", () => {
     // Les trois volets sont DANS le panneau du suivi du travail (un seul conteneur).
     const debut = html.indexOf('<div id="agent-activity">');
     const fin = html.indexOf('<div id="agent-activity-card"');
@@ -196,28 +196,52 @@ describe("(a) plus de panneau cloche en bas a droite : un seul panneau", () => {
     expect(bloc).toContain('id="agent-activity-pane-agents"');
     expect(bloc).toContain('id="agent-activity-pane-events"');
     expect(bloc).toContain('id="agent-activity-pane-tasks"');
-    // LOT 4 de la presentation : plus de cercle flottant en position fixe. Le
-    // suivi du travail est une entree NOMMEE de la bande de contexte, dans le
-    // flux — c'est ce qui supprime le chevauchement avec la barre d'onglets.
-    // L'intention du verrou est conservee : l'acces au travail est en HAUT, a
-    // DROITE de la zone de travail, jamais en bas.
+    // Plus de cercle flottant en position fixe. Le suivi du travail est une
+    // entree NOMMEE de la rangee d'onglets, dans le flux — c'est ce qui supprime
+    // le chevauchement avec la barre d'onglets. L'intention du verrou est
+    // conservee : l'acces au travail est en HAUT, a DROITE de la zone de travail,
+    // jamais en bas.
     const regleConteneur = sliceSource(css, "#agent-activity {", "#agent-activity-entry {", 40);
     expect(regleConteneur).toMatch(/position:\s*relative/);
     expect(regleConteneur).not.toMatch(/position:\s*fixed/);
     expect(regleConteneur).not.toMatch(/top:\s*calc\(var\(--window-bar-height\)/);
     expect(regleConteneur).not.toMatch(/bottom:\s*\d+px/);
-    // La bande de contexte : 26 px, dans #main-area, AVANT la barre d'onglets.
-    const bande = html.indexOf('<div id="context-bar">');
+    // RANGEE D'ONGLETS (bande de contexte de 26 px supprimee, cf.
+    // docs/proposition-bande-contexte-allegee.md §4) : une rangee de 36 px,
+    // dans #main-area, qui porte la barre d'onglets PUIS l'entree « Travail »,
+    // dans un conteneur SEPARE (#tab-bar est remplie par tabs.js : ses enfants
+    // sont « les onglets + le bouton d'ajout d'agent »).
+    const rangee = html.indexOf('<div id="tab-row">');
     const barreOnglets = html.indexOf('<div id="tab-bar">');
     const zoneTravail = html.indexOf('<main id="main-area">');
-    expect(bande).toBeGreaterThan(zoneTravail);
-    expect(barreOnglets).toBeGreaterThan(bande);
-    // Le conteneur du suivi du travail est DANS la bande de contexte.
-    expect(debut).toBeGreaterThan(bande);
-    expect(debut).toBeLessThan(barreOnglets);
-    const regleBande = sliceSource(css, "#context-bar {", "#context-breadcrumb {", 40);
-    expect(regleBande).toMatch(/height:\s*26px/);
-    expect(regleBande).toMatch(/border-bottom:\s*1px solid var\(--border-subtle\)/);
+    expect(rangee).toBeGreaterThan(zoneTravail);
+    expect(barreOnglets).toBeGreaterThan(rangee);
+    // Le conteneur du suivi du travail est DANS la rangee, APRES la barre.
+    expect(debut).toBeGreaterThan(barreOnglets);
+    const finRangee = html.indexOf('<div id="main-content">');
+    expect(finRangee).toBeGreaterThan(debut);
+    // Aucun vestige de la bande supprimee : ni HTML, ni CSS.
+    expect(html).not.toContain('id="context-bar"');
+    expect(html).not.toContain('id="context-breadcrumb');
+    expect(css).not.toContain('#context-bar');
+    expect(css).not.toContain('#context-breadcrumb');
+    // La rangee : 36 px (la HAUTEUR DE LA RANGEE D'ONGLETS, aucune hauteur
+    // ajoutee), filet bas, dans le flux.
+    const regleRangee = sliceSource(css, "#tab-row {", "}", 40);
+    expect(regleRangee).toMatch(/min-height:\s*36px/);
+    expect(regleRangee).toMatch(/border-bottom:\s*1px solid var\(--border-subtle\)/);
+    expect(regleRangee).toMatch(/flex:\s*0 0 auto/);
+    expect(regleRangee).toMatch(/display:\s*flex/);
+    // Le fond et le filet bas ne sont plus peints par #tab-bar (une seule source).
+    const regleBarre = sliceSource(css, "#tab-bar {", "}", 40);
+    expect(regleBarre).toMatch(/flex:\s*1 1 auto/);
+    expect(regleBarre).toMatch(/min-width:\s*0/);
+    expect(regleBarre).not.toMatch(/background:/);
+    expect(regleBarre).not.toMatch(/border-bottom:/);
+    // L'entree « Travail » ne defile pas avec les onglets et occupe sa place
+    // reservee, sur toute la hauteur de la rangee.
+    expect(regleConteneur).toMatch(/align-self:\s*stretch/);
+    expect(regleConteneur).toMatch(/flex:\s*0 0 auto/);
   });
 
   it("le panneau se ferme par le cercle, par la croix et par Echap", () => {

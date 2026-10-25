@@ -173,24 +173,21 @@
 
   <!-- Zone de Travail (Droite) -->
   <main id="main-area">
-    <!-- LOT 4 de la presentation (docs/proposition-presentation-ui.md §3.4 et
-         lot 4 du §6) : BANDE DE CONTEXTE de 26 px, en haut de la zone de
-         travail. Elle s'empile DANS LE FLUX : bande de fenetre (32 px) ->
-         bande de contexte (26 px) -> barre d'onglets. Elle porte a gauche le
-         fil d'Ariane « Projet > <projet> > <onglet> » et a droite l'entree
-         « Travail » NOMMEE, qui remplace le cercle flottant (le cercle
-         chevauchait la barre d'onglets : plus aucun recouvrement possible
-         puisqu'il n'y a plus rien en position fixe ici). -->
-    <div id="context-bar">
-      <nav id="context-breadcrumb" aria-label="Fil d'Ariane">
-        <button type="button" id="context-breadcrumb-project" title="Projets" aria-haspopup="true" aria-expanded="false">Projet</button>
-        <span class="context-breadcrumb-sep" aria-hidden="true">›</span>
-        <span id="context-breadcrumb-name">Aucun projet</span>
-        <span class="context-breadcrumb-sep" aria-hidden="true">›</span>
-        <span id="context-breadcrumb-tab">Aucun onglet</span>
-      </nav>
+    <!-- RANGEE D'ONGLETS (remplace la bande de contexte de 26 px, supprimee :
+         docs/proposition-bande-contexte-allegee.md §4). Une seule rangee de
+         36 px, dans le flux : bande de fenetre (32 px) -> rangee d'onglets
+         (36 px) -> contenu. Elle porte la barre d'onglets et, a DROITE, dans
+         un conteneur SEPARE, l'entree « Travail » : l'entree ne peut donc pas
+         aller dans `#tab-bar` (tabs.js suppose que ses enfants sont « les
+         onglets + le bouton d'ajout d'agent ») ni dans la colonne de gauche
+         (masquee en mode zen, l'entree deviendrait inaccessible). Aucun
+         recouvrement : rien n'est en position fixe ici. -->
+    <div id="tab-row">
+      <div id="tab-bar"></div>
       <!-- Suivi du travail : UN SEUL panneau, ouvert par l'entree « Travail »
-           de la bande de contexte, à TROIS onglets, dans l'ORDRE DÉFINITIF (de
+           posee a DROITE de la rangee d'onglets (bande de contexte supprimee,
+           docs/proposition-bande-contexte-allegee.md §4), a TROIS onglets, dans
+           l'ORDRE DÉFINITIF (de
            gauche à droite) : « Agents » (qui travaille), « Tâches » (missions en
            cours et en attente) et « Événements » (journal système). Le panneau
            s'ouvre sur « Agents » tant que l'utilisateur n'a pas choisi un autre
@@ -199,7 +196,9 @@
            LOT 4 : `#agent-activity-dot` et `#agent-activity-badge` sont CONSERVES
            comme CONTENU du bouton nommé (identifiants et attributs
            d'accessibilité inchangés) ; le clic garde le comportement du cercle
-           (bascule du panneau) et la respiration n'a pas bougé. -->
+           (bascule du panneau) et la respiration n'a pas bougé.
+           Le bouton garde ses TROIS identifiants et UN SEUL ecouteur de clic
+           (src/js/agent-activity.js) : seule sa place change. -->
       <div id="agent-activity">
         <button type="button" id="agent-activity-entry" title="Suivi du travail" aria-label="Suivi du travail" aria-haspopup="true" aria-expanded="false"><span id="agent-activity-dot" title="Suivi du travail" aria-label="Suivi du travail" aria-haspopup="true" aria-expanded="false"></span><span class="agent-activity-entry-label">Travail</span><span id="agent-activity-badge" hidden>0</span></button>
         <div id="agent-activity-dropdown" class="hidden">
@@ -240,7 +239,6 @@
         <div id="agent-activity-card" class="hidden"></div>
       </div>
     </div>
-    <div id="tab-bar"></div>
     <div id="main-content">
       <div id="editor-container"></div>
       <img id="empty-logo" src="/logo_pilot_vector.svg" alt="Pilot" class="hidden" />

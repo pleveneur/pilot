@@ -193,8 +193,17 @@ function hauteurPanneau(vp) {
   return dimension(declaration(BLOC_PANNEAU(), "max-height"), vars, vp);
 }
 
-/** `top` du panneau (sous le cercle) + `top` du cercle : 8 + 22 px. */
-const DECALAGE_HAUT = 30;
+/**
+ * Decalage vertical reel du panneau depuis le haut de la fenetre, MESURE sur
+ * l'agencement en vigueur (Chrome, 1654 et 600 px de large) : bande de fenetre
+ * 32 px + rangee d'onglets 37 px (36 px de contenu + 1 px de filet bas) = 69 px.
+ * Le panneau s'ouvre donc SOUS la rangee (`top: calc(100% + 1px)` depuis
+ * `#agent-activity`, qui fait toute la hauteur de la rangee) : il ne recouvre
+ * jamais le bouton « Travail » (bas du bouton a 61 px).
+ * Avant la suppression de la bande de contexte : 30 px (le panneau s'ouvrait
+ * juste sous le bouton, dans la bande de 26 px).
+ */
+const DECALAGE_HAUT = 69;
 
 const FENETRES = [
   { l: 1920, h: 1080 },
