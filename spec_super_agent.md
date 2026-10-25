@@ -2632,7 +2632,23 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   tronque les descriptions longues à 100 caractères (fin de mot + `…`). Un test
   garde-fou (`super_agent_fixed_prompt_stays_under_budget`) échoue si le total
   des textes fixes dépasse le plafond `SUPER_AGENT_FIXED_PROMPT_BUDGET`
-  (5 550 caractères, mesuré à 5 497).
+  (6 250 caractères, mesuré à 6 213 — dont ~680 pour le bloc « documentation
+  lisible » ci-dessous ; le plafond valait 5 550 avant ce bloc).
+- **Documentation de Pilot lisible sur disque (spec_help.md §4.6)** : le prompt
+  porte le **chemin exact** de la documentation écrite au démarrage par
+  `help::write_startup_docs` dans `<app_data_dir>/aide/` (un fichier par thème +
+  `index.md`), et **deux règles** : (a) une question de **mode d'emploi** se
+  répond **directement**, jamais déléguée à un agent — même quand le mode
+  coordinateur ou la délégation sont actifs ; (b) si la documentation **ne dit
+  rien**, le dire au lieu d'inventer. Le bloc porte aussi le **garde-fou
+  mémoire** : une question de mode d'emploi ne laisse **rien** dans la mémoire
+  de suivi (ni tâche, ni décision, ni note de projet, ni mémoire de session ou
+  utilisateur) — la mémoire n'étant écrite que par les outils de l'Assistant,
+  la règle de prompt est la voie unique, sans second mécanisme. Bloc
+  `SUPER_AGENT_DOC_PROMPT` (chemin injecté), mesuré sur
+  `SUPER_AGENT_DOC_PATH_SAMPLE`. Verrou :
+  `assistant_prompt_names_readable_docs_path_and_both_rules` (échoue si le bloc
+  disparaît).
 - **Garde-fou du livrable (défaut « l'agent rend un plan »)** : deux verrous
   ferment le trou où une demande d'écriture rendait un texte et Pilot annonçait
   « terminé » sans fichier.

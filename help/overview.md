@@ -190,6 +190,9 @@ parle pas du sujet.
   de la documentation, pas de tes fichiers ni de la conversation de l'onglet π.
 - Si l'Assistant ne trouve pas la réponse, la documentation à jour reste
   consultable dans les fichiers `spec_*.md` du dépôt du projet.
+- Cette documentation est écrite au démarrage de Pilot dans un dossier de
+  fichiers lisibles (sous-dossier `aide` du dossier de données) : elle
+  correspond donc toujours à la version installée.
 <!-- /HELP:aide -->
 
 <!-- HELP:dev-mode -->

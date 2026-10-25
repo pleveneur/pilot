@@ -6,6 +6,7 @@
 Tu es l'assistant d'aide de l'éditeur Pilot. Réponds aux questions de
 l'utilisateur en te basant sur le contenu de ce handbook.
 
+<!-- HELP-TOPIC:overview -->
 ## Pilot en bref
 
 Pilot est un éditeur de texte multiplateforme pensé pour les agents IA. Il
@@ -28,6 +29,7 @@ externe.
 
 ---
 
+<!-- HELP-TOPIC:demarrage -->
 ## Démarrer un projet
 
 1. **Ouvrir un projet** : bouton **« 📁 Projets ▼ »** en haut de la barre
@@ -54,6 +56,7 @@ externe.
 
 ---
 
+<!-- HELP-TOPIC:raccourcis -->
 ## Raccourcis clavier essentiels
 
 ### Fichiers et onglets
@@ -83,6 +86,7 @@ externe.
 
 ---
 
+<!-- HELP-TOPIC:theme-parametres -->
 ## Thème et paramètres
 
 - **Thème** : bascule dark/light depuis les **Paramètres ⚙️** (bouton du panneau
@@ -116,6 +120,7 @@ externe.
 
 ---
 
+<!-- HELP-TOPIC:terminal -->
 ## Terminal intégré
 
 - Bouton **Terminal** dans le panneau d'actions (ou palette de commandes).
@@ -131,6 +136,7 @@ externe.
 
 ---
 
+<!-- HELP-TOPIC:recherche-outline -->
 ## Recherche, remplacement et outline
 
 - **Recherche globale** (`Ctrl+Shift+F`) : panneau de recherche full-text dans
@@ -152,6 +158,7 @@ externe.
 
 ---
 
+<!-- HELP-TOPIC:edition-lint -->
 ## Édition : multi-curseurs, lint, export HTML, fichiers récents
 
 - **Multi-curseurs** : `Alt+clic` ajoute un curseur à la position cliquée ;
@@ -170,6 +177,7 @@ externe.
 
 ---
 
+<!-- HELP-TOPIC:aide -->
 ## Réponses sur la documentation (l'Assistant répond)
 
 Il n'y a **plus d'onglet ni de bouton « Aide »**. Pour une question sur
@@ -185,9 +193,13 @@ parle pas du sujet.
   de la documentation, pas de tes fichiers ni de la conversation de l'onglet π.
 - Si l'Assistant ne trouve pas la réponse, la documentation à jour reste
   consultable dans les fichiers `spec_*.md` du dépôt du projet.
+- Cette documentation est écrite au démarrage de Pilot dans un dossier de
+  fichiers lisibles (sous-dossier `aide` du dossier de données) : elle
+  correspond donc toujours à la version installée.
 
 ---
 
+<!-- HELP-TOPIC:dev-mode -->
 ## Développer Pilot avec Pilot (mode dev)
 
 Tu peux **développer Pilot avec Pilot** : lancer une version **dev** en parallèle
@@ -206,6 +218,7 @@ Tu peux **développer Pilot avec Pilot** : lancer une version **dev** en parall�
 
 ---
 
+<!-- HELP-TOPIC:pi-update -->
 ## Mise à jour de l'agent Pi
 
 **Au démarrage de Pilot** — et à l'ouverture de l'onglet agent — Pilot
@@ -232,6 +245,7 @@ si une version plus récente existe réellement.
 
 ---
 
+<!-- HELP-TOPIC:pilot-update -->
 ## Mise à jour de Pilot
 
 Pilot vérifie tout seul s'il existe une version plus récente : une première
@@ -290,6 +304,7 @@ travailles t'est donc proposée **sans redémarrer** l'application.
 
 ---
 
+<!-- HELP-TOPIC:multi-agents -->
 ## Plusieurs agents sur un même projet (multi-onglets)
 
 Tu peux ouvrir **plusieurs onglets agent indépendants** sur le même projet,
@@ -312,6 +327,7 @@ chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
 
 ---
 
+<!-- HELP-TOPIC:lire-reponses -->
 ## Écouter une réponse à voix haute 🔊
 
 Chaque réponse de l'assistant (onglet **π** comme onglet **🧭 Assistant**) porte
@@ -408,6 +424,7 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
 
 ---
 
+<!-- HELP-TOPIC:gds -->
 ## GDS (gestionnaire de sources) — principe
 
 Le **GDS** (Gestionnaire De Sources) **centralise les sources des projets**
@@ -700,6 +717,7 @@ d'un hébergement externe type GitHub.
 
 ---
 
+<!-- HELP-TOPIC:commands -->
 ## Commandes du projet (▶)
 
 Lancez vos commandes de compilation / tests / etc. depuis la ligne
@@ -721,6 +739,7 @@ square-terminal**).
 
 ---
 
+<!-- HELP-TOPIC:agent-pi -->
 ## Agent Pi (onglet π)
 
 L'onglet **π** intègre l'agent de codage **Pi** (pi.dev) directement dans Pilot :
@@ -809,6 +828,7 @@ L'agent a accès aux fichiers du projet courant (lecture/écriture).
 
 ---
 
+<!-- HELP-TOPIC:orchestration -->
 ## Mode Orchestration
 
 Le **Mode Orchestration** (onglet π, activable dans les Paramètres ⚙️) fait
@@ -854,6 +874,7 @@ travailler ensemble deux IA :
 
 ---
 
+<!-- HELP-TOPIC:web-remote -->
 ## Accès distant (mode remote)
 
 Pilot peut exposer une **interface web distante** pour consulter le travail,
@@ -893,6 +914,7 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
 
 ---
 
+<!-- HELP-TOPIC:dictee-vocale -->
 ## Dictée vocale 🎙️
 
 Pilot intègre la dictée vocale (Web Speech API, langue `fr-FR`) pour saisir du
@@ -908,6 +930,7 @@ texte à la voix.
 
 ---
 
+<!-- HELP-TOPIC:pdf -->
 ## PDF : conversion en Markdown et export
 
 - **Conversion PDF → Markdown** : dans l'explorateur (barre latérale),
@@ -920,6 +943,7 @@ texte à la voix.
 
 ---
 
+<!-- HELP-TOPIC:context-engine -->
 ## Context Engine (auto-contexte agent)
 
 Pilot injecte **automatiquement** un contexte projet avant le 1er prompt de chaque
@@ -960,6 +984,7 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
 
 ---
 
+<!-- HELP-TOPIC:code-graph -->
 ` | Ajouté ici + regénérer handbook |
 
 ### Points de connexion à ne pas casser (l'existant à préserver)
@@ -1048,6 +1073,7 @@ réponde aux questions d'architecture **sans relire les fichiers** (économie de
 
 ---
 
+<!-- HELP-TOPIC:diff-review -->
 ## Porte pré-écriture (confirmer les modifications de l'agent)
 
 Par défaut, l'agent Pi modifie les fichiers librement. Activez **Paramètres →
@@ -1063,6 +1089,7 @@ autonome). Le changement du paramètre relance l'agent à chaud (session préser
 
 ---
 
+<!-- HELP-TOPIC:project-memory -->
 ### 📝 Mémoire de projet (H3)
 
 Pilot maintient un fichier `PROJECT_MEMORY.md` à la racine du projet, enrichi
@@ -1082,6 +1109,7 @@ contexte de l'agent.
 
 ---
 
+<!-- HELP-TOPIC:review -->
 ## 🔍 Onglet Review (revue de code assistée)
 
 L'onglet **🔍 Review** (bouton 🔍 dans la barre d'action, visible quand un projet
@@ -1112,6 +1140,7 @@ Voir [`spec_review.md`](spec_review.md) pour le détail technique.
 
 ---
 
+<!-- HELP-TOPIC:orchestration -->
 ### Reviewer indépendant (H2 V1)
 
 - **Opt-in** (Paramètres → Orchestration → Reviewer). Un second agent relit le diff
@@ -1126,6 +1155,7 @@ Voir [`spec_review.md`](spec_review.md) pour le détail technique.
 
 ---
 
+<!-- HELP-TOPIC:session-history -->
 ## Historique des sessions (onglet 📜)
 
 L'onglet **📜** indexe **toutes** vos sessions agent (passées et nouvelles)
@@ -1154,6 +1184,7 @@ des sessions (jours)** (0 = désactivé).
 
 ---
 
+<!-- HELP-TOPIC:agents -->
 ## Aide utilisateur — Agents
 
 L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivre** ce qu'elle fait. Pour lancer une tâche, utilisez l'onglet **🧭 Assistant** (ou la discussion d'un agent).
@@ -1263,6 +1294,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 
 ---
 
+<!-- HELP-TOPIC:agents-md -->
 ### 📄 Générer / mettre à jour AGENTS.md
 
 Pilot peut générer ou mettre à jour le fichier `AGENTS.md` à la racine du
@@ -1283,6 +1315,7 @@ projet en utilisant l'IA.
 
 ---
 
+<!-- HELP-TOPIC:multiprojets -->
 ## Projets multiples (multi-projets)
 
 Pilot peut ouvrir **plusieurs projets en même temps** dans la même fenêtre et
@@ -1322,6 +1355,7 @@ deux commandes ne sont pas envoyées au moteur.
 
 ---
 
+<!-- HELP-TOPIC:interprojets -->
 ## Discussion inter-projets (lier des projets)
 
 Pilot peut **lier des projets entre eux** pour qu'un projet dépose une **analyse /
@@ -1347,6 +1381,7 @@ tâche** à un autre projet, dont l'agent est lancé pour la traiter.
 
 ---
 
+<!-- HELP-TOPIC:super-agent -->
 ## Aide utilisateur — Assistant
 
 L'onglet **🧭 Assistant** est un assistant dédié qui **suit tous vos projets**
@@ -3302,6 +3337,7 @@ rejouer.
 
 ---
 
+<!-- HELP-TOPIC:super-agent-session-memory -->
 ### Reprendre après un redémarrage de Pilot
 L'assistant 🧭 garde une **mémoire de session** : à la fin d'un chantier ou
 quand le sujet change, il enregistre un **résumé court** de la discussion en
@@ -3324,6 +3360,7 @@ ancien sans avoir à annuler les plus récents.
 
 ---
 
+<!-- HELP-TOPIC:super-agent-mcp -->
 ### MCP piloté par l'Assistant
 
 L'Assistant peut piloter les **serveurs MCP** (connectés à Pilot) pour déléguer
@@ -3353,6 +3390,7 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
 
 ---
 
+<!-- HELP-TOPIC:super-agent-checklist -->
 ### Checklist de livraison d'une tâche
 
 Une tâche du tableau Kanban peut porter une **checklist de livraison** : la
@@ -3396,6 +3434,7 @@ Dans **Paramètres**, rubrique **« Assistant (suivi multi-projets) »** :
 
 ---
 
+<!-- HELP-TOPIC:super-agent-tracabilite -->
 ### Retrouver ce qui a été livré (traçabilité)
 
 La **traçabilité** relie chaque livraison à sa **demande d'origine** : vous voyez
@@ -3419,6 +3458,7 @@ d'un coup d'œil **qui a demandé quoi, quand**, sans fouiller les conversations
 
 ---
 
+<!-- HELP-TOPIC:super-agent-temps -->
 ### Noter le temps prévu et le temps passé d'une tâche
 
 Comparer **ce qu'une tâche avait coûté en prévision** à **ce qu'elle a réellement
@@ -3448,6 +3488,7 @@ le suivi du temps — et il est **masqué par défaut**.
 
 ---
 
+<!-- HELP-TOPIC:super-agent-taches-longues -->
 ### Repérer les tâches longues
 
 Certaines demandes sont **nettement plus lourdes** que les autres. Pour
@@ -3469,6 +3510,7 @@ plutôt que de les laisser peser sur l'assistant de suivi.
 
 ---
 
+<!-- HELP-TOPIC:super-agent-extensions-fiables -->
 ### Extensions d'agent : écriture fiable
 
 Les extensions de Pilot (les outils qu'un agent reçoit) sont réécrites sur le
@@ -3486,6 +3528,7 @@ disque à chaque lancement de session.
 
 ---
 
+<!-- HELP-TOPIC:file-attente-limites -->
 ### Deux limites connues, écrites noir sur blanc
 
 Après les correctifs d'**ordre d'arrivée**, de **file conservée à l'arrêt d'un
@@ -3511,6 +3554,7 @@ restent **non appliqués** (hors périmètre des correctifs déjà publiés).
 
 ---
 
+<!-- HELP-TOPIC:dashboard -->
 ## Aide utilisateur — Tableau de bord
 
 L'onglet **📊 Tableau de bord** (bouton **📊** de la barre latérale) affiche une
@@ -3602,6 +3646,7 @@ projet (ouverture, fermeture, bascule).
 
 ---
 
+<!-- HELP-TOPIC:vault -->
 ## Aide utilisateur — Coffre fort
 
 L'onglet **🔐 Coffre** (bouton **🔐** de la barre latérale) stocke vos mots de
@@ -3637,6 +3682,7 @@ passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
 
 ---
 
+<!-- HELP-TOPIC:anomaly -->
 ## Aide utilisateur — Détection d'anomalies et arrêt auto des agents bloqués
 
 Pilot surveille en arrière-plan l'activité de ses agents (codeur, agents du
@@ -3760,6 +3806,7 @@ normalement** l'agent au lieu de rester en file derrière un couple
 
 ---
 
+<!-- HELP-TOPIC:telegram -->
 ## Aide utilisateur — Notifications Telegram
 
 Pilot peut vous prévenir **sur Telegram** quand il a quelque chose à vous dire,
@@ -3896,6 +3943,7 @@ indique son état et votre choix est conservé après un redémarrage de Pilot.
 
 ---
 
+<!-- HELP-TOPIC:laya -->
 ## Service Laya (classification locale)
 
 Le **service Laya** est un classement automatique local qui tourne sur votre

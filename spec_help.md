@@ -9,6 +9,8 @@
 > La brique qui répond reste — c'est le **socle** (§4.4) et son **outil pour
 > l'Assistant** (§4.5) : c'est l'onglet **Assistant** qui répond désormais sur
 > la documentation. Ordre décidé : l'outil d'abord, le retrait ensuite.
+> Depuis §4.6, la documentation est en plus **écrite en fichiers lisibles** au
+> démarrage, que l'Assistant peut ouvrir directement.
 
 ---
 
@@ -207,6 +209,52 @@ de l'interface manque / utilise un sentinel **différent** ; le **test du plafon
 échoue si le 2ᵉ appel n'est plus refusé ou si le compteur n'est plus remis à zéro
 au tour suivant.
 
+### 4.6 Documentation de Pilot LISIBLE sur disque (l'Assistant la consulte)
+
+L'Assistant ne pouvait répondre aux questions de mode d'emploi qu'en passant par
+l'outil documentaire (`answer_from_documentation`). Il peut désormais **lire la
+documentation comme des fichiers**, sans rien réécrire ni dupliquer.
+
+| Élément | Valeur / règle |
+|---|---|
+| Où | `<app_data_dir>/aide/` (dossier de données de l'application, sous-dossier `aide`). Chemin **annoncé** à l'Assistant = chemin **écrit**, même fonction `help::doc_dir`. |
+| Quoi | `index.md` (sommaire cliquable) + **un fichier par thème** (`overview.md`, `agent-pi.md`, `super-agent.md`…). |
+| Contenu | Le bloc du handbook **tel quel** — aucune réécriture de fond, aucun second contenu. Deux blocs déclarant le **même** thème sont fusionnés dans le fichier de ce thème. |
+| Découpage | Sur les marqueurs `<!-- HELP-TOPIC:<slug> -->` que `scripts/build-handbook.js` place devant chaque bloc. Le séparateur `---` ne peut pas servir de frontière : un bloc peut légitimement en contenir un. |
+| Quand | **Au démarrage** (`setup` de `run()` → `help::write_startup_docs`, appel direct vérifié par un test). |
+| Idempotent | Un fichier dont le contenu est déjà exact n'est **pas réécrit** (0 écriture) ; seule une différence provoque une écriture. |
+| Fail-open | Un échec d'écriture est signalé (`eprintln`) et **ne bloque jamais** le démarrage. Aucun réseau. |
+| Sécurité | Le slug d'un thème est réduit aux caractères sûrs : aucun séparateur de chemin ne peut venir du handbook. |
+
+**Prompt de l'Assistant** (`SUPER_AGENT_DOC_PROMPT` dans `super_agent.rs`) : il
+porte le **chemin exact**, la nature du contenu (`index.md` + un fichier par
+thème) et les **deux règles** exigées :
+
+1. une question de **mode d'emploi** se répond **directement**, avec ce que dit
+   la documentation — elle n'est **jamais** déléguée à un agent ;
+2. si la documentation **ne dit rien** sur le point demandé, le dire clairement
+   **au lieu d'inventer**.
+
+**Garde-fou mémoire** : la mémoire de suivi n'est écrite que par les outils de
+l'Assistant lui-même (`update_session_memory`, `create_task`, `add_decision`…).
+La voie la plus simple ET la plus sûre est donc une **règle explicite dans le
+prompt** : une question de mode d'emploi ne laisse **rien** dans la mémoire
+(aucune tâche, décision, note de projet, mémoire de session ni utilisateur).
+Aucune modification du code d'écriture de la mémoire — aucun second mécanisme.
+
+> L'écran, le bouton et l'onglet Aide restent retirés (§9) et `help_model` reste
+> tel quel (repli de la Revue). Rien d'autre ne bouge.
+
+**Tests** (tous **échouent** si le geste est retiré) :
+
+| Test | Ce qu'il verrouille |
+|---|---|
+| `help::tests::la_documentation_est_ecrite_en_fichiers_lisibles_au_bon_endroit` | Fichiers produits dans `<app_data_dir>/aide/`, index complet dont chaque lien existe, contenu réel, idempotence (0 puis 1 écriture). |
+| `help::tests::le_decoupage_par_theme_suit_les_marqueurs_du_handbook` | Découpage par marqueur (`---` interne non coupant), en-tête hors thème, fusion des thèmes homonymes, handbook sans marqueur → erreur explicite. |
+| `help::tests::le_nom_de_fichier_dun_theme_est_sur` | Aucun chemin ne peut sortir du dossier. |
+| `help::tests::lecriture_au_demarrage_est_branchee_dans_le_setup` | L'appel `help::write_startup_docs(&handle);` existe **non commenté** dans `lib.rs`. |
+| `super_agent::tests::assistant_prompt_names_readable_docs_path_and_both_rules` | Le prompt contient le **chemin**, `index.md`, `read`, la règle (a), la règle (b) et le garde-fou mémoire. |
+
 ### 4.3 Historique multi-tours
 
 Le process pi étant `--no-session` et tué après chaque réponse, il n'a pas de
@@ -255,8 +303,9 @@ accepte, lui, un historique — il servait à l'écran Aide, désormais retiré.
 |---|---|
 | `help/overview.md` | Source aide : généralités (rédigé, orienté utilisateur) |
 | `help/handbook.md` | **Généré** (ne pas éditer) — embarqué via `include_str!` |
-| `scripts/build-handbook.js` | Agrégation des blocs HELP |
-| `src-tauri/src/help.rs` | `HANDBOOK` (const), socle structuré (`answer_from_handbook`, `finish_help_answer`, `resolve_help_doc_model`), commandes `get_handbook`, `ask_help_doc`, `ask_help`, `ask_pi_caged`/`ask_pi_caged_timed` |
+| `scripts/build-handbook.js` | Agrégation des blocs HELP + marqueurs `<!-- HELP-TOPIC:x -->` (frontières des fichiers lisibles, §4.6) |
+| `src-tauri/src/help.rs` | `HANDBOOK` (const), **documentation lisible** (`handbook_topics`, `doc_files_of`, `write_doc_files`, `write_startup_docs`, `doc_dir`), socle structuré (`answer_from_handbook`, `finish_help_answer`, `resolve_help_doc_model`), commandes `get_handbook`, `ask_help_doc`, `ask_help`, `ask_pi_caged`/`ask_pi_caged_timed` |
+| `src-tauri/src/lib.rs` | `setup` de `run()` : `help::write_startup_docs(&handle);` (écriture au démarrage, fail-open) |
 | `src-tauri/extensions/pilot-assistant-doc.ts` | Outil `answer_from_documentation` de l'Assistant (§4.5) : une entrée (la question), plafond 1 appel/tour, sortie honnête |
 | `src/js/super-agent.js` | Relais du sentinel `PILOT_ASSISTANT_DOC::` → `ask_help_doc` (point unique) |
 | `src/js/assistant-outil-doc.test.js` | Câblage (extension + déclaration ×2 + relais + sentinel identique) + plafond + sortie honnête |

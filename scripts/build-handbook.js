@@ -98,7 +98,13 @@ function main() {
     "",
   ].join("\n");
 
-  const body = all.map((b) => b.body).join("\n\n---\n\n");
+  // Marqueur de thème devant chaque bloc : c'est la frontière que lit le
+  // programme (Rust : `help::handbook_topics`) pour écrire la documentation
+  // LISIBLE sur disque, un fichier par thème. Le séparateur `---` du corps ne
+  // peut pas servir de frontière : un bloc peut légitimement en contenir un.
+  const body = all
+    .map((b) => `<!-- HELP-TOPIC:${b.topic} -->\n${b.body}`)
+    .join("\n\n---\n\n");
 
   const out = header + body + "\n";
 

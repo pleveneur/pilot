@@ -552,7 +552,32 @@ const SUPER_AGENT_ROLE_TEMPLATE: &str = "Tu es « {} », l'assistant de suivi mu
 /// système de l'assistant (rôle, règles figées et voix permanente), injectés à
 /// chaque message indépendamment des données et des toggles. Fixé au total
 /// mesuré après nettoyage, majoré de 5 % (arrondi au multiple de 50 supérieur).
-const SUPER_AGENT_FIXED_PROMPT_BUDGET: usize = 5550;
+/// Dernière valeur mesurée : 6 213 caractères (dont le bloc « documentation
+/// lisible sur disque », ~680 caractères), arrondie à 6 250.
+const SUPER_AGENT_FIXED_PROMPT_BUDGET: usize = 6250;
+
+/// Chemin de référence utilisé pour MESURER le budget du prompt fixe : le vrai
+/// chemin dépend du dossier de données de l'utilisateur (Windows :
+/// `<AppData>\Roaming\<identifiant>\aide`), donc de longueur variable. Le
+/// plafond est mesuré sur ce chemin représentatif et la mesure est affichée par
+/// les tests.
+const SUPER_AGENT_DOC_PATH_SAMPLE: &str =
+    "C:\\Users\\utilisateur\\AppData\\Roaming\\com.pilot.editor\\aide";
+
+/// Bloc d'instructions figé : la **documentation de Pilot est lisible sur
+/// disque** (écrite au démarrage par `help::write_startup_docs`, un fichier par
+/// thème + `index.md`), et les DEUX règles demandées par le propriétaire :
+/// (a) une question de mode d'emploi se répond **directement**, jamais déléguée
+/// à un agent ; (b) si la documentation ne dit rien, le dire au lieu d'inventer.
+/// Il porte aussi le garde-fou mémoire : une question de mode d'emploi ne laisse
+/// RIEN dans la mémoire de suivi (ni tâche, ni décision, ni note de projet, ni
+/// mémoire de session/utilisateur). `{}` est remplacé par le chemin exact.
+const SUPER_AGENT_DOC_PROMPT: &str = "\n\n## Documentation de Pilot (mode d'emploi)\nLa documentation de Pilot est lisible sur disque, un fichier par thème + `index.md` : `{}`. Ouvre-la avec `read` quand une question porte sur le fonctionnement de Pilot.\nDeux règles : (a) une question de mode d'emploi se répond DIRECTEMENT ici, avec ce que dit la documentation — tu ne la délègues JAMAIS à un agent ; (b) si la documentation ne dit rien sur le point demandé, dis-le clairement au lieu d'inventer.\nUne question de mode d'emploi ne laisse RIEN dans la mémoire de suivi : aucune tâche, aucune décision, aucune note de projet, aucune mémoire de session ni utilisateur.";
+
+/// Construit le bloc documentaire avec le chemin réel de la documentation.
+pub(crate) fn doc_guideline(dir: &str) -> String {
+    SUPER_AGENT_DOC_PROMPT.replace("{}", dir)
+}
 
 
 #[tauri::command]
@@ -691,6 +716,8 @@ struct SuperAgentPromptBlocks<'a> {
     project_context: &'a str,
     known_projects: &'a str,
     available_agents: &'a str,
+    /// Chemin exact de la documentation de Pilot lisible sur disque.
+    doc_dir: &'a str,
     custom_prompt: &'a str,
     user_memory: &'a str,
     session_memory: &'a str,
@@ -712,6 +739,7 @@ fn assemble_super_agent_system_prompt(blocks: &SuperAgentPromptBlocks) -> String
     full_system.push_str(blocks.project_context);
     full_system.push_str(blocks.known_projects);
     full_system.push_str(blocks.available_agents);
+    full_system.push_str(&doc_guideline(blocks.doc_dir));
     full_system.push_str(SUPER_AGENT_TOOLS_PROMPT);
     full_system.push_str(SUPER_AGENT_RESILIENCE_PROMPT);
     full_system.push_str(SUPER_AGENT_AGENTSMD_PROMPT);
@@ -837,6 +865,10 @@ pub(crate) fn do_send_super_agent_prompt(
     // doit connaître les agents disponibles et la procédure de planification
     // avant délégation au codeur.
     let available_agents = available_agents_context(state, app);
+    // Documentation de Pilot lisible sur disque : le chemin annoncé à
+    // l'assistant est EXACTEMENT celui où le démarrage écrit les fichiers
+    // (même fonction `help::doc_dir`).
+    let doc_dir = crate::help::doc_dir(app).to_string_lossy().to_string();
     // Mémoire de session (reprise) : après un redémarrage de Pilot, la session
     // repart de zéro. On réinjecte le résumé de la dernière session pour que
     // l'assistant reprenne naturellement là où on en était dès le premier
@@ -853,6 +885,7 @@ pub(crate) fn do_send_super_agent_prompt(
         project_context: &project_context,
         known_projects: &known_projects,
         available_agents: &available_agents,
+        doc_dir: &doc_dir,
         custom_prompt: &system_prompt,
         user_memory: &user_memory,
         session_memory: &session_memory,
@@ -8446,11 +8479,13 @@ mod tests {
             .join("\n- ")
         );
         let session_memory = String::from("Chantier en cours : alléger le prompt de l'assistant.");
+        let doc_dir = super::SUPER_AGENT_DOC_PATH_SAMPLE;
         let blocks = super::SuperAgentPromptBlocks {
             role: &role,
             project_context: &project_context,
             known_projects: &known_projects,
             available_agents: &available_agents,
+            doc_dir,
             custom_prompt: "",
             user_memory: "",
             session_memory: &session_memory,
@@ -8483,6 +8518,10 @@ mod tests {
                 super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count(),
             ),
             ("SCHEDULE", super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()),
+            (
+                "DOCUMENTATION LISIBLE",
+                super::doc_guideline(doc_dir).chars().count(),
+            ),
             ("VOICE", super::voice_guideline().chars().count()),
         ];
         for (name, n) in &fixed_parts {
@@ -8493,6 +8532,7 @@ mod tests {
             ("contexte projet", project_context.chars().count()),
             ("liste projets", known_projects.chars().count()),
             ("liste agents", available_agents.chars().count()),
+            ("documentation lisible", super::doc_guideline(doc_dir).chars().count()),
             ("textes figés + voix", fixed),
             ("memoire de session", session_memory_block.chars().count()),
         ];
@@ -8548,6 +8588,58 @@ mod tests {
     /// message ne doit pas dépasser `SUPER_AGENT_FIXED_PROMPT_BUDGET`. Si ce test
     /// échoue, c'est qu'une consigne a été rallongée ou ajoutée : compacter (ou
     /// relever le plafond explicitement, en justifiant la nouvelle règle).
+    /// VERROU (spec_help.md §4.6) : le prompt de l'Assistant annonce le CHEMIN
+    /// EXACT de la documentation lisible sur disque et les DEUX règles exigées
+    /// (répondre directement / dire quand la documentation ne dit rien). Ce
+    /// test ÉCHOUE si le bloc est retiré du prompt.
+    #[test]
+    fn assistant_prompt_names_readable_docs_path_and_both_rules() {
+        let dir = crate::help::doc_dir_for(std::path::Path::new("/donnees/pilot"));
+        let label = dir.to_string_lossy().to_string();
+        let blocks = super::SuperAgentPromptBlocks {
+            role: "",
+            project_context: "",
+            known_projects: "",
+            available_agents: "",
+            doc_dir: &label,
+            custom_prompt: "",
+            user_memory: "",
+            session_memory: "",
+            concise: false,
+            coordinator: false,
+            user_friendly: false,
+            adaptive_personality: false,
+            personality: "",
+        };
+        let full = super::assemble_super_agent_system_prompt(&blocks);
+        // Le chemin de la documentation, exactement celui de l'écriture.
+        assert!(
+            full.contains(&label),
+            "chemin de la documentation absent du prompt : {full}"
+        );
+        assert!(full.contains("index.md"), "l'index doit être annoncé");
+        assert!(full.contains("`read`"), "l'outil de lecture doit être annoncé");
+        // Règle (a) : répondre directement, jamais déléguer.
+        assert!(
+            full.contains("se répond DIRECTEMENT ici"),
+            "règle (a) absente : {full}"
+        );
+        assert!(
+            full.contains("tu ne la délègues JAMAIS à un agent"),
+            "règle (a) incomplète : {full}"
+        );
+        // Règle (b) : dire que la documentation ne dit rien, ne pas inventer.
+        assert!(
+            full.contains("ne dit rien") && full.contains("au lieu d'inventer"),
+            "règle (b) absente : {full}"
+        );
+        // Garde-fou mémoire : la question de mode d'emploi ne laisse rien.
+        assert!(
+            full.contains("ne laisse RIEN dans la mémoire de suivi"),
+            "garde-fou mémoire absent : {full}"
+        );
+    }
+
     #[test]
     fn super_agent_fixed_prompt_stays_under_budget() {
         let total = super::SUPER_AGENT_ROLE_TEMPLATE.chars().count()
@@ -8556,6 +8648,9 @@ mod tests {
             + super::SUPER_AGENT_AGENTSMD_PROMPT.chars().count()
             + super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count()
             + super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()
+            + super::doc_guideline(super::SUPER_AGENT_DOC_PATH_SAMPLE)
+                .chars()
+                .count()
             + super::voice_guideline().chars().count();
         let budget = super::SUPER_AGENT_FIXED_PROMPT_BUDGET;
         eprintln!("prompt assistant — textes fixes : {total} caracteres (plafond {budget})");

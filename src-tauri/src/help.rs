@@ -24,6 +24,7 @@
 // d'envoyer la suivante (pattern éprouvé par test direct).
 
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -31,7 +32,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Manager, State};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -54,6 +55,198 @@ pub struct HelpTurn {
 #[tauri::command]
 pub fn get_handbook() -> String {
     HANDBOOK.to_string()
+}
+
+// ── Documentation de Pilot LISIBLE sur disque (spec_help.md §4.6) ──
+//
+// L'Assistant répond aux questions de mode d'emploi : il lui faut la
+// documentation dans des fichiers qu'il peut OUVRIR, pas seulement embarquée
+// dans le binaire. Le contenu n'est ni réécrit ni dupliqué : on découpe le
+// handbook déjà compilé (`HANDBOOK`, généré par `scripts/build-handbook.js`)
+// sur les marqueurs de thème qu'il porte, et on écrit un fichier par thème au
+// démarrage, dans `<app_data_dir>/aide/`. **Un seul contenu, une seule
+// source** de production (le handbook).
+
+/// Nom du dossier de la documentation lisible, sous le dossier de données.
+pub const DOC_DIR_NAME: &str = "aide";
+
+/// Nom du fichier d'index de la documentation lisible.
+pub const DOC_INDEX_FILE: &str = "index.md";
+
+/// Marqueur de frontière de thème dans le handbook généré.
+pub const TOPIC_MARKER_PREFIX: &str = "<!-- HELP-TOPIC:";
+
+/// Fin d'un marqueur de thème (`-->`).
+const TOPIC_MARKER_SUFFIX: &str = "-->";
+
+/// Découpe un handbook en **thèmes** `(slug, contenu)`, dans l'ordre du
+/// fichier. Un thème commence à un marqueur `<!-- HELP-TOPIC:<slug> -->` ; le
+/// contenu qui précède le premier marqueur (en-tête généré) est ignoré.
+/// **Fonction pure** : testable sur n'importe quel handbook.
+pub fn handbook_topics(handbook: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut current: Option<(String, Vec<&str>)> = None;
+    for line in handbook.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(TOPIC_MARKER_PREFIX) {
+            if let Some(slug) = rest.strip_suffix(TOPIC_MARKER_SUFFIX) {
+                if let Some((prev, lines)) = current.take() {
+                    push_topic(&mut out, &prev, &lines);
+                }
+                current = Some((slug.trim().to_string(), Vec::new()));
+                continue;
+            }
+        }
+        if let Some((_, lines)) = current.as_mut() {
+            lines.push(line);
+        }
+    }
+    if let Some((slug, lines)) = current.take() {
+        push_topic(&mut out, &slug, &lines);
+    }
+    out
+}
+
+/// Range un thème terminé : contenu vide ou slug vide → rien (jamais un
+/// fichier fantôme dans le dossier de documentation).
+fn push_topic(out: &mut Vec<(String, String)>, slug: &str, lines: &[&str]) {
+    if slug.trim().is_empty() {
+        return;
+    }
+    let body = lines.join("\n");
+    let body = body.trim();
+    if body.is_empty() {
+        return;
+    }
+    out.push((slug.trim().to_string(), format!("{}\n", body)));
+}
+
+/// Nom de fichier d'un thème : `<slug>.md`, slug réduit aux caractères sûrs
+/// (aucun séparateur de chemin ne peut venir d'un handbook). Repli
+/// `theme.md` si le slug ne contient aucun caractère exploitable.
+pub fn doc_file_name(topic: &str) -> String {
+    let mut slug = String::new();
+    for c in topic.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "theme.md".to_string()
+    } else {
+        format!("{}.md", slug)
+    }
+}
+
+/// Titre lisible d'un thème : son premier titre Markdown, sinon le slug.
+/// Sert uniquement à l'index (le contenu écrit, lui, n'est pas réécrit).
+fn doc_title(topic: &str, body: &str) -> String {
+    for line in body.lines() {
+        let t = line.trim_start();
+        let rest = t
+            .strip_prefix("### ")
+            .or_else(|| t.strip_prefix("## "))
+            .or_else(|| t.strip_prefix("# "));
+        if let Some(r) = rest {
+            let r = r.trim();
+            if !r.is_empty() {
+                return r.to_string();
+            }
+        }
+    }
+    topic.to_string()
+}
+
+/// Fichiers de la documentation lisible : l'index **puis** un fichier par
+/// thème. Le contenu de chaque thème est le bloc du handbook **tel quel**
+/// (aucune réécriture de fond). Deux blocs qui déclarent le **même** thème sont
+/// fusionnés dans le fichier de ce thème (un seul fichier par thème, dans
+/// l'ordre du handbook).
+pub fn doc_files_of(handbook: &str) -> Vec<(String, String)> {
+    let topics = handbook_topics(handbook);
+    let mut index = String::new();
+    index.push_str("# Documentation de Pilot (aide)\n\n");
+    index.push_str(
+        "Documentation de l'éditeur Pilot, un fichier par thème (même dossier que cet \
+         index).\n\n",
+    );
+    let mut files: Vec<(String, String)> = Vec::new();
+    for (topic, body) in &topics {
+        let name = doc_file_name(topic);
+        let title = doc_title(topic, body);
+        if let Some(existing) = files.iter_mut().find(|(n, _)| *n == name) {
+            existing.1.push('\n');
+            existing.1.push_str(body);
+            continue;
+        }
+        index.push_str(&format!("- [{}]({})\n", title, name));
+        files.push((name, body.clone()));
+    }
+    let mut out = vec![(DOC_INDEX_FILE.to_string(), index)];
+    out.extend(files);
+    out
+}
+
+/// Écrit la documentation lisible dans `dir` (créé au besoin). **Idempotent** :
+/// un fichier dont le contenu est déjà exactement le bon n'est **pas** réécrit
+/// (aucune écriture disque inutile, aucune date de modification qui bouge).
+/// Retourne le nombre de fichiers réellement écrits (0 = tout était à jour).
+pub fn write_doc_files(dir: &Path, handbook: &str) -> Result<usize, String> {
+    let files = doc_files_of(handbook);
+    if files.len() <= 1 {
+        return Err(
+            "Documentation vide : aucun thème trouvé dans le handbook (marqueurs HELP-TOPIC \
+             absents ?)"
+                .to_string(),
+        );
+    }
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("Création du dossier de documentation impossible : {}", e))?;
+    let mut written = 0usize;
+    for (name, content) in files {
+        let path = dir.join(&name);
+        if std::fs::read_to_string(&path).ok().as_deref() == Some(content.as_str()) {
+            continue;
+        }
+        std::fs::write(&path, &content)
+            .map_err(|e| format!("Écriture de {} impossible : {}", path.display(), e))?;
+        written += 1;
+    }
+    Ok(written)
+}
+
+/// Dossier de la documentation lisible sous un dossier de données donné.
+pub fn doc_dir_for(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(DOC_DIR_NAME)
+}
+
+/// Dossier de la documentation lisible (dossier de données de l'application).
+/// Le chemin annoncé à l'Assistant est **exactement** celui utilisé pour
+/// l'écriture (même fonction) : aucun risque d'annoncer un chemin faux.
+pub fn doc_dir(app: &tauri::AppHandle) -> PathBuf {
+    doc_dir_for(&app.path().app_data_dir().unwrap_or_default())
+}
+
+/// Écrit la documentation lisible **au démarrage** de Pilot (appelée depuis le
+/// `setup` de `run()`). Fail-open : un échec d'écriture est signalé sans jamais
+/// bloquer ni faire échouer le démarrage. Retourne le nombre de fichiers
+/// écrits (0 = déjà à jour).
+pub fn write_startup_docs(app: &tauri::AppHandle) -> usize {
+    let dir = doc_dir(app);
+    match write_doc_files(&dir, HANDBOOK) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!(
+                "[aide] documentation lisible non écrite dans {} : {}",
+                dir.display(),
+                e
+            );
+            0
+        }
+    }
 }
 
 // ── Socle réutilisable : « répondre à partir de la documentation » ──
@@ -840,6 +1033,140 @@ mod tests {
             err.to_lowercase().contains("aucun modèle"),
             "message d'erreur inattendu : {}",
             err
+        );
+    }
+
+    // ── Documentation lisible sur disque (§4.6) : tests PURS / disque local ──
+
+    /// (a) La documentation est écrite au BON endroit, un fichier par thème +
+    /// un index, et le contenu n'est pas réécrit (c'est le bloc du handbook).
+    /// Ce test échoue si le geste d'écriture ou le découpage par thème est
+    /// retiré.
+    #[test]
+    fn la_documentation_est_ecrite_en_fichiers_lisibles_au_bon_endroit() {
+        let app_data = std::env::temp_dir().join(format!("pilot-aide-{}", std::process::id()));
+        let dir = doc_dir_for(&app_data);
+        assert_eq!(dir, app_data.join(DOC_DIR_NAME));
+        let _ = std::fs::remove_dir_all(&app_data);
+
+        let written = write_doc_files(&dir, HANDBOOK).expect("écriture de la documentation");
+        assert!(written >= 2, "au moins l'index + un thème (écrits : {written})");
+
+        // L'index est là et pointe des fichiers qui existent VRAIMENT.
+        let index = std::fs::read_to_string(dir.join(DOC_INDEX_FILE)).expect("index.md lisible");
+        let mut linked = 0usize;
+        for line in index.lines() {
+            let Some(open) = line.rfind("](") else { continue };
+            let Some(close) = line.rfind(')') else { continue };
+            if close <= open + 2 {
+                continue;
+            }
+            let name = &line[open + 2..close];
+            assert!(
+                dir.join(name).is_file(),
+                "l'index annonce {} qui n'existe pas dans {}",
+                name,
+                dir.display()
+            );
+            linked += 1;
+        }
+        assert!(linked > 10, "l'index doit lister les thèmes (liés : {linked})");
+
+        // Le thème `overview` est présent et contient le vrai contenu.
+        let overview = std::fs::read_to_string(dir.join("overview.md")).expect("overview.md");
+        assert!(overview.contains("## Pilot en bref"), "contenu réel attendu");
+        assert!(overview.contains("Pilot est un"));
+
+        // Le premier thème réellement listé est aussi celui du handbook.
+        let topics = handbook_topics(HANDBOOK);
+        let unique: std::collections::BTreeSet<String> =
+            topics.iter().map(|(t, _)| doc_file_name(t)).collect();
+        assert_eq!(
+            unique.len(),
+            linked,
+            "un fichier par thème (thèmes homonymes fusionnés), ni plus ni moins"
+        );
+        assert_eq!(topics[0].0, "overview");
+        // Le thème `orchestration` est déclaré par DEUX blocs : ils sont
+        // fusionnés dans un seul fichier (aucun écrasement silencieux).
+        if topics.len() > unique.len() {
+            let orch = std::fs::read_to_string(dir.join("orchestration.md")).expect("fusion");
+            assert!(
+                orch.contains("## Mode Orchestration") && orch.contains("### Reviewer indépendant"),
+                "les deux blocs `orchestration` doivent cohabiter"
+            );
+        }
+
+        // IDEMPOTENCE : un second passage n'écrit RIEN.
+        assert_eq!(
+            write_doc_files(&dir, HANDBOOK).expect("second passage"),
+            0,
+            "contenu inchangé → aucune écriture"
+        );
+        // ... et un contenu qui change est bien réécrit (un seul fichier).
+        std::fs::write(dir.join("overview.md"), "ancien contenu\n").expect("écriture");
+        assert_eq!(write_doc_files(&dir, HANDBOOK).expect("réécriture"), 1);
+
+        let _ = std::fs::remove_dir_all(&app_data);
+    }
+
+    /// Le découpage par thème lit les marqueurs du handbook généré ; sans eux,
+    /// aucun fichier ne serait produit (le séparateur `---` ne suffit pas : un
+    /// bloc peut en contenir un).
+    #[test]
+    fn le_decoupage_par_theme_suit_les_marqueurs_du_handbook() {
+        let mini = "<!-- PILOT-HELP topics=a,b -->\n# Aide\nintro\n\
+                    <!-- HELP-TOPIC:a -->\n## Thème A\ntexte a\n\n---\n\nsuite a\n\
+                    <!-- HELP-TOPIC:b -->\n## Thème B\ntexte b\n";
+        let topics = handbook_topics(mini);
+        assert_eq!(topics.len(), 2);
+        assert_eq!(topics[0].0, "a");
+        assert!(topics[0].1.contains("## Thème A"));
+        // Le `---` interne au bloc ne coupe PAS le thème.
+        assert!(topics[0].1.contains("suite a"), "thème coupé sur `---` : {:?}", topics[0].1);
+        assert!(!topics[0].1.contains("intro"), "l'en-tête généré reste hors thème");
+        assert_eq!(topics[1].0, "b");
+
+        let files = doc_files_of(mini);
+        let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec![DOC_INDEX_FILE, "a.md", "b.md"]);
+        // Deux blocs du même thème → un seul fichier (contenus fusionnés).
+        let fusion = format!("{mini}<!-- HELP-TOPIC:a -->\n## Thème A bis\nautre a\n");
+        let names: Vec<String> = doc_files_of(&fusion).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, vec![DOC_INDEX_FILE.to_string(), "a.md".to_string(), "b.md".to_string()]);
+
+        // Un handbook sans marqueur ne produit rien : erreur explicite, jamais
+        // un dossier vide silencieux.
+        let dir = std::env::temp_dir().join(format!("pilot-aide-vide-{}", std::process::id()));
+        assert!(write_doc_files(&dir, "# rien du tout\n").is_err());
+    }
+
+    /// Le slug d'un thème ne peut jamais fabriquer un chemin.
+    #[test]
+    fn le_nom_de_fichier_dun_theme_est_sur() {
+        assert_eq!(doc_file_name("overview"), "overview.md");
+        assert_eq!(doc_file_name("theme-parametres"), "theme-parametres.md");
+        assert_eq!(doc_file_name("../../etc/passwd"), "etc-passwd.md");
+        assert_eq!(doc_file_name("A\\B"), "a-b.md");
+        assert_eq!(doc_file_name("..."), "theme.md");
+    }
+
+    /// L'écriture au démarrage est BRANCHÉE dans le `setup` de `run()` : sans
+    /// cet appel, les fichiers existeraient en théorie seulement.
+    #[test]
+    fn lecriture_au_demarrage_est_branchee_dans_le_setup() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("lecture de lib.rs")
+            .replace("\r\n", "\n");
+        // Ligne EXACTE (indentation comprise) : une version commentée ne compte
+        // pas comme un branchement (sinon le verrou ne verrouillerait rien).
+        let branche = src
+            .lines()
+            .any(|l| l.trim() == "help::write_startup_docs(&handle);");
+        assert!(
+            branche,
+            "le setup de run() doit APPELER help::write_startup_docs(&handle); \
+             (ligne non commentée)"
         );
     }
 
