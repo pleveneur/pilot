@@ -3147,6 +3147,10 @@ impl AgentService {
             ("pilot-assistant-schedule.ts", include_str!("../extensions/pilot-assistant-schedule.ts")),
             ("pilot-assistant-tools.ts", include_str!("../extensions/pilot-assistant-tools.ts")),
             ("pilot-assistant-session-memory.ts", include_str!("../extensions/pilot-assistant-session-memory.ts")),
+            // Documentation intégrée : l'assistant répond au mode d'emploi de
+            // Pilot (outil `answer_from_documentation`, 1 appel par tour) via la
+            // commande du socle `ask_help_doc`. Lecture seule, sans projet.
+            ("pilot-assistant-doc.ts", include_str!("../extensions/pilot-assistant-doc.ts")),
             // Passerelle du visage : outils set_expression/get_status/set_position/
             // reset fournis par Pilot (aucun processus externe, ni Node ni MCP).
             ("pilot-face.ts", include_str!("../extensions/pilot-face.ts")),
@@ -3361,6 +3365,11 @@ impl AgentService {
                         ("pilot-assistant-schedule.ts", include_str!("../extensions/pilot-assistant-schedule.ts")),
                         ("pilot-assistant-tools.ts", include_str!("../extensions/pilot-assistant-tools.ts")),
                         ("pilot-assistant-session-memory.ts", include_str!("../extensions/pilot-assistant-session-memory.ts")),
+                        // Documentation intégrée : l'assistant répond au mode
+                        // d'emploi de Pilot (outil `answer_from_documentation`,
+                        // 1 appel par tour) via la commande du socle
+                        // `ask_help_doc`. Lecture seule, sans projet.
+                        ("pilot-assistant-doc.ts", include_str!("../extensions/pilot-assistant-doc.ts")),
                         // Passerelle du visage : outils de pilotage de PLface fournis
                         // par Pilot (aucun processus externe, ni Node ni MCP).
                         ("pilot-face.ts", include_str!("../extensions/pilot-face.ts")),

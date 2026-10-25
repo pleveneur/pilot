@@ -188,6 +188,27 @@ disponible » → erreur). Ces tests échouent si l'un des gestes est retiré.
 > le style de l'écran Aide n'est pas touché (partagé par la Revue et
 > l'Historique).
 
+### 4.5 L'Assistant appelle la réponse documentaire (outil `answer_from_documentation`)
+
+Lot intermédiaire de la disparition de l'écran Aide : l'**Assistant** (onglet 🧭)
+peut désormais **appeler** la réponse sur la documentation. Rien n'est encore
+retiré de l'écran Aide.
+
+| Élément | Valeur / règle |
+|---|---|
+| Outil | `answer_from_documentation(question)` — déclaré par `src-tauri/extensions/pilot-assistant-doc.ts`. **Une seule entrée** (la question) : aucun chemin de projet, aucun fichier, aucun historique — l'inverse des outils de lecture de projet. **Lecture seule**, n'écrit rien. |
+| Brique | Aucune duplication : le relais de l'interface exécute la commande du socle `ask_help_doc` (§4.4). Aucun second prompt, aucune lecture de fichier. |
+| Relais | **Un seul point** : `super-agent.js` reconnaît le sentinel `PILOT_ASSISTANT_DOC::` (à côté des autres sentinels d'outils de l'Assistant), exécute `ask_help_doc` et renvoie le JSON `HandbookAnswer` comme `value`. |
+| Plafond | **Un seul appel par tour.** Chaque appel renvoie toute la documentation au modèle : le 2ᵉ appel du même tour est **refusé** avec un message qui dit pourquoi, quoi faire, et interdit d'inventer ; il n'atteint pas Pilot (aucun coût). Remise à zéro au début du tour suivant (hook `before_agent_start`). |
+| Sortie (honnête) | Texte de la réponse, **sections de doc qui recoupent** la réponse (recoupement approximatif par titre, jamais présenté comme une citation exacte), avertissement explicite **« la documentation ne dit rien »** quand `insufficient` est levé, mention de la coupure quand `truncated`. Une erreur de Pilot est dite, jamais masquée. |
+| Déclaration | Le fichier d'extension est écrit sur disque dans les **deux** listes de `agent_service.rs` (`write_assistant_extensions`, `spawn_superagent_session`) : sans les deux, l'outil n'existe pas. |
+
+**Tests** (`src/js/assistant-outil-doc.test.js`) : le **test de câblage** échoue si
+l'extension n'est pas déclarée (une seule liste, outil renommé) ou si le relais
+de l'interface manque / utilise un sentinel **différent** ; le **test du plafond**
+échoue si le 2ᵉ appel n'est plus refusé ou si le compteur n'est plus remis à zéro
+au tour suivant.
+
 ### 4.3 Historique multi-tours
 
 Le process pi étant `--no-session` et tué après chaque réponse, il n'a pas de
@@ -236,6 +257,9 @@ mémoire entre les tours. L'historique d'aide est **géré côté frontend**
 | `help/handbook.md` | **Généré** (ne pas éditer) — embarqué via `include_str!` |
 | `scripts/build-handbook.js` | Agrégation des blocs HELP |
 | `src-tauri/src/help.rs` | `HANDBOOK` (const), socle structuré (`answer_from_handbook`, `finish_help_answer`, `resolve_help_doc_model`), commandes `get_handbook`, `ask_help_doc`, `ask_help`, `ask_pi_caged`/`ask_pi_caged_timed` |
+| `src-tauri/extensions/pilot-assistant-doc.ts` | Outil `answer_from_documentation` de l'Assistant (§4.5) : une entrée (la question), plafond 1 appel/tour, sortie honnête |
+| `src/js/super-agent.js` | Relais du sentinel `PILOT_ASSISTANT_DOC::` → `ask_help_doc` (point unique) |
+| `src/js/assistant-outil-doc.test.js` | Câblage (extension + déclaration ×2 + relais + sentinel identique) + plafond + sortie honnête |
 | `src/js/help.js` | Onglet Aide : chat, historique, envoi, rendu Markdown |
 | `index.html` | Onglet « ❓ Aide » + zone chat |
 | `src/css/style.css` | Styles (réutilise une partie de agent-pi) |

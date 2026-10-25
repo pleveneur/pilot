@@ -4305,6 +4305,13 @@ function accumulateSuperLoopToolResponse(messagesEl, method, payload) {
       const raTask = String(raInfo.task || "").trim();
       fingerprint = buildToolLoopFingerprint("run_agents", { agent_ids: raIds, task: raTask });
       superLoopBuffer += "run_agents task: " + raTask + "\n";
+    } else if (title.startsWith("PILOT_ASSISTANT_DOC::")) {
+      // Documentation intégrée (answer_from_documentation) : deux questions
+      // identiques dans le même tour sont un motif de boucle (le plafond d'un
+      // appel par tour reste la première barrière, posée côté extension).
+      fingerprint = buildToolLoopFingerprint("answer_from_documentation", {
+        question: title.slice("PILOT_ASSISTANT_DOC::".length),
+      });
     } else if (title.startsWith("PILOT_ASSISTANT_SESSIONS::")) {
       // Issue #143 : empreinte concordante pour list_agent_sessions (le sentinel
       // arrive via un input d'outil, pas via tool_execution_start).
@@ -4869,6 +4876,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const TELEGRAM_NOTIFY_SENTINEL = "PILOT_ASSISTANT_TELEGRAM_NOTIFY::";
     const SCHEDULE_SENTINEL = "PILOT_ASSISTANT_SCHEDULE::";
     const TOOLS_SENTINEL = "PILOT_ASSISTANT_TOOLS::";
+    // Documentation intégrée de Pilot (outil `answer_from_documentation`, lot
+    // « l'assistant répond sur la doc ») : le titre porte UNIQUEMENT la
+    // question. Une seule entrée, aucun chemin de projet, aucun fichier.
+    // Le relais exécute la commande du socle (`ask_help_doc`) — aucun second
+    // mécanisme, aucune lecture de fichier.
+    const DOC_SENTINEL = "PILOT_ASSISTANT_DOC::";
     // Retrait CIBLE d'une mission en attente (outil `remove_queued_mission`).
     // L'assistant ne voit jamais la file : il designe la demande par son rang
     // affiche (`/file`) ou par son numero de mission.
@@ -5004,6 +5017,20 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       try {
         const result = await invoke("super_agent_db_execute", { sql });
         await respondSuperAgent(id, JSON.stringify(result), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(DOC_SENTINEL)) {
+      // Réponse à partir de la documentation intégrée : on délègue à la commande
+      // du socle (help::answer_from_handbook) et on renvoie le résultat
+      // structuré (texte, sections recoupées, drapeaux) en JSON. Aucun accès aux
+      // fichiers du projet : la commande ne prend QUE la question.
+      const question = title.slice(DOC_SENTINEL.length);
+      try {
+        const answer = await invoke("ask_help_doc", { question });
+        await respondSuperAgent(id, JSON.stringify(answer), false);
       } catch (e) {
         await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
       }

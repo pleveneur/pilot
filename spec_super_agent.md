@@ -2538,6 +2538,23 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   (`~/.pilot/super-agent.db`), via des commandes Rust (`super_agent_db_query` /
   `super_agent_db_execute`). L'assistant construit et met à jour ses propres
   tables de suivi ; il ne touche jamais aux fichiers des projets.
+- **Répondre sur la documentation (mode d'emploi de Pilot)** : l'extension
+  `pilot-assistant-doc` fournit l'outil `answer_from_documentation(question)` —
+  **une seule entrée**, la question : aucun chemin de projet, aucun fichier,
+  aucun historique (l'inverse des outils de lecture de projet). L'outil est
+  **lecture seule** : il ne modifie rien et n'écrit rien. Il ne refait aucun
+  travail : le relais de l'interface (`super-agent.js`, sentinel
+  `PILOT_ASSISTANT_DOC::`, **point unique**) exécute la commande du socle
+  `ask_help_doc` (`help::answer_from_handbook`, voir `spec_help.md` §4.4-4.5) et
+  renvoie la réponse **structurée** (texte, sections recoupées, drapeaux).
+  **Plafond : un seul appel par tour** — chaque appel renvoie toute la
+  documentation au modèle ; le 2ᵉ appel du même tour est **refusé** avec un
+  message clair (pourquoi, quoi faire, interdiction d'inventer) et **n'atteint
+  pas** Pilot, donc ne coûte rien ; le compteur repart à zéro au tour suivant
+  (`before_agent_start`). Quand la documentation ne dit rien (`insufficient`),
+  l'assistant doit le **dire** au lieu d'inventer ; les sections citées sont un
+  **recoupement approximatif par titre**, jamais présenté comme une citation
+  exacte. Tests : `src/js/assistant-outil-doc.test.js` (câblage + plafond).
 - **Supervision des sessions d'agents (P2)** : l'extension
   `pilot-assistant-sessions` fournit l'outil `list_agent_sessions` qui retourne
   la vue d'ensemble de toutes les sessions d'agents (projet, agent, mode
@@ -2801,8 +2818,11 @@ plutôt que de les laisser peser sur l'assistant de suivi.
   run_assistant_agents / mcp_state),
   `pilot-assistant-db.ts` (db_query / db_execute sur la base de suivi),
   `pilot-assistant-prompt.ts` (update_my_prompt) et
-  `pilot-assistant-sessions.ts` (list_agent_sessions), chargées dans la session
-  super-agent dès que le backend supporte `--extension`.
+  `pilot-assistant-sessions.ts` (list_agent_sessions),
+  `pilot-assistant-doc.ts` (answer_from_documentation : réponse sur la
+  documentation intégrée de Pilot, une entrée = la question, 1 appel par tour),
+  chargées dans la session super-agent dès que le backend supporte
+  `--extension`.
 
 <!-- HELP:super-agent-extensions-fiables -->
 ### Extensions d'agent : écriture fiable
@@ -2840,6 +2860,8 @@ disque à chaque lancement de session.
   - `query_super_agent(question)` (recherche dans la base + projets)
   - `list_agent_sessions()` (vue d'ensemble des sessions d'agents, P2 —
     AgentService)
+  - `ask_help_doc(question)` (réponse sur la documentation intégrée, brique du
+    socle Aide réutilisée par l'outil `answer_from_documentation`)
 
 ## 11. Frontend (esquisse)
 
