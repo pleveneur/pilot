@@ -31,7 +31,8 @@ Trois zones : **Barre Latérale** (gauche), **Zone de Travail** (droite), **Pann
 
 ### C. Panneau d'Actions
 - ⚙️ **Paramètres** : **onglet** des Réglages (et non plus une fenêtre — bascule du lot B de `docs/proposition-reglages-en-onglet.md`) : le nœud `#settings-modal` est **déplacé tel quel** dans le conteneur d'onglet (classe `.modal-in-tab`, qui ne neutralise que le positionnement). Ouverture par le bouton ⚙, la palette ou un événement externe : **un seul chemin** (`_openSettings`), un onglet déjà ouvert n'est ni recréé ni rechargé (`switchTab`). Le **✕ de l'onglet vaut « Annuler »** (chemin normal de fermeture, sans confirmation, retour à zéro : aperçu de thème annulé, sondes Laya arrêtées, lecture à voix haute arrêtée) ; « Annuler » et « Enregistrer » gardent leur effet mais **ne ferment plus l'onglet**. Ouvrir les Réglages **quitte d'abord le mode « Assistant seul »** ; l'onglet est **transverse** (il survit aux bascules et fermetures de projet). Onglets verticaux (Général / Agent Pi / Modèles IA / Accès distant / Avatar / Serveurs MCP + écrans transverses GDS et service Laya). Thème dark/light + sous-thèmes (5 par mode, aperçu en direct), commande défaut, auto-load projet, terminal (intégré/externe), params RPC, word wrap, niveaux de réflexion (défaut global, par agent, Assistant — voir [`spec_rpc.md`](spec_rpc.md) § 4ter).
-- 📂 **Explorateur** (dossier projet dans l'OS) · 🖥️ **Terminal** · π **Agent Pi** · ▶ **Commandes du projet** (voir plus bas) · 🎭 **Agents** · 🔍 **Review** · 📜 **Sessions** · 📊 **Tableau de bord** · 🔐 **Coffre** · 💬 **Feedback** (accessible sans projet) · écrans GDS (« GDS Serveur », « GDS paramétrage »).
+- **Bas de la colonne (cadre accent, le seul de l'interface)** : **SIX lignes** de 32 px, toujours les mêmes, libellés en clair et jamais raccourcis — dans l'ordre : **Lancer l'agent** (13 px / 600, icône accent, 1re ligne), **Assistant**, **Dossier du projet** (`btn-explorer` : ouvre le dossier du projet dans l'explorateur du système), **Terminal**, **Commandes du projet** (`btn-commands`), **Autres écrans ▾** (menu ouvert **vers le haut**, 9 entrées groupées : Prompt Builder / Tableau de bord, Graphe du projet, Historique des sessions / Revue de code / Équipe d'agents, Kanban, Discussion inter-projets / GDS du projet). Hauteur 240 px, plafond 50 % de la fenêtre. Voir `docs/proposition-presentation-ui.md` § 3.3.
+- Autres accès : **Agents** · **Review** · écrans GDS (« GDS Serveur », « GDS paramétrage ») · **Coffre** · **Feedback** (accessible sans projet).
 
 ### E. Design system & icônes
 - **Design tokens CSS** partagés (`--space-*`, `--radius-*`, `--shadow-*`, `--ring`, `--transition*`) + ombres / anneau de focus par thème, utilisés par tous les composants (modales, boutons, inputs, onglets, menu contextuel). **Icônes Lucide** (SVG inline ; `src/js/icons.js` : `refreshIcons`, `setIcon`, `setIconText`) à la place des emojis, tailles `.icon`/`.icon-sm`/`.icon-lg`, couleur `currentColor`, icône par type de fichier (`FILE_ICONS` / `FILE_NAMES`) et coloration par catégorie (`ICON_CATEGORY` → `icon-cat-*`).
@@ -74,8 +75,9 @@ Trois zones : **Barre Latérale** (gauche), **Zone de Travail** (droite), **Pann
 <!-- HELP:commands -->
 ## Commandes du projet (▶)
 
-Lancez vos commandes de compilation / tests / etc. depuis un bouton du panneau
-d'actions (icône **▶ square-terminal**).
+Lancez vos commandes de compilation / tests / etc. depuis la ligne
+**« Commandes du projet »** du bas de la colonne de gauche (icône **▶
+square-terminal**).
 
 - **Ouvrir** : cliquez sur l'icône ▶ → la liste des commandes du **projet courant**
   s'affiche (vide au début).

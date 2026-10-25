@@ -87,33 +87,52 @@
 
     <!-- Boutons du PROJET (en bas de la liste des fichiers, visibles si projet ouvert)
          LOT 3 de la presentation (docs/proposition-presentation-ui.md §3.3 et lot 3
-         du §6) : les TROIS sous-onglets « Projet / Vues / Assistant » et leurs
-         QUATORZE lignes sont remplaces par QUATRE lignes de 32 px, toujours les
-         memes, dans l'ordre fige :
+         du §6), etendu par les trois decisions du proprietaire du 2026-10-25 : les
+         TROIS sous-onglets « Projet / Vues / Assistant » et leurs QUATORZE lignes
+         sont remplaces par SIX lignes de 32 px, toujours les memes, dans l'ordre
+         fige :
 
-             Assistant · Terminal · Lancer l'agent (en evidence) · Autres écrans ▾
+             Lancer l'agent (en evidence) · Assistant · Dossier du projet ·
+             Terminal · Commandes du projet · Autres écrans ▾
 
-         « Lancer l'agent » est la ligne principale du bloc (13 px / 600, icone
+         « Lancer l'agent » reste la ligne principale du bloc (13 px / 600, icone
          accent) ; « Autres écrans » ouvre un menu VERS LE HAUT qui accueille les
-         ecrans consultes occasionnellement.
+         ecrans consultes occasionnellement (NEUF entrees, groupes inchanges).
          Les IDENTIFIANTS et les FONCTIONS des quatorze entrees sont ceux d'avant :
          aucun ecran ne devient inaccessible et le cablage (`main.js`,
          `project-commands.js`, `interproject.js`) n'a pas bouge d'une ligne.
+         « Dossier du projet » et « Commandes du projet » sont les boutons
+         `btn-explorer` et `btn-commands`, REMONTES du menu vers le bloc : ils
+         gardent leur identifiant, leur titre et leur gestionnaire, seul le
+         libelle affiche de `btn-explorer` change (« Ouvrir le dossier » ->
+         « Dossier du projet »).
          Le cadre accent — le SEUL de l'interface — reste celui de ce bloc. -->
     <div id="project-footer" class="project-only hidden">
       <!-- Un seul panneau, plus de rangee d'onglets : `role="tablist"` disparait
            avec les sous-onglets. -->
       <div class="pj-panel">
-        <!-- 1. Assistant : toujours visible, 1 clic (etait cache derriere un
+        <!-- 1. LIGNE PRINCIPALE : lancer l'agent (meme identifiant, meme effet
+             qu'avant : conversation de l'agent, sinon terminal, sinon terminal
+             systeme). Le libelle dit enfin ce que fait le bouton. Q1 du
+             proprietaire (2026-10-25) : elle reste la PREMIERE ligne. -->
+        <button id="btn-terminal-cmd" class="project-only hidden pj-row-main" title="Lancer l'agent : ouvrir la conversation de l'agent"><i data-lucide="bot" class="icon"></i><span class="pj-btn-label">Lancer l'agent</span></button>
+        <!-- 2. Assistant : toujours visible, 1 clic (etait cache derriere un
              sous-onglet). -->
         <button id="btn-superagent" class="project-only hidden" title="Assistant : suivi multi-projets (lecture seule)"><i data-lucide="compass" class="icon"></i><span class="pj-btn-label">Assistant</span></button>
-        <!-- 2. Terminal integre. -->
+        <!-- 3. Dossier du projet : REMONTE du menu (Q2 du proprietaire,
+             2026-10-25). C'est le bouton `btn-explorer` d'avant — meme
+             identifiant, meme gestionnaire (`main.js`), meme effet : il ouvre le
+             dossier du projet dans l'explorateur du systeme. Seul le libelle
+             affiche est ecrit en clair. -->
+        <button id="btn-explorer" class="project-only hidden" title="Dossier du projet : ouvrir le dossier dans l'explorateur du systeme"><i data-lucide="folder-open" class="icon"></i><span class="pj-btn-label">Dossier du projet</span></button>
+        <!-- 4. Terminal integre. -->
         <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal"><i data-lucide="terminal" class="icon"></i><span class="pj-btn-label">Terminal</span></button>
-        <!-- 3. LIGNE PRINCIPALE : lancer l'agent (meme identifiant, meme effet
-             qu'avant : conversation de l'agent, sinon terminal, sinon terminal
-             systeme). Le libelle dit enfin ce que fait le bouton. -->
-        <button id="btn-terminal-cmd" class="project-only hidden pj-row-main" title="Lancer l'agent : ouvrir la conversation de l'agent"><i data-lucide="bot" class="icon"></i><span class="pj-btn-label">Lancer l'agent</span></button>
-
+        <!-- 5. Commandes du projet : REMONTE du menu (proposition appliquee,
+             2026-10-25). C'est le bouton `btn-commands` d'avant — meme
+             identifiant, meme gestionnaire (`project-commands.js`). -->
+        <button id="btn-commands" class="project-only hidden" title="Commandes du projet (lancer une commande parametree)"><i data-lucide="square-terminal" class="icon"></i><span class="pj-btn-label">Commandes du projet</span></button>
+        <!-- 6. « Autres ecrans ▾ » : le declencheur du menu, toujours la
+             derniere ligne du bloc. -->
         <!-- ===== MENU « Autres écrans » (lot 3 de la presentation) =====
              Le document de conception (`docs/proposition-presentation-ui.md` §3.3)
              le veut ouvert VERS LE HAUT : le bloc est en bas de colonne, un menu
@@ -122,7 +141,9 @@
              GROUPES NOMMES (§ 4.3 du doc de navigation).
              CHAQUE ENTREE GARDE SON IDENTIFIANT ET SA FONCTION : le cablage de
              `main.js`, de `project-commands.js` et de `interproject.js` les
-             retrouve tels quels, sans une ligne de changement.
+             retrouve tels quels, sans une ligne de changement. NEUF entrees y
+             restent (`btn-explorer` et `btn-commands` sont remontes dans le bloc
+             du bas : voir les lignes 3 et 5 ci-dessus).
              Il est ici, DANS la colonne de 280 px : sa largeur est celle du cadre,
              ses couleurs viennent des jetons de theme (sombre ET clair). -->
         <div id="pj-more-wrap" class="pj-more-wrap">
@@ -130,8 +151,6 @@
           <div id="pj-more-menu" class="pj-more-menu hidden" role="menu" aria-label="Autres écrans">
             <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-projet">
               <div class="pj-more-group-label" id="pj-more-groupe-projet">Mon projet</div>
-              <button id="btn-explorer" class="pj-more-item" role="menuitem" title="Ouvrir le dossier dans l'explorateur"><i data-lucide="folder-open" class="icon-sm"></i><span class="pj-btn-label">Ouvrir le dossier</span></button>
-              <button id="btn-commands" class="pj-more-item" role="menuitem" title="Commandes du projet (lancer une commande paramétrée)"><i data-lucide="square-terminal" class="icon-sm"></i><span class="pj-btn-label">Commandes du projet</span></button>
               <button id="btn-prompt-builder" class="pj-more-item" role="menuitem" title="Prompt Builder"><i data-lucide="puzzle" class="icon-sm"></i><span class="pj-btn-label">Prompt Builder</span></button>
             </div>
             <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-comprendre">

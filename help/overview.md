@@ -24,8 +24,13 @@ externe.
   terminal (🖥️), agent Pi (π).
 - **Barre latérale** : explorateur de fichiers du projet, filtre, favoris,
   brouillon (scratchpad).
-- **Panneau d'actions** (bas de la barre latérale) : boutons Terminal, Agent Pi,
-  Prévisualisation, Paramètres ⚙️, badge Accès distant.
+- **Panneau d'actions** (bas de la barre latérale, cadre accentué) : six lignes
+  nommées, toujours visibles — **Lancer l'agent** (mise en évidence), **Assistant**,
+  **Dossier du projet** (ouvre le dossier du projet dans l'explorateur du système),
+  **Terminal**, **Commandes du projet**, puis **Autres écrans ▾** : ce dernier
+  ouvre vers le haut un menu groupé (Tableau de bord, Graphe du projet,
+  Historique des sessions, Revue de code, Équipe d'agents, Kanban, Discussion
+  inter-projets, GDS du projet, Prompt Builder).
 <!-- /HELP:overview -->
 
 <!-- HELP:demarrage -->

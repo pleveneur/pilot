@@ -1680,7 +1680,7 @@ class Sidebar {
 
   // LOT 3 de la presentation : la methode `_initProjectTabs` (bascule des trois
   // sous-onglets Projet / Vues / Assistant) est supprimee avec les sous-onglets.
-  // Les quatre lignes du bloc du bas sont toujours visibles et le menu
+  // Les six lignes du bloc du bas sont toujours visibles et le menu
   // « Autres ecrans » porte le reste (cf. `_initProjectFooterMenu` ci-dessus).
   // Le cablage des ecrans, lui, n'a pas change d'une ligne.
 

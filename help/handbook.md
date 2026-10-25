@@ -18,8 +18,13 @@ externe.
   terminal (🖥️), agent Pi (π).
 - **Barre latérale** : explorateur de fichiers du projet, filtre, favoris,
   brouillon (scratchpad).
-- **Panneau d'actions** (bas de la barre latérale) : boutons Terminal, Agent Pi,
-  Prévisualisation, Paramètres ⚙️, badge Accès distant.
+- **Panneau d'actions** (bas de la barre latérale, cadre accentué) : six lignes
+  nommées, toujours visibles — **Lancer l'agent** (mise en évidence), **Assistant**,
+  **Dossier du projet** (ouvre le dossier du projet dans l'explorateur du système),
+  **Terminal**, **Commandes du projet**, puis **Autres écrans ▾** : ce dernier
+  ouvre vers le haut un menu groupé (Tableau de bord, Graphe du projet,
+  Historique des sessions, Revue de code, Équipe d'agents, Kanban, Discussion
+  inter-projets, GDS du projet, Prompt Builder).
 
 ---
 
@@ -698,8 +703,9 @@ d'un hébergement externe type GitHub.
 
 ## Commandes du projet (▶)
 
-Lancez vos commandes de compilation / tests / etc. depuis un bouton du panneau
-d'actions (icône **▶ square-terminal**).
+Lancez vos commandes de compilation / tests / etc. depuis la ligne
+**« Commandes du projet »** du bas de la colonne de gauche (icône **▶
+square-terminal**).
 
 - **Ouvrir** : cliquez sur l'icône ▶ → la liste des commandes du **projet courant**
   s'affiche (vide au début).

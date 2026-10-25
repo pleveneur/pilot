@@ -771,27 +771,28 @@ body.theme-light.theme-tokyo-day {
   gap: 6px;
   /* LOT 3 : `visible` et non plus `auto` — le menu « Autres ecrans » s'ouvre
      VERS LE HAUT, donc AU-DESSUS du cadre : un conteneur qui rogne le
-     masquerait entierement. Le contenu du bloc ne deborde jamais (4 lignes de
+     masquerait entierement. Le contenu du bloc ne deborde jamais (SIX lignes de
      32 px, cf. `.pj-panel`), il n'y a donc rien a faire defiler. */
   overflow: visible;
-  /* Le plafond de 40 % reste en place (aucune dimension existante n'est
-     changee) ; il ne contraint plus rien : 164 px < 40 % des que la fenetre
-     depasse 410 px de haut, et le bloc tient dans 500 px (plafond 200 px). */
-  max-height: 40%;
-  /* Un seul cadre pour les QUATRE lignes du bas : la bordure accent, le fond
+  /* Plafond porte de 40 % a 50 % (decision Q3 du proprietaire, 2026-10-25) :
+     le bloc fait desormais 240 px (voir le calcul dans `padding` ci-dessous) ;
+     a la hauteur minimale de fenetre (500 px), 50 % = 250 px > 240 px, donc
+     aucune ligne n'est jamais dessinee hors du cadre. */
+  max-height: 50%;
+  /* Un seul cadre pour les SIX lignes du bas : la bordure accent, le fond
      léger et le rayon restent ici (c'est le SEUL cadre accentue de l'interface). */
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border: 1px solid var(--accent);
   border-radius: var(--radius-lg);
   /* LOT 3 : plus de padding horizontal — les lignes occupent toute la largeur
      du cadre et leurs fonds de survol touchent la bordure (inset 30 -> 16 px).
-     8 px en haut et en bas : 2 + 16 + 4 x 32 + 3 x 6 = 164 px. */
+     8 px en haut et en bas : 2 + 16 + 6 x 32 + 5 x 6 = 240 px. */
   padding: 8px 0;
 }
 
 /* --- Barre de boutons projet : systeme a onglets (v8) ---
    LOT 3 de la presentation : la rangee de sous-onglets « Projet / Vues /
-   Assistant » N'EXISTE PLUS (les quatre lignes du bloc sont toujours visibles
+   Assistant » N'EXISTE PLUS (les six lignes du bloc sont toujours visibles
    et le menu « Autres ecrans » porte le reste). Les regles `.pj-tabs` et
    `.pj-tab` sont conservees telles quelles : elles ne s'appliquent a aucun
    element, et la regle d'etats partagee du lot 1 les cite encore. */
@@ -844,9 +845,11 @@ body.theme-light.theme-tokyo-day {
 }
 
 .pj-panel {
-  /* LOT 3 de la presentation : les QUATRE lignes du bas sont toujours visibles,
-     dans l'ordre fige Assistant · Terminal · Lancer l'agent · Autres écrans.
-     Une seule colonne de lignes pleine largeur (aucun libelle tronque, aucune
+  /* LOT 3 de la presentation, etendu par les trois decisions du proprietaire
+     (2026-10-25) : les SIX lignes du bas sont toujours visibles, dans l'ordre
+     fige Lancer l'agent · Assistant · Dossier du projet · Terminal ·
+     Commandes du projet · Autres écrans.
+     Une seule colonne de lignes pleine largeur (aucun libelle tronque, aucun
      retour a la ligne, colonne inchangee a 280 px) ; 6 px entre les lignes.
      Cadre + fond portes par #project-footer (un seul bloc visuel) : le panel ne
      garde que sa mise en page interne, sans padding (les fonds de survol
@@ -1677,7 +1680,7 @@ body.theme-light.theme-tokyo-day {
 }
 
 /* LOT 3 de la presentation : « Lancer l'agent » est LA ligne principale du bloc
-   du bas (13 px / 600, icone accent) — les trois autres restent a 12 px / 400.
+   du bas (13 px / 600, icone accent) — les CINQ autres restent a 12 px / 400.
    Seul ecart de taille du bloc, volontaire : c'est l'action la plus frequente. */
 .pj-panel button.pj-row-main {
   font-size: var(--font-base);

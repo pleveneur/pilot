@@ -2,15 +2,22 @@
  * Verrou du LOT 3 de la presentation : LE BAS DE LA COLONNE DE GAUCHE.
  *
  * Document qui fait foi : `docs/proposition-presentation-ui.md` § 3.3 et lot 3
- * du § 6 (etape 5 du doc de navigation).
+ * du § 6 (etape 5 du doc de navigation), etendu par les trois decisions du
+ * proprietaire du 2026-10-25 (Q1, Q2, Q3).
  *   - les TROIS sous-onglets « Projet / Vues / Assistant » disparaissent ;
- *   - les QUATORZE lignes deviennent QUATRE lignes de 32 px, toujours visibles,
- *     dans l'ordre fige : Assistant · Terminal · Lancer l'agent · Autres écrans ;
- *   - « Lancer l'agent » est la ligne principale (13 px / 600, icone accent) ;
+ *   - les QUATORZE lignes deviennent SIX lignes de 32 px, toujours visibles,
+ *     dans l'ordre fige : Lancer l'agent · Assistant · Dossier du projet ·
+ *     Terminal · Commandes du projet · Autres écrans ;
+ *   - « Lancer l'agent » est la ligne principale (13 px / 600, icone accent) et
+ *     reste la PREMIERE (Q1) ;
+ *   - « Dossier du projet » est le bouton `btn-explorer` remonte du menu (Q2),
+ *     meme identifiant, meme effet (dossier projet dans l'explorateur) ;
+ *   - « Commandes du projet » (`btn-commands`) remonte aussi du menu ;
  *   - « Autres écrans » ouvre un menu VERS LE HAUT (le bloc est en bas de
- *     colonne), groupes nommes, fermeture a Echap / clic exterieur / selection ;
- *   - le bloc passe d'environ 272 px a environ 164 px et tient dans 500 px de
- *     hauteur d'ecran (plafond 40 % = 200 px).
+ *     colonne), groupes nommes, NEUF entrees, fermeture a Echap / clic
+ *     exterieur / selection ;
+ *   - le bloc passe d'environ 272 px a environ 240 px et tient dans 500 px de
+ *     hauteur d'ecran (plafond 50 % = 250 px, Q3).
  *
  * Ce qui ne doit PAS changer : les QUATORZE identifiants et leurs fonctions
  * (`btn-explorer`, `btn-terminal`, `btn-terminal-cmd`, `btn-commands`,
@@ -21,11 +28,16 @@
  * Ce fichier echoue si :
  *   (a) une rangee de sous-onglets revient, ou `role="tablist"` avec elle ;
  *   (b) une des quatorze entrees perd son identifiant ou son cablage ;
- *   (c) le bloc ne fait plus quatre lignes de 32 px, ou depasse 500 px de haut ;
+ *   (c) le bloc ne fait plus SIX lignes de 32 px, ou depasse 500 px de haut ;
  *   (d) le menu s'ouvre vers le bas (il sortirait de la fenetre) ou ne se ferme
  *       plus a Echap ;
  *   (e) le cadre accent du bloc disparait, ou une couleur en dur y apparait
  *       (thème clair casse).
+ *
+ * Deux regressions precises sont surveillees en plus : remettre QUATRE lignes
+ * dans le panneau (test « le panneau ne contient que SIX lignes »), et renvoyer
+ * « Commandes du projet » DANS le menu (tests « les neuf entrees restees » et
+ * « Commandes du projet n'est pas dans le menu »).
  *
  * Aucun navigateur n'est requis : lecture des fichiers (fins de ligne
  * normalisees, cf. quality-gate 3.4).
@@ -92,12 +104,27 @@ const ENTREES = [
   ["btn-interproject", interprojectJs],
 ];
 
-/** Les QUATRE lignes, dans l'ordre impose par le document. */
+/** Les SIX lignes, dans l'ordre impose par le document et les decisions Q1/Q2. */
 const LIGNES = [
-  "btn-superagent",
-  "btn-terminal",
   "btn-terminal-cmd",
+  "btn-superagent",
+  "btn-explorer",
+  "btn-terminal",
+  "btn-commands",
   "btn-more-screens",
+];
+
+/** Les NEUF entrees qui restent DANS le menu « Autres écrans ». */
+const MENU = [
+  "btn-prompt-builder",
+  "btn-dashboard",
+  "btn-code-graph",
+  "btn-history",
+  "btn-review",
+  "btn-agents",
+  "btn-superkanban",
+  "btn-interproject",
+  "btn-gds",
 ];
 
 describe("LOT 3 (a) — les sous-onglets du bas ont disparu", () => {
@@ -132,23 +159,26 @@ describe("LOT 3 (b) — les quatorze identifiants et leurs fonctions sont conser
     }
   });
 
-  it("les entrees deplacees sont bien DANS le menu (pas seulement presentes)", () => {
+  it("les neuf entrees restees sont bien DANS le menu (pas seulement presentes)", () => {
     const menu = sliceFrom(pied, 'id="pj-more-menu"', 500);
-    for (const id of [
-      "btn-explorer",
-      "btn-commands",
-      "btn-prompt-builder",
-      "btn-dashboard",
-      "btn-code-graph",
-      "btn-history",
-      "btn-review",
-      "btn-agents",
-      "btn-superkanban",
-      "btn-interproject",
-      "btn-gds",
-    ]) {
+    for (const id of MENU) {
       expect(menu, `${id} hors du menu`).toContain(`id="${id}"`);
     }
+    // Exactement NEUF lignes de menu : aucune ligne oubliee, aucune en trop.
+    const lignes = menu.match(/class="pj-more-item"/g) || [];
+    expect(lignes, "nombre d'entrees du menu").toHaveLength(9);
+  });
+
+  it("« Dossier du projet » et « Commandes du projet » ne sont PLUS dans le menu", () => {
+    const menu = sliceFrom(pied, 'id="pj-more-menu"', 500);
+    // Ils sont remontes dans le bloc du bas : les renvoyer dans le menu doit
+    // faire echouer ce test (et le test d'ordre des six lignes).
+    expect(menu).not.toContain('id="btn-commands"');
+    expect(menu).not.toContain('id="btn-explorer"');
+    // Et ils sont bien des lignes du bloc, entre #project-footer et le menu.
+    const blocLignes = sliceSource(pied, 'id="project-footer"', 'id="pj-more-wrap"', 500);
+    expect(blocLignes).toContain('id="btn-commands"');
+    expect(blocLignes).toContain('id="btn-explorer"');
   });
 
   it("le menu est groupe et nomme (5 groupes, libelles ecrits en clair)", () => {
@@ -166,15 +196,17 @@ describe("LOT 3 (b) — les quatorze identifiants et leurs fonctions sont conser
   });
 });
 
-describe("LOT 3 (c) — quatre lignes de 32 px, environ 164 px de haut", () => {
-  it("le panneau ne contient que QUATRE lignes, dans l'ordre fige", () => {
+describe("LOT 3 (c) — six lignes de 32 px, environ 240 px de haut", () => {
+  it("le panneau ne contient que SIX lignes, dans l'ordre fige", () => {
     const panneau = html.match(/\n      <div class="pj-panel">\n([\s\S]*?)\n      <\/div>/);
     expect(panneau, "conteneur .pj-panel introuvable").not.toBeNull();
     const lignes = panneau[1]
       .split("\n")
       .filter((l) => l.startsWith("        <button") || l.includes('id="pj-more-wrap"'));
-    expect(lignes).toHaveLength(4);
-    // La 4e ligne est le conteneur du menu : son declencheur est la ligne.
+    // Si QUATRE lignes reviennent (retour a l'etat du lot 3 d'origine), la
+    // longueur comme l'ordre ci-dessous echouent.
+    expect(lignes).toHaveLength(6);
+    // La 6e ligne est le conteneur du menu : son declencheur est la ligne.
     const ordre = lignes.map((l) =>
       l.includes('id="pj-more-wrap"')
         ? "btn-more-screens"
@@ -183,22 +215,34 @@ describe("LOT 3 (c) — quatre lignes de 32 px, environ 164 px de haut", () => {
     expect(ordre).toEqual(LIGNES);
   });
 
-  it("la hauteur calculee du bloc est bien 164 px (et tient dans 500 px)", () => {
+  it("les libelles sont ecrits en clair, jamais raccourcis", () => {
+    expect(pied).toContain(">Lancer l'agent</span>");
+    expect(pied).toContain(">Assistant</span>");
+    expect(pied).toContain(">Dossier du projet</span>");
+    expect(pied).toContain(">Terminal</span>");
+    expect(pied).toContain(">Commandes du projet</span>");
+    expect(pied).toContain(">Autres écrans</span>");
+    // L'ancien libelle du bouton remonte ne doit plus s'afficher.
+    expect(pied).not.toContain(">Ouvrir le dossier</span>");
+  });
+
+  it("la hauteur calculee du bloc est bien 240 px (et tient dans 500 px)", () => {
     const piedCss = declarations(bloc(css, "#project-footer"));
     const panneauCss = declarations(bloc(css, ".pj-panel"));
     const ligne = declarations(bloc(css, ".pj-panel button"));
     // padding vertical du cadre
     const pad = Number((piedCss.match(/padding: (\d+)px 0/) || [])[1]);
     expect(pad, "padding vertical du cadre").toBe(8);
-    // 4 lignes de 32 px
+    // 6 lignes de 32 px
     expect(ligne).toContain("height: 32px");
     const gap = Number((panneauCss.match(/gap: (\d+)px/) || [])[1]);
     expect(gap, "espace entre les lignes").toBe(6);
-    const hauteur = 2 + pad * 2 + 4 * 32 + 3 * gap;
-    expect(hauteur).toBe(164);
-    // Plafond du bloc : 40 % de 500 px = 200 px > 164 px -> aucun defilement.
-    expect(piedCss).toContain("max-height: 40%");
-    expect(hauteur).toBeLessThan(200);
+    const hauteur = 2 + pad * 2 + 6 * 32 + 5 * gap;
+    expect(hauteur).toBe(240);
+    // Plafond du bloc : 50 % de 500 px (hauteur minimale de fenetre) = 250 px
+    // > 240 px -> aucune ligne dessinee hors du cadre, aucun defilement.
+    expect(piedCss).toContain("max-height: 50%");
+    expect(hauteur).toBeLessThan(250);
   });
 
   it("« Lancer l'agent » est la ligne mise en evidence (13 px / 600, accent)", () => {
@@ -209,7 +253,7 @@ describe("LOT 3 (c) — quatre lignes de 32 px, environ 164 px de haut", () => {
     expect(d).toContain("font-weight: var(--fw-semibold)");
     const icone = declarations(bloc(css, ".pj-panel button.pj-row-main .icon"));
     expect(icone).toContain("color: var(--accent-text)");
-    // Les trois autres lignes restent a 12 px.
+    // Les CINQ autres lignes restent a 12 px.
     expect(declarations(bloc(css, ".pj-panel button"))).toContain(
       "font-size: var(--font-sm)",
     );
