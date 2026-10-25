@@ -69,6 +69,7 @@ import { CODE_BLOCK_NOTICE, cutTextAtBoundary, textForSpeech } from "./speech-te
 import {
   LOCAL_VOICE_ONLY_HINT,
   LOCAL_VOICE_READY_HINT,
+  LOCAL_VOICE_UNKNOWN_HINT,
   LOCAL_VOICE_VALUE,
   getLocalVoiceStatus,
   isLocalVoiceChoice,
@@ -371,8 +372,8 @@ export function voiceChoiceOptions(voices, local) {
  *  - `ok`      : le reglage est utilisable.
  * @param {SpeechSynthesisVoice[]} voices
  * @param {string} [choice]
- * @param {{installed?: boolean, dir?: string}|null} [local] etat du moteur local
- * @returns {{kind: "empty"|"missing"|"ok"|"local-missing", hint: string, missing: string, value: string}}
+ * @param {{installed?: boolean, dir?: string, unknown?: boolean}|null} [local] état du moteur local
+ * @returns {{kind: "empty"|"missing"|"ok"|"local-missing"|"local-unknown", hint: string, missing: string, value: string}}
  */
 export function voiceChoiceStatus(voices, choice, local) {
   const list = (Array.isArray(voices) ? voices : []).filter(Boolean);
@@ -383,12 +384,21 @@ export function voiceChoiceStatus(voices, choice, local) {
   const statusModel = String((local && local.voice) || "");
   const localInstalled =
     !!(local && local.installed) && (!statusModel || statusModel === localModel);
+  // Vérification en ÉCHEC (moteur injoignable) : l'état est INCONNU, ni
+  // installé ni manquant. On le dit, sans jamais décider à la place de
+  // l'utilisateur (le bouton « Vérifier à nouveau » relance la vérification) ;
+  // le choix en cours est conservé. Placé APRÈS les replis qui ne dépendent pas
+  // du moteur (voix du système disparue) : leur phrase reste la bonne.
+  const localUnknown = !!(local && local.unknown === true);
   // Choix de la voix locale : le choix est CONSERVE (il ne se perd pas si le
   // modele est telecharge plus tard), et la note dit clairement ce qui se passe
   // pendant ce temps (lecture avec la voix du systeme).
   if (localModel) {
     if (localInstalled) {
       return { kind: "ok", hint: LOCAL_VOICE_READY_HINT, missing: "", value: wanted };
+    }
+    if (localUnknown) {
+      return { kind: "local-unknown", hint: LOCAL_VOICE_UNKNOWN_HINT, missing: "", value: wanted };
     }
     return {
       kind: "local-missing",
@@ -403,6 +413,11 @@ export function voiceChoiceStatus(voices, choice, local) {
     if (localInstalled) {
       return { kind: "ok", hint: LOCAL_VOICE_ONLY_HINT, missing: "", value: wanted };
     }
+    // Moteur NON vérifié : on ne peut pas affirmer « aucune voix installée » —
+    // l'état est inconnu, le réglage reste donc utilisable (voix locales).
+    if (localUnknown) {
+      return { kind: "local-unknown", hint: LOCAL_VOICE_UNKNOWN_HINT, missing: "", value: wanted };
+    }
     return { kind: "empty", hint: NO_VOICE_INSTALLED_HINT, missing: "", value: AUTO_VOICE_VALUE };
   }
   if (wanted && !findVoiceForChoice(list, wanted)) {
@@ -414,6 +429,9 @@ export function voiceChoiceStatus(voices, choice, local) {
       missing: wanted,
       value: AUTO_VOICE_VALUE,
     };
+  }
+  if (localUnknown) {
+    return { kind: "local-unknown", hint: LOCAL_VOICE_UNKNOWN_HINT, missing: "", value: wanted };
   }
   return { kind: "ok", hint: READ_ALOUD_HELP_HINT, missing: "", value: wanted };
 }

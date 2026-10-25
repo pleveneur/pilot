@@ -437,6 +437,12 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   installée sur cet ordinateur ») et indique quoi déposer, puis « Vérifier à
   nouveau ». La lecture ne reste jamais silencieuse : elle continue avec la voix
   du système et le dit.
+- **La section se remplit toute seule** : à l'ouverture des Paramètres (et à
+  l'affichage de l'onglet « Assistant »), Pilot vérifie **une seule fois** si le
+  moteur et le modèle sont en place — vous n'avez rien à cliquer. Pendant la
+  vérification, la section l'écrit ; si elle n'aboutit pas, la section dit que
+  l'état est **inconnu** (jamais une ligne vide) et le bouton « Vérifier à
+  nouveau » reste là pour relancer. Rien n'est téléchargé pour autant.
 - **Le téléchargement s'affiche et s'arrête** : la section montre la **taille**
   et la **progression** (« 26,0 Mo / 60,6 Mo, 42 % »), puis « installation
   terminée » ou l'échec. Un bouton **« × Arrêter le téléchargement »**

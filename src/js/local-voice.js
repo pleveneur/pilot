@@ -109,6 +109,20 @@ export const LOCAL_AUDIO_PREFIX = "data:audio/wav;base64,";
 export const LOCAL_VOICE_READY_HINT =
   "Voix française locale prête : elle fonctionne hors ligne, sans clé et sans carte graphique.";
 
+/**
+ * Phrase affichée tant que la vérification de l'état du moteur n'a pas répondu
+ * (la section se remplit toute seule : ce texte n'est jamais un vide).
+ */
+export const LOCAL_VOICE_PENDING_HINT =
+  "Voix française locale : vérification de l'état du moteur en cours\u2026";
+
+/**
+ * Phrase affichée quand la vérification a échoué : l'état du moteur est
+ * réellement INCONNU — on le dit, et le bouton reste le moyen de relancer.
+ */
+export const LOCAL_VOICE_UNKNOWN_HINT =
+  "État du moteur de voix locale inconnu : cliquez sur «\u00a0Vérifier à nouveau\u00a0» pour relancer la vérification.";
+
 /** Phrase affichée quand aucune voix du système n'existe mais que le local est prêt. */
 export const LOCAL_VOICE_ONLY_HINT =
   "Aucune voix n'est installée sur cet ordinateur : utilisez la voix française locale " +
@@ -251,9 +265,9 @@ const localStatusByModel = new Map();
  * Normalise un état brut renvoyé par le moteur (jamais de champ manquant, jamais
  * de valeur inventée : un état absent est traité comme « non installé »).
  * @param {object|null} raw
- * @returns {{installed: boolean, engine: string, voice: string, gender: string,
- *            quality: string, model_present: boolean, engine_present: boolean,
- *            engine_dir: string, engine_shared: boolean,
+ * @returns {{installed: boolean, unknown: boolean, engine: string, voice: string,
+ *            gender: string, quality: string, model_present: boolean,
+ *            engine_present: boolean, engine_dir: string, engine_shared: boolean,
  *            model_bytes: number, dir: string, missing: string[], hint: string,
  *            log: string}}
  */
@@ -265,6 +279,9 @@ export function normalizeLocalVoiceStatus(raw) {
   const known = LOCAL_VOICE_MODELS.find((m) => m.model === voice);
   return {
     installed,
+    // Vérification en ÉCHEC (moteur injoignable) : l'état n'est pas « absent »,
+    // il est INCONNU — la nuance est dite à l'écran, jamais masquée.
+    unknown: src.unknown === true,
     engine: String(src.engine || LOCAL_VOICE_ENGINE),
     voice,
     gender: String(src.gender || (known ? known.gender : "")),
@@ -325,7 +342,7 @@ export function setLocalVoiceStatus(raw) {
 /**
  * Demande l'état réel du moteur local pour UN modèle (par défaut : la voix
  * désignée par la valeur historique) et le mémorise. Ne lève jamais : un échec
- * devient un état « non installé » avec une explication lisible.
+ * devient un état **inconnu** avec une explication lisible (`unknown: true`).
  * @param {{invoke?: Function, model?: string}} [options]
  * @returns {Promise<object>} état normalisé
  */
@@ -335,12 +352,40 @@ export async function refreshLocalVoiceStatus(options = {}) {
     const invoke = await resolveInvoke(options);
     return setLocalVoiceStatus(await invoke(LOCAL_VOICE_COMMAND_STATUS, { model }));
   } catch (error) {
+    // La vérification elle-même a échoué : l'état est INCONNU (jamais « non
+    // installé », qui serait une affirmation inventée). La cause technique ne
+    // sert qu'au journal de la console : le texte vu reste une phrase claire.
+    safeCall(() => console.warn("tts_local_status :", messageOf(error)));
     return setLocalVoiceStatus({
       installed: false,
       voice: model,
-      hint: `Voix française locale indisponible (${messageOf(error)}) : la lecture utilise la voix du système.`,
+      unknown: true,
+      hint: LOCAL_VOICE_UNKNOWN_HINT,
     });
   }
+}
+
+/**
+ * Phrase de la ligne « voix locale » de la section « Lecture des réponses ».
+ *
+ * **Jamais vide** : vérification en cours, état inconnu (avec le bouton), ou
+ * état réel du moteur et dossier où sont ses fichiers. Une seule source de ce
+ * texte (aucune seconde formulation ailleurs).
+ * @param {object|null} local état du moteur de voix locale
+ * @returns {string}
+ */
+export function localVoiceSectionNote(local) {
+  if (!local) return LOCAL_VOICE_PENDING_HINT;
+  if (local.unknown === true) return LOCAL_VOICE_UNKNOWN_HINT;
+  if (local.installed && local.dir) {
+    // Moteur réutilisé depuis une AUTRE version de Pilot du même ordinateur :
+    // l'utilisateur le voit (jamais un partage silencieux).
+    if (local.engine_shared && local.engine_dir) {
+      return `${local.hint} Modèles dans « ${local.dir} », moteur déjà installé pour Pilot dans « ${local.engine_dir} ».`;
+    }
+    return `${local.hint} Moteur et modèle se trouvent dans « ${local.dir} ».`;
+  }
+  return local.hint || LOCAL_VOICE_UNKNOWN_HINT;
 }
 
 /** Vrai si le moteur local est connu comme installé. */

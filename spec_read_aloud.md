@@ -51,7 +51,7 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
 | `#setting-read-aloud-voice` (`<select>`) | choix de la voix (« Automatique », **une entrée par voix française locale** — genre dit en clair, puis une entrée par voix du système, libellé `nom (langue)`) |
 | `#read-aloud-state` (`role="status"`, `aria-live="polite"`) | état de la lecture (aucune / en cours / terminée / aucune voix / repli sur la voix du système…) |
 | `#read-aloud-voice-note` (`role="note"`) | explication et, le cas échéant, quoi faire |
-| `#read-aloud-local-note` (`role="note"`) | état du **moteur de voix locale**, **dossier où déposer ses fichiers** (chemin réel renvoyé par le moteur, jamais recopié) et ce qui se passe si le modèle manque |
+| `#read-aloud-local-note` (`role="note"`) | état du **moteur de voix locale**, **dossier où déposer ses fichiers** (chemin réel renvoyé par le moteur, jamais recopié) et ce qui se passe si le modèle manque — **jamais vide** : « vérification en cours… », « état inconnu + Vérifier à nouveau », ou l'état réel (§ 2 ter) |
 | `#read-aloud-download-state` (`role="status"`, `aria-live="polite"`) | état du **téléchargement** : taille, progression, terminé / arrêté / impossible |
 | `#btn-read-aloud-download`, `#btn-read-aloud-download-cancel`, `#btn-read-aloud-recheck` | **télécharger le modèle**, **arrêter le téléchargement en cours**, **vérifier à nouveau** la présence du moteur et du modèle |
 | `#read-aloud-voice-previews` | **écoute d'exemple** : une rangée par voix proposée (bouton « ▶ Écouter » ↔ « ⏹ Arrêter », libellé de la voix, message court en cas d'échec) — voir § 2 bis |
@@ -109,6 +109,50 @@ résultat **unique** de `voiceChoiceOptions(...)` dans `renderReadAloudVoice`
 (aucun second appel, aucun appel à `availableVoices` dans le rendu des
 rangées) : une voix proposée = une rangée, dans le même ordre, avec le même
 libellé (genre et taille compris).
+
+## 2 ter. État du moteur : chargement AUTOMATIQUE de la section
+
+Décision du propriétaire : « là faut juste charger en automatique ». Ouvrir les
+Paramètres (ou afficher l'onglet « Assistant ») **suffit** — aucun clic,
+notamment avec le réglage par défaut `read_aloud_voice: ""` (défaut
+`lib.rs:1207`). Avant, l'état n'était demandé que si la valeur enregistrée était
+**déjà** une voix locale : avec « Automatique », `localVoiceModelFor("")` =
+`null` (`local-voice.js`) → aucun appel `tts_local_status` → **aucune voix locale
+proposée** et une ligne bloquée sur « vérification du moteur en cours… »
+(régression de `52eb3ab`, publiée en v0.4.46 et v0.5.0).
+
+1. **Un seul point de décision** (`refreshReadAloudVoice`, `settings.js`) : le
+   modèle dont on demande l'état est celui de la voix choisie, sinon
+   `DEFAULT_LOCAL_VOICE_MODEL` — le seul état qui permette d'afficher le
+   catalogue. L'état connu est **toujours** passé au rendu
+   (`renderReadAloudVoice(wanted, known)`), sinon `voiceChoiceOptions` n'affiche
+   aucune entrée locale.
+2. **Un seul chemin de vérification** : `checkLocalVoiceStatus(value)` —
+   exactement ce que fait le bouton « Vérifier à nouveau » (relire l'état du
+   dernier téléchargement avec `refreshLocalVoiceDownloadState`, puis
+   `refreshLocalVoiceStatus` pour la voix concernée, puis re-rendre). Le bouton,
+   le chargement automatique et le choix d'une voix l'appellent tous : aucun
+   second mécanisme, aucune commande Rust nouvelle.
+3. **Coût : au plus une fois par ouverture des Paramètres.** Drapeau
+   `localVoiceAutoChecked` remis à `false` dans `resetSettingsContent` (donc à
+   chaque ouverture), et une seule demande en vol (`localVoiceCheckInFlight`).
+   Jamais à chaque rendu, jamais en boucle, **aucune minuterie** (`setInterval` /
+   `setTimeout` absents de ce chemin). Un **geste** (choix dans la liste) reste
+   une vérification à la demande : il demande l'état de SA voix, même après la
+   vérification automatique (sinon le choix serait perdu).
+4. **États visibles, jamais un vide** (source unique `localVoiceSectionNote`) :
+   - pendant → `LOCAL_VOICE_PENDING_HINT` (« vérification de l'état du moteur en
+     cours… ») ;
+   - échec de la vérification → état **`unknown`** (jamais « non installé », qui
+     serait une affirmation inventée) + `LOCAL_VOICE_UNKNOWN_HINT` (« État du
+     moteur de voix locale inconnu : cliquez sur « Vérifier à nouveau »… ») ;
+     `voiceChoiceStatus` renvoie `kind: "local-unknown"` et **conserve** le choix
+     en cours (aucune décision prise à la place de l'utilisateur) ;
+   - moteur absent / modèle non téléchargé → messages existants (`hint` du
+     moteur, chemin du dossier) inchangés.
+5. **Aucun téléchargement** n'est déclenché par ce chemin (vérifié par test :
+   `downloadLocalVoiceModel` / `startReadAloudDownload` absents de
+   `refreshReadAloudVoice`, `ensureLocalVoiceChecked`, `checkLocalVoiceStatus`).
 
 ## 3. Choix de la voix
 
@@ -261,7 +305,14 @@ valeur recopiée, aucun réseau, texte nettoyé avant le moteur local, repli
 visible + journal, arrêt du son local) et `src/js/voix-locale-choix.test.js`
 (choix de la voix : catalogue réel avec genre et taille, une valeur par voix dont
 la première reste historique, état mémorisé **par modèle**, téléchargement
-**seulement sur geste**, état visible / arrêt / échec, aucun effacement). Côté
+**seulement sur geste**, état visible / arrêt / échec, aucun effacement) et
+`src/js/voix-locales-chargement-automatique.test.js` (chargement **automatique**
+de l'état du moteur : la ligne d'état n'est jamais vide, un échec devient un état
+**inconnu** et non « non installé », le rendu demande l'état **sans clic** même
+avec « Automatique », le bouton et l'automatique passent par **le même**
+`checkLocalVoiceStatus`, une seule fois par ouverture, aucun téléchargement).
+Retirer l'appel `ensureLocalVoiceChecked(...)` fait **échouer** le contrôle de
+branchement (vérifié avant/après). Côté
 Rust : tests de `tts_local` (statut sur dossier vide/équipé, chemins déduits d'un
 seul dossier, table des voix complète et sans doublon, voix masculine avec ses
 propres fichiers et son propre état, journal du repli, **moteur de l'autre version

@@ -57,6 +57,7 @@ import {
 // Voix française LOCALE (Piper, hors ligne) : le statut du moteur et le libellé
 // de son choix viennent d'un seul module — aucune valeur recopiée ici.
 import {
+  DEFAULT_LOCAL_VOICE_MODEL,
   LOCAL_VOICE_DOWNLOAD_EVENT,
   LOCAL_VOICE_MODELS,
   cancelLocalVoiceDownload,
@@ -64,8 +65,8 @@ import {
   downloadLocalVoiceModel,
   downloadProgressText,
   formatMegabytes,
-  isLocalVoiceChoice,
   localVoiceModelFor,
+  localVoiceSectionNote,
   localVoiceStatusFor,
   logLocalVoice,
   refreshLocalVoiceDownloadState,
@@ -634,9 +635,15 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
    *  - voix locale choisie mais moteur absent → choix CONSERVÉ + phrase qui dit
    *    que la lecture utilise la voix du système en attendant ;
    *  - cas normal → phrase de rappel du fonctionnement.
+   * L'état du moteur local est demandé **sans clic** dès que la section est
+   * rendue avec un état inconnu (ouverture des Paramètres, affichage de
+   * l'onglet Assistant) : le propriétaire a tranché « ça se charge tout seul ».
    * @param {string} [choice] voix à sélectionner (défaut : la configuration)
+   * @param {{gesture?: boolean}} [options] `gesture` = l'appel vient d'un choix
+   *   de l'utilisateur dans la liste (il demande l'état de SA voix, même après
+   *   la vérification automatique de l'ouverture)
    */
-  function refreshReadAloudVoice(choice) {
+  function refreshReadAloudVoice(choice, options) {
     if (!selectReadAloudVoice) return;
     const wanted =
       choice == null
@@ -645,19 +652,86 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
           : ""
         : String(choice);
     const model = localVoiceModelFor(wanted);
-    renderReadAloudVoice(wanted, model ? localVoiceStatusFor(model) : null);
-    // Statut du moteur pour LA voix concernée : demandé UNE fois, puis la
-    // section est re-rendue. Jamais bloquant : sans réponse, la voix du système
-    // reste utilisable.
-    if (model && !localVoiceStatusFor(model)) {
-      refreshLocalVoiceStatus({ model }).then((status) => {
-        if (status && isLocalVoiceChoice(selectReadAloudVoice.value)) {
-          renderReadAloudVoice(selectReadAloudVoice.value, status);
-        } else if (status) {
-          renderReadAloudVoice(wanted, status);
-        }
-      });
+    // L'état du moteur est TOUJOURS fourni au rendu : sans lui, la liste ne
+    // propose aucune voix locale (`voiceChoiceOptions`). Quand aucune voix
+    // locale n'est choisie, on fournit l'état de la voix locale PAR DÉFAUT —
+    // le seul qui permette d'afficher le catalogue.
+    const statusModel = model || DEFAULT_LOCAL_VOICE_MODEL;
+    const known = localVoiceStatusFor(statusModel);
+    renderReadAloudVoice(wanted, known);
+    // État inconnu ou périmé ? Vérification demandée SANS clic, par le chemin
+    // unique (`checkLocalVoiceStatus`). Une seule fois tant que les Paramètres
+    // sont ouverts : jamais à chaque rendu, jamais en boucle, jamais périodique.
+    // L'état mémorisé n'est donc pas une raison de ne rien demander : un modèle
+    // déposé à la main (ou supprimé) doit être vu à la première ouverture.
+    if (options && options.gesture) ensureLocalVoiceChecked(wanted, true);
+    else if (!localVoiceAutoChecked) ensureLocalVoiceChecked(wanted, false);
+  }
+
+  /** Vérification automatique déjà faite pour cette ouverture des Paramètres. */
+  let localVoiceAutoChecked = false;
+  /** Vérification en vol : jamais deux demandes simultanées de la section. */
+  let localVoiceCheckInFlight = null;
+
+  /**
+   * Vérification de l'état du moteur de voix locale : **le seul chemin de
+   * vérification de cette section**, exactement ce que fait le bouton
+   * « Vérifier à nouveau » — relire l'état du dernier téléchargement, puis
+   * demander `tts_local_status` (`refreshLocalVoiceStatus`) pour la voix
+   * concernée (ou pour la voix locale par défaut), puis re-rendre la section.
+   * Jamais bloquant : le module local ne lève pas.
+   * @param {string} [value] valeur de réglage concernée (défaut : choix affiché)
+   * @returns {Promise<object|null>} état du moteur
+   */
+  async function checkLocalVoiceStatus(value) {
+    const wanted = String(
+      value == null ? (selectReadAloudVoice ? selectReadAloudVoice.value : "") : value,
+    );
+    // État du DERNIER téléchargement : relu, jamais relancé (aucun geste ici).
+    const state = await refreshLocalVoiceDownloadState();
+    if (state && (state.running || state.outcome)) showDownloadState(state);
+    const model = localVoiceModelFor(wanted);
+    const status = model
+      ? await refreshLocalVoiceStatus({ model })
+      : await refreshLocalVoiceStatus({});
+    if (status && selectReadAloudVoice) {
+      // Le choix en cours est CONSERVÉ : on re-rend la valeur AFFICHÉE (la
+      // valeur demandée quand la liste est vide, pour ne pas perdre l'annonce
+      // d'une voix disparue).
+      const shown = selectReadAloudVoice.value || wanted;
+      renderReadAloudVoice(shown, status);
     }
+    return status;
+  }
+
+  /**
+   * Demande la vérification sans clic (ouverture, onglet Assistant) **une seule
+   * fois** tant que les Paramètres sont ouverts. Un choix de voix dans la liste
+   * reste un geste : il demande l'état de SA voix même après la vérification
+   * automatique (sinon le choix serait perdu).
+   * @param {string} wanted valeur de réglage concernée
+   * @param {boolean} [gesture] vrai si l'appel vient d'un choix de l'utilisateur
+   * @returns {Promise<object|null>|null} état, ou null si rien n'est demandé
+   */
+  function ensureLocalVoiceChecked(wanted, gesture) {
+    // Une seule demande à la fois : une demande déjà en vol est réutilisée. Un
+    // GESTE (choix d'une autre voix) attend son tour, sinon le choix serait
+    // perdu (aucun état pour sa voix).
+    const launch = (value, previous) => {
+      const run = () => checkLocalVoiceStatus(value).catch(() => null);
+      const pending = previous ? previous.catch(() => null).then(run) : run();
+      localVoiceCheckInFlight = pending;
+      pending.finally(() => {
+        if (localVoiceCheckInFlight === pending) localVoiceCheckInFlight = null;
+      });
+      return pending;
+    };
+    if (localVoiceCheckInFlight) {
+      return gesture ? launch(wanted, localVoiceCheckInFlight) : localVoiceCheckInFlight;
+    }
+    if (!gesture && localVoiceAutoChecked) return null;
+    localVoiceAutoChecked = true;
+    return launch(wanted, null);
   }
 
   /**
@@ -688,10 +762,15 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
       readAloudVoiceNote.dataset.state = status.kind;
     }
     // Ligne dédiée au moteur local : où sont les fichiers, et ce qui se passe
-    // en cas d'absence. Une seule phrase, toujours visible (aucun blocage).
+    // en cas d'absence ou de vérification impossible. Une seule phrase, toujours
+    // visible (jamais une ligne vide, aucun blocage).
     if (readAloudLocalNote) {
-      readAloudLocalNote.textContent = localVoiceNoteText(local);
-      readAloudLocalNote.dataset.state = local && local.installed ? "ok" : "missing";
+      readAloudLocalNote.textContent = localVoiceSectionNote(local);
+      readAloudLocalNote.dataset.state = local && local.unknown
+        ? "unknown"
+        : local && local.installed
+          ? "ok"
+          : "missing";
     }
     showReadAloudState(lastReadAloudState);
     showDownloadState(downloadState);
@@ -704,25 +783,6 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         }
       });
     }
-  }
-
-  /**
-   * Phrase de la ligne « voix locale » : état réel du moteur, ou vérification
-   * en cours (jamais une promesse non tenue).
-   * @param {object|null} local
-   * @returns {string}
-   */
-  function localVoiceNoteText(local) {
-    if (!local) return "Voix française locale : vérification du moteur en cours\u2026";
-    if (local.installed && local.dir) {
-      // Moteur réutilisé depuis une AUTRE version de Pilot du même ordinateur :
-      // l'utilisateur le voit (jamais un partage silencieux).
-      if (local.engine_shared && local.engine_dir) {
-        return `${local.hint} Modèles dans « ${local.dir} », moteur déjà installé pour Pilot dans « ${local.engine_dir} ».`;
-      }
-      return `${local.hint} Moteur et modèle se trouvent dans « ${local.dir} ».`;
-    }
-    return local.hint;
   }
 
   // ── Téléchargement d'un modèle de voix locale (GESTE EXPLICITE seulement) ──
@@ -1935,6 +1995,11 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     stopLayaModelPoll();
     stopLayaProgressListener();
     stopReading();
+    // La vérification automatique de l'état du moteur de voix locale est liée à
+    // UNE ouverture des Paramètres : elle repart à la prochaine (une seule fois
+    // par ouverture, jamais en boucle).
+    localVoiceAutoChecked = false;
+    localVoiceCheckInFlight = null;
     // Revert l'aperçu en direct : on revient au thème/sous-thème sauvegardé
     applyTheme(savedTheme, savedSubtheme);
   }
@@ -2023,7 +2088,10 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   // `read_aloud_voice`) ; il n'est jamais repris ailleurs dans l'interface.
   if (selectReadAloudVoice) {
     selectReadAloudVoice.addEventListener("change", () => {
-      refreshReadAloudVoice(selectReadAloudVoice.value);
+      // GESTE : la voix choisie peut être un modèle jamais vérifié — on demande
+      // l'état de CETTE voix (sinon le choix serait perdu et le téléchargement
+      // décidé à tort).
+      refreshReadAloudVoice(selectReadAloudVoice.value, { gesture: true });
       // GESTE EXPLICITE : choisir une voix locale dont le modèle manque lance son
       // téléchargement (état visible, arrêt possible). Aucun autre chemin ne
       // déclenche de téléchargement.
@@ -2045,19 +2113,12 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     });
   }
   // Bouton « Vérifier à nouveau » : un état mémorisé peut être périmé (fichiers
-  // déposés à la main, modèle installé pendant que Pilot tournait).
+  // déposés à la main, modèle installé pendant que Pilot tournait, ou
+  // vérification automatique de l'ouverture qui a échoué). Il utilise la MÊME
+  // vérification que le chargement automatique (aucun second mécanisme).
   if (btnReadAloudRecheck) {
-    btnReadAloudRecheck.addEventListener("click", async () => {
-      const model = currentReadAloudModel();
-      const state = await refreshLocalVoiceDownloadState();
-      if (state && (state.running || state.outcome)) showDownloadState(state);
-      if (!model) {
-        const fallback = await refreshLocalVoiceStatus({});
-        if (fallback) renderReadAloudVoice(selectReadAloudVoice.value, fallback);
-        return;
-      }
-      const status = await refreshLocalVoiceStatus({ model });
-      if (status) renderReadAloudVoice(selectReadAloudVoice.value, status);
+    btnReadAloudRecheck.addEventListener("click", () => {
+      checkLocalVoiceStatus(selectReadAloudVoice ? selectReadAloudVoice.value : "");
     });
   }
   // Progression poussée par le moteur local (un seul abonnement, jamais bloquant).
