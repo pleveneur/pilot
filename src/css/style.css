@@ -648,14 +648,17 @@ body.theme-light.theme-tokyo-day {
 #global-actions {
   flex-shrink: 0;
   margin: 8px 8px 0;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-lg);
+  /* LOT 2 : plus AUCUN cadre ici (principe 1 : un seul cadre accentue par
+     colonne, celui du projet). L'alignement reste a 16 px du bord
+     (8 px de marge + 8 px de padding). */
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  /* 6 px entre les portes : c'est ce qui permet aux trois libelles de tenir
+     sur UNE ligne dans une colonne de 280 px (248 px utiles). Si la place
+     manque, la rangee se replie au lieu de couper un libelle. */
   gap: 6px;
-  padding: 8px;
+  padding: 0 8px 8px;
 }
 
 #project-footer {
@@ -892,8 +895,12 @@ body.theme-light.theme-tokyo-day {
 }
 
 /* --- Project Selector --- */
+/* LOT 2 de la presentation : bandeau d'identification de 48 px (au lieu de
+   72) — logo 20 px, nom du projet 15 px / 600 et sous-titre du moteur 11 px
+   sur deux lignes. Inset de gauche 16 px (grille § 4.2), filet bas conserve. */
 #project-selector {
-  padding: 12px 8px 12px 12px;
+  height: 48px;
+  padding: 8px 8px 8px 16px;
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: row;
@@ -902,52 +909,103 @@ body.theme-light.theme-tokyo-day {
   position: relative;
 }
 
+/* Identite du projet : nom + sous-titre du moteur. Le bloc prend la place
+   disponible et porte la troncature : un nom de projet tres long ne pousse
+   jamais le bouton « Projets » hors de la colonne. */
+#project-identity {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+
 #btn-open-project {
   background: var(--surface-2);
-  color: var(--text-primary);
+  color: var(--text-secondary);
   border: 1px solid var(--border-subtle);
-  padding: 0;
+  padding: 0 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  font-family: var(--font-ui);
   font-size: var(--font-sm);
   font-weight: var(--fw-semibold);
-  transition: background var(--transition-fast), border-color var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
+  gap: 6px;
+  /* Bouton NOMME : hauteur 28 px, largeur au contenu (etait un carre 48 x 48
+     qui ne portait qu'un chevron de 16 px). */
+  width: auto;
+  height: 28px;
+  flex: 0 0 auto;
   margin-left: auto;
+  white-space: nowrap;
 }
 #btn-open-project:hover {
   background: var(--surface-3);
+  color: var(--text-primary);
   border-color: var(--border-hover);
 }
+/* Etat OUVERT du menu : `sidebar.js` pose la classe `open` et `aria-expanded`
+   au meme moment que l'affichage du menu (fond accent 14 %, bordure accent
+   40 %, chevron retourne de 180°). */
+#btn-open-project.open {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--text-primary);
+}
+#btn-open-project.open .dropdown-arrow { transform: rotate(180deg); }
 
 #btn-project-logo {
-  height: 48px;
+  height: 20px;
   width: auto;
+  flex: 0 0 auto;
   object-fit: contain;
 }
 
 #btn-project-name {
-  font-family: 'Avenir', 'Avenir Next', 'Segoe UI', sans-serif;
-  font-weight: 700;
-  font-size: 22px;
-  line-height: 1;
+  /* Le nom du projet quitte la police en dur (Avenir) et passe de 22 a 15 px
+     (--font-zone) : c'est le SEUL texte au-dessus de 13 px de l'application. */
+  font-family: var(--font-ui);
+  font-weight: var(--fw-semibold);
+  font-size: var(--font-zone);
+  line-height: 1.2;
   color: var(--text-primary);
-  flex: 1;
-  display: flex;
-  align-items: flex-end;
-  height: 48px;
-  padding-left: 4px;
-  padding-bottom: 2px;
+  display: block;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   user-select: none;
 }
+
+/* Sous-titre du moteur en service (« Agent Pi » / « Agent PLh ») — decision du
+   proprietaire : il vit ICI, dans le bandeau d'identification, et non dans
+   l'onglet. Rempli par `main.js` (valeur de `backend-info.js`). */
+.project-engine {
+  font-family: var(--font-ui);
+  font-size: var(--font-xs);
+  font-weight: var(--fw-normal);
+  line-height: 1.2;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Avant la premiere sonde du backend, l'element est vide : il ne doit pas
+   reserver de hauteur (le bandeau garde ses 48 px). */
+.project-engine:empty { display: none; }
 
 .dropdown-arrow {
   font-size: 10px;
   opacity: 0.7;
+  display: inline-flex;
+  align-items: center;
+  transition: transform var(--transition-fast);
 }
 
 /* --- Tree Filter --- */
@@ -983,7 +1041,9 @@ body.theme-light.theme-tokyo-day {
 .projects-dropdown {
   position: absolute;
   top: 100%;
-  left: 12px;
+  /* Aligne le menu sur l'inset de 16 px du bandeau d'identification (LOT 2) :
+     il demarre sous le logo, pas 4 px avant lui. */
+  left: 16px;
   right: 8px;
   z-index: 150;
   background: var(--surface-floating);
@@ -1492,6 +1552,27 @@ body.theme-light.theme-tokyo-day {
   font-size: var(--font-sm);
   font-family: var(--font-ui);
   text-align: left;
+}
+
+/* LOT 2 de la presentation : les TROIS portes globales sont nommees. Format
+   « pastille » : hauteur 28 px, largeur au contenu, icone 16 px (`.icon`) et
+   libelle 12 px / 500. Les lignes du panneau projet (`.pj-panel button`)
+   gardent leurs 32 px : c'est le lot 3 qui les reprend. */
+#global-actions button {
+  width: auto;
+  height: 28px;
+  padding: 0 6px;
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-size: var(--font-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.ga-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pj-btn-label {
@@ -6377,30 +6458,46 @@ body.pilot-loading *::after {
 
 /* ── Accès distant (mode remote) ── */
 
+/* Badge « Distant » (LOT 2 de la presentation) : il prend sa place a droite de
+   la rangee des trois portes, dans la MEME famille visuelle qu'elles —
+   hauteur 28 px, padding 0 8 px, bordure `--border-subtle`, fond
+   `--surface-2`, libelle « Distant » 11 px / 600 et compteur 11 px.
+   L'ETAT reste lisible sans couleur de fond : connecte = icone et compteur
+   en `--success`, hors service (`.off`) = tout en `--text-secondary`. */
 .remote-badge {
-  width: 32px;
-  height: 32px;
+  height: 28px;
+  width: auto;
   box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 1px;
-  padding: 0;
-  margin: 0;
-  font-size: 14px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--success) 22%, transparent);
-  color: var(--success);
+  gap: 4px;
+  padding: 0 8px;
+  margin: 0 0 0 auto;
+  font-family: var(--font-ui);
+  font-size: var(--font-xs);
+  font-weight: var(--fw-semibold);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
-  border: 1px solid color-mix(in srgb, var(--success) 40%, transparent);
-  transition: background 0.15s;
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.remote-badge:hover { background: color-mix(in srgb, var(--success) 35%, transparent); }
+.remote-badge:not(.off) {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+.remote-badge:hover {
+  background: var(--surface-3);
+  border-color: var(--border-hover);
+}
 .remote-badge.off {
-  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  background: var(--surface-2);
   color: var(--text-secondary);
-  border-color: color-mix(in srgb, var(--text-muted) 30%, transparent);
+  border-color: var(--border-subtle);
   cursor: default;
 }
 .remote-badge.hidden { display: none; }

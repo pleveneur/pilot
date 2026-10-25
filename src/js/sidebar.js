@@ -1294,6 +1294,11 @@ class Sidebar {
       await this._loadRecentProjects();
       this._renderOpenProjectsBar();
       this.dropdown.classList.remove("hidden");
+      // LOT 2 : l'etat OUVERT du bouton nomme « Projets » (fond accent, chevron
+      // retourne de 180°) suit exactement l'affichage du menu. Un seul point de
+      // verite : ici et dans `_hideProjectsDropdown`.
+      this.btnOpen?.classList.add("open");
+      this.btnOpen?.setAttribute("aria-expanded", "true");
     } else {
       this._hideProjectsDropdown();
     }
@@ -1411,6 +1416,12 @@ class Sidebar {
 
   _hideProjectsDropdown() {
     this.dropdown.classList.add("hidden");
+    // LOT 2 : le bouton nomme « Projets » reprend son etat ferme (chevron a 0°,
+    // `aria-expanded="false"`), quel que soit le chemin de fermeture.
+    if (this.btnOpen) {
+      this.btnOpen.classList.remove("open");
+      this.btnOpen.setAttribute("aria-expanded", "false");
+    }
   }
 
   async _loadRecentProjects() {

@@ -465,6 +465,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   // pour renommer les onglets/labels déjà affichés. Re-sondé sur changement de
   // chemin pi (event `pilot-config-changed`).
   refreshBackendInfo();
+
+  // 3d-quater-bis. LOT 2 de la presentation : le moteur en service
+  // (« Agent Pi » / « Agent PLh ») s'affiche en SOUS-TITRE du bandeau
+  // d'identification de la colonne de gauche — decision du proprietaire : il
+  // n'est pas porte par l'onglet. La valeur vient de `backend-info.js` :
+  // aucune seconde source, et elle suit chaque re-sonde du backend.
+  const syncEngineSubtitle = () => {
+    const el = document.getElementById("project-engine");
+    if (el) el.textContent = agentDisplayLabel();
+  };
+  syncEngineSubtitle();
+  window.addEventListener("pilot-backend-changed", syncEngineSubtitle);
+
   window.addEventListener("pilot-config-changed", () => {
     refreshBackendInfo();
     // Re-sonde aussi la santé de l'agent (chemin pi peut avoir changé).
@@ -658,7 +671,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // 🔐 Coffre : coffre fort de mots de passe chiffré — issue #52.
-  document.getElementById("btn-vault").addEventListener("click", () => {
+  // LOT 2 de la presentation — ce bouton ne vit plus en haut de la colonne :
+  // il revient dans Reglages → Acces directs au LOT 7, avec le MEME
+  // identifiant. En attendant, son absence ne doit PAS casser le demarrage :
+  // d'ou le `?.` (cablage identique des qu'il est de retour).
+  document.getElementById("btn-vault")?.addEventListener("click", () => {
     tabs.openFile("Coffre", "vault");
   });
 
@@ -668,17 +685,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // 🖥️ GDS Serveur : onglet transverse d'administration du serveur — LOT 4 (L4.1).
-  document.getElementById("btn-gds-admin").addEventListener("click", () => {
+  // LOT 2 : retire du haut de la colonne (retour au LOT 7, meme identifiant).
+  document.getElementById("btn-gds-admin")?.addEventListener("click", () => {
     tabs.openFile("GDS Serveur", "gds-admin");
   });
 
   // ⚙️ GDS Paramétrage : onglet transverse de paramétrage utilisateur — LOT 5 (L5.1).
-  document.getElementById("btn-gds-params").addEventListener("click", () => {
+  // LOT 2 : retire du haut de la colonne (retour au LOT 7, meme identifiant).
+  document.getElementById("btn-gds-params")?.addEventListener("click", () => {
     tabs.openFile("GDS — paramétrage", "gds-params");
   });
 
   // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
-  document.getElementById("btn-feedback").addEventListener("click", () => {
+  // LOT 2 : retire du haut de la colonne (retour au LOT 7, meme identifiant).
+  document.getElementById("btn-feedback")?.addEventListener("click", () => {
     tabs.openFile("Feedback", "feedback");
   });
 
