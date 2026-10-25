@@ -161,6 +161,36 @@ describe("1. la file visible compose les files réelles du projet", () => {
     expect(readProjectQueueView(PROJECT).running).toHaveLength(0);
   });
 
+  it("chaque demande en attente de la file RÉELLE dit quel agent la traite (jamais un blanc)", () => {
+    // Les trois familles qui, jusqu'ici, ne disaient pas l'agent : mission de
+    // l'assistant (identité de mission), commande manuelle, délégation. Chaque
+    // agent est celui RÉELLEMENT enregistré avec la demande.
+    runAgentsQueueByProject[PROJECT] = [{ launch: async () => {}, label: "mission de l'assistant", id: 7, agentIds: ["reviewer"] }];
+    enqueueProjectCommand({ project: PROJECT, text: "commande manuelle", agentId: "codeur", launch: async () => true });
+    delegationState(PROJECT).queue.push({ request: "délégation en attente", projectPath: PROJECT, agentId: "testeur" });
+
+    const report = formatProjectQueueReport(PROJECT);
+    const line = (needle) => report.split("\n").find((l) => l.includes(needle)) || "";
+    expect(line("commande manuelle"), "l'agent de la commande en attente a disparu").toContain("agent : codeur");
+    expect(line("mission de l'assistant"), "l'agent de la mission en attente a disparu").toContain("agent : reviewer");
+    expect(line("délégation en attente"), "l'agent de la délégation en attente a disparu").toContain("agent : testeur");
+
+    // Une demande qui ne porte AUCUN agent (entrée sans identité) le DIT :
+    // aucune ligne ne laisse « agent : » suivi de rien.
+    runAgentsQueueByProject[PROJECT] = [{ launch: async () => {}, label: "mission sans agent" }];
+    const report2 = formatProjectQueueReport(PROJECT);
+    const waiting = report2.split("\n").filter((l) => l.startsWith("- en attente ("));
+    expect(waiting.length).toBeGreaterThan(0);
+    for (const l of waiting) {
+      expect(l, `nom d'agent vide : ${l}`).toMatch(/agent : [^ ]/);
+      expect(l).not.toMatch(/agent : $/);
+    }
+    expect(
+      report2.split("\n").find((l) => l.includes("mission sans agent")) || "",
+      "l'agent inconnu doit être DIT",
+    ).toContain("agent : agent non défini");
+  });
+
   it("les demandes du projet voisin ne polluent pas la file", () => {
     enqueueProjectCommand({ project: OTHER, text: "autre projet", launch: async () => true });
     runAgentsQueueByProject[OTHER] = [{ launch: async () => {}, label: "mission d'un autre projet" }];

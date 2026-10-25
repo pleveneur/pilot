@@ -10,7 +10,10 @@
 //  1. PUR (testable sans Tauri, aucun import) : rangs et libellés simples en
 //     français (« en cours », « en attente (2e) »), vue unifiée de la file d'un
 //     projet et textes affichés (bloc discret de l'onglet agent, commande
-//     `/file`).
+//     `/file`). Chaque demande EN ATTENTE y dit aussi QUEL agent la traitera,
+//     à partir de l'agent enregistré AVEC la demande (`agentIds` / `agentId`) :
+//     point d'affichage UNIQUE (`entryLine`), jamais de nom vide
+//     (`AGENT_UNKNOWN_LABEL`) ni de nom inventé.
 //
 //  2. ÉTAT de la file des COMMANDES MANUELLES du chat d'agent. C'est la seule
 //     famille de demandes qui n'avait AUCUNE file : une commande tapée pendant
@@ -72,12 +75,56 @@ function familyNoun(kind) {
   return FAMILY_NOUNS[kind] || "tâche";
 }
 
+/**
+ * Libellé affiché quand une demande ne porte AUCUN agent : la file le dit
+ * explicitement plutôt que d'afficher un vide.
+ */
+export const AGENT_UNKNOWN_LABEL = "agent non défini";
+
+/**
+ * Agents réellement enregistrés AVEC une demande de la file (lecture seule, pure).
+ *
+ * Aucun nom n'est inventé ici : on ne lit que ce que la demande mise en file
+ * contient déjà — `agentIds` (mission de l'assistant : identité allouée à la
+ * mise en file) ou `agentId` (commande manuelle, délégation, demande d'agent en
+ * file d'exclusivité). Ces deux champs sont les SEULS lus : aucun autre champ
+ * n'est interprété comme un agent.
+ * @param {object|null|undefined} entry - entrée de file
+ * @returns {string[]} identifiants d'agent non vides, sans doublon
+ */
+export function queueAgentIds(entry) {
+  const e = entry || {};
+  const ids = [];
+  const push = (value) => {
+    if (typeof value !== "string") return;
+    const clean = value.trim();
+    if (clean && !ids.includes(clean)) ids.push(clean);
+  };
+  if (Array.isArray(e.agentIds)) e.agentIds.forEach(push);
+  push(e.agentId);
+  return ids;
+}
+
+/**
+ * Nom de l'agent visé par une demande, lisible en clair sur une ligne.
+ * Jamais une chaîne vide : sans agent connu, la fonction renvoie
+ * `AGENT_UNKNOWN_LABEL` (la file le dit au lieu de laisser un blanc).
+ * @param {object|null|undefined} entry - entrée de file
+ * @returns {string}
+ */
+export function queueAgentLabel(entry) {
+  const ids = queueAgentIds(entry);
+  return ids.length > 0 ? ids.join(", ") : AGENT_UNKNOWN_LABEL;
+}
+
 function normalizeEntries(entries, kind) {
   const out = [];
   for (const entry of entries || []) {
     if (!entry) continue;
     const label = typeof entry === "string" ? entry : entry.label;
-    out.push({ kind, label: shortLabel(label) });
+    // Les agents voyagent AVEC l'entrée normalisée : l'affichage ne relit pas
+    // la file d'origine (aucune seconde source).
+    out.push({ kind, label: shortLabel(label), agentIds: queueAgentIds(entry) });
   }
   return out;
 }
@@ -93,7 +140,7 @@ function normalizeEntries(entries, kind) {
  * @param {{project?:string, running?:Array, manual?:Array, missions?:Array,
  *          delegations?:Array, agents?:Array}} input
  * @returns {{project:string, running:Array<{kind:string,label:string}>,
- *            waiting:Array<{rank:number,kind:string,label:string}>,
+ *            waiting:Array<{rank:number,kind:string,label:string,agentIds:string[]}>,
  *            waitingCount:number, isEmpty:boolean}}
  */
 export function buildProjectQueueView(input = {}) {
@@ -114,7 +161,9 @@ export function buildProjectQueueView(input = {}) {
   let rank = 1 + running.length;
   for (const family of families) {
     for (const entry of family) {
-      waiting.push({ rank, kind: entry.kind, label: entry.label });
+      // `agentIds` : l'agent visé par la demande, tel qu'il a été enregistré
+      // avec elle (jamais déduit à l'affichage).
+      waiting.push({ rank, kind: entry.kind, label: entry.label, agentIds: entry.agentIds });
       rank += 1;
     }
   }
@@ -127,11 +176,18 @@ export function buildProjectQueueView(input = {}) {
   };
 }
 
-/** Ligne « en cours » / « en attente (Ne) » d'une entrée de la file. */
+/**
+ * Ligne « en cours » / « en attente (Ne) » d'une entrée de la file.
+ *
+ * Une demande EN ATTENTE dit en plus QUEL agent la traitera : c'est la question
+ * que l'utilisateur se pose devant la file, une demande en attente ne doit pas
+ * être anonyme. La tâche EN COURS garde son affichage (son sens ne change pas).
+ */
 function entryLine(entry, running) {
   const noun = familyNoun(entry.kind);
   const head = running ? "en cours" : `en attente (${rankLabel(entry.rank)})`;
-  return `- ${head} : ${noun} « ${entry.label} »`;
+  const agent = running ? "" : ` · agent : ${queueAgentLabel(entry)}`;
+  return `- ${head} : ${noun} « ${entry.label} »${agent}`;
 }
 
 /**

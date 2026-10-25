@@ -105,8 +105,9 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 ### File d'attente du projet
 - Sur un projet, **une seule tâche tourne à la fois**. Les demandes suivantes ne sont **pas perdues** : elles **attendent leur tour** et démarrent **automatiquement** dès que la place se libère.
 - **L'ordre d'arrivée est respecté à l'admission** : une demande déposée alors qu'une autre attend déjà ne passe **jamais devant** — elle se place **derrière** et démarre à son tour. Une seule nuance, écrite noir sur blanc dans les **limites connues** (aucune perte, aucun doublon) : une mission **déjà sortie de file** qui ne peut pas démarrer repart **derrière** les suivantes. L'écran vous le dit (« N demande(s) attendent déjà — votre demande est mise en file DERRIÈRE elles ») et la raison reste écrite dans `.pilot/agent-stops.log`.
-- Un **bloc discret** sous la barre d'outils de l'onglet de l'agent montre la file : la tâche **en cours**, puis les demandes **en attente** avec leur rang (« en attente (2e) »). Il n'apparaît que s'il y a quelque chose à dire.
-- La commande **`/file`** affiche la file complète du projet dans la discussion ; **`/file vide`** abandonne les demandes **en attente** et annonce **combien** ont été abandonnées (la tâche en cours n'est jamais arrêtée).
+- Un **bloc discret** sous la barre d'outils de l'onglet de l'agent montre la file : la tâche **en cours**, puis les demandes **en attente** avec leur rang et **l'agent qui va les traiter** (« en attente (2e) : mission « … » · agent : Codeur »). Il n'apparaît que s'il y a quelque chose à dire.
+- **Chaque demande en attente dit quel agent la traite** : l'agent est celui **enregistré avec la demande** au moment de sa mise en file (jamais un nom supposé à l'affichage). Si l'agent n'est pas connu, la ligne l'écrit noir sur blanc (« agent : agent non défini ») : **jamais un blanc** à la place du nom. La tâche **en cours** garde son affichage habituel.
+- La commande **`/file`** affiche la file complète du projet dans la discussion (mêmes rangs, mêmes agents) ; **`/file vide`** abandonne les demandes **en attente** et annonce **combien** ont été abandonnées (la tâche en cours n'est jamais arrêtée).
 - **Aucune demande ne disparaît en silence** : une demande en attente dont la tâche porteuse s'est arrêtée reste **visible** et **relançable** ; si elle est abandonnée (par vous, par le chien de garde ou par « tout arrêter »), son libellé est écrit dans `.pilot/agent-stops.log` et l'écran vous le signale.
 <!-- /HELP:agents -->
 
@@ -492,6 +493,17 @@ La file **n'invente aucune file parallèle** : elle compose celles qui existent
 - **Affichage** : bloc discret `.agent-queue-block` sous la barre d'outils de
   l'onglet de l'agent (masqué si la file est vide), titré « 🧾 File d'attente —
   N en cours · M en attente », lignes « en cours : … », « en attente (2e) : … ».
+  **Chaque ligne de demande en attente nomme l'agent qui la traitera**
+  (« … · agent : <agent> »), à partir de l'agent **réellement enregistré avec
+  la demande** : `agentIds` d'une mission de l'assistant (`allocateMissionIdentity`),
+  `agentId` d'une commande manuelle (`enqueueProjectCommand`), d'une délégation
+  (`delegationState(p).queue`) ou d'une demande d'agent en file d'exclusivité
+  (`listProjectExclusivityEntries`). Aucun nom n'est **déduit** ni **inventé** à
+  l'affichage ; quand la demande ne porte aucun agent, la ligne affiche
+  `AGENT_UNKNOWN_LABEL` (« agent non défini ») — **jamais un vide**. La ligne
+  « en cours » est **inchangée** (elle ne reçoit pas de suffixe d'agent).
+  Point d'affichage **unique** : `entryLine` (`project-task-queue.js`), partagé
+  par le bloc de l'onglet et `/file` — aucune seconde copie du format.
   Rafraîchi par l'événement `pilot-queue-changed` (émis par la boucle) et aux
   `agent_start` / `agent_end`.
 - **Commandes de chat** : `/file` affiche la file (`formatProjectQueueReport`) ;
@@ -499,9 +511,13 @@ La file **n'invente aucune file parallèle** : elle compose celles qui existent
   famille (`formatQueueClearedMessage`). Traitées **localement** (jamais envoyées
   au moteur), sur le modèle de `/verrou`.
 - **Tests** : `src/js/project-task-queue.test.js` (ordre, une seule tâche
-  démarre, la suivante démarre seule, place rendue, rien perdu) et
+  démarre, la suivante démarre seule, place rendue, rien perdu),
   `src/js/project-queue-wiring.test.js` (composition de la file visible,
-  `/file vide`, câblage de l'onglet, style).
+  `/file vide`, câblage de l'onglet, style, agent réel de chaque famille de
+  demande) et `src/js/file-attente-nom-agent.test.js` (le nom de l'agent ne
+  peut pas disparaître d'une demande en attente ; un agent inconnu est **dit**
+  et jamais laissé vide ; ordre, rangs et nombre de demandes inchangés ; ligne
+  « en cours » inchangée).
 
 #### Ordre d'arrivée à l'admission (P1)
 

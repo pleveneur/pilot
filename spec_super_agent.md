@@ -945,6 +945,12 @@ sur le projet), cette demande n'est plus une simple ligne anonyme :
   qui vous revient est **étiqueté** avec cette identité
   (`[mission #7 · agents : codeur]`). Vous voyez donc toujours **quelle**
   demande a produit **quel** résultat ;
+- **la file affiche ces agents** : chaque demande **en attente** dit, à côté de
+  son rang et de son libellé, **quel agent va la traiter** (« en attente (2e) :
+  mission « … » · agent : codeur »), dans le bloc de file de l'onglet comme dans
+  `/file`. L'agent affiché est celui **enregistré avec la demande** ; s'il n'est
+  pas connu, la ligne l'écrit (« agent : agent non défini ») — **jamais un
+  blanc** ;
 - la demande appartient à la **file du projet** : la fin d'une tâche ne fait plus
   disparaître les demandes encore en attente ;
 - une demande n'est **jamais** exécutée à la place d'une autre : si la tâche qui

@@ -1185,12 +1185,19 @@ export async function keepQueuedRunAgentsMissions(target, opts = {}) {
 
 /**
  * Délégations (issue #66) en attente pour un projet, dans l'ordre.
+ *
+ * `agentId` est l'agent RÉELLEMENT visé, résolu et enregistré avec la demande
+ * avant sa mise en file : la file visible du projet peut donc dire quel agent
+ * traitera la délégation (aucun nom déduit, aucune supposition).
  * @param {string} projectPath
- * @returns {Array<{label:string}>}
+ * @returns {Array<{label:string, agentId:string}>}
  */
 export function getProjectDelegationQueue(projectPath) {
   const queue = (delegationState(projectPath).queue || []);
-  return queue.map((item) => ({ label: String((item && item.request) || "délégation") }));
+  return queue.map((item) => ({
+    label: String((item && item.request) || "délégation"),
+    agentId: String((item && item.agentId) || ""),
+  }));
 }
 
 /**
