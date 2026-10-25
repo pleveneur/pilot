@@ -25,6 +25,19 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
+// Portage (mode reseau multi-postes) : lecture des reponses du serveur et
+// textes de l'interface en UN SEUL endroit (`gds-status.js`).
+import {
+  HANDOVER_MINE,
+  countLocalChanges,
+  handoverBanner,
+  handoverHasGiveBack,
+  handoverHasTake,
+  handoverLocalWorkNotice,
+  handoverWriteAllowed,
+  handoverWriteRefusal,
+  mapHandoverState,
+} from "./gds-status.js";
 
 /**
  * Durée maximale d'attente de l'état de connexion GDS (ms). L'état repose
@@ -240,6 +253,7 @@ export function createGds(container) {
           <div id="gds-state-badge" class="gds-badge"></div>
         </div>
         <div class="gds-subtitle" id="gds-subtitle">Chargement…</div>
+        <div id="gds-handover" class="gds-handover"></div>
       </div>
       <div id="gds-body" class="gds-body"></div>
     </div>
@@ -258,6 +272,158 @@ export function createGds(container) {
   // configuré n'a plus aucun chemin de correction). Remis à false au retour ou
   // au changement de projet.
   let editRegistered = false;
+
+  // ── Portage du projet (mode reseau multi-postes, plan §7 etape 5) ──
+  // Etat LU sur le serveur (`gds_handover_can_write`, aucune ecriture) : il
+  // decide du bandeau « tenu par un autre developpeur, jusqu'a HH:MM » ET du
+  // refus des actions qui ecrivent. `null` = pas encore verifie (on ne bloque
+  // rien sur une supposition : le serveur reste seul juge).
+  let handover = null;
+  // Fichiers modifies localement (aucun nombre devine : 0 si Git ne repond pas).
+  let localChanges = 0;
+  // Motif du dernier geste empeche ou echoue (dit AU CLIC, jamais dans le vide).
+  let handoverMsg = "";
+
+  /**
+   * Peint le bloc de portage de l'en-tete. Il ne decale AUCUNE rangee d'onglets
+   * (il vit dans le corps de cet onglet), et il est VIDE — donc invisible —
+   * quand le projet est libre ou tenu par ce poste : aucun bandeau parasite.
+   */
+  function renderHandover() {
+    const zone = container.querySelector("#gds-handover");
+    if (!zone) return;
+    const banner = handoverBanner(handover);
+    const work = handoverLocalWorkNotice(handover, localChanges);
+    const take = handoverHasTake(handover, localChanges);
+    const giveBack = handoverHasGiveBack(handover);
+    const lines = [banner && banner.text, work].filter(Boolean);
+    const msg = String(handoverMsg || "").trim();
+    if (!lines.length && !take && !giveBack && !msg) {
+      zone.innerHTML = "";
+      return;
+    }
+    // Le projet tenu par un AUTRE poste est une alerte (fond d'avertissement du
+    // theme) ; le reste s'affiche sans fond, en une ligne discrete.
+    const warn = lines.length > 0 && banner && banner.tone === "warn";
+    const body = lines.map((t) => `<div>${esc(t)}</div>`).join("");
+    const actions =
+      (take
+        ? `<button id="gds-handover-take" class="web-btn" type="button">` +
+          `<i data-lucide="hand" class="icon-sm"></i> Prendre le projet pour publier</button>`
+        : "") +
+      (giveBack
+        ? `<button id="gds-handover-giveback" class="web-btn" type="button" ` +
+          `title="Publie le code, pousse l'avancement, puis libere le projet pour le developpeur suivant.">` +
+          `<i data-lucide="log-out" class="icon-sm"></i> Rendre le projet</button>`
+        : "");
+    zone.innerHTML =
+      (warn
+        ? `<div class="gds-warn">${body}</div>`
+        : body
+        ? `<div class="gds-handover-line">${body}</div>`
+        : "") +
+      (msg ? `<div id="gds-handover-msg" class="gds-handover-msg">${esc(msg)}</div>` : "") +
+      (actions ? `<div class="gds-handover-actions">${actions}</div>` : "");
+    refreshIcons(zone);
+    const takeBtn = zone.querySelector("#gds-handover-take");
+    if (takeBtn) takeBtn.addEventListener("click", () => takeProject());
+    const giveBtn = zone.querySelector("#gds-handover-giveback");
+    if (giveBtn) giveBtn.addEventListener("click", () => giveBackProject());
+  }
+
+  /**
+   * Porte d'ecriture : quand un AUTRE poste tient le projet, l'action est
+   * empêchée et son motif est DIT dans la zone d'erreur du panneau (jamais un
+   * refus muet, jamais un bouton mort). Rend `true` quand l'action peut partir.
+   * @param {string} actionLabel nom lisible de l'action tente
+   * @param {HTMLElement} [errEl] ou dire le refus (zone d'erreur du panneau)
+   * @returns {boolean}
+   */
+  function guardWrite(actionLabel, errEl) {
+    if (handoverWriteAllowed(handover)) return true;
+    const msg = handoverWriteRefusal(handover, actionLabel);
+    handoverMsg = msg;
+    if (errEl) errEl.textContent = msg;
+    renderHandover();
+    return false;
+  }
+
+  /** Lit l'etat de portage (lecture seule cote serveur). Jamais bloquant. */
+  async function loadHandover(project) {
+    try {
+      handover = mapHandoverState(await invoke("gds_handover_can_write", { project }));
+    } catch (e) {
+      // Verification impossible : on le DIT (la publication reste refusee par le
+      // serveur), on n'invente ni porteur ni echeance.
+      handover = mapHandoverState({ ok: false, error: String(e) });
+    }
+  }
+
+  /** Compte le travail local non publie (aucune ecriture, lecture Git). */
+  async function loadLocalChanges(project) {
+    try {
+      localChanges = countLocalChanges(await invoke("git_status_project", { project }));
+    } catch (_) {
+      localChanges = 0;
+    }
+  }
+
+  /** « Prendre le projet pour publier » : le serveur decide, le refus est dit. */
+  async function takeProject() {
+    const project = currentProjectPath();
+    if (!project) return;
+    handoverMsg = "";
+    const btn = container.querySelector("#gds-handover-take");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Prise en main…";
+    }
+    try {
+      const res = await invoke("gds_handover_take", { project });
+      handover = mapHandoverState(res);
+      if (handover.kind === HANDOVER_MINE) {
+        pendingNotice =
+          "✅ Projet pris en main : vous pouvez publier. Rendez-le quand vous avez " +
+          "fini (bouton « Rendre le projet »).";
+      } else {
+        const motif = String((res && res.error) || "").trim();
+        handoverMsg = motif
+          ? `Le projet n'a pas été pris en main : ${motif}`
+          : "Le projet n'a pas été pris en main : un autre développeur le tient " +
+            "encore. Réessayez quand il l'aura rendu.";
+      }
+      await refresh();
+    } catch (e) {
+      handoverMsg = `Le projet n'a pas été pris en main : ${String(e)}`;
+      renderHandover();
+    }
+  }
+
+  /** Restitution : publie le code, pousse l'avancement, puis libere le projet. */
+  async function giveBackProject() {
+    const project = currentProjectPath();
+    if (!project) return;
+    handoverMsg = "";
+    const btn = container.querySelector("#gds-handover-giveback");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Restitution…";
+    }
+    try {
+      await invoke("gds_handover_return", { project });
+      pendingNotice =
+        "✅ Projet rendu : le code et l'avancement sont publiés, le projet est libre " +
+        "pour le développeur suivant.";
+      notifyGdsChanged();
+      refreshExplorerAfterGds();
+      await refresh();
+    } catch (e) {
+      // Le poste reste porteur, rien n'est perdu : le message du poste le dit
+      // deja, et l'operation est rejouable (aucun effacement, aucun mensonge).
+      handoverMsg = String(e);
+      renderHandover();
+    }
+  }
 
   // ── Badge d'état global (Connecté / En attente / À configurer) ──
   function setStateBadge(status, onServer) {
@@ -491,6 +657,9 @@ export function createGds(container) {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
       if (!email) { err.textContent = "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité)."; return; }
+      // Projet tenu par un autre poste : l'activation (qui ecrit sur le serveur)
+      // est refusee AU CLIC, avec son motif.
+      if (!guardWrite("Activer GDS sur ce projet", err)) return;
       err.textContent = "";
       ok.textContent = "";
       btn.disabled = true;
@@ -579,6 +748,7 @@ export function createGds(container) {
         err.textContent = "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).";
         return;
       }
+      if (!guardWrite("Ajouter ce projet au GDS", err)) return;
       err.textContent = ""; ok.textContent = "";
       notice.style.display = "block";
     });
@@ -856,6 +1026,9 @@ export function createGds(container) {
     panel.querySelector("#gds-sync-btn").addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
+      // Projet tenu par un autre poste : aucune synchronisation (donc aucune
+      // ecriture) et le motif est DIT ici, au clic.
+      if (!guardWrite("Synchroniser ce projet", err)) return;
       err.textContent = ""; ok.textContent = "";
       const btn = panel.querySelector("#gds-sync-btn");
       btn.disabled = true;
@@ -929,6 +1102,7 @@ export function createGds(container) {
           "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).";
         return;
       }
+      if (!guardWrite("Publier ce projet sur le GDS", err)) return;
       err.textContent = ""; ok.textContent = "";
       notice.style.display = "block";
     });
@@ -1033,6 +1207,7 @@ export function createGds(container) {
     panel.querySelector("#" + idPrefix + "-confirm-btn").addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { removeErr.textContent = "Aucun projet ouvert."; return; }
+      if (!guardWrite("Retirer du GDS", removeErr)) return;
       const purgeServer = purgeCheck.checked;
       removeErr.textContent = ""; removeOk.textContent = "";
       const btn = panel.querySelector("#" + idPrefix + "-confirm-btn");
@@ -1068,6 +1243,10 @@ export function createGds(container) {
     if (!project) {
       badgeEl.textContent = "○ À configurer";
       badgeEl.className = "gds-badge gds-badge-off";
+      handover = null;
+      localChanges = 0;
+      handoverMsg = "";
+      renderHandover();
       bodyEl.innerHTML = `<div class="gds-empty">Ouvrez un projet pour configurer le GDS (activé projet par projet).</div>`;
       return;
     }
@@ -1086,6 +1265,9 @@ export function createGds(container) {
     const conn = await fetchGdsConnectionStatus(invoke, project);
     if (conn.timedOut) {
       setStateBadge("error", false);
+      handover = null;
+      localChanges = 0;
+      renderHandover();
       bodyEl.innerHTML = GDS_TIMEOUT_HTML;
       const retry = bodyEl.querySelector("#gds-retry");
       if (retry) retry.addEventListener("click", () => refresh());
@@ -1102,6 +1284,18 @@ export function createGds(container) {
     try { secrets = await invoke("gds_secrets_status", { project }); } catch (_) { secrets = null; }
 
     const provisioned = !!(cfg && cfg.enabled);
+
+    // Portage (mode reseau multi-postes) : l'etat est LU sur le serveur (aucune
+    // ecriture), et le travail local non publie est compte. Un projet non
+    // rattache au GDS n'a pas de portage : on n'affiche donc rien du tout.
+    if (provisioned) {
+      await loadHandover(project);
+      await loadLocalChanges(project);
+    } else {
+      handover = null;
+      localChanges = 0;
+      handoverMsg = "";
+    }
 
     bodyEl.innerHTML = "";
     setStateBadge(status, onServer);
@@ -1137,6 +1331,7 @@ export function createGds(container) {
       renderConnect(cfg, secrets, identity, provisioned);
       if (onServer) renderAlreadyAdded();
     }
+    renderHandover();
     refreshIcons(container);
   }
 
@@ -1147,6 +1342,9 @@ export function createGds(container) {
     if (cur !== lastProjectPath) {
       lastProjectPath = cur;
       editRegistered = false;
+      // Le motif d'un refus appartient au projet precedent : il ne suit jamais
+      // la bascule (aucun message trompeur sur un autre projet).
+      handoverMsg = "";
       refresh();
     }
   }

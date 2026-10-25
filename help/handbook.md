@@ -752,6 +752,31 @@ d'un hébergement externe type GitHub.
   base et des dépôts doivent être **joignables depuis le poste de travail** —
   sur un serveur Linux distant, c'est Pilot qui prépare la base **à distance**
   et y enregistre sa clef, il n'administre **jamais** la machine.
+- **Projet tenu par un autre développeur (travail à plusieurs)** : un seul
+  développeur **tient** un projet à la fois. Si un autre le tient, votre écran
+  « 🌐 GDS » affiche un **bandeau** : « Ce projet est tenu par un autre
+  développeur, **jusqu'à HH:MM** ». Vous pouvez **lire, naviguer, consulter** ;
+  en revanche **rien ne peut être publié** depuis votre poste (code et
+  avancement). Les boutons qui publient (Activer GDS, Ajouter au GDS,
+  Synchroniser, Publier, Retirer du GDS) **vous disent pourquoi ils ne partent
+  pas** au lieu de rester sans effet. Un projet **libre** ou **tenu par vous**
+  n'affiche **aucun bandeau**.
+- **Votre travail local n'est jamais perdu** : des modifications faites sur votre
+  poste **restent** sur votre poste, **rien n'est supprimé ni écrasé**, et elles
+  ne peuvent simplement pas être publiées tant que le projet est tenu ailleurs.
+  L'écran le **dit** (nombre de fichiers) et propose **« Prendre le projet pour
+  publier »** : le projet vous revient, la publication devient possible.
+- **Rendre le projet** : quand **vous** tenez le projet, le bouton **« Rendre le
+  projet »** publie **le code**, puis l'**avancement**, puis **libère** le projet
+  pour le développeur suivant. Si l'une de ces étapes échoue, le projet **reste
+  chez vous**, le message dit ce qui a bloqué, et vous pouvez **recommencer** :
+  rien n'est perdu.
+- **Libérer un projet (administrateur)** : dans « 🖥️ GDS Serveur —
+  administration » → **Dépôts / projets**, un **administrateur** seul voit le
+  bouton **« Libérer »** ; un **motif est obligatoire** et le geste est **tracé**
+  (projet + compte + motif). Tant que la commande correspondante n'est pas
+  livrée, l'écran **le dit** après confirmation : il **n'annonce jamais** une
+  libération qui n'a pas eu lieu.
 - **Documentation technique** : installation du serveur en conteneur dans
   `gds-server/README.md` et `docs/gds-server-setup.md` du dépôt Pilot (dont
   **§9 : modifier le serveur — ce qui change pour le conteneur**, preuves

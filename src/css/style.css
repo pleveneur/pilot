@@ -10263,6 +10263,37 @@ body.pilot-loading *::after {
   font-size: 12px;
   line-height: 1.5;
 }
+/* ── Bloc de portage (mode réseau multi-postes) ──
+   Il vit dans l'en-tête de l'écran GDS, donc DANS le corps de l'onglet : il ne
+   décale jamais la rangée d'onglets ni la colonne de gauche. Il est vide — donc
+   invisible et sans espace occupé — quand le projet est libre ou tenu par ce
+   poste (aucun bandeau parasite). Tokens uniquement (clair ET sombre). */
+.gds-handover:empty {
+  display: none;
+}
+.gds-handover {
+  margin-top: 8px;
+  max-width: 900px;
+}
+.gds-handover-line {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.gds-handover-msg {
+  margin-top: 8px;
+  padding-left: 8px;
+  border-left: 3px solid var(--warning);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.gds-handover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
 .gds-note-box {
   display: flex;
   align-items: center;

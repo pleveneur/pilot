@@ -704,8 +704,10 @@ export function initialProjectsState() {
     notice: "",
     selected: null, // id du projet déplié
     removing: null, // { project_id, name, purge } : panneau de confirmation ouvert
+    releasing: null, // { project_id, name, reason } : libération (administrateur)
     busy: "", // id du projet en cours d'opération
     loadSeq: 0, // numéro de la DERNIÈRE demande de liste (anti-réponse périmée)
+    role: "", // rôle du compte connecté (pilote le masquage de « Libérer »)
   };
 }
 
@@ -810,11 +812,16 @@ export function renderProjectsTableHtml(state = {}) {
       const busy = String(s.busy) === String(id);
       const dis = busy ? " disabled" : "";
       const bare = repo && repo.bare_path ? repo.bare_path : "—";
+      // « Libérer » : geste d'ADMINISTRATEUR seulement (même règle que les
+      // actions de service). Aucun bouton pour un développeur.
+      const release = canReleaseProject(s.role)
+        ? `\n          <button class="gds-admin-btn small" data-prj-action="release" data-id="${esc(id)}"${dis}><i data-lucide="unlock" class="icon-sm"></i> Libérer</button>`
+        : "";
       return `
       <tr data-project-id="${esc(id)}">
         <td class="gds-admin-cell-email">${esc((p && p.name) || "—")}</td>
         <td class="gds-admin-cell-path" title="${esc(bare)}">${esc(bare)}</td>
-        <td class="gds-admin-cell-actions">
+        <td class="gds-admin-cell-actions">${release}
           <button class="gds-admin-btn small danger" data-prj-action="remove" data-id="${esc(id)}"${dis}><i data-lucide="trash-2" class="icon-sm"></i> Retirer</button>
         </td>
       </tr>`;
@@ -852,6 +859,85 @@ export function renderProjectRemoveConfirmHtml(state = {}) {
       </div>`;
 }
 
+/**
+ * « Libérer » un projet tenu par un autre poste : geste réservé à
+ * l'ADMINISTRATEUR (même règle que les actions de service, `canControlService`).
+ * Aucun bouton n'est rendu pour un développeur. Pure.
+ * @param {string} role rôle du compte connecté.
+ * @returns {boolean}
+ */
+export function canReleaseProject(role) {
+  return String(role == null ? "" : role).trim().toLowerCase() === "admin";
+}
+
+/** Description affichée du panneau de libération (mode réseau multi-postes). */
+export const PROJECT_RELEASE_DESC =
+  "Libérer un projet tenu par un autre poste : geste réservé à un administrateur, " +
+  "avec un motif OBLIGATOIRE inscrit au journal d'audit du serveur. Le travail local " +
+  "du poste qui tenait le projet n'est ni effacé ni publié par cette action.";
+
+/**
+ * Contrôle du motif de libération (le serveur refuse un motif vide). Pure.
+ * @param {string} reason motif saisi.
+ * @returns {string} message à afficher, ou chaîne vide si le motif convient.
+ */
+export function handoverReleaseReasonError(reason) {
+  const r = String(reason == null ? "" : reason).trim();
+  if (!r) return "Le motif est obligatoire : dites pourquoi vous libérez ce projet.";
+  if (r.length < 5) {
+    return "Le motif est trop court : donnez une raison compréhensible (5 caractères au moins).";
+  }
+  return "";
+}
+
+/**
+ * Ligne TRACÉE d'une libération : elle nomme le projet, l'administrateur et le
+ * motif, et dit exactement ce qui a été fait — jamais un geste anonyme, jamais
+ * un mensonge. Pure.
+ * @param {{name?: string, reason?: string, admin?: string, applied?: boolean}} [o]
+ * @returns {string}
+ */
+export function handoverReleaseTraceLine(o = {}) {
+  const name = String(o.name || "").trim() || "(projet sans nom)";
+  const who = String(o.admin || "").trim() || "(compte administrateur)";
+  const why = String(o.reason || "").trim();
+  const trace = `Libération de « ${name} » demandée par ${who} — motif : « ${why} ».`;
+  if (o.applied) {
+    return `${trace} Le projet est redevenu libre ; l'action est inscrite au journal d'audit du serveur.`;
+  }
+  return (
+    `${trace} Rien n'a été libéré : la libération depuis un poste n'est pas encore ` +
+    "installée dans cette version (elle reste réservée à un administrateur et sera " +
+    "inscrite au journal d'audit du serveur). Aucun autre poste n'a été déconnecté."
+  );
+}
+
+/**
+ * Rend le panneau de libération d'un projet (pure). Il n'existe QUE pour un
+ * administrateur : un développeur ne voit ni le bouton ni le panneau.
+ */
+export function renderProjectReleaseConfirmHtml(state = {}) {
+  const s = { ...initialProjectsState(), ...state };
+  if (!s.releasing) return "";
+  if (!canReleaseProject(s.role)) return "";
+  const project =
+    (s.projects || []).find((p) => String(p && p.id) === String(s.releasing.project_id)) ||
+    { name: s.releasing.name, id: s.releasing.project_id };
+  const nom = project.name || s.releasing.name || s.releasing.project_id;
+  return `
+      <div class="gds-admin-confirm">
+        <div class="gds-admin-reset-title">Libération — <b>${esc(nom)}</b></div>
+        <div class="gds-admin-section-desc">${esc(PROJECT_RELEASE_DESC)}</div>
+        <label class="gds-admin-field"><span>Motif (obligatoire, inscrit au journal)</span>
+          <input id="gds-admin-prj-release-reason" type="text" autocomplete="off" placeholder="ex. : poste en panne, développeur absent" value="${esc(s.releasing.reason || "")}">
+        </label>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn danger" data-prj-action="release-confirm" data-id="${esc(s.releasing.project_id)}"><i data-lucide="unlock" class="icon-sm"></i> Confirmer la libération</button>
+          <button class="gds-admin-btn" data-prj-action="release-cancel"><i data-lucide="x" class="icon-sm"></i> Annuler</button>
+        </div>
+      </div>`;
+}
+
 /** Rend la section « Dépôts / projets » complète (pure, testable). */
 export function renderProjectsSectionHtml(state = {}) {
   const base = initialProjectsState();
@@ -872,6 +958,7 @@ export function renderProjectsSectionHtml(state = {}) {
         <div id="gds-admin-projects-status">${renderProjectsStatusHtml(s)}</div>
         ${renderProjectsTableHtml(s)}
         ${renderProjectRemoveConfirmHtml(s)}
+        ${renderProjectReleaseConfirmHtml(s)}
         <div class="gds-admin-hint">Tout compte du serveur accède à tous les projets : aucun rattachement par projet n'est nécessaire. Le retrait d'un projet demande une confirmation explicite ; la purge du dépôt bare (destructive) ne se fait que si vous la cochez, jamais par défaut.</div>
       </section>`;
 }
@@ -1388,6 +1475,12 @@ export function createGdsAdmin(container) {
     if (purge && projects.removing) {
       projects.removing = { ...projects.removing, purge: !!purge.checked };
     }
+    // Motif de libération : relu AVANT redessin, comme les autres saisies (sans
+    // quoi le champ affiché serait écrasé par l'état).
+    const reason = q("#gds-admin-prj-release-reason");
+    if (reason && projects.releasing) {
+      projects.releasing = { ...projects.releasing, reason: String(reason.value || "") };
+    }
   }
 
   /** Récupère la saisie du bloc « Espace + journal » AVANT tout redessin. */
@@ -1442,7 +1535,7 @@ export function createGdsAdmin(container) {
       sectionHtml: {
         connection: renderConnectionSectionHtml(state),
         accounts: renderAccountsSectionHtml(accounts),
-        repos: renderProjectsSectionHtml(projects),
+        repos: renderProjectsSectionHtml({ ...projects, role: service.role }),
         storage: renderStorageSectionHtml(storage),
         service: renderServiceSectionHtml(service),
       },
@@ -1612,6 +1705,57 @@ export function createGdsAdmin(container) {
           projects.removing = null;
         },
       });
+    }
+    // ── Libération d'un projet tenu (administrateur uniquement) ──
+    if (action === "release") {
+      if (!canReleaseProject(service.role)) {
+        projects.error =
+          "La libération d'un projet est réservée à un administrateur. Connectez-vous " +
+          "avec un compte administrateur pour la faire.";
+        projects.notice = "";
+        return draw();
+      }
+      const project = (projects.projects || []).find((p) => String(p && p.id) === String(id));
+      projects.releasing = {
+        project_id: Number(id),
+        name: project ? String(project.name || "") : "",
+        reason: "",
+      };
+      projects.error = "";
+      projects.notice = "";
+      return draw();
+    }
+    if (action === "release-cancel") {
+      projects.releasing = null;
+      return draw();
+    }
+    if (action === "release-confirm") {
+      if (!canReleaseProject(service.role)) {
+        projects.error =
+          "La libération d'un projet est réservée à un administrateur : rien n'a été fait.";
+        projects.notice = "";
+        return draw();
+      }
+      const releasing = projects.releasing || { project_id: Number(id), reason: "" };
+      const motif = String(releasing.reason || "").trim();
+      const refus = handoverReleaseReasonError(motif);
+      if (refus) {
+        projects.error = refus;
+        projects.notice = "";
+        return draw();
+      }
+      // La libération depuis un poste n'est pas encore installée (aucune
+      // commande côté poste) : on ne fait pas semblant. Le geste laisse une
+      // trace NOMMÉE (projet + administrateur + motif), jamais un clic anonyme.
+      projects.releasing = null;
+      projects.notice = handoverReleaseTraceLine({
+        name: releasing.name,
+        reason: motif,
+        admin: (state.server && state.server.email) || (adminConn && adminConn.email) || "",
+        applied: false,
+      });
+      projects.error = "";
+      return draw();
     }
   }
 

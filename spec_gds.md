@@ -894,6 +894,63 @@ machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
   aucune commande `gds_urgent_lock` ne subsiste. La gestion des droits passe
   désormais par les **rôles** (§2.2).
 
+### 5.4 Portage d'un projet entre postes — interface (plan réseau multi-postes, étape 5)
+
+> Un seul développeur **tient** un projet à la fois ; les autres postes le voient
+> en **lecture seule** et ne publient rien. Plan complet :
+> `PLAN-mode-reseau-multipostes.md` (§1, §3, §7 étape 5).
+
+- **Où** : dans l'**en-tête de l'écran « 🌐 GDS »** du projet (zone `#gds-handover`),
+  donc **dans le corps de l'onglet** : il ne décale **jamais** la rangée d'onglets
+  ni la colonne de gauche. La zone est **vide** (aucune place occupée, aucune
+  bordure) quand le projet est **libre** ou **tenu par ce poste** : aucun bandeau
+  parasite.
+- **Tenu par un autre poste** : bandeau d'avertissement « Ce projet est tenu par
+  un autre développeur, **jusqu'à HH:MM** » — heure du fuseau du poste, `JJ/MM a
+  HH:MM` si l'échéance tombe un autre jour, `JJ/MM/AAAA a HH:MM` une autre année.
+  Échéance illisible = **aucune heure inventée**. Le texte dit ce qui reste
+  possible (lire, naviguer, consulter) et ce qui ne l'est pas (publier le code
+  et l'avancement).
+- **Lecture seule, dite au clic** : les gestes qui **écrivent** — « Activer GDS
+  sur ce projet », « Ajouter ce projet au GDS », « Synchroniser ce projet »,
+  « Publier ce projet sur le GDS », « Retirer du GDS » — **ne partent pas** et
+  affichent le **motif** (qui tient le projet, jusqu'à quand, quoi faire). Jamais
+  un refus muet, jamais un bouton mort. Un état **invérifiable** ne bloque pas le
+  geste (le serveur reste seul juge, et bloquer empêcherait de réparer une
+  liaison) : le bandeau le dit.
+- **Travail local non publiable** : si des modifications locales existent et que
+  le projet est tenu ailleurs (ou libre), l'écran l'écrit — nombre de fichiers,
+  **conservés sur ce poste, jamais supprimés** — et propose **« Prendre le projet
+  pour publier »**. Aucune publication n'est jamais simulée, aucune fusion
+  automatique, aucune poussée silencieuse.
+- **Restitution** : bouton **« Rendre le projet »** visible **seulement** quand ce
+  poste tient le projet ; il appelle `gds_handover_return` (code publié →
+  avancement poussé → projet libéré). En cas d'échec : le poste **reste porteur**,
+  le message du poste s'affiche, l'opération est **rejouable**.
+- **Libérer (administrateur seul)** : dans « 🖥️ GDS Serveur — administration » →
+  **Dépôts / projets**, le bouton **« Libérer »** n'apparaît que pour un rôle
+  `admin` (même règle que les actions de service) et exige un **motif
+  obligatoire** ; le geste laisse une trace **nommée** (projet + compte + motif),
+  jamais un clic anonyme. **Limite assumée et affichée** : la libération forcée
+  existe côté serveur (`POST /api/gds/handover/force`) et côté poste
+  (`gds_handover::force`), mais **aucune commande Tauri ne l'expose** à ce jour —
+  l'écran demande le motif et **dit qu'il n'a rien libéré** ; il ne fait pas
+  semblant. Exposer le geste demande une commande Rust.
+- **Modules** : `src/js/gds-status.js` = **source unique** de la lecture des
+  réponses de portage et de tous les textes (`mapHandoverState`,
+  `formatHandoverUntil`, `handoverBanner`, `handoverLocalWorkNotice`,
+  `handoverWriteAllowed`, `handoverWriteRefusal`, `handoverHasTake`,
+  `handoverHasGiveBack`, `countLocalChanges`) ; `src/js/gds.js` ne fait que
+  **rendre** et **déclencher** (`gds_handover_can_write`, `gds_handover_take`,
+  `gds_handover_return`, `git_status_project`) ; `src/js/gds-admin.js` porte la
+  libération (`canReleaseProject`, `handoverReleaseReasonError`,
+  `handoverReleaseTraceLine`).
+- **Preuve** : `npx vitest run src/js/gds-handover.test.js` — chaque état
+  (libre / tenu par soi / tenu par un autre / invérifiable), l'heure de fin, le
+  refus au clic, le travail local, la restitution, la libération réservée à
+  l'administrateur, et le **câblage réel** (un geste qui publie sans porte
+  d'écriture fait **échouer** le test).
+
 ---
 
 ## 6. Suivi fusionné SQLite → PostgreSQL (Option A + pont bidirectionnel)
