@@ -3313,13 +3313,23 @@ mark.search-highlight {
   flex-direction: column;
   gap: var(--space-1);
 }
+/* Titre de regroupement de la liste de GAUCHE des Parametres ("Pilot", "IA",
+   "Connexions", "Suivi"). Meme decision de couleur que les titres de blocs
+   du panneau de droite (`.settings-section-title`) et que les rubriques du menu
+   "Autres ecrans" (`.pj-more-group-label`) : `--accent-text`, le jeton du
+   theme fait pour l'accent quand il porte du TEXTE, defini a UN seul endroit
+   par theme (aucune teinte en dur, aucun second reglage a maintenir).
+   Taille (--font-xs), graisse (600), casse (petites majuscules) et espacement
+   (0.04em) INCHANGES : seule la couleur change, pour que le titre se distingue
+   des entrees qu'il coiffe sans prendre le pas sur elles (l'entree reste en
+   --text-secondary, contraste legerement superieur en theme de base). */
 .settings-tabs-group-title {
   padding: 12px 12px 4px;
   font-size: var(--font-xs);
   font-weight: var(--fw-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: var(--accent-text);
 }
 .settings-tab {
   display: flex;
