@@ -662,6 +662,36 @@ export function enqueueMissionForProject(projectPath, launch, label, identity) {
 }
 
 /**
+ * REMET une mission à SON RANG (tête de file) — bug « la tâche mise en file
+ * exécute une autre tâche que la sienne ».
+ *
+ * Une mission qui SORT de la file (`dequeue`) puis trouve le projet encore
+ * occupé est remise en file par le chemin unique `enqueueMissionForProject`, qui
+ * pousse toujours en QUEUE de file. Elle perdait donc son rang : les missions
+ * arrivées DERRIÈRE elle passaient devant, et le créneau libéré finissait par
+ * exécuter une AUTRE demande que celle dont c'était le tour. La remise en file
+ * d'une mission rejouée doit donc la replacer en TÊTE (aucun changement pour
+ * une demande qui arrive : elle s'empile normalement en queue).
+ *
+ * Idempotente et sans effet de bord : une entrée déjà en tête, absente de la
+ * file (ou un projet sans file) n'est jamais déplacée et aucune file
+ * n'est créée. L'ordre des autres missions est strictement préservé.
+ * @param {string} projectPath - projet (clé de file)
+ * @param {object} entry - entrée de file à replacer en tête
+ * @returns {boolean} `true` si l'entrée est (ou était déjà) en tête
+ */
+export function restoreQueuedMissionRank(projectPath, entry) {
+  const queue = runAgentsQueueByProject[missionQueueKey(projectPath)];
+  if (!Array.isArray(queue) || !entry || typeof entry !== "object") return false;
+  const at = queue.indexOf(entry);
+  if (at < 0) return false;
+  if (at === 0) return true;
+  queue.splice(at, 1);
+  queue.unshift(entry);
+  return true;
+}
+
+/**
  * Missions de l'assistant en attente pour un projet, dans l'ordre de démarrage.
  * @param {string} projectPath
  * @returns {Array<{label:string}>}
@@ -5441,6 +5471,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // RÈGLE 4 : mise en file par le chemin de PRODUCTION UNIQUE (libellé +
             // identité de mission + refus du double empilement).
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
+            // RANG : la mission qui vient de SORTIR de la file (rejeu) reprend sa
+            // place en TÊTE — sinon elle passait DERRIÈRE les missions arrivées
+            // après elle et le créneau libéré exécutait une autre demande que la
+            // sienne.
+            if (launchOpts && launchOpts.dequeue) restoreQueuedMissionRank(target, queued.entry);
             // RÉSUMÉ COURT : conservé AVEC la mission en attente (facultatif).
             stampQueuedMissionResume(queued.entry, resume);
             if (queued.duplicate) {
@@ -5523,6 +5558,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // RÈGLE 4 : même chemin de mise en file que `launchOrQueue` (une seule
             // mission, un seul numéro) + refus du double empilement.
             const queued = enqueueMissionForProject(target, launchMission, task, missionIdentity);
+            // RANG : même garantie que dans `launchOrQueue` — une mission
+            // rejouée qui trouve le projet encore occupé reprend la TÊTE de file.
+            if (launchOpts && launchOpts.dequeue) restoreQueuedMissionRank(target, queued.entry);
             // RÉSUMÉ COURT : conservé AVEC la mission en attente (facultatif).
             stampQueuedMissionResume(queued.entry, resume);
             if (queued.duplicate) {
@@ -5752,7 +5790,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // RÈGLE 4 : identité de la mission d'assistant en file (le numéro
             // survit à la fermeture du chat : il est porté par la file, indexée
             // par projet/espace) — même chemin de production unique.
-            enqueueMissionForProject(target, (missionLaunchOpts) => startRun(missionLaunchOpts), task, missionIdentity);
+            const queued = enqueueMissionForProject(target, (missionLaunchOpts) => startRun(missionLaunchOpts), task, missionIdentity);
+            // RANG : une mission rejouée qui trouve le projet encore occupé
+            // reprend la TÊTE de file (même garantie que les deux autres chemins).
+            if (launchOpts && launchOpts.dequeue) restoreQueuedMissionRank(target, queued.entry);
             // RÉSUMÉ COURT : conservé AVEC la mission en attente (facultatif).
             stampQueuedMissionResume(
               (runAgentsQueueByProject[missionQueueKey(target)] || []).at(-1),
