@@ -397,6 +397,20 @@ export async function initSettings() {
       }
     });
   });
+  // ── LOT 7 de la presentation (docs/proposition-presentation-ui.md §3.7) ──
+  // Les QUATRE acces directs retires du haut de la colonne par le lot 2 vivent
+  // desormais DANS cette fenetre : Coffre fort, Envoyer une remarque, Serveur
+  // GDS, GDS mon compte. Leur EFFET est inchange et reste cable dans main.js,
+  // par identifiant (ouverture de l'onglet). Il ne manquait ici QUE la
+  // fermeture de la fenetre : sans elle, l'onglet ouvert resterait cache
+  // derriere la fenetre des Reglages. On emprunte le chemin NORMAL de
+  // « Annuler » (aucune modification non enregistree n'est perdue en silence,
+  // et l'apercu de theme est bien annule).
+  for (const accessId of ["btn-vault", "btn-feedback", "btn-gds-admin", "btn-gds-params"]) {
+    document.getElementById(accessId)?.addEventListener("click", () => {
+      if (btnClose) btnClose.click();
+    });
+  }
   const selectTheme = document.getElementById("setting-theme");
   const selectSubtheme = document.getElementById("setting-subtheme");
   const inputCmd = document.getElementById("setting-command");

@@ -2932,7 +2932,9 @@ mark.search-highlight {
 .command-form input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-input, var(--bg-hover)); color: var(--text-primary); }
 .command-form input:focus { outline: none; border-color: var(--accent); }
 
-.modal-content.settings-content { width: 920px; max-width: 96vw; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
+/* LOT 7 de la presentation : 92 vw (au lieu de 96) pour que les deux marges
+   restent visibles en fenetre etroite. */
+.modal-content.settings-content { width: 920px; max-width: 92vw; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
 
 /* Modale : mise à jour disponible (updater) */
 .modal-content.update-content { width: 640px; max-width: 95vw; max-height: 80vh; display: flex; flex-direction: column; }
@@ -3046,15 +3048,35 @@ mark.search-highlight {
 }
 .modal-actions button:hover { background: var(--bg-hover); }
 .modal-actions button:active { transform: scale(0.97); }
-.modal-actions button:first-child {
-  /* Bouton primaire d'une fenetre : fond plein accentue et encre dediee
-     (--accent-solid / --accent-fg). Le texte blanc sur --accent donnait
-     3.08:1 en sombre et 4.28:1 en clair. Lot 1 de la presentation. */
+/* Bouton primaire d'une fenetre : fond plein accentue et encre dediee
+   (--accent-solid / --accent-fg). Le texte blanc sur --accent donnait
+   3.08:1 en sombre et 4.28:1 en clair. Lot 1 de la presentation.
+
+   LOT 7 de la presentation : le primaire est DESIGNE (classe
+   `modal-action-primary`), il n'est plus « le premier bouton du pied ». La
+   regle de position ci-dessous est donc NEUTRALISEE pour tout pied qui
+   declare son propre ordre (`modal-actions-cancel-first`) : dans Reglages,
+   « Annuler » est desormais a GAUCHE et deviendrait primaire sans cela. Les
+   autres fenetres, qui gardent l'ordre « action puis Annuler », ne changent
+   pas d'un pixel : elles continuent de passer par ce repli. */
+.modal-actions button.modal-action-primary,
+.modal-actions:not(.modal-actions-cancel-first) button:first-child {
   background: var(--accent-solid);
   color: var(--accent-fg);
   border-color: var(--accent-solid);
 }
-.modal-actions button:first-child:hover { background: var(--accent-hover); }
+.modal-actions button.modal-action-primary:hover,
+.modal-actions:not(.modal-actions-cancel-first) button:first-child:hover { background: var(--accent-hover); }
+/* Action secondaire : texte secondaire sur --bg-input (l'accent ne designe
+   qu'UNE action par fenetre). */
+.modal-actions button.modal-action-secondary {
+  color: var(--text-secondary);
+  background: var(--bg-input);
+}
+.modal-actions button.modal-action-secondary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
 
 /* --- Popup de sélection des modèles Orchestration --- */
 .orch-picker-status {
@@ -3072,31 +3094,136 @@ mark.search-highlight {
 /* --- Paramètres : layout onglets verticaux (sidebar + panneaux) --- */
 /* La modale settings = flex colonne : titre + layout + actions. Le scroll se
    fait dans .settings-panels, pas sur la modale entière. */
+
+/* LOT 7 de la presentation (docs/proposition-presentation-ui.md §3.7) :
+   EN-TETE. Titre a 15 px / 600 (--font-zone, seule taille au-dessus de 13 px),
+   sous-titre a 11 px en texte secondaire, bande de 48 px, filet bas. Le h2 ne
+   prend pas la marge basse de .modal-content h2 : la bande fait l'espacement. */
+.settings-head {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-height: 48px;
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-head .settings-head-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-zone);
+  font-weight: var(--fw-semibold);
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+.settings-head .settings-head-title .icon-lg { color: var(--text-secondary); }
+.settings-head .settings-head-subtitle {
+  margin: 0;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+/* LOT 7 - ACCES DIRECTS : les quatre portes venues du haut de la colonne.
+   Carte --surface-2 / --border-subtle, rangee qui se replie en fenetre
+   etroite, boutons de 30 px (icone 14 px + libelle 12 px / 500). */
+.settings-access {
+  flex-shrink: 0;
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.settings-access-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: var(--font-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.settings-access-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.settings-access-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  font-weight: var(--fw-medium);
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+.settings-access-btn .icon-sm { color: var(--text-secondary); }
+.settings-access-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+.settings-access-btn:hover .icon-sm { color: var(--text-primary); }
+.settings-access-btn:active { transform: scale(0.97); }
+
 .settings-layout {
   display: flex;
   flex: 1;
   min-height: 0;
   gap: var(--space-5);
 }
-/* Sidebar d'onglets (verticale) */
+/* Sidebar d'onglets (verticale) : 200 px, quatre groupes visuels */
 .settings-tabs {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  width: 184px;
+  width: 200px;
   flex-shrink: 0;
   padding: var(--space-1);
   border-right: 1px solid var(--border);
+}
+/* En-tete de groupe : visuel seulement, jamais focalisable (ce n'est pas un
+   onglet) : aucun `data-settings-tab`, aucune classe `.settings-tab`. */
+.settings-tabs-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.settings-tabs-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.settings-tabs-group-title {
+  padding: 12px 12px 4px;
+  font-size: var(--font-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 .settings-tab {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  min-height: 32px;
+  padding: 0 var(--space-3);
   background: transparent;
   color: var(--text-secondary);
   border: 1px solid transparent;
+  /* Filet gauche de 2 px reserve a l'etat actif : la largeur ne change pas
+     entre les deux etats, le libelle ne se decale donc jamais. */
+  border-left: 2px solid transparent;
   border-radius: var(--radius-md);
   cursor: pointer;
   font-size: var(--font-base);
@@ -3111,6 +3238,8 @@ mark.search-highlight {
   background: var(--bg-input);
   color: var(--text-primary);
   border-color: var(--border);
+  /* LOT 7 : le filet gauche accentue dit l'onglet courant, en plus du fond. */
+  border-left-color: var(--accent);
   font-weight: 600;
 }
 /* Zone des panneaux (scrollable verticalement) */

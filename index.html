@@ -349,20 +349,63 @@
   <!-- Modale Paramètres -->
   <div id="settings-modal" class="modal hidden">
     <div class="modal-content settings-content">
-      <h2><i data-lucide="settings" class="icon-lg"></i> Paramètres</h2>
+      <!-- LOT 7 de la presentation (docs/proposition-presentation-ui.md §3.7 et
+           lot 7 du §6) - EN-TETE : titre 15 px / 600 + sous-titre 11 px, bande
+           de 48 px et filet bas. Puis la rangee « Acces directs ». -->
+      <header class="settings-head">
+        <h2 class="settings-head-title"><i data-lucide="settings" class="icon-lg"></i> Réglages</h2>
+        <p class="settings-head-subtitle">Tout ce qui se règle dans Pilot</p>
+      </header>
+      <!-- LOT 7 - ACCES DIRECTS : les QUATRE portes retirees du haut de la
+           colonne par le lot 2 vivent ici, avec leurs IDENTIFIANTS d'origine
+           (`btn-vault`, `btn-feedback`, `btn-gds-admin`, `btn-gds-params`) et
+           les libelles de leurs `title` : le cablage de `main.js` continue de
+           fonctionner sans une ligne de changement (meme effet qu'avant). -->
+      <div class="settings-access" role="group" aria-label="Accès directs">
+        <span class="settings-access-label">Accès directs</span>
+        <div class="settings-access-row">
+          <button type="button" id="btn-vault" class="settings-access-btn" title="Coffre fort de mots de passe (chiffré)"><i data-lucide="lock" class="icon-sm"></i><span class="settings-access-text">Coffre fort</span></button>
+          <button type="button" id="btn-feedback" class="settings-access-btn" title="Envoyer une remarque ou une suggestion"><i data-lucide="message-square-plus" class="icon-sm"></i><span class="settings-access-text">Envoyer une remarque</span></button>
+          <button type="button" id="btn-gds-admin" class="settings-access-btn" title="GDS Serveur — administration (onglet transverse, hors projet)"><i data-lucide="server" class="icon-sm"></i><span class="settings-access-text">Serveur GDS</span></button>
+          <button type="button" id="btn-gds-params" class="settings-access-btn" title="GDS — paramétrage utilisateur (onglet transverse, hors projet)"><i data-lucide="sliders-horizontal" class="icon-sm"></i><span class="settings-access-text">GDS mon compte</span></button>
+        </div>
+      </div>
       <div class="settings-layout">
+        <!-- LOT 7 - QUATRE GROUPES VISUELS seulement : aucun onglet renomme,
+             aucun `data-settings-tab` modifie, aucun contenu deplace (la fusion
+             reste l'etape 8). Les libelles sont ceux du code. -->
         <nav class="settings-tabs" role="tablist" aria-label="Catégories de paramètres">
-          <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true"><i data-lucide="sliders-horizontal" class="icon"></i> Général</button>
-          <button class="settings-tab" data-settings-tab="avatar" role="tab" aria-selected="false"><i data-lucide="user-round" class="icon"></i> Avatar</button>
-          <button class="settings-tab" data-settings-tab="laya" role="tab" aria-selected="false"><i data-lucide="boxes" class="icon"></i> Service Laya</button>
-          <button class="settings-tab" data-settings-tab="agent" role="tab" aria-selected="false"><i data-lucide="bot" class="icon"></i> Agent Pi</button>
-          <button class="settings-tab" data-settings-tab="models" role="tab" aria-selected="false"><i data-lucide="cpu" class="icon"></i> Modèles IA</button>
-          <button class="settings-tab" data-settings-tab="providers" role="tab" aria-selected="false"><i data-lucide="server" class="icon"></i> Fournisseurs</button>
-          <button class="settings-tab" data-settings-tab="remote" role="tab" aria-selected="false"><i data-lucide="globe" class="icon"></i> Accès distant</button>
-          <button class="settings-tab" data-settings-tab="rag" role="tab" aria-selected="false"><i data-lucide="database" class="icon"></i> RAG</button>
-          <button class="settings-tab" data-settings-tab="codegraph" role="tab" aria-selected="false"><i data-lucide="network" class="icon"></i> Graphe</button>
-          <button class="settings-tab" data-settings-tab="superagent" role="tab" aria-selected="false"><i data-lucide="compass" class="icon"></i> Assistant</button>
-          <button class="settings-tab" data-settings-tab="mcp" role="tab" aria-selected="false"><i data-lucide="plug" class="icon"></i> Serveurs MCP</button>
+          <div class="settings-tabs-group" role="presentation">
+            <div class="settings-tabs-group-title" aria-hidden="true">Pilot</div>
+            <div class="settings-tabs-group-items">
+              <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true"><i data-lucide="sliders-horizontal" class="icon"></i> Général</button>
+              <button class="settings-tab" data-settings-tab="avatar" role="tab" aria-selected="false"><i data-lucide="user-round" class="icon"></i> Avatar</button>
+            </div>
+          </div>
+          <div class="settings-tabs-group" role="presentation">
+            <div class="settings-tabs-group-title" aria-hidden="true">IA</div>
+            <div class="settings-tabs-group-items">
+              <button class="settings-tab" data-settings-tab="agent" role="tab" aria-selected="false"><i data-lucide="bot" class="icon"></i> Agent Pi</button>
+              <button class="settings-tab" data-settings-tab="models" role="tab" aria-selected="false"><i data-lucide="cpu" class="icon"></i> Modèles IA</button>
+              <button class="settings-tab" data-settings-tab="providers" role="tab" aria-selected="false"><i data-lucide="server" class="icon"></i> Fournisseurs</button>
+              <button class="settings-tab" data-settings-tab="rag" role="tab" aria-selected="false"><i data-lucide="database" class="icon"></i> RAG</button>
+              <button class="settings-tab" data-settings-tab="codegraph" role="tab" aria-selected="false"><i data-lucide="network" class="icon"></i> Graphe</button>
+            </div>
+          </div>
+          <div class="settings-tabs-group" role="presentation">
+            <div class="settings-tabs-group-title" aria-hidden="true">Connexions</div>
+            <div class="settings-tabs-group-items">
+              <button class="settings-tab" data-settings-tab="remote" role="tab" aria-selected="false"><i data-lucide="globe" class="icon"></i> Accès distant</button>
+              <button class="settings-tab" data-settings-tab="mcp" role="tab" aria-selected="false"><i data-lucide="plug" class="icon"></i> Serveurs MCP</button>
+              <button class="settings-tab" data-settings-tab="laya" role="tab" aria-selected="false"><i data-lucide="boxes" class="icon"></i> Service Laya</button>
+            </div>
+          </div>
+          <div class="settings-tabs-group" role="presentation">
+            <div class="settings-tabs-group-title" aria-hidden="true">Suivi</div>
+            <div class="settings-tabs-group-items">
+              <button class="settings-tab" data-settings-tab="superagent" role="tab" aria-selected="false"><i data-lucide="compass" class="icon"></i> Assistant</button>
+            </div>
+          </div>
         </nav>
         <div class="settings-panels">
 
@@ -1338,9 +1381,15 @@
           </div>
         </div>
 
-      <div class="modal-actions">
-        <button id="btn-save-settings">Enregistrer</button>
-        <button id="btn-close-settings">Annuler</button>
+      <!-- LOT 7 - ORDRE DES ACTIONS : « Annuler » a GAUCHE, « Enregistrer » a
+           DROITE (convention : annuler avant valider). Le bouton primaire est
+           desormais DESIGNE par sa classe (`modal-action-primary`) et non plus
+           deduit de sa position : la classe `modal-actions-cancel-first`
+           neutralise pour ce pied la regle `.modal-actions button:first-child`
+           qui, sinon, rendrait « Annuler » primaire. -->
+      <div class="modal-actions modal-actions-cancel-first">
+        <button type="button" id="btn-close-settings" class="modal-action-secondary">Annuler</button>
+        <button type="button" id="btn-save-settings" class="modal-action-primary">Enregistrer</button>
       </div>
     </div>
   </div>

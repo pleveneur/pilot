@@ -816,10 +816,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // 🔐 Coffre : coffre fort de mots de passe chiffré — issue #52.
-  // LOT 2 de la presentation — ce bouton ne vit plus en haut de la colonne :
-  // il revient dans Reglages → Acces directs au LOT 7, avec le MEME
-  // identifiant. En attendant, son absence ne doit PAS casser le demarrage :
-  // d'ou le `?.` (cablage identique des qu'il est de retour).
+  // LOT 2 de la presentation : ce bouton ne vit plus en haut de la colonne.
+  // LOT 7 : il est revenu dans Reglages → Acces directs, avec le MEME
+  // identifiant et le MEME effet. Le `?.` reste : il couvre le cas ou la
+  // fenetre des Reglages n'est pas dans le document.
   document.getElementById("btn-vault")?.addEventListener("click", () => {
     tabs.openFile("Coffre", "vault");
   });
@@ -830,19 +830,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // 🖥️ GDS Serveur : onglet transverse d'administration du serveur — LOT 4 (L4.1).
-  // LOT 2 : retire du haut de la colonne (retour au LOT 7, meme identifiant).
+  // LOT 2 : retire du haut de la colonne. LOT 7 : revenu dans Reglages →
+  // Acces directs (« Serveur GDS »), identifiant et effet inchanges.
   document.getElementById("btn-gds-admin")?.addEventListener("click", () => {
     tabs.openFile("GDS Serveur", "gds-admin");
   });
 
   // ⚙️ GDS Paramétrage : onglet transverse de paramétrage utilisateur — LOT 5 (L5.1).
-  // LOT 2 : retire du haut de la colonne (retour au LOT 7, meme identifiant).
+  // LOT 2 : retire du haut de la colonne. LOT 7 : revenu dans Reglages →
+  // Acces directs (« GDS mon compte »), identifiant et effet inchanges.
   document.getElementById("btn-gds-params")?.addEventListener("click", () => {
     tabs.openFile("GDS — paramétrage", "gds-params");
   });
 
   // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
-  // LOT 2 : retire du haut de la colonne (retour au LOT 7, meme identifiant).
+  // LOT 2 : retire du haut de la colonne. LOT 7 : revenu dans Reglages →
+  // Acces directs (« Envoyer une remarque »), identifiant et effet inchanges.
   document.getElementById("btn-feedback")?.addEventListener("click", () => {
     tabs.openFile("Feedback", "feedback");
   });
