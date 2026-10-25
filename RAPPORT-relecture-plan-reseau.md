@@ -111,3 +111,16 @@ Les 7 risques de la §6 ont été **tranchés par le propriétaire** (via le coo
 ---
 
 **Livraison** : `PLAN-mode-reseau-multipostes.md` en **v4** (en-tête v4 conservant la ligne « ce qui change par rapport à la v2 »), ce rapport complété de la §8, et `plan_dev.md` mis à jour — le tout dans un seul commit.
+
+## 9. Ce qui reste ouvert
+
+> Le **troisième point ouvert** signalé en fin de mission précédente n'a **pas** été conservé dans ce rapport (rapport tronqué de ce côté) : je ne l'invente donc pas. Ce qui suit est la liste, **vérifiée sur le disque** à la date de la v4.1, des points qui restent **réellement** ouverts — une ligne par point, avec le risque concret et l'étape où il faudra trancher.
+
+| # | Point ouvert | Risque concret | À trancher à l'étape |
+|---|---|---|---|
+| 1 | **Restriction par projet** de `GET /api/gds/handover/state` (D7) : « tout membre » = « tout compte authentifié » en V1 | n'importe quel compte inscrit sait qui tient un projet et jusqu'à quand ; aucune notion de membre actif par projet dans le code d'aujourd'hui | **étape 3** (routes `/api/gds/handover/*`), puis évolution future |
+| 2 | **La documentation contredit encore l'exclusivité** : `README.md:283-285`, `spec_gds.md`, `spec_assistant_sync.md`, `plan_gds.md` affirment toujours « dernier qui écrit gagne » | un développeur — ou un agent qui lit la doc — peut conclure qu'écrire en parallèle sur le même projet est prévu | **étape 8** (tableau §9 du plan) |
+| 3 | **Conséquence de la garde stricte sur les commandes de test** : `AGENTS.md` annonce `cargo test --workspace` ; dès l'étape 2, cette commande échouera sans base locale | l'échec sera pris pour une régression et cherché au mauvais endroit, alors qu'il suffit de démarrer la base jetable | **étape 8** (`AGENTS.md` : renvoyer à `docs/gds-server-setup.md` §11) |
+| 4 | **`AGENTS.md:226`** documente encore « `0001_init` → `0007` » | référence fausse dès l'étape 1, puisque la série ira jusqu'à `0009` | **étape 8** (déjà planifié au §9 du plan) |
+
+**Livraison v4.1** : `PLAN-mode-reseau-multipostes.md` passe en **v4.1** (titre et en-tête cohérents) avec **A1** écrit en §7 (« Où la base est fournie ») et **A2** écrit en §8 (« publication réussie, poste mort avant `return` ») ; `.github/workflows/gds-server-image.yml` fournit désormais la base au job `tests` (service PostgreSQL 16 jetable) ; `docs/gds-server-setup.md` gagne sa §11 (`PILOT_GDS_TEST_URL` + commande locale). **`release.yml` n'a pas été touché** (vérifié : `git diff --stat` ne le cite pas).

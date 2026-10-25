@@ -874,3 +874,73 @@ la base est appliqué **par le conteneur lui-même** — dépôts bare et
   et le badge du projet passe à **● Connecté** ;
 - `git ls-remote` en SSH sur un dépôt du serveur **ne demande pas de mot de passe**
   (partie 1, étape 2.4 de `docs/gds-guide-mise-en-place.md`).
+
+
+---
+
+## 11. Lancer les tests du socle sur une base PostgreSQL jetable (`PILOT_GDS_TEST_URL`)
+
+Les tests du **socle** (`gds-core`) qui ont besoin d'une base — portage de projet,
+routes, migrations — lisent leur connexion **exclusivement** dans la variable
+d'environnement **`PILOT_GDS_TEST_URL`**. Rien d'autre n'est lu : ni
+`.pilot/gds.json`, ni `~/.pilot/gds_secrets.json`. La base **réelle**
+(`pilot_gds`) ne peut **jamais** être visée : `gds-core/src/db.rs` **refuse**
+toute URL dont la base ne s'appelle pas `pilot_gds_test_*`.
+
+### 11.1 La commande locale (conteneur jetable, PostgreSQL 16)
+
+Dans un premier terminal, on démarre une base **jetable** — sans volume, donc
+détruite à l'arrêt (`--rm`). Le port `55433` est choisi pour ne pas entrer en
+conflit avec le `5432` du serveur GDS, souvent déjà pris sur un poste de
+développement (§5.1) :
+
+```bash
+docker run --rm --name pilot-gds-test-db \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=pilot_gds_test_local \
+  -p 55433:5432 \
+  postgres:16
+```
+
+Dans un second terminal, on pointe les tests dessus puis on lance la suite :
+
+```bash
+# macOS / Linux / Git Bash
+export PILOT_GDS_TEST_URL="postgres://postgres:postgres@127.0.0.1:55433/pilot_gds_test_local"
+cargo test -p gds-core --lib
+```
+
+```powershell
+# Windows PowerShell
+$env:PILOT_GDS_TEST_URL = "postgres://postgres:postgres@127.0.0.1:55433/pilot_gds_test_local"
+cargo test -p gds-core --lib
+```
+
+Avec la même variable, `cargo test -p gds-server` s'exécute aussi. En fin de
+travail : `Ctrl+C` dans le premier terminal (le conteneur et la base disparaissent,
+rien n'est laissé sur le disque).
+
+**Ce que font les tests eux-mêmes** : à partir de cette seule URL (rôle
+`postgres`, superutilisateur), ils créent des bases jetables
+`pilot_gds_test_<pid>_<n>`, y appliquent les migrations, puis les **suppriment**
+en fin de test (même en cas d'échec). Il suffit donc que le conteneur **tourne** :
+aucune base n'est à préparer à la main.
+
+### 11.2 Ce que « vert » veut dire — et ne veut pas dire
+
+- **Sans** `PILOT_GDS_TEST_URL`, les tests PostgreSQL **existants** s'ignorent
+  proprement (message `PILOT_GDS_TEST_URL absente — test ignoré`) : la suite est
+  verte, mais **rien n'a été testé sur la base**. C'est le comportement actuel,
+  conservé tel quel.
+- Les tests de **portage de projet** (plan « mode réseau multi-postes », §7,
+  décision **D3**) sont, eux, **obligatoires** : ils utilisent un helper dédié qui
+  **échoue** avec un message explicite quand la variable est absente — jamais un
+  silence. Son message d'échec **rappelle la commande de ce §11**. Un test de
+  portage ne doit **jamais** passer sans base : un « ok » sans rien tester n'est
+  pas une preuve.
+- **En intégration continue**, la même variable est fournie par le job `tests` de
+  `.github/workflows/gds-server-image.yml`, qui démarre un **service PostgreSQL 16
+  jetable** (`POSTGRES_DB: pilot_gds_test_ci`). Cet enchaînement reste
+  **manuel** et **indépendant** de `release.yml` (ce dernier ne lance pas les
+  tests du socle : il n'est pas concerné).

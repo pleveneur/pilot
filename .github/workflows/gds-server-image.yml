@@ -20,7 +20,12 @@ name: gds-server-image
 #
 # Enchaînement des jobs :
 #   1. `tests`              — tests unitaires du socle et du serveur (Rust, sans
-#                             base de données, sans Tauri) ;
+#                             Tauri) ; le job fournit désormais une base
+#                             PostgreSQL 16 JETABLE (service éphémère) aux tests
+#                             du socle via `PILOT_GDS_TEST_URL` : un test qui a
+#                             besoin de la base ne peut plus « passer » sans
+#                             avoir rien testé (cf. plan « mode réseau
+#                             multi-postes », §7, décision A1) ;
 #   2. `e2e`                — banc d'essai de bout en bout en conteneur jetable
 #                             (`gds-server/tests/e2e.sh`), qui construit l'image
 #                             depuis la MÊME recette (`gds-server/Dockerfile`)
@@ -54,20 +59,61 @@ permissions:
 jobs:
   # ─────────────────────────────────────────────────────────────────────
   # tests — tests unitaires du socle partagé et du serveur autonome.
-  # Ils ne dépendent NI de Tauri, NI d'une base PostgreSQL, NI du frontend :
-  # aucun `npm ci` ni bundle MCP n'est requis ici (le binaire serveur ne dépend
-  # pas de `src-tauri`, cf. `gds-server/Cargo.toml`).
+  # Ils ne dépendent NI de Tauri, NI du frontend : aucun `npm ci` ni bundle MCP
+  # n'est requis ici (le binaire serveur ne dépend pas de `src-tauri`, cf.
+  # `gds-server/Cargo.toml`).
+  #
+  # BASE DE TEST : le service `postgres` ci-dessous est une base PostgreSQL 16
+  # JETABLE, propre à l'exécution (aucun volume, détruite avec le runner). Elle
+  # est fournie aux tests du socle par `PILOT_GDS_TEST_URL`.
+  #   - l'URL doit viser une base dont le nom commence par `pilot_gds_test_` :
+  #     `gds-core/src/db.rs` REFUSE toute autre base (la base réelle `pilot_gds`
+  #     ne peut jamais être ciblée) — d'où `POSTGRES_DB: pilot_gds_test_ci` ;
+  #   - le rôle `postgres` est superutilisateur : il peut créer et supprimer les
+  #     bases jetables `pilot_gds_test_<pid>_<n>` qu'ouvrent les tests ;
+  #   - l'équivalent local (même base, même variable) est la commande de
+  #     conteneur jetable documentée dans `docs/gds-server-setup.md` §11.
   # ─────────────────────────────────────────────────────────────────────
   tests:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pilot_gds_test_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pilot_gds_test_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Wait for PostgreSQL
+        # Ceinture et bretelles : le health-check du service suffit en principe,
+        # cette attente bornée évite un échec erratique au premier essai.
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec "${{ job.services.postgres.id }}" pg_isready -U postgres -d pilot_gds_test_ci >/dev/null 2>&1; then
+              echo "PostgreSQL prêt (essai ${i})"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgreSQL n'a pas répondu dans le délai" >&2
+          exit 1
+
       - name: Run gds-core unit tests
+        env:
+          PILOT_GDS_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/pilot_gds_test_ci
         run: cargo test -p gds-core --lib
 
       - name: Run gds-server unit tests
