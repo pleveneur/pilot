@@ -140,6 +140,10 @@ describe("findUnprotectedSourceSlices — détecte le motif exact du défaut", (
 // lignes suivantes), et ces sites n'avaient donc jamais pu être comptés. Le
 // relevé est désormais EXACT (comparaison d'égalité, pas un plafond) : réparer
 // un site oblige à baisser son compte, en ajouter un fait échouer le test.
+//
+// LOT 4 de la presentation : `panneau-suivi-trois-onglets` passe de 9 à 8 — le
+// verrou de position du cercle flottant a été remplacé par deux découpages
+// PROTÉGÉS (`sliceSource`). Compte BAISSÉ, jamais desserré.
 const INVENTAIRE_HISTORIQUE = {
   "scripts/mcp-client-extension.test.js": 1,
   "scripts/release-workflow.test.js": 1,
@@ -152,7 +156,7 @@ const INVENTAIRE_HISTORIQUE = {
   "src/js/file-attente-fenetre-rejeu.test.js": 1,
   "src/js/file-attente-retrait-mission.test.js": 1,
   "src/js/garde-fou-refus-lecture-seule.test.js": 1,
-  "src/js/panneau-suivi-trois-onglets.test.js": 9,
+  "src/js/panneau-suivi-trois-onglets.test.js": 8,
   "src/js/pi-update-startup.test.js": 1,
   "src/js/planificateur-plan-complet.test.js": 1,
   "src/js/reglage-voix-onglet-assistant.test.js": 2,

@@ -30,6 +30,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 
 import { invoke } from "@tauri-apps/api/core";
+// Découpage de source VÉRIFIÉ (3ᵉ audit, point 4) : une ancre absente doit
+// faire ÉCHOUER le test, jamais rendre une assertion négative vraie par
+// construction. Les nouveaux découpages du LOT 4 passent par lui.
+import { sliceSource } from "./source-slice.js";
 import {
   AGENT_PANEL_TABS,
   AGENT_PANEL_TAB_LABELS,
@@ -181,8 +185,8 @@ describe("(a) plus de panneau cloche en bas a droite : un seul panneau", () => {
     expect(css).not.toContain(".sa-events-badge");
   });
 
-  it("le panneau est celui du cercle d'activite, fixe en HAUT a DROITE", () => {
-    // Les trois volets sont DANS le panneau du cercle (un seul conteneur).
+  it("le panneau est celui de l'entree « Travail » de la bande de contexte", () => {
+    // Les trois volets sont DANS le panneau du suivi du travail (un seul conteneur).
     const debut = html.indexOf('<div id="agent-activity">');
     const fin = html.indexOf('<div id="agent-activity-card"');
     expect(debut).toBeGreaterThan(-1);
@@ -192,16 +196,28 @@ describe("(a) plus de panneau cloche en bas a droite : un seul panneau", () => {
     expect(bloc).toContain('id="agent-activity-pane-agents"');
     expect(bloc).toContain('id="agent-activity-pane-events"');
     expect(bloc).toContain('id="agent-activity-pane-tasks"');
-    // Position historique du cercle : coin superieur droit (jamais en bas).
-    const regleCercle = css.slice(css.indexOf("#agent-activity {"), css.indexOf("#agent-activity-dot {"));
-    expect(regleCercle).toMatch(/position:\s*fixed/);
-    // Barre de fenetre Pilot : la pastille se decale SOUS la bande (32 px + le
-    // 8 px d'origine) — sans ce decalage elle passerait dessous (z-index 10000
-    // contre 100001) et deviendrait invisible et non cliquable. L'intention du
-    // verrou est inchangee : coin superieur droit, jamais en bas.
-    expect(regleCercle).toMatch(/top:\s*calc\(var\(--window-bar-height\) \+ 8px\)/);
-    expect(regleCercle).toMatch(/right:\s*12px/);
-    expect(regleCercle).not.toMatch(/bottom:\s*\d+px/);
+    // LOT 4 de la presentation : plus de cercle flottant en position fixe. Le
+    // suivi du travail est une entree NOMMEE de la bande de contexte, dans le
+    // flux — c'est ce qui supprime le chevauchement avec la barre d'onglets.
+    // L'intention du verrou est conservee : l'acces au travail est en HAUT, a
+    // DROITE de la zone de travail, jamais en bas.
+    const regleConteneur = sliceSource(css, "#agent-activity {", "#agent-activity-entry {", 40);
+    expect(regleConteneur).toMatch(/position:\s*relative/);
+    expect(regleConteneur).not.toMatch(/position:\s*fixed/);
+    expect(regleConteneur).not.toMatch(/top:\s*calc\(var\(--window-bar-height\)/);
+    expect(regleConteneur).not.toMatch(/bottom:\s*\d+px/);
+    // La bande de contexte : 26 px, dans #main-area, AVANT la barre d'onglets.
+    const bande = html.indexOf('<div id="context-bar">');
+    const barreOnglets = html.indexOf('<div id="tab-bar">');
+    const zoneTravail = html.indexOf('<main id="main-area">');
+    expect(bande).toBeGreaterThan(zoneTravail);
+    expect(barreOnglets).toBeGreaterThan(bande);
+    // Le conteneur du suivi du travail est DANS la bande de contexte.
+    expect(debut).toBeGreaterThan(bande);
+    expect(debut).toBeLessThan(barreOnglets);
+    const regleBande = sliceSource(css, "#context-bar {", "#context-breadcrumb {", 40);
+    expect(regleBande).toMatch(/height:\s*26px/);
+    expect(regleBande).toMatch(/border-bottom:\s*1px solid var\(--border-subtle\)/);
   });
 
   it("le panneau se ferme par le cercle, par la croix et par Echap", () => {

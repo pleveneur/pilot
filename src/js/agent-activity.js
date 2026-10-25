@@ -964,9 +964,15 @@ export function initAgentActivity(tabs) {
     }
   });
 
-  // Clic sur le cercle → ouvre le panneau sur le dernier onglet utilisé (à
-  // défaut « Agents ») ; un second clic le referme.
-  dot.addEventListener("click", (e) => {
+  // Clic sur l'entree « Travail » → ouvre le panneau sur le dernier onglet
+  // utilisé (à défaut « Agents ») ; un second clic le referme.
+  // LOT 4 : l'entree est un bouton NOMMÉ de la bande de contexte ; le cercle
+  // `#agent-activity-dot` en est désormais le CONTENU (une pastille d'état, pas
+  // un bouton). Le comportement est le même qu'avant : un seul écouteur, la
+  // même bascule, la même mémoire d'onglet.
+  const entry = document.getElementById("agent-activity-entry");
+  const trigger = entry || dot;
+  trigger.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleAgentPanel();
   });
@@ -1050,7 +1056,9 @@ export function initAgentActivity(tabs) {
     if (e.key !== "Escape") return;
     e.stopPropagation();
     closeAgentPanel();
-    dot.focus();
+    // Le focus revient a l'entree « Travail » (LOT 4) : c'est elle, le bouton
+    // reel ; la pastille n'est plus focusable (elle est son contenu).
+    trigger.focus();
   });
 
   // Fermeture explicite (bouton ×) et effacement des événements (« tout
@@ -1281,6 +1289,20 @@ export function setAgentPanelTabsVisibility(config) {
   return visible;
 }
 
+/**
+ * Publie l'etat ouvert/ferme du panneau sur l'entree « Travail » ET sur la
+ * pastille `#agent-activity-dot` (LOT 4 : cette derniere conserve ses attributs
+ * d'accessibilite d'origine ; le bouton reel, lui, doit porter l'etat).
+ * @param {boolean} open
+ */
+function setActivityExpanded(open) {
+  const value = open ? "true" : "false";
+  for (const id of ["agent-activity-entry", "agent-activity-dot"]) {
+    const el = document.getElementById(id);
+    if (el) el.setAttribute("aria-expanded", value);
+  }
+}
+
 /** Ouvre le panneau (sur l'onglet mémorisé, ou sur `tab` s'il est fourni). */
 export function openAgentPanel(tab) {
   const panel = panelEl();
@@ -1290,8 +1312,7 @@ export function openAgentPanel(tab) {
   panel.classList.remove("hidden");
   const card = document.getElementById("agent-activity-card");
   if (card) card.classList.add("hidden");
-  const dot = document.getElementById("agent-activity-dot");
-  if (dot) dot.setAttribute("aria-expanded", "true");
+  setActivityExpanded(true);
   try { localStorage.setItem("agent-activity-expanded", "true"); } catch (_) { /* stockage plein */ }
   if (panelActiveTab === "events") {
     panelUnread = 0;
@@ -1304,8 +1325,7 @@ export function openAgentPanel(tab) {
 export function closeAgentPanel() {
   const panel = panelEl();
   if (panel) panel.classList.add("hidden");
-  const dot = document.getElementById("agent-activity-dot");
-  if (dot) dot.setAttribute("aria-expanded", "false");
+  setActivityExpanded(false);
   try { localStorage.setItem("agent-activity-expanded", "false"); } catch (_) { /* stockage plein */ }
   emitAgentPanelState();
 }
