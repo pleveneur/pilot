@@ -870,9 +870,13 @@ describe("POINT C — rejeu garanti de la file de DÉLÉGATIONS (issue #66)", ()
 
   it("le chemin de mise en file de delegate_to_coder arme le rejeu (jamais de blocage silencieux)", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
-    const idx = src.indexOf("ds.queue.push({ request, projectPath, agentId");
+    // Ancre indépendante de la mise en forme : l'entrée de file porte la demande
+    // ET le brief de base + la tâche (le contexte de suivi est relu à la
+    // transmission par `flushDelegationQueue`, jamais figé à l'arrivée).
+    const srcNoSpace = src.replace(/\s+/g, " ");
+    const idx = srcNoSpace.indexOf("ds.queue.push({ request, baseRequest, task: delegationTask, projectPath, agentId");
     expect(idx, "la mise en file de délégation doit exister").toBeGreaterThan(-1);
-    expect(src.slice(idx, idx + 600)).toContain("armDelegationQueueReplay(projectPath)");
+    expect(srcNoSpace.slice(idx, idx + 600)).toContain("armDelegationQueueReplay(projectPath)");
   });
 
   it("le chemin distant (agent_prompt) ne court-circuite pas ce rejeu (pas de send_agent_command_to)", () => {

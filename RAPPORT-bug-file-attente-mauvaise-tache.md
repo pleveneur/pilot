@@ -302,7 +302,16 @@ trouvée ; le symptôme s'explique entièrement par le contexte figé du § 8.
   `super-agent-context`, `file-attente-fifo-admission`,
   `file-attente-identite-demande`, `file-attente-rang-rejeu`,
   `exclusivity-queue`, `project-queue-wiring`) : `PASS (124) FAIL (0)`.
-- Suites complètes lancées après le commit de ce rapport (§ 15).
+- **Suite complète** `npx vitest run` : `PASS (2932) FAIL (0)`.
+  Elle a d'abord révélé **1 échec** dans un test existant (`verrou-par-projet.test.js`,
+  « le chemin de mise en file de delegate_to_coder arme le rejeu ») : son ancre
+  cherchait l'ancienne forme de l'empilement de délégation
+  (`ds.queue.push({ request, projectPath, agentId`) sur une seule ligne. L'entrée
+  porte maintenant aussi `baseRequest` + `task` (indispensables pour relire le
+  contexte à la transmission) : l'ancre a été **mise à jour sans rien retirer de
+  son intention** (l'empilement existe toujours et arme bien le rejeu
+  `armDelegationQueueReplay(projectPath)`), et la suite est redevenue verte.
+- Aucun code Rust touché : `cargo test` non relancé pour cette correction.
 
 ## 15. Fichiers touchés
 
@@ -310,6 +319,9 @@ trouvée ; le symptôme s'explique entièrement par le contexte figé du § 8.
   trois chemins) ;
 - `src/js/super-agent-context.test.js` (ancres de branchement mises à jour) ;
 - `src/js/file-attente-contexte-au-lancement.test.js` (nouveau, reproduction) ;
+- `src/js/verrou-par-projet.test.js` (ancre de l'empilement de délégation mise à
+  jour : elle pointait la forme sur une seule ligne) ;
+- `spec_super_agent.md` (+ bloc d'aide régénéré dans `help/handbook.md`) ;
 - ce rapport.
 
 Ni `super-agent-context.js`, ni `project-task-queue.js`, ni `project-queue-view.js`,
