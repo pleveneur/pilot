@@ -1,5 +1,7 @@
-# PLAN — Mode réseau multi-postes de Pilot (v3)
+# PLAN — Mode réseau multi-postes de Pilot (v4)
 
+> **v4 — les 7 risques de la relecture sont tranchés** (arbitrages du propriétaire, D1→D7) : ce que veut dire « transmis au seul serveur GDS du projet » pour `poste_id`, `poste_id` par **machine** et non par projet, garde **strict** des tests base obligatoires, **ordre de la restitution** (le code est publié AVANT que le projet soit libéré), glossaire « agent du projet » / « assistant de suivi », sort du **travail local d'un poste non porteur**, portée réelle de `GET /api/gds/handover/state`. Rien d'autre ne change : les **12 décisions fermes** (§11) et les **5 réglages validés** (§3) sont intacts. Détail des arbitrages : `RAPPORT-relecture-plan-reseau.md` §8.
+>
 > **Ce qui change par rapport à la v2** (relecture indépendante ; rien n'est implémenté ici) : les **dix renvois `fichier:ligne` faux sont corrigés** et revérifiés un par un sur le disque ; les **formulations contradictoires sont alignées** (« tenu par X, jusqu'à HH:MM » partout, « répondre sur l'avancement », lecture seule stricte d'un projet tenu par un autre poste, mémoire et consignes qui restent des fichiers du dépôt) ; et les **cinq points bloquants reçoivent leur solution écrite** (reprise dans la même transaction, `poste_id` UUID stable, expiration paresseuse sans job planifié, restitution scindée socle/poste, routes et schémas nommés, tests de routes obligatoires sur base). Les **12 décisions fermes** (§11) et les **5 réglages validés** (§3) sont conservés tels quels : ils appartiennent au propriétaire. Les points restés en désaccord sont signalés, pas corrigés — voir `RAPPORT-relecture-plan-reseau.md`.
 
 > Rédigé à partir du cahier des charges du propriétaire, qui fait foi. Les informations projet partent au fil de l'eau, toutes les 3 minutes, **pendant** le travail ; la restitution est le moment où l'on pousse l'état d'avancement final, où l'on libère le projet et où l'on vérifie que tout est à jour.
@@ -16,6 +18,19 @@ Le projet reste ce qu'il est déjà : des sources dans Git. Ce que le mode rése
 - **Le code continue de voyager par Git**, exactement comme aujourd'hui (clone / fetch / pull / push), mais **on ne le modifie pas depuis un poste qui ne tient pas le projet**. Lire, consulter, comparer reste possible ; écrire ne l'est pas.
 - Corollaire : le poste qui ne tient pas le projet **lit** les informations projet et **répond** aux questions sur l'avancement (pour son développeur comme pour son assistant), et **n'écrit jamais** : ni fichier, ni information projet.
 
+### Glossaire — « agent du projet » et « assistant de suivi »
+
+Le mot « agent » désigne deux choses différentes dans ce plan, et les décisions 3 et 8 ne parlent pas du même :
+
+- **agent du projet** : un agent qui travaille sur les fichiers du projet. Il est **interdit à un poste non porteur** (décisions 3, 4 et 5).
+- **assistant de suivi** : l'assistant du développeur, qui lit les informations projet et répond aux questions. Il est **autorisé à tout moment**, en **lecture seule** (décision 8), y compris sur un projet tenu par un autre poste.
+
+Ce glossaire ne modifie aucune décision : il lève une ambiguïté de vocabulaire.
+
+### Le travail local d'un poste non porteur n'est jamais perdu
+
+Les modifications locales **déjà présentes** sur un poste qui ne tient pas le projet **NE SONT JAMAIS supprimées ni écrasées**. Elles **restent locales**, elles **ne peuvent pas être publiées** tant que le projet n'est pas pris en main, et l'interface l'indique clairement : le **bandeau** le dit, et une **action « prendre le projet pour publier »** est proposée. **Aucune fusion automatique, aucune poussée silencieuse.**
+
 ## 2. Le cycle, en 4 temps
 
 | # | Temps | Ce que fait le développeur | Ce que fait Pilot | Ce que voit le serveur |
@@ -31,6 +46,7 @@ Le point clé : **les informations circulent en continu, toutes les 3 minutes**,
 
 - **Synchro de fond** — automatique, toutes les 3 minutes, silencieuse et jamais bloquante (aucun verrou attendu, aucune file, aucune attente) : elle transporte uniquement les informations du projet, jamais un fichier de code. **Un cycle = un seul appel** (présence + informations) ; l'appel de prise (`take`) ne sert jamais à la présence.
 - **Synchro manuelle** — le geste volontaire du développeur : elle rend le projet, pousse une dernière fois les informations du projet, et **c'est le poste qui publie le code** sur le GDS quand le projet y est activé (dans ce cas, aucune publication GitHub). Hors GDS activé, elle ne publie aucun code : celui-ci reste dans Git comme avant.
+- **La synchro manuelle est une séquence ORDONNÉE côté poste** (détail en §6 b, réalisation à l'étape 4) : (1) si le projet est activé sur le GDS, publier le code (commit + push) ; (2) pousser l'état d'avancement ; (3) **seulement ensuite**, appeler `return`. **On ne libère jamais un projet avant que son code soit publié** : si l'étape 1 ou 2 échoue, la restitution n'est pas faite, le poste reste porteur, le bandeau le dit, et l'opération est rejouable.
 
 ## 3. Réglages validés par le propriétaire
 
@@ -55,7 +71,7 @@ Le point clé : **les informations circulent en continu, toutes les 3 minutes**,
 | État d'avancement (« où on en est ») | **Partagé — seul contenu de `project_info`** | Permet au suivant de reprendre sans relire 40 fichiers. C'est le **seul** contenu que la table serveur `project_info` transporte (`kind = etat_avancement`). |
 | Qui tient le projet, et jusqu'à quand | **Partagé** | C'est l'objet même de la coordination. |
 | Lecture des informations projet par un poste qui ne tient pas le projet | **Ouverte à tous, tout le temps** | L'exclusivité ne porte que sur l'écriture ; c'est ce qui permet à l'assistant de n'importe quel développeur de répondre sur l'avancement. |
-| Écriture des fichiers du projet et lancement d'agents sur le projet | **Réservée au porteur** | Un projet tenu par un autre poste s'ouvre en lecture seule : aucune modification de fichier, aucun agent (§1). |
+| Écriture des fichiers du projet et lancement d'agents sur le projet | **Réservée au porteur** | Un projet tenu par un autre poste s'ouvre en lecture seule : aucune modification de fichier, aucun agent du projet (§1). Le travail local **déjà présent** sur un poste non porteur n'est jamais supprimé ni écrasé : il reste local, non publiable, et l'interface le dit (§1). |
 | Historique de conversation (transcripts, `.pilot/sessions/`, `.pilot/sessions.jsonl`) | **Privé** | Échanges personnels ; seuls le résumé et les décisions sont extraits vers le projet. |
 | Instructions / prompt de l'assistant (`~/.pilot/assistant/`) | **Privé** | Personnalisation du développeur. |
 | Réglages, préférences, thème, voix | **Privé** | Réglages de poste. |
@@ -111,7 +127,9 @@ project_handovers(
 - **Historique conservé** : la ligne est clôturée (`returned_at`), jamais supprimée → on garde la trace de qui a tenu le projet et quand.
 - Migration écrite **en LF** (sinon `embedded_migrations_are_lf`, `gds-core/src/db.rs:1886-1907`, échoue).
 
-**`poste_id`** : identifiant de poste généré **UNE fois** (UUID), conservé **côté poste dans la configuration GDS du projet**, **stable pour la machine**, jamais transmis ailleurs. Il sert à distinguer **deux machines du même compte utilisateur**.
+**`poste_id`** — un identifiant **par machine, pas par projet** : il est généré **UNE fois** pour la machine (UUID), conservé dans la **configuration locale de l'application**, puis **recopié à l'identique dans la configuration GDS de chaque projet**. La même machine présente donc **le même `poste_id` sur tous les projets**, ce qui rend l'idempotence du `take` (même `user_id` + même `poste_id` = renouvellement, pas une nouvelle prise) **valable projet par projet**. Il sert aussi à distinguer **deux machines du même compte utilisateur**.
+
+**Transmission de `poste_id`** : « `poste_id` est transmis au seul serveur GDS du projet, jamais à un autre service ni à un tiers. »
 
 ### 6 b) Les règles du portage — `gds-core/src/handover.rs` + routes
 
@@ -123,6 +141,12 @@ project_handovers(
 - **`return` (restitution) — scindée** :
   - dans le **socle partagé** (`gds-core`) : **seulement les règles pures et la clôture de la ligne avec `sync_at`**. **Aucune publication de code, aucun appel réseau sortant** — le serveur ne peut pas publier le code d'un poste.
   - c'est **le poste** qui déclenche la synchronisation des informations et, si le projet est activé sur le GDS, la publication du code (`src-tauri/src/gds_client.rs` / `git push`), à l'étape 4 du tableau de réalisation.
+- **Ordre de la restitution — la seule séquence retenue (côté poste)** :
+  1. si le projet est activé sur le GDS : publier le code (commit + push) ;
+  2. pousser l'état d'avancement ;
+  3. **seulement ensuite**, appeler `return`.
+
+  Si l'étape 1 ou 2 échoue, **la restitution n'est pas faite** : le poste reste porteur, le bandeau le dit, et l'opération est **rejouable**. Autrement dit : **on ne libère jamais un projet avant que son code soit publié**. Le cas « `return` réussi puis `git push` échoué » ne peut donc pas se produire — l'ordre l'interdit. Le filet de sécurité reste l'**expiration à 15 minutes** (§3 réglage 1), qui couvre le poste qui meurt en cours de route.
 - **`force_return`** — **réservée au rôle `admin`** (`require_admin`), **motif obligatoire**, écriture `audit_gds` action `handover.force_return` + `returned_by` / `return_reason`.
 - **Moment de la prise en main** : à l'**ouverture d'un projet déjà connecté au GDS** (`src/js/sidebar.js:471` → `gds_sync_project`, `src-tauri/src/gds_client.rs:177`) — jamais à la création du projet, et pas par `gds_connect_existing` (commande distincte, `src-tauri/src/gds.rs:2431`).
 
@@ -135,6 +159,8 @@ project_handovers(
 | `POST /api/gds/handover/return` | restitution (clôture de la ligne + `sync_at`) |
 | `GET /api/gds/handover/state` | **lecture, ouverte à tout membre** : qui tient le projet, jusqu'à quand |
 | `POST /api/gds/handover/force` | libération forcée — placée dans **`admin_routes`** (`gds-core/src/http.rs:214`, qui applique déjà `require_admin` à toutes ses routes) |
+
+**Portée de lecture de `GET /api/gds/handover/state` — écrite telle quelle, sans promesse** : en **V1**, « tout membre » signifie **« tout compte authentifié »**, car le code existant n'a **pas** de notion de membre actif par projet — la V1 ouvre tous les projets à tous les inscrits (`gds-core/migrations/0001_init.sql:30-31`) et la garde d'écriture ne dépend plus que du rôle (`ensure_project_publisher`, `gds-core/src/db.rs:1748` ; `can_force_publish`, `gds-core/src/roles.rs:112-123`). La **restriction réelle par projet** est notée comme **évolution future**, pas comme acquise.
 
 ### 6 c) Le partage de l'avancement — migration `0009_project_info.sql`
 
@@ -165,10 +191,10 @@ Toute route d'écriture de projet (suivi, informations, restitution) vérifie le
 | # | Livré | Agent | Fichiers | Test qui le prouve |
 |---|---|---|---|---|
 | 1 | Table + règles pures du portage (prise, présence, restitution, expiration, idempotence) | codeur Rust socle | `gds-core/migrations/0008_project_handover.sql`, `gds-core/src/handover.rs`, `gds-core/src/lib.rs` | `cargo test -p gds-core` (module `handover`) — **sans base** ; la migration est en **LF** (test `db::tests::embedded_migrations_are_lf`, `gds-core/src/db.rs:1886-1907`) |
-| 2 | Base du portage (take / heartbeat / return / force_return / lecture), reprise **dans la même transaction** | codeur Rust socle | `gds-core/src/db.rs` | `cargo test -p gds-core` : **base PostgreSQL obligatoire** via `PILOT_GDS_TEST_URL` (test déclaré obligatoire, pas ignoré) — **deux prises concurrentes, une seule réussit, l'autre reçoit un refus** |
-| 3 | Routes partagées `/api/gds/handover/*` (+ force dans `admin_routes`) | codeur Rust socle | `gds-core/src/http.rs` | `cargo test -p gds-core` : 409 pour un 2e dev, 200 pour l'admin, 403 pour un non-admin — **base PostgreSQL obligatoire** via `PILOT_GDS_TEST_URL`, test déclaré obligatoire |
-| 4 | Poste : prise en main à l'ouverture, présence périodique (1 appel/cycle), restitution, écritures refusées hors portage | codeur Rust desktop | `src-tauri/src/gds_client.rs`, `src-tauri/src/gds.rs`, `src-tauri/src/gds_sync.rs`, `src-tauri/src/gds_service.rs` (voie service : `force_push_tracking` ligne 552, routes `/api/gds/tracking/*` lignes 569-596), `src-tauri/src/lib.rs` (**enregistrement de toute nouvelle commande dans `tauri::generate_handler!`**, ligne 3535 ; entrées GDS voisines 3854-3884), `src-tauri/src/gds_web.rs` lignes 43-51 **si** une route propre au poste est ajoutée | `cargo test --manifest-path src-tauri/Cargo.toml --lib` |
-| 5 | Interface : bandeau « tenu par X, jusqu'à HH:MM », **lecture seule (aucune modification de fichier, aucun agent lancé)**, bouton de restitution, bouton admin « Libérer » tracé | codeur front | `src/js/gds.js`, `src/js/gds-status.js`, `src/js/gds-admin.js` | `npx vitest run src/js/gds-handover.test.js` |
+| 2 | Base du portage (take / heartbeat / return / force_return / lecture), reprise **dans la même transaction** | codeur Rust socle | `gds-core/src/db.rs` | `cargo test -p gds-core` : **base PostgreSQL obligatoire** via `PILOT_GDS_TEST_URL`, avec la **garde STRICTE** de la §7 (helper dédié qui **échoue** avec un message explicite si la variable est absente) — **deux prises concurrentes, une seule réussit, l'autre reçoit un refus** |
+| 3 | Routes partagées `/api/gds/handover/*` (+ force dans `admin_routes`) | codeur Rust socle | `gds-core/src/http.rs` | `cargo test -p gds-core` : 409 pour un 2e dev, 200 pour l'admin, 403 pour un non-admin — **base PostgreSQL obligatoire** via `PILOT_GDS_TEST_URL`, même **garde STRICTE** que l'étape 2 |
+| 4 | Poste : prise en main à l'ouverture, présence périodique (1 appel/cycle), **restitution dans l'ordre du §6 b** (code publié → état d'avancement → `return`), écritures refusées hors portage | codeur Rust desktop | `src-tauri/src/gds_client.rs`, `src-tauri/src/gds.rs`, `src-tauri/src/gds_sync.rs`, `src-tauri/src/gds_service.rs` (voie service : `force_push_tracking` ligne 552, routes `/api/gds/tracking/*` lignes 569-596), `src-tauri/src/lib.rs` (**enregistrement de toute nouvelle commande dans `tauri::generate_handler!`**, ligne 3535 ; entrées GDS voisines 3854-3884), `src-tauri/src/gds_web.rs` lignes 43-51 **si** une route propre au poste est ajoutée | `cargo test --manifest-path src-tauri/Cargo.toml --lib` |
+| 5 | Interface : bandeau « tenu par X, jusqu'à HH:MM », **lecture seule (aucune modification de fichier, aucun agent du projet lancé)**, **travail local non publiable signalé** avec l'action « prendre le projet pour publier » (§1), bouton de restitution, bouton admin « Libérer » tracé | codeur front | `src/js/gds.js`, `src/js/gds-status.js`, `src/js/gds-admin.js` | `npx vitest run src/js/gds-handover.test.js` |
 | 6 | Informations projet côté serveur (**état d'avancement uniquement**) | codeur Rust socle | `gds-core/migrations/0009_project_info.sql`, `gds-core/src/db.rs`, `gds-core/src/http.rs` | `cargo test -p gds-core` (règles pures sans base ; accès base via `PILOT_GDS_TEST_URL` quand il y en a) + migration en **LF** |
 | 7 | Poste : la restitution pousse l'**état d'avancement** et la prise en main suivante le récupère — jamais de donnée privée, **aucune duplication de `PROJECT_MEMORY.md` / `AGENTS.md`** | codeur Rust + front | `src-tauri/src/gds_sync.rs`, `src/js/project-memory.js` | `cargo test --lib` + `npx vitest run src/js/project-memory*.test.js` |
 | 8 | Documentation : nouveau `spec_reseau.md` + réécriture des contradictions (§9) + **mise à jour de `AGENTS.md`** (il documente aujourd'hui « `0001_init` → `0007` », ligne 226 : il doit aller jusqu'à `0009`) | rédacteur doc | `spec_reseau.md`, `spec_assistant_sync.md`, `spec_gds.md`, `plan_gds.md`, `README.md`, `AGENTS.md` | `npm run build:handbook` + `npx vitest run` |
@@ -178,12 +204,15 @@ Toute route d'écriture de projet (suivi, informations, restitution) vérifie le
 
 **Preuve exigée pour les tests de routes (étapes 2 et 3)** : les tests de routes exigent une base PostgreSQL via `PILOT_GDS_TEST_URL` et sont **OBLIGATOIRES dans la vérification attendue** — aucun test ne doit rendre « ok » sans rien tester. Les règles pures de l'étape 1 se testent **sans base**.
 
+**Garde STRICTE des tests base (décision D3) — différente du style existant, volontairement** : les tests de portage des **étapes 2 et 3** utilisent un **helper dédié** qui **ÉCHOUE avec un message explicite** quand `PILOT_GDS_TEST_URL` est absente — **jamais un `return None` silencieux**. Les **autres tests PostgreSQL existants gardent leur comportement actuel** (ignorés proprement quand la variable manque, ex. `fresh_migrated_test_db`, `gds-core/src/db.rs:2045-2051`) : **on ne les change pas dans ce chantier**. Conséquence pratique : sans `PILOT_GDS_TEST_URL`, la suite reste verte pour l'existant mais **échoue explicitement** sur les tests de portage — c'est voulu, l'exclusivité ne peut pas être déclarée prouvée sans base.
+
 ## 8. Cas de panne, et ce qui protège
 
 - **Le développeur ferme Pilot proprement sans restituer** : la restitution est déclenchée d'office à la fermeture du projet, et l'état d'avancement est poussé — on ne perd pas son travail d'information.
 - **Le poste meurt brutalement (coupure, plantage)** : le portage expire après 15 minutes ; le projet redevient libre et le suivant le prend (la prise en main ferme elle-même la ligne expirée, §6 b). Comme les informations projet partent au fil de l'eau (toutes les 3 minutes), on ne perd au plus que 3 minutes de travail d'information — jamais tout.
 - **Le serveur tombe** : le travail continue en local **sans écrire sur le serveur**. Il n'y a **pas de file d'écritures en attente** : l'existant est un simple **repère de dernière synchronisation** (table `gds_sync_state`, clé `last_sync_ms`, `src-tauri/src/gds_sync.rs:113` et 380-400). Un envoi raté est **simplement refait au cycle suivant**, sans alerte. On préfère un projet non partagé quelques minutes à un projet bloqué.
 - **Coupure en pleine écriture** : une écriture serveur = une requête transactionnelle par entité ; une coupure laisse l'entité inchangée, jamais à moitié écrite.
+- **La publication du code échoue à la restitution** : l'ordre du §6 b fait passer la publication du code (commit + push) et la poussée de l'état d'avancement **avant** `return`. Un échec laisse donc le poste **porteur** : le projet n'est pas libéré, le bandeau le dit, et le développeur **rejoue** la restitution. On ne libère jamais un projet dont le code n'est pas publié ; le poste qui meurt malgré tout est couvert par l'expiration à 15 minutes.
 - **Projet tenu par quelqu'un qui a disparu** : trois protections cumulées — expiration paresseuse (15 min), reprise en main par un administrateur (motif + journal d'audit), et affichage permanent du porteur et de l'échéance pour que le problème se voie au lieu de se deviner.
 - **Le projet est bloqué : le développeur a disparu** : l'administrateur du GDS peut libérer le projet (motif obligatoire, action tracée dans l'audit). Le suivant qui le prend en main reçoit pour son assistant un point de reprise détaillé — ce qui était en cours, ce qui était prévu — construit uniquement à partir des informations projet partagées, jamais depuis la machine disparue. Le travail en cours est à refaire, mais sur sa confirmation seulement.
 - **Aucune donnée privée sur le fil** : la couche de partage ne lit qu'une liste blanche de champs de projet (section 4) ; tout le reste n'est jamais sérialisé.
@@ -234,4 +263,4 @@ Conséquence du point 7 : le serveur reçoit des états intermédiaires pendant 
 
 ---
 
-> **Points restés en désaccord ou à confirmer** : ils ne sont pas corrigés ici, ils sont signalés — voir `RAPPORT-relecture-plan-reseau.md` (§ « Désaccords et incohérences restantes »).
+> **Points restés en désaccord ou à confirmer** : les 7 risques signalés par la relecture sont désormais **tranchés** (D1→D7) et **écrits dans ce plan** ; le constat d'origine reste visible dans `RAPPORT-relecture-plan-reseau.md` (§6) et la correspondance risque → arbitrage → endroit du plan est en §8 du même rapport.
