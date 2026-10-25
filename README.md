@@ -14,6 +14,11 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 
 ## Fonctionnalités
 
+### Barre de fenêtre
+- La **barre de titre système** (logo, nom du dossier, boutons Windows) n'est plus affichée : Pilot dessine sa propre **bande de fenêtre** de 32 px en haut, qui suit le thème sombre/clair.
+- Les trois boutons système vivent dans l'interface, collés au bord droit : **Réduire**, **Agrandir / Restaurer** (l'icône suit l'état réel de la fenêtre) et **Fermer** — Fermer garde exactement le comportement habituel (confirmation ou mise en veille de la fenêtre).
+- **Glisser** la fenêtre depuis toute la bande (hors boutons) ; **double-clic** sur la bande = agrandir / restaurer. Le nom donné au système (barre des tâches, Alt+Tab) est toujours `Pilot`.
+
 ### Animations d'ouverture
 - **Modales** : les modales (Paramètres ⚙️, raccourcis, commandes projet, inter-projets, etc.) s'ouvrent avec une **animation de zoom** depuis le point de clic (bouton ou option de menu) jusqu'à leur taille finale. Les **modales et dialogues de l'agent** (Code Graph 📊, sélection des modèles d'orchestration 🧠, confirmations/choix/saisies demandés par l'agent) bénéficient de la même animation.
 - **Nouveaux onglets** : l'ouverture d'un **nouvel onglet** (fichier dans l'explorateur, bouton du panneau bas, bascule vers un onglet jamais encore affiché) bénéficie du même **zoom depuis le point cliqué**, appliqué au contenu. La bascule vers un onglet déjà affiché reste instantanée.
@@ -31,7 +36,7 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - **Bouton "Projets"** avec logo Pilot — menu déroulant listant les 10 derniers projets (les projets déjà ouverts n'y sont pas dupliqués : ils sont listés dans la barre « Projets en cours » ci-dessous).
 - **"📁 Nouveau projet"** : sélecteur de dossier natif.
 - **Chargement automatique** du dernier projet au démarrage (paramétrable).
-- **Titre de fenêtre dynamique** : `Pilot` → `Pilot <chemin_du_projet>`.
+- **Titre de fenêtre** : `Pilot` — le nom donné au système (barre des tâches, Alt+Tab) ne contient jamais le chemin du projet.
 - **Projets en cours** : les projets ouverts sont listés sous le bouton Projets
   (toujours visibles, projet actif en surbrillance). Cliquer sur un projet bascule
   dessus ; le bouton **✕** à droite le ferme proprement.
@@ -544,7 +549,7 @@ pilot/
 | `resize_terminal` | Redimensionne le PTY |
 | `kill_terminal` | Tue le processus PTY |
 | `stop_watcher` | Arrête le file watcher |
-| `set_window_title` | Modifie le titre de la fenêtre |
+| `set_window_title` | Pose le nom de la fenêtre (toujours `Pilot`) |
 | `export_pdf` | Génère un HTML pour export PDF |
 | `start_agent_session` | Lance le processus pi --mode rpc |
 | `stop_agent_session` | Tue le processus pi |

@@ -10,7 +10,9 @@
 
 ## 1. Interface
 
-Trois zones : **Barre Latérale** (gauche), **Zone de Travail** (droite), **Panneau d'Actions** (bas gauche). Titre de fenêtre : `Pilot` par défaut, `Pilot <chemin>` si un projet est ouvert.
+**Bande de fenêtre** (`#window-bar`, 32 px, en haut, hors des trois zones) : la barre de titre système est retirée sous Windows et Linux (`set_decorations(false)` dans `setup`, macOS garde son cadre) ; la bande est une zone de glissement (double-clic = agrandir/restaurer) avec, collés au bord droit, les trois boutons système **Réduire / Agrandir-Restaurer / Fermer** (`close()`, jamais `destroy()` : la confirmation et le keep-alive restent maîtres). Permissions : `core:window:allow-minimize`, `allow-toggle-maximize`, `allow-close`, `allow-start-dragging`. La pastille d'activité est décalée sous la bande. Voir `docs/proposition-barre-fenetre.md`.
+
+Trois zones : **Barre Latérale** (gauche), **Zone de Travail** (droite), **Panneau d'Actions** (bas gauche). Nom donné au système (barre des tâches, Alt+Tab) : toujours `Pilot`, jamais le chemin du projet.
 
 ### A. Barre Latérale
 - **Sélecteur de projet** : bouton "Projets" (📁 Nouveau + 10 récents). Un dossier = un "Projet de l'Agent IA".

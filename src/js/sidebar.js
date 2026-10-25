@@ -490,7 +490,10 @@ class Sidebar {
       this._loadFavorites();
       this._showProjectButtons();
       this._renderOpenProjectsBar();
-      invoke("set_window_title", { title: `Pilot ${folderPath}` }).catch(() => {});
+      // Nom donne au systeme (Q2 du document de la barre de fenetre) :
+      // exactement « Pilot », sans le chemin du projet. Le nom du dossier
+      // reste lisible dans la barre « Projets en cours ».
+      invoke("set_window_title", { title: "Pilot" }).catch(() => {});
 
       // Restaurer les onglets de la session précédente (restoreTabs rouvre aussi
       // l'onglet agent de CE projet si la session persistée en avait un).
@@ -527,7 +530,8 @@ class Sidebar {
       this._showProjectButtons();
       await this._renderOpenProjectsBar();
       loadModelAliases();
-      invoke("set_window_title", { title: "Pilot " + path }).catch(() => {});
+      // Meme nom qu'apres une ouverture locale (Q2) : jamais le chemin.
+      invoke("set_window_title", { title: "Pilot" }).catch(() => {});
     } catch (e) {
       console.warn("[remote] resync projet distant échoué :", e);
     }
