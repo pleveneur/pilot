@@ -493,6 +493,31 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
    Le sous-thème "default" = palette Pilot de base (aucune classe).
    ================================================================ */
 
+/* `--accent-text` : l'accent quand il porte du TEXTE (titres de bloc des
+   Parametres, titres de groupe de la liste de gauche, rubriques du menu
+   « Autres ecrans », en-tete par client du Tableau de bord). Le jeton n'existait
+   que dans les deux themes de base : sous un sous-theme, ces titres gardaient
+   leur teinte generique, hors palette — et tombaient meme SOUS le seuil AA sous
+   `nord` (3.71:1 sur sa carte).
+   Chaque valeur ci-dessous est l'accent DU sous-theme : seule sa clarte a ete
+   ajustee (teinte et saturation conservees), exactement comme le fait le theme
+   de base (#6b8cff -> #7d97ff en sombre, #4f6ef7 -> #3b57d6 en clair). Aucune
+   teinte arbitraire. Cible : au moins 4.5:1 (AA) sur le fond de carte reel des
+   Parametres, `--bg-input` = `--surface-2`.
+   Mesures (carte / --surface-1 / --surface-3) :
+     one-dark    #6bb4f0 (= #61afef, clarte 66 -> 68 %)  5.85 / 6.90 / 4.72
+     dracula     #c49efa (= #bd93f9, clarte 78 -> 80 %)  5.83 / 7.23 / 4.92
+     nord        #99c9d7 (= #88c0d0, clarte 67 -> 72 %)  5.60 / 7.79 / 4.80
+     tokyo-night #7aa2f7 (= son accent, deja conforme)  5.78 / 7.14 / 4.90
+     github      #0861c9 (= #0969da, clarte 45 -> 41 %)  5.29 / 5.89 / 4.84
+     one-light   #1053e5 (= #4078f2, clarte 60 -> 48 %)  5.43 / 6.19 / 4.92
+     solarized   #1a5e8f (= #268bd2, clarte 49 -> 33 %)  5.63 / 6.40 / 5.09
+     tokyo-day   #1359b9 (= #2e7de9, clarte 55 -> 40 %)  5.50 / 6.65 / 4.60
+   Non corrige (signale) : le fond d'onglet special ACTIF est un melange
+   d'accent et de `--surface-3`, ou le jeton donne 3.84:1 a 4.21:1 — la situation
+   est la meme dans les deux themes de base (4.28:1 / 4.17:1), et la corriger
+   imposerait de changer le fond des onglets, hors de ce reglage de couleur. */
+
 /* ── Dark : One Dark (Atom) ── */
 body.theme-dark.theme-one-dark {
   --bg-app: #282c34;
@@ -508,6 +533,8 @@ body.theme-dark.theme-one-dark {
   --border-active: rgba(255, 255, 255, 0.20);
   --accent: #61afef;
   --accent-hover: #4d9fd8;
+  /* Titres : --accent-text propre au sous-theme, 5.85:1 sur la carte. */
+  --accent-text: #6bb4f0;
   --danger: #e06c75;
   --success: #98c379;
   --warning: #e5c07b;
@@ -537,6 +564,8 @@ body.theme-dark.theme-dracula {
   --border-active: rgba(255, 255, 255, 0.20);
   --accent: #bd93f9;
   --accent-hover: #a97ee0;
+  /* Titres : --accent-text propre au sous-theme, 5.83:1 sur la carte. */
+  --accent-text: #c49efa;
   --danger: #ff5555;
   --success: #50fa7b;
   --warning: #f1fa8c;
@@ -559,6 +588,8 @@ body.theme-dark.theme-nord {
   --border-active: rgba(255, 255, 255, 0.20);
   --accent: #88c0d0;
   --accent-hover: #6fa8b8;
+  /* Titres : l'accent eclairci (3.71:1 avant, sous AA) -> 5.60:1 sur la carte. */
+  --accent-text: #99c9d7;
   --danger: #bf616a;
   --success: #a3be8c;
   --warning: #ebcb8b;
@@ -581,6 +612,8 @@ body.theme-dark.theme-tokyo-night {
   --border-active: rgba(255, 255, 255, 0.20);
   --accent: #7aa2f7;
   --accent-hover: #5f8be0;
+  /* Titres : l'accent de ce sous-theme est deja conforme, 5.78:1 sur la carte. */
+  --accent-text: #7aa2f7;
   --danger: #f7768e;
   --success: #9ece6a;
   --warning: #e0af68;
@@ -603,6 +636,8 @@ body.theme-light.theme-github {
   --border-active: rgba(0, 0, 0, 0.16);
   --accent: #0969da;
   --accent-hover: #0a5cc0;
+  /* Titres : --accent-text propre au sous-theme, 5.29:1 sur la carte. */
+  --accent-text: #0861c9;
   --danger: #cf222e;
   --success: #1a7f37;
   --warning: #9a6700;
@@ -625,6 +660,8 @@ body.theme-light.theme-one-light {
   --border-active: rgba(0, 0, 0, 0.16);
   --accent: #4078f2;
   --accent-hover: #2f66d6;
+  /* Titres : --accent-text propre au sous-theme, 5.43:1 sur la carte. */
+  --accent-text: #1053e5;
   --danger: #e45649;
   --success: #50a14f;
   --warning: #c18401;
@@ -647,6 +684,8 @@ body.theme-light.theme-solarized {
   --border-active: rgba(0, 0, 0, 0.18);
   --accent: #268bd2;
   --accent-hover: #1f78b8;
+  /* Titres : --accent-text propre au sous-theme, 5.63:1 sur la carte. */
+  --accent-text: #1a5e8f;
   --danger: #dc322f;
   --success: #859900;
   --warning: #b58900;
@@ -669,6 +708,8 @@ body.theme-light.theme-tokyo-day {
   --border-active: rgba(0, 0, 0, 0.16);
   --accent: #2e7de9;
   --accent-hover: #1f66c9;
+  /* Titres : --accent-text propre au sous-theme, 5.50:1 sur la carte. */
+  --accent-text: #1359b9;
   --danger: #f52a65;
   --success: #587539;
   --warning: #8c6c3e;
