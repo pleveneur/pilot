@@ -29,6 +29,17 @@
  *     nomment le moteur que pour expliquer une panne.
  * Compte attendu a l'issue de la decision : EXACTEMENT 1. 0 ou plus de 1 = echec.
  *
+ * DEUXIEME PASSE (2026-10-26, controle independant) : le compte n'est plus
+ * seulement celui des trois zones ci-dessus. Il est verifie A L'ECHELLE DE TOUT
+ * LE FRONT DE PRODUCTION (`index.html` + `src/js/**` hors `*.test.js`) : le
+ * libelle visible « Moteur · » ne doit y apparaitre qu'UNE fois, dans
+ * `main.js`, et le porteur `#project-engine` qu'UNE fois, dans le bandeau.
+ * Motif de ce renforcement, mesure par contre-epreuve : la premiere version ne
+ * cherchait que `agentDisplayLabel()` et les roles `(RPC)` / `(Suivi)` ; un
+ * libelle reecrit EN DUR (`statusFiletype.textContent = "Moteur · Agent Pi"`)
+ * la laissait VERTE. Les commentaires sont retires avant lecture (quality-gate
+ * 3.4 et incident du verrou satisfait par sa propre prose).
+ *
  * Ce fichier echoue si :
  *   (a) le bandeau ne porte plus le sous-titre, ou le porte deux fois ;
  *   (b) la barre de statut se remet a ecrire le nom du moteur ou son role
@@ -48,7 +59,7 @@
  * normalisees, cf. quality-gate 3.4).
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -72,17 +83,80 @@ function bloc(source, marqueur, fin, min = 1) {
 }
 
 /**
+ * Source SANS ses commentaires (bloc et fin de ligne). Pure.
+ *
+ * Pourquoi : un verrou qui lit la prose se satisfait d'un commentaire
+ * (`repli-menus-bas.test.js`, incident du 2026-10-26) — et, dans l'autre sens,
+ * un commentaire qui CITE une ecriture fautive ferait rougir a tort. On ne juge
+ * donc que le CODE.
+ */
+export function sansCommentaires(source) {
+  return source
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+/**
+ * Ecritures qui nomment le moteur DANS la barre de statut (`#status-filetype`).
+ *
+ * Deuxieme passe (2026-10-26) : la premiere version ne cherchait que
+ * `agentDisplayLabel()` et les roles `(RPC)` / `(Suivi)`. Elle laissait donc
+ * passer un libelle ECRIT EN DUR — contre-epreuve faite :
+ * `statusFiletype.textContent = "Moteur · Agent Pi";` restait VERT. Desormais
+ * toute ecriture dans la barre de statut qui nomme le moteur, d'ou qu'il
+ * vienne, est refusee.
+ * Pure : rend les extraits fautifs (liste vide = conforme).
+ * @returns {string[]}
+ */
+export function ecrituresNommantLeMoteurDansLeStatut(source) {
+  const lignes = sansCommentaires(source).split("\n");
+  const ecritures = [
+    /statusFiletype\.(textContent|innerText|innerHTML|outerHTML)\s*=/,
+    /statusFiletype\.(append|prepend|insertAdjacentHTML|insertAdjacentText|replaceChildren)\s*\(/,
+  ];
+  const nomme = /agentDisplayLabel|\bMoteur\b|\bAgent Pi\b|\bAgent PLh\b|\(RPC\)|\(Suivi\)/;
+  const fautives = [];
+  lignes.forEach((ligne, i) => {
+    if (!ecritures.some((m) => m.test(ligne))) return;
+    // L'ecriture peut tenir sur plusieurs lignes (gabarit ou concatenation) :
+    // on juge l'instruction avec ses deux lignes suivantes.
+    const instruction = lignes.slice(i, i + 3).join("\n");
+    if (nomme.test(instruction)) fautives.push(`L${i + 1}: ${ligne.trim()}`);
+  });
+  return fautives;
+}
+
+/**
  * Ecritures de la barre de statut qui nommeraient le moteur ou son role.
- * Pure : prend le source, rend la liste des motifs trouves (vide = conforme).
+ * Conserve pour les cas historiques ; delegue au detecteur ELARGI ci-dessus.
+ * Pure : rend la liste des ecritures fautives (vide = conforme).
  */
 export function ecrituresDuMoteurDansLaBarreDeStatut(source) {
-  const motifs = [
-    /statusFiletype\.textContent\s*=\s*`[^`]*agentDisplayLabel\(\)/,
-    /statusFiletype\.textContent\s*=\s*`[^`]*\(RPC\)/,
-    /statusFiletype\.textContent\s*=\s*`[^`]*\(Suivi\)/,
-    /statusFiletype\.textContent\s*=\s*[^;\n]*agentDisplayLabel/,
-  ];
-  return motifs.filter((m) => m.test(source)).map((m) => String(m));
+  return ecrituresNommantLeMoteurDansLeStatut(source);
+}
+
+/**
+ * Fichiers de PRODUCTION du front : `index.html` + les modules `src/js` hors
+ * `*.test.js`. C'est le perimetre du compte : la ou l'utilisateur peut lire un
+ * texte, pas les tests.
+ * @returns {string[]} chemins relatifs au depot, tries.
+ */
+export function sourcesDeProduction() {
+  const modules = readdirSync(resolve(ROOT, "src", "js"))
+    .filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"))
+    .sort()
+    .map((f) => `src/js/${f}`);
+  return ["index.html", ...modules];
+}
+
+/**
+ * Occurrences du libelle visible du sous-titre (« Moteur · … ») dans une source,
+ * commentaires retires. Pure.
+ * @returns {number}
+ */
+export function occurrencesDuSousTitre(source) {
+  return (sansCommentaires(source).match(/Moteur\s*\u00b7/g) || []).length;
 }
 
 /**
@@ -146,6 +220,21 @@ describe("Un seul endroit nomme le moteur — la barre de statut n'en est plus",
     expect(ecrituresDuMoteurDansLaBarreDeStatut(tabsJs)).toEqual([]);
   });
 
+  it("un libelle ECRIT EN DUR dans la barre de statut est refuse lui aussi", () => {
+    // Contre-epreuve de la 2e passe : la 1re version laissait ce sabotage VERT.
+    const sabote = tabsJs.replace(
+      "statusFiletype.textContent = '';",
+      'statusFiletype.textContent = "Moteur \u00b7 Agent Pi";',
+    );
+    expect(sabote).not.toBe(tabsJs);
+    expect(ecrituresNommantLeMoteurDansLeStatut(sabote).length).toBeGreaterThan(0);
+  });
+
+  it("un commentaire qui CITE une ecriture ne fait pas rougir le verrou", () => {
+    const avecProse = `${tabsJs}\n// statusFiletype.textContent = \`Agent Pi (Suivi)\`;\n`;
+    expect(ecrituresNommantLeMoteurDansLeStatut(avecProse)).toEqual([]);
+  });
+
   it("les deux branches de chat vident la barre de statut au lieu de la remplir", () => {
     const corps = bloc(
       tabsJs,
@@ -202,5 +291,38 @@ describe("Un seul endroit nomme le moteur — la zone de saisie n'en porte plus"
     expect(agentPiJs).toContain("agentSelectorIds(");
     expect(agentPiJs).toContain('class="agent-model-select"');
     expect(superAgentJs).toContain("#superagent-model-select");
+  });
+});
+
+describe("Un seul endroit nomme le moteur — le compte a l'echelle du front", () => {
+  it("le libelle « Moteur · » n'est ecrit qu'a UN endroit de tout le front", () => {
+    const parFichier = sourcesDeProduction()
+      .map((f) => [f, occurrencesDuSousTitre(lire(f))])
+      .filter(([, n]) => n > 0);
+    // Un seul fichier, une seule occurrence : le sous-titre du bandeau.
+    expect(parFichier).toEqual([["src/js/main.js", 1]]);
+  });
+
+  it("le porteur #project-engine n'existe qu'une fois et aucun module n'en cree un second", () => {
+    expect((html.match(/id="project-engine"/g) || []).length).toBe(1);
+    for (const f of sourcesDeProduction().filter((x) => x.endsWith(".js"))) {
+      expect(lire(f), `${f} : second porteur du sous-titre`).not.toContain(
+        'id="project-engine"',
+      );
+    }
+  });
+
+  it("le compte final des endroits vaut EXACTEMENT 1", () => {
+    expect(endroitsQuiNommentLeMoteur({
+      page: html,
+      statut: tabsJs,
+      chatPi: agentPiJs,
+      chatAssistant: superAgentJs,
+    })).toHaveLength(1);
+    // Et aucun autre module de production n'ecrit le libelle du sous-titre.
+    for (const f of sourcesDeProduction()) {
+      if (f === "src/js/main.js") continue;
+      expect(occurrencesDuSousTitre(lire(f)), f).toBe(0);
+    }
   });
 });

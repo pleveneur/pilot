@@ -195,3 +195,125 @@ seul ». Version inchangée.
 
 `src-tauri/src/agents.rs` était **déjà modifié** avant cette mission : il n'est
 pas inclus dans le commit de cette mission.
+
+---
+
+## 9. Contrôle indépendant (deuxième passe, 2026-10-26)
+
+> Cette passe n'a **rien redessiné** : elle a contrôlé le disque, refait le
+> compte moi-même, et renforcé le verrou qui doit l'empêcher de revenir.
+
+### 9.1 État trouvé (commit de contrôle `c0a4304`)
+
+Les trois points de la décision 382 étaient **déjà** ceux du disque, livrés par
+`7758ba5` (« le nom du moteur remonte dans le bandeau, un seul endroit ») :
+
+| Exigence 382 | Constaté sur le disque | Verdict |
+|---|---|---|
+| (1) nom du moteur **sous la barre du haut, dans le bandeau** | `index.html:50`, dans `#project-identity`, sous `#btn-project-name` | conforme |
+| (2) badge « Distant » **seul** en bas de colonne, aligné à droite | `index.html:234-236` : `#sidebar-engine-row` ne contient que `#remote-badge` ; `style.css` : `justify-content: flex-end` | conforme |
+| (3) plus de mention du moteur **sous la zone de saisie** | `tabs.js:223`, `tabs.js:225`, `tabs.js:2361`, `tabs.js:2369` : `statusFiletype.textContent = ""` / `''` | conforme |
+
+`9db5ea7` (descente du texte en bas de colonne, décision 375) est bien **annulé
+pour le texte**, et le badge a **gardé** sa position du bas.
+
+### 9.2 Le compte, refait à la main (preuves fichier:ligne)
+
+Champ de comptage : les textes **visibles dans l'interface de travail** qui
+nomment le moteur **en service** (le libellé de la source unique
+`agentDisplayLabel()`, `src/js/backend-info.js:70`).
+
+| # | Endroit | Preuve fichier:ligne | Compte |
+|---|---|---|---|
+| 1 | Sous-titre du bandeau de la colonne | porteur `index.html:50` ; seule écriture du libellé `src/js/main.js:646` (`"Moteur · " + agentDisplayLabel()`) ; style `src/css/style.css:1241` et `:1253` | **1** |
+| — | Barre de statut (`#status-filetype`), sous la zone de saisie | `src/js/tabs.js:223` (agent), `:225` (assistant), `:2361` (agent), `:2369` (assistant) — toutes vides | 0 |
+| — | Barres de saisie des deux chats | `src/js/agent-pi.js:558-568`, `src/js/super-agent.js:2917-2925` : `textarea`, micro, envoi — aucun texte d'identité | 0 |
+| — | Ligne du bas de la colonne | `index.html:234-236` : badge `#remote-badge` seul | 0 |
+| | **TOTAL** | | **1** ✅ |
+
+Relevé machine complémentaire (`node`, sources de production seulement,
+commentaires retirés) : le libellé `Moteur ·` apparaît **une seule fois** dans
+tout le front de production, `src/js/main.js:646` ; zéro occurrence dans
+`index.html` et dans les 120 autres modules `src/js` (121 modules de production
+au total, hors tests).
+
+**Hors de ce compte, et signalé franchement** (ce ne sont pas des informations
+de statut, et deux sont exigés par d'autres décisions verrouillées) :
+
+- le **nom d'onglet** du chat : `src/js/tabs.js:212` et `:3330`
+  (« π Agent Pi (RPC) ») — c'est le nom de l'onglet, comme « Notes.md » ;
+- le **libellé de l'onglet des Options**, dans la modale Paramètres fermée par
+  défaut : `index.html:534` (+ valeur de repli avant la première sonde) — verrou
+  distinct `src/js/libelle-moteur-options.test.js` ;
+- le titre de section de cette même modale : `index.html:742`
+  (« Agent Pi ou PLh ») ;
+- l'écran de **prise en main** de la première ouverture :
+  `src/js/onboarding.js:155` (une seule fois, jamais l'interface de travail) ;
+- les **messages de panne / d'attente** : `src/js/tabs.js:615`, `:632`, `:686`.
+
+Si le propriétaire veut que le nom d'onglet cesse lui aussi de nommer le moteur,
+c'est une décision distincte : rien n'a été changé de ce côté.
+
+### 9.3 Faille du verrou trouvée, puis corrigée (mesurée, pas supposée)
+
+Le verrou `src/js/moteur-un-seul-endroit.test.js` (livré par `7758ba5`) ne
+cherchait que `agentDisplayLabel()` et les rôles `(RPC)` / `(Suivi)`.
+
+**Contre-épreuve 1 (avant renforcement)** — libellé réécrit **en dur** dans
+`src/js/tabs.js` : `statusFiletype.textContent = "Moteur · Agent Pi";` →
+suite du verrou **PASS 8 / FAIL 0**. Le nom du moteur pouvait donc revenir sous
+la zone de saisie **sans faire rougir** le verrou. C'est exactement le défaut que
+la mission demandait de fermer.
+
+Renforcement (dans le test **uniquement**, aucun code de production touché) :
+
+- `sansCommentaires()` : la prose n'est plus jugée (un commentaire ne satisfait
+  ni ne fait rougir un verrou) ;
+- `ecrituresNommantLeMoteurDansLeStatut()` : **toute** écriture dans
+  `statusFiletype` (`textContent`, `innerText`, `innerHTML`, `outerHTML`,
+  `append`, `prepend`, `insertAdjacentHTML/Text`, `replaceChildren`) qui nomme le
+  moteur — `agentDisplayLabel`, `Moteur`, `Agent Pi`, `Agent PLh`, `(RPC)`,
+  `(Suivi)` — est refusée, **y compris écrite en dur** ;
+- `sourcesDeProduction()` + `occurrencesDuSousTitre()` : le libellé `Moteur ·`
+  est compté à l'échelle de **tout** le front de production (index.html + tous
+  les modules `src/js` hors tests) et doit valoir **exactement 1** ;
+- le porteur `id="project-engine"` doit rester **unique** dans `index.html` et
+  **aucun** module ne peut en créer un second.
+
+**Contre-épreuve 2 (après renforcement)** — mêmes sabotages volontaires
+(libellé en dur dans `tabs.js` + second porteur `id="project-engine"` ajouté dans
+`main.js`) → verrou **FAIL 5 / (13 cas)** :
+« aucune écriture du nom du moteur dans la barre de statut », « un commentaire
+qui cite une écriture » (le code saboté est lu), « aucun texte d'identité dans
+les barres de saisie » (compte = 2), « le libellé n'est écrit qu'à un endroit »
+(2 fichiers) et « aucun module ne crée un second porteur ». Sabotages **retirés**
+(copies restaurées, `git diff` vide sur ces deux fichiers) puis relance :
+**PASS 13 / FAIL 0**.
+
+### 9.4 Vérifications exécutées dans cette passe
+
+| Vérification | Résultat exact |
+|---|---|
+| `npx vitest run src/js/moteur-un-seul-endroit.test.js` | **PASS 13 / FAIL 0** |
+| Suite complète `npm test` (vitest, 195 fichiers) | **3417 PASS / 0 FAIL** (3412 avant cette passe ; +5 cas de verrou) |
+| `npm run build` (vite) | exit 0, `built` — seuls les avertissements de taille de chunk déjà présents |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | **786 passed, 1 ignored**, exit 0 |
+| Contre-épreuves | voir § 9.3 (une rouge avant renforcement, cinq rouges après) |
+
+`src-tauri/src/agents.rs` n'a **pas** été touché (il était déjà modifié avant
+cette passe, et n'est pas inclus dans le commit). Aucune version changée, aucun
+envoi GitHub, aucun tag.
+
+### 9.5 Ce qui reste à vérifier à l'écran (non vérifiable ici)
+
+Pilot n'a pas été lancé (aucun contrôle graphique dans cette session). Restent
+**déduits** du HTML et du CSS, pas vus :
+
+- le bandeau de 48 px tient bien les deux lignes (nom 15 px + sous-titre 11 px)
+  sans rogner le nom ni pousser le bouton « Projets » ;
+- le sous-titre s'affiche en entier (« Moteur · Agent Pi ») à 280 px et s'ellipse
+  proprement pour un libellé plus long ;
+- le badge « Distant » apparaît collé à droite de sa ligne de 28 px quand un
+  client distant est connecté, et la ligne garde sa hauteur ;
+- la barre de statut d'un onglet de chat est bien vide au premier affichage
+  **et** après une re-sonde pi ↔ plh.
