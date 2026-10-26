@@ -203,3 +203,111 @@ Note : `npm run build:handbook` a été lancé **après** les modifications d'ai
 | `RAPPORT-colonne-entrees-lotB.md` | ce rapport |
 
 Aucun fichier de code de production n'a changé de comportement. Aucune suppression.
+
+---
+
+## 9. DEUXIEME PASSAGE — reprise de la mission, verification seule, aucun code refait
+
+> Date : ce passage. Commit de depart constate : `2978922` (et non `1ef4aee`, comme
+> l'annoncait la consigne). Le present fichier a ete CONSERVE : la section 9 est
+> ajoutee a la suite du rapport deja commite, rien n'est supprime.
+
+### 9.1 Ce que je constate en arrivant, sur le disque et non sur la consigne
+
+| Annonce de la consigne | Constat fait par moi |
+|---|---|
+| « la tentative precedente n'a rien produit, le depot est reste au commit `1ef4aee` » | **faux** : `git log` donne `2978922` en tete, soit **six commits apres** `1ef4aee` |
+| « le lot A (deux portes en tete du bloc) est applique en `1ef4aee` » | exact |
+| « le bloc mesure 316 px pour un plafond de 50 % (250 px) : il deborde » | **faux sur le disque** : le bloc est deja a **7 lignes / 278 px** avec un plafond de **60 % (300 px)** |
+| « `RAPPORT-colonne-entrees-lotB.md` n'existe pas » | **faux** : il existait, commite dans `2978922`, avec 205 lignes |
+
+Deux commits ont livre ce lot entre-temps :
+
+```
+2978922 docs(colonne): lot B -- la documentation dit les 7 lignes et le plafond 60 %
+de9b869 feat(colonne): lot 1 insecable -- 7 lignes de 32 px, plafond 60 %
+1ef4aee feat(colonne): Brouillon et Options ouvrent le bloc du bas          <- lot A
+```
+
+**Decision prise sans rien demander** : ne rien refaire. Rejouer le lot aurait ete une
+regression certaine (deuxieme deplacement des memes boutons, deuxieme passage de 50 a
+60 %, tests reecrits une seconde fois). J'ai donc **verifie moi-meme, ligne a ligne**, que
+chaque point du lot B du cadrage est bien sur le disque, puis j'ai documente le resultat.
+
+### 9.2 Recomptage fait par moi (aucun nombre attendu recopie du cadrage)
+
+| Point du lot B (cadrage § 1.a a 1.g) | Recompter sur le disque | Verdict |
+|---|---|---|
+| `#global-actions` ne contient plus **aucun** `<button>` | `index.html` : ce conteneur n'a qu'un enfant, `#remote-badge` | conforme |
+| `#project-footer` sans `project-only hidden` (visible sans projet) | `<div id="project-footer">` nu, bordure et fond accent conserves | conforme |
+| Les deux portes en **deux premieres lignes** de `.pj-panel` | `btn-scratchpad` puis `btn-settings`, indentation de 8 espaces, une seule ligne chacune, classe de libelle `.ga-label` conservee | conforme |
+| « Lancer l'agent » **hors du bloc**, **1re entree** du groupe « Mon projet » | `#btn-terminal-cmd` a l'indentation de 14 espaces, juste apres le titre « Mon projet », avant « Prompt Builder » ; `class="project-only hidden pj-more-item"` + `role="menuitem"` ; identifiant et infobulle inchanges | conforme |
+| Bloc = **7 lignes** dans l'ordre fige | Brouillon, Options, Assistant, Dossier du projet, Terminal, Commandes du projet, Autres ecrans (via `#pj-more-wrap`) = **7** | conforme |
+| Menu = **10 entrees**, **5 groupes** | 10 `pj-more-item` (agent, prompt-builder, dashboard, code-graph, history, review, agents, superkanban, interproject, gds) ; 5 `pj-more-group-label` (Mon projet, Comprendre, Verifier, Collaborer, Sources) | conforme |
+| `#global-actions` aplati | `margin: 0` et `padding: 0` dans la regle `#global-actions` | conforme |
+| Air du badge porte par `.remote-badge` | `margin: 8px 8px 8px auto` | conforme |
+| Plafond du bloc | `max-height: 60%` sur `#project-footer` | conforme |
+| Regles mortes retirees | plus de `.pj-panel button.pj-row-main` ni `.pj-panel button.pj-row-main .icon` ; plus de regle « pastille » 28 px `#global-actions button { width:auto; height:28px }` | conforme |
+| `.ga-label` conserve | regle `.ga-label` toujours presente (les deux lignes deplacees s'en servent) | conforme |
+| Commentaires a jour | `index.html` (haut vide, 7 lignes, menu a 10 entrees), `src/css/style.css` (60 %, 278 px, sept lignes), `src/js/sidebar.js` (SEPT lignes) | conforme |
+| Verrous de tests a jour | `lot3-colonne-bas.test.js` : `LIGNES` = 7, `MENU` = 10, `.pj-more-item` = 10, 5 groupes, aucune mise en evidence, hauteur recalculee et comparee au plafond ; `lot2-colonne-haut.test.js` et `retrait-ecran-aide.test.js` : zero bouton en haut | conforme |
+| Documentation (lot 2 du cadrage) | `help/overview.md` et `spec_pilot.md` disent 7 lignes / 10 entrees / 278 px / plafond 60 % ; `spec_help.md` ne parle plus de « deux portes » seules ; `README.md` ne detaille pas ces lignes (verifie, rien a y changer) | conforme |
+
+Aucune de ces lignes n'a eu besoin d'etre corrigee : je n'ai **touche a aucun fichier de
+code** dans ce passage.
+
+### 9.3 Etat du debordement apres le lot — question posee par la consigne
+
+Recompte par moi, sans recopier le cadrage :
+
+```
+hauteur du bloc = 2 (bordures) + 8x2 (padding haut/bas) + 7x32 (lignes) + 6x6 (gap) = 278 px
+plafond         = 60 % de la fenetre minimale (minHeight 500 px, src-tauri/tauri.conf.json) = 300 px
+marge           = 22 px
+```
+
+**Le debordement ne persiste pas** : il n'y a **rien a attendre d'un lot suivant** pour ce
+point. Le plafond n'a pas ete force par moi : il etait deja a 60 % (le cadrage le confie au
+meme lot, et ce lot est fait). Le lot 3 du cadrage est une **recette visuelle**, sans
+modification de fichier.
+
+### 9.4 Tests et verifications, lances par moi (resultats exacts)
+
+| Verification | Resultat exact |
+|---|---|
+| `npx vitest run` (etat du disque, aucun fichier modifie par moi) | **PASS (3226) FAIL (0)** |
+| `npm run build:handbook` puis `git status --short help/` | handbook regenere, `git status` **vide** : la documentation generee etait deja a jour |
+| `npm run build` (Vite) | **reussi** (seul avertissement preexistant : tailles de chunks > 500 kB) |
+| `minHeight` relu dans `src-tauri/tauri.conf.json` | **500** px (base du calcul du plafond) |
+| Tests Rust | non lances : **aucun fichier `.rs` n'est concerne** ; la seule modification Rust du disque (`src-tauri/src/agents.rs`, +39 lignes) appartient a une autre mission et est **exclue** de mon commit |
+
+### 9.5 Incidents de mon passage, dits franchement
+
+1. La consigne imposait d'ecrire `RAPPORT-colonne-entrees-lotB.md` **avant toute analyse**.
+   Ce fichier existait deja (commite) : ma premiere ecriture l'a donc **ecrase**. Je l'ai
+   **restaure a l'identique** depuis `git show HEAD:RAPPORT-colonne-entrees-lotB.md` (205
+   lignes verifiees identiques) et j'ai ajoute la presente section a la suite. Rien n'est
+   perdu, rien n'est supprime.
+2. Le cadrage lui-meme est **perime** sur un point de forme : il nomme ses lots
+   « Lot 1 / Lot 2 / Lot 3 » alors que les commits parlent de « lot A » et « lot B ». Les
+   deux nommages designent la meme chose. Je n'ai pas reecrit le document de conception
+   (ce n'est pas de la documentation utilisateur).
+3. `docs/proposition-presentation-ui.md` decrit encore « Lancer l'agent » en evidence dans
+   le bloc du bas (document de proposition, anterieur a la decision). Hors lot : non touche.
+
+### 9.6 Fichiers touches par ce passage
+
+| Fichier | Nature |
+|---|---|
+| `RAPPORT-colonne-entrees-lotB.md` | **ce rapport** : section 9 ajoutee a la suite du rapport existant (aucune ligne anterieure supprimee) |
+
+Aucun fichier de code, de style, de test, de specification ou d'aide n'a ete modifie dans ce
+passage : le lot etait deja livre, et le refaire aurait ete une regression.
+
+### 9.7 Ce qui reste a faire apres le lot B
+
+| # | Reste | Qui |
+|---|---|---|
+| 1 | **Lot 3 — recette visuelle** (9 points du cadrage : fenetre a 500 px sans ligne hors cadre, sans projet ouvert 2 lignes, badge distant, theme clair, mode Zen) | proprietaire, dans `npm run tauri dev`, aucun fichier a modifier |
+| 2 | Annoter ou archiver `RAPPORT-design-colonne-entrees.md` § 5 (questions Q1/Q2/Q3 tranchees) et `docs/proposition-presentation-ui.md` | decision du proprietaire |
+| 3 | Publier une version (bump + tag) | **uniquement sur demande explicite** ; interdit ici, non fait |
