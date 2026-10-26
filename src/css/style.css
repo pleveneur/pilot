@@ -821,7 +821,7 @@ body.theme-light.theme-tokyo-day {
 
 /* --- Barre de boutons projet : systeme a onglets (v8) ---
    LOT 3 de la presentation : la rangee de sous-onglets « Projet / Vues /
-   Assistant » N'EXISTE PLUS (les huit lignes du bloc sont toujours visibles
+   Assistant » N'EXISTE PLUS (les SEPT lignes du bloc sont toujours visibles
    et le menu « Autres ecrans » porte le reste). Les regles `.pj-tabs` et
    `.pj-tab` sont conservees telles quelles : elles ne s'appliquent a aucun
    element, et la regle d'etats partagee du lot 1 les cite encore. */

@@ -296,26 +296,43 @@ describe("LOT 3 (c) — sept lignes de 32 px, 278 px de haut, plafond 60 %", () 
     expect(pied).not.toContain(">Ouvrir le dossier</span>");
   });
 
-  it("la hauteur calculee du bloc est bien 278 px, dans le plafond de 60 %", () => {
+  it("la hauteur calculee du bloc tient dans le plafond, a la fenetre la plus petite", () => {
     const piedCss = declarations(bloc(css, "#project-footer"));
     const panneauCss = declarations(bloc(css, ".pj-panel"));
-    const ligne = declarations(bloc(css, ".pj-panel button"));
+    const lignesCss = declarations(blocs(css, ".pj-panel button").join("\n"));
     // padding vertical du cadre
     const pad = Number((piedCss.match(/padding: (\d+)px 0/) || [])[1]);
     expect(pad, "padding vertical du cadre").toBe(8);
-    // 7 lignes de 32 px
-    expect(ligne).toContain("height: 32px");
+    // hauteur d'une ligne du bloc
+    const hauteurLigne = Number((lignesCss.match(/height: (\d+)px/) || [])[1]);
+    expect(hauteurLigne, "hauteur d'une ligne du bloc").toBe(32);
     const gap = Number((panneauCss.match(/gap: (\d+)px/) || [])[1]);
     expect(gap, "espace entre les lignes").toBe(6);
-    const hauteur = 2 + pad * 2 + 7 * 32 + 6 * gap;
+    // Aucun total fige : il se RECALCULE a partir des regles CSS lues et du
+    // nombre de lignes verrouille plus haut (`LIGNES`). Ajouter une ligne, ou
+    // grossir padding / gap / hauteur de ligne, change donc cette valeur.
+    const hauteur =
+      2 + pad * 2 + LIGNES.length * hauteurLigne + (LIGNES.length - 1) * gap;
     expect(hauteur).toBe(278);
-    // Le plafond passe de 50 % a 60 % (§ 3.5 du rapport) : a la fenetre minimale
-    // de 500 px, 60 % = 300 px. Redescendre a 50 % (250 px) ferait rougir ce
-    // test : deux lignes seraient dessinees hors du cadre, `overflow` etant
-    // `visible` (obligatoire pour le menu qui s'ouvre vers le haut).
-    expect(piedCss).toContain("max-height: 60%");
-    expect(piedCss).not.toContain("max-height: 50%");
-    expect(hauteur).toBeLessThan(300);
+    // Le plafond est la DECISION du proprietaire (§ 3.5 du rapport) : 60 % et
+    // non 50 %. Sa valeur est verifiee ici, mais la place reellement disponible
+    // est relue dans la configuration de la fenetre (`minHeight`), pas figee :
+    // redescendre a 50 %, ou baisser `minHeight`, fait rougir ce test.
+    const plafondPct = Number((piedCss.match(/max-height: (\d+)%/) || [])[1]);
+    expect(plafondPct, "plafond du bloc").toBe(60);
+    const config = JSON.parse(lire("src-tauri/tauri.conf.json"));
+    const minHeight = config.app.windows[0].minHeight;
+    expect(minHeight, "hauteur minimale de fenetre introuvable").toBeGreaterThan(0);
+    const plafond = Math.floor((minHeight * plafondPct) / 100);
+    // « Aucune ligne hors cadre a petite fenetre » : `overflow` etant `visible`
+    // (obligatoire pour le menu qui s'ouvre vers le haut), un depassement ne
+    // serait pas rattrape par un defilement.
+    expect(
+      hauteur,
+      `${LIGNES.length} lignes = ${hauteur} px depassent les ${plafond} px autorises ` +
+        `(${plafondPct} % de ${minHeight} px de fenetre) : des lignes seraient ` +
+        "dessinees hors du cadre",
+    ).toBeLessThanOrEqual(plafond);
   });
 
   it("aucune ligne du bloc n'est mise en evidence (pj-row-main supprimee)", () => {

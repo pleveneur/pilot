@@ -19,18 +19,23 @@ externe.
   terminal (🖥️), agent Pi (π).
 - **Barre latérale** : explorateur de fichiers du projet, filtre, favoris,
   brouillon (scratchpad).
-- **Panneau d'actions** (bas de la barre latérale, cadre accentué) : **huit** lignes
-  nommées, toujours visibles — **Brouillon**, **Options**, **Lancer l'agent** (mise en
-  évidence), **Assistant**, **Dossier du projet** (ouvre le dossier du projet dans
-  l'explorateur du système), **Terminal**, **Commandes du projet**, puis
-  **Autres écrans ▾** : ce dernier ouvre vers le haut un menu groupé (Prompt Builder,
-  Tableau de bord, Graphe du projet, Historique des sessions, Revue de code, Équipe
-  d'agents, Kanban, Discussion inter-projets, GDS du projet).
+- **Panneau d'actions** (bas de la barre latérale, cadre accentué) : **sept** lignes
+  nommées, toujours visibles et **toutes de la même taille** (aucune n'est mise en
+  évidence) — **Brouillon**, **Options**, **Assistant**, **Dossier du projet** (ouvre le
+  dossier du projet dans l'explorateur du système), **Terminal**, **Commandes du
+  projet**, puis **Autres écrans ▾** : ce dernier ouvre vers le haut un menu groupé de
+  **dix** entrées, dont **Lancer l'agent** en toute première ligne (groupe « Mon
+  projet »), puis Prompt Builder, Tableau de bord, Graphe du projet, Historique des
+  sessions, Revue de code, Équipe d'agents, Kanban, Discussion inter-projets et GDS du
+  projet. **Lancer l'agent** se fait donc maintenant en **deux clics** (ouvrir le menu,
+  puis la ligne) : aucun raccourci clavier ne le double.
 - **Le haut de la barre latérale ne porte plus aucun bouton** : « Brouillon » et
   « Options » ont rejoint le panneau du bas, dont elles sont les deux premières lignes
   (mêmes libellés, mêmes icônes, mêmes infobulles, mêmes raccourcis). L'espace ainsi
   rendu profite à la liste des fichiers. Le panneau du bas reste affiché **même sans
-  projet ouvert** : il montre alors ces deux seules lignes.
+  projet ouvert** : il montre alors ces deux seules lignes. Ses sept lignes tiennent
+  entières dans le cadre **même à la fenêtre la plus petite** : il peut occuper jusqu'à
+  **60 %** de la hauteur de la fenêtre, sans jamais de ligne dessinée hors du cadre.
 
 ---
 
