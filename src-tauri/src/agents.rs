@@ -432,12 +432,69 @@ pub(crate) fn ensure_agent_not_busy(
     agent_id: &str,
 ) -> Result<(), String> {
     if service.agent_process_busy(anomaly_map, project, agent_id) {
-        return Err(format!(
-            "L'agent « {} » est déjà en train de travailler — le prompt n'a pas été envoyé (une seconde exécution concurrente sur ce MÊME agent est interdite).",
-            agent_id
-        ));
+        return Err(busy_agent_refusal(agent_id));
     }
     Ok(())
+}
+
+/// Message de refus HONNÊTE de la porte du verrou : UN SEUL exemplaire pour
+/// toutes les portes (prompt direct, commande arbitraire).
+pub(crate) fn busy_agent_refusal(agent_id: &str) -> String {
+    format!(
+        "L'agent « {} » est déjà en train de travailler — le prompt n'a pas été envoyé (une seconde exécution concurrente sur ce MÊME agent est interdite).",
+        agent_id
+    )
+}
+
+/// Vrai si la commande RPC est un **lancement d'exécution** (`prompt`). C'est la
+/// SEULE commande qui doit passer la porte du verrou : les réponses à une
+/// question (`extension_ui_response`), `abort`, `get_state`, `set_model`…
+/// doivent continuer à passer PENDANT qu'un agent travaille (il attend
+/// justement la réponse).
+pub(crate) fn command_is_prompt(command: &Value) -> bool {
+    command.get("type").and_then(|v| v.as_str()) == Some("prompt")
+}
+
+/// Porte du verrou par projet pour les points d'entrée qui acceptent une
+/// commande RPC **arbitraire** (`send_agent_command_to`, `do_send_agent_process_command`) :
+/// ces commandes-là peuvent porter un `prompt` et contournaient donc
+/// `ensure_agent_not_busy`. Un lancement passe désormais par la MÊME garde que
+/// les prompts directs ; tout le reste n'est pas filtré.
+pub(crate) fn ensure_command_launch_allowed(
+    service: &crate::agent_service::AgentService,
+    anomaly_map: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, crate::anomaly::AgentAnomalyState>>>,
+    project: &str,
+    agent_id: &str,
+    command: &Value,
+) -> Result<(), String> {
+    // `agent_process_busy` n'est interrogé QUE pour une commande de lancement :
+    // une réponse à une question (`extension_ui_response`) ou un `abort` ne
+    // prend même pas le verrou de la map d'anomalie.
+    let busy = command_is_prompt(command) && service.agent_process_busy(anomaly_map, project, agent_id);
+    command_launch_refusal(agent_id, command, busy)
+}
+
+/// Décision PURE de la porte des commandes **arbitraires** (aucun état, aucun
+/// verrou) : `busy` dit si l'agent visé travaille déjà. Seule une commande de
+/// LANCEMENT (`prompt`) est filtrée ; `extension_ui_response`, `abort`,
+/// `get_state`, `set_model`, `new_session`… passent TOUJOURS, y compris quand
+/// l'agent travaille (c'est même le cas d'usage de la réponse à une question).
+pub(crate) fn command_launch_refusal(agent_id: &str, command: &Value, busy: bool) -> Result<(), String> {
+    if command_is_prompt(command) && busy {
+        return Err(busy_agent_refusal(agent_id));
+    }
+    Ok(())
+}
+
+/// POINT DE PASSAGE UNIQUE de l'envoi d'une commande RPC à un agent, par couple
+/// (projet, agent) : la porte du verrou est ici, et les DEUX entrées qui
+/// acceptent une commande **arbitraire** passent par cette fonction —
+/// `do_send_agent_process_command` (agents.rs) et `send_agent_command_to`
+/// (rpc.rs, empruntée par la délégation de l'Assistant, `super-agent.js`).
+/// Aucune des deux ne peut donc plus envoyer un `prompt` en contournant la garde.
+pub(crate) fn send_command_to_agent(state: &AppState, project: &str, agent_id: &str, command: Value) -> Result<(), String> {
+    ensure_command_launch_allowed(&state.agent_service, &state.agent_anomaly, project, agent_id, &command)?;
+    state.agent_service.send(project, agent_id, command)
 }
 
 /// Envoie un prompt à un agent multi-rôles H2 V2.
@@ -614,9 +671,14 @@ pub fn abort_agent_process(state: State<AppState>, agent_id: String, project: Op
 }
 
 /// Envoie une commande arbitraire (ex: extension_ui_response) au processus pi d'un agent.
+///
+/// Un `prompt` passé ici est un LANCEMENT : il passe la porte du verrou par
+/// couple (projet, agent) via le point de passage unique `send_command_to_agent`,
+/// sinon cet appel contournait `do_send_agent_process_prompt` et démarrait une
+/// seconde exécution concurrente sur le même agent.
 pub(crate) fn do_send_agent_process_command(state: &AppState, agent_id: String, command: Value, project: Option<String>) -> Result<(), String> {
     let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
-    state.agent_service.send(&project, &agent_id, command)
+    send_command_to_agent(state, &project, &agent_id, command)
 }
 
 #[tauri::command]
@@ -846,7 +908,8 @@ pub fn available_thinking_levels_for_model(
 
 #[cfg(test)]
 mod tests {
-    use super::creating_provided_agent_is_forbidden;
+    use super::{command_is_prompt, command_launch_refusal, creating_provided_agent_is_forbidden};
+    use serde_json::json;
 
     /// D4 : la création d'un agent global avec l'identifiant d'un agent fourni est
     /// refusée ; modification d'un fourni existant, agent de projet, et id libre
@@ -862,5 +925,128 @@ mod tests {
         assert!(!creating_provided_agent_is_forbidden("codeur", true, false, &defaults));
         // Id libre → autorisé.
         assert!(!creating_provided_agent_is_forbidden("mon-agent", false, false, &defaults));
+    }
+
+    /// Mission « verrou du prompt par commande RPC » : une commande `prompt`
+    /// glissée dans une commande ARBITRAIRE est un LANCEMENT. Seul `prompt`
+    /// compte : les autres commandes ne doivent jamais être prises pour un
+    /// lancement (sinon on couperait la réponse à une question en pleine
+    /// exécution).
+    #[test]
+    fn command_is_prompt_only_for_prompt_commands() {
+        assert!(command_is_prompt(&json!({ "type": "prompt", "message": "fais X" })));
+        for other in [
+            json!({ "type": "extension_ui_response", "id": "1", "value": "oui" }),
+            json!({ "type": "abort" }),
+            json!({ "type": "get_state" }),
+            json!({ "type": "set_model", "provider": "p", "modelId": "m" }),
+            json!({ "type": "new_session" }),
+            json!({}),
+            json!({ "type": 42 }),
+            json!(null),
+        ] {
+            assert!(!command_is_prompt(&other), "ne doit pas être un lancement : {other}");
+        }
+    }
+
+    /// Mission « verrou du prompt par commande RPC » — CŒUR de la garde : la
+    /// décision PURE (état d'occupation passé en paramètre) refuse un `prompt`
+    /// visant un agent DÉJÀ occupé, accepte un `prompt` vers un agent libre, et
+    /// laisse passer TOUTES les autres commandes même sur un agent occupé
+    /// (réponse à une question, `abort`, consultation d'état, changement de
+    /// modèle). Ce test rougit si la garde devient inopérante (décision toujours
+    /// permissive) ou si elle se met à filtrer autre chose que `prompt`.
+    #[test]
+    fn prompt_is_refused_only_when_the_agent_is_already_busy() {
+        let prompt = json!({ "type": "prompt", "message": "fais X" });
+        // Agent occupé : le lancement est refusé, avec un message honnête et nommé.
+        let err = command_launch_refusal("codeur", &prompt, true)
+            .expect_err("un prompt vers un agent occupé doit être refusé");
+        assert!(
+            err.contains("codeur") && err.contains("déjà"),
+            "refus honnête et nommé : {err}"
+        );
+        // Agent libre : le lancement passe.
+        assert!(
+            command_launch_refusal("codeur", &prompt, false).is_ok(),
+            "un prompt vers un agent libre doit passer"
+        );
+        // Agent occupé, commandes qui ne lancent RIEN : toujours acceptées.
+        for other in [
+            json!({ "type": "extension_ui_response", "id": "1", "value": "oui" }),
+            json!({ "type": "abort" }),
+            json!({ "type": "get_state" }),
+            json!({ "type": "set_model", "provider": "p", "modelId": "m" }),
+            json!({ "type": "new_session" }),
+        ] {
+            assert!(
+                command_launch_refusal("codeur", &other, true).is_ok(),
+                "une commande qui ne lance rien doit passer même occupé : {other}"
+            );
+        }
+    }
+
+    /// Fins de ligne normalisées (quality-gate § 3.4) : sur un worktree CRLF
+    /// (Windows, `core.autocrlf=true`), une ancre multi-lignes serait introuvable.
+    fn normalize_eol(src: &str) -> String {
+        src.replace("\r\n", "\n")
+    }
+
+    /// Corps d'une fonction du source : de sa signature jusqu'à la première
+    /// accolade fermante en début de ligne (aucun corps de ce fichier n'en
+    /// contient en colonne 0).
+    fn function_body(source: &str, signature: &str) -> String {
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("signature introuvable dans le source : {signature}"));
+        let rest = &source[start..];
+        let end = rest.find("\n}\n").unwrap_or(rest.len());
+        rest[..end].to_string()
+    }
+
+    /// Mission « verrou du prompt par commande RPC » — CÂBLAGE : les DEUX entrées
+    /// qui acceptent une commande RPC arbitraire passent par le point de passage
+    /// unique `send_command_to_agent`, qui porte la garde AVANT l'envoi ; aucune
+    /// des deux n'écrit de commande en direct dans `AgentService::send`. C'est ce
+    /// qui rend le contournement impossible : `send_agent_command_to` (rpc.rs)
+    /// est le chemin emprunté par la délégation de l'Assistant
+    /// (`super-agent.js`, `delegate_to_coder` → `{ type: "prompt" }`). Ce test
+    /// rougit dès qu'une des deux entrées (ou la garde elle-même) est retirée.
+    #[test]
+    fn both_arbitrary_command_entries_go_through_the_launch_gate() {
+        let agents_src = normalize_eol(include_str!("agents.rs"));
+        let rpc_src = normalize_eol(include_str!("rpc.rs"));
+
+        // 1. Le point de passage unique porte la garde, et AVANT l'envoi.
+        let funnel = function_body(&agents_src, "pub(crate) fn send_command_to_agent(");
+        let gate = funnel
+            .find("ensure_command_launch_allowed(")
+            .unwrap_or_else(|| panic!("la garde a disparu du point de passage unique : {funnel}"));
+        let send = funnel
+            .find("agent_service.send(")
+            .unwrap_or_else(|| panic!("l'envoi a disparu du point de passage unique : {funnel}"));
+        assert!(gate < send, "la garde doit précéder l'envoi : {funnel}");
+
+        // 2. Entrée `do_send_agent_process_command` (agents.rs).
+        let entry_agents = function_body(&agents_src, "pub(crate) fn do_send_agent_process_command(");
+        assert!(
+            entry_agents.contains("send_command_to_agent("),
+            "cette entrée doit passer par la porte : {entry_agents}"
+        );
+        assert!(
+            !entry_agents.contains("agent_service.send("),
+            "cette entrée ne doit pas envoyer en direct (contournement de la porte) : {entry_agents}"
+        );
+
+        // 3. Entrée `send_agent_command_to` (rpc.rs) — délégation de l'Assistant.
+        let entry_rpc = function_body(&rpc_src, "pub fn send_agent_command_to(");
+        assert!(
+            entry_rpc.contains("agents::send_command_to_agent("),
+            "cette entrée doit passer par la porte : {entry_rpc}"
+        );
+        assert!(
+            !entry_rpc.contains("agent_service.send("),
+            "cette entrée ne doit pas envoyer en direct (contournement de la porte) : {entry_rpc}"
+        );
     }
 }

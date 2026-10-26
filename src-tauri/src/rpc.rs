@@ -632,8 +632,9 @@ pub fn send_rpc_command(state: State<AppState>, command: Value) -> Result<(), St
 /// Envoie une commande (ex: `extension_ui_response`) à la session agent d'un
 /// projet donné, identifiée par (project_path, agent_id). L'AgentService étant
 /// la source unique de vérité des sessions (clé composite (projet, agent)), le
-/// routage se réduit à une consultation directe de son registre
-/// (`AgentService.send`).
+/// routage passe par son registre (`agents::send_command_to_agent`), qui porte
+/// aussi la **porte du verrou** : un `prompt` (lancement d'exécution) est refusé
+/// si ce même agent travaille déjà, toutes les autres commandes passent.
 ///
 /// Permet de répondre à un bouton de question rendu dans le chat de l'assistant
 /// en routant la réponse vers LE bon agent, sans mélanger les réponses quand
@@ -658,7 +659,15 @@ pub fn send_agent_command_to(
             .clone()
             .ok_or("Aucun projet ouvert")?,
     };
-    state.agent_service.send(&project, &agent_id, command)
+    // Un `prompt` reçu ici est un LANCEMENT : il passe la porte du verrou par
+    // couple (projet, agent) via le point de passage unique
+    // `agents::send_command_to_agent` — c'est le chemin qu'emprunte la délégation
+    // de l'Assistant (`delegate_to_coder` dans super-agent.js). Sans cette porte,
+    // un `prompt` glissé dans une commande arbitraire démarrait une SECONDE
+    // exécution concurrente sur le même agent. Les autres commandes
+    // (`extension_ui_response`, `abort`…) ne sont pas filtrées : elles doivent
+    // passer PENDANT que l'agent travaille.
+    crate::agents::send_command_to_agent(state.inner(), &project, &agent_id, command)
 }
 
 pub(crate) fn do_get_agent_state(state: &AppState) -> Result<Value, String> {
