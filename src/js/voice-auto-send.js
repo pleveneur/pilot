@@ -15,13 +15,19 @@
 //      referme la session à la première fin ⇒ un seul envoi par dictée) ;
 //   3. la valeur écrite dans la zone de saisie reste exactement celle d'avant la
 //      décision (texte déjà présent + texte dicté, une seule espace de séparation),
-//      pour que l'envoi automatique porte sur ce que l'utilisateur voit.
+//      pour que l'envoi automatique porte sur ce que l'utilisateur voit ;
+//   4. si l'UTILISATEUR a repris la main pendant la dictée (il a tapé, collé ou
+//      vidé la zone), sa saisie n'est JAMAIS réécrite et rien ne part : il garde
+//      la main. Le texte qu'il a écrit est celui qui est envoyé, et seulement
+//      s'il valide lui-même.
 //
 // Aucun réglage : décision du propriétaire, ce comportement est le défaut.
 // Aucune lecture de configuration, aucune dépendance.
 
 /** La session de dictée n'est plus ouverte (erreur, arrêt, fin déjà traitée). */
 export const VOICE_END_NO_SESSION = "session-fermee";
+/** L'utilisateur a repris la main pendant la dictée : on n'écrit rien, on n'envoie pas. */
+export const VOICE_END_USER_TAKEOVER = "utilisateur-a-repris-la-main";
 /** Fin normale, mais rien n'a été dicté : on n'envoie pas. */
 export const VOICE_END_EMPTY = "texte-vide";
 /** Fin normale avec du texte dicté : on envoie, une seule fois. */
@@ -59,18 +65,26 @@ export function composeVoiceInputValue(preText, dictatedText) {
  * @param {boolean} input.sessionActive session ouverte AVANT ce traitement.
  * @param {string} input.preText texte déjà présent dans la zone de saisie.
  * @param {string} input.dictatedText texte réellement dicté.
+ * @param {boolean} [input.userEdited] l'utilisateur a modifié la zone PENDANT la dictée.
  * @param {() => void} [input.closeSession] referme la session de dictée.
  * @param {(value: string) => void} [input.write] écrit la valeur dans la zone.
  * @param {() => void} [input.send] chemin d'envoi EXISTANT (Entrée / ▶️).
  * @returns {{autoSend: boolean, reason: string, dictatedText: string, sent: boolean}}
  */
 export function applyVoiceEnd(input) {
-  const { sessionActive, preText, dictatedText, closeSession, write, send } = input || {};
-  const decision = decideVoiceAutoSend({ sessionActive, dictatedText });
+  const { sessionActive, preText, dictatedText, userEdited, closeSession, write, send } =
+    input || {};
+  const decision = decideVoiceAutoSend({ sessionActive, dictatedText, userEdited });
   if (sessionActive !== true) {
     return { ...decision, sent: false };
   }
   if (typeof closeSession === "function") closeSession();
+  // Reprise en main : la zone garde EXACTEMENT ce que l'utilisateur y a écrit. Le
+  // texte dicté ne la réécrit pas, et rien ne part sans une validation de
+  // l'utilisateur lui-même.
+  if (decision.reason === VOICE_END_USER_TAKEOVER) {
+    return { ...decision, sent: false };
+  }
   if (typeof write === "function") write(composeVoiceInputValue(preText, dictatedText));
   if (decision.autoSend && typeof send === "function") {
     send();
@@ -87,13 +101,18 @@ export function applyVoiceEnd(input) {
  *   était encore ouverte AVANT ce traitement (fin normale). Un évènement de fin
  *   arrivé après une erreur, un arrêt manuel ou une première fin ⇒ `false`.
  * @param {string} input.dictatedText texte réellement dicté (résultats finaux).
+ * @param {boolean} [input.userEdited] `true` seulement si l'UTILISATEUR a modifié
+ *   la zone de saisie pendant l'écoute : sa saisie prime, rien ne part.
  * @returns {{autoSend: boolean, reason: string, dictatedText: string}}
  */
 export function decideVoiceAutoSend(input) {
-  const { sessionActive, dictatedText } = input || {};
+  const { sessionActive, dictatedText, userEdited } = input || {};
   const text = normalizedVoiceText(dictatedText);
   if (sessionActive !== true) {
     return { autoSend: false, reason: VOICE_END_NO_SESSION, dictatedText: text };
+  }
+  if (userEdited === true) {
+    return { autoSend: false, reason: VOICE_END_USER_TAKEOVER, dictatedText: text };
   }
   if (!text) {
     return { autoSend: false, reason: VOICE_END_EMPTY, dictatedText: text };

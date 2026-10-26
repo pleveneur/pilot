@@ -1102,6 +1102,9 @@ texte à la voix.
   part si vous n'avez rien dicté, ni si la dictée s'arrête sur une erreur
   (micro refusé, réseau coupé) : dans ce cas le texte reste dans la zone, à vous
   de le relire. Un seul message part par dictée, même si vous parlez longtemps.
+- **Vous gardez toujours la main** : si vous tapez dans la zone pendant que vous
+  dictez, ce que vous écrivez n'est pas écrasé et rien ne part sans votre
+  validation.
 
 ---
 

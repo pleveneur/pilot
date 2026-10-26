@@ -160,8 +160,8 @@ couvrait pas, ils n'ont pas été touchés.
 
 | Fonction | Rôle |
 |---|---|
-| `decideVoiceAutoSend({ sessionActive, dictatedText })` | décide : `autoSend` + `reason` (`fin-normale-avec-texte`, `texte-vide`, `session-fermee`) |
-| `applyVoiceEnd({ sessionActive, preText, dictatedText, closeSession, write, send })` | impose l'**ordre** : refermer la session → écrire la zone → envoyer (et envoyer seulement si la décision l'autorise) |
+| `decideVoiceAutoSend({ sessionActive, dictatedText, userEdited })` | décide : `autoSend` + `reason` (`fin-normale-avec-texte`, `texte-vide`, `session-fermee`, `utilisateur-a-repris-la-main`) |
+| `applyVoiceEnd({ sessionActive, preText, dictatedText, userEdited, closeSession, write, send })` | impose l'**ordre** : refermer la session → écrire la zone → envoyer (et envoyer seulement si la décision l'autorise ; **rien** n'est écrit ni envoyé si l'utilisateur a repris la main) |
 | `composeVoiceInputValue(preText, dictatedText)` | la composition de zone **historique**, inchangée |
 
 ### Règles de sûreté tenues
@@ -173,17 +173,33 @@ couvrait pas, ils n'ont pas été touchés.
 3. **Aucun double envoi** : la session est refermée **avant** l'écriture et l'envoi ;
    un second évènement de fin (ou un second `onend` du moteur) trouve la session
    fermée ⇒ un seul message par dictée.
-4. **L'envoi est le chemin existant** : `sendPrompt` (celui de la touche Entrée et
+4. **L'utilisateur reprend la main** : s'il a tapé, collé ou vidé la zone de saisie
+   **pendant** la dictée, sa saisie n'est **jamais réécrite** (le moteur cesse
+   d'écrire dans la zone) et **rien ne part** : c'est lui qui valide. Détection :
+   les écritures du moteur sont programmatiques (`inputEl.value = …`) et n'émettent
+   aucun évènement `input` — tout `input` reçu pendant l'écoute vient donc de
+   l'utilisateur (`voiceUserTookOver`, remis à zéro au début de chaque dictée).
+5. **L'envoi est le chemin existant** : `sendPrompt` (celui de la touche Entrée et
    du bouton ▶️). Aucun second mécanisme, et la zone de saisie est vidée par ce même
    chemin (refus, file d'attente et verrous du projet inchangés).
-5. Le bouton micro revient à son libellé au repos à chaque fin de dictée.
+6. Le bouton micro revient à son libellé au repos à chaque fin de dictée.
 
 ### Ce qui est prouvé, et ce qui ne l'est pas
 
-- Prouvé (tests) : les quatre cas ci-dessus + l'ordre refermer → écrire → envoyer +
-  le branchement de `agent-pi.js` (un seul point d'envoi, `sendPrompt` réutilisé).
+- Prouvé (tests, 22 cas dans `src/js/envoi-auto-fin-dictee.test.js`) : les six cas
+  ci-dessus + l'ordre refermer → écrire → envoyer + le branchement de `agent-pi.js`
+  (un seul point d'envoi, `sendPrompt` réutilisé, garde de reprise en main avant
+  l'écriture du moteur). Deux verrous explicites : si l'envoi automatique disparaît
+  (`decideVoiceAutoSend` renvoie `autoSend: false` sur une fin normale), le test
+  « envoie une seule fois » tombe ; si un texte vide partait, le test « n'envoie pas
+  quand rien n'a été dicté » tombe. Vérifié par sabotage réel du code (échecs
+  constatés, code remis en place).
 - **Non vérifié** : la dictée réelle au micro dans la fenêtre (aucun son, aucune
-  application lancée) — le comportement est prouvé par la décision et l'ordre.
+  application lancée) — le comportement est prouvé par la décision et l'ordre, pas
+  par une parole réelle.
+- **Pas couvert (reste à faire)** : la barre de saisie de l'**Assistant 🧭**
+  (`src/js/super-agent.js`) et la **version web distante** (`web/js/app.js`) gardent
+  l'envoi manuel.
 
 ---
 
@@ -286,4 +302,7 @@ texte à la voix.
   part si vous n'avez rien dicté, ni si la dictée s'arrête sur une erreur
   (micro refusé, réseau coupé) : dans ce cas le texte reste dans la zone, à vous
   de le relire. Un seul message part par dictée, même si vous parlez longtemps.
+- **Vous gardez toujours la main** : si vous tapez dans la zone pendant que vous
+  dictez, ce que vous écrivez n'est pas écrasé et rien ne part sans votre
+  validation.
 <!-- /HELP:dictee-vocale -->

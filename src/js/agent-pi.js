@@ -857,6 +857,18 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   const MIC_TITLE_IDLE = "Dictée vocale (transcription cloud)";
   let voiceActive = false;
   let voiceRec = null;
+  // Reprise en main : `true` quand l'UTILISATEUR a tapé, collé ou vidé la zone de
+  // saisie PENDANT l'écoute. Les écritures du moteur de reconnaissance sont
+  // programmatiques (`inputEl.value = …`) et n'émettent AUCUN évènement `input` :
+  // tout `input` reçu pendant l'écoute vient donc de l'utilisateur. Dans ce cas,
+  // la zone n'est plus réécrite (sa saisie prime) et rien ne part tout seul
+  // (décision : `decideVoiceAutoSend({ userEdited })`).
+  let voiceUserTookOver = false;
+  if (inputEl) {
+    inputEl.addEventListener("input", () => {
+      if (voiceActive) voiceUserTookOver = true;
+    });
+  }
 
   // ── H7 : projet sensible (local-first) ──
   const lockBadge = wrapper.querySelector("#agent-lock-badge");
@@ -942,6 +954,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     rec.continuous = true;
     const preText = inputEl.value;
     let finalText = "";
+    // Chaque dictée repart d'une zone "non reprise en main" : le drapeau ne
+    // survit jamais à la dictée précédente.
+    voiceUserTookOver = false;
     const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
     rec.onresult = (e) => {
       if (!voiceActive) return;
@@ -968,6 +983,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       } else {
         transcript = finalText;
       }
+      if (voiceUserTookOver) return; // l'utilisateur a repris la main : sa saisie prime
       const sep = preText && !preText.endsWith(" ") ? " " : "";
       inputEl.value = preText + sep + transcript;
       inputEl.scrollTop = inputEl.scrollHeight;
@@ -1001,6 +1017,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
         sessionActive: wasActive,
         preText,
         dictatedText: finalText,
+        userEdited: voiceUserTookOver,
         closeSession: () => { voiceActive = false; voiceRec = null; },
         write: (value) => { inputEl.value = value; autoResizeTextarea(); },
         send: () => { sendPrompt(); },

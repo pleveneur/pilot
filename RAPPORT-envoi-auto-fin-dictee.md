@@ -8,6 +8,60 @@
 
 ---
 
+## 1bis. Deuxième passe (même tâche, complément) — reprise en main par l'utilisateur
+
+La première passe (commit `108038e`) tenait les cas 1, 2, 3, 5 et 6 de la mission.
+Le **cas 4 n'était pas tenu**, et il n'y avait aucun test pour le dire : la zone de
+saisie pouvait être réécrite sous les doigts de l'utilisateur. Constat lu dans le
+code, avant modification :
+
+```
+agent-pi.js:972   inputEl.value = preText + sep + transcript;     // onresult, écrit sans condition
+agent-pi.js:1005  write: (value) => { inputEl.value = value; … }  // onend, écrase la zone dans tous les cas
+```
+
+Autrement dit : si l'utilisateur tapait ou vidait la zone pendant la dictée, le
+moteur de reconnaissance réécrivait par-dessus à chaque résultat, et la fin
+normale réécrivait encore `preText + texte dicté`, puis envoyait — sa saisie était
+perdue et un message partait sans lui.
+
+### Geste fait (minimal)
+
+| Endroit | Ce qui change |
+|---|---|
+| `agent-pi.js` (état de dictée) | `voiceUserTookOver` : `true` quand un évènement `input` arrive **pendant** l'écoute. Fondement : les écritures du moteur sont programmatiques (`inputEl.value = …`) et n'émettent **aucun** `input` — tout `input` reçu pendant l'écoute vient donc de l'utilisateur. Remis à `false` au début de chaque dictée. |
+| `agent-pi.js` (`rec.onresult`) | garde `if (voiceUserTookOver) return;` placée **avant** l'écriture de la zone : le moteur cesse d'écrire, la saisie de l'utilisateur reste. |
+| `agent-pi.js` (`rec.onend`) | transmet `userEdited: voiceUserTookOver` à `applyVoiceEnd`. |
+| `voice-auto-send.js` | nouvelle raison `VOICE_END_USER_TAKEOVER` (`utilisateur-a-repris-la-main`) : `decideVoiceAutoSend` refuse l'envoi, et `applyVoiceEnd` **n'appelle même pas `write`** (la zone garde exactement ce que l'utilisateur a écrit), tout en refermant la session. |
+
+Aucun réglage, aucun bouton, aucun libellé ajouté. **`src-tauri/src/agents.rs` non
+touché** (la modification qui y figure était déjà présente avant cette tâche).
+
+### Cas couverts par les tests (22 cas, `src/js/envoi-auto-fin-dictee.test.js`)
+
+| Cas de la mission | Tenue |
+|---|---|
+| 1. fin normale + texte ⇒ envoi automatique, un seul, par `sendPrompt` | ✅ (existant) |
+| 2. texte vide / espaces ⇒ rien n'est envoyé, zone inchangée | ✅ (existant) |
+| 3. erreur, refus, interruption ⇒ aucun envoi | ✅ (existant) |
+| 4. reprise en main ⇒ saisie non écrasée, rien ne part | ✅ **nouveau** : 3 tests (texte tapé conservé, zone vidée qui le reste, primat sur un texte dicté non vide) + test de décision pure |
+| 5. aucun envoi en double | ✅ (existant) |
+| 6. dictée coupée pendant la réponse de l'assistant | ✅ (inchangé : `if (state.isStreaming)` refuse de démarrer) |
+
+### Verrous vérifiés par sabotage réel
+
+| Sabotage appliqué au code | Tests tombés |
+|---|---|
+| `decideVoiceAutoSend` renvoie `autoSend: false` sur une fin normale (l'envoi automatique disparaît) | 6 ✅ |
+| suppression du garde-fou « texte vide » (un texte vide partirait) | 3 ✅ |
+| suppression de la règle de reprise en main (décision + `applyVoiceEnd`) | 4 ✅ |
+| dans `agent-pi.js` : plus de détection `input`, plus de garde dans `onresult`, plus de `userEdited` transmis | 1 ✅ (test de câblage) |
+
+Chaque sabotage a été appliqué puis **le code a été remis en place** (copies sauvegardées,
+`node --check` repassé, suite re-verte).
+
+---
+
 ## 1. Point de départ (audit `RAPPORT-inventaire-vocal-pilot.md`)
 
 - La dictée existe et fonctionne (Web Speech API, `fr-FR`, `continuous = true`).
@@ -76,22 +130,29 @@ Le module **ne sait pas envoyer** (aucune dépendance, aucun `sendPrompt(`, aucu
 
 | Vérification | Résultat |
 |---|---|
-| `npx vitest run src/js/envoi-auto-fin-dictee.test.js` | **17 tests, 0 échec** |
-| `npm test` (suite complète) | **194 fichiers, 3397 tests, 0 échec** |
+| `npx vitest run src/js/envoi-auto-fin-dictee.test.js` | **22 tests, 0 échec** (17 de la 1ʳᵉ passe + 5 pour la reprise en main) |
+| `npm test` (suite complète) | **195 fichiers, 3437 tests, 0 échec** |
 | `cargo test --manifest-path src-tauri/Cargo.toml --lib` | **786 passés, 1 ignoré, 0 échec** |
+| `npm run build` (vite) | **OK** (`✓ built in 13.04s`, seuls des avertissements de chunks préexistants) |
 | `node --check src/js/agent-pi.js` / `voice-auto-send.js` | OK |
-| `npm run build:handbook` | OK (aide intégrée régénérée, bloc `dictee-vocale` à jour) |
+| `npm run build:handbook` | OK (45 blocs ; la phrase « Vous gardez toujours la main » est bien dans `help/handbook.md`) |
 
 Ce qui **n'a pas** été vérifié (impossible ici) : la dictée réelle avec un micro dans
-la fenêtre (aucun son, aucune application lancée). Le comportement est prouvé par la
-décision pure, l'ordre testé et le branchement lu dans le source.
+la fenêtre (aucun son, aucune application lancée) — je ne peux pas parler dans un
+micro. Le comportement est prouvé par la décision pure, l'ordre testé et le
+branchement lu dans le source, jamais par une parole réelle.
+
+Reste à faire (hors périmètre de cette tâche, dit franchement) : la barre de saisie
+de l'**Assistant 🧭** (`src/js/super-agent.js`) et la **version web distante**
+(`web/js/app.js`) n'ont pas l'envoi automatique ni la reprise en main ; leur dictée
+reste « le texte dans la zone, puis envoi manuel ».
 
 ## 7. Conclusion
 
 Le geste « je parle, puis j'appuie sur Entrée » n'existe plus dans l'onglet agent π :
 à la fin normale d'une dictée, le texte dicté part une seule fois, par le chemin
-d'envoi de toujours ; en cas d'erreur, de refus ou de texte vide, rien ne part et le
-texte reste dans la zone.
+d'envoi de toujours ; en cas d'erreur, de refus, de texte vide, ou si l'utilisateur a
+repris la main en tapant dans la zone, rien ne part et la zone garde son contenu.
 
 VERDICT : conforme à la décision du 2026-10-26, sans réglage ajouté, sans second
 mécanisme d'envoi, sans régression sur Entrée / bouton ▶️ / lecture à voix haute.

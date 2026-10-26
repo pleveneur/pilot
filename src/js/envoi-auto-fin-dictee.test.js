@@ -3,13 +3,17 @@
 // Décision du propriétaire (2026-10-26) : à la fin d'une dictée, si du texte a été
 // dicté, le message part TOUT SEUL — l'utilisateur n'appuie plus sur Entrée.
 //
-// Ce que ces tests tiennent (les quatre cas qui comptent, plus les branchements) :
+// Ce que ces tests tiennent (les cinq cas qui comptent, plus les branchements) :
 //   1. fin NORMALE + texte dicté  ⇒ un seul envoi, par le chemin d'envoi existant ;
+//      (VERROU : si l'envoi automatique disparaît, ce test tombe)
 //   2. fin sur ERREUR (reconnaissance, permission, panne réseau) ⇒ aucun envoi et
 //      le texte est laissé tel quel dans la zone de saisie ;
 //   3. texte dicté vide / uniquement des espaces ⇒ aucun envoi ;
+//      (VERROU : s'il partait un texte vide, ce test tombe)
 //   4. évènement de fin reçu DEUX fois ⇒ un seul envoi (jamais de doublon) ;
-//   5. le câblage de l'onglet agent π (agent-pi.js) utilise bien ce module pour la
+//   5. l'UTILISATEUR reprend la main pendant la dictée ⇒ sa saisie n'est pas
+//      réécrite et rien ne part (il valide lui-même) ;
+//   6. le câblage de l'onglet agent π (agent-pi.js) utilise bien ce module pour la
 //      décision et l'ORDRE, et n'ajoute aucun second mécanisme d'envoi.
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
@@ -23,6 +27,7 @@ import {
   VOICE_END_EMPTY,
   VOICE_END_NO_SESSION,
   VOICE_END_SEND,
+  VOICE_END_USER_TAKEOVER,
 } from "./voice-auto-send.js";
 import { sliceSource } from "./source-slice.js";
 
@@ -35,15 +40,24 @@ function createAgentWindow(preText = "") {
   const state = {
     value: preText,
     voiceActive: false,
+    userTookOver: false,
     sends: [],
   };
   const start = () => {
     state.voiceActive = true;
+    state.userTookOver = false;
   };
   // Le moteur écrit le texte reconnu (comportement de `rec.onresult`).
   const speech = (dictatedText) => {
     if (!state.voiceActive) return;
+    if (state.userTookOver) return; // sa saisie prime : le moteur n'écrit plus
     state.value = composeVoiceInputValue(preText, dictatedText);
+  };
+  // L'utilisateur TAPE (ou vide) la zone pendant la dictée : évènement `input`
+  // (un `inputEl.value = …` programmatique n'en émet aucun).
+  const userTypes = (value) => {
+    if (state.voiceActive) state.userTookOver = true;
+    state.value = value;
   };
   // Fin sur erreur : la session est refermée AVANT que `onend` n'arrive.
   const error = () => {
@@ -62,6 +76,7 @@ function createAgentWindow(preText = "") {
       sessionActive: wasActive,
       preText,
       dictatedText,
+      userEdited: state.userTookOver,
       closeSession: () => {
         state.voiceActive = false;
       },
@@ -71,7 +86,7 @@ function createAgentWindow(preText = "") {
       send,
     });
   };
-  return { state, start, speech, error, end };
+  return { state, start, speech, userTypes, error, end };
 }
 
 // ── 1. Fin normale + texte dicté ⇒ un seul envoi ─────────────────────────────
@@ -190,6 +205,58 @@ describe("évènement de fin reçu deux fois : un seul message par dictée", () 
   });
 });
 
+// ── 4bis. L'utilisateur reprend la main ⇒ sa saisie prime, rien ne part ──────
+describe("l'utilisateur reprend la main pendant la dictée : rien ne part, sa saisie n'est pas écrasée", () => {
+  it("un texte tapé à la main n'est jamais réécrit par le texte dicté", () => {
+    const w = createAgentWindow();
+    w.start();
+    w.speech("ce que j'avais dicte");
+    w.userTypes("ce que j'ai tape moi-meme");
+    w.speech("la suite dictee"); // le moteur ne réécrit plus la zone
+    const res = w.end("ce que j'avais dicte la suite dictee");
+
+    expect(res.autoSend).toBe(false);
+    expect(res.sent).toBe(false);
+    expect(res.reason).toBe(VOICE_END_USER_TAKEOVER);
+    expect(w.state.sends).toEqual([]);
+    // Ce que l'utilisateur a écrit est intact : le texte dicté ne l'a pas écrasé.
+    expect(w.state.value).toBe("ce que j'ai tape moi-meme");
+    expect(w.state.voiceActive).toBe(false);
+  });
+
+  it("une zone vidée à la main reste vide : aucun texte vide n'est envoyé", () => {
+    const w = createAgentWindow();
+    w.start();
+    w.speech("un long texte dicte");
+    w.userTypes(""); // l'utilisateur efface tout pendant la dictée
+    const res = w.end("un long texte dicte");
+
+    expect(res.sent).toBe(false);
+    expect(w.state.sends).toEqual([]);
+    expect(w.state.value).toBe("");
+  });
+
+  it("la reprise en main prime sur un texte dicté non vide (aucune écriture, aucun envoi)", () => {
+    const ecritures = [];
+    const envois = [];
+    const res = applyVoiceEnd({
+      sessionActive: true,
+      preText: "deja la",
+      dictatedText: "du texte dicte",
+      userEdited: true,
+      closeSession: () => {},
+      write: (v) => ecritures.push(v),
+      send: () => envois.push("envoi"),
+    });
+
+    expect(res.reason).toBe(VOICE_END_USER_TAKEOVER);
+    expect(res.autoSend).toBe(false);
+    expect(res.sent).toBe(false);
+    expect(ecritures).toEqual([]); // la zone n'est même pas réécrite
+    expect(envois).toEqual([]);
+  });
+});
+
 // ── 5. Décision pure, isolée ────────────────────────────────────────────────
 describe("decideVoiceAutoSend — décision seule, sans effet", () => {
   it("n'envoie que sur une fin normale ET un texte dicté non vide", () => {
@@ -205,6 +272,16 @@ describe("decideVoiceAutoSend — décision seule, sans effet", () => {
   it("ne décide rien pour un drapeau de session non strictement vrai", () => {
     expect(decideVoiceAutoSend({ sessionActive: "true", dictatedText: "ok" }).autoSend).toBe(false);
     expect(decideVoiceAutoSend({ sessionActive: 1, dictatedText: "ok" }).autoSend).toBe(false);
+  });
+
+  it("n'envoie jamais quand l'utilisateur a repris la main", () => {
+    const d = decideVoiceAutoSend({ sessionActive: true, dictatedText: "ok", userEdited: true });
+    expect(d.autoSend).toBe(false);
+    expect(d.reason).toBe(VOICE_END_USER_TAKEOVER);
+    // Un drapeau non strictement vrai ne vaut PAS une reprise en main : le cas
+    // normal continue de partir tout seul.
+    expect(decideVoiceAutoSend({ sessionActive: true, dictatedText: "ok", userEdited: false }).autoSend).toBe(true);
+    expect(decideVoiceAutoSend({ sessionActive: true, dictatedText: "ok" }).autoSend).toBe(true);
   });
 
   it("normalise le texte dicté (jamais null/undefined)", () => {
@@ -265,5 +342,26 @@ describe("câblage de agent-pi.js : décision et ordre délégués, un seul envo
     expect(module).not.toContain("sendPrompt(");
     expect(module).not.toContain("invoke(");
     expect(module).not.toContain("import ");
+  });
+
+  it("la reprise en main est détectée, respectée et transmise à la décision", () => {
+    // Détection : un évènement `input` reçu PENDANT l'écoute vient de l'utilisateur
+    // (les écritures du moteur sont programmatiques, donc sans évènement `input`).
+    const blocEtat = sliceSource(src, "  let voiceUserTookOver = false;", "  // ── H7 :", 50);
+    expect(blocEtat).toContain('inputEl.addEventListener("input"');
+    expect(blocEtat).toContain("if (voiceActive) voiceUserTookOver = true;");
+    // Le moteur n'écrit plus la zone après la reprise en main (garde AVANT l'écriture).
+    const blocResultat = sliceSource(src, "    rec.onresult = (e) => {", "    rec.onerror = (ev) => {", 100);
+    const garde = blocResultat.indexOf("if (voiceUserTookOver) return;");
+    const ecriture = blocResultat.indexOf("inputEl.value = preText + sep + transcript;");
+    expect(garde).toBeGreaterThan(-1);
+    expect(ecriture).toBeGreaterThan(-1);
+    expect(garde).toBeLessThan(ecriture);
+    // La fin d'écoute transmet la reprise en main à la décision unique.
+    const blocFin = sliceSource(src, "    rec.onend = () => {", "    try {\n      rec.start();", 100);
+    expect(blocFin).toContain("userEdited: voiceUserTookOver");
+    // Chaque dictée repart proprement (le drapeau ne survit pas à la précédente).
+    const blocDemarrage = sliceSource(src, '    let finalText = "";', "    const norm =", 10);
+    expect(blocDemarrage).toContain("voiceUserTookOver = false;");
   });
 });
