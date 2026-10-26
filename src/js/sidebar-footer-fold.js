@@ -26,7 +26,10 @@
 //     mouvement ;
 //   - TOUCHER (LOT 3, decision Q1) : le premier appui sur le bloc replie deploie
 //     et ne fait rien d'autre (appui consomme) ; un appui hors du bloc deploye le
-//     replie tout de suite.
+//     replie tout de suite. Le doigt ne SURVOLE pas : les deux evenements de survol
+//     d'un pointeur tactile sont ignores, donc un bloc ouvert au doigt RESTE ouvert
+//     (sinon il se refermerait 300 ms apres le premier appui, et le second appui —
+//     celui qui doit agir — retomberait sur un bloc replie).
 //
 // Aucune dependance Tauri ni DOM au chargement : le module s'importe dans les
 // tests (`environment: node`) sans navigateur.
@@ -148,10 +151,14 @@ export function appliquerSansMouvement(cadre, coupe) {
 }
 
 /**
- * L'evenement est-il un APPUI TACTILE ? (LOT 3)
+ * L'evenement vient-il d'un pointeur TACTILE ? (LOT 3)
  *
  * On ne regarde que `pointerType` : un seul chemin, celui du reste de
- * l'application (§ 4.2), jamais `touchstart` en plus.
+ * l'application (§ 4.2), jamais `touchstart` en plus, jamais une media query
+ * (qui decrirait la MACHINE et non le GESTE : un portable tactile a les deux).
+ * Tous les evenements de pointeur portent `pointerType` : la reponse sert donc
+ * aussi bien pour `pointerdown` (le seul chemin du doigt) que pour
+ * `pointerenter` / `pointerleave` (qui, eux, ne concernent que la souris).
  *
  * @param {Object} evenement
  * @returns {boolean}
@@ -380,7 +387,14 @@ export function initRepliMenusBas(options = {}) {
   // ── Souris ──────────────────────────────────────────────────────────────────
   // `pointerenter` / `pointerleave` ne bouillonnent pas : ecoute directe sur le
   // cadre, sans capture.
-  const surEntree = () => {
+  //
+  // Un DOIGT ne survole pas : ses deux evenements de survol sont ignores ici, le
+  // seul chemin tactile etant `pointerdown` (§ surAppui). Sans cette porte, un
+  // appui LONG ouvrirait par le survol apres OUVERTURE_MS, l'appui arriverait sur
+  // un bloc deja deploye (donc non consomme) et le bouton sous le doigt agirait —
+  // ce que la decision Q1 interdit.
+  const surEntree = (e) => {
+    if (estAppuiTactile(e)) return;
     etat.survol = true;
     annulerFermeture();
     if (!etat.replie) return;
@@ -392,7 +406,17 @@ export function initRepliMenusBas(options = {}) {
     }, OUVERTURE_MS);
   };
 
-  const surSortie = () => {
+  const surSortie = (e) => {
+    // Le doigt se LEVE : ce `pointerleave` suit immediatement le premier appui.
+    // Armer ici le sursis refermerait le panneau GRACE_MS apres le deploiement au
+    // doigt, et le second appui (celui qui doit agir, Q1) retomberait sur un bloc
+    // replie. On ne fait donc que retirer un survol qui n'existe pas : le panneau
+    // ouvert au doigt reste ouvert jusqu'a un appui HORS du bloc (§ surAppui).
+    if (estAppuiTactile(e)) {
+      etat.survol = false;
+      annulerOuverture();
+      return;
+    }
     etat.survol = false;
     annulerOuverture();
     planifierFermeture();

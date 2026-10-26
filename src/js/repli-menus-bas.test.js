@@ -330,9 +330,12 @@ describe("LOT 1 (h) — mouvement reduit : la convention existante, pas une autr
   it("les DELAIS restent actifs en mouvement reduit (Q3)", () => {
     // La reduction ne touche que la bascule : les deux minuteries sont armees
     // avant tout test de mouvement.
+    // L'ancre s'arrete aux parametres : la porte du survol recoit desormais
+    // l'evenement (pour ignorer un doigt, LOT 3), la duree de l'ouverture n'a pas
+    // bouge pour autant.
     const entree = sliceSource(
       moduleJs,
-      "const surEntree = () => {",
+      "const surEntree = (",
       "const surSortie",
       80,
     );
@@ -1169,6 +1172,154 @@ describe("LOT 4 (o) — le mouvement reduit est tenu aussi par la feuille de sty
     expect(repli.etat().replie, "le sursis doit rester actif").toBe(false);
     d.win.avancer(1);
     expect(repli.etat().replie).toBe(true);
+    repli.detruire();
+  });
+});
+
+// ── LOT 3 (p) — le doigt ne « survole » pas : le panneau deploye au doigt RESTE ouvert ─
+//
+// Decision Q1 du proprietaire, ferme : « au toucher, le premier appui deploie la
+// barre sans rien declencher ; il faut donc deux appuis pour agir sur un menu ».
+// Cette decision n'est tenable que si le panneau OUVERT AU DOIGT le reste : un
+// pointeur tactile emet `pointerenter` avant l'appui puis `pointerleave` des que
+// le doigt se leve. Si ces deux evenements suivaient le chemin de la SOURIS, le
+// panneau se refermerait 300 ms apres le premier appui et le second appui ne
+// pourrait jamais atteindre une ligne. D'ou la regle verrouillee ici : les
+// evenements d'un pointeur TACTILE ne passent NI par l'ouverture au survol NI par
+// le sursis de repli — le seul chemin du doigt est `pointerdown`.
+//
+// Aucun second mecanisme : la distinction se fait sur `pointerType`, porte par
+// tous les evenements de pointeur, jamais par une media query (qui obligerait a
+// scinder la regle `:hover` partagee avec la barre d'outils de l'editeur, cf.
+// RAPPORT-repli-menus-bas-lots2-4.md § 4).
+describe("LOT 3 (p) — au doigt, le panneau deploye reste ouvert (sinon 2 appuis impossibles)", () => {
+  /** Appui tactile pret a etre emis, avec ou sans consommation attendue. */
+  const appui = (d, options = {}) => {
+    const vu = { consomme: false, stoppe: false };
+    d.doc.emettre("pointerdown", {
+      pointerType: "touch",
+      target: options.target || d.lignes[2],
+      preventDefault: () => {
+        vu.consomme = true;
+      },
+      stopPropagation: () => {
+        vu.stoppe = true;
+      },
+    });
+    return vu;
+  };
+
+  it("le doigt leve ne referme pas le panneau : le premier appui laisse le bloc OUVERT", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+
+    // Ce que fait un vrai doigt, dans l'ordre : entree, appui, levee.
+    d.cadre.emettre("pointerenter", { pointerType: "touch" });
+    const vu = appui(d);
+    expect(vu.consomme, "l'appui du premier geste est consomme").toBe(true);
+    expect(repli.etat().replie, "le bloc est deploye").toBe(false);
+
+    d.cadre.emettre("pointerleave", { pointerType: "touch" });
+    // Cinq sursis complets : rien ne doit refermer un panneau ouvert au doigt.
+    d.win.avancer(GRACE_MS * 5);
+    expect(repli.etat().replie, "le doigt leve ne referme JAMAIS le panneau").toBe(
+      false,
+    );
+    expect(d.cadre.classList.contains(CLASSE_REPLIE)).toBe(false);
+    repli.detruire();
+  });
+
+  it("le SECOND appui atteint la ligne : la ligne agit apres le deploiement au doigt", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+
+    d.cadre.emettre("pointerenter", { pointerType: "touch" });
+    appui(d);
+    d.cadre.emettre("pointerleave", { pointerType: "touch" });
+    d.win.avancer(GRACE_MS * 5);
+
+    const second = appui(d, { target: d.lignes[1] });
+    expect(second.consomme, "le second appui n'est plus consomme").toBe(false);
+    expect(second.stoppe, "le second appui n'est plus arrete").toBe(false);
+    repli.detruire();
+  });
+
+  it("un appui LONG (plus de 100 ms) ne deploie pas par le survol et ne clique pas", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+
+    // Le doigt pose : un pointeur tactile emet `pointerenter` AVANT l'appui. S'il
+    // ouvrait par le survol, l'appui arriverait sur un bloc deja deploye (donc
+    // non consomme) et le bouton sous le doigt agirait : exactement ce que Q1
+    // interdit.
+    d.cadre.emettre("pointerenter", { pointerType: "touch" });
+    d.win.avancer(OUVERTURE_MS * 3);
+    expect(repli.etat().replie, "le doigt ne deploie pas par le survol").toBe(true);
+
+    const vu = appui(d);
+    expect(vu.consomme, "l'appui long reste consomme : aucun clic ne part").toBe(true);
+    expect(repli.etat().replie).toBe(false);
+    repli.detruire();
+  });
+
+  it("la SOURIS garde exactement son role, avant comme apres un geste au doigt", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+
+    // Survol souris : ouverture apres OUVERTURE_MS, repli apres GRACE_MS.
+    d.cadre.emettre("pointerenter", { pointerType: "mouse" });
+    d.win.avancer(OUVERTURE_MS - 1);
+    expect(repli.etat().replie, "le survol ouvre toujours apres 100 ms").toBe(true);
+    d.win.avancer(1);
+    expect(repli.etat().replie).toBe(false);
+    d.cadre.emettre("pointerleave", { pointerType: "mouse" });
+    d.win.avancer(GRACE_MS);
+    expect(repli.etat().replie, "la sortie de souris replie toujours").toBe(true);
+
+    // Apres un geste au doigt, la souris retrouve son role intact.
+    d.cadre.emettre("pointerenter", { pointerType: "touch" });
+    appui(d);
+    d.cadre.emettre("pointerleave", { pointerType: "touch" });
+    d.win.avancer(GRACE_MS * 5);
+    expect(repli.etat().replie).toBe(false);
+    d.cadre.emettre("pointerleave", { pointerType: "mouse" });
+    d.win.avancer(GRACE_MS);
+    expect(repli.etat().replie, "la souris referme ce que le doigt a ouvert").toBe(true);
+    repli.detruire();
+  });
+
+  it("le doigt ne laisse aucun survol « colle » derriere lui", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+
+    d.cadre.emettre("pointerenter", { pointerType: "touch" });
+    expect(repli.etat().survol, "un doigt n'est pas un survol").toBe(false);
+    appui(d);
+    d.cadre.emettre("pointerleave", { pointerType: "touch" });
+    expect(repli.etat().survol, "aucun survol fantome apres la levee").toBe(false);
+    repli.detruire();
+  });
+
+  it("seule la HAUTEUR bouge : ni largeur posee, ni classe nouvelle, ni ligne deplacee", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+
+    d.cadre.emettre("pointerenter", { pointerType: "touch" });
+    appui(d);
+    d.win.avancer(GRACE_MS);
+    expect(d.cadre.style.width, "le deploiement ne pose aucune largeur").toBeUndefined();
+    expect(d.panneau.style.width, "le panneau garde sa largeur").toBeUndefined();
+    // La classe d'etat reste la seule posee par le module (aucune classe nouvelle
+    // n'a ete inventee pour le doigt).
+    expect(moduleJs).not.toContain("pj-tactile");
+    // Le doigt n'ouvre pas un second chemin : `pointerdown` en capture, un seul.
+    expect(moduleJs).toContain('doc.addEventListener("pointerdown", surAppui, true);');
     repli.detruire();
   });
 });

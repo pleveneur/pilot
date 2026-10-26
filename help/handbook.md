@@ -38,8 +38,9 @@ externe.
   le retiennent : se déplacer **à l'intérieur** du panneau déplié ne le referme
   jamais, et son menu « Autres écrans » non plus (on peut y circuler au clavier,
   `Échap` le referme tout seul). **Au doigt**, le premier appui déploie le panneau
-  sans rien déclencher d'autre — un second appui agit ; toucher ailleurs le
-  replie aussitôt. Si votre système demande de **réduire les animations** (et que
+  sans rien déclencher d'autre — un second appui agit, et le doigt levé ne le
+  referme pas (sinon ce second appui n'aurait pas le temps d'arriver) ; toucher
+  ailleurs le replie aussitôt. Si votre système demande de **réduire les animations** (et que
   le réglage « Animer l'ouverture des modales » est désactivé), le panneau
   s'ouvre et se referme **sans animation**, en gardant les mêmes temps de
   décision. Rien n'est donc perdu quand il est replié : la ligne qui reste nomme la
