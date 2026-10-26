@@ -1,34 +1,33 @@
-// barre-fenetre-assistant-seul.test.js — Verrou de l'angle haut droit du mode
+// barre-fenetre-assistant-seul.test.js — Verrou du coin haut droit du mode
 // « Assistant seul ».
 //
-// LE DEFAUT (signale par le proprietaire) : en mode « Assistant seul », les DEUX
-// boutons de droite de la barre du haut (le point des agents et le ⚙ des
-// options) etaient places SOUS les trois boutons systeme de la fenetre :
-// partiellement recouverts, donc difficiles a cliquer. En mode normal, le meme
-// coin ne posait pas de probleme.
+// HISTORIQUE (deux defauts successifs, mesures a l'appui) :
+//   1. Le ⚙ et le point des agents etaient places SOUS les trois boutons
+//      systeme de la fenetre : partiellement recouverts, donc difficiles a
+//      cliquer. Cause : l'overlay du mode est `position: fixed; inset: 0` et
+//      recouvre la rangee d'onglets, alors que les trois boutons systeme
+//      gardent `z-index: 100001` et restent peints AU-DESSUS ; la barre du
+//      mode posait ses deux boutons dans la MEME ligne.
+//   2. Premiere correction : 150 px de marge a DROITE (largeur du groupe +
+//      air) pour ne plus les recouvrir. Effet de bord signale par le
+//      proprietaire : les deux boutons ne sont plus dans le coin, ils
+//      flottent au milieu-droite.
 //
-// LA CAUSE (structurelle, sans ecran) : les deux modes ne partagent PAS la meme
-// zone.
-//   - Mode normal : les trois boutons systeme (#window-controls) sont le
-//     DERNIER enfant de la rangee d'onglets (#tab-row) — leur place est
-//     RESERVEE dans le flux, rien ne passe dessous.
-//   - Mode « Assistant seul » : l'overlay `.superagent-immersive` est
-//     `position: fixed; inset: 0` et recouvre cette rangee ; mais les trois
-//     boutons gardent `z-index: 100001` et restent donc peints AU-DESSUS, a la
-//     MEME place (angle haut droit de la fenetre). La barre du mode
-//     (`.sa-immersive-top`, qui demarre tout en haut depuis la suppression de la
-//     bande de 32 px) posait ses propres boutons a droite SANS leur reserver
-//     cette place : le ⚙ et le point se retrouvaient dans la bande des trois
-//     boutons systeme.
+// ETAT VERROUILLE ICI (ce que le proprietaire demande) :
+//   - la barre du mode vit sur la SECONDE ligne, SOUS la rangee des boutons
+//     systeme (decalage = hauteur mesuree de cette rangee) ;
+//   - ses deux boutons de droite prennent l'air droit EXACT du groupe
+//     systeme, donc le MEME bord droit que lui : alignes sur le bord de la
+//     fenetre ;
+//   - aucune reservation laterale (le ⚙ n'est plus repousse vers le milieu) ;
+//   - aucun empilement : une marge haute, un remplissage droit, pas de
+//     `position` / `z-index` / `top` ajoutes sur la barre.
 //
-// LA CORRECTION : la barre du mode reserve a DROITE la largeur du groupe
-// (`--window-controls-width`) plus l'air des jetons (`--space-2`). Rien ne
-// bouge en mode normal, ni la hauteur de la barre, ni la colonne de gauche.
-//
-// CE FICHIER N'EST PAS UNE VALEUR FIGEE : la largeur attendue est RECALCULEE
-// depuis le disque (largeur d'une touche dans `#window-controls > button`,
-// remplissage droit du groupe, nombre de boutons dans index.html). Si l'une de
-// ces valeurs change sans que le jeton suive, le test echoue.
+// CE FICHIER NE FIGE AUCUN NOMBRE : la largeur du groupe, son air droit et la
+// hauteur de la rangee sont RECALCULES depuis le disque (`index.html`,
+// `#window-controls`, `#tab-row`). Une valeur qui bouge sans que le CSS
+// suive fait echouer le test. Si quelqu'un remet les deux boutons a cheval
+// sur la rangee systeme, les deux derniers tests rougissent.
 //
 // Aucun navigateur n'est requis (lecture des fichiers, fins de ligne
 // normalisees, cf. quality-gate 3.4).
@@ -96,6 +95,11 @@ function cotesEnCadre(liste) {
 
 // ── Mesures prises SUR LE DISQUE ───────────────────────────────────────────
 
+// 0. `box-sizing: border-box` est GLOBAL : il est indispensable au calcul
+//    ci-dessous (la bordure basse de la rangee est COMPRISE dans sa hauteur).
+expect(css, "box-sizing: border-box global attendu (base du calcul de hauteur)")
+  .toMatch(/\*,\s*\*::before,\s*\*::after\s*\{\s*box-sizing:\s*border-box/);
+
 // 1. Les trois boutons systeme : largeur d'une touche et nombre de touches.
 const groupe = bloc("#window-controls");
 const touche = bloc("#window-controls > button");
@@ -106,59 +110,127 @@ const nombreTouches = (blocHtml.match(/<button /g) || []).length;
 expect(nombreTouches, "les trois boutons systeme doivent etre dans index.html").toBeGreaterThanOrEqual(3);
 
 // 2. Remplissage du groupe : « 4px 4px 4px 0 » -> l'air de DROITE est le 2e.
-const remplissage = cotesEnCadre(cotes(propriete(groupe, "padding")));
-const airDroiteGroupe = enPixels(remplissage[1], "air droit du groupe systeme");
+const remplissageGroupe = cotesEnCadre(cotes(propriete(groupe, "padding")));
+const airDroiteGroupe = enPixels(remplissageGroupe[1], "air droit du groupe systeme");
 
-// 3. Empreinte reelle du groupe dans l'angle haut droit.
+// 3. Empreinte laterale reelle du groupe.
 const empreinte = nombreTouches * largeurTouche + airDroiteGroupe;
 
-// 4. Le jeton nomme, et l'air des jetons.
-const racine = bloc(":root");
-const jeton = enPixels(propriete(racine, "--window-controls-width"), "--window-controls-width");
-const airJetons = enPixels(propriete(racine, "--space-2"), "--space-2");
+// 4. La RANGEE qui porte le groupe, donc la hauteur de la premiere ligne.
+const rangee = bloc("#tab-row");
+const hauteurRangee = enPixels(propriete(rangee, "min-height"), "hauteur de la rangee d'onglets");
+const filetRangee = enPixels(
+  cotes(propriete(rangee, "border-bottom"))[0],
+  "filet bas de la rangee d'onglets",
+);
+// border-box : le filet est pris DANS la hauteur declaree. Le bas de la
+// premiere ligne (donc le bas des boutons systeme) est a `hauteurRangee`.
+const basBandeSystemes = hauteurRangee;
 
-// 5. La barre du mode « Assistant seul ».
+// 5. Les jetons nommes, et l'air des jetons.
+const racine = bloc(":root");
+const jetons = {};
+for (const nom of [
+  "--window-controls-width",
+  "--window-controls-air",
+  "--window-controls-height",
+  "--space-2",
+]) {
+  jetons[nom] = enPixels(propriete(racine, nom), nom);
+}
+
+/** Resout une valeur CSS simple en pixels : `Npx`, `var(--jeton)`, ou
+ *  `calc(<terme> + <terme>)` de tels termes. Sert a comparer les declarations
+ *  ENTRE ELLES (aucun nombre recopie dans ce fichier). */
+function resoudre(valeur, quoi) {
+  const v = String(valeur).trim();
+  const calc = v.match(/^calc\(([\s\S]+)\)$/);
+  if (calc) {
+    const termes = cotes(calc[1].replace(/\+/g, " "));
+    return termes.reduce((somme, terme) => somme + resoudre(terme, quoi), 0);
+  }
+  const variable = v.match(/^var\((--[a-z0-9-]+)\)$/);
+  if (variable) {
+    expect(jetons[variable[1]], `jeton ${variable[1]} attendu dans :root pour ${quoi}`).toBeTypeOf("number");
+    return jetons[variable[1]];
+  }
+  return enPixels(v, quoi);
+}
+
+// 6. La barre du mode « Assistant seul ».
 const barre = bloc(".sa-immersive-top");
 const remplissageBarre = cotesEnCadre(cotes(propriete(barre, "padding")));
+const decalageBarre = resoudre(propriete(barre, "margin-top"), "marge haute de la barre");
+const airDroiteBarre = resoudre(remplissageBarre[1], "air droit de la barre");
+const airGaucheBarre = resoudre(remplissageBarre[3], "air gauche de la barre");
+const hauteurBarre = enPixels(propriete(barre, "height"), "hauteur de la barre du mode");
 
-describe("mode « Assistant seul » — l'angle haut droit reserve la place des boutons systeme", () => {
+// 7. L'overlay du mode.
+const overlay = bloc(".superagent-immersive");
+
+describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee systeme et alignes a DROITE", () => {
   it("le jeton de largeur vaut EXACTEMENT l'empreinte mesuree des trois boutons", () => {
-    // Aucune valeur figee : si une touche change de largeur (46 px) ou si l'air
-    // du groupe change (4 px), ou si un quatrieme bouton apparait, le jeton doit
-    // suivre — sinon la reservation de la barre devient fausse en silence.
-    expect(jeton, `empreinte mesuree = ${nombreTouches} x ${largeurTouche} + ${airDroiteGroupe}`).toBe(empreinte);
+    // Mesure de reference du groupe (plus utilisee pour reserver une place,
+    // mais toujours verifiee : c'est elle qui dit ou est le bord droit).
+    expect(
+      jetons["--window-controls-width"],
+      `empreinte mesuree = ${nombreTouches} x ${largeurTouche} + ${airDroiteGroupe}`,
+    ).toBe(empreinte);
   });
 
-  it("la barre du mode reserve a DROITE cette largeur PLUS de l'air", () => {
-    // Le 2e cote du remplissage est celui de DROITE. Il doit citer le jeton
-    // (pas une valeur recopiee, qui divergerait) ...
-    expect(remplissageBarre[1]).toContain("var(--window-controls-width)");
-    // ... et la place reservee doit depasser l'empreinte du groupe : les deux
-    // boutons de la barre restent ainsi entierement a GAUCHE des trois boutons
-    // systeme, sans les toucher (c'est l'« air » demande par le proprietaire).
-    const reserve = jeton + airJetons;
-    expect(reserve, `reserve ${reserve} px pour une empreinte de ${empreinte} px`).toBeGreaterThan(empreinte);
+  it("le jeton de hauteur vaut la hauteur mesuree de la rangee systeme", () => {
+    // Aucune valeur figee : si la rangee change de hauteur (36 px), le jeton
+    // doit suivre, sinon le decalage devient faux en silence.
+    expect(
+      jetons["--window-controls-height"],
+      `rangee = ${hauteurRangee} px dont ${filetRangee} px de filet bas`,
+    ).toBe(basBandeSystemes);
   });
 
-  it("la place est reservee a DROITE seulement : l'air de gauche de la barre ne change pas", () => {
-    // La correction ne doit pas recentrer ni decaler la barre : le cote GAUCHE
-    // garde son air, c'est uniquement le cote droit qui s'elargit.
-    const airGaucheBarre = enPixels(remplissageBarre[3], "air gauche de la barre");
-    expect(airGaucheBarre).toBeGreaterThan(0);
-    expect(airGaucheBarre).toBeLessThan(jeton + airJetons);
+  it("le jeton d'air droit vaut l'air droit mesure du groupe systeme", () => {
+    expect(jetons["--window-controls-air"]).toBe(airDroiteGroupe);
   });
 
-  it("la barre demarre toujours TOUT EN HAUT (aucun decalage vertical ajoute)", () => {
-    // La correction est HORIZONTALE : la hauteur de la bande validee ne doit pas
-    // bouger. L'overlay reste `inset: 0` et aucune regle ne lui pose de `top`
-    // (c'est justement pourquoi les trois boutons systeme flottent sur cette
-    // barre, et donc pourquoi la reservation laterale est necessaire).
-    const overlay = bloc(".superagent-immersive");
+  it("la barre descend de la hauteur EXACTE de la rangee systeme (une marge, pas un empilement)", () => {
+    // C'est la marge haute qui place la barre sur la SECONDE ligne.
+    expect(propriete(barre, "margin-top")).toContain("var(--window-controls-height)");
+    expect(decalageBarre, `la barre demarre a ${decalageBarre} px du haut`).toBe(basBandeSystemes);
+    // ... et qui ne pousse pas le contenu inutilement plus bas.
+    expect(decalageBarre).toBeLessThanOrEqual(basBandeSystemes + jetons["--space-2"]);
+  });
+
+  it("les deux boutons de droite prennent l'air droit EXACT des boutons systeme", () => {
+    // Meme bord droit que le dernier bouton systeme : alignes sur le bord de
+    // la fenetre, plus au milieu. Aucune place reservee a la largeur du
+    // groupe (c'etait le defaut « boutons flottants »).
+    expect(propriete(barre, "padding")).toContain("var(--window-controls-air)");
+    expect(propriete(barre, "padding")).not.toContain("--window-controls-width");
+    expect(airDroiteBarre).toBe(airDroiteGroupe);
+    // Confortable a cliquer : jamais colle au bord, jamais repousse dedans.
+    expect(airDroiteBarre).toBeGreaterThan(0);
+    expect(airDroiteBarre).toBeLessThan(largeurTouche);
+  });
+
+  it("aucune couche ajoutee sur la barre (ni position, ni z-index, ni top)", () => {
+    // La cause des deux defauts precedents etait un jeu de couches. Le
+    // placement se fait par UNE marge et UN remplissage, rien d'autre.
+    const sansCommentaires = barre.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(sansCommentaires).not.toMatch(/(?:^|[;{])\s*position\s*:/);
+    expect(sansCommentaires).not.toMatch(/(?:^|[;{])\s*z-index\s*:/);
+    expect(sansCommentaires).not.toMatch(/(?:^|[;{])\s*top\s*:/);
+  });
+
+  it("l'overlay reste plein ecran et la hauteur de la barre ne bouge pas", () => {
     expect(propriete(overlay, "inset")).toBe("0");
-    expect(overlay).not.toMatch(/\n\s*top:/);
+    expect(overlay).not.toMatch(/(?:^|[;{])\s*top\s*:/);
+    expect(hauteurBarre, "la hauteur de la barre du mode ne doit pas exploser").toBe(58);
   });
 
-  it("les deux boutons vises sont les DERNIERS de la barre (c'est a eux que profite la reservation)", () => {
+  it("la correction ne recentre pas la barre : l'air de GAUCHE ne change pas", () => {
+    expect(airGaucheBarre).toBe(18);
+  });
+
+  it("les deux boutons vises sont les DERNIERS de la barre", () => {
     // Ordre de la maquette ASS_Only_V4 : retour, titre, point des agents, ⚙.
     const js = lire("src/js/super-agent.js");
     const barreJs = sliceSource(js, '<div class="sa-immersive-top">', "\n      </div>", 200);
@@ -166,5 +238,17 @@ describe("mode « Assistant seul » — l'angle haut droit reserve la place des 
       .map((classe) => barreJs.indexOf(classe));
     expect(ordre.every((i) => i >= 0), "les quatre elements de la barre doivent etre presents").toBe(true);
     expect([...ordre].sort((a, b) => a - b)).toEqual(ordre);
+  });
+
+  it("le coin des deux boutons est SOUS et a DROITE de celui des boutons systeme", () => {
+    // Le test qui doit rougir si quelqu'un remet les deux boutons a cheval :
+    //   - verticalement, la barre (donc ses boutons) demarre au bas de la
+    //     rangee systeme ou en dessous ;
+    //   - horizontalement, elle s'arrete au meme bord droit.
+    expect(decalageBarre).toBeGreaterThanOrEqual(basBandeSystemes);
+    expect(airDroiteBarre).toBe(airDroiteGroupe);
+    // Et les deux zones ne peuvent pas se recouvrir : la premiere ligne
+    // s'arrete a `basBandeSystemes`, la barre commence la ou elle s'arrete.
+    expect(basBandeSystemes - decalageBarre).toBeLessThanOrEqual(0);
   });
 });

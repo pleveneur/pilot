@@ -265,18 +265,27 @@ body.theme-light.theme-tokyo-day #window-controls > button:active {
      prennent la hauteur de la rangee d'onglets, qui porte deja sa propre valeur
      de hauteur (36 px) : aucune hauteur nouvelle n'est donc inventee ici. */
 
-  /* Largeur REELLEMENT occupee par le groupe des trois boutons de fenetre
-     (#window-controls), a droite de la rangee d'onglets : 3 touches de 46 px
-     + les 4 px d'air a droite du groupe = 142 px (mesure, pas une invention :
-     les deux valeurs sont lues dans le bloc #window-controls). Elle est NOMMEE
-     ici parce qu'un SECOND endroit la lit : la barre du mode « Assistant
-     seul » (.sa-immersive-top) doit lui RESERVER cette largeur. Dans ce mode,
-     l'overlay recouvre la rangee d'onglets alors que les trois boutons
-     restent peints au-dessus (z-index 100001) : sans reservation, les deux
-     boutons de droite de cette barre passaient DESSOUS.
-     barre-fenetre-assistant-seul.test.js RECALCULE cette largeur depuis
-     #window-controls et echoue si les deux divergent (aucune valeur figee). */
+  /* MESURES du groupe des trois boutons de fenetre (#window-controls), NOMMEES
+     ici parce qu'un SECOND endroit les lit : la barre du mode « Assistant
+     seul » (.sa-immersive-top). Dans ce mode, l'overlay recouvre la rangee
+     d'onglets alors que les trois boutons restent peints AU-DESSUS
+     (z-index 100001) : cette barre doit donc se poser SOUS eux et s'aligner
+     sur leur bord droit, sans jamais les recouvrir.
+     Aucune de ces valeurs n'est figee a l'aveugle :
+     barre-fenetre-assistant-seul.test.js les RECALCULE depuis le disque
+     (#tab-row, #window-controls, index.html) et echoue si elles divergent. */
+  /* Largeur du groupe : 3 touches de 46 px + les 4 px d'air a droite. Elle
+     n'est plus utilisee pour reserver une place laterale (la barre du mode ne
+     partage plus la ligne des boutons systeme) : elle reste la mesure de
+     reference du groupe, verifiee par le test. */
   --window-controls-width: 142px;
+  /* Air a DROITE du groupe : la barre du mode prend le MEME air, donc le meme
+     bord droit que les trois boutons systeme au-dessus d'elle. */
+  --window-controls-air: 4px;
+  /* Hauteur de la RANGEE des boutons systeme (leur ligne entiere, filet bas
+     compris : `box-sizing: border-box` est global) : c'est le decalage
+     vertical de la barre du mode, qui la pose sur la SECONDE ligne. */
+  --window-controls-height: 36px;
 
   /* Typographie */
   --font-ui: "Inter", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -10883,11 +10892,10 @@ body.pilot-loading *::after {
       les trois boutons restent visibles et actifs AU-DESSUS de l'overlay
       (99990). Sans cela : impossible de fermer Pilot sans sortir du mode.
       Aucune regle de ce mode ne touche a ce z-index.
-   2. PLUS AUCUN DECALAGE : la bande de fenetre de 32 px a disparu, donc
-      l'overlay demarre TOUT EN HAUT (`inset: 0`, deja pose ci-dessus) et sa
-      propre barre (`.sa-immersive-top`, 58 px, avec son bouton retour)
-      occupe les premiers pixels. La regle `top: var(--window-bar-height)`
-      qui reservait la bande a ete retiree avec elle. */
+   2. L'overlay demarre TOUT EN HAUT (`inset: 0`, deja pose ci-dessus) ; le
+      decalage vit sur la BARRE du mode, pas sur l'overlay : elle se place sur
+      la SECONDE ligne, sous la rangee des boutons systeme (marge haute de
+      `--window-controls-height`). Une seule marge, aucune couche ajoutee. */
 /* En mode assistant seul, les modales (Paramètres ⚙ notamment) et les toasts
    s'affichent AU-DESSUS de l'overlay. En mode normal, z-index inchangés
    (100 / 9999) : aucune régression hors de ce mode. */
@@ -10902,17 +10910,22 @@ body.pilot-loading *::after {
   align-items: center;
   gap: 12px;
   height: 58px;
-  /* Reservation de l'angle haut droit : voir --window-controls-width. Dans ce
-     mode, l'overlay est `position: fixed; inset: 0` et recouvre la rangee
-     d'onglets ; les trois boutons systeme, eux, restent AU-DESSUS (z-index
-     100001) et occupent donc l'angle haut droit de la MEME fenetre. Le ⚙ et
-     le point des agents sont les deux derniers enfants de cette barre : sans
-     cette place reservee a DROITE (largeur du groupe + 8 px d'air), ils se
-     glissaient sous les trois boutons et devenaient difficiles a cliquer.
+  /* PLACEMENT (decision du proprietaire) : la barre vit sur la SECONDE ligne,
+     SOUS la rangee des trois boutons systeme. Dans ce mode, l'overlay est
+     `position: fixed; inset: 0` et recouvre la rangee d'onglets ; les trois
+     boutons systeme restent peints AU-DESSUS (z-index 100001) et occupent la
+     premiere ligne de la fenetre. Le ⚙ et le point des agents sont les deux
+     derniers enfants de cette barre : sous cette marge haute, ils sont donc
+     entierement SOUS les trois boutons, sans aucune place reservee.
+     A DROITE, ils reprennent l'air EXACT du groupe systeme
+     (`--window-controls-air`), donc le meme bord droit que lui : alignes sur
+     le bord de la fenetre, plus au milieu. Une position, une marge : aucun
+     empilement, aucun z-index nouveau.
      La HAUTEUR de la barre (58 px) et l'air de GAUCHE (18 px) ne changent pas.
      Le mode normal n'est pas concerne : sa rangee d'onglets porte le groupe
      dans son PROPRE conteneur (aucun chevauchement possible). */
-  padding: 0 calc(var(--window-controls-width) + var(--space-2)) 0 18px;
+  margin-top: var(--window-controls-height);
+  padding: 0 var(--window-controls-air) 0 18px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-1);
 }
