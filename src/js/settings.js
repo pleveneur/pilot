@@ -83,8 +83,9 @@ let savedSubtheme = "default";
 // Les Options ne sont plus une fenetre : leur noeud `#settings-modal` devient
 // le contenu d'un ONGLET (deplace, jamais recopie). L'ouverture n'a donc qu'UN
 // chemin : `settingsApi`, renseigne une seule fois a la fin de `initSettings()`.
-// Le bouton du haut de colonne, la palette, le badge distant et les evenements
-// externes passent tous par lui (aucune duplication).
+// La ligne « Options » du bloc du bas (ex-bouton du haut de colonne, Lot A),
+// la palette, le badge distant et les evenements externes passent tous par lui
+// (aucune duplication).
 //   open(detail)     : lit la configuration, remplit les champs, active
 //                      l'onglet interne demande, demarre les sondes Laya ;
 //   reset()          : remet l'etat a zero (exactement « Annuler ») ;
@@ -2004,7 +2005,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     applyTheme(savedTheme, savedSubtheme);
   }
 
-  // Le bouton du haut de colonne ouvre l'ONGLET des Options (plus de fenetre).
+  // La ligne « Options » du bloc du bas (ex-bouton du haut de colonne, Lot A de
+  // `RAPPORT-design-colonne-entrees.md` § 4 : meme identifiant, meme place dans
+  // le DOM du panneau) ouvre l'ONGLET des Options (plus de fenetre).
   // La palette, le badge distant et `pilot-open-settings` passent par la meme
   // porte (`openSettingsTab`), qui appelle `openSettingsContent` ci-dessus.
   btnSettings.addEventListener("click", () => {
@@ -2628,8 +2631,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
 
   // Ouvrir depuis l'extérieur (ex: gate E4 dans tabs.js → bouton « Ouvrir les
   // paramètres » quand l'agent est indisponible, ou l'onglet 🧭 Assistant avec
-  // { tab: "superagent" }). LOT B : meme porte que le bouton du haut de colonne
-  // — l'onglet des Options, sur la categorie demandee.
+  // { tab: "superagent" }). LOT B : meme porte que la ligne « Options » du bloc
+  // du bas (ex-bouton du haut de colonne, Lot A) — l'onglet des Options, sur la
+  // categorie demandee.
   window.addEventListener("pilot-open-settings", (e) => {
     openSettingsTab(e && e.detail);
   });
@@ -3254,7 +3258,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
  */
 function openSettingsTab(detail = null) {
   // Mode « Assistant seul » (overlay plein écran) : il est quitté AVANT
-  // d'ouvrir, quel que soit le chemin (⚙ du haut de colonne, palette, ⚙ de
+  // d'ouvrir, quel que soit le chemin (⚙ du bloc du bas, palette, ⚙ de
   // l'assistant, evenement externe). L'overlay vit au-dessus de tout (z-index
   // eleve) : sans cette sortie, l'onglet des Options s'ouvrirait DERRIERE lui.
   if (document.body.classList.contains("superagent-immersive-active")) {

@@ -1680,8 +1680,13 @@ class Sidebar {
 
   // LOT 3 de la presentation : la methode `_initProjectTabs` (bascule des trois
   // sous-onglets Projet / Vues / Assistant) est supprimee avec les sous-onglets.
-  // Les six lignes du bloc du bas sont toujours visibles et le menu
-  // « Autres ecrans » porte le reste (cf. `_initProjectFooterMenu` ci-dessus).
+  // Les lignes du bloc du bas sont toujours visibles et le menu « Autres ecrans »
+  // porte le reste (cf. `_initProjectFooterMenu` ci-dessus). Le Lot A
+  // (`RAPPORT-design-colonne-entrees.md` § 4) y a ajoute les DEUX portes
+  // globales « Brouillon » et « Options », qui ne portent ni `project-only` ni
+  // `hidden` : elles restent donc affichees sans projet ouvert, alors que les
+  // lignes de projet, elles, sont pilotees par `_showProjectButtons` et
+  // `closeProject` (`querySelectorAll(".project-only")`) sans changement.
   // Le cablage des ecrans, lui, n'a pas change d'une ligne.
 
   /** Initialise le drag du séparateur sidebar avec persistance */

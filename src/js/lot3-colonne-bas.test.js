@@ -3,21 +3,33 @@
  *
  * Document qui fait foi : `docs/proposition-presentation-ui.md` § 3.3 et lot 3
  * du § 6 (etape 5 du doc de navigation), etendu par les trois decisions du
- * proprietaire du 2026-10-25 (Q1, Q2, Q3).
+ * proprietaire du 2026-10-25 (Q1, Q2, Q3) PUIS par le Lot A de
+ * `RAPPORT-design-colonne-entrees.md` § 4 :
  *   - les TROIS sous-onglets « Projet / Vues / Assistant » disparaissent ;
- *   - les QUATORZE lignes deviennent SIX lignes de 32 px, toujours visibles,
- *     dans l'ordre fige : Lancer l'agent · Assistant · Dossier du projet ·
- *     Terminal · Commandes du projet · Autres écrans ;
- *   - « Lancer l'agent » est la ligne principale (13 px / 600, icone accent) et
- *     reste la PREMIERE (Q1) ;
+ *   - les QUATORZE lignes deviennent des lignes de 32 px, toujours visibles,
+ *     dans l'ordre fige : Brouillon · Options · Lancer l'agent · Assistant ·
+ *     Dossier du projet · Terminal · Commandes du projet · Autres écrans ;
+ *   - « Brouillon » (`btn-scratchpad`) et « Options » (`btn-settings`) sont les
+ *     DEUX PORTES GLOBALES qui etaient en HAUT de la colonne : memes libelles,
+ *     memes infobulles, memes icones, memes identifiants, meme ordre. Elles ne
+ *     portent NI `project-only` NI `hidden` : le cadre reste visible SANS
+ *     projet ouvert et n'affiche alors que ces deux lignes (reponse A de la
+ *     question 3 du rapport) ;
+ *   - « Lancer l'agent » reste la ligne mise en evidence (13 px / 600, icone
+ *     accent) ; sa sortie vers le menu « Autres écrans » n'est PAS faite ici
+ *     (lot C du rapport) ;
  *   - « Dossier du projet » est le bouton `btn-explorer` remonte du menu (Q2),
  *     meme identifiant, meme effet (dossier projet dans l'explorateur) ;
  *   - « Commandes du projet » (`btn-commands`) remonte aussi du menu ;
  *   - « Autres écrans » ouvre un menu VERS LE HAUT (le bloc est en bas de
  *     colonne), groupes nommes, NEUF entrees, fermeture a Echap / clic
- *     exterieur / selection ;
- *   - le bloc passe d'environ 272 px a environ 240 px et tient dans 500 px de
- *     hauteur d'ecran (plafond 50 % = 250 px, Q3).
+ *     exterieur / selection.
+ *
+ * Hauteur : 2 + 8 x 2 + 8 x 32 + 7 x 6 = 316 px avec les HUIT lignes du Lot A.
+ * DETTE CONNUE, mesuree et assumee : le plafond `max-height: 50 %` (250 px a la
+ * fenetre minimale de 500 px) n'est PAS ajuste par le Lot A (mission separee
+ * pour 60 %). Ce fichier verrouille donc l'etat REEL et rougira lorsque le
+ * plafond changera, pour forcer la mise a jour des chiffres.
  *
  * Ce qui ne doit PAS changer : les QUATORZE identifiants et leurs fonctions
  * (`btn-explorer`, `btn-terminal`, `btn-terminal-cmd`, `btn-commands`,
@@ -27,17 +39,20 @@
  *
  * Ce fichier echoue si :
  *   (a) une rangee de sous-onglets revient, ou `role="tablist"` avec elle ;
- *   (b) une des quatorze entrees perd son identifiant ou son cablage ;
- *   (c) le bloc ne fait plus SIX lignes de 32 px, ou depasse 500 px de haut ;
+ *   (b) une des quatorze entrees perd son identifiant ou son cablage, ou une
+ *       des deux portes globales quitte le bloc ;
+ *   (c) le bloc ne fait plus HUIT lignes de 32 px, ou l'ordre fige change, ou
+ *       une ligne du bloc perd sa hauteur de 32 px / son libelle de 12 px ;
  *   (d) le menu s'ouvre vers le bas (il sortirait de la fenetre) ou ne se ferme
  *       plus a Echap ;
  *   (e) le cadre accent du bloc disparait, ou une couleur en dur y apparait
  *       (thème clair casse).
  *
  * Deux regressions precises sont surveillees en plus : remettre QUATRE lignes
- * dans le panneau (test « le panneau ne contient que SIX lignes »), et renvoyer
+ * dans le panneau (test « le panneau ne contient que HUIT lignes »), renvoyer
  * « Commandes du projet » DANS le menu (tests « les neuf entrees restees » et
- * « Commandes du projet n'est pas dans le menu »).
+ * « Commandes du projet n'est pas dans le menu »), et remettre « Brouillon » ou
+ * « Options » en haut de la colonne (`lot2-colonne-haut.test.js`).
  *
  * Aucun navigateur n'est requis : lecture des fichiers (fins de ligne
  * normalisees, cf. quality-gate 3.4).
@@ -104,8 +119,12 @@ const ENTREES = [
   ["btn-interproject", interprojectJs],
 ];
 
-/** Les SIX lignes, dans l'ordre impose par le document et les decisions Q1/Q2. */
+/** Les HUIT lignes du bloc, dans l'ordre impose par le document, les decisions
+ *  Q1/Q2 et le Lot A (les deux portes globales passent en tete, dans l'ordre ou
+ *  elles etaient cote a cote en haut : Brouillon puis Options). */
 const LIGNES = [
+  "btn-scratchpad",
+  "btn-settings",
   "btn-terminal-cmd",
   "btn-superagent",
   "btn-explorer",
@@ -196,8 +215,8 @@ describe("LOT 3 (b) — les quatorze identifiants et leurs fonctions sont conser
   });
 });
 
-describe("LOT 3 (c) — six lignes de 32 px, environ 240 px de haut", () => {
-  it("le panneau ne contient que SIX lignes, dans l'ordre fige", () => {
+describe("LOT 3 (c) — huit lignes de 32 px, 316 px de haut (dette de plafond connue)", () => {
+  it("le panneau ne contient que HUIT lignes, dans l'ordre fige", () => {
     const panneau = html.match(/\n      <div class="pj-panel">\n([\s\S]*?)\n      <\/div>/);
     expect(panneau, "conteneur .pj-panel introuvable").not.toBeNull();
     const lignes = panneau[1]
@@ -205,8 +224,8 @@ describe("LOT 3 (c) — six lignes de 32 px, environ 240 px de haut", () => {
       .filter((l) => l.startsWith("        <button") || l.includes('id="pj-more-wrap"'));
     // Si QUATRE lignes reviennent (retour a l'etat du lot 3 d'origine), la
     // longueur comme l'ordre ci-dessous echouent.
-    expect(lignes).toHaveLength(6);
-    // La 6e ligne est le conteneur du menu : son declencheur est la ligne.
+    expect(lignes).toHaveLength(8);
+    // La 8e ligne est le conteneur du menu : son declencheur est la ligne.
     const ordre = lignes.map((l) =>
       l.includes('id="pj-more-wrap"')
         ? "btn-more-screens"
@@ -215,7 +234,33 @@ describe("LOT 3 (c) — six lignes de 32 px, environ 240 px de haut", () => {
     expect(ordre).toEqual(LIGNES);
   });
 
+  it("les deux portes globales sont DANS le bloc, sans condition de projet", () => {
+    // Lot A : elles ne portent ni `project-only` (sinon elles disparaitraient
+    // sans projet ouvert) ni `hidden` ni la mise en evidence `pj-row-main`.
+    for (const id of ["btn-scratchpad", "btn-settings"]) {
+      const m = piedNu.match(new RegExp(`<button id="${id}"[^>]*>`));
+      expect(m, `ligne ${id} introuvable dans le bloc du bas`).not.toBeNull();
+      expect(m[0], `${id} ne doit pas porter project-only`).not.toContain(
+        "project-only",
+      );
+      expect(m[0], `${id} ne doit pas porter hidden`).not.toContain("hidden");
+      expect(m[0], `${id} ne doit pas etre mis en evidence`).not.toContain(
+        "pj-row-main",
+      );
+    }
+  });
+
+  it("le cadre du bloc reste visible sans projet ouvert (reponse A de la Q3)", () => {
+    const ouverture = html.match(/<div id="project-footer"[^>]*>/);
+    expect(ouverture, "div #project-footer introuvable").not.toBeNull();
+    expect(ouverture[0], "le cadre redevient conditionnel a un projet ouvert")
+      .not.toContain("project-only");
+    expect(ouverture[0]).not.toContain("hidden");
+  });
+
   it("les libelles sont ecrits en clair, jamais raccourcis", () => {
+    expect(pied).toContain(">Brouillon</span>");
+    expect(pied).toContain(">Options</span>");
     expect(pied).toContain(">Lancer l'agent</span>");
     expect(pied).toContain(">Assistant</span>");
     expect(pied).toContain(">Dossier du projet</span>");
@@ -226,26 +271,28 @@ describe("LOT 3 (c) — six lignes de 32 px, environ 240 px de haut", () => {
     expect(pied).not.toContain(">Ouvrir le dossier</span>");
   });
 
-  it("la hauteur calculee du bloc est bien 240 px (et tient dans 500 px)", () => {
+  it("la hauteur calculee du bloc est bien 316 px (plafond pas encore ajuste)", () => {
     const piedCss = declarations(bloc(css, "#project-footer"));
     const panneauCss = declarations(bloc(css, ".pj-panel"));
     const ligne = declarations(bloc(css, ".pj-panel button"));
     // padding vertical du cadre
     const pad = Number((piedCss.match(/padding: (\d+)px 0/) || [])[1]);
     expect(pad, "padding vertical du cadre").toBe(8);
-    // 6 lignes de 32 px
+    // 8 lignes de 32 px
     expect(ligne).toContain("height: 32px");
     const gap = Number((panneauCss.match(/gap: (\d+)px/) || [])[1]);
     expect(gap, "espace entre les lignes").toBe(6);
-    const hauteur = 2 + pad * 2 + 6 * 32 + 5 * gap;
-    expect(hauteur).toBe(240);
-    // Plafond du bloc : 50 % de 500 px (hauteur minimale de fenetre) = 250 px
-    // > 240 px -> aucune ligne dessinee hors du cadre, aucun defilement.
+    const hauteur = 2 + pad * 2 + 8 * 32 + 7 * gap;
+    expect(hauteur).toBe(316);
+    // DETTE CONNUE : le Lot A n'ajuste pas le plafond (mission separee). Il vaut
+    // toujours 50 % = 250 px a la fenetre minimale (500 px), alors que le bloc
+    // fait 316 px. Rendre ce plafond a 60 % sans mettre a jour ce test le fait
+    // rougir : c'est voulu, la mise a jour est explicite dans la mission.
     expect(piedCss).toContain("max-height: 50%");
-    expect(hauteur).toBeLessThan(250);
+    expect(hauteur).toBeGreaterThan(250);
   });
 
-  it("« Lancer l'agent » est la ligne mise en evidence (13 px / 600, accent)", () => {
+  it("« Lancer l'agent » reste la ligne mise en evidence (13 px / 600, accent)", () => {
     expect(pied).toContain('id="btn-terminal-cmd" class="project-only hidden pj-row-main"');
     expect(pied).toContain(">Lancer l'agent</span>");
     const d = declarations(bloc(css, ".pj-panel button.pj-row-main"));
@@ -253,7 +300,7 @@ describe("LOT 3 (c) — six lignes de 32 px, environ 240 px de haut", () => {
     expect(d).toContain("font-weight: var(--fw-semibold)");
     const icone = declarations(bloc(css, ".pj-panel button.pj-row-main .icon"));
     expect(icone).toContain("color: var(--accent-text)");
-    // Les CINQ autres lignes restent a 12 px.
+    // Les SEPT autres lignes restent a 12 px (dont les deux portes du Lot A).
     expect(declarations(bloc(css, ".pj-panel button"))).toContain(
       "font-size: var(--font-sm)",
     );

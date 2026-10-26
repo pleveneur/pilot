@@ -761,20 +761,19 @@ body.theme-light.theme-tokyo-day {
 
 #global-actions {
   flex-shrink: 0;
-  margin: 8px 8px 0;
+  /* Lot A (`RAPPORT-design-colonne-entrees.md` § 1.e) : plus AUCUN bouton ici.
+     Les marges et le padding tombent a 0 pour que le conteneur n'occupe plus
+     aucune hauteur (44 px rendus a la liste des fichiers), sans reserve de
+     place vide. L'air du badge « Distant », qui reste le seul enfant, est porte
+     par le badge lui-meme (`.remote-badge`, plus bas). */
+  margin: 0;
   /* LOT 2 : plus AUCUN cadre ici (principe 1 : un seul cadre accentue par
-     colonne, celui du projet). L'alignement reste a 16 px du bord
-     (8 px de marge + 8 px de padding). */
+     colonne, celui du projet). */
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  /* 6 px entre les portes : la rangee tient sur UNE ligne dans une colonne de
-     280 px (248 px utiles). Il ne reste que DEUX portes nommees (« Brouillon »,
-     « Options ») depuis le retrait de « Aide » : aucune place n'est reservee a
-     la troisieme, la rangee se resserre. Si la place manque, elle se replie au
-     lieu de couper un libelle. */
   gap: 6px;
-  padding: 0 8px 8px;
+  padding: 0;
 }
 
 #project-footer {
@@ -785,28 +784,33 @@ body.theme-light.theme-tokyo-day {
   gap: 6px;
   /* LOT 3 : `visible` et non plus `auto` — le menu « Autres ecrans » s'ouvre
      VERS LE HAUT, donc AU-DESSUS du cadre : un conteneur qui rogne le
-     masquerait entierement. Le contenu du bloc ne deborde jamais (SIX lignes de
-     32 px, cf. `.pj-panel`), il n'y a donc rien a faire defiler. */
+     masquerait entierement. */
   overflow: visible;
-  /* Plafond porte de 40 % a 50 % (decision Q3 du proprietaire, 2026-10-25) :
-     le bloc fait desormais 240 px (voir le calcul dans `padding` ci-dessous) ;
-     a la hauteur minimale de fenetre (500 px), 50 % = 250 px > 240 px, donc
-     aucune ligne n'est jamais dessinee hors du cadre. */
+  /* Plafond herite de la decision Q3 du proprietaire (2026-10-25) : 50 %.
+     ATTENTION — il n'est PAS ajuste par le Lot A, qui est une mission separee
+     du passage a 60 % (`RAPPORT-design-colonne-entrees.md` § 1.e et § 3.5).
+     Le bloc compte desormais HUIT lignes (Brouillon et Options sont entrees) :
+     2 + 16 + 8 x 32 + 7 x 6 = 316 px, alors que 50 % de la fenetre minimale
+     (500 px) = 250 px. Le debordement est CONNU et assume jusqu'a la mission
+     du plafond : aucune ligne n'est supprimee, `#file-tree` garde son
+     `overflow-y: auto`.
+     (Etat vise apres les missions suivantes : 7 lignes, 278 px, plafond 60 %.) */
   max-height: 50%;
-  /* Un seul cadre pour les SIX lignes du bas : la bordure accent, le fond
+  /* Un seul cadre pour les HUIT lignes du bas : la bordure accent, le fond
      léger et le rayon restent ici (c'est le SEUL cadre accentue de l'interface). */
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border: 1px solid var(--accent);
   border-radius: var(--radius-lg);
   /* LOT 3 : plus de padding horizontal — les lignes occupent toute la largeur
      du cadre et leurs fonds de survol touchent la bordure (inset 30 -> 16 px).
-     8 px en haut et en bas : 2 + 16 + 6 x 32 + 5 x 6 = 240 px. */
+     8 px en haut et en bas : 2 + 16 + 8 x 32 + 7 x 6 = 316 px avec les HUIT
+     lignes du Lot A (cf. `max-height` ci-dessus pour la dette de plafond). */
   padding: 8px 0;
 }
 
 /* --- Barre de boutons projet : systeme a onglets (v8) ---
    LOT 3 de la presentation : la rangee de sous-onglets « Projet / Vues /
-   Assistant » N'EXISTE PLUS (les six lignes du bloc sont toujours visibles
+   Assistant » N'EXISTE PLUS (les huit lignes du bloc sont toujours visibles
    et le menu « Autres ecrans » porte le reste). Les regles `.pj-tabs` et
    `.pj-tab` sont conservees telles quelles : elles ne s'appliquent a aucun
    element, et la regle d'etats partagee du lot 1 les cite encore. */
@@ -860,9 +864,10 @@ body.theme-light.theme-tokyo-day {
 
 .pj-panel {
   /* LOT 3 de la presentation, etendu par les trois decisions du proprietaire
-     (2026-10-25) : les SIX lignes du bas sont toujours visibles, dans l'ordre
-     fige Lancer l'agent · Assistant · Dossier du projet · Terminal ·
-     Commandes du projet · Autres écrans.
+     (2026-10-25) et par le Lot A (`RAPPORT-design-colonne-entrees.md` § 4) :
+     les HUIT lignes du bas sont toujours visibles, dans l'ordre fige
+     Brouillon · Options · Lancer l'agent · Assistant · Dossier du projet ·
+     Terminal · Commandes du projet · Autres écrans.
      Une seule colonne de lignes pleine largeur (aucun libelle tronque, aucun
      retour a la ligne, colonne inchangee a 280 px) ; 6 px entre les lignes.
      Cadre + fond portes par #project-footer (un seul bloc visuel) : le panel ne
@@ -1693,8 +1698,9 @@ body.theme-light.theme-tokyo-day {
   text-align: left;
 }
 
-/* LOT 3 de la presentation : « Lancer l'agent » est LA ligne principale du bloc
-   du bas (13 px / 600, icone accent) — les CINQ autres restent a 12 px / 400.
+/* LOT 3 de la presentation : « Lancer l'agent » est LA ligne mise en evidence du
+   bloc du bas (13 px / 600, icone accent) — les SEPT autres restent a 12 px / 400
+   (dont « Brouillon » et « Options », arrivees du haut de la colonne au Lot A).
    Seul ecart de taille du bloc, volontaire : c'est l'action la plus frequente. */
 .pj-panel button.pj-row-main {
   font-size: var(--font-base);
@@ -1705,21 +1711,13 @@ body.theme-light.theme-tokyo-day {
   color: var(--accent-text);
 }
 
-/* LOT 2 de la presentation : les TROIS portes globales sont nommees. Format
-   « pastille » : hauteur 28 px, largeur au contenu, icone 16 px (`.icon`) et
-   libelle 12 px / 500. Les lignes du panneau projet (`.pj-panel button`)
-   gardent leurs 32 px : c'est le lot 3 qui les reprend. */
-#global-actions button {
-  width: auto;
-  height: 28px;
-  padding: 0 6px;
-  gap: 6px;
-  font-family: var(--font-ui);
-  font-size: var(--font-sm);
-  font-weight: var(--fw-medium);
-  white-space: nowrap;
-}
-
+/* LOT 2 de la presentation : les portes globales etaient nommees.
+   Le Lot A (`RAPPORT-design-colonne-entrees.md` § 1.e) a vide `#global-actions`
+   de ses boutons : la regle « pastille » 28 px / 12 px / 500 qui les decrivait
+   est donc SUPPRIMEE (regle morte). Les deux portes sont desormais des lignes
+   du panneau (`Brouillon`, `Options`) et prennent la regle `.pj-panel button`
+   (32 px, `var(--font-sm)`, icone a gauche). Le libelle garde `.ga-label`
+   (ci-dessous) : c'est la decision §3.8 du rapport, aucun verrou a toucher. */
 .ga-label {
   white-space: nowrap;
   overflow: hidden;
@@ -7267,7 +7265,10 @@ body.pilot-loading *::after {
   justify-content: center;
   gap: 4px;
   padding: 0 8px;
-  margin: 0 0 0 auto;
+  /* Lot A : le conteneur n'a plus de marge ; l'air du badge est porte ici pour
+     qu'il reste identique a l'affichage (8 px en haut, a droite et en bas,
+     comme la rangee qu'il occupait). Masque, il n'occupe aucune hauteur. */
+  margin: 8px 8px 8px auto;
   font-family: var(--font-ui);
   font-size: var(--font-xs);
   font-weight: var(--fw-semibold);

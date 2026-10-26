@@ -295,8 +295,11 @@ accepte, lui, un historique — il servait à l'écran Aide, désormais retiré.
 - **Aucun écran d'aide dédié.** Le point d'entrée est la conversation de
   l'**Assistant** (🧭) : on lui pose la question, il appelle l'outil
   `answer_from_documentation` et répond (Markdown, sections recoupées).
-- Le haut de la colonne de gauche ne garde que **deux portes** : « Brouillon » et
-  « Réglages ». Aucune porte de remplacement n'a été ajoutée (aucune place
+- Le haut de la colonne de gauche ne porte plus **aucun bouton** : « Brouillon » et
+  « Options » (les deux anciennes portes du haut) sont désormais les **deux premières
+  lignes du bloc du bas**, avec leurs libellés, infobulles, icônes et identifiants
+  inchangés (`btn-scratchpad`, `btn-settings`) — voir `RAPPORT-design-colonne-entrees.md`
+  § 4 lot A. Aucune porte de remplacement n'a été ajoutée en haut (aucune place
   réservée).
 - Quand la documentation ne dit rien, la réponse le dit explicitement ; si elle
   est trop longue, la coupure est annoncée.
@@ -361,6 +364,9 @@ accepte, lui, un historique — il servait à l'écran Aide, désormais retiré.
 | Commandes `ask_help` et `get_handbook` | Restées enregistrées dans le socle : **plus aucun appelant côté écran** (signalé, non supprimées). |
 
 **Comment le retrait est tenu** : `src/js/retrait-ecran-aide.test.js` rougit si le
-bouton revient (le haut repasserait à 3 boutons), si le mode `help` revient dans
+bouton revient dans le haut (il y repasserait à 1 bouton alors que ce haut doit
+rester vide), si le mode `help` revient dans
 `tabs.js`, si `help.js` réapparaît, ou si un style partagé / le socle est
-supprimé. `src/js/lot2-colonne-haut.test.js` est mis à jour (deux portes nommées).
+supprimé. `src/js/lot2-colonne-haut.test.js` est mis à jour (le haut ne contient
+plus aucun bouton) et `src/js/lot3-colonne-bas.test.js` vérifie que « Brouillon »
+puis « Options » sont les deux premières lignes du bloc du bas.

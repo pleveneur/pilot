@@ -8,7 +8,10 @@
  *
  * Ce fichier echoue si :
  *   (a) le bouton « Aide » revient dans le haut de la colonne de gauche (le
- *       haut doit garder exactement DEUX boutons nommes : Brouillon, Options) ;
+ *       haut ne doit plus porter AUCUN bouton : depuis le Lot A de
+ *       `RAPPORT-design-colonne-entrees.md` § 4, « Brouillon » et « Options »
+ *       sont les deux premieres lignes du bloc du bas, et ce fichier verifie
+ *       qu'elles y sont bien, dans cet ordre) ;
  *   (b) un cablage vers l'onglet Aide revient dans `main.js` ;
  *   (c) le mode d'onglet `help` revient dans `tabs.js` (branche d'ouverture,
  *       methode `_openHelp`, nettoyage, table des modes speciaux) ;
@@ -25,6 +28,7 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sliceSource } from "./source-slice.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const lire = (...p) =>
@@ -49,15 +53,34 @@ describe("Retrait de l'ecran Aide (a) — plus aucune porte dans la colonne", ()
     expect(blocActions[1]).not.toMatch(/>\s*Aide\s*</);
   });
 
-  it("le haut de la colonne garde exactement deux boutons nommes", () => {
+  it("le haut de la colonne ne garde aucun bouton", () => {
     const blocActions = html.match(
       /<div id="global-actions">([\s\S]*?)\n    <\/div>/,
     );
     const boutons = blocActions[1].match(/<button /g) || [];
-    // S'il revient, ce compte passe a 3 et ce test rougit.
-    expect(boutons).toHaveLength(2);
-    expect(blocActions[1]).toContain("Brouillon");
-    expect(blocActions[1]).toContain("Options");
+    // Lot A de `RAPPORT-design-colonne-entrees.md` § 4 : ce compte est passe de
+    // 2 a 0 — les deux portes nommees sont les premieres lignes du bloc du bas.
+    // S'il revient, ce compte remonte et ce test rougit.
+    expect(boutons).toHaveLength(0);
+  });
+
+  it("« Brouillon » et « Options » sont les deux premieres lignes du bloc du bas", () => {
+    // Meme pouvoir de detection qu'avant le Lot A : les deux mots restent
+    // verifies, mais la ou ils s'affichent desormais.
+    const blocActions = html.match(
+      /<div id="global-actions">([\s\S]*?)\n    <\/div>/,
+    );
+    expect(blocActions[1]).not.toContain("Brouillon");
+    expect(blocActions[1]).not.toContain("Options");
+    const pied = sliceSource(html, 'id="project-footer"', "</aside>", 4000);
+    expect(pied).toContain('id="btn-scratchpad"');
+    expect(pied).toContain(">Brouillon</span>");
+    expect(pied).toContain('id="btn-settings"');
+    expect(pied).toContain(">Options</span>");
+    // Ordre impose : Brouillon AVANT Options (comme cote a cote en haut).
+    expect(pied.indexOf('id="btn-scratchpad"')).toBeLessThan(
+      pied.indexOf('id="btn-settings"'),
+    );
   });
 
   it("aucune place vide n'est reservee a la place du bouton retire", () => {

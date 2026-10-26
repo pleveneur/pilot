@@ -33,7 +33,11 @@
  *       long doit s'arreter par ellipse, pas elargir la colonne) ;
  *   (c) « Projets » n'est plus un bouton nomme, ou perd son etat ouvert ;
  *   (d) les deux portes nommees perdent leur libelle ou leur identifiant, ou
- *       une porte « Aide » revient dans le haut ;
+ *       une porte « Aide » revient dans le haut, ou un bouton (l'un des deux
+ *       ou un nouveau) reapparait dans `#global-actions` — depuis le Lot A de
+ *       `RAPPORT-design-colonne-entrees.md` § 4, ce conteneur ne porte plus
+ *       AUCUN bouton : « Brouillon » et « Options » sont les deux premieres
+ *       lignes du bloc du bas (verrou d'ordre : `lot3-colonne-bas.test.js`) ;
  *   (e) une des quatre portes retirees reste dans le haut, ou son retrait
  *       n'est pas tolere par le cablage (demarrage casse) ;
  *   (f) le cadre accent du haut revient, ou celui du bas disparait ;
@@ -199,11 +203,40 @@ describe("LOT 2 (d) — sept icones nues deviennent deux boutons nommes", () => 
     }
   });
 
-  it("le haut ne contient plus que deux boutons", () => {
+  // Lot A (`RAPPORT-design-colonne-entrees.md` § 4) : les deux portes ont QUITTE
+  // le haut de la colonne. Le compte attendu passe donc de 2 a 0 — remettre un
+  // bouton ici (meme par megarde) fait rougir ce test.
+  it("le haut ne contient plus aucun bouton", () => {
     const bloc_actions = html.match(/<div id="global-actions">([\s\S]*?)\n    <\/div>/);
     expect(bloc_actions, "conteneur #global-actions introuvable").not.toBeNull();
     const boutons = bloc_actions[1].match(/<button /g) || [];
-    expect(boutons).toHaveLength(2);
+    expect(boutons).toHaveLength(0);
+  });
+
+  it("les deux portes ont bien quitte le haut (aucun de leurs identifiants n'y reste)", () => {
+    const bloc_actions = html.match(/<div id="global-actions">([\s\S]*?)\n    <\/div>/);
+    expect(bloc_actions, "conteneur #global-actions introuvable").not.toBeNull();
+    for (const [id] of PORTES) {
+      expect(bloc_actions[1], `${id} encore en haut de la colonne`).not.toContain(
+        `id="${id}"`,
+      );
+    }
+    // Le badge « Distant » garde sa place : le conteneur reste dans le DOM.
+    expect(bloc_actions[1]).toContain('id="remote-badge"');
+  });
+
+  it("le conteneur du haut n'occupe plus aucune hauteur (44 px rendus)", () => {
+    // Lot A § 3.4 du rapport : marges et padding a 0 ; l'air du badge est porte
+    // par le badge lui-meme. Sans cela, 8 + 28 + 8 = 44 px resteraient vides.
+    const d = declarations(bloc(css, "#global-actions"));
+    expect(d).toContain("margin: 0;");
+    expect(d).toContain("padding: 0;");
+    expect(d).not.toMatch(/margin: 8px/);
+    expect(d).not.toMatch(/padding: 0 8px 8px/);
+    // Le badge reprend l'air perdu : 44 px quand il est affiche, comme avant.
+    expect(declarations(bloc(css, ".remote-badge"))).toContain(
+      "margin: 8px 8px 8px auto;",
+    );
   });
 
   it("la porte « Aide » ne revient pas dans le haut de la colonne", () => {
@@ -216,10 +249,22 @@ describe("LOT 2 (d) — sept icones nues deviennent deux boutons nommes", () => 
     expect(html).not.toContain('id="btn-help"');
   });
 
-  it("les deux portes sont des pastilles de 28 px a libelle 12 px", () => {
-    // Regle d'exception ecrite une seule fois, apres la base 32 px partagee.
-    expect(css).toContain("#global-actions button {\n  width: auto;\n  height: 28px;");
-    expect(css).toContain("font-size: var(--font-sm)");
+  // Lot A : la regle « pastille » 28 px des deux portes n'existe plus (plus
+  // aucun bouton dans `#global-actions`). Les deux portes prennent la regle des
+  // lignes du panneau : 32 px et `var(--font-sm)`. La classe du libelle, elle,
+  // reste `.ga-label` (decision §3.8 du rapport).
+  it("les deux portes prennent la regle des lignes du panneau (32 px, 12 px)", () => {
+    expect(css, "regle morte `#global-actions button` revenue").not.toContain(
+      "#global-actions button {\n  width: auto;\n  height: 28px;",
+    );
+    // `.pj-panel button` porte DEUX regles (base 32 px, puis la mise en ligne
+    // pleine largeur) : on lit l'ensemble, comme le verrou du bloc du bas.
+    const panneau = [...css.matchAll(/(?:^|\n)\.pj-panel button \{([^}]*)\}/g)]
+      .map((m) => m[1])
+      .join("\n");
+    expect(panneau, "regle `.pj-panel button` absente").toContain("width: 100%");
+    expect(panneau).toContain("font-size: var(--font-sm)");
+    expect(css).toContain(".ga-label {");
   });
 });
 

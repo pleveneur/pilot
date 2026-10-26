@@ -24,13 +24,18 @@ externe.
   terminal (🖥️), agent Pi (π).
 - **Barre latérale** : explorateur de fichiers du projet, filtre, favoris,
   brouillon (scratchpad).
-- **Panneau d'actions** (bas de la barre latérale, cadre accentué) : six lignes
-  nommées, toujours visibles — **Lancer l'agent** (mise en évidence), **Assistant**,
-  **Dossier du projet** (ouvre le dossier du projet dans l'explorateur du système),
-  **Terminal**, **Commandes du projet**, puis **Autres écrans ▾** : ce dernier
-  ouvre vers le haut un menu groupé (Tableau de bord, Graphe du projet,
-  Historique des sessions, Revue de code, Équipe d'agents, Kanban, Discussion
-  inter-projets, GDS du projet, Prompt Builder).
+- **Panneau d'actions** (bas de la barre latérale, cadre accentué) : **huit** lignes
+  nommées, toujours visibles — **Brouillon**, **Options**, **Lancer l'agent** (mise en
+  évidence), **Assistant**, **Dossier du projet** (ouvre le dossier du projet dans
+  l'explorateur du système), **Terminal**, **Commandes du projet**, puis
+  **Autres écrans ▾** : ce dernier ouvre vers le haut un menu groupé (Prompt Builder,
+  Tableau de bord, Graphe du projet, Historique des sessions, Revue de code, Équipe
+  d'agents, Kanban, Discussion inter-projets, GDS du projet).
+- **Le haut de la barre latérale ne porte plus aucun bouton** : « Brouillon » et
+  « Options » ont rejoint le panneau du bas, dont elles sont les deux premières lignes
+  (mêmes libellés, mêmes icônes, mêmes infobulles, mêmes raccourcis). L'espace ainsi
+  rendu profite à la liste des fichiers. Le panneau du bas reste affiché **même sans
+  projet ouvert** : il montre alors ces deux seules lignes.
 <!-- /HELP:overview -->
 
 <!-- HELP:demarrage -->
