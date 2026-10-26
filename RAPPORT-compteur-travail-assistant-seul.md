@@ -177,3 +177,148 @@ proprietaire :
   bouton, `right: 0` : il s'etend vers la gauche depuis la nouvelle position) ;
 - le rendu sur une fenetre etroite (le panneau garde ses plafonds
   `100vw - marge`).
+
+---
+
+# Second passage — re-verification demandee (meme objectif, meme fichier de rapport)
+
+> Cette section est **ajoutee** a la suite du premier passage (ci-dessus), qui
+> n'est ni reecrit ni supprime : il reste la trace de la correction d'origine
+> (`5af237d`). Le travail de ce second passage ne refait pas le compteur : il
+> **verifie l'etat reel du disque** et **ferme ce qui n'etait pas verrouille**.
+
+## 8. Etat trouve sur le disque (avant toute modification de ce passage)
+
+### 8.1 Combien de calculs ? **UN SEUL.**
+
+| Etape | Fichier | Ligne | Role |
+|---|---|---|---|
+| donnees d'activite | `src/js/agent-activity.js` | `activityRefresh()` ~720 | poll partage (2 s) + push `agent-state-changed` |
+| liste des missions | `src/js/super-agent.js` | `collectQueuedMissions()` 2649 | 4 familles d'attente (delegations, `run_agents`, commandes manuelles, file du bus) |
+| **calcul unique** | `src/js/super-agent.js` | `publishSuperMissionsCount()` **2600** | `buildRunningMissions(...)` puis `splitMissions(...)` puis `setAgentPanelTaskCount(running.length, waiting.length)` |
+| texte visible | `src/js/agent-activity.js` | `agentTaskCounterText()` **1204** | `en cours / total` (total = en cours + attente), vide si rien, plafond `99+` |
+| infobulle + nom lu | `src/js/agent-activity.js` | `agentTaskCounterLabel()` **1219** | nombres reels |
+| **peintre unique** | `src/js/agent-activity.js` | `paintAgentPanelTaskCount()` **1248** | ecrit `#agent-activity-count` (texte, `hidden`, classe `working`) + `title`/`aria-label` de `#agent-activity-entry` |
+| point d'entree | `src/js/agent-activity.js` | `setAgentPanelTaskCount()` **1275** | seul appele par `super-agent.js:2603` |
+
+### 8.2 Combien de chemins d'affichage ? **UN SEUL NOEUD, DEPLACE.**
+
+- `index.html:282-283` : `#agent-activity` porte l'entree « Travail » et le
+  chiffre `#agent-activity-count` (un seul de chaque dans tout le document).
+- Mode standard : ce noeud vit dans la rangee d'onglets.
+- Mode « Assistant seul » : `src/js/super-agent.js:3513-3517` (`enterImmersive`)
+  prend **le noeud existant** (`document.getElementById("agent-activity")`) et
+  l'insere dans la barre du mode (`insertBefore(activity, agentsHost)`) ;
+  `src/js/super-agent.js:3557-3562` (`exitImmersive`) le restitue a sa place
+  exacte **avant** le retrait de l'overlay.
+- `src/css/style.css:11240` : `.superagent-immersive-active #agent-activity`
+  passe de `display: none` (avant `5af237d`) a `display: flex` : le compteur est
+  **affiche**, pas recopie.
+
+**Conclusion de l'etat trouve : les deux modes ne divergent plus** — ils
+affichent le meme element, peint par le meme code, alimente par le meme calcul.
+Aucune divergence de chiffre n'etait donc a corriger dans ce passage.
+
+## 9. Ce qui a ete unifie dans CE passage : **rien de plus, et c'est volontaire**
+
+Aucun second calcul n'a ete cree, aucun noeud n'a ete duplique, aucun reglage
+n'a ete ajoute, la largeur de colonne et les menus du bas ne sont pas touches.
+
+Ce passage ferme une **porte ouverte** : les tests existants verifiaient le
+*calcul* unique, le *noeud* unique et le *deplacement*, mais **pas qu'aucune
+regle CSS propre au mode « Assistant seul » ne masque une partie du compteur**.
+Une regle du type `.superagent-immersive-active #agent-activity-count { display:
+none }` aurait rendu le second mode muet **sans faire rougir un seul test** :
+les deux modes n'auraient alors plus affiche le meme chiffre, ce qui est
+exactement le defaut que la decision 361 interdit.
+
+Ajout dans `src/js/compteur-taches-travail.test.js` — nouveau bloc **(h)**, 5
+tests, aucun ancien test supprime ni modifie :
+
+1. **aucune regle du mode assistant seul ne cache une partie du compteur** :
+   balayage de *toutes* les regles dont le selecteur contient
+   `.superagent-immersive-active` et l'une des cinq parties visibles
+   (`#agent-activity`, `#agent-activity-entry`, `#agent-activity-count`,
+   `#agent-activity-dot`, `.agent-activity-entry-label`) ; aucune ne doit porter
+   `display: none`, `visibility: hidden` ni `opacity: 0`.
+2. **la barre du mode ne rogne pas le compteur** : `.sa-immersive-top` ne porte
+   aucun `overflow: hidden` (qui couperait le bouton et son panneau).
+3. **les quatre cas limites peignent la valeur EXACTE, sans etape
+   intermediaire** : `(0;0)` → rien (et infobulle neutre), `(1;0)` → `1/1`,
+   `(0;3)` → `0/3`, `(2;3)` → `2/5`, avec `hidden`, classe `working`, infobulle
+   et `aria-label` verifies a chaque etape.
+4. **un travail qui se termine pendant l'affichage** : `(1;2)` → `1/3` allume,
+   puis `(0;2)` → `0/2` eteint, puis `(0;0)` → chiffre retire et infobulle
+   revenue a « Suivi du travail » : le compteur **ne reste pas fige**.
+5. **le compteur ne saute pas** : repeindre le meme etat ne change rien (aucun
+   clignotement), et une demande de plus dans la file fait passer `2/5` a `2/6`
+   — seul le total bouge, le nombre de taches en cours ne bouge pas.
+
+## 10. Cas limites : resultat
+
+| Cas | Attendu | Verifie par | Resultat |
+|---|---|---|---|
+| aucun travail | rien a l'ecran, pas de « 0/0 » | blocs (a) et (h) 3 | ✅ |
+| un seul travail en cours | `1/1`, chiffre allume | (a) et (h) 3 | ✅ |
+| plusieurs en attente | `0/3` (le total compte l'attente) | (a), (b) et (h) 3 | ✅ |
+| en cours + attente | `2/5` = 2 + 3 | (b) et (h) 3 | ✅ |
+| un travail qui se termine pendant l'affichage | redescend, jamais fige | (h) 4 | ✅ |
+| file qui change | total juste, aucun echange entre les deux nombres | (h) 5 | ✅ |
+| meme chiffre dans les deux modes | meme noeud, meme peintre, rien ne le masque | (g) 1-6 et (h) 1-2 | ✅ |
+
+**Preuve que les nouveaux tests rougissent** (sabotages temporaires, sources
+restaurees a l'identique ensuite ; `git status` verifie : aucune trace) :
+
+| Sabotage applique | Resultat |
+|---|---|
+| ajout de `.superagent-immersive-active #agent-activity-count { display: none }` | `1 failed` — « expected [ Array(1) ] to deeply equal [] » (h) 1 |
+| `overflow: hidden` ajoute sur `.sa-immersive-top` | `1 failed` — « expected 'hidden' not to be 'hidden' » (h) 2 |
+| `count.hidden = false` force dans `paintAgentPanelTaskCount` (compteur qui ne s'efface plus) | `3 failed` (h) 3 et 4 |
+
+## 11. Fichiers touches par ce second passage
+
+- `src/js/compteur-taches-travail.test.js` : **ajout seul** du bloc (h) (5
+  tests). Aucune assertion existante modifiee, aucun test supprime.
+- `RAPPORT-compteur-travail-assistant-seul.md` : cette section (le rapport du
+  premier passage est conserve tel quel).
+
+**Non touches** (verifie par `git status --porcelain`) : `index.html`,
+`src/js/agent-activity.js`, `src/js/super-agent.js`, `src/css/style.css`. Le
+calcul unique, le peintre unique et le deplacement du noeud sont donc
+**inchanges** par ce passage.
+
+## 12. Resultat des tests
+
+```
+npx vitest run src/js/compteur-taches-travail.test.js
+  Test Files  1 passed (1)
+  Tests       35 passed (35)        (30 avant ce passage : +5, aucun supprime)
+
+npm test  (vitest run)   — 7 executions consecutives vertes
+  Test Files  191 passed (191)
+  Tests       3355 passed (3355)     (3350 avant ce passage : +5)
+  Duration    11 s
+```
+
+**A signaler (non corrige, non lie a ce passage)** : sur **8** executions
+completes, **une** (la premiere, a 17:00:34) a montre `1 failed | 3354 passed`
+sans que le nom du test fautif soit capture ; les **7** suivantes sont vertes a
+l'identique. Le fichier modifie ici (`compteur-taches-travail.test.js`) ne
+depend d'aucune horloge ni d'aucun timer : il ne peut pas etre la source de
+cette intermittence. Test instable preexistant, a identifier par une execution
+avec `--reporter=verbose` si l'utilisateur le souhaite.
+
+## 13. Desaccords signales, non corriges seul
+
+1. **Texte affiche « en cours / total »** : la decision 361 dit que le chiffre
+   doit etre un TOTAL (en cours + attente). Le bouton affiche `2/5`, c'est-a-dire
+   *deux* nombres. C'est conforme a la decision du proprietaire du compteur
+   (`e55f60e`, RAPPORT-compteur-taches.md) et identique dans les deux modes ;
+   je n'ai donc rien change. Si le proprietaire veut le seul total (`5`), c'est
+   une decision a prendre, pas une correction d'ecart entre modes.
+2. **Le compteur s'efface quand le reglage « onglet Taches » est desactive**
+   (`paintAgentPanelTaskCount` : `panelTabEnabled.tasks !== false`). Comportement
+   anterieur, identique dans les deux modes, non modifie.
+3. **Non verifie a l'ecran** : aucune execution de Pilot pendant ce passage
+   (Vitest sans navigateur). L'egalite est prouvee par le code, le CSS et les
+   tests, pas par une capture.

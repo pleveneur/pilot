@@ -492,3 +492,112 @@ describe("(g) le mode assistant seul affiche le MEME compteur (aucune copie)", (
     expect(el("agent-activity-entry").title).toBe("Travail : 2 taches en cours sur 5 (3 en attente)");
   });
 });
+
+// ===========================================================================
+// (h) Cas limites : la valeur affichee suit TOUJOURS le travail reel
+//
+// Les blocs (a) a (g) verrouillent le calcul unique, le noeud unique et le
+// deplacement du noeud d'un mode a l'autre. Ce bloc ferme les deux dernieres
+// portes, celles que la demande du proprietaire nomme explicitement :
+//   1. une regle CSS propre au mode « Assistant seul » pourrait masquer une
+//      PARTIE du compteur (le chiffre, le bouton, le mot « Travail », la
+//      pastille) : le second mode afficherait alors un compteur muet, donc un
+//      « autre compteur ». Aucun test ne le detectait ;
+//   2. les cas limites doivent peindre la valeur EXACTE — aucun travail, un
+//      seul en cours, plusieurs en attente, un travail qui se termine pendant
+//      l'affichage — sans valeur intermediaire et sans compteur fige.
+// ===========================================================================
+describe("(h) cas limites : le compteur suit le travail reel, dans les deux modes", () => {
+  /** Decoupe la feuille en regles { selecteur, corps } (commentaires retires). */
+  function reglesCss(texte) {
+    const out = [];
+    const sans = texte.replace(/\/\*[\s\S]*?\*\//g, "");
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    let m;
+    while ((m = re.exec(sans))) out.push({ selecteur: m[1].trim(), corps: m[2] });
+    return out;
+  }
+
+  /** Une declaration qui REND UN ELEMENT INVISIBLE (aucune autre). */
+  const CACHE = /display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:[;}\s]|$)/;
+
+  it("aucune regle du mode assistant seul ne cache une partie du compteur", () => {
+    // Chaque cible est une partie visible du MEME compteur : conteneur, bouton
+    // nomme « Travail », chiffre « en cours / total », pastille d'etat, libelle.
+    const cibles = [
+      "#agent-activity",
+      "#agent-activity-entry",
+      "#agent-activity-count",
+      "#agent-activity-dot",
+      ".agent-activity-entry-label",
+    ];
+    const fautives = [];
+    for (const regle of reglesCss(css)) {
+      if (!regle.selecteur.includes(".superagent-immersive-active")) continue;
+      if (!cibles.some((c) => regle.selecteur.includes(c))) continue;
+      if (CACHE.test(regle.corps)) fautives.push(`${regle.selecteur} {${regle.corps.trim()}}`);
+    }
+    // Le compteur du mode assistant seul EST le compteur du mode normal : si une
+    // regle du mode le masque, les deux modes n'affichent plus la meme chose.
+    expect(fautives).toEqual([]);
+  });
+
+  it("la barre du mode ne rogne pas le compteur (ni son panneau)", () => {
+    // `overflow: hidden` sur la barre couperait le bouton « Travail » et le
+    // panneau a trois onglets qui s'ancre dessous.
+    const barre = blockOf(".sa-immersive-top");
+    expect(barre).not.toBe("");
+    expect(declaration(barre, "overflow")).not.toBe("hidden");
+    expect(declaration(barre, "overflow-x")).not.toBe("hidden");
+    expect(declaration(barre, "overflow-y")).not.toBe("hidden");
+  });
+
+  it("les quatre cas limites peignent la valeur EXACTE, sans etape intermediaire", () => {
+    const etapes = [
+      // [en cours, en attente, texte visible, chiffre allume]
+      [0, 0, "", false],  // aucun travail : rien plutot qu'un « 0/0 » permanent
+      [1, 0, "1/1", true], // un seul travail en cours
+      [0, 3, "0/3", false], // plusieurs en attente, rien en cours
+      [2, 3, "2/5", true], // les deux a la fois : le total additionne
+    ];
+    for (const [running, waiting, texte, allume] of etapes) {
+      setAgentPanelTaskCount(running, waiting);
+      const compteur = el("agent-activity-count");
+      expect(compteur.textContent, `${running} en cours / ${waiting} en attente`).toBe(texte);
+      expect(compteur.hidden).toBe(texte === "");
+      expect(compteur.classList.contains("working")).toBe(allume);
+      // Infobulle et nom lu : les nombres REELS, jamais le texte plafonne.
+      expect(el("agent-activity-entry").title).toBe(agentTaskCounterLabel(running, waiting));
+      expect(el("agent-activity-entry").getAttribute("aria-label")).toBe(agentTaskCounterLabel(running, waiting));
+    }
+  });
+
+  it("un travail qui se termine pendant l'affichage : le compteur redescend, jamais fige", () => {
+    setAgentPanelTaskCount(1, 2); // une tache tourne, deux attendent leur tour
+    expect(el("agent-activity-count").textContent).toBe("1/3");
+    expect(el("agent-activity-count").classList.contains("working")).toBe(true);
+    // La tache en cours se termine : l'attente reste, le total redescend.
+    setAgentPanelTaskCount(0, 2);
+    expect(el("agent-activity-count").textContent).toBe("0/2");
+    expect(el("agent-activity-count").classList.contains("working")).toBe(false);
+    // La file se vide : plus de chiffre, plus d'infobulle de travail.
+    setAgentPanelTaskCount(0, 0);
+    expect(el("agent-activity-count").textContent).toBe("");
+    expect(el("agent-activity-count").hidden).toBe(true);
+    expect(el("agent-activity-entry").title).toBe("Suivi du travail");
+  });
+
+  it("le compteur ne saute pas : meme entree = meme affichage, file qui change = total juste", () => {
+    setAgentPanelTaskCount(2, 3);
+    const premier = el("agent-activity-count").textContent;
+    // Repeindre le meme etat ne doit rien changer (aucun clignotement).
+    setAgentPanelTaskCount(2, 3);
+    expect(el("agent-activity-count").textContent).toBe(premier);
+    expect(el("agent-activity-count").hidden).toBe(false);
+    // Une demande de plus dans la file : seul le total bouge, jamais le nombre
+    // de taches en cours (aucun echange entre les deux nombres).
+    setAgentPanelTaskCount(2, 4);
+    expect(el("agent-activity-count").textContent).toBe("2/6");
+    expect(el("agent-activity-entry").title).toBe("Travail : 2 taches en cours sur 6 (4 en attente)");
+  });
+});
