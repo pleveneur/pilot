@@ -11190,12 +11190,20 @@ body.pilot-loading *::after {
   background: color-mix(in srgb, var(--superagent-accent) 8%, var(--surface-2));
 }
 /* Ajustements A19 : le bouton de synthèse vocale (🔊) a été retiré du mode
-   Assistant Only (l'élément n'existe plus), et le suivi du travail (cercle +
-   panneau à trois onglets) reste un contrôleur du mode standard — masqué tant
-   que l'overlay est actif (le panneau, non déplacé, est de toute façon
-   recouvert). */
+   Assistant Only (l'élément n'existe plus).
+   COMPTEUR DE TRAVAIL (RAPPORT-compteur-travail-assistant-seul.md) : le suivi
+   du travail n'est plus masqué dans ce mode. super-agent.js DEPLACE le MEME
+   noeud #agent-activity du mode normal dans la barre du mode : le compteur
+   « en cours / total », son infobulle et son panneau a trois onglets sont donc
+   ceux du mode normal, a l'identique — aucune copie, aucun second calcul. Il
+   prend simplement sa place dans la barre de 58 px : centre verticalement (la
+   rangee d'onglets, elle, l'etirait) et sans la marge laterale de la rangee.
+   `position: relative` (posee sur le bloc #agent-activity) est conservee : le
+   panneau deroulant reste ancre sous le bouton et s'ouvre dans l'overlay. */
 .superagent-immersive-active #agent-activity {
-  display: none;
+  display: flex;
+  align-self: center;
+  margin: 0;
 }
 
 /* Disclaimer (maquette V4) : mention discrète sous la barre de saisie. */

@@ -15,11 +15,13 @@
 //   (d) une pastille, un fond ou une animation revient sur le compteur ;
 //   (e) la hauteur de la rangee d'onglets augmente d'un seul pixel ;
 //   (f) le signal des non-lus disparait du bouton ou de l'onglet « Evenements ».
+//   (g) le mode « Assistant seul » affiche un AUTRE compteur que le mode
+//       normal (second noeud, second calcul, ou compteur absent).
 //
 // Aucun navigateur : fonctions reelles du module + DOM minimal + lecture des
 // sources (fins de ligne normalisees, cf. quality-gate 3.4).
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -393,5 +395,100 @@ describe("(f) le signal des non-lus survit (point du bouton + point de l'onglet)
     expect(maj[0]).toMatch(/agent-activity-events-unread/);
     expect(maj[0]).toMatch(/agentUnreadTooltip\(panelUnread\)/);
     expect(maj[0]).toMatch(/agent-activity-dot/);
+  });
+});
+
+// ===========================================================================
+// (g) Mode « Assistant seul » : le MEME compteur, la MEME source
+//
+// Le proprietaire veut retrouver, en mode assistant seul, EXACTEMENT le
+// compteur du mode normal (« en cours / total »). La seule facon d'y arriver
+// sans divergence future est de ne pas creer un second compteur : le noeud
+// #agent-activity est DEPLACE dans la barre du mode, puis restitue. Ce bloc
+// rougit si quelqu'un ajoute un second noeud, un second calcul ou remet le
+// masquage du compteur dans ce mode.
+// ===========================================================================
+describe("(g) le mode assistant seul affiche le MEME compteur (aucune copie)", () => {
+  /** Tous les modules applicatifs de src/js (hors tests), avec leur source. */
+  function modulesApplicatifs() {
+    const dossier = resolve(ROOT, "src/js");
+    return readdirSync(dossier)
+      .filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"))
+      .map((f) => [f, readFileSync(resolve(dossier, f), "utf8").replace(/\r\n/g, "\n")]);
+  }
+
+  /** Corps d'une fonction (ancre de debut / de fin verifiees). */
+  function corps(ancre, fin) {
+    return sliceSource(jsSuper, ancre, fin, 200);
+  }
+
+  it("un SEUL noeud de compteur dans tout le document (aucune copie par mode)", () => {
+    expect((html.match(/id="agent-activity-count"/g) || []).length).toBe(1);
+    expect((html.match(/id="agent-activity"/g) || []).length).toBe(1);
+    // Aucun compteur parallele construit pour le mode assistant seul.
+    expect(jsSuper).not.toContain("sa-immersive-count");
+    expect(css).not.toContain("sa-immersive-count");
+  });
+
+  it("le mode assistant seul DEPLACE le noeud du mode normal, puis le restitue", () => {
+    const entree = corps("function enterImmersive() {", "\n  function exitImmersive() {");
+    // Il prend le noeud EXISTANT (getElementById) et l'insere dans sa barre.
+    expect(entree).toContain('document.getElementById("agent-activity")');
+    expect(entree).toMatch(/insertBefore\(activity, agentsHost\)/);
+    // Aucune peinture ni aucun calcul propres a ce mode.
+    expect(entree).not.toContain("agentTaskCounterText");
+    expect(entree).not.toContain("agent-activity-count");
+    expect(entree).not.toContain("setAgentPanelTaskCount");
+
+    const sortie = corps("function exitImmersive() {", "\n  // Raccourci clavier de bascule");
+    // Retour a la place EXACTE (meme parent, meme voisin) avant de detruire
+    // l'overlay : sans cela, le mode normal perdrait son compteur.
+    expect(sortie).toContain("immersiveActivityHome");
+    expect(sortie).toMatch(/home\.parent\.insertBefore\(activity, next\)/);
+  });
+
+  it("le CSS ne masque plus le suivi du travail dans ce mode : il l'accueille", () => {
+    const regle = blockOf(".superagent-immersive-active #agent-activity").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(declaration(regle, "display")).toBe("flex");
+    // Centre verticalement dans la barre (58 px) : aucune hauteur ajoutee.
+    expect(declaration(regle, "align-self")).toBe("center");
+    expect(css).not.toMatch(/\.superagent-immersive-active #agent-activity \{[^}]*display:\s*none/);
+  });
+
+  it("un seul calcul du texte et un seul peintre, dans TOUT le projet", () => {
+    const modules = modulesApplicatifs();
+    const parMotif = (motif) =>
+      modules.filter(([, src]) => motif.test(src)).map(([f]) => f).sort();
+
+    // Le texte « en cours / total » n'est compose QUE par agent-activity.js.
+    expect(parMotif(/agentTaskCounterText\(/)).toEqual(["agent-activity.js"]);
+    // Une seule fonction peint le compteur (et elle ne vise qu'un noeud).
+    expect(parMotif(/function paintAgentPanelTaskCount\(/)).toEqual(["agent-activity.js"]);
+    // Un seul publieur de compte appelle le peintre : super-agent.js.
+    expect(parMotif(/setAgentPanelTaskCount\(/)).toEqual(["agent-activity.js", "super-agent.js"]);
+  });
+
+  it("le peintre n'ecrit que sur le noeud PARTAGE par les deux modes", () => {
+    const peintre = sliceSource(jsPanel, "function paintAgentPanelTaskCount() {", "\n}\n", 200);
+    expect(peintre).toContain('getElementById("agent-activity-count")');
+    // Aucune ecriture vers un element propre a un mode : c'est ce qui garantit
+    // que les deux modes ne peuvent pas afficher deux nombres differents.
+    expect(peintre).not.toContain("sa-immersive");
+    expect(peintre).not.toContain("immersive");
+  });
+
+  it("le noeud deplace affiche le meme compte apres un changement de mode", () => {
+    // Le compteur ne depend pas du conteneur : il suffit que le noeud soit le
+    // meme. On le verifie sur l'element reel (DOM minimal) : « 2/5 » avant et
+    // apres le deplacement simule, avec la MEME instance.
+    setAgentPanelTaskCount(2, 3);
+    const compteur = el("agent-activity-count");
+    expect(compteur.textContent).toBe("2/5");
+    // Deplacement simule : rien n'est recree, seule la position change.
+    const deplace = compteur;
+    setAgentPanelTaskCount(2, 3);
+    expect(deplace).toBe(el("agent-activity-count"));
+    expect(deplace.textContent).toBe("2/5");
+    expect(el("agent-activity-entry").title).toBe("Travail : 2 taches en cours sur 5 (3 en attente)");
   });
 });

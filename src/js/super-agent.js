@@ -3401,6 +3401,12 @@ export async function createSuperAgent(container) {
   // au store partagé de agent-activity.js, posé à l'entrée et retiré à la
   // sortie du mode.
   let immersiveAgentsUnsubscribe = null;
+  // Suivi du travail (« Travail » + compteur « en cours / total ») : en mode
+  // assistant seul, le MEME noeud du mode normal est DEPLACE dans la barre du
+  // mode (jamais recopie, jamais recalcule). On memorise ici sa place
+  // d'origine (parent + voisin suivant) pour une restitution EXACTE a la
+  // sortie : aucune place perdue, aucun doublon.
+  let immersiveActivityHome = null;
   // Éléments créés avec l'overlay, réutilisés à chaque entrée en mode immersif.
   let immersiveSuggestions = null;
   let immersiveDisclaimer = null;
@@ -3498,9 +3504,18 @@ export async function createSuperAgent(container) {
     if (pendingBar) immInput.appendChild(pendingBar);
     // Disclaimer (maquette V4) : mention sous la barre de saisie.
     if (immersiveDisclaimer) immInput.appendChild(immersiveDisclaimer);
-    // Ajustement A19 : le suivi du travail (cercle + panneau à trois onglets)
-    // reste un contrôleur du mode standard — il n'est plus déplacé dans l'overlay
-    // (recouvert par celui-ci, masqué via .superagent-immersive-active).
+    // Suivi du travail : l'entree « Travail » (point + mot + compteur
+    // « en cours / total » + son panneau a trois onglets) est DEPLACEE dans la
+    // barre du mode, juste a gauche du resume des agents. C'est le MEME noeud
+    // DOM, peint par le MEME code (agent-activity.js) et alimente par la MEME
+    // source (publishSuperMissionsCount) : les deux modes ne peuvent pas
+    // afficher deux nombres differents, et il n'existe aucun second calcul.
+    const activity = document.getElementById("agent-activity");
+    const agentsHost = immersiveOverlay.querySelector('[data-imm="agents"]');
+    if (activity && agentsHost && agentsHost.parentNode) {
+      immersiveActivityHome = { parent: activity.parentNode, next: activity.nextSibling };
+      agentsHost.parentNode.insertBefore(activity, agentsHost);
+    }
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
     refreshIcons(immersiveOverlay);
@@ -3536,6 +3551,16 @@ export async function createSuperAgent(container) {
     // n'apparaît plus en mode immersif. Le panneau des événements n'est plus
     // déplacé non plus : il reste en mode standard, ajustement A19.)
     wrapper.appendChild(pendingBar);
+    // Suivi du travail : restitution EXACTE dans la rangee d'onglets (meme
+    // parent, meme voisin), AVANT le retrait de l'overlay — sinon le noeud
+    // serait detruit avec lui et le mode normal perdrait son compteur.
+    const activity = document.getElementById("agent-activity");
+    if (activity && immersiveActivityHome && immersiveActivityHome.parent) {
+      const home = immersiveActivityHome;
+      const next = home.next && home.next.parentNode === home.parent ? home.next : null;
+      home.parent.insertBefore(activity, next);
+    }
+    immersiveActivityHome = null;
     // Disclaimer : retiré avec l'overlay (réinséré à la prochaine entrée).
     if (immersiveDisclaimer && immersiveDisclaimer.parentNode) immersiveDisclaimer.remove();
     immersiveOverlay.remove();
