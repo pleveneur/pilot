@@ -4,6 +4,16 @@
 > il décrit l'existant, nomme les gênes, puis propose une réorganisation de la
 > navigation. Rien n'est publié, aucune version n'est changée.
 > Rédigé pour être lu sans connaissance technique du projet.
+>
+> **État réel aujourd'hui (vérifié sur le disque le 26/10/2026).** La
+> réorganisation proposée ici a été livrée, mais la forme finale du bas de la
+> colonne diffère de la cible dessinée plus bas : **sept** lignes, toutes de la
+> même taille, **sans aucune mise en évidence** ; « Lancer l'agent » n'y est
+> **plus** et se trouve désormais en **toute première entrée** du menu
+> « Autres écrans » (dix entrées) ; le plafond de hauteur du bloc est à **60 %**
+> de la hauteur de la fenêtre. Le corps de ce document reste la proposition
+> d'origine ; pour l'état de référence, voir `spec_pilot.md` § C et, côté
+> utilisateur, `help/overview.md`.
 
 ---
 

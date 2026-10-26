@@ -25,8 +25,8 @@ externe.
 - **Barre latérale** : explorateur de fichiers du projet, filtre, favoris,
   brouillon (scratchpad).
 - **Panneau d'actions** (bas de la barre latérale, cadre accentué) : **sept** lignes
-  nommées, toujours visibles et **toutes de la même taille** (aucune n'est mise en
-  évidence) — **Brouillon**, **Options**, **Assistant**, **Dossier du projet** (ouvre le
+  nommées, **toutes de la même taille** (aucune n'est mise en évidence) et, dès qu'un
+  projet est ouvert, toutes visibles — **Brouillon**, **Options**, **Assistant**, **Dossier du projet** (ouvre le
   dossier du projet dans l'explorateur du système), **Terminal**, **Commandes du
   projet**, puis **Autres écrans ▾** : ce dernier ouvre vers le haut un menu groupé de
   **dix** entrées, dont **Lancer l'agent** en toute première ligne (groupe « Mon
