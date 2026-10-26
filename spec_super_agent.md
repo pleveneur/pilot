@@ -1949,9 +1949,13 @@ rejouer.
   une demande à l'agent », « Préparer une livraison », « Lister les tâches en
   cours ») qui **préremplissent la zone de saisie** (elles n'envoient pas).
 - La barre du haut ne contient aucun toggle voix : la **🎙️ dictée** reste dans
-  la barre de saisie. Ni bouton de **synthèse vocale** (🔊), ni **suivi du
-  travail** (cercle + panneau à trois onglets) en mode assistant seul — ces
-  contrôles restent propres au mode standard. Le message d'accueil affiche le **nom réel
+  la barre de saisie, et aucun bouton de **synthèse vocale** (🔊) n'y figure. Le
+  **suivi du travail** y est en revanche **le même** que dans le mode normal :
+  l'entrée « Travail » (point + mot + compteur « en cours / total » + son
+  panneau à trois onglets) est **déplacée** dans la barre du mode, à gauche du
+  résumé des agents — **même élément** (jamais une copie), **même libellé**,
+  **même valeur**, alimentée par le **même calcul**. Le message d'accueil
+  affiche le **nom réel
   de l'assistant** (config de l'onglet 🧭), avec repli « Pilot Assistant ».
 - Le bouton **← (retour)** revient à l'interface complète. L'état de la
   conversation est **préservé** lors des allers-retours (les éléments du chat
@@ -2012,11 +2016,25 @@ Décision propriétaire appliquée telle quelle : `RAPPORT-compteur-taches.md`
   `listAllProjectCommands()` (`src/js/project-task-queue.js`, commandes
   manuelles mises en file) et `listExclusivityWaitingDemands()`
   (`src/js/agents-bus.js`, `projectExclusivityQueues`).
-- **Le compte vit aussi onglet Assistant ferme** : a la fermeture,
-  `subscribeAgentActivity(publishSuperMissionsCount)` est abonne ; a l'ouverture,
-  `startSuperMissionsWatch()`. `onPanelTabChanged` **n'arrete plus** la
-  surveillance (sinon le compteur gelait) : seul le **rendu de la liste** est
-  conditionne par `isAgentPanelPaneVisible("tasks")`.
+- **Le compte vit aussi onglet Assistant ferme** : le demarrage
+  `startTaskCounter()` (`src/js/super-agent.js`, appele par `src/js/main.js`
+  **au lancement de Pilot**, sans dependance a un onglet) pose l'abonnement
+  UNIQUE `subscribeAgentActivity(publishSuperMissionsCount)`. Il est
+  **idempotent** (`if (taskCounterUnsub) return false;`) : l'ouverture puis la
+  fermeture de l'onglet 🧭 le rappellent sans jamais creer un second
+  abonnement. A l'ouverture du volet, `startSuperMissionsWatch()` ajoute le seul
+  **rendu de liste** ; `onPanelTabChanged` **n'arrete plus** la surveillance
+  (sinon le compteur gelait) : seul le rendu est conditionne par
+  `isAgentPanelPaneVisible("tasks")`.
+  **Pourquoi ce demarrage** : auparavant l'abonnement n'etait pose que par la
+  fabrique de l'onglet 🧭 (`createSuperAgentBlock`). Tant que cet onglet n'avait
+  jamais ete ouvert, personne ne publiait le compte : le bouton restait muet en
+  mode normal ; en mode « Assistant seul », l'onglet existe forcement, donc le
+  compte y etait juste. Deux valeurs pour deux modes **sans** deux calculs — la
+  cause etait l'alimentation, pas le calcul. Un seul abonnement, un seul calcul,
+  un seul noeud (`#agent-activity`, deplace et non copie) : les deux modes
+  affichent desormais la meme valeur. Couverture :
+  `src/js/compteur-taches-travail.test.js` bloc (i).
 - **Reglage respecte** : `setAgentPanelTabsVisibility()` rappelle
   `paintAgentPanelTaskCount()` ; `super_agent_tasks_tab_enabled === false`
   masque l'onglet « Taches » **et** le compteur (aucun nombre sans volet).

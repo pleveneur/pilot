@@ -14,7 +14,7 @@ import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus,
 // installée ICI, au seul endroit qui connaît à la fois le bus d'agents (runs en
 // cours) et l'activité RÉELLE des sessions (agent qui travaille sans run).
 import { isRunInProgress } from "./agents-bus.js";
-import { isProjectAgentBusy, initOwnerEngagementWatch } from "./super-agent.js";
+import { isProjectAgentBusy, initOwnerEngagementWatch, startTaskCounter } from "./super-agent.js";
 import { getAgentActivitySnapshot, subscribeAgentActivity, isAgentWorking, initAgentActivity } from "./agent-activity.js";
 // Bande de contexte supprimee (docs/proposition-bande-contexte-allegee.md) :
 // le fil « Projet > projet > onglet » n'existe plus. L'entree « Travail » vit
@@ -551,6 +551,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   // bouton « Afficher l'onglet » de la fiche appelle tabs._openAgent /
   // tabs.openFile.
   initAgentActivity(tabs);
+  // Compteur « Travail » (bouton de la rangee d'onglets) : demarre ICI, avec
+  // l'application, et non dans la fabrique de l'onglet 🧭 Assistant. Sans cela,
+  // tant que l'onglet 🧭 n'avait jamais ete ouvert, le calcul du compte
+  // n'etait pas abonne : le bouton restait muet (ou fige) en mode normal alors
+  // qu'il etait juste en mode « Assistant seul » (ou l'onglet existe
+  // forcement). Un seul abonnement, un seul calcul, un seul noeud partages par
+  // les deux modes. Idempotent : un second appel ne cree rien.
+  try {
+    startTaskCounter();
+  } catch (e) {
+    console.warn("Compteur « Travail » indisponible:", e);
+  }
   // Exposé pour la vérification de mise à jour de Pi à l'ouverture de l'onglet
   // agent (issue #26) : appelé depuis tabs.js _openAgent après le health check.
   window._pilotCheckPiUpdate = checkPiUpdate;

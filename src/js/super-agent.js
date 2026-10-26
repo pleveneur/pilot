@@ -2595,13 +2595,41 @@ function onPanelTabChanged(state) {
  * Publie le COMPTE des missions sur le bouton « Travail » et retourne les
  * missions (aucun rendu de liste). Une seule source de calcul pour le bouton et
  * pour l'onglet : `buildRunningMissions` puis `splitMissions` (fonctions pures).
+ * C'est LE calcul du compteur « Travail » : il n'en existe pas d'autre, ni pour
+ * le mode normal, ni pour le mode « Assistant seul », et les deux modes lisent
+ * le MEME noeud du document (`#agent-activity`, jamais duplique).
  * @returns {Array} missions courantes (buildRunningMissions)
  */
-function publishSuperMissionsCount() {
+export function publishSuperMissionsCount() {
   const missions = buildRunningMissions(getAgentActivitySnapshot().list, collectQueuedMissions());
   const { running, waiting } = splitMissions(missions);
   setAgentPanelTaskCount(running.length, waiting.length);
   return missions;
+}
+
+// ── Abonnement UNIQUE du compteur « Travail » ─────────────────────────────
+// Le compte ne doit pas dependre de l'ouverture de l'onglet 🧭 Assistant : au
+// demarrage, aucun onglet 🧭 n'existe, donc `startSuperMissionsWatch()` n'a
+// jamais tourne et le bouton « Travail » restait MUET alors que des agents
+// travaillaient ou que des commandes attendaient leur tour. En mode
+// « Assistant seul », l'onglet a forcement ete ouvert auparavant : le compteur
+// y etait juste. Les deux modes pouvaient donc afficher deux valeurs
+// differentes alors qu'il n'y avait qu'un seul calcul — la divergence venait
+// de l'ABONNEMENT, pas du calcul. Ce demarrage, appele par `main.js` sans
+// dependance a un onglet, supprime la cause : UN abonnement, UN calcul, UN
+// noeud, pour les deux modes.
+let taskCounterUnsub = null;
+
+/**
+ * Demarre le compteur « Travail » — idempotent : quel que soit le nombre
+ * d'appels (demarrage de Pilot, ouverture puis fermeture de l'onglet 🧭), il
+ * n'existe qu'UN abonnement, donc qu'une seule publication du compte.
+ * @returns {boolean} true si l'abonnement vient d'etre pose.
+ */
+export function startTaskCounter() {
+  if (taskCounterUnsub) return false;
+  taskCounterUnsub = subscribeAgentActivity(publishSuperMissionsCount);
+  return true;
 }
 
 function renderSuperMissions() {
@@ -4005,10 +4033,11 @@ export async function createSuperAgent(container) {
       stopSuperMissionsWatch();
       // ... MAIS le compteur du bouton « Travail » doit rester VRAI onglet
       // ferme : des agents et des demandes en file continuent de vivre (les
-      // commandes manuelles d'un projet, par exemple). Un abonnement UNIQUE au
-      // store, sans rendu de liste (le volet n'existe plus), prend donc le
-      // relais : le compte ne se fige jamais et ne ment jamais.
-      superMissionsUnsub = subscribeAgentActivity(publishSuperMissionsCount);
+      // commandes manuelles d'un projet, par exemple). L'abonnement UNIQUE du
+      // compteur (startTaskCounter, deja pose au demarrage de Pilot et SANS
+      // rendu de liste) prend le relais : le compte ne se fige jamais, ne ment
+      // jamais et ne se dedouble pas (aucun second calcul).
+      startTaskCounter();
       // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
       // Anti-doublon Telegram (lot 3) : l'Assistant ne peut plus parler → les
       // avis bruts retardés partent MAINTENANT (aucun événement perdu), et la

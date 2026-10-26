@@ -27,6 +27,58 @@ import { fileURLToPath } from "node:url";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => ({})) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: vi.fn(async () => true),
+  requestPermission: vi.fn(async () => "granted"),
+  sendNotification: vi.fn(),
+}));
+vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(), exit: vi.fn() }));
+
+// `super-agent.js` (importe par le bloc (i) pour appeler le CALCUL REEL du
+// compte) est un module d'interface qui touche `window` des son evaluation. Un
+// `window`/`document` minimal est donc installe AVANT les imports (`vi.hoisted`
+// s'execute avant eux), comme dans `verrou-par-projet.test.js`. Les blocs (a) a
+// (h) remplacent ensuite `globalThis.document` par leur registre minimal.
+vi.hoisted(() => {
+  const noop = () => {};
+  const el = () => ({
+    addEventListener: noop,
+    removeEventListener: noop,
+    appendChild: noop,
+    remove: noop,
+    classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+    style: {},
+    dataset: {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    setAttribute: noop,
+    getAttribute: () => null,
+    focus: noop,
+    scrollIntoView: noop,
+    insertAdjacentHTML: noop,
+    innerHTML: "",
+    textContent: "",
+    value: "",
+  });
+  globalThis.window = globalThis;
+  globalThis.addEventListener = noop;
+  globalThis.removeEventListener = noop;
+  globalThis.dispatchEvent = noop;
+  globalThis.document = {
+    createElement: el,
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: noop,
+    removeEventListener: noop,
+    body: el(),
+    documentElement: el(),
+  };
+  globalThis.localStorage = { getItem: () => null, setItem: noop, removeItem: noop };
+  globalThis.requestAnimationFrame = (cb) => setTimeout(() => cb(0), 0);
+  globalThis.cancelAnimationFrame = () => {};
+  globalThis.matchMedia = () => ({ matches: false, addEventListener: noop, removeEventListener: noop });
+});
 
 import {
   AGENT_PANEL_UNREAD_MAX,
@@ -43,6 +95,9 @@ import { enqueueProjectCommand, listAllProjectCommands, countProjectQueuedComman
 import { exclusivityQueueOfProject, listExclusivityWaitingDemands } from "./agents-bus.js";
 import { sliceSource } from "./source-slice.js";
 import { enqueueExclusivity } from "./exclusivity-queue.js";
+// Le CALCUL unique du compte (et son demarrage) sont importes du module
+// Assistant : le test ne recalcule rien lui-meme — il appelle la production.
+import { publishSuperMissionsCount } from "./super-agent.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const lire = (rel) => readFileSync(resolve(ROOT, rel), "utf8").replace(/\r\n/g, "\n");
@@ -599,5 +654,176 @@ describe("(h) cas limites : le compteur suit le travail reel, dans les deux mode
     setAgentPanelTaskCount(2, 4);
     expect(el("agent-activity-count").textContent).toBe("2/6");
     expect(el("agent-activity-entry").title).toBe("Travail : 2 taches en cours sur 6 (4 en attente)");
+  });
+});
+
+// ===========================================================================
+// (i) Les deux modes lisent la MEME valeur, alimentee DES LE DEMARRAGE
+//
+// Cause constatee sur le disque (RAPPORT-compteur-travail-unifie.md) : il n'y
+// avait PAS deux calculs — il n'y en a jamais eu qu'un — mais son ABONNEMENT
+// etait pose par la fabrique de l'onglet Assistant (`createSuperAgentBlock`).
+// Tant que cet onglet n'avait jamais ete ouvert, personne ne publiait le
+// compte : le bouton « Travail » restait muet (ou fige) en mode normal. En mode
+// « Assistant seul », l'onglet Assistant existe forcement (c'est lui qui porte
+// le mode) : le meme calcul y etait donc alimente, et le compte y etait juste.
+// Deux valeurs affichees pour deux modes, sans une seule ligne de calcul
+// dupliquee. La cause est l'ALIMENTATION, pas le calcul.
+//
+// Ce bloc echoue si :
+//   1. le compteur cesse de demarrer avec l'application (retour dans l'onglet) ;
+//   2. un SECOND abonnement ou un SECOND calcul apparait ;
+//   3. la valeur publiee change en passant d'un mode a l'autre.
+// ===========================================================================
+describe("(i) les deux modes affichent la MEME valeur, alimentee des le demarrage", () => {
+  const jsMain = lire("src/js/main.js");
+
+  /** Conteneur minimal : DEPLACE un noeud (comme insertBefore), ne le copie pas. */
+  class FakeConteneur {
+    constructor(nom) {
+      this.nom = nom;
+      this.children = [];
+      this.parentNode = null;
+    }
+    retire(noeud) {
+      const i = this.children.indexOf(noeud);
+      if (i >= 0) this.children.splice(i, 1);
+    }
+    insere(noeud, ref) {
+      if (noeud.parentNode) noeud.parentNode.retire(noeud);
+      const i = ref ? this.children.indexOf(ref) : -1;
+      if (i < 0) this.children.push(noeud);
+      else this.children.splice(i, 0, noeud);
+      noeud.parentNode = this;
+      return noeud;
+    }
+  }
+
+  /** Corps verifie du demarrage du compteur (ancres controlees). */
+  function corpsDemarrage() {
+    return sliceSource(jsSuper, "export function startTaskCounter() {", "\n}\n", 80);
+  }
+
+  it("le compteur demarre avec l'application, PAS avec l'ouverture de l'onglet Assistant", () => {
+    // main.js importe le demarrage et l'appelle au lancement...
+    expect(jsMain).toMatch(/import \{[^}]*startTaskCounter[^}]*\} from "\.\/super-agent\.js"/);
+    expect(jsMain).toMatch(/^\s*startTaskCounter\(\);$/m);
+    // ...et ne fabrique pas l'onglet Assistant au demarrage : si le compteur y
+    // retournait, ce test rougirait, car il n'y aurait plus de demarrage
+    // independant de l'onglet.
+    expect(jsMain).not.toContain("createSuperAgentBlock");
+    // L'abonnement est UNIQUE (idempotent) : le demarrage ET la fermeture de
+    // l'onglet ne peuvent pas creer deux publications du compte.
+    const corps = corpsDemarrage();
+    expect(corps).toContain("if (taskCounterUnsub) return false;");
+    expect(corps).toContain("subscribeAgentActivity(publishSuperMissionsCount)");
+  });
+
+  it("un SEUL abonnement et un SEUL calcul du compte dans tout le module Assistant", () => {
+    // Un second abonnement = un second calcul possible = deux valeurs.
+    expect((jsSuper.match(/subscribeAgentActivity\(publishSuperMissionsCount\)/g) || []).length).toBe(1);
+    // Une seule ecriture du compte, et elle passe par le peintre partage.
+    expect((jsSuper.match(/setAgentPanelTaskCount\(/g) || []).length).toBe(1);
+    // Le calcul lui-meme n'existe qu'une fois.
+    expect((jsSuper.match(/function publishSuperMissionsCount\(/g) || []).length).toBe(1);
+  });
+
+  it("la MEME valeur publiee dans les deux placements (calcul reel, meme noeud)", () => {
+    // Etat de REFERENCE : ce que le CALCUL REEL publie avant mes demandes. Les
+    // autres blocs de ce fichier laissent leurs propres files : on mesure donc
+    // un ECART, jamais un nombre absolu emprunte a un autre test.
+    const reference = publishSuperMissionsCount();
+    const referenceTexte = el("agent-activity-count").textContent;
+    const referenceAttente = splitMissions(reference).waiting.length;
+    const referenceEnCours = splitMissions(reference).running.length;
+
+    // File REELLE : deux commandes manuelles mises en file sur deux projets.
+    abandonProjectCommands("/projet/mode-normal");
+    abandonProjectCommands("/projet/mode-assistant-seul");
+    enqueueProjectCommand({ project: "/projet/mode-normal", text: "prepare la livraison", launch: () => true });
+    enqueueProjectCommand({ project: "/projet/mode-assistant-seul", text: "relis le diff", launch: () => true });
+
+    // Mode normal : le noeud du compteur vit dans la rangee d'onglets.
+    const rangee = new FakeConteneur("tab-row");
+    const barre = new FakeConteneur("sa-immersive-top");
+    const noeud = new FakeConteneur("agent-activity");
+    registry.set("agent-activity", noeud);
+    rangee.insere(noeud, null);
+
+    const missionsNormal = publishSuperMissionsCount();
+    const normal = {
+      texte: el("agent-activity-count").textContent,
+      infobulle: el("agent-activity-entry").title,
+      chiffre: el("agent-activity-count"),
+      parent: noeud.parentNode,
+    };
+    const decoupage = splitMissions(missionsNormal);
+    // Le calcul reel voit bien mes deux demandes (et rien de nouveau d'autre).
+    expect(decoupage.waiting.length - referenceAttente).toBe(2);
+    expect(decoupage.running.length).toBe(referenceEnCours);
+    // Le chiffre affiche EST ce calcul-la (aucun second comptage).
+    expect(normal.texte).toBe(agentTaskCounterText(decoupage.running.length, decoupage.waiting.length));
+    expect(normal.texte).not.toBe(referenceTexte); // la file a bien change
+    expect(normal.parent).toBe(rangee);
+
+    // Passage en mode « Assistant seul » : le MEME noeud est DEPLACE.
+    barre.insere(noeud, null);
+    const missionsSeul = publishSuperMissionsCount();
+    const seul = {
+      texte: el("agent-activity-count").textContent,
+      infobulle: el("agent-activity-entry").title,
+      chiffre: el("agent-activity-count"),
+      parent: noeud.parentNode,
+    };
+    expect(seul.parent).toBe(barre);
+    expect(seul.chiffre).toBe(normal.chiffre); // aucune copie du noeud
+    expect(seul.texte).toBe(normal.texte); // aucune valeur differente
+    expect(seul.infobulle).toBe(normal.infobulle);
+    expect(missionsSeul).toEqual(missionsNormal); // le MEME calcul
+
+    // Retour en mode normal : la valeur ne bouge pas d'un pouce.
+    rangee.insere(noeud, null);
+    expect(publishSuperMissionsCount()).toEqual(missionsNormal);
+    expect(el("agent-activity-count").textContent).toBe(normal.texte);
+    expect(noeud.parentNode).toBe(rangee);
+
+    abandonProjectCommands("/projet/mode-normal");
+    abandonProjectCommands("/projet/mode-assistant-seul");
+    setAgentPanelTaskCount(0, 0);
+  });
+
+  it("la file qui bouge change le chiffre de la MEME facon dans les deux modes", () => {
+    abandonProjectCommands("/projet/file-bougeante");
+    const rangee = new FakeConteneur("tab-row");
+    const barre = new FakeConteneur("sa-immersive-top");
+    const noeud = new FakeConteneur("agent-activity");
+    registry.set("agent-activity", noeud);
+    rangee.insere(noeud, null);
+
+    enqueueProjectCommand({ project: "/projet/file-bougeante", text: "premiere demande", launch: () => true });
+    const apresUne = publishSuperMissionsCount();
+    const texteUne = el("agent-activity-count").textContent;
+    expect(texteUne).toBe(
+      agentTaskCounterText(splitMissions(apresUne).running.length, splitMissions(apresUne).waiting.length)
+    );
+
+    // Une demande de plus arrive PENDANT le mode « Assistant seul ».
+    barre.insere(noeud, null);
+    enqueueProjectCommand({ project: "/projet/file-bougeante", text: "seconde demande", launch: () => true });
+    const apresDeux = publishSuperMissionsCount();
+    const texteDeux = el("agent-activity-count").textContent;
+    expect(splitMissions(apresDeux).waiting.length - splitMissions(apresUne).waiting.length).toBe(1);
+    expect(texteDeux).toBe(
+      agentTaskCounterText(splitMissions(apresDeux).running.length, splitMissions(apresDeux).waiting.length)
+    );
+    expect(texteDeux).not.toBe(texteUne);
+
+    // La meme file, relue en mode normal : exactement le meme chiffre.
+    rangee.insere(noeud, null);
+    expect(publishSuperMissionsCount()).toEqual(apresDeux);
+    expect(el("agent-activity-count").textContent).toBe(texteDeux);
+
+    abandonProjectCommands("/projet/file-bougeante");
+    setAgentPanelTaskCount(0, 0);
   });
 });

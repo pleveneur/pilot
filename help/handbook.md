@@ -3495,9 +3495,13 @@ rejouer.
   une demande à l'agent », « Préparer une livraison », « Lister les tâches en
   cours ») qui **préremplissent la zone de saisie** (elles n'envoient pas).
 - La barre du haut ne contient aucun toggle voix : la **🎙️ dictée** reste dans
-  la barre de saisie. Ni bouton de **synthèse vocale** (🔊), ni **suivi du
-  travail** (cercle + panneau à trois onglets) en mode assistant seul — ces
-  contrôles restent propres au mode standard. Le message d'accueil affiche le **nom réel
+  la barre de saisie, et aucun bouton de **synthèse vocale** (🔊) n'y figure. Le
+  **suivi du travail** y est en revanche **le même** que dans le mode normal :
+  l'entrée « Travail » (point + mot + compteur « en cours / total » + son
+  panneau à trois onglets) est **déplacée** dans la barre du mode, à gauche du
+  résumé des agents — **même élément** (jamais une copie), **même libellé**,
+  **même valeur**, alimentée par le **même calcul**. Le message d'accueil
+  affiche le **nom réel
   de l'assistant** (config de l'onglet 🧭), avec repli « Pilot Assistant ».
 - Le bouton **← (retour)** revient à l'interface complète. L'état de la
   conversation est **préservé** lors des allers-retours (les éléments du chat
