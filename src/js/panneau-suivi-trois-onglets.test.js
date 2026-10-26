@@ -116,7 +116,12 @@ const PANEL_IDS = [
   "agent-activity",
   "agent-activity-dropdown",
   "agent-activity-dot",
-  "agent-activity-badge",
+  // Le badge de non-lus du bouton est remplace par le COMPTEUR DE TRAVAIL ;
+  // le signal de non-lus vit desormais dans le point du bouton et dans le
+  // point de 6 px de l'onglet « Evenements ».
+  "agent-activity-count",
+  "agent-activity-events-unread",
+  "agent-activity-entry",
   "agent-activity-card",
   "agent-activity-list",
   "agent-activity-panel-clear",
@@ -137,8 +142,9 @@ function installeDom() {
     if (t !== "agents") el(`agent-activity-pane-${t}`).classList.add("hidden");
   }
   el("agent-activity-panel-clear").hidden = true;
-  el("agent-activity-badge").hidden = true;
-  el("agent-activity-badge").textContent = "0";
+  el("agent-activity-count").hidden = true;
+  el("agent-activity-count").textContent = "";
+  el("agent-activity-events-unread").hidden = true;
   globalThis.document = { getElementById: parId, querySelector: () => null };
 }
 
@@ -559,7 +565,7 @@ describe("(c) les trois volets sont reellement alimentes", () => {
     const fin = html.indexOf('id="agent-activity-pane-events"');
     expect(fin).toBeGreaterThan(debut);
     expect(html.slice(debut, fin)).toContain('class="sa-tasks-list"');
-    expect(jsSuper).toMatch(/buildRunningMissions\(snapshot\.list, collectQueuedMissions\(\)\)/);
+    expect(jsSuper).toMatch(/buildRunningMissions\(getAgentActivitySnapshot\(\)\.list, collectQueuedMissions\(\)\)/);
     expect(jsSuper).toMatch(/superTasksList\.innerHTML = renderMissionsPanelHtml\(missions\)/);
     // Sans mission : message explicite (jamais une liste vide trompeuse).
     expect(renderMissionsPanelHtml([])).toContain("Aucune mission en cours");
@@ -597,25 +603,31 @@ describe("(c) les trois volets sont reellement alimentes", () => {
 // ════════════════════════════════════════════════════════════════════════════
 // (d) Le signal d'attention reste visible sur le cercle
 // ════════════════════════════════════════════════════════════════════════════
-describe("(d) signal d'attention (pastille + cercle allume)", () => {
-  it("la pastille est posee SUR le cercle du suivi du travail", () => {
+describe("(d) signal d'attention (point du bouton + point de l'onglet Evenements)", () => {
+  it("le bouton du suivi du travail est le seul element interactif nomme", () => {
     const debut = html.indexOf('id="agent-activity-dot"');
     const bouton = html.slice(html.lastIndexOf("<button", debut), html.indexOf("</button>", debut));
-    expect(bouton).toContain('id="agent-activity-badge"');
+    expect(bouton).toContain('id="agent-activity-entry"');
+    expect(bouton).toContain('id="agent-activity-count"');
     expect(bouton).toContain("aria-haspopup");
     expect(bouton).toContain("aria-expanded");
+    // Le badge de non-lus ne vit plus dans le bouton (sa place porte le compte).
+    expect(bouton).not.toContain('id="agent-activity-badge"');
   });
 
-  it("un evenement non lu allume la pastille et le cercle", () => {
+  it("un evenement non lu allume le point du bouton et celui de l'onglet", () => {
     openAgentPanel("agents");
     expect(getAgentPanelUnread()).toBe(0);
-    expect(el("agent-activity-badge").hidden).toBe(true);
+    expect(el("agent-activity-events-unread").hidden).toBe(true);
     agentPanelNoteEvent();
     expect(getAgentPanelUnread()).toBe(1);
-    expect(el("agent-activity-badge").hidden).toBe(false);
-    expect(el("agent-activity-badge").textContent).toBe("1");
+    expect(el("agent-activity-events-unread").hidden).toBe(false);
     expect(el("agent-activity-dot").classList.contains("agent-unread")).toBe(true);
-    // Compteur plafonne (jamais une pastille illisible).
+    // Le nombre REEL vit dans l'infobulle (aucun chiffre en clair : la marge
+    // de l'onglet ne le porte pas).
+    expect(el("agent-activity-tab-events").title).toBe("1 evenement non lu");
+    expect(el("agent-activity-tab-events").getAttribute("aria-label")).toBe("Événements : 1 evenement non lu");
+    // Compteur plafonne (jamais un signal illisible).
     expect(agentPanelBadgeText(150)).toBe(`${AGENT_PANEL_UNREAD_MAX}+`);
     expect(agentPanelBadgeText(0)).toBe("");
   });
@@ -627,8 +639,11 @@ describe("(d) signal d'attention (pastille + cercle allume)", () => {
     expect(getAgentPanelUnread()).toBe(2);
     selectAgentPanelTab("events");
     expect(getAgentPanelUnread()).toBe(0);
-    expect(el("agent-activity-badge").hidden).toBe(true);
+    expect(el("agent-activity-events-unread").hidden).toBe(true);
     expect(el("agent-activity-dot").classList.contains("agent-unread")).toBe(false);
+    // Plus d'infobulle quand il n'y a rien a voir ; le nom lu reste le libelle.
+    expect(el("agent-activity-tab-events").title).toBe("");
+    expect(el("agent-activity-tab-events").getAttribute("aria-label")).toBe("Événements");
   });
 
   it("la liste des evenements sous les yeux ne compte pas comme non lue", () => {

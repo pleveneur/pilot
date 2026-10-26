@@ -46,7 +46,7 @@ import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 import { armDoneSound, noteSoundRenderActivity, markSoundRenderIdle, resetDeferredSound, setDeferredSoundPlayer } from "./sound-deferred.js";
 setDeferredSoundPlayer(playAssistantSound);
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from "./agents.js";
-import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
+import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE, RUN_LAUNCH_MIN_STUCK_IDLE_MS, listExclusivityWaitingDemands } from "./agents-bus.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections, buildReminderInjection, buildReminderInjectionMessage, formatReminderGroupNotificationLabel, formatReminderHoldNotice, createReminderHoldGuard } from "./super-agent-schedule.js";
@@ -54,7 +54,11 @@ import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel
 // mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
 // « Supprimer les rappels inutiles » de Paramètres → Assistant.
 import { classifyScheduleCleanup, cleanupApplyPayload } from "./super-agent-schedule-cleanup.js";
-import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility } from "./agent-activity.js";
+import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility, splitMissions, setAgentPanelTaskCount, isAgentPanelPaneVisible } from "./agent-activity.js";
+// Compteur du bouton « Travail » : les commandes TAPEES A LA MAIN mises en file
+// sur un projet sont une famille d'attente a part entiere (elles n'etaient
+// comptees nulle part, donc le total affiche etait faux).
+import { listAllProjectCommands } from "./project-task-queue.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames, addConcernedBadge, badgeNameFromProjectPath } from "./super-agent-badges.js";
@@ -2541,17 +2545,16 @@ function applySuperEventsTabsVisibility() {
 }
 
 /**
- * Réagit au changement d'onglet du panneau du suivi du travail : le volet
- * « Tâches » n'est alimenté EN DIRECT (store d'activité partagé) que tant qu'il
- * est affiché ; les autres onglets coupent cette surveillance (aucun travail
- * inutile, aucune photo périmée au retour : on recharge à l'affichage).
+ * Réagit au changement d'onglet du panneau du suivi du travail. La surveillance
+ * des missions ne s'arrête PLUS sur un autre onglet : le compteur du bouton
+ * « Travail » doit rester vrai (il se figerait dès qu'on regarde ailleurs). Le
+ * RENDU de la liste, lui, n'a lieu que lorsque le volet « Tâches » est affiché
+ * (voir renderSuperMissions) : aucun travail d'affichage inutile, aucune photo
+ * périmée au retour (on repeint a l'affichage).
  * @param {{tab: string, open: boolean}} state
  */
 function onPanelTabChanged(state) {
-  if (!state || !state.open || state.tab !== "tasks") {
-    stopSuperMissionsWatch();
-    return;
-  }
+  if (!state || !state.open || state.tab !== "tasks") return;
   loadSuperMissions();
 }
 
@@ -2566,11 +2569,28 @@ function onPanelTabChanged(state) {
  * mission → message explicite, jamais une liste vide trompeuse. Le rendu est
  * PUR (renderMissionsPanelHtml, agent-activity.js).
  */
+/**
+ * Publie le COMPTE des missions sur le bouton « Travail » et retourne les
+ * missions (aucun rendu de liste). Une seule source de calcul pour le bouton et
+ * pour l'onglet : `buildRunningMissions` puis `splitMissions` (fonctions pures).
+ * @returns {Array} missions courantes (buildRunningMissions)
+ */
+function publishSuperMissionsCount() {
+  const missions = buildRunningMissions(getAgentActivitySnapshot().list, collectQueuedMissions());
+  const { running, waiting } = splitMissions(missions);
+  setAgentPanelTaskCount(running.length, waiting.length);
+  return missions;
+}
+
 function renderSuperMissions() {
+  // Le COMPTE est publie AVANT tout rendu : il ne dépend pas de l'affichage du
+  // volet, seulement des mêmes données que lui. Le bouton et l'onglet ne
+  // peuvent donc pas se contredire.
+  const missions = publishSuperMissionsCount();
+  // Rendu de la liste : uniquement quand le volet « Tâches » est a l'ecran.
+  if (!isAgentPanelPaneVisible("tasks")) return;
   const superTasksList = agentPanelTasksListElement();
   if (!superTasksList) return;
-  const snapshot = getAgentActivitySnapshot();
-  const missions = buildRunningMissions(snapshot.list, collectQueuedMissions());
   superTasksList.innerHTML = renderMissionsPanelHtml(missions);
   refreshIcons(superTasksList);
 }
@@ -2582,6 +2602,17 @@ function missionProjectLabel(project) {
 }
 
 /** Missions EN ATTENTE, tous projets (files de délégation et de runs). */
+/**
+ * Missions EN ATTENTE, tous projets. Quatre familles, toutes lues dans un etat
+ * DEJA tenu par l'application (aucune structure nouvelle, aucun appel au
+ * moteur) :
+ *  1. les delegations de l'assistant (`delegationStates`) ;
+ *  2. les demandes de `run_agents` (`runAgentsQueueByProject`) ;
+ *  3. les commandes TAPEES A LA MAIN mises en file sur un projet
+ *     (`project-task-queue.js`) — oubliees jusqu'ici, donc total faux ;
+ *  4. les agents qui attendent leur tour dans la file d'exclusivite du bus
+ *     (`agents-bus.js`) — oublies aussi.
+ */
 function collectQueuedMissions() {
   const out = [];
   for (const [project, st] of delegationStates) {
@@ -2596,6 +2627,19 @@ function collectQueuedMissions() {
       // sur l'extraction du libellé de la demande (comportement antérieur).
       out.push({ project: missionProjectLabel(project), mission: item.label || "", resume: item.resume || "" });
     }
+  }
+  // FAMILLE 3 : commandes manuelles en file (project-task-queue.js).
+  for (const cmd of listAllProjectCommands()) {
+    out.push({ project: missionProjectLabel(cmd.project), mission: cmd.label || "", agent: cmd.agent || "" });
+  }
+  // FAMILLE 4 : demandes en file d'exclusivite du bus (agents-bus.js).
+  for (const demand of listExclusivityWaitingDemands()) {
+    out.push({
+      project: missionProjectLabel(demand.project),
+      mission: demand.brief || "",
+      resume: demand.resume || "",
+      agent: demand.agent || "",
+    });
   }
   return out;
 }
@@ -2833,6 +2877,10 @@ export async function createSuperAgent(container) {
   // rechargées quand son onglet « Tâches » s'affiche).
   if (stopPanelTabWatch) stopPanelTabWatch();
   stopPanelTabWatch = onAgentPanelTabChange(onPanelTabChanged);
+  // Compteur du bouton « Travail » : il vit DES L'OUVERTURE de l'onglet, sans
+  // attendre que le volet « Taches » ait ete affiche (sinon le bouton resterait
+  // muet alors que des missions tournent).
+  startSuperMissionsWatch();
   // Réglage global : onglet « Tâches » présent ou non.
   applySuperEventsTabsVisibility();
   // Indicateur discret « assistant occupé » (Bug 1 UX) : bandeau inséré au-dessus
@@ -3913,6 +3961,12 @@ export async function createSuperAgent(container) {
         stopPanelTabWatch = null;
       }
       stopSuperMissionsWatch();
+      // ... MAIS le compteur du bouton « Travail » doit rester VRAI onglet
+      // ferme : des agents et des demandes en file continuent de vivre (les
+      // commandes manuelles d'un projet, par exemple). Un abonnement UNIQUE au
+      // store, sans rendu de liste (le volet n'existe plus), prend donc le
+      // relais : le compte ne se fige jamais et ne ment jamais.
+      superMissionsUnsub = subscribeAgentActivity(publishSuperMissionsCount);
       // Signal de travail de la zone de saisie : on retire notre abonnement au
       // store partage (le store et le point du haut survivent a la fermeture).
       unsubscribeAgentsWorking();

@@ -112,11 +112,24 @@ apprend et répond.
     la croix **×** ou un clic sur le cercle referment le panneau ; les onglets
     sont atteignables au clavier (Tab) et commutables aux **flèches** (←/→,
     Début/Fin) **dans l'ordre d'affichage**, de gauche à droite.
-  - **Signal d'attention conservé SUR le cercle** : une **pastille** posée sur
-    le cercle affiche le nombre d'**événements non lus** (plafonnée à « 99+ ») et
-    le cercle **s'allume** tant qu'il reste des événements non vus ; regarder
-    l'onglet « Événements » **éteint** le signal. Tant que la liste est sous vos
-    yeux, un nouvel événement **ne compte pas** comme non lu.
+  - **Compteur de travail sur l'entrée « Travail »** : à droite du mot, deux
+    nombres **« en cours / total »** (par exemple **`2/5`**) disent d'un coup
+    d'œil **combien de tâches tournent** et **combien sont prévues au total**
+    (en cours **plus** en attente). Le total compte **tout ce qui attend
+    vraiment** : les missions de l'assistant, les demandes qu'il a déléguées, les
+    **commandes tapées pendant qu'une tâche tourne** et les **agents qui
+    attendent leur tour**. **Rien** ne s'affiche quand il n'y a aucun travail ;
+    le chiffre s'**allume** quand au moins une tâche est **en cours** (aucune
+    animation). Les **nombres réels** (et le plafond « 99+ » quand ils deviennent
+    grands) sont dans l'**infobulle**. Le compteur **et** le volet « Tâches »
+    affichent **toujours les mêmes nombres**.
+  - **Signal d'attention des événements non lus** (il ne se perd pas) : le
+    **point du bouton** s'allume tant qu'il reste des événements non vus, et un
+    **petit point** apparaît sur l'onglet « Événements » — **pas de nombre en
+    clair** (il ne tient pas dans la marge du panneau), le nombre exact étant dans
+    son **infobulle**. Regarder l'onglet « Événements » **éteint** le signal.
+    Tant que la liste est sous vos yeux, un nouvel événement **ne compte pas**
+    comme non lu.
   - Le panneau **reste ouvert** tant qu'on ne le ferme pas ; son état
     ouvert/fermé est **mémorisé**. Pendant l'ouverture, les nouveaux événements
     s'ajoutent en direct en haut de la liste.
@@ -1967,6 +1980,59 @@ rejouer.
 <!-- /HELP:super-agent-data-care -->
 
 <!-- /HELP:super-agent -->
+
+---
+
+## Technique — compteur de travail de l'entrée « Travail »
+
+Décision propriétaire appliquée telle quelle : `RAPPORT-compteur-taches.md`
+(rapport d'application : `RAPPORT-compteur-taches-application.md`).
+
+- **Ce qui est affiché** : `#agent-activity-count`, a droite du libelle
+  `.agent-activity-entry-label` du bouton `#agent-activity-entry`. Texte
+  `en cours/total`, chaine vide et `hidden` quand `en cours + total <= 0`
+  (aucun `0/0` permanent). Plafond `AGENT_PANEL_UNREAD_MAX` (99) applique
+  **chiffre par chiffre** (`99+/99+`) ; les nombres **reels** sont dans
+  `title` et `aria-label` du bouton (meme chaine, `agentTaskCounterLabel`).
+- **Fonctions pures** (`src/js/agent-activity.js`) : `agentTaskCounterText`,
+  `agentTaskCounterLabel`, `agentUnreadTooltip`, `paintAgentPanelTaskCount`,
+  `setAgentPanelTaskCount`. Aucun etat nouveau : elles ne font que rendre un
+  compte deja calcule.
+- **Source unique du compte** : `publishSuperMissionsCount()`
+  (`src/js/super-agent.js`) calcule une seule fois
+  `buildRunningMissions(getAgentActivitySnapshot().list, collectQueuedMissions())`
+  puis `splitMissions(missions)` ; `setAgentPanelTaskCount(running.length,
+  waiting.length)` alimente le bouton, et `renderSuperMissions()` **reprend ce
+  resultat** pour le volet « Taches ». Le bouton ne peut donc pas contredire
+  l'onglet.
+- **Quatre familles d'attente**, toutes lues dans des files **deja tenues** :
+  `delegationStates`, `runAgentsQueueByProject` (`collectQueuedMissions`),
+  `listAllProjectCommands()` (`src/js/project-task-queue.js`, commandes
+  manuelles mises en file) et `listExclusivityWaitingDemands()`
+  (`src/js/agents-bus.js`, `projectExclusivityQueues`).
+- **Le compte vit aussi onglet Assistant ferme** : a la fermeture,
+  `subscribeAgentActivity(publishSuperMissionsCount)` est abonne ; a l'ouverture,
+  `startSuperMissionsWatch()`. `onPanelTabChanged` **n'arrete plus** la
+  surveillance (sinon le compteur gelait) : seul le **rendu de la liste** est
+  conditionne par `isAgentPanelPaneVisible("tasks")`.
+- **Reglage respecte** : `setAgentPanelTabsVisibility()` rappelle
+  `paintAgentPanelTaskCount()` ; `super_agent_tasks_tab_enabled === false`
+  masque l'onglet « Taches » **et** le compteur (aucun nombre sans volet).
+- **Apparence verrouillee** : texte seul (pas de pastille, pas de fond, pas de
+  bordure, pas d'animation), `color: var(--text-secondary)` (AA dans les deux
+  themes), `font-variant-numeric: tabular-nums` (largeur stable), aucune hauteur
+  propre (`font-size: var(--font-xs)`, `line-height: 1`).
+- **Signal des non-lus conserve** : point du bouton `#agent-activity-dot`
+  (`agent-unread`) **et** point de 6 px `#agent-activity-events-unread` sur
+  l'onglet « Evenements », sans nombre en clair (la marge du panneau ne le porte
+  pas) ; nombre exact dans `agentUnreadTooltip()`.
+- **Aucun pixel de hauteur ajoute** : `#tab-row` reste 36 px + 1 px de filet =
+  **37 px peints**, bouton a **22 px**, compteur sans hauteur (mesure avant/apres
+  identique, voir le rapport d'application).
+- **Verrou** : `src/js/compteur-taches-travail.test.js` (24 tests) — vide,
+  en cours, en attente, plafond, **bouton = onglet**, les deux familles oubliees,
+  absence de pastille, hauteur de rangee inchangee, signal des non-lus. Il
+  **echoue** si le total oublie l'attente ou si une famille disparait du compte.
 
 ---
 

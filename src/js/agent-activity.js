@@ -1172,6 +1172,112 @@ export function agentPanelBadgeText(count) {
   return n > AGENT_PANEL_UNREAD_MAX ? `${AGENT_PANEL_UNREAD_MAX}+` : String(n);
 }
 
+// ── Compteur de TRAVAIL de l'entree « Travail » (bouton de la rangee) ────────
+// Le bouton affiche « en cours / total » (ex. 2/5). Le total est celui demande
+// par le proprietaire : "les taches totales prevues = celles en cours + celles
+// en attente". Les deux nombres sortent de `splitMissions()` — LA MEME fonction
+// pure que les deux titres de groupes de l'onglet « Taches » — donc le bouton ne
+// peut pas contredire l'onglet (verrou : compteur-taches-travail.test.js).
+
+/** Derniers nombres publies (repeints quand la visibilite de l'onglet change). */
+let panelTaskRunning = 0;
+let panelTaskWaiting = 0;
+
+/** Normalise un compte (entier >= 0, jamais NaN). */
+function countOf(n) {
+  return Math.max(0, Math.floor(Number(n) || 0));
+}
+
+/** Nombre du texte visible : plafonne a « 99+ » (le bouton ne s'allonge pas). */
+function cappedCount(n) {
+  return n > AGENT_PANEL_UNREAD_MAX ? `${AGENT_PANEL_UNREAD_MAX}+` : String(n);
+}
+
+/**
+ * Texte du compteur de travail : « en cours / total », chaine VIDE quand il n'y
+ * a ni travail en cours ni demande en attente (aucun « 0/0 » permanent).
+ * Fonction PURE.
+ * @param {number} running nombre de taches en cours
+ * @param {number} waiting nombre de demandes en attente
+ * @returns {string}
+ */
+export function agentTaskCounterText(running, waiting) {
+  const r = countOf(running);
+  const w = countOf(waiting);
+  if (r + w <= 0) return "";
+  return `${cappedCount(r)}/${cappedCount(r + w)}`;
+}
+
+/**
+ * Infobulle (et `aria-label`, MEME chaine) du bouton « Travail ». Elle donne
+ * TOUJOURS les nombres REELS : le plafond du texte visible ne ment jamais.
+ * Fonction PURE.
+ * @param {number} running
+ * @param {number} waiting
+ * @returns {string}
+ */
+export function agentTaskCounterLabel(running, waiting) {
+  const r = countOf(running);
+  const w = countOf(waiting);
+  const total = r + w;
+  if (total <= 0) return "Suivi du travail";
+  const mot = r > 1 ? "taches" : "tache";
+  if (r > 0) return `Travail : ${r} ${mot} en cours sur ${total} (${w} en attente)`;
+  return `Travail : aucune tache en cours (${w} en attente)`;
+}
+
+/**
+ * Infobulle du point de l'onglet « Evenements » : nombre REEL d'evenements non
+ * lus (aucun chiffre n'est affiche sur l'onglet : la marge ne le porte pas).
+ * Fonction PURE.
+ * @param {number} count
+ * @returns {string} chaine vide quand il n'y a rien a signaler
+ */
+export function agentUnreadTooltip(count) {
+  const n = countOf(count);
+  if (n <= 0) return "";
+  return n > 1 ? `${n} evenements non lus` : `${n} evenement non lu`;
+}
+
+/**
+ * Repeint le compteur de travail du bouton « Travail » (texte, `hidden`,
+ * infobulle et `aria-label`). Le compteur SUIT le reglage de l'onglet
+ * « Taches » : onglet absent, compteur absent (il renverrait a un volet qui
+ * n'existe pas).
+ */
+function paintAgentPanelTaskCount() {
+  const enabled = panelTabEnabled.tasks !== false;
+  const running = enabled ? panelTaskRunning : 0;
+  const waiting = enabled ? panelTaskWaiting : 0;
+  const text = agentTaskCounterText(running, waiting);
+  const label = agentTaskCounterLabel(running, waiting);
+  const count = document.getElementById("agent-activity-count");
+  if (count) {
+    count.textContent = text;
+    count.hidden = !text;
+    // Au moins une tache EN COURS : le chiffre s'allume (aucune animation).
+    if (typeof count.classList?.toggle === "function") count.classList.toggle("working", running > 0);
+  }
+  const entry = document.getElementById("agent-activity-entry");
+  if (entry) {
+    // UNE SEULE source pour l'infobulle et le nom lu : la meme chaine.
+    entry.title = label;
+    entry.setAttribute("aria-label", label);
+  }
+}
+
+/**
+ * Publie le compte de travail (appele par l'onglet « Taches », sur les memes
+ * donnees que lui). Fonction a effet de bord limite a l'affichage.
+ * @param {number} running taches en cours
+ * @param {number} waiting demandes en attente
+ */
+export function setAgentPanelTaskCount(running, waiting) {
+  panelTaskRunning = countOf(running);
+  panelTaskWaiting = countOf(waiting);
+  paintAgentPanelTaskCount();
+}
+
 /** Onglet actuellement affiché. */
 export function getActiveAgentPanelTab() {
   return panelActiveTab;
@@ -1221,16 +1327,30 @@ function emitAgentPanelState() {
   }
 }
 
-/** Met à jour le signal d'attention posé sur le cercle (pastille + cercle). */
+/**
+ * Met a jour le signal d'attention des evenements non lus. Il ne vit plus dans
+ * le bouton (sa place porte desormais le compteur de travail) : le point du
+ * bouton s'allume, et un point de 6 px apparait sur l'onglet « Evenements »,
+ * avec le nombre REEL dans son infobulle et dans son nom lu (aucun chiffre
+ * affiche : il ne tient pas dans la marge du panneau).
+ */
 function updateAgentPanelBadge() {
   const text = agentPanelBadgeText(panelUnread);
-  const badge = document.getElementById("agent-activity-badge");
-  if (badge) {
-    badge.textContent = text || "0";
-    badge.hidden = !text;
-  }
   const dot = document.getElementById("agent-activity-dot");
   if (dot) dot.classList.toggle("agent-unread", !!text);
+  const point = document.getElementById("agent-activity-events-unread");
+  if (point) point.hidden = !text;
+  const tab = document.getElementById("agent-activity-tab-events");
+  if (tab) {
+    const tooltip = agentUnreadTooltip(panelUnread);
+    // Infobulle vide = pas d'infobulle ; le nom lu garde TOUJOURS le libelle de
+    // l'onglet, augmente du compte quand il y a quelque chose a voir.
+    tab.title = tooltip;
+    tab.setAttribute(
+      "aria-label",
+      tooltip ? `${AGENT_PANEL_TAB_LABELS.events} : ${tooltip}` : AGENT_PANEL_TAB_LABELS.events
+    );
+  }
 }
 
 /**
@@ -1286,21 +1406,21 @@ export function setAgentPanelTabsVisibility(config) {
   }
   // Onglet désactivé pendant qu'il est affiché → repli sur « Agents ».
   if (!visible.tasks && panelActiveTab === "tasks") selectAgentPanelTab(AGENT_PANEL_DEFAULT_TAB);
+  // Le compteur de travail suit le reglage (onglet absent = compteur absent).
+  paintAgentPanelTaskCount();
   return visible;
 }
 
 /**
- * Publie l'etat ouvert/ferme du panneau sur l'entree « Travail » ET sur la
- * pastille `#agent-activity-dot` (LOT 4 : cette derniere conserve ses attributs
- * d'accessibilite d'origine ; le bouton reel, lui, doit porter l'etat).
+ * Publie l'etat ouvert/ferme du panneau sur le BOUTON « Travail » (seul element
+ * interactif et seul porteur du nom lu ; la pastille `#agent-activity-dot` n'est
+ * qu'un contenu d'etat, sans role ni attribut d'accessibilite propre).
  * @param {boolean} open
  */
 function setActivityExpanded(open) {
   const value = open ? "true" : "false";
-  for (const id of ["agent-activity-entry", "agent-activity-dot"]) {
-    const el = document.getElementById(id);
-    if (el) el.setAttribute("aria-expanded", value);
-  }
+  const entry = document.getElementById("agent-activity-entry");
+  if (entry) entry.setAttribute("aria-expanded", value);
 }
 
 /** Ouvre le panneau (sur l'onglet mémorisé, ou sur `tab` s'il est fourni). */

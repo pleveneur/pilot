@@ -215,14 +215,24 @@
            s'ouvre sur « Agents » tant que l'utilisateur n'a pas choisi un autre
            onglet (mémoire). Unique endroit de l'interface où le travail se suit :
            plus de panneau séparé, plus de seconde liste.
-           LOT 4 : `#agent-activity-dot` et `#agent-activity-badge` sont CONSERVES
-           comme CONTENU du bouton nommé (identifiants et attributs
-           d'accessibilité inchangés) ; le clic garde le comportement du cercle
-           (bascule du panneau) et la respiration n'a pas bougé.
-           Le bouton garde ses TROIS identifiants et UN SEUL ecouteur de clic
-           (src/js/agent-activity.js) : seule sa place change. -->
+           LOT 4 : les elements du bouton sont CONSERVES comme CONTENU du bouton
+           nomme (le clic garde le comportement du cercle — bascule du panneau —
+           et la respiration n'a pas bouge). Le badge de non-lus, lui, est
+           remplace par le compteur de travail (voir ci-dessous).
+           Le bouton garde ses identifiants et UN SEUL ecouteur de clic
+           (src/js/agent-activity.js) : seule sa place change.
+           COMPTEUR DE TRAVAIL (RAPPORT-compteur-taches.md) : a droite du mot, le
+           bouton affiche « en cours / total » (ex. 2/5) — taches en cours des
+           agents plus demandes en attente. Le compte sort de la MEME fonction
+           pure que les deux titres de groupes de l'onglet « Taches »
+           (splitMissions) : le bouton ne peut pas contredire l'onglet. Rien
+           n'est affiche quand il n'y a aucun travail. L'ancien compteur
+           d'evenements non lus quitte le bouton : son signal survit sur le
+           point du bouton et sur un point de 6 px dans l'onglet « Evenements »
+           (#agent-activity-events-unread), avec le nombre reel dans son
+           infobulle. -->
       <div id="agent-activity">
-        <button type="button" id="agent-activity-entry" title="Suivi du travail" aria-label="Suivi du travail" aria-haspopup="true" aria-expanded="false"><span id="agent-activity-dot" title="Suivi du travail" aria-label="Suivi du travail" aria-haspopup="true" aria-expanded="false"></span><span class="agent-activity-entry-label">Travail</span><span id="agent-activity-badge" hidden>0</span></button>
+        <button type="button" id="agent-activity-entry" title="Suivi du travail" aria-label="Suivi du travail" aria-haspopup="true" aria-expanded="false"><span id="agent-activity-dot"></span><span class="agent-activity-entry-label">Travail</span><span id="agent-activity-count" hidden></span></button>
         <div id="agent-activity-dropdown" class="hidden">
         <div class="sa-events-header">
           <!-- LOT 5 de la presentation : le panneau s'annonce par un TITRE (il ne
@@ -232,7 +242,7 @@
           <div class="sa-events-tabs" role="tablist" aria-label="Suivi du travail">
             <button type="button" class="sa-events-tab active" role="tab" id="agent-activity-tab-agents" data-agent-panel-tab="agents" aria-controls="agent-activity-pane-agents" aria-selected="true" tabindex="0">Agents</button>
             <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-tasks" data-agent-panel-tab="tasks" aria-controls="agent-activity-pane-tasks" aria-selected="false" tabindex="-1">Tâches</button>
-            <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-events" data-agent-panel-tab="events" aria-controls="agent-activity-pane-events" aria-selected="false" tabindex="-1">Événements</button>
+            <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-events" data-agent-panel-tab="events" aria-controls="agent-activity-pane-events" aria-selected="false" tabindex="-1" aria-label="Événements">Événements<span id="agent-activity-events-unread" hidden></span></button>
           </div>
           <!-- LOT 5 : un SEUL bouton a droite de l'en-tete (le ×). « Tout
                effacer » quitte l'en-tete : il passe en mot, en pied du seul

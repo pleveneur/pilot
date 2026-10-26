@@ -133,13 +133,22 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   sa pastille s'anime quand des agents travaillent, et un clic ouvre le panneau. Un **second panneau**
   (l'ancienne « cloche ») n'existe plus : tout est réuni ici. Elle reste atteignable même quand la
   colonne de gauche est masquée, et ne recouvre plus le contenu.
+- **Le compteur de travail** : à droite du mot « Travail », deux nombres **en cours / total**
+  (par exemple **`2/5`**) disent d'un coup d'œil **combien de tâches tournent** et **combien sont
+  prévues au total** (en cours **plus** en attente). Le total compte **tout ce qui attend vraiment** :
+  les missions de l'assistant, les demandes qu'il a déléguées, les **commandes que vous tapez pendant
+  qu'une tâche tourne** et les **agents qui attendent leur tour**. Rien ne s'affiche quand il n'y a
+  aucun travail. Le détail exact (et les nombres réels quand ils deviennent grands, par exemple
+  « 99+ ») est dans l'infobulle ; le chiffre s'allume quand au moins une tâche est **en cours**.
 - Le panneau a **trois onglets**, dans cet ordre : **« Agents »** (qui travaille, sur quel projet),
   **« Tâches »** (les missions en cours et celles qui attendent leur tour, avec la mention « en attente »)
-  et **« Événements »** (démarrages, fins de tâche, erreurs, connexions).
-- Une **pastille sur l'entrée « Travail »** indique les événements que vous n'avez pas encore vus ;
-  ouvrir l'onglet « Événements » l'éteint. Le panneau s'ouvre sur **« Agents »** tant que vous
-  n'avez pas choisi d'onglet, puis se rouvre sur l'onglet où vous l'avez laissé ; il se ferme par
-  **Échap**, la **croix** ou un second clic sur l'entrée « Travail ».
+  et **« Événements »** (démarrages, fins de tâche, erreurs, connexions). Le compteur du bouton et le
+  volet « Tâches » affichent **toujours les mêmes nombres** : ils sortent du même calcul.
+- Les **événements que vous n'avez pas encore vus** sont signalés à **deux endroits** : le point du
+  bouton « Travail » **s'allume**, et un **petit point** apparaît sur l'onglet « Événements » (son
+  infobulle donne le nombre exact ; ouvrir l'onglet l'éteint). Le panneau s'ouvre sur **« Agents »**
+  tant que vous n'avez pas choisi d'onglet, puis se rouvre sur l'onglet où vous l'avez laissé ; il se
+  ferme par **Échap**, la **croix** ou un second clic sur l'entrée « Travail ».
 - **Une demande en attente devenue inutile se retire seule** : la commande **`/file retire <rang>`**
   retire **une seule** demande de la file (le rang affiché par `/file` — la tâche en cours occupe le
   1er rang), les autres restent dans leur ordre et la tâche en cours continue. `/file vide` continue

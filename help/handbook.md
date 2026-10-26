@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-25 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-26 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1618,11 +1618,24 @@ apprend et répond.
     la croix **×** ou un clic sur le cercle referment le panneau ; les onglets
     sont atteignables au clavier (Tab) et commutables aux **flèches** (←/→,
     Début/Fin) **dans l'ordre d'affichage**, de gauche à droite.
-  - **Signal d'attention conservé SUR le cercle** : une **pastille** posée sur
-    le cercle affiche le nombre d'**événements non lus** (plafonnée à « 99+ ») et
-    le cercle **s'allume** tant qu'il reste des événements non vus ; regarder
-    l'onglet « Événements » **éteint** le signal. Tant que la liste est sous vos
-    yeux, un nouvel événement **ne compte pas** comme non lu.
+  - **Compteur de travail sur l'entrée « Travail »** : à droite du mot, deux
+    nombres **« en cours / total »** (par exemple **`2/5`**) disent d'un coup
+    d'œil **combien de tâches tournent** et **combien sont prévues au total**
+    (en cours **plus** en attente). Le total compte **tout ce qui attend
+    vraiment** : les missions de l'assistant, les demandes qu'il a déléguées, les
+    **commandes tapées pendant qu'une tâche tourne** et les **agents qui
+    attendent leur tour**. **Rien** ne s'affiche quand il n'y a aucun travail ;
+    le chiffre s'**allume** quand au moins une tâche est **en cours** (aucune
+    animation). Les **nombres réels** (et le plafond « 99+ » quand ils deviennent
+    grands) sont dans l'**infobulle**. Le compteur **et** le volet « Tâches »
+    affichent **toujours les mêmes nombres**.
+  - **Signal d'attention des événements non lus** (il ne se perd pas) : le
+    **point du bouton** s'allume tant qu'il reste des événements non vus, et un
+    **petit point** apparaît sur l'onglet « Événements » — **pas de nombre en
+    clair** (il ne tient pas dans la marge du panneau), le nombre exact étant dans
+    son **infobulle**. Regarder l'onglet « Événements » **éteint** le signal.
+    Tant que la liste est sous vos yeux, un nouvel événement **ne compte pas**
+    comme non lu.
   - Le panneau **reste ouvert** tant qu'on ne le ferme pas ; son état
     ouvert/fermé est **mémorisé**. Pendant l'ouverture, les nouveaux événements
     s'ajoutent en direct en haut de la liste.

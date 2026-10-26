@@ -449,6 +449,34 @@ export function exclusivityQueueOfProject(project) {
 }
 
 /**
+ * Demandes en ATTENTE dans les files d'exclusivite, TOUS projets confondus
+ * (lecture seule ; aucune structure nouvelle : on lit la file deja tenue par le
+ * bus). Sans cette vue, un agent qui attend son tour n'apparaissait nulle part
+ * et le compteur du bouton « Travail » ignorait cette famille d'attente.
+ * @returns {Array<{project: string, agent: string, resume: string, brief: string}>}
+ */
+export function listExclusivityWaitingDemands() {
+  const out = [];
+  for (const queue of Object.values(projectExclusivityQueues)) {
+    const fallbackProject = realProjectOfExclusivityQueue(queue);
+    for (const key of Object.keys(queue)) {
+      const sep = key.indexOf("\u{1f}");
+      const agent = sep >= 0 ? key.slice(sep + 1) : "";
+      for (const assignment of queue[key] || []) {
+        if (!assignment) continue;
+        out.push({
+          project: assignment.project || fallbackProject,
+          agent,
+          resume: typeof assignment.resume === "string" ? assignment.resume : "",
+          brief: typeof assignment.brief === "string" ? assignment.brief : "",
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Retire les entrées de file dont la CLÉ est inexploitable (sans séparateur
  * projet ↔ agent) : `drainExclusivityQueues` ne peut pas les relancer, elles
  * resteraient à vie dans la file partagée et empêcheraient le verrou d'être

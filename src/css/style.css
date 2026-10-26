@@ -1974,25 +1974,41 @@ body.theme-light.theme-tokyo-day {
   opacity: 1;
   animation: agent-pulse 1.5s ease-in-out infinite;
 }
-/* Compteur de non-lus (LOT 4) : il vit DANS l'entree « Travail », dans le flux
-   (plus pose en absolu sur un cercle de 14 px). Meme identifiant, meme
-   attribut `hidden`, meme animation : seul son emplacement change. */
-#agent-activity-badge {
+/* Compteur de TRAVAIL du bouton (RAPPORT-compteur-taches.md) : « en cours /
+   total » (ex. 2/5), dans le flux, a droite du mot. Texte seul — aucune
+   pastille, aucun fond, aucune bordure, aucune animation : une pastille pleine
+   a 11 px ne peut pas atteindre le contraste AA en theme clair, un simple texte
+   si (--text-secondary : 7,85:1 sombre / 5,70:1 clair). Chiffres de largeur
+   CONSTANTE (tabular-nums) : le bouton ne « danse » pas quand le compte change.
+   La hauteur de la rangee n'augmente pas : le bouton garde ses 22 px et ce
+   texte tient sur une ligne (font-size --font-xs, line-height 1). */
+#agent-activity-count {
   flex: 0 0 auto;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--superagent-accent);
-  color: var(--bg-input);
+  min-width: 22px;
+  text-align: right;
   font-size: var(--font-xs);
-  line-height: 15px;
-  text-align: center;
   font-weight: 600;
+  line-height: 1;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
   pointer-events: none;
-  animation: agent-pulse 1.5s ease-in-out infinite;
 }
-#agent-activity-badge[hidden] { display: none; }
+#agent-activity-count[hidden] { display: none; }
+/* Au moins une tache EN COURS : le chiffre s'allume (aucune animation). */
+#agent-activity-count.working { color: var(--text-primary); }
+/* Point de 6 px sur l'onglet « Evenements » : le signal des evenements non lus
+   ne se perd pas, et le NOMBRE reste dans l'infobulle (un chiffre en clair
+   couterait 16 a 26 px sur une marge de 20,3 px, et echouerait le contraste AA
+   dans la marge). 6 px + 4 px d'ecart = 10 px : il ne consomme aucune hauteur. */
+#agent-activity-events-unread {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--superagent-accent);
+  pointer-events: none;
+}
+#agent-activity-events-unread[hidden] { display: none; }
 /* Des événements non lus : le cercle lui-même s'allume (jamais muet). */
 #agent-activity-dot.agent-unread {
   background: var(--superagent-accent);
@@ -5275,6 +5291,10 @@ body.zen-mode #project-footer {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* Ecart entre le libelle et le point des evenements non lus (6 px) : 4 px,
+     comme la barre. Aucune hauteur n'est ajoutee (le point fait 6 px dans une
+     barre de 24 px). */
+  gap: 4px;
   padding: 4px 8px;
   border: none;
   border-radius: var(--radius-sm);

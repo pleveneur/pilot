@@ -423,6 +423,40 @@ export function listProjectLaunchedCommands(project) {
 }
 
 /**
+ * TOUTES les commandes manuelles EN ATTENTE, tous projets confondus (lecture
+ * seule). Sans cette vue, une commande tapee a la main pendant qu'une tache
+ * tournait restait invisible dans l'onglet « Taches » et dans le compteur du
+ * bouton « Travail » (le compte affiche etait donc faux). Aucune structure
+ * nouvelle : on lit la file deja tenue en memoire (`state.queues`).
+ * @returns {Array<{project: string, label: string, agent: string}>}
+ */
+export function listAllProjectCommands() {
+  const out = [];
+  for (const [project, queue] of state.queues) {
+    for (const entry of queue || []) {
+      if (!entry) continue;
+      out.push({
+        project: project === "." ? "" : project,
+        label: entry.label || "",
+        // Nom lisible de l'agent enregistre AVEC la demande (jamais invente).
+        agent: agentIdLabel(entry.agentId),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Nombre TOTAL de commandes manuelles en attente, tous projets (fonction PURE).
+ * C'est le compte global de cette famille d'attente pour le compteur
+ * « Travail » ; il sort de la MEME liste que l'onglet « Taches ».
+ * @returns {number}
+ */
+export function countProjectQueuedCommands() {
+  return listAllProjectCommands().length;
+}
+
+/**
  * Abandonne les commandes manuelles en attente d'un projet. Le nombre abandonné
  * est retourné (l'appelant l'annonce : rien ne disparaît en silence).
  * @param {string} project
