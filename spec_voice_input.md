@@ -148,10 +148,12 @@ le micro sur le web et afficher l'avertissement.
 > message part **tout seul** — l'utilisateur n'appuie plus sur Entrée.
 > **Aucun réglage** ajouté (pas de réglage superflu) : c'est le défaut.
 
-**Portée** : onglet **agent π (desktop)** — `src/js/agent-pi.js`. L'Assistant 🧭
-(`src/js/super-agent.js`) et le **web distant** (`web/js/app.js`) gardent le
-comportement antérieur (texte dans la zone, envoi manuel) : la décision ne les
-couvrait pas, ils n'ont pas été touchés.
+**Portée** : les **deux barres de saisie du desktop** — onglet **agent π**
+(`src/js/agent-pi.js`, commit `108038e`) et **Assistant 🧭**
+(`src/js/super-agent.js`, même module, même ordre, même chemin d'envoi existant
+`send()`). Le **web distant** (`web/js/app.js`) garde le comportement antérieur
+(texte dans la zone, envoi manuel) : sa logique d'écoute est une copie propre au
+web, non branchée sur le module partagé — reste à faire.
 
 ### Décision et ordre — un seul module
 
@@ -179,27 +181,37 @@ couvrait pas, ils n'ont pas été touchés.
    les écritures du moteur sont programmatiques (`inputEl.value = …`) et n'émettent
    aucun évènement `input` — tout `input` reçu pendant l'écoute vient donc de
    l'utilisateur (`voiceUserTookOver`, remis à zéro au début de chaque dictée).
-5. **L'envoi est le chemin existant** : `sendPrompt` (celui de la touche Entrée et
-   du bouton ▶️). Aucun second mécanisme, et la zone de saisie est vidée par ce même
-   chemin (refus, file d'attente et verrous du projet inchangés).
+5. **L'envoi est le chemin existant du fichier appelant** : `sendPrompt` dans
+   l'onglet agent π (touche Entrée / bouton ▶️), `send()` dans l'Assistant (Entrée /
+   bouton Envoyer). Aucun second mécanisme, et la zone de saisie est vidée par ce
+   même chemin (refus, file d'attente et verrous du projet inchangés). Les gardes
+   propres à `send()` de l'Assistant (question en attente, règle de démarrage,
+   Assistant occupé) s'appliquent donc **telles quelles** ; si `send()` refuse, le
+   texte dicté reste dans la zone (jamais perdu).
 6. Le bouton micro revient à son libellé au repos à chaque fin de dictée.
+7. Les deux barres ne recopient **pas** la décision : elles importent le même
+   module et lui confient leurs effets (refermer, écrire, envoyer).
 
 ### Ce qui est prouvé, et ce qui ne l'est pas
 
-- Prouvé (tests, 22 cas dans `src/js/envoi-auto-fin-dictee.test.js`) : les six cas
-  ci-dessus + l'ordre refermer → écrire → envoyer + le branchement de `agent-pi.js`
-  (un seul point d'envoi, `sendPrompt` réutilisé, garde de reprise en main avant
-  l'écriture du moteur). Deux verrous explicites : si l'envoi automatique disparaît
-  (`decideVoiceAutoSend` renvoie `autoSend: false` sur une fin normale), le test
-  « envoie une seule fois » tombe ; si un texte vide partait, le test « n'envoie pas
-  quand rien n'a été dicté » tombe. Vérifié par sabotage réel du code (échecs
+- Prouvé (tests, **37 cas** dans `src/js/envoi-auto-fin-dictee.test.js`) : les sept
+  cas ci-dessus + l'ordre refermer → écrire → envoyer + le branchement **des deux**
+  barres (`agent-pi.js` : un seul point d'envoi, `sendPrompt` réutilisé ;
+  `super-agent.js` : un seul point d'envoi, `send()` réutilisé, aucune décision
+  recopiée, garde de reprise en main avant l'écriture du moteur) + une assertion
+  croisée (les deux appelants importent le **même** module, qui reste sans envoi ni
+  DOM). Verrous explicites : si l'envoi automatique disparaît
+  (`decideVoiceAutoSend` renvoie `autoSend: false` sur une fin normale), 10 tests
+  tombent ; si un texte vide partait, le test « n'envoie pas quand rien n'a été
+  dicté » tombe ; si `applyVoiceEnd` n'est plus appelé par une barre, ou si
+  `send: () => { send(); }` / `sessionActive: wasActive` / `userEdited` disparaissent,
+  les tests de câblage tombent. Vérifié par sabotage réel du code (échecs
   constatés, code remis en place).
 - **Non vérifié** : la dictée réelle au micro dans la fenêtre (aucun son, aucune
   application lancée) — le comportement est prouvé par la décision et l'ordre, pas
   par une parole réelle.
-- **Pas couvert (reste à faire)** : la barre de saisie de l'**Assistant 🧭**
-  (`src/js/super-agent.js`) et la **version web distante** (`web/js/app.js`) gardent
-  l'envoi manuel.
+- **Pas couvert (reste à faire)** : la **version web distante** (`web/js/app.js`)
+  garde l'envoi manuel et n'a pas la reprise en main.
 
 ---
 
@@ -296,13 +308,15 @@ texte à la voix.
   « Exposer en HTTPS automatique (Tailscale Serve) » dans les Options →
   Accès distant, puis utiliser le bouton 🎙️ depuis le téléphone/autre poste.
 - La transcription alimente directement la zone de saisie active (éditeur ou
-  saisie de l'agent).
-- **Dans l'onglet agent Pi, à la fin d'une dictée, le message part tout seul**
-  (comme si vous aviez appuyé sur Entrée) : vous n'avez plus à valider. Rien ne
-  part si vous n'avez rien dicté, ni si la dictée s'arrête sur une erreur
-  (micro refusé, réseau coupé) : dans ce cas le texte reste dans la zone, à vous
-  de le relire. Un seul message part par dictée, même si vous parlez longtemps.
+  saisie de l'agent, ou saisie de l'Assistant 🧭).
+- **Dans l'onglet agent Pi ET dans l'Assistant 🧭, à la fin d'une dictée, le
+  message part tout seul** (comme si vous aviez appuyé sur Entrée) : vous n'avez
+  plus à valider. Rien ne part si vous n'avez rien dicté, ni si la dictée
+  s'arrête sur une erreur (micro refusé, réseau coupé) : dans ce cas le texte
+  reste dans la zone, à vous de le relire. Un seul message part par dictée, même
+  si vous parlez longtemps.
 - **Vous gardez toujours la main** : si vous tapez dans la zone pendant que vous
   dictez, ce que vous écrivez n'est pas écrasé et rien ne part sans votre
   validation.
+- **Sur le web distant**, la dictée remplit la zone et l'envoi reste manuel.
 <!-- /HELP:dictee-vocale -->

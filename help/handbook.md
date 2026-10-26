@@ -465,9 +465,15 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
 - Par défaut, la voix est sur **« Automatique »** : Pilot prend la voix de la
   langue de l'interface. Si vous choisissez une voix précise, **ce choix est
   mémorisé** et réutilisé aux démarrages suivants.
-- **La voix choisie a disparu de l'ordinateur** (désinstallée, autre poste) :
-  Pilot revient **proprement** sur la voix automatique, l'annonce dans la
-  section et ne produit ni erreur ni lecture muette.
+- **La voix choisie a disparu de l'ordinateur** (désinstallée, autre poste,
+  autre système) : Pilot revient **proprement** sur la voix de la langue de
+  l'interface, l'annonce dans la section et **le dit aussi là où vous écoutez** —
+  une ligne courte apparaît **à côté du bouton « 🔊 Écouter »** de la réponse
+  (« Voix du système choisie indisponible (voix introuvable) : lecture avec la
+  voix de la langue de l'interface. »). Ni erreur, ni lecture muette, et surtout
+  **jamais un remplacement silencieux** : votre choix enregistré n'est pas
+  modifié dans votre dos, vous êtes simplement informé. Quand la voix choisie
+  est bien présente et sert réellement, **aucune ligne n'apparaît**.
 - **La voix suit la langue de l'interface** (français si Pilot est en
   français) : quand vous êtes en « Automatique », Pilot demande la première
   voix disponible dans cette langue.
@@ -1097,15 +1103,17 @@ texte à la voix.
   « Exposer en HTTPS automatique (Tailscale Serve) » dans les Options →
   Accès distant, puis utiliser le bouton 🎙️ depuis le téléphone/autre poste.
 - La transcription alimente directement la zone de saisie active (éditeur ou
-  saisie de l'agent).
-- **Dans l'onglet agent Pi, à la fin d'une dictée, le message part tout seul**
-  (comme si vous aviez appuyé sur Entrée) : vous n'avez plus à valider. Rien ne
-  part si vous n'avez rien dicté, ni si la dictée s'arrête sur une erreur
-  (micro refusé, réseau coupé) : dans ce cas le texte reste dans la zone, à vous
-  de le relire. Un seul message part par dictée, même si vous parlez longtemps.
+  saisie de l'agent, ou saisie de l'Assistant 🧭).
+- **Dans l'onglet agent Pi ET dans l'Assistant 🧭, à la fin d'une dictée, le
+  message part tout seul** (comme si vous aviez appuyé sur Entrée) : vous n'avez
+  plus à valider. Rien ne part si vous n'avez rien dicté, ni si la dictée
+  s'arrête sur une erreur (micro refusé, réseau coupé) : dans ce cas le texte
+  reste dans la zone, à vous de le relire. Un seul message part par dictée, même
+  si vous parlez longtemps.
 - **Vous gardez toujours la main** : si vous tapez dans la zone pendant que vous
   dictez, ce que vous écrivez n'est pas écrasé et rien ne part sans votre
   validation.
+- **Sur le web distant**, la dictée remplit la zone et l'envoi reste manuel.
 
 ---
 

@@ -13,6 +13,11 @@ import { refreshIcons } from "./icons.js";
 // bulle (bouton Ecouter / Arreter). Regles (nettoyage du balisage, decoupage en
 // phrases, une seule lecture a la fois) regroupees dans read-aloud.js.
 import { attachReadAloud } from "./read-aloud.js";
+// Envoi AUTOMATIQUE a la fin d'une dictee vocale : la decision et l'ORDRE
+// (refermer la session -> ecrire la zone -> envoyer) vivent dans CE module, le
+// meme que celui de l'onglet agent pi — aucune copie de logique ici, et le
+// `send` reste le chemin d'envoi existant du fichier (Entree / bouton Envoyer).
+import { applyVoiceEnd } from "./voice-auto-send.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage, purgeAgentTabView } from "./agent-pi.js";
 import {
@@ -3297,14 +3302,29 @@ export async function createSuperAgent(container) {
   const voiceSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   const micBtn = inputBar.querySelector(".agent-mic-btn");
   if (micBtn && !voiceSupported) micBtn.style.display = "none";
+  // Libellé au repos du bouton micro (rétabli à chaque fin de dictée : aucun
+  // bouton ne doit rester affiché « Arrêter la dictée » sans écoute).
+  const MIC_TITLE_IDLE = "Dictée vocale (transcription cloud)";
   let voiceActive = false;
   let voiceRec = null;
+  // Reprise en main : `true` quand l'UTILISATEUR a tapé, collé ou vidé la zone de
+  // saisie PENDANT l'écoute. Les écritures du moteur de reconnaissance sont
+  // programmatiques (`inputEl.value = …`) et n'émettent AUCUN évènement `input` :
+  // tout `input` reçu pendant l'écoute vient donc de l'utilisateur. Dans ce cas,
+  // la zone n'est plus réécrite (sa saisie prime) et rien ne part tout seul
+  // (décision : `decideVoiceAutoSend({ userEdited })`, même règle que l'agent π).
+  let voiceUserTookOver = false;
+  if (inputEl) {
+    inputEl.addEventListener("input", () => {
+      if (voiceActive) voiceUserTookOver = true;
+    });
+  }
 
   function stopVoiceInput() {
     // Empêche onresult/onend de réécrire le textarea après l'envoi.
     voiceActive = false;
     if (voiceRec) { try { voiceRec.stop(); } catch (_) {} }
-    if (micBtn) micBtn.classList.remove("rec");
+    if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
   }
 
   function resizeInput() {
@@ -3323,6 +3343,9 @@ export async function createSuperAgent(container) {
     rec.continuous = true;
     const preText = inputEl.value;
     let finalText = "";
+    // Chaque dictée repart d'une zone « non reprise en main » : le drapeau ne
+    // survit jamais à la dictée précédente.
+    voiceUserTookOver = false;
     const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
     rec.onresult = (e) => {
       if (!voiceActive) return;
@@ -3347,13 +3370,16 @@ export async function createSuperAgent(container) {
       } else {
         transcript = finalText;
       }
+      if (voiceUserTookOver) return; // l'utilisateur a repris la main : sa saisie prime
       const sep = preText && !preText.endsWith(" ") ? " " : "";
       inputEl.value = preText + sep + transcript;
       resizeInput();
     };
     rec.onerror = (ev) => {
+      // Session refermée ICI : la fin d'écoute qui suit (onend) ne doit RIEN
+      // envoyer (erreur de reconnaissance, refus de permission, panne réseau).
       voiceActive = false; voiceRec = null;
-      if (micBtn) micBtn.classList.remove("rec");
+      if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
         appendSystemMessage(messagesEl, "🎙️ Micro indisponible (" + ev.error + "). Vérifie qu'un micro est branché et autorisé (Réglages Windows → Confidentialité → Micro → applications de bureau). Alternative : web remote (HTTPS) depuis un téléphone ou un autre PC.");
       } else if (ev.error !== "no-speech" && ev.error !== "aborted") {
@@ -3361,14 +3387,24 @@ export async function createSuperAgent(container) {
       }
     };
     rec.onend = () => {
+      // `wasActive` est lu AVANT de refermer la session : c'est la seule chose qui
+      // distingue une fin NORMALE d'une fin sur erreur / arrêt manuel, et c'est
+      // aussi ce qui empêche un second envoi si `onend` arrive deux fois.
       const wasActive = voiceActive;
-      voiceActive = false; voiceRec = null;
-      if (micBtn) micBtn.classList.remove("rec");
-      if (wasActive) {
-        const sep = preText && !preText.endsWith(" ") ? " " : "";
-        inputEl.value = preText + sep + finalText;
-        resizeInput();
-      }
+      // Décision et ORDRE (refermer → écrire → envoyer) délégués au module PARTAGÉ
+      // `applyVoiceEnd` — le même que l'onglet agent π. L'envoi emprunte le chemin
+      // EXISTANT (Entrée / bouton Envoyer, fonction `send`) : aucun second
+      // mécanisme, et la zone est vidée par ce même chemin.
+      applyVoiceEnd({
+        sessionActive: wasActive,
+        preText,
+        dictatedText: finalText,
+        userEdited: voiceUserTookOver,
+        closeSession: () => { voiceActive = false; voiceRec = null; },
+        write: (value) => { inputEl.value = value; resizeInput(); },
+        send: () => { send(); },
+      });
+      if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
     };
     try {
       rec.start();

@@ -14,7 +14,12 @@
 //   5. l'UTILISATEUR reprend la main pendant la dictée ⇒ sa saisie n'est pas
 //      réécrite et rien ne part (il valide lui-même) ;
 //   6. le câblage de l'onglet agent π (agent-pi.js) utilise bien ce module pour la
-//      décision et l'ORDRE, et n'ajoute aucun second mécanisme d'envoi.
+//      décision et l'ORDRE, et n'ajoute aucun second mécanisme d'envoi ;
+//   7. le MÊME comportement dans la barre de saisie de l'Assistant 🧭
+//      (super-agent.js) : même module, mêmes règles, chemin d'envoi existant
+//      (`send`), aucune décision recopiée ;
+//   8. les deux appelants partagent bien le module (aucun des deux ne réimplémente
+//      la décision) et le module n'a pas changé de nature (toujours sans envoi).
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
@@ -257,6 +262,180 @@ describe("l'utilisateur reprend la main pendant la dictée : rien ne part, sa sa
   });
 });
 
+// ── 4ter. Harnais de la barre de saisie de l'Assistant 🧭 ────────────────────
+// Reproduit la barre de l'Assistant : même état de session (`voiceActive` + le
+// drapeau de reprise en main), et surtout le chemin d'envoi RÉEL `send()` de
+// super-agent.js, avec ses gardes propres (texte trimé vide ⇒ rien, Assistant
+// occupé ⇒ la saisie est CONSERVÉE, question en attente ⇒ elle est validée au
+// lieu d'ouvrir un nouveau tour).
+function createAssistantWindow(preText = "") {
+  const state = {
+    value: preText,
+    voiceActive: false,
+    userTookOver: false,
+    busy: false,
+    pendingQuestion: false,
+    notes: [],
+    sends: [],
+  };
+  const write = (value) => {
+    state.value = value;
+  };
+  // Image fidèle de `send()` (super-agent.js) : les gardes sont dans le MÊME
+  // ordre, et un refus ne vide jamais la zone.
+  const send = () => {
+    if (state.pendingQuestion) {
+      state.notes.push(state.value);
+      state.value = "";
+      return;
+    }
+    const text = state.value.trim();
+    if (!text) return;
+    if (state.busy) return;
+    state.value = "";
+    state.sends.push(text);
+  };
+  const start = () => {
+    state.voiceActive = true;
+    state.userTookOver = false;
+  };
+  const speech = (dictatedText) => {
+    if (!state.voiceActive) return;
+    if (state.userTookOver) return;
+    state.value = composeVoiceInputValue(preText, dictatedText);
+  };
+  const userTypes = (value) => {
+    if (state.voiceActive) state.userTookOver = true;
+    state.value = value;
+  };
+  const error = () => {
+    state.voiceActive = false;
+  };
+  const end = (dictatedText) => {
+    const wasActive = state.voiceActive;
+    return applyVoiceEnd({
+      sessionActive: wasActive,
+      preText,
+      dictatedText,
+      userEdited: state.userTookOver,
+      closeSession: () => {
+        state.voiceActive = false;
+      },
+      write,
+      send,
+    });
+  };
+  return { state, start, speech, userTypes, error, end };
+}
+
+// ── 4quater. Assistant 🧭 : même comportement que l'onglet agent π ──────────
+describe("barre de saisie de l'Assistant 🧭 : la dictée part toute seule, par send()", () => {
+  it("envoie une seule fois à la fin normale, par le chemin d'envoi existant", () => {
+    const w = createAssistantWindow();
+    w.start();
+    w.speech("fais le point sur les projets");
+    const res = w.end("fais le point sur les projets");
+
+    expect(res.autoSend).toBe(true);
+    expect(res.sent).toBe(true);
+    expect(res.reason).toBe(VOICE_END_SEND);
+    expect(w.state.sends).toEqual(["fais le point sur les projets"]);
+    // La zone est vidée par `send()` lui-même, comme après un appui sur Entrée.
+    expect(w.state.value).toBe("");
+    expect(w.state.voiceActive).toBe(false);
+  });
+
+  it("ajoute le texte déjà présent dans la zone avant la dictée", () => {
+    const w = createAssistantWindow("Pour demain : ");
+    w.start();
+    w.speech("relance les agents bloqués");
+    w.end("relance les agents bloqués");
+
+    expect(w.state.sends).toEqual(["Pour demain : relance les agents bloqués"]);
+  });
+
+  it("une fin signalée DEUX fois ne produit qu'un seul message", () => {
+    const w = createAssistantWindow();
+    w.start();
+    w.speech("résume la journée");
+    const premier = w.end("résume la journée");
+    const second = w.end("résume la journée");
+
+    expect(premier.sent).toBe(true);
+    expect(second.sent).toBe(false);
+    expect(second.reason).toBe(VOICE_END_NO_SESSION);
+    expect(w.state.sends).toEqual(["résume la journée"]);
+  });
+
+  it("erreur ou arrêt manuel : aucun envoi, le texte reconnu reste dans la zone", () => {
+    for (const fermeture of ["erreur", "arret-manuel"]) {
+      const w = createAssistantWindow();
+      w.start();
+      w.speech("je voulais dire que");
+      w.error(); // onerror / stopVoiceInput referment la session de la même façon
+      const res = w.end("je voulais dire que");
+
+      expect(res.autoSend, fermeture).toBe(false);
+      expect(res.sent, fermeture).toBe(false);
+      expect(w.state.sends, fermeture).toEqual([]);
+      // Le texte reconnu reste affiché : rien n'est effacé par surprise.
+      expect(w.state.value, fermeture).toBe("je voulais dire que");
+    }
+  });
+
+  it("texte vide ou uniquement des espaces : aucun envoi", () => {
+    const vide = createAssistantWindow();
+    vide.start();
+    expect(vide.end("").sent).toBe(false);
+    expect(vide.state.sends).toEqual([]);
+
+    const blancs = createAssistantWindow("   ");
+    blancs.start();
+    const res = blancs.end("  \n\t ");
+    expect(res.autoSend).toBe(false);
+    expect(res.reason).toBe(VOICE_END_EMPTY);
+    expect(blancs.state.sends).toEqual([]);
+  });
+
+  it("reprise en main : la saisie de l'utilisateur est intacte et rien ne part", () => {
+    const w = createAssistantWindow();
+    w.start();
+    w.speech("une phrase dictee");
+    w.userTypes("ce que j'ecris moi-meme");
+    const res = w.end("une phrase dictee");
+
+    expect(res.reason).toBe(VOICE_END_USER_TAKEOVER);
+    expect(res.sent).toBe(false);
+    expect(w.state.sends).toEqual([]);
+    expect(w.state.value).toBe("ce que j'ecris moi-meme");
+    expect(w.state.voiceActive).toBe(false);
+  });
+
+  it("Assistant occupé : rien ne part, mais le texte dicté reste dans la zone", () => {
+    // Garde PROPRE à `send()` de l'Assistant (tour venu d'ailleurs). L'envoi
+    // automatique ne la contourne pas : la saisie est conservée, jamais perdue.
+    const w = createAssistantWindow();
+    w.state.busy = true;
+    w.start();
+    w.speech("une demande");
+    w.end("une demande");
+
+    expect(w.state.sends).toEqual([]);
+    expect(w.state.value).toBe("une demande");
+  });
+
+  it("question en attente : le chemin existant valide la question (comme Entrée)", () => {
+    const w = createAssistantWindow();
+    w.state.pendingQuestion = true;
+    w.start();
+    w.speech("oui pour le projet Kalico");
+    w.end("oui pour le projet Kalico");
+
+    expect(w.state.sends).toEqual([]);
+    expect(w.state.notes).toEqual(["oui pour le projet Kalico"]);
+  });
+});
+
 // ── 5. Décision pure, isolée ────────────────────────────────────────────────
 describe("decideVoiceAutoSend — décision seule, sans effet", () => {
   it("n'envoie que sur une fin normale ET un texte dicté non vide", () => {
@@ -363,5 +542,85 @@ describe("câblage de agent-pi.js : décision et ordre délégués, un seul envo
     // Chaque dictée repart proprement (le drapeau ne survit pas à la précédente).
     const blocDemarrage = sliceSource(src, '    let finalText = "";', "    const norm =", 10);
     expect(blocDemarrage).toContain("voiceUserTookOver = false;");
+  });
+});
+
+// ── 7. Câblage dans la barre de saisie de l'Assistant 🧭 ────────────────────
+describe("câblage de super-agent.js : même module, même ordre, un seul envoi", () => {
+  const lire = (nom) =>
+    fs.readFileSync(path.join(ICI, nom), "utf8").replace(/\r\n/g, "\n");
+  const src = lire("super-agent.js");
+
+  it("importe le module partagé de décision", () => {
+    expect(src).toContain('import { applyVoiceEnd } from "./voice-auto-send.js";');
+  });
+
+  it("la fin d'écoute délègue à applyVoiceEnd et lit le drapeau AVANT de refermer", () => {
+    const bloc = sliceSource(src, "    rec.onend = () => {", "    try {\n      rec.start();", 200);
+    expect(bloc).toContain("const wasActive = voiceActive;");
+    expect(bloc).toContain("applyVoiceEnd({");
+    expect(bloc).toContain("sessionActive: wasActive");
+    const posLecture = bloc.indexOf("const wasActive = voiceActive;");
+    const posDelegation = bloc.indexOf("applyVoiceEnd({");
+    const posFermeture = bloc.indexOf("closeSession: () => { voiceActive = false;");
+    expect(posDelegation).toBeGreaterThan(posLecture);
+    expect(posFermeture).toBeGreaterThan(posDelegation);
+  });
+
+  it("n'a qu'UN seul point d'envoi, qui réutilise send()", () => {
+    const bloc = sliceSource(src, "    rec.onend = () => {", "    try {\n      rec.start();", 200);
+    expect(bloc).toContain("send: () => { send(); }");
+    // Aucun second mécanisme : une seule occurrence de `send(` dans le bloc.
+    expect(bloc.match(/send\(/g) || []).toHaveLength(1);
+    // La décision n'est pas recopiée ici.
+    expect(bloc).not.toContain("decideVoiceAutoSend");
+    // L'ancien comportement (réécrire la zone sans jamais envoyer) a disparu.
+    expect(bloc).not.toContain("if (wasActive) {");
+  });
+
+  it("la fin sur erreur referme la session (donc aucun envoi derrière)", () => {
+    const blocErreur = sliceSource(src, "    rec.onerror = (ev) => {", "    rec.onend = () => {", 100);
+    expect(blocErreur).toContain("voiceActive = false;");
+  });
+
+  it("la reprise en main est détectée, respectée et transmise à la décision", () => {
+    const blocEtat = sliceSource(src, "  let voiceUserTookOver = false;", "  function stopVoiceInput() {", 50);
+    expect(blocEtat).toContain('inputEl.addEventListener("input"');
+    expect(blocEtat).toContain("if (voiceActive) voiceUserTookOver = true;");
+    // Le moteur n'écrit plus la zone après la reprise en main (garde AVANT l'écriture).
+    const blocResultat = sliceSource(src, "    rec.onresult = (e) => {", "    rec.onerror = (ev) => {", 100);
+    const garde = blocResultat.indexOf("if (voiceUserTookOver) return;");
+    const ecriture = blocResultat.indexOf("inputEl.value = preText + sep + transcript;");
+    expect(garde).toBeGreaterThan(-1);
+    expect(ecriture).toBeGreaterThan(-1);
+    expect(garde).toBeLessThan(ecriture);
+    // La fin d'écoute transmet la reprise en main à la décision unique.
+    const blocFin = sliceSource(src, "    rec.onend = () => {", "    try {\n      rec.start();", 100);
+    expect(blocFin).toContain("userEdited: voiceUserTookOver");
+    // Chaque dictée repart proprement.
+    const blocDemarrage = sliceSource(src, '    let finalText = "";', "    const norm =", 10);
+    expect(blocDemarrage).toContain("voiceUserTookOver = false;");
+  });
+});
+
+// ── 8. Un seul module pour les deux appelants ──────────────────────────────
+describe("un seul module décide pour les DEUX barres de saisie", () => {
+  const lire = (nom) =>
+    fs.readFileSync(path.join(ICI, nom), "utf8").replace(/\r\n/g, "\n");
+
+  it("agent-pi.js et super-agent.js importent le MÊME module, sans recopier la décision", () => {
+    for (const fichier of ["agent-pi.js", "super-agent.js"]) {
+      const src = lire(fichier);
+      expect(src, fichier).toContain('import { applyVoiceEnd } from "./voice-auto-send.js";');
+      // Aucune copie de la décision dans un appelant.
+      expect(src, fichier).not.toContain("export function decideVoiceAutoSend");
+    }
+  });
+
+  it("le module partagé reste sans envoi, sans DOM et sans dépendance", () => {
+    const module = lire("voice-auto-send.js");
+    for (const interdit of ["sendPrompt(", "invoke(", "document.", "window.", "import ", "fetch("]) {
+      expect(module, interdit).not.toContain(interdit);
+    }
   });
 });
