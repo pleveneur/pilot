@@ -2,26 +2,29 @@
  * Verrou — LE BADGE « DISTANT » EST DANS LA LIGNE DU BAS DE LA COLONNE.
  *
  * Decision du proprietaire n° 375 (base de suivi de l'assistant), ferme :
- *   « Le badge descend EN BAS de la colonne de gauche, A DROITE de la ligne
- *     d'information qui nomme le moteur (du genre « Agent Pi (Suivi) »). »
+ *   « Le badge descend EN BAS de la colonne de gauche. »
  *   La proposition qui le placait dans la barre du haut est ECARTEE.
- * Document de la mission : `RAPPORT-badge-distant-bas.md`.
+ * MISE A JOUR (decision du proprietaire du 2026-10-26) : la partie de la
+ * decision 375 qui descendait AVEC lui la ligne qui nomme le moteur est ANNULEE.
+ * Le nom du moteur est remonte dans le bandeau du haut, son emplacement
+ * d'origine. Le badge reste en bas, SEUL, aligne a droite : il ne depend plus de
+ * la presence d'un texte a cote de lui. La decision du 2026-10-25 (« sous-titre
+ * du moteur dans le bandeau, pas dans l'onglet ») redevient la seule verite.
+ * Document de la mission : `RAPPORT-nom-du-moteur-un-seul-endroit.md`.
  *
  * Ce qui est verifie ici, et rien d'autre :
  *   (a) le badge a QUITTE le haut de la colonne (`#global-actions`) et vit dans
- *       la LIGNE D'INFORMATION DU BAS (`#sidebar-engine-row`), dernier enfant de
- *       `#sidebar`, SOUS le bloc accentue des menus ;
- *   (b) il est A DROITE du texte qui nomme le moteur (ordre du DOM : texte
- *       d'abord, badge ensuite) ;
+ *       la LIGNE DU BAS (`#sidebar-engine-row`), dernier enfant de `#sidebar`,
+ *       SOUS le bloc accentue des menus ;
+ *   (b) il y est SEUL et ALIGNE A DROITE (plus aucun texte de moteur a cote) ;
  *   (c) la ligne liberee en haut ne laisse AUCUN trou (conteneur vide, marges et
  *       padding a 0, aucune hauteur minimale) ;
- *   (d) la colonne reste a 280 px et tout tient dedans : le TEXTE se reduit
- *       avant le badge (`min-width: 0` + ellipse), le badge ne se reduit ni ne
- *       grossit (`flex: 0 0 auto`, largeur au contenu), rien n'est rogne ;
+ *   (d) la colonne reste a 280 px et tout tient dedans : le badge ne se reduit
+ *       ni ne grossit (`flex: 0 0 auto`, largeur au contenu), rien n'est rogne ;
  *   (e) le badge n'est pas devenu un bouton, il garde son libelle, son compteur,
- *       son infobulle et son clic ; le texte du moteur ne change pas et n'est
- *       pas duplique ;
- *   (f) le bandeau du haut garde ses 48 px et son logo.
+ *       son infobulle et son clic ;
+ *   (f) le bandeau du haut garde ses 48 px, son logo, et il porte de nouveau le
+ *       sous-titre du moteur (une seule fois dans toute la page).
  *
  * REGLE DE CALCUL : aucune valeur n'est figee ici. La largeur de la colonne, la
  * hauteur du badge et de sa ligne, les marges, le padding, l'icone et la taille
@@ -136,7 +139,7 @@ function contenuDuHaut() {
 /** La colonne entiere, pour prouver l'ordre de ses enfants. */
 const colonne = sliceSource(html, '<aside id="sidebar">', "</aside>", 1000);
 
-/** Le contenu de la ligne d'information du bas (jusqu'a la fin de `#sidebar`). */
+/** Le contenu de la ligne du bas (jusqu'a la fin de `#sidebar`). */
 const contenuLigne = sliceSource(html, BALISE_LIGNE, "</aside>", 100);
 
 /** Le bloc du bas (menus), pour prouver que la ligne d'info vient APRES lui. */
@@ -150,28 +153,27 @@ const TEXTE_MOTEUR = "Moteur · Agent Pi";
 
 /**
  * Calcul central, refait a partir du disque : le badge est-il dans la ligne du
- * bas, a droite du texte du moteur, et plus en haut ?
+ * bas, SEUL, et plus en haut ?
  */
 function badge_dans_la_ligne_du_bas() {
   const contenuHaut = contenuDuHaut();
   const dansLeHaut = contenuHaut.includes('id="remote-badge"');
   const dansLaLigne = contenuLigne.includes('id="remote-badge"');
   const apresLeBlocDesMenus = contenuPied.includes('id="remote-badge"');
-  const texteAvantBadge =
-    contenuLigne.indexOf('id="project-engine"') > -1 &&
-    contenuLigne.indexOf('id="project-engine"') <
-      contenuLigne.indexOf('id="remote-badge"');
-  return dansLaLigne && !dansLeHaut && apresLeBlocDesMenus && texteAvantBadge;
+  // Le nom du moteur n'est PLUS dans cette ligne : il est remonte dans le
+  // bandeau du haut (decision du 2026-10-26).
+  const sansTexteDuMoteur = !contenuLigne.includes('id="project-engine"');
+  return dansLaLigne && !dansLeHaut && apresLeBlocDesMenus && sansTexteDuMoteur;
 }
 
-describe("Decision 375 — le badge « Distant » est en bas, a droite du moteur", () => {
+describe("Decision 375 — le badge « Distant » est en bas de la colonne", () => {
   it("le badge est dans la ligne du bas, et plus dans le haut de la colonne", () => {
     // Ce seul booleen resume la decision : s'il repasse a `false`, le badge est
-    // remonte en haut (ou a gauche du texte) et le test rougit.
+    // remonte en haut (ou redescendu avec un texte de moteur) et le test rougit.
     expect(
       badge_dans_la_ligne_du_bas(),
-      "le badge doit etre DANS #sidebar-engine-row, APRES #project-engine, et " +
-        "ne doit plus etre dans #global-actions",
+      "le badge doit etre DANS #sidebar-engine-row, SEUL, et ne doit plus etre " +
+        "dans #global-actions",
     ).toBe(true);
     // Aucune trace du badge dans le haut : ni l'element, ni son libelle.
     expect(contenuDuHaut()).not.toContain('id="remote-badge"');
@@ -193,18 +195,20 @@ describe("Decision 375 — le badge « Distant » est en bas, a droite du moteur
     const ids = [...colonne.matchAll(/<div id="([a-z-]+)"/g)].map((m) => m[1]);
     expect(ids.length).toBeGreaterThan(2);
     expect(ids[ids.length - 1]).toBe("sidebar-engine-row");
-    // Et elle ne contient que les deux elements attendus (le texte, le badge).
-    expect(contenuLigne.match(/<span id=/g) || []).toHaveLength(2);
+    // Et elle ne contient QUE le badge (plus aucun texte de moteur a cote).
+    expect(contenuLigne.match(/<span id=/g) || []).toHaveLength(1);
+    expect(contenuLigne).not.toContain('id="project-engine"');
   });
 
-  it("le badge est A DROITE du texte (ordre du DOM, texte d'abord)", () => {
-    const moteur = contenuLigne.indexOf('id="project-engine"');
-    const badgePos = contenuLigne.indexOf('id="remote-badge"');
-    expect(moteur).toBeGreaterThan(-1);
-    expect(badgePos).toBeGreaterThan(moteur);
-    // Et le badge est cale a droite par la marge automatique de gauche, meme
-    // quand le texte du moteur est absent (avant la premiere sonde).
+  it("le badge est SEUL dans la ligne : il y est aligne a droite", () => {
+    // Le badge est le seul enfant utile : la ligne le cale a droite, et sa
+    // propre marge automatique de gauche fait de meme (double securite).
+    expect(valeur("#sidebar-engine-row", "justify-content")).toBe("flex-end");
     expect(valeur(".remote-badge", "margin")).toBe("0 0 0 auto");
+    // Le nom du moteur n'est plus la : il est remonte dans le bandeau du haut.
+    expect(contenuLigne).not.toContain("project-engine");
+    const bandeau = sliceSource(html, '<div id="project-selector">', BALISE_LIGNE, 4000);
+    expect(bandeau).toContain('id="project-engine"');
   });
 
   it("la ligne liberee en haut ne laisse aucun trou", () => {
@@ -225,7 +229,6 @@ describe("Decision 375 — la colonne reste a 280 px et rien ne deborde", () => 
   const largeurMini = px(valeur("#sidebar", "min-width"));
   const margeLigne = horizontal(valeur("#sidebar-engine-row", "margin"));
   const paddingLigne = horizontal(valeur("#sidebar-engine-row", "padding"));
-  const espaceLigne = px(valeur("#sidebar-engine-row", "gap"));
   const hauteurBadge = px(valeur(".remote-badge", "height"));
   const hauteurLigne = px(valeur("#sidebar-engine-row", "height"));
   const policeBadge = px(valeur(".remote-badge", "font-size"));
@@ -239,7 +242,7 @@ describe("Decision 375 — la colonne reste a 280 px et rien ne deborde", () => 
     expect(valeur("#sidebar-engine-row", "min-width")).toBe("");
   });
 
-  it("la ligne tient dans la colonne : marges + padding + badge + texte", () => {
+  it("le badge tient dans la colonne, avec ou sans client connecte", () => {
     // Largeur reellement disponible DANS la ligne, calculee depuis le disque.
     const interieur = largeurColonne - margeLigne - paddingLigne;
     expect(interieur).toBeGreaterThan(0);
@@ -256,34 +259,20 @@ describe("Decision 375 — la colonne reste a 280 px et rien ne deborde", () => 
       2 * px(valeur(".remote-badge", "gap")) +
       largeurTexte(libelle, policeBadge) +
       largeurTexte(` ${compteur}`, policeBadge);
-    // Meme si le texte du moteur tombait a 0 px, le badge tient : il ne peut
-    // donc pas etre pousse hors du cadre.
-    expect(interieur - espaceLigne - largeurBadgeMini).toBeGreaterThan(0);
-    // Et il reste de la place pour le texte du moteur, au complet.
-    const policeMoteur = px(valeur(".project-engine", "font-size"));
-    expect(
-      interieur - espaceLigne - largeurBadgeMini,
-      "le texte du moteur n'a plus la place de s'afficher en entier",
-    ).toBeGreaterThan(largeurTexte(TEXTE_MOTEUR, policeMoteur));
+    // Le badge est seul : la place restante de la ligne lui suffit largement.
+    expect(interieur - largeurBadgeMini).toBeGreaterThan(0);
   });
 
-  it("le TEXTE se reduit avant le badge, jamais l'inverse", () => {
-    // Le texte du moteur est l'element elastique : il prend la place restante et
-    // peut descendre sous la largeur de son contenu (min-width: 0) jusqu'a
-    // l'ellipse.
-    expect(valeur("#sidebar-engine-row .project-engine", "flex")).toBe(
-      "1 1 auto",
-    );
-    expect(valeur("#sidebar-engine-row .project-engine", "min-width")).toBe("0");
-    expect(valeur(".project-engine", "text-overflow")).toBe("ellipsis");
-    expect(valeur(".project-engine", "overflow")).toBe("hidden");
-    expect(valeur(".project-engine", "white-space")).toBe("nowrap");
-    // Le badge, lui, ne se reduit ni ne grossit, et sa largeur suit son contenu.
+  it("le badge ni ne se reduit ni ne grossit, et rien ne depasse", () => {
+    // Le badge ne se reduit ni ne grossit, et sa largeur suit son contenu.
     expect(valeur(".remote-badge", "flex")).toBe("0 0 auto");
     expect(valeur(".remote-badge", "width")).toBe("auto");
     expect(valeur(".remote-badge", "white-space")).toBe("nowrap");
     // Rien ne depasse de la ligne (pas de debordement horizontal possible).
     expect(valeur("#sidebar-engine-row", "overflow")).toBe("hidden");
+    // Aucun reglage de texte elastique ne subsiste dans cette ligne : le texte
+    // du moteur y est remplace par rien (il est remonte dans le bandeau).
+    expect(blocs(css, "#sidebar-engine-row .project-engine")).toHaveLength(0);
   });
 
   it("la ligne a exactement la hauteur du badge : rien n'est rogne", () => {
@@ -330,8 +319,7 @@ describe("Decision 375 — la colonne reste a 280 px et rien ne deborde", () => 
   });
 });
 
-describe("Decision 375 — le badge et le texte sont inchanges", () => {
-  it("le badge n'est pas un bouton et ne le devient pas", () => {
+describe("Decision 375 — le badge et le texte sont inchanges", () => {  it("le badge n'est pas un bouton et ne le devient pas", () => {
     expect(badge[0].startsWith('<span id="remote-badge"')).toBe(true);
     expect(badge[0]).not.toContain("<button");
     expect(badge[0]).not.toContain('role="button"');
@@ -353,7 +341,8 @@ describe("Decision 375 — le badge et le texte sont inchanges", () => {
   });
 
   it("le texte du moteur n'est NI change NI duplique", () => {
-    // Un seul element pour nommer le moteur dans toute la colonne.
+    // Un seul element pour nommer le moteur dans toute la page (donc un seul
+    // endroit qui l'affiche).
     expect(html.split('id="project-engine"').length - 1).toBe(1);
     expect(html.split('class="project-engine"').length - 1).toBe(1);
     // Meme identifiant, meme classe : `main.js` n'a pas eu a changer.
@@ -362,17 +351,33 @@ describe("Decision 375 — le badge et le texte sont inchanges", () => {
     const mainJs = lire("src/js/main.js");
     expect(mainJs).toContain('document.getElementById("project-engine")');
     expect(mainJs).toContain("agentDisplayLabel()");
+    // Le libelle affiche est bien celui du projet (`TEXTE_MOTEUR`), construit
+    // depuis la source unique : le mot « Moteur » est ajoute, pas remplace.
+    expect(mainJs).toContain('"Moteur · " + agentDisplayLabel()');
+    expect(TEXTE_MOTEUR.startsWith("Moteur · ")).toBe(true);
     expect(mainJs).toContain(
       'window.addEventListener("pilot-backend-changed", syncEngineSubtitle)',
     );
   });
 
-  it("le bandeau du haut garde ses 48 px et son logo valide", () => {
+  it("le bandeau du haut garde ses 48 px, son logo, et porte de nouveau le moteur", () => {
     expect(px(valeur("#project-selector", "height"))).toBe(48);
     expect(html).toContain('id="btn-project-logo"');
     expect(html).toContain('src="/logo_pilot_vector.svg"');
-    // Le sous-titre du moteur n'est plus dans le bandeau (il est descendu).
-    const bandeau = sliceSource(html, '<div id="project-selector">', BALISE_GLOBAL, 200);
-    expect(bandeau).not.toContain('id="project-engine"');
+    // Le sous-titre du moteur est REVENU dans le bandeau (decision du
+    // 2026-10-26), dans le bloc d'identite du projet, sous le nom.
+    const bandeau = sliceSource(html, '<div id="project-selector">', BALISE_GLOBAL, 2000);
+    expect(bandeau).toContain('id="project-engine"');
+    const identite = sliceSource(
+      html,
+      '<div id="project-identity">',
+      "</div>",
+      100,
+    );
+    expect(identite).toContain('id="btn-project-name"');
+    expect(identite).toContain('id="project-engine"');
+    expect(identite.indexOf('id="btn-project-name"')).toBeLessThan(
+      identite.indexOf('id="project-engine"'),
+    );
   });
 });

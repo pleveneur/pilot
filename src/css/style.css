@@ -800,39 +800,34 @@ body.theme-light.theme-tokyo-day {
   padding: 0;
 }
 
-/* LIGNE D'INFORMATION DU BAS de la colonne de gauche (decision 375 du
-   proprietaire) : elle nomme le MOTEUR en service (« Moteur · Agent Pi ») et
-   porte, A SA DROITE, le badge « Distant ». Elle est le DERNIER enfant de
-   `#sidebar`, sous le bloc accentue des menus du bas : c'est donc bien le bas de
-   la colonne, et la ligne liberee en haut (`#global-actions`, vide) laisse
-   remonter la liste des fichiers d'une ligne.
+/* LIGNE DU BAS de la colonne de gauche : elle ne porte plus QUE le badge
+   « Distant », SEUL et ALIGNE A DROITE (decision du proprietaire du 2026-10-26 :
+   le texte qui nommait le moteur est remonte dans le bandeau du haut, son
+   emplacement d'origine). Le badge ne depend donc plus de la presence d'une
+   ligne de texte a cote de lui.
+   Elle est le DERNIER enfant de `#sidebar`, sous le bloc accentue des menus du
+   bas : la ligne liberee en haut (`#global-actions`, vide) laisse remonter la
+   liste des fichiers d'une ligne.
    Hauteur FIXE de 28 px (celle du badge) : l'arrivee ou le depart d'un client
    distant ne fait pas sauter la liste des fichiers. Elle est hors du bloc
    accentue `#project-footer`, donc elle ne consomme rien de son plafond de
    60 % (verrou : 278 px pour ses SEPT lignes, dans les 300 px de la fenetre
    minimale).
-   Inset horizontal 8 + 8 px : le texte du moteur s'aligne sur les libelles des
-   lignes du bloc du bas (meme marge de cadre, meme padding de ligne). */
+   Inset horizontal 8 + 8 px : le badge s'aligne sur les libelles des lignes du
+   bloc du bas (meme marge de cadre, meme padding de ligne). */
 #sidebar-engine-row {
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  /* Le badge est SEUL dans la ligne : il est cale a droite par la ligne
+     elle-meme (et par sa propre marge automatique de gauche). */
+  justify-content: flex-end;
   gap: 8px;
   height: 28px;
   margin: 0 8px 8px;
   padding: 0 8px;
-  /* Rien ne depasse jamais de la ligne : c'est le TEXTE qui se reduit (ellipse
-     sur `.project-engine`), jamais le badge. */
+  /* Rien ne depasse jamais de la ligne. */
   overflow: hidden;
-}
-
-/* Le texte du moteur est le SEUL element elastic de la ligne : il prend la
-   place restante et peut donc tomber a 0 px (ellipse) quand le badge est
-   affiche ; `min-width: 0` est indispensable pour qu'un enfant de flex accepte
-   de descendre sous la largeur de son contenu. */
-#sidebar-engine-row .project-engine {
-  flex: 1 1 auto;
-  min-width: 0;
 }
 
 #project-footer {
@@ -1130,11 +1125,13 @@ body.theme-light.theme-tokyo-day {
 
 /* --- Project Selector --- */
 /* LOT 2 de la presentation : bandeau d'identification de 48 px (au lieu de
-   72) — logo 24 px (LOT A), nom du projet 15 px / 600. Inset de gauche 16 px
-   (grille § 4.2), filet bas conserve.
-   DECISION 375 du proprietaire : le sous-titre du moteur a quitte ce bandeau
-   pour la ligne d'information du BAS de la colonne (`#sidebar-engine-row`). La
-   hauteur du bandeau reste 48 px et le logo ne change pas.
+   72) — logo 24 px (LOT A), nom du projet 15 px / 600 et sous-titre du moteur
+   11 px sur deux lignes. Inset de gauche 16 px (grille § 4.2), filet bas
+   conserve.
+   Le sous-titre du moteur vit bien ICI (decision du proprietaire du
+   2026-10-25) : la descente en bas de la colonne (decision 375) est ANNULEE
+   (decision du 2026-10-26). La hauteur du bandeau reste 48 px et le logo ne
+   change pas.
    Depuis la suppression de la bande de fenetre, ce bandeau est l'une des DEUX
    zones qui deplacent la fenetre (glisser + double-clic) : `user-select: none`
    evite qu'un double-clic selectionne le nom du projet au lieu d'agrandir la
@@ -1151,10 +1148,9 @@ body.theme-light.theme-tokyo-day {
   user-select: none;
 }
 
-/* Identite du projet : le NOM (le sous-titre du moteur est descendu en bas de
-   la colonne, decision 375). Le bloc prend la place disponible et porte la
-   troncature : un nom de projet tres long ne pousse jamais le bouton
-   « Projets » hors de la colonne. */
+/* Identite du projet : nom + sous-titre du moteur. Le bloc prend la place
+   disponible et porte la troncature : un nom de projet tres long ne pousse
+   jamais le bouton « Projets » hors de la colonne. */
 #project-identity {
   flex: 1;
   min-width: 0;
@@ -1235,12 +1231,13 @@ body.theme-light.theme-tokyo-day {
 }
 
 /* Sous-titre du moteur en service (« Moteur · Agent Pi » / « Moteur · Agent
-   PLh »). DECISION 375 du proprietaire : il ne vit plus dans le bandeau
-   d'identification mais dans la LIGNE D'INFORMATION DU BAS de la colonne
-   (`#sidebar-engine-row`, dernier enfant de `#sidebar`), a cote du badge
-   « Distant ». Meme identifiant, meme classe, meme texte, meme source unique
-   (`backend-info.js` rempli par `main.js`). Dans cette ligne il est l'element
-   ELASTIQUE : il se reduit par ellipse avant le badge. */
+   PLh ») — decision du proprietaire du 2026-10-25 : il vit ICI, dans le bandeau
+   d'identification, et non dans l'onglet. La descente en bas de la colonne
+   (decision 375) est ANNULEE (decision du 2026-10-26). Rempli par `main.js`
+   (valeur de `backend-info.js`, source unique) : c'est le SEUL endroit de
+   l'application qui nomme le moteur en service.
+   Dans le bandeau il est sur DEUX lignes, sous le nom du projet : il se reduit
+   par ellipse si le libelle est long, sans elargir la colonne. */
 .project-engine {
   font-family: var(--font-ui);
   font-size: var(--font-xs);
@@ -1252,7 +1249,7 @@ body.theme-light.theme-tokyo-day {
   text-overflow: ellipsis;
 }
 /* Avant la premiere sonde du backend, l'element est vide : il ne doit pas
-   reserver de largeur (le badge reste seul, cale a droite). */
+   reserver de hauteur (le bandeau garde ses 48 px). */
 .project-engine:empty { display: none; }
 
 .dropdown-arrow {
@@ -7417,15 +7414,16 @@ body.pilot-loading *::after {
 
 /* ── Accès distant (mode remote) ── */
 
-/* Badge « Distant » : il vit desormais dans la LIGNE D'INFORMATION DU BAS de
-   la colonne (`#sidebar-engine-row`), A DROITE du texte qui nomme le moteur en
-   service — decision 375 du proprietaire (il occupait seul une ligne en haut).
+/* Badge « Distant » : il vit dans la LIGNE DU BAS de la colonne
+   (`#sidebar-engine-row`), SEUL et aligne a droite — decision du proprietaire
+   du 2026-10-26 : le texte qui nommait le moteur est remonte dans le bandeau du
+   haut, le badge ne depend donc plus d'une ligne de texte a cote de lui.
    Il garde la MEME famille visuelle : hauteur 28 px, padding 0 8 px, bordure
    `--border-subtle`, fond `--surface-2`, libelle « Distant » 11 px / 600 et
    compteur 11 px.
-   `flex: 0 0 auto` : il ne se reduit NI ne grossit — c'est le texte qui perd de
-   la place avant lui ; `margin-left: auto` le cale a droite de la ligne, meme
-   quand le texte du moteur est absent (avant la premiere sonde).
+   `flex: 0 0 auto` : il ne se reduit NI ne grossit ; sa largeur suit son
+   contenu et `margin-left: auto` le cale a droite de la ligne, meme quand la
+   ligne est vide autour de lui.
    L'ETAT reste lisible sans couleur de fond : connecte = icone et compteur
    en `--success`, hors service (`.off`) = tout en `--text-secondary`. */
 .remote-badge {
@@ -7439,8 +7437,7 @@ body.pilot-loading *::after {
   gap: 4px;
   padding: 0 8px;
   /* Plus d'air porte par le badge : la ligne qui le contient porte l'inset
-     (8 + 8 px) et sa hauteur (28 px). Masque, il ne prend AUCUNE place et le
-     texte du moteur occupe alors toute la largeur. */
+     (8 + 8 px) et sa hauteur (28 px). Masque, il ne prend AUCUNE place. */
   margin: 0 0 0 auto;
   font-family: var(--font-ui);
   font-size: var(--font-xs);

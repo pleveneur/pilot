@@ -212,14 +212,17 @@ export class TabsManager {
           if (nameSpan) nameSpan.textContent = `π ${newLabel} (RPC)`;
         }
       }
-      // Barre de statut de l'onglet actif. L'onglet assistant (🧭) affiche le
-      // libellé du backend actif (Agent Pi/PLh) plutôt que le nom configuré,
-      // pour refléter le moteur IA réellement en service.
+      // Barre de statut de l'onglet actif. Les onglets de chat (agent π et
+      // assistant 🧭) n'y ecrivent PLUS le nom du moteur ni son role : le nom du
+      // moteur en service ne s'affiche qu'a UN SEUL endroit, le sous-titre du
+      // bandeau de la colonne de gauche (`#project-engine`). La barre de statut
+      // reste celle des fichiers (type, curseur, encodage) : elle n'est ni un
+      // selecteur de modele ni un choix d'agent.
       const active = this.getActiveTab();
       if (active && active.mode === "agent") {
-        statusFiletype.textContent = `${active.name} (RPC)`;
+        statusFiletype.textContent = "";
       } else if (active && active.mode === "superagent") {
-        statusFiletype.textContent = `${newLabel} (Suivi)`;
+        statusFiletype.textContent = "";
       }
     });
   }
@@ -2351,16 +2354,19 @@ export class TabsManager {
       // Encodage et EOL
       this._updateFileInfo(tab);
     } else if (tab && tab.mode === "agent") {
-      statusFiletype.textContent = `${agentDisplayLabel()} (RPC)`;
+      // Plus de nom de moteur ni de role sous la zone de saisie du chat : le nom
+      // du moteur en service n'a qu'UN seul endroit, le bandeau de la colonne
+      // (`#project-engine`). La barre de statut n'affiche rien de propre a
+      // l'agent (elle reste celle des fichiers).
+      statusFiletype.textContent = '';
       statusCursor.textContent = '';
       statusStats.textContent = '';
       statusEncoding.textContent = '';
       statusEol.textContent = '';
       statusAutosave.textContent = '';
     } else if (tab && tab.mode === "superagent") {
-      // Libellé du backend actif (Agent Pi/PLh) plutôt que le nom configuré,
-      // pour refléter le moteur IA réellement en service.
-      statusFiletype.textContent = `${agentDisplayLabel()} (Suivi)`;
+      // Idem pour l'assistant (🧭) : aucune mention du moteur ni de son role.
+      statusFiletype.textContent = '';
       statusCursor.textContent = '';
       statusStats.textContent = '';
       statusEncoding.textContent = '';

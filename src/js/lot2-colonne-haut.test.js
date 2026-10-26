@@ -20,11 +20,13 @@
  *   - le sous-titre du moteur en service (« Moteur · Agent Pi » /
  *     « Moteur · Agent PLh ») vit DANS le bandeau d'identification (decision
  *     Q1 = option b).
- *     MISE A JOUR (decision 375 du proprietaire, `RAPPORT-badge-distant-bas.md`) :
- *     ce sous-titre est DESCENDU dans la ligne d'information du BAS de la
- *     colonne (`#sidebar-engine-row`), ou il nomme le moteur A COTE du badge
- *     « Distant » qui occupait seul une ligne en haut. Le bandeau garde ses
- *     48 px et son logo ; seule cette ligne de texte a change de place.
+ *     MISE A JOUR (decision du proprietaire du 2026-10-26) : le detour de la
+ *     decision 375 — qui avait DESCENDU ce sous-titre dans la ligne du bas de la
+ *     colonne — est ANNULE. Le sous-titre est revenu a sa place d'origine, dans
+ *     le bloc d'identite du projet (`#project-identity`), sous le nom. Le badge
+ *     « Distant », lui, reste en bas, SEUL et aligne a droite : il ne depend
+ *     plus d'un texte a cote de lui. Verrou complet :
+ *     `badge-distant-bas.test.js` et `moteur-un-seul-endroit.test.js`.
  *
  * Ce qui ne doit PAS changer : les identifiants des boutons conserves
  * (`btn-scratchpad`, `btn-settings`), les identifiants des quatre
@@ -48,8 +50,8 @@
  *       n'est pas tolere par le cablage (demarrage casse) ;
  *   (f) le cadre accent du haut revient, ou celui du bas disparait ;
  *   (g) le badge « Distant » n'est plus nomme, ou repasse en carre 32 x 32 ;
- *   (h) le sous-titre du moteur quitte la ligne d'information du bas de la
- *       colonne (ou se retrouve dans le bandeau), ou n'a plus de source ;
+ *   (h) le sous-titre du moteur ne vit plus dans le bloc d'identite du projet
+ *       (`#project-identity`, dans le bandeau), ou n'a plus de source ;
  *   (i) une couleur est ecrite en dur dans le bandeau (thème clair casse).
  *
  * Aucun navigateur n'est requis : lecture des fichiers (fins de ligne
@@ -229,8 +231,8 @@ describe("LOT 2 (d) — sept icones nues deviennent deux boutons nommes", () => 
       );
     }
     // Le badge « Distant » a QUITTE ce conteneur (decision 375 : il est
-    // descendu dans `#sidebar-engine-row`, a droite du sous-titre du moteur) :
-    // il ne doit pas revenir ici, sinon la ligne vide du haut reapparait.
+    // descendu dans `#sidebar-engine-row`) : il ne doit pas revenir ici, sinon
+    // la ligne vide du haut reapparait.
     expect(bloc_actions[1]).not.toContain('id="remote-badge"');
   });
 
@@ -345,23 +347,26 @@ describe("LOT 2 (g) — le badge « Distant » est nomme et a la bonne famille",
   });
 });
 
-describe("LOT 2 (h) — le sous-titre du moteur vit dans la ligne du bas", () => {
-  // MISE A JOUR (decision 375 du proprietaire) : le sous-titre a quitte le
-  // bandeau pour la LIGNE D'INFORMATION DU BAS de la colonne, ou le badge
-  // « Distant » le rejoint a sa droite. Verrou complet du nouvel emplacement :
-  // `badge-distant-bas.test.js`.
-  it("l'element est place DANS #sidebar-engine-row, qui ferme #sidebar", () => {
-    const debut = html.indexOf('id="sidebar-engine-row"');
+describe("LOT 2 (h) — le sous-titre du moteur vit dans le bandeau", () => {
+  // MISE A JOUR (decision du proprietaire du 2026-10-26) : le sous-titre est
+  // REVENU dans le bandeau d'identification (`#project-identity`), sous le nom du
+  // projet, sa place d'origine. Le detour de la decision 375 est annule ; le
+  // badge « Distant » reste seul en bas de la colonne. Verrou complet du
+  // sous-titre : `moteur-un-seul-endroit.test.js`.
+  it("l'element est place DANS #project-identity, dans le bandeau du haut", () => {
+    const identiteDebut = html.indexOf('id="project-identity"');
     const moteur = html.indexOf('id="project-engine"');
+    const identiteFin = html.indexOf('id="btn-open-project"');
+    expect(identiteDebut).toBeGreaterThan(-1);
+    expect(moteur).toBeGreaterThan(identiteDebut);
+    expect(identiteFin).toBeGreaterThan(moteur);
+    // Et il a bien quitte la ligne du bas (ou le badge vit desormais seul).
+    const ligneDebut = html.indexOf('id="sidebar-engine-row"');
     const fin = html.indexOf("</aside>");
-    expect(debut).toBeGreaterThan(-1);
-    expect(moteur).toBeGreaterThan(debut);
-    expect(fin).toBeGreaterThan(moteur);
-    // Et il n'est plus dans le bandeau d'identification.
-    const bandeauDebut = html.indexOf('id="project-selector"');
-    const bandeauFin = html.indexOf('id="open-projects-bar"');
-    expect(html.indexOf('id="project-engine"')).toBeGreaterThan(bandeauFin);
-    expect(moteur).toBeGreaterThan(bandeauDebut);
+    expect(ligneDebut).toBeGreaterThan(moteur);
+    expect(fin).toBeGreaterThan(ligneDebut);
+    const ligne = html.slice(ligneDebut, fin);
+    expect(ligne).not.toContain('id="project-engine"');
   });
 
   it("il est rempli par la source UNIQUE du libelle du moteur (backend-info.js)", () => {

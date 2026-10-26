@@ -37,15 +37,17 @@
          bouton NOMME « Projets » (28 px, chevron 14 px) qui ouvre le menu. Le
          nom du projet tronque par ellipse : la colonne ne s'elargit jamais,
          meme avec un nom tres long.
-         DECISION 375 du proprietaire : le SOUS-TITRE DU MOTEUR en service (11 px)
-         a quitte ce bandeau pour la LIGNE D'INFORMATION DU BAS de la colonne
-         (`#sidebar-engine-row`, sous le bloc des menus), ou il nomme le moteur
-         A COTE du badge « Distant ». Sa hauteur de 48 px, son logo et son bouton
-         « Projets » ne changent pas : seule une ligne de texte a change de place. -->
+         SOUS-TITRE DU MOTEUR en service : il vit ICI, sous le nom du projet
+         (decision du proprietaire du 2026-10-25 : « sous-titre du moteur dans le
+         bandeau, pas dans l'onglet »). Le detour de la decision 375 qui l'avait
+         descendu en bas de la colonne est ANNULE (decision du 2026-10-26) : il
+         reprend sa place d'origine. C'est le SEUL endroit de l'application qui
+         nomme le moteur en service. -->
     <div id="project-selector">
       <img id="btn-project-logo" src="/logo_pilot_vector.svg" alt="Logo" />
       <div id="project-identity">
         <span id="btn-project-name">Pilot</span>
+        <span id="project-engine" class="project-engine"></span>
       </div>
       <button id="btn-open-project" type="button" title="Projets" aria-haspopup="true" aria-expanded="false">
         <span class="pj-open-label">Projets</span>
@@ -71,9 +73,9 @@
          libelles, memes infobulles, memes icones, memes identifiants : le
          cablage de `main.js` (`getElementById`) et de `settings.js` n'a pas
          bouge d'une ligne.
-         DECISION 375 du proprietaire : le badge « Distant » a quitte ce
-         conteneur pour la LIGNE D'INFORMATION DU BAS de la colonne
-         (`#sidebar-engine-row`). Le conteneur ne porte donc PLUS RIEN : il
+         Le badge « Distant » a quitte ce conteneur pour la LIGNE DU BAS de la
+         colonne (`#sidebar-engine-row`), ou il vit SEUL, aligne a droite.
+         Le conteneur ne porte donc PLUS RIEN : il
          reste dans le DOM (des verrous le citent) mais, vide, avec des marges
          et un padding a 0 (voir `src/css/style.css`), il n'occupe AUCUNE
          hauteur — la ligne qu'il occupait est rendue a la liste des fichiers,
@@ -214,22 +216,15 @@
         </div>
       </div>
     </div>
-    <!-- LIGNE D'INFORMATION DU BAS de la colonne de gauche (decision 375 du
-         proprietaire) : elle NOMME LE MOTEUR en service (« Moteur · Agent Pi »)
-         et porte, A SA DROITE, le badge « Distant » — qui etait seul sur sa
-         propre ligne en haut de la colonne, dans `#global-actions`.
+    <!-- LIGNE DU BAS de la colonne de gauche : elle ne porte plus QUE le badge
+         « Distant », SEUL et ALIGNE A DROITE (decision du proprietaire du
+         2026-10-26 : le nom du moteur est remonte dans le bandeau du haut, donc
+         le badge ne depend plus d'une ligne de texte a cote de lui).
          Le badge garde son identifiant, ses libelles (« Distant » + compteur),
          son icone, son infobulle, son clic et sa taille : ce n'est PAS un bouton
          d'action, il ne devient ni plus gros ni cliquable autrement.
-         ORDRE IMPOSE : le texte d'abord, le badge ensuite. Le texte est le SEUL
-         a pouvoir se reduire (ellipse) : un libelle long perd de la place AVANT
-         le badge, jamais l'inverse, et le badge ne sort jamais du cadre. La
-         colonne reste a 280 px — aucune largeur n'est ecrite ici.
-         Le sous-titre garde son identifiant `#project-engine` et sa classe
-         `.project-engine` : il est rempli par la MEME source unique
-         (`backend-info.js`, via `main.js`) et suit la meme re-sonde du backend. -->
+         Aucune largeur n'est ecrite ici : la colonne reste a 280 px. -->
     <div id="sidebar-engine-row">
-      <span id="project-engine" class="project-engine"></span>
       <span id="remote-badge" class="remote-badge hidden" title="Client(s) distant(s) connecté(s) — cliquer pour gérer"><i data-lucide="globe" class="icon-sm"></i><span class="remote-badge-label">Distant</span> <b id="remote-badge-count">0</b></span>
     </div>
   </aside>
