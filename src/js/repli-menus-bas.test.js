@@ -70,7 +70,15 @@ function bloc(source, selector) {
   return trouves.join("\n");
 }
 
-const declarations = (corps) => corps.replace(/\s+/g, " ").toLowerCase();
+// Les COMMENTAIRES sont retires AVANT toute lecture de declaration : sans cela,
+// une declaration CITEE dans un commentaire du meme bloc satisferait le verrou
+// (contre-epreuve : retirer reellement `justify-content: flex-end` du bloc
+// laissait le test vert, parce que le commentaire juste en dessous le nomme).
+// Le verrou doit tenir la DECLARATION, jamais son commentaire.
+const sansCommentaires = (corps) => corps.replace(/\/\*[\s\S]*?\*\//g, " ");
+
+const declarations = (corps) =>
+  sansCommentaires(corps).replace(/\s+/g, " ").toLowerCase();
 
 /** Duree d'un jeton de transition (`--nom: 0.1s var(--ease-spring)`) en ms. */
 function dureeJeton(nom) {
@@ -774,5 +782,64 @@ describe("LOT 1 (j) — machine a etats : delais, ordre, clavier", () => {
     // Aucune hauteur en pixels : pas d'interpolation.
     expect(d.cadre.style.height).toBe("");
     repli.detruire();
+  });
+});
+
+// ── LOT 1 (l) — la ligne qui reste visible NOMME le contenu (Q2) ────────────
+//
+// Decision du proprietaire du 2026-10-26, qui leve la question fermee Q2 du § 7 :
+// « replie, la ligne garde le libelle « Autres ecrans » ; on ajoute seulement une
+// info-bulle enrichie. Aucun libelle nouveau. » Conception § 3.2 point 4 : le
+// `title` de la ligne d'ancrage nomme les SIX autres lignes du bloc.
+describe("LOT 1 (l) — l'infobulle de la ligne visible nomme les six autres lignes (Q2)", () => {
+  /** Les six lignes que la ligne d'ancrage doit nommer (hors elle-meme). */
+  const SIX_LIGNES = [
+    "Brouillon",
+    "Options",
+    "Assistant",
+    "Dossier du projet",
+    "Terminal",
+    "Commandes du projet",
+  ];
+
+  /** Balise ouvrante du declencheur « Autres ecrans ». */
+  const declencheur = () => {
+    const m = html.match(/<button id="btn-more-screens"[^>]*>/);
+    expect(m, "declencheur #btn-more-screens introuvable").not.toBeNull();
+    return m[0];
+  };
+
+  it("le `title` nomme les six autres lignes du bloc", () => {
+    const title = (declencheur().match(/title="([^"]*)"/) || [])[1] || "";
+    expect(title, "infobulle de la ligne visible").toBeTruthy();
+    // Les six libelles ecrits en clair, tels qu'ils apparaissent dans le bloc.
+    for (const libelle of SIX_LIGNES) {
+      expect(title, `ligne non nommee dans l'infobulle : ${libelle}`).toContain(
+        libelle,
+      );
+    }
+    // L'infobulle dit COMMENT le bloc s'ouvre : c'est sa seule raison d'etre.
+    expect(title).toContain("au survol");
+  });
+
+  it("le libelle affiche reste « Autres ecrans » (aucun libelle nouveau)", () => {
+    // Verrou du lot 3 conserve : le texte du bouton ne bouge pas d'un caractere.
+    const panneau = sliceSource(html, '<div class="pj-panel">', "</aside>", 200);
+    expect(panneau).toContain(">Autres écrans</span>");
+    expect(panneau).not.toContain("Menus du projet");
+  });
+
+  it("l'infobulle n'ajoute ni bouton, ni reglage, ni noeud", () => {
+    // Un attribut seulement : la balise garde ses trois attributs ARIA et son id.
+    const balise = declencheur();
+    expect(balise).toContain('aria-haspopup="menu"');
+    expect(balise).toContain('aria-expanded="false"');
+    expect(balise).toContain('aria-controls="pj-more-menu"');
+    // Aucune ligne ajoutee dans le bloc par cette decision.
+    const panneau = sliceSource(html, '<div class="pj-panel">', "</aside>", 200);
+    const lignes = panneau
+      .split("\n")
+      .filter((l) => l.startsWith("        <button") || l.includes('id="pj-more-wrap"'));
+    expect(lignes).toHaveLength(7);
   });
 });

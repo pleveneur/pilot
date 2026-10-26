@@ -184,8 +184,15 @@
              `btn-commands` restent, eux, remontes dans le bloc du bas).
              Il est ici, DANS la colonne de 280 px : sa largeur est celle du cadre,
              ses couleurs viennent des jetons de theme (sombre ET clair). -->
+        <!-- INFOBULLE ENRICHIE (decision Q2 du proprietaire du 2026-10-26, § 3.2
+             point 4 de `RAPPORT-conception-repli-menus-bas.md`) : replie, le bloc
+             ne laisse voir QUE cette ligne. Son libelle ne change pas ("Autres
+             ecrans", verrou du lot 3), et le seul ajout est cet attribut
+             `title` : il NOMME les six autres lignes, pour qu'aucune fonction ne
+             soit cachee sans etre nommee. Ni bouton, ni reglage, ni libelle
+             nouveau. -->
         <div id="pj-more-wrap" class="pj-more-wrap">
-          <button id="btn-more-screens" class="project-only hidden" type="button" title="Autres écrans" aria-haspopup="menu" aria-expanded="false" aria-controls="pj-more-menu"><i data-lucide="more-horizontal" class="icon"></i><span class="pj-btn-label">Autres écrans</span><span class="pj-more-chevron"><i data-lucide="chevron-down" class="icon-sm"></i></span></button>
+          <button id="btn-more-screens" class="project-only hidden" type="button" title="Autres écrans — le bloc s'ouvre au survol : Brouillon, Options, Assistant, Dossier du projet, Terminal, Commandes du projet" aria-haspopup="menu" aria-expanded="false" aria-controls="pj-more-menu"><i data-lucide="more-horizontal" class="icon"></i><span class="pj-btn-label">Autres écrans</span><span class="pj-more-chevron"><i data-lucide="chevron-down" class="icon-sm"></i></span></button>
           <div id="pj-more-menu" class="pj-more-menu hidden" role="menu" aria-label="Autres écrans">
             <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-projet">
               <div class="pj-more-group-label" id="pj-more-groupe-projet">Mon projet</div>
