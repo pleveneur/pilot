@@ -179,6 +179,30 @@ pub fn piper_exe(root: &Path) -> PathBuf {
     piper_dir(root).join(piper_exe_name())
 }
 
+/// Vrai si Pilot sait installer LUI-MÊME le moteur de lecture sur ce système.
+///
+/// Le moteur fourni est le binaire Windows (archive officielle Piper). Sur
+/// macOS et Linux, Pilot ne télécharge donc **rien** pour le moteur : le
+/// message le dit, indique le dossier, et la lecture reste proprement sur la
+/// voix du système (aucune erreur, aucun plantage, aucun succès mensonger).
+pub fn engine_install_supported() -> bool {
+    cfg!(windows)
+}
+
+/// Vrai si le fichier existe **ET** fait exactement la taille attendue.
+///
+/// Un fichier tronqué (téléchargement coupé, copie interrompue, ancien défaut)
+/// n'est **jamais** déclaré installé : sans cette règle, Pilot annonçait
+/// « installé » un modèle incomplet et la lecture échouait à chaque fois sans
+/// que rien ne l'explique. Une taille attendue inconnue (`0`) se contente de la
+/// présence du fichier.
+pub fn file_complete(path: &Path, expected: u64) -> bool {
+    match std::fs::metadata(path) {
+        Ok(meta) => meta.is_file() && (expected == 0 || meta.len() == expected),
+        Err(_) => false,
+    }
+}
+
 /// Racine « produit » d'un identifiant d'application.
 ///
 /// La version installée et la version de développement de Pilot
@@ -314,23 +338,34 @@ pub fn ready_hint_shared(voice: &LocalVoice, engine_root: &Path) -> String {
 
 /// Phrase affichée quand il manque quelque chose.
 ///
-/// Deux situations distinctes, dites en clair et **sans jargon** :
-///  - le **moteur** manque → Pilot ne le télécharge pas (aucun téléchargement
-///    automatique) : l'utilisateur dépose le dossier `piper` dans le dossier de
-///    données **réellement utilisé**, puis vérifie à nouveau ;
-///  - seul le **modèle** manque → le bouton « Télécharger » le récupère, sur un
-///    geste explicite.
-/// Dans les deux cas, la lecture utilise la voix du système en attendant (repli
+/// Trois situations distinctes, dites en clair et **sans jargon** :
+///  - le **moteur** manque sur un système que Pilot sait équiper (Windows) →
+///    **un seul geste** (« Installer la voix locale ») télécharge le moteur ET
+///    les deux voix françaises, une seule fois et sur demande explicite ;
+///  - le **moteur** manque sur un système pour lequel Pilot ne fournit pas de
+///    moteur (macOS, Linux) → on le dit, on donne le dossier, et la lecture
+///    reste proprement sur la voix du système ;
+///  - seul un **modèle** manque → le même geste le récupère.
+/// Dans tous les cas, la lecture utilise la voix du système en attendant (repli
 /// journalisé, jamais muet).
 pub fn missing_hint(root: &Path, missing: &[String], engine_missing: bool) -> String {
+    if engine_missing && !engine_install_supported() {
+        return format!(
+            "La voix française locale n'est pas encore installée sur cet ordinateur : Pilot ne \
+             fournit pas le moteur de lecture pour ce système. Placez le moteur Piper de votre \
+             système dans « {} », puis cliquez sur « Vérifier à nouveau » ; les voix, elles, se \
+             téléchargent avec « Installer la voix locale ». En attendant, la lecture utilise la \
+             voix du système.",
+            piper_dir(root).display()
+        );
+    }
     if engine_missing {
         return format!(
             "La voix française locale n'est pas encore installée sur cet ordinateur : il manque le \
-             moteur de lecture ({}), qui n'est jamais téléchargé automatiquement. Déposez le dossier \
-             « {} » (page officielle de Piper) dans « {} », puis cliquez sur « Vérifier à nouveau ». \
-             En attendant, la lecture utilise la voix du système.",
-            piper_exe_name(),
-            PIPER_SUBDIR,
+             moteur de lecture. Cliquez sur « Installer la voix locale » : tout est téléchargé une \
+             seule fois, sur votre demande, dans « {} » (le moteur et les deux voix françaises, une \
+             femme et un homme), puis la lecture se fait hors ligne. En attendant, la lecture \
+             utilise la voix du système.",
             root.display()
         );
     }
@@ -374,11 +409,23 @@ pub fn status_for_dir_with_engine(
     if !engine_present {
         missing.push(format!("le moteur Piper ({})", piper_exe_name()));
     }
-    if !model_file.is_file() {
-        missing.push(format!("le modèle {}.onnx", voice.model));
+    // Taille EXACTE attendue : un fichier tronqué compte comme manquant (il sera
+    // réparé, jamais considéré comme installé).
+    let model_ok = file_complete(&model_file, voice.onnx_bytes);
+    let config_ok = file_complete(&config, voice.config_bytes);
+    if !model_ok {
+        missing.push(if model_file.exists() {
+            format!("le modèle {}.onnx (incomplet)", voice.model)
+        } else {
+            format!("le modèle {}.onnx", voice.model)
+        });
     }
-    if !config.is_file() {
-        missing.push(format!("sa configuration {}.onnx.json", voice.model));
+    if !config_ok {
+        missing.push(if config.exists() {
+            format!("sa configuration {}.onnx.json (incomplète)", voice.model)
+        } else {
+            format!("sa configuration {}.onnx.json", voice.model)
+        });
     }
     let installed = missing.is_empty();
     LocalVoiceStatus {
@@ -395,7 +442,7 @@ pub fn status_for_dir_with_engine(
             String::new()
         },
         engine_shared: installed && shared,
-        model_present: model_file.is_file() && config.is_file(),
+        model_present: model_ok && config_ok,
         dir: root.display().to_string(),
         exe: exe.display().to_string(),
         model: model_file.display().to_string(),
@@ -694,6 +741,24 @@ mod tests {
         dir
     }
 
+    /// Écrit un fichier de la taille EXACTE attendue, sans écrire les octets
+    /// (`set_len` réserve la taille) : l'installation exige la taille exacte, un
+    /// fichier de 4 octets n'est plus « installé ».
+    fn write_sized(path: &Path, len: u64) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let file = std::fs::File::create(path).expect("fichier de test");
+        file.set_len(len).expect("taille du fichier de test");
+    }
+
+    /// Pose un modèle COMPLET (binaire + configuration, tailles exactes).
+    fn write_voice(root: &Path, model: &str) {
+        let voice = voice_for(Some(model));
+        write_sized(&model_path(root, voice.model), voice.onnx_bytes);
+        write_sized(&model_config_path(root, voice.model), voice.config_bytes);
+    }
+
     #[test]
     fn les_chemins_derivent_d_un_seul_dossier() {
         let root = PathBuf::from("/tmp/pilot-voix");
@@ -758,8 +823,10 @@ mod tests {
         assert!(status.hint.contains("pas encore installée"));
         assert!(status.hint.contains(&root.display().to_string()));
         assert!(status.hint.contains("voix du système"));
-        // Le moteur ne se télécharge JAMAIS tout seul : la phrase le dit.
-        assert!(status.hint.contains("jamais téléchargé automatiquement"));
+        // Le geste unique est nommé, et rien ne se télécharge sans lui : la
+        // phrase le dit (plus de « déposez le dossier »).
+        assert!(status.hint.contains("Installer la voix locale"));
+        assert!(status.hint.contains("sur votre demande"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -781,8 +848,7 @@ mod tests {
         // installée), le mode test utilise un AUTRE dossier de données. Sans
         // réutilisation, la lecture retombait toujours sur la voix du système.
         let (parent, installed, dev) = deux_versions_de_pilot("partage");
-        std::fs::write(model_path(&dev, "fr_FR-tom-medium"), b"fake").unwrap();
-        std::fs::write(model_config_path(&dev, "fr_FR-tom-medium"), b"{}").unwrap();
+        write_voice(&dev, "fr_FR-tom-medium");
 
         let (engine_root, shared) = resolve_engine_root(&dev, "com.pilot.editor");
         assert_eq!(engine_root, installed);
@@ -839,8 +905,7 @@ mod tests {
         std::fs::create_dir_all(piper_dir(&root)).unwrap();
         std::fs::create_dir_all(root.join(VOICES_SUBDIR)).unwrap();
         std::fs::write(piper_exe(&root), b"fake").unwrap();
-        std::fs::write(model_path(&root, DEFAULT_MODEL_NAME), b"fake").unwrap();
-        std::fs::write(model_config_path(&root, DEFAULT_MODEL_NAME), b"{}").unwrap();
+        write_voice(&root, DEFAULT_MODEL_NAME);
         let status = status_for_dir(&root, None);
         assert!(status.installed);
         assert!(status.missing.is_empty());
@@ -862,8 +927,7 @@ mod tests {
         std::fs::create_dir_all(root.join(VOICES_SUBDIR)).unwrap();
         std::fs::write(piper_exe(&root), b"fake").unwrap();
         // Seul le modèle par DÉFAUT est installé.
-        std::fs::write(model_path(&root, DEFAULT_MODEL_NAME), b"fake").unwrap();
-        std::fs::write(model_config_path(&root, DEFAULT_MODEL_NAME), b"{}").unwrap();
+        write_voice(&root, DEFAULT_MODEL_NAME);
         // La voix d'homme (tom) : le moteur est là, mais SON modèle manque.
         let tom = status_for_dir(&root, Some("fr_FR-tom-medium"));
         assert!(!tom.installed);
@@ -875,6 +939,57 @@ mod tests {
         // Et la voix par défaut reste, elle, installée : aucun état mélangé.
         assert!(status_for_dir(&root, None).installed);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn un_modele_tronque_n_est_jamais_declare_installe() {
+        // Défaut corrigé : un fichier incomplet (téléchargement coupé, copie
+        // interrompue) était compté comme présent, Pilot annonçait « installé »
+        // et la lecture échouait à chaque fois.
+        let root = temp_root("tronque");
+        std::fs::create_dir_all(piper_dir(&root)).unwrap();
+        std::fs::write(piper_exe(&root), b"fake").unwrap();
+        write_voice(&root, DEFAULT_MODEL_NAME);
+        assert!(status_for_dir(&root, None).installed);
+
+        // Modèle tronqué (10 Mo de moins) : plus installé, et le manque est DIT.
+        let voice = voice_for(None);
+        write_sized(&model_path(&root, voice.model), voice.onnx_bytes - 10_000_000);
+        let status = status_for_dir(&root, None);
+        assert!(!status.installed, "un modèle tronqué n'est pas installé");
+        assert!(!status.model_present);
+        assert_eq!(status.missing.len(), 1);
+        assert!(status.missing[0].contains("incomplet"));
+
+        // Configuration tronquée : même règle, mêmes conséquences.
+        write_voice(&root, DEFAULT_MODEL_NAME);
+        write_sized(&model_config_path(&root, voice.model), 10);
+        let status = status_for_dir(&root, None);
+        assert!(!status.installed);
+        assert_eq!(status.missing.len(), 1);
+        assert!(status.missing[0].contains("incomplète"));
+
+        // Fichier complet : de nouveau installé (aucune autre règle cachée).
+        write_voice(&root, DEFAULT_MODEL_NAME);
+        assert!(status_for_dir(&root, None).installed);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn le_moteur_n_est_propose_au_telechargement_que_la_ou_pilot_sait_l_installer() {
+        // Windows : Pilot installe le moteur lui-même. macOS / Linux : il ne
+        // fournit rien pour le moteur, et le dit sans erreur.
+        assert_eq!(engine_install_supported(), cfg!(windows));
+        let root = PathBuf::from("/tmp/pilot-voix");
+        let hint = missing_hint(&root, &[], true);
+        assert!(hint.contains("voix du système"), "le repli est toujours dit");
+        if engine_install_supported() {
+            assert!(hint.contains("Installer la voix locale"));
+            assert!(!hint.contains("Déposez"));
+        } else {
+            assert!(hint.contains("ne fournit pas le moteur"));
+            assert!(hint.contains("Vérifier à nouveau"));
+        }
     }
 
     #[test]

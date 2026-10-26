@@ -470,36 +470,43 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   des **voix françaises locales** (une entrée par voix, avec son **genre** écrit
   en clair — « voix de femme » ou « voix d'homme » — et sa taille). Elles
   fonctionnent **hors ligne**, **sans clé** et **sans carte graphique**.
-- **Rien n'est téléchargé sans votre accord** : la section indique si le moteur
-  et le modèle de la voix choisie sont en place, et propose **« Télécharger le
-  modèle »**. Le téléchargement ne part que d'un **geste** (ce bouton, ou le
-  choix d'une voix dont le modèle manque), **un seul modèle à la fois**. Votre
-  choix est enregistré même si le modèle n'est pas encore là, et il reste
-  utilisable dès qu'il est téléchargé.
-- **Le moteur, lui, n'est jamais téléchargé par Pilot** : s'il a déjà été
-  installé **une fois** pour Pilot sur cet ordinateur, il est **réutilisé** —
-  y compris par une autre version de Pilot (version installée et version de
-  test partagent le même moteur, rien n'est copié ni supprimé). La section dit
-  **où il se trouve** ; s'il manque vraiment, elle l'écrit en clair (« pas encore
-  installée sur cet ordinateur ») et indique quoi déposer, puis « Vérifier à
-  nouveau ». La lecture ne reste jamais silencieuse : elle continue avec la voix
-  du système et le dit.
+- **Rien n'est téléchargé sans votre accord** : la section indique si la voix
+  locale est en place et propose **un seul bouton : « Installer la voix
+  locale »**. Ce **seul geste** installe, **une seule fois** et sur votre
+  demande : le **moteur de lecture** et **deux voix françaises** — une voix de
+  femme et une voix d'homme, en qualité moyenne (environ 60 Mo par voix, plus
+  l'archive du moteur, compressée à environ 22 Mo). Rien ne part au démarrage,
+  ni à l'ouverture des Options, ni pendant la lecture.
+- **Seulement ce qui manque, jamais deux fois** : un fichier déjà présent et
+  **complet** n'est jamais retéléchargé — le geste ne récupère que ce qui
+  manque, et il le fait sans rien supprimer de ce qui existe déjà.
+- **Le moteur est partagé entre les versions de Pilot** : installé **une fois**
+  sur cet ordinateur, il est **réutilisé** — version installée et version de
+  test partagent le même moteur, rien n'est copié ni supprimé. La section dit
+  **où il se trouve** ; la voix locale est alors utilisable tout de suite.
+- **Sur macOS et Linux**, Pilot ne fournit pas ce moteur : la section l'écrit
+  en clair, sans erreur et sans rien télécharger en vain, et la lecture continue
+  avec la voix du système.
 - **La section se remplit toute seule** : à l'ouverture des Options (et à
   l'affichage de l'onglet « Assistant »), Pilot vérifie **une seule fois** si le
-  moteur et le modèle sont en place — vous n'avez rien à cliquer. Pendant la
+  moteur et les modèles sont en place — vous n'avez rien à cliquer. Pendant la
   vérification, la section l'écrit ; si elle n'aboutit pas, la section dit que
   l'état est **inconnu** (jamais une ligne vide) et le bouton « Vérifier à
   nouveau » reste là pour relancer. Rien n'est téléchargé pour autant.
-- **Le téléchargement s'affiche et s'arrête** : la section montre la **taille**
-  et la **progression** (« 26,0 Mo / 60,6 Mo, 42 % »), puis « installation
-  terminée » ou l'échec. Un bouton **« × Arrêter le téléchargement »**
-  interrompt un téléchargement en cours, et **« Vérifier à nouveau »** revérifie
-  à tout moment la présence du moteur et du modèle. **Rien n'est supprimé** :
-  le fichier déjà présent reste en place, et un téléchargement interrompu
-  reprend là où il s'était arrêté. **Un modèle téléchargé ne suffit pas** : si le
-  moteur manque encore, Pilot vous le dit franchement (« téléchargé, mais la voix
-  locale n'est pas encore utilisable ») au lieu d'annoncer une réussite, et la
-  lecture reste sur la voix du système en attendant.
+- **L'installation s'affiche et s'arrête** : la section montre **l'étape en
+  cours** (« étape 2 sur 3 : la voix de femme »), la **taille** et le
+  **pourcentage** (« 26,0 Mo / 60,6 Mo, 42 % »), puis la fin. Un bouton
+  **« × Arrêter l'installation »** interrompt le geste en cours, et **« Vérifier
+  à nouveau »** revérifie à tout moment. **Rien n'est supprimé** : ce qui a déjà
+  été reçu reste en place, et l'installation **reprend là où elle s'était
+  arrêtée** au prochain geste.
+- **Un fichier incomplet n'est jamais déclaré installé** : Pilot ne se fie pas
+  à la présence du fichier mais à sa taille exacte. Une voix dont le fichier a
+  été tronqué est annoncée **« incomplète »**, et le geste répare ce fichier
+  (sans le supprimer). C'est ce qui fait que la lecture ne se lance jamais sur
+  un modèle à moitié téléchargé.
+- **Après l'installation, plus aucune connexion** : lire une réponse ne fait
+  **aucun appel au réseau**. Tout est sur l'ordinateur.
 - **Si le moteur local est absent ou échoue**, la lecture ne s'arrête pas : elle
   **continue avec la voix du système**, et vous le **voyez là où vous écoutez** :
   une **ligne courte** apparaît **à côté du bouton « 🔊 Écouter »** de la réponse

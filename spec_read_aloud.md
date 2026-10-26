@@ -52,8 +52,8 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
 | `#read-aloud-state` (`role="status"`, `aria-live="polite"`) | état de la lecture (aucune / en cours / terminée / aucune voix / repli sur la voix du système…) |
 | `#read-aloud-voice-note` (`role="note"`) | explication et, le cas échéant, quoi faire |
 | `#read-aloud-local-note` (`role="note"`) | état du **moteur de voix locale**, **dossier où déposer ses fichiers** (chemin réel renvoyé par le moteur, jamais recopié) et ce qui se passe si le modèle manque — **jamais vide** : « vérification en cours… », « état inconnu + Vérifier à nouveau », ou l'état réel (§ 2 ter) |
-| `#read-aloud-download-state` (`role="status"`, `aria-live="polite"`) | état du **téléchargement** : taille, progression, terminé / arrêté / impossible |
-| `#btn-read-aloud-download`, `#btn-read-aloud-download-cancel`, `#btn-read-aloud-recheck` | **télécharger le modèle**, **arrêter le téléchargement en cours**, **vérifier à nouveau** la présence du moteur et du modèle |
+| `#read-aloud-download-state` (`role="status"`, `aria-live="polite"`) | état de l'**installation** : étape en cours (moteur / voix), taille et pourcentage de l'étape **et** du total, puis terminé / arrêté / impossible |
+| `#btn-read-aloud-download`, `#btn-read-aloud-download-cancel`, `#btn-read-aloud-recheck` | **le geste unique « Installer la voix locale »** (moteur + les deux voix françaises), **arrêter l'installation en cours**, **vérifier à nouveau** la présence du moteur et des modèles |
 | `#read-aloud-voice-previews` | **écoute d'exemple** : une rangée par voix proposée (bouton « ▶ Écouter » ↔ « ⏹ Arrêter », libellé de la voix, message court en cas d'échec) — voir § 2 bis |
 
 - **Aucun doublon** : ce réglage n'existe dans aucun autre onglet des paramètres
@@ -92,9 +92,10 @@ cours à la fermeture de la fenêtre. Aucun son orphelin.
 5. **Modèle non téléchargé** : l'aperçu vérifie `localVoiceStatusFor(model)`
 (ou `refreshLocalVoiceStatus`) **avant** de lire. Si le modèle manque, il **ne
 joue pas** la voix du système à la place : `previewNotInstalledHint(label)`
-dit que la voix « n'est pas encore installée », où cliquer pour télécharger, et
-que **rien n'est téléchargé sans geste**. Aucun téléchargement n'est déclenché
-par l'aperçu (`downloadLocalVoiceModel` n'apparaît pas dans ce chemin).
+dit que la voix « n'est pas encore installée », qu'il faut cliquer sur
+**« Installer la voix locale »**, et que **rien n'est téléchargé sans geste**.
+Aucun téléchargement n'est déclenché par l'aperçu (`downloadLocalVoiceModel`
+n'apparaît pas dans ce chemin).
 6. **Repli du moteur local** (moteur ou modèle installé mais synthèse en échec) :
 la lecture continue avec la voix du système — comportement du chemin commun —
 et la rangée affiche `readAloudStateLabel("local-fallback")` ; la ligne
@@ -228,25 +229,52 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
    une seule fois restait invisible pour l'autre version et la lecture retombait
    **toujours** sur la voix du système, quelle que soit la voix choisie (incident
    « joue Hortense »).
-4. **Téléchargement — sur geste explicite seulement** (`tts_local_download.rs`) :
-   - **un seul modèle à la fois** (garde atomique), **un seul fichier à la fois** ;
+4. **Installation — sur geste explicite seulement** (`tts_local_download.rs`) :
+   - **UN SEUL geste** (« Installer la voix locale », `tts_local_download(model)`)
+     installe **le moteur ET les deux voix françaises** en une fois — `plan_bundle`
+     construit le plan dans cet ordre : **moteur** (`ENGINE_STEP`) s'il manque et
+     si Pilot sait l'installer sur ce système, puis **`BUNDLE_MODELS`**
+     (`fr_FR-siwis-medium` = voix de femme, `fr_FR-tom-medium` = voix d'homme,
+     qualité moyenne) ; seuls les fichiers **absents ou incomplets** entrent dans
+     le plan (un fichier présent et complet n'est **jamais** retéléchargé) ;
+   - **le moteur** vient de l'archive officielle Piper
+     (`piper_windows_amd64.zip`, 22 477 236 o compressés, 38 846 222 o une fois
+     décompressés), **décompressée** dans `<app_data>/voix-locale/piper/`
+     (`piper.exe` vérifié après extraction) ; l'archive reste dans
+     `<app_data>/voix-locale/telechargements/` — **jamais supprimée** ;
+   - **Windows seulement** : `tts_local::engine_install_supported()` =
+     `cfg!(windows)`. Ailleurs, aucune étape moteur, **aucune erreur** : la ligne
+     d'état écrit que Pilot ne fournit pas le moteur pour ce système et la lecture
+     garde la voix du système ;
+   - **un seul fichier à la fois**, **un seul téléchargement à la fois** (garde
+     atomique `DOWNLOADING`) ;
    - URL exactes du dépôt Piper, tailles vérifiées à l'arrivée ;
    - écriture dans un fichier **`.part`** puis **renommage** une fois complet :
      le fichier final n'est **jamais** partiellement écrit ;
    - **reprise** (`Range: bytes=<déjà reçu>`), **aucune suppression** : un `.part`
      interrompu reprend, un modèle déjà présent n'est **jamais** retéléchargé ;
-   - **arrêt** (`tts_local_cancel_download`) : le téléchargement s'arrête, rien
-     n'est effacé ;
-   - progression poussée par l'évènement `tts-local-download-progress` (taille + %).
+   - **arrêt** (`tts_local_cancel_download`) : l'installation s'arrête, rien n'est
+     effacé ;
+   - progression poussée par l'évènement `tts-local-download-progress` : taille
+     **et** pourcentage de l'étape (`step`, `step_label`, `step_index`,
+     `step_count`, `step_bytes`, `step_bytes_total`, `step_percent`) en plus du
+     total (`bytes`, `bytes_total`, `percent`).
    Aucun téléchargement au démarrage, à l'ouverture des Options, ni pendant une
    lecture : seul un **clic** (ou le **choix** d'une voix dont le modèle manque)
    le déclenche.
-   - **le moteur n'est jamais téléchargé** (par Pilot). Un modèle téléchargé ne
-     suffit donc pas : `downloadDoneMessage` ne dit « installé / lecture
-     hors ligne » **que si** `installed` est vrai après vérification. Sinon
-     (moteur manquant) : **avertissement** « téléchargé, mais la voix locale n'est
-     pas encore utilisable : il manque le moteur (dossier `piper`) », journalisé
-     (`tts_local_log`) — jamais un succès mensonger, jamais un repli muet.
+   - **un fichier tronqué n'est jamais déclaré installé** : `tts_local::file_complete`
+     compare la **taille exacte** attendue du catalogue ; un fichier de taille
+     différente est **incomplet** (et sera réparé par le geste, sans suppression),
+     jamais « installé » ;
+   - `downloadDoneMessage` ne dit « terminé / lecture hors ligne » **que si**
+     `installed` est vrai après vérification. Sinon (moteur manquant) :
+     **avertissement** explicite, journalisé (`tts_local_log`) — jamais un succès
+     mensonger, jamais un repli muet ;
+   - **cohérence des deux catalogues** : `LOCAL_VOICE_MODELS` (JS) et `VOICES`
+     (Rust) décrivent les mêmes voix, aux mêmes tailles ; `BUNDLE_MODELS` et
+     `LOCAL_VOICE_BUNDLE_MODELS` sont identiques et `ENGINE_ARCHIVE_BYTES` =
+     `LOCAL_VOICE_ENGINE_ARCHIVE_BYTES`. **`src/js/catalogue-voix-locales.test.js`
+     échoue** dès qu'un identifiant, une taille ou le paquet installé divergent.
 5. **Un seul réglage** : le champ `read_aloud_voice` (aucun autre), valeur
    réservée **`local:piper`** définie une seule fois (`LOCAL_VOICE_VALUE`,
    `src/js/local-voice.js`). Le texte nettoyé et le découpage par phrase sont
@@ -277,9 +305,11 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
    - **la phrase affichée est non technique** (`missing_hint` côté Rust,
      `localVoiceMissingHint` côté JS) : « La voix locale n'est pas encore installée
      sur cet ordinateur (dossier utilisé : …) », puis **quoi faire** selon ce qui
-     manque — moteur absent : déposer le dossier `piper` puis « Vérifier à nouveau »
-     (et il est dit qu'il n'est **jamais téléchargé automatiquement**) ; modèle
-     absent : bouton « Télécharger ». Aucun `onnx`, `.exe`, `espeak` ni code
+     manque — moteur absent et installable : cliquer sur **« Installer la voix
+     locale »** (le moteur et les deux voix sont alors installés **d'un seul
+     geste, sur demande**) ; moteur absent et **non fourni** pour ce système :
+     Pilot ne l'installe pas, la voix du système est utilisée ; modèle absent :
+     le même bouton installe ce qui manque. Aucun `onnx`, `.exe`, `espeak` ni code
      d'erreur dans le texte vu par l'utilisateur.
    - **à chaque clic**, l'état du modèle est relu (`tts_local_status`) : jamais un
      cache périmé, le repli est journalisé à chaque fois.
@@ -292,7 +322,8 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
    un temporaire retiré après lecture.
 
    Table des voix (Rust) : `VOICES` = mêmes modèles que `LOCAL_VOICE_MODELS`,
-   avec le genre (`femme` / `homme`), la qualité et la taille exacte du `.onnx`.
+   avec le genre (`femme` / `homme`), la qualité et la taille exacte du `.onnx`
+   (cohérence tenue par `src/js/catalogue-voix-locales.test.js`).
    `voice_for(Option<&str>)` retombe sur la voix par défaut pour une valeur
    absente **ou inconnue**.
 

@@ -6,10 +6,13 @@
 //   - **hors ligne à la lecture** : aucun appel réseau pendant qu'on lit. Le
 //     texte part vers le moteur local par une commande Tauri (processus local)
 //     et revient sous forme de son joué par la fenêtre ;
-//   - **le seul geste réseau** est le téléchargement d'un modèle, déclenché par
-//     le bouton « Télécharger » des Paramètres (`downloadLocalVoiceModel`) :
-//     jamais au démarrage, jamais à l'ouverture des Paramètres, jamais à la
-//     lecture ; un seul téléchargement à la fois, arrêtable ;
+//   - **le seul moment où Pilot télécharge** est le geste unique « Installer la
+//     voix locale » des Paramètres (`downloadLocalVoiceModel`) : il installe le
+//     moteur de lecture ET les deux voix françaises (une femme, un homme), une
+//     seule fois, et uniquement ce qui manque. Jamais au démarrage, jamais à
+//     l'ouverture des Paramètres, jamais à la lecture ; un seul téléchargement
+//     à la fois, arrêtable, reprenable là où il s'est arrêté, sans rien
+//     supprimer ;
 //   - **aucune clé, aucun compte, aucun abonnement** ;
 //   - **aucune carte graphique** : le moteur calcule sur le processeur ;
 //   - **repli obligatoire et visible** : moteur absent, modèle absent, synthèse
@@ -19,8 +22,8 @@
 //
 // Répartition des rôles (aucun doublon) :
 //   - `local-voice.js` (ce fichier) : SAIT quelles voix existent, si le moteur et
-//     le modèle choisi sont là, télécharge un modèle sur geste explicite,
-//     synthétise un morceau, le joue, journalise un repli ;
+//     le modèle choisi sont là, installe le moteur et les deux voix sur geste
+//     explicite, synthétise un morceau, le joue, journalise un repli ;
 //   - `read-aloud.js` : décide QUOI lire (réponse finale seule), nettoie et
 //     découpe le texte, choisit le moteur d'après LE réglage unique, et publie
 //     l'état de lecture ;
@@ -57,6 +60,55 @@ export const LOCAL_VOICE_MODELS = [
 
 /** Modèle désigné par la valeur historique de la voix locale (voix de femme). */
 export const DEFAULT_LOCAL_VOICE_MODEL = "fr_FR-siwis-medium";
+
+/**
+ * Voix installées par le geste UNIQUE « Installer la voix locale » : une voix de
+ * femme ET une voix d'homme, en qualité moyenne (décision du propriétaire : ni
+ * voix de qualité légère, ni autre langue). Cette liste est la MÊME que
+ * `BUNDLE_MODELS` côté Rust (`tts_local_download.rs`) :
+ * `catalogue-voix-locales.test.js` échoue si les deux divergent.
+ */
+export const LOCAL_VOICE_BUNDLE_MODELS = ["fr_FR-siwis-medium", "fr_FR-tom-medium"];
+
+/**
+ * Taille exacte de l'archive du moteur de lecture (Windows, octets) : identique
+ * à `ENGINE_ARCHIVE_BYTES` côté Rust (une seule valeur, vérifiée par le test).
+ */
+export const LOCAL_VOICE_ENGINE_ARCHIVE_BYTES = 22_477_236;
+
+/** Libellé du bouton du geste unique (une seule formulation dans tout l'écran). */
+export const LOCAL_VOICE_INSTALL_LABEL = "Installer la voix locale";
+
+/**
+ * Ce que le geste unique installe, en une phrase (jamais un détail technique).
+ * @returns {string}
+ */
+export function localVoiceBundleSummary() {
+  return (
+    "le moteur de lecture et les deux voix françaises (une voix de femme et une voix " +
+    "d'homme, en qualité moyenne)"
+  );
+}
+
+/** Taille du modèle d'une voix (octets), 0 si le modèle est inconnu. */
+export function localVoiceBytes(model) {
+  const name = String(model == null ? "" : model).trim();
+  const found = LOCAL_VOICE_MODELS.find((entry) => entry.model === name);
+  return found ? found.bytes : 0;
+}
+
+/**
+ * Octets attendus pour l'installation complète (moteur + les deux voix) :
+ * l'écran annonce ce total AVANT le geste, jamais une estimation inventée.
+ * @param {{engineInstalled?: boolean}} [options] `engineInstalled` = moteur déjà
+ *        présent (il n'est alors pas téléchargé : le total baisse d'autant)
+ * @returns {number}
+ */
+export function localVoiceBundleBytes(options = {}) {
+  const voices = LOCAL_VOICE_BUNDLE_MODELS.reduce((sum, model) => sum + localVoiceBytes(model), 0);
+  const engine = options.engineInstalled === true ? 0 : LOCAL_VOICE_ENGINE_ARCHIVE_BYTES;
+  return voices + engine;
+}
 
 /** Nom du modèle français par défaut (affiché, et valeur de compatibilité). */
 export const LOCAL_VOICE_MODEL = DEFAULT_LOCAL_VOICE_MODEL;
@@ -141,18 +193,24 @@ export const LOCAL_VOICE_ONLY_HINT =
  */
 export function localVoiceMissingHint(dir, status) {
   const where = dir ? ` (dossier utilisé : « ${dir} »)` : "";
-  // Le MOTEUR ne se télécharge jamais tout seul : le dire, et dire quoi faire.
+  // Un SEUL geste installe le moteur ET les deux voix, et il reste un geste :
+  // rien ne se télécharge tout seul. Sur un système pour lequel Pilot ne
+  // fournit pas de moteur, l'état détaillé le dit (repli sur la voix du système).
   if (status && status.engine_present === false) {
     return (
       `La voix locale n'est pas encore installée sur cet ordinateur${where} : il manque le moteur ` +
-      "de lecture. Déposez le dossier « piper » (page officielle de Piper) dans ce dossier, puis " +
-      "cliquez sur « Vérifier à nouveau ». En attendant, la lecture utilise la voix du système."
+      `de lecture. Cliquez sur «\u00a0${LOCAL_VOICE_INSTALL_LABEL}\u00a0» : ${localVoiceBundleSummary()} ` +
+      "sont alors installés d'un seul geste, une seule fois et sur votre demande. Si Pilot ne " +
+      "fournit pas le moteur pour ce système, la ligne d'état le dit ; sinon, " +
+      "«\u00a0Vérifier à nouveau\u00a0» relance la vérification. En attendant, la lecture " +
+      "utilise la voix du système."
     );
   }
   return (
     `La voix locale n'est pas encore installée sur cet ordinateur${where} : ` +
-    "cliquez sur « Télécharger » pour récupérer cette voix depuis Internet, une seule fois et sur " +
-    "votre demande. En attendant, la lecture utilise la voix du système."
+    `cliquez sur «\u00a0${LOCAL_VOICE_INSTALL_LABEL}\u00a0» pour récupérer depuis Internet, une seule ` +
+    "fois et sur votre demande, ce qui manque (le moteur et les voix françaises). En attendant, " +
+    "la lecture utilise la voix du système."
   );
 }
 
@@ -482,12 +540,29 @@ export function normalizeDownloadState(raw) {
   const bytes = Number(src.bytes);
   const percent = Number(src.percent);
   const outcome = src.outcome == null ? null : String(src.outcome);
+  const stepPercent = Number(src.step_percent);
+  const stepIndex = Number(src.step_index);
+  const stepCount = Number(src.step_count);
+  const stepBytes = Number(src.step_bytes);
+  const stepBytesTotal = Number(src.step_bytes_total);
+  const bounded = (value) =>
+    Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : null;
+  const count = (value) => (Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
   return {
     model: String(src.model || ""),
     running: src.running === true,
     bytes: Number.isFinite(bytes) && bytes > 0 ? bytes : 0,
     bytes_total: Number.isFinite(total) && total > 0 ? total : 0,
-    percent: Number.isFinite(percent) ? Math.min(100, Math.max(0, Math.round(percent))) : null,
+    percent: bounded(percent),
+    // Étape en cours : le geste unique installe plusieurs choses (le moteur puis
+    // les deux voix) ; l'écran dit laquelle, et où elle en est.
+    step: String(src.step || ""),
+    step_label: String(src.step_label || ""),
+    step_index: count(stepIndex),
+    step_count: count(stepCount),
+    step_bytes: Number.isFinite(stepBytes) && stepBytes > 0 ? stepBytes : 0,
+    step_bytes_total: Number.isFinite(stepBytesTotal) && stepBytesTotal > 0 ? stepBytesTotal : 0,
+    step_percent: bounded(stepPercent),
     outcome: outcome && ["done", "cancelled", "failed"].includes(outcome) ? outcome : null,
     message: String(src.message || ""),
   };
@@ -517,11 +592,27 @@ export function downloadProgressText(state, status) {
   const s = state && typeof state === "object" ? state : null;
   if (!s || (!s.running && !s.outcome && !s.message)) return "";
   if (s.running) {
-    const label = s.model ? ` de ${localVoiceModelLabel(s.model)}` : "";
-    const percent = s.percent == null ? "" : ` (${s.percent} %)`;
     const sizes = s.bytes_total
       ? ` — ${formatMegabytes(s.bytes)} / ${formatMegabytes(s.bytes_total)}`
       : "";
+    // Installation en plusieurs étapes (moteur puis voix) : on dit laquelle et
+    // où elle en est, avec la taille ET le pourcentage de CETTE étape.
+    const stepCount = Number(s.step_count);
+    if (s.step && Number.isFinite(stepCount) && stepCount > 0) {
+      const global = s.percent == null ? "" : ` (${s.percent} %)`;
+      const where = s.step_label ? ` : ${s.step_label}` : "";
+      const stepPercent = s.step_percent == null ? "" : ` (${s.step_percent} %)`;
+      const stepSizes =
+        s.step_bytes_total > 0
+          ? ` ${formatMegabytes(s.step_bytes)} / ${formatMegabytes(s.step_bytes_total)}`
+          : "";
+      return (
+        `Installation de la voix locale en cours${sizes}${global} · ` +
+        `étape ${s.step_index || 1} sur ${stepCount}${where}${stepSizes}${stepPercent}…`
+      );
+    }
+    const label = s.model ? ` de ${localVoiceModelLabel(s.model)}` : "";
+    const percent = s.percent == null ? "" : ` (${s.percent} %)`;
     return `Téléchargement${label} en cours${percent}${sizes}…`;
   }
   if (s.message) return s.message;
@@ -564,7 +655,9 @@ export function downloadDoneMessage(state, status, model) {
   if (s.outcome === "cancelled") {
     return {
       level: "warning",
-      text: `Téléchargement arrêté : ${label} n'est pas installé, la lecture utilise la voix du système.`,
+      text:
+        s.message ||
+        `Installation arrêtée : ${label} n'est pas installé, la lecture utilise la voix du système.`,
     };
   }
   if (s.outcome === "failed") {
@@ -572,16 +665,20 @@ export function downloadDoneMessage(state, status, model) {
       level: "error",
       text:
         s.message ||
-        "Téléchargement impossible : la lecture utilise la voix du système (voir le journal de la voix locale).",
+        "Installation impossible : la lecture utilise la voix du système (voir le journal de la voix locale).",
     };
   }
   if (s.outcome !== "done") return { level: "info", text: "" };
   // Le seul succès vrai : la voix locale est réellement utilisable.
-  if (status && status.installed === true) {
+  const installed = !!(status && status.installed === true);
+  // Le moteur rend un compte rendu EXACT (moteur + deux voix, ou ce qui manque) :
+  // il est repris tel quel, avec le niveau qui convient à l'état constaté.
+  if (s.message) return { level: installed ? "success" : "warning", text: s.message };
+  if (installed) {
     const where = status.engine_shared && status.engine_dir ? ` (moteur déjà installé : « ${status.engine_dir} »)` : "";
     return {
       level: "success",
-      text: `${label} est installé${where} : la lecture se fait désormais hors ligne, sans réseau.`,
+      text: `${LOCAL_VOICE_INSTALL_LABEL} : terminé${where}. La lecture se fait désormais hors ligne, sans réseau.`,
     };
   }
   if (status && status.engine_present === false) {
@@ -599,10 +696,13 @@ export function downloadDoneMessage(state, status, model) {
 }
 
 /**
- * Télécharge le modèle d'une voix locale — **uniquement sur geste explicite**
- * (bouton « Télécharger » des Paramètres). Ne lève jamais : une panne devient un
- * état visible, et la lecture retombe sur la voix du système.
- * @param {string} model
+ * Installe la voix locale — **uniquement sur geste explicite** (bouton
+ * « Installer la voix locale » des Paramètres). Le geste est UNIQUE : le moteur
+ * de lecture et les deux voix françaises (une femme, un homme) sont installés
+ * en une fois, et seulement ce qui manque (un fichier déjà présent et complet
+ * n'est jamais retéléchargé). Ne lève jamais : une panne devient un état
+ * visible, et la lecture retombe sur la voix du système.
+ * @param {string} model voix choisie (la voix retenue si une seule est possible)
  * @param {{invoke?: Function}} [options]
  * @returns {Promise<object>} état normalisé du téléchargement
  */
@@ -613,13 +713,13 @@ export async function downloadLocalVoiceModel(model, options = {}) {
     return normalizeDownloadState(await invoke(LOCAL_VOICE_COMMAND_DOWNLOAD, { model: name }));
   } catch (error) {
     await logLocalVoice(
-      `Téléchargement du modèle ${name} impossible (${messageOf(error)}) : la lecture utilise la voix du système.`,
+      `Installation de la voix locale impossible (${messageOf(error)}) : la lecture utilise la voix du système.`,
       options,
     );
     return normalizeDownloadState({
       model: name,
       outcome: "failed",
-      message: `Téléchargement impossible : ${messageOf(error)}. La lecture utilise la voix du système.`,
+      message: `Installation impossible : ${messageOf(error)}. La lecture utilise la voix du système.`,
     });
   }
 }

@@ -67,6 +67,7 @@ import { CODE_BLOCK_NOTICE, cutTextAtBoundary, textForSpeech } from "./speech-te
 // moteur est là, synthétise et joue un morceau, journalise un repli. Le réglage
 // unique (`read_aloud_voice`) et l'état de lecture restent ICI.
 import {
+  LOCAL_VOICE_INSTALL_LABEL,
   LOCAL_VOICE_ONLY_HINT,
   LOCAL_VOICE_READY_HINT,
   LOCAL_VOICE_UNKNOWN_HINT,
@@ -864,7 +865,7 @@ export function previewNotInstalledHint(label) {
   const name = String(label == null ? "" : label).trim();
   return (
     `Aper\u00e7u impossible : ${name || "cette voix"} n'est pas encore install\u00e9e sur cet ordinateur. ` +
-    "Choisissez-la dans la liste ci-dessus puis cliquez sur \u00ab\u00a0T\u00e9l\u00e9charger le mod\u00e8le\u00a0\u00bb : " +
+    `Choisissez-la dans la liste ci-dessus puis cliquez sur \u00ab\u00a0${LOCAL_VOICE_INSTALL_LABEL}\u00a0\u00bb : ` +
     "rien n'est t\u00e9l\u00e9charg\u00e9 sans votre geste."
   );
 }

@@ -541,14 +541,14 @@ describe("note du moteur local : claire et non technique", () => {
     expect(hint).not.toMatch(/onnx|\.exe|espeak|DLL|RuntimeError/i);
   });
 
-  it("moteur présent mais modèle absent : c'est le bouton « Télécharger » qui agit", () => {
+  it("moteur présent mais modèle absent : c'est le bouton « Installer la voix locale » qui agit", () => {
     const hint = voiceChoiceStatus([FR_VOICE()], LOCAL_VOICE_VALUE, {
       installed: false,
       engine_present: true,
       dir: "C:/x",
     }).hint;
     expect(hint).toContain("pas encore installée");
-    expect(hint).toContain("Télécharger");
+    expect(hint).toContain("Installer la voix locale");
     expect(hint).toContain("voix du système");
   });
 });

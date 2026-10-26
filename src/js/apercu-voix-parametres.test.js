@@ -308,7 +308,7 @@ describe("modele local absent : on le dit, on ne lit pas une autre voix", () => 
   it("le message nomme la voix, dit « pas encore installee » et propose le telechargement", () => {
     const hint = previewNotInstalledHint("Français — voix de femme (qualité moyenne, 60 Mo)");
     expect(hint).toMatch(/pas encore install/);
-    expect(hint).toMatch(/Télécharger le modèle/);
+    expect(hint).toMatch(/Installer la voix locale/);
     expect(hint).toMatch(/sans votre geste/);
     expect(hint).toMatch(/voix de femme/);
     // Aucun terme technique dans ce que voit l'utilisateur.

@@ -59,12 +59,14 @@ import {
 import {
   DEFAULT_LOCAL_VOICE_MODEL,
   LOCAL_VOICE_DOWNLOAD_EVENT,
-  LOCAL_VOICE_MODELS,
+  LOCAL_VOICE_INSTALL_LABEL,
   cancelLocalVoiceDownload,
   downloadDoneMessage,
   downloadLocalVoiceModel,
   downloadProgressText,
   formatMegabytes,
+  localVoiceBundleBytes,
+  localVoiceBundleSummary,
   localVoiceModelFor,
   localVoiceSectionNote,
   localVoiceStatusFor,
@@ -821,9 +823,16 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     if (btnReadAloudDownload) {
       btnReadAloudDownload.style.display = missing ? "" : "none";
       btnReadAloudDownload.disabled = !missing || running;
-      const size = model ? (LOCAL_VOICE_MODELS.find((m) => m.model === model) || {}).bytes : 0;
+      btnReadAloudDownload.textContent = LOCAL_VOICE_INSTALL_LABEL;
+      // UN SEUL geste : il installe le moteur ET les deux voix françaises. Le
+      // total annoncé se calcule à partir du catalogue (aucune estimation), et
+      // baisse quand le moteur est déjà là (il n'est jamais retéléchargé).
+      const engineThere = !local || local.engine_present !== false;
+      const total = localVoiceBundleBytes({ engineInstalled: engineThere });
       btnReadAloudDownload.title = model
-        ? `Télécharge une seule fois le modèle ${model} (${formatMegabytes(size)}) depuis Internet. Rien n'est téléchargé sans ce geste, et le modèle reste ensuite sur l'ordinateur.`
+        ? `${LOCAL_VOICE_INSTALL_LABEL} : installe une seule fois ${localVoiceBundleSummary()} ` +
+          `(environ ${formatMegabytes(total)} depuis Internet). Rien n'est téléchargé sans ce geste, ` +
+          "et tout reste ensuite sur l'ordinateur (rien n'est supprimé)."
         : "";
     }
     if (btnReadAloudDownloadCancel) {
@@ -2105,7 +2114,8 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
       }
     });
   }
-  // Bouton « Télécharger le modèle » (geste explicite).
+  // Bouton « Installer la voix locale » (geste explicite unique : moteur +
+  // les deux voix françaises, jamais un téléchargement automatique).
   if (btnReadAloudDownload) {
     btnReadAloudDownload.addEventListener("click", () => startReadAloudDownload(true));
   }

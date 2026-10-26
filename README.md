@@ -121,12 +121,18 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   inactif, avec une phrase qui explique quoi faire.
 - **Vraies voix françaises, hors ligne** : la liste propose des **voix françaises locales** (une entrée
   par voix, avec son **genre** écrit en clair — voix de femme ou voix d'homme — et sa taille). Elles
-  fonctionnent **sans Internet, sans clé et sans carte graphique**. La section indique **où sont les
-  fichiers**, et un bouton **« Télécharger le modèle »** récupère celui de la voix choisie (**un seul
-  modèle à la fois**, jamais sans votre accord) avec la **taille et la progression** affichées, un bouton
-  **« Arrêter le téléchargement »** et un bouton **« Vérifier à nouveau »**. Rien n'est jamais supprimé.
-  Si le moteur manque ou échoue, la lecture **continue avec la voix du système** et le dit
-  clairement (aucun blocage, rien ne plante).
+  fonctionnent **sans Internet, sans clé et sans carte graphique**.
+- **Un seul geste pour les rendre utilisables** : la section propose le bouton **« Installer la voix
+  locale »**. Ce seul clic installe, **une seule fois** et **sur votre demande**, ce qui manque : le
+  **moteur de lecture** (environ 22 Mo compressés) et **deux voix françaises** — une voix de femme et
+  une voix d'homme, en qualité moyenne (environ 60 Mo chacune). L'**étape en cours, la taille et le
+  pourcentage** s'affichent, un bouton **« × Arrêter l'installation »** interrompt le geste, et
+  **rien n'est supprimé** : l'installation **reprend là où elle s'est arrêtée** au prochain clic. Un
+  fichier déjà présent et complet n'est **jamais** retéléchargé, et un fichier incomplet n'est jamais
+  déclaré installé. **Après l'installation, lire une réponse ne fait aucun appel au réseau.**
+  Ce moteur n'est fourni que pour Windows : sur **macOS et Linux**, la section le dit clairement et la
+  lecture garde la voix du système, sans erreur. Si le moteur manque ou échoue, la lecture **continue
+  avec la voix du système** et le dit clairement (aucun blocage, rien ne plante).
 
 ### Suivre le travail (entrée « Travail » à droite de la barre d'onglets)
 - L'entrée **« Travail »**, à droite de la barre d'onglets, est le **seul endroit** où se suit le travail :
