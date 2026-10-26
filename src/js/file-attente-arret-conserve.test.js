@@ -162,7 +162,7 @@ describe("P2 (a) — un arrêt d'agent CONSERVE la file non vide", () => {
     // Le verrou de run est LIBRE (projet jugé « libre » par l'ancien code) alors
     // qu'une session travaille encore : c'est exactement la situation du défaut.
     vi.mocked(invoke).mockImplementation(async (cmd) => {
-      if (cmd === "list_agent_sessions") return { sessions: [workingSession()] };
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [workingSession()] };
       if (cmd === "get_config") return {};
       return undefined;
     });
@@ -203,7 +203,7 @@ describe("P2 (b) — le rejeu juge sur les sessions vivantes, jamais sur le verr
   it("session encore vivante → rien n'est lancé et la file reste entière", async () => {
     queueTwoMissions();
     vi.mocked(invoke).mockImplementation(async (cmd) => {
-      if (cmd === "list_agent_sessions") return { sessions: [workingSession()] };
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [workingSession()] };
       if (cmd === "get_config") return {};
       return undefined;
     });
@@ -231,7 +231,7 @@ describe("P2 (b) — le rejeu juge sur les sessions vivantes, jamais sur le verr
     };
 
     vi.mocked(invoke).mockImplementation(async (cmd) => {
-      if (cmd === "list_agent_sessions") return { sessions: [] };
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [] };
       if (cmd === "get_config") return {};
       return undefined;
     });

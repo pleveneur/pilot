@@ -1156,8 +1156,8 @@ export async function abandonQueuedRunAgentsMissions(target, opts = {}) {
  * `shift`, aucun `length = 0`), chaque mission est NOMMÉE dans le journal des
  * arrêts (`queue-kept`) et à l'écran, et le rejeu périodique est ARMÉ. Ce rejeu
  * ne lance la tête de file qu'une fois l'admission RÉELLEMENT libre — jugée sur
- * les sessions vivantes (`isRunStillActive`, la même sonde que le rejeu), jamais
- * sur un verrou.
+ * l'ACTIVITÉ des agents (`isRunStillActive`, la même sonde que le rejeu, sonde
+ * LÉGÈRE sans liste de sessions), jamais sur un verrou.
  * @param {string} target - projet (clé de file)
  * @param {{reason?:string, detected?:string}} [opts]
  * @returns {Promise<{count:number, labels:string[], replayArmed:boolean}>}
@@ -1329,14 +1329,23 @@ const RUN_AGENTS_QUEUE_REPLAY_MIN_STUCK_IDLE_MS = 2 * 60 * 1000;
  * donné, pour ne JAMAIS couper une tâche légitime longue qui progresse encore.
  *   - Source de vérité du verrou : si le bus d'agents exécute encore une run
  *     sur ce projet (`isRunInProgress(runProject)`), l'agent travaille → actif.
- *   - Sinon, on sonde les sessions (`list_agent_sessions`) : la run est
- *     considérée active uniquement si un agent du projet cible TRAVAILLE
- *     RÉELLEMENT (`isSessionWorking` : busy non périmé, ou activité récente).
- *     Un processus simplement VIVANT mais au repos (agent settled, busy périmé)
- *     ne compte PAS : sinon le verrou de run ne se libère jamais et les
- *     demandes suivantes restent en file (faux « lancé »).
+ *   - Sinon, on sonde l'ACTIVITÉ (`agent_activity_probe`, sonde LÉGÈRE) : la run
+ *     est considérée active uniquement si un agent du projet cible TRAVAILLE
+ *     RÉELLEMENT (`isProjectWorking` : busy non périmé, outil en cours, ou
+ *     activité récente). Un processus simplement VIVANT mais au repos (agent
+ *     settled, busy périmé) ne compte PAS : sinon le verrou de run ne se libère
+ *     jamais et les demandes suivantes restent en file (faux « lancé »).
  *   - Fail-open : en cas d'erreur de supervision, on renvoie `true` (actif) —
  *     une erreur de supervision ne doit JAMAIS couper une run saine.
+ *
+ * ⚠️ INTERDIT : `list_agent_sessions` ici. Cette fonction est le SEUL point de
+ * sonde des deux rejeux PÉRIODIQUES (file de missions et file de délégations,
+ * cadencés à 15 s). `list_agent_sessions` envoie un `get_state` SYNCHRONE à
+ * chaque session vivante (timeout 2 s) et lit la table `agents` : appelée en
+ * boucle, elle gèle la file de travail du projet (défaut constaté : 25-30 min
+ * de blocage). `agent_activity_probe` donne la même information utile (qui
+ * TRAVAILLE ?) sans base et sans RPC. Verrouillé par
+ * `sonde-rejeu-sans-liste-sessions.test.js`.
  * @param {string} [runProject]
  * @returns {Promise<boolean>}
  */
@@ -1352,7 +1361,12 @@ async function isRunStillActive(runProject) {
   await releaseStuckRunLock(runProject, { requireIdleMs: RUN_AGENTS_QUEUE_REPLAY_MIN_STUCK_IDLE_MS });
   if (isRunInProgress(runProject)) return true;
   try {
-    const res = await invoke("list_agent_sessions");
+    // SONDE LÉGÈRE (consigne absolue du propriétaire) : la LISTE DES SESSIONS
+    // est INTERDITE dans un cadencement — voir l'avertissement de la docstring.
+    // `agent_activity_probe` renvoie la même projection utile au décideur
+    // (`project`, `alive`, `busy`, `toolInProgress`, `lastActivity`), lue en
+    // mémoire, sans accès base ni `get_state` RPC.
+    const res = await invoke("agent_activity_probe");
     const sessions = (res && res.sessions) || [];
     return isProjectWorking(sessions, runProject);
   } catch (_) {

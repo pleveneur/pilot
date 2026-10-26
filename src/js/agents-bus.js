@@ -1421,6 +1421,22 @@ async function drainExclusivityQueues(ctx, runKeyValue) {
   return launched;
 }
 
+// SONDE D'ACTIVITÉ UNIQUE des chemins RÉPÉTÉS du bus (watchdog de run, portes
+// de libération de verrou, rejeu de file).
+//
+// `list_agent_sessions` est INTERDIT ici : le watchdog et le rejeu de file de
+// missions/délégations s'exécutent en BOUCLE (15 s), et cette commande envoie un
+// `get_state` SYNCHRONE à chaque session vivante (timeout 2 s) puis lit la table
+// `agents` — en boucle, elle gèle la file de travail du projet (défaut constaté :
+// 25-30 min de blocage). `agent_activity_probe` renvoie la MÊME projection utile
+// (projet, agent, vivacité, busy, outil en cours, dernière activité), lue en
+// mémoire, sans base ni RPC. Les deux sondes ci-dessous ne lisent QUE ces
+// champs : le verdict est identique, seule la source change.
+async function probeActivitySessions() {
+  const res = await invoke("agent_activity_probe");
+  return (res && res.sessions) || [];
+}
+
 // Sonde « une run est-elle VRAIMENT en activité ? » : retourne true si au moins
 // un agent actif de la run du projet est réellement au travail — busy = true,
 // ou dernière activité plus récente que la fenêtre de grâce (2 min,
@@ -1439,8 +1455,7 @@ async function anyActiveAgentWorking(project) {
   const ctx = busState.runs[key];
   if (!ctx) return false;
   try {
-    const res = await invoke("list_agent_sessions");
-    const sessions = (res && res.sessions) || [];
+    const sessions = await probeActivitySessions();
     return isAnyAgentWorking(sessions, Array.from(ctx.activeAgents), (id) => ctx.agentProject[id] || null, Date.now());
   } catch (e) {
     return true;
@@ -1456,8 +1471,7 @@ async function anyActiveAgentWorking(project) {
 // → le verrou est CONSERVÉ (jamais de libération sur une sonde indisponible).
 async function projectHasWorkingSession(project) {
   try {
-    const res = await invoke("list_agent_sessions");
-    const sessions = (res && res.sessions) || [];
+    const sessions = await probeActivitySessions();
     // `project` peut être une CLÉ DE RUN (`projet#read:N`) : on compare à la
     // session par son PROJET RÉEL, sinon la comparaison était toujours fausse et
     // une lecture légitime et active pouvait être libérée de force.

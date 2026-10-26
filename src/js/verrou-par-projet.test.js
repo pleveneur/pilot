@@ -210,7 +210,7 @@ describe("PREUVE (h) — deux missions, un projet : la lecture survit, se termin
         return { agents: [{ id: "lecteur", name: "Lecteur", readonly: true, models: { pi: "openai/gpt-4o" }, keep_context: false }] };
       }
       if (cmd === "get_config") return {};
-      if (cmd === "list_agent_sessions") {
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") {
         return lecteurBusy
           ? { sessions: [{ agent: "lecteur", project: p, mode: "agent_process", alive: true, busy: true, lastActivity: new Date().toISOString() }] }
           : { sessions: [] };
@@ -276,7 +276,7 @@ describe("C1 — une demande mise en file dans une run de LECTURE repart quand l
         return { agents: [{ id: "lecteur", name: "Lecteur", readonly: true, models: { pi: "openai/gpt-4o" }, keep_context: false }] };
       }
       if (cmd === "get_config") return {};
-      if (cmd === "list_agent_sessions") {
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") {
         return busy
           ? { sessions: [{ agent: "lecteur", project: p, mode: "agent_process", alive: true, busy: true, lastActivity: new Date().toISOString() }] }
           : { sessions: [] };
@@ -330,7 +330,7 @@ describe("C1 (reste) — sans événement de fin, le watchdog relance la demande
         return { agents: [{ id: "lecteur", name: "Lecteur", readonly: true, models: { pi: "openai/gpt-4o" }, keep_context: false }] };
       }
       if (cmd === "get_config") return {};
-      if (cmd === "list_agent_sessions") {
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") {
         return busy
           ? { sessions: [{ agent: "lecteur", project: p, mode: "agent_process", alive: true, busy: true, lastActivity: new Date().toISOString() }] }
           : { sessions: [] };

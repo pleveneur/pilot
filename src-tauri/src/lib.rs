@@ -3782,6 +3782,7 @@ pub fn run() {
             agent_service::list_agent_views,
             agent_service::save_agent_views,
             agent_service::list_agent_sessions,
+            agent_service::agent_activity_probe,
             agent_service::list_common_skills,
             agents::start_agent_process,
             agents::register_ephemeral_agent,

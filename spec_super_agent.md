@@ -3091,6 +3091,28 @@ après les correctifs P1 (`4cf5356`, ordre d'arrivée respecté à l'admission),
 P2 (`13f7552`, un arrêt d'agent ne détruit plus une file de missions) et
 P3 (`275eb04`, une seule identité de projet).
 
+### Sonde périodique des files : LÉGÈRE, jamais la liste des sessions
+
+Les deux rejeux de l'assistant (file de **missions**, file de **délégations**)
+sont cadencés à **15 s** et jugent l'admission avec le **même** prédicat
+`isRunStillActive` (`src/js/super-agent.js`), lui-même relayé par
+`releaseStuckRunLock` (`src/js/agents-bus.js`) → `anyActiveAgentWorking` /
+`projectHasWorkingSession`. Ces chemins **répétés** appellent désormais
+`invoke("agent_activity_probe")` : commande Rust (`agent_service.rs`,
+`AgentService::agent_activity_probe`) qui projette le registre **en mémoire**
+sur `{ project, agent, alive, busy, toolInProgress, lastActivity }` — **aucun**
+accès base, **aucun** `get_state` RPC. Le verdict reste calculé à un **seul**
+endroit côté front (`isProjectWorking`, `src/js/exclusivity-queue.js`) : aucune
+règle dupliquée en Rust.
+
+`list_agent_sessions` (base + `get_state` **synchrone** par session vivante,
+timeout 2 s, + table `agents`) reste réservé aux usages **explicites** : outil
+de l'assistant, affichages (tableau de bord, panneau, pastille), porte de
+lancement `run_agents`. L'appeler dans une boucle **gèle la file de travail du
+projet** (défaut constaté : 25-30 min de blocage). Le motif est **interdit par
+un test** : `src/js/sonde-rejeu-sans-liste-sessions.test.js` (et le détail du
+diagnostic dans `RAPPORT-sonde-sessions-15s.md`).
+
 ### L1 — Une mission déjà sortie de file repart **derrière** les suivantes
 
 - **Ce qui se passe** : le rejeu sort la **tête** de file (`queue.shift()`,

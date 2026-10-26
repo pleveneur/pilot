@@ -279,7 +279,7 @@ describe("RÈGLE 4 (b) — la file ne meurt pas avec la run propriétaire", () =
         };
       }
       if (cmd === "get_config") return {};
-      if (cmd === "list_agent_sessions") return { sessions: [] };
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [] };
       return undefined;
     });
     await initAgentsBus({});
@@ -302,7 +302,7 @@ describe("RÈGLE 4 (b) — la file ne meurt pas avec la run propriétaire", () =
         };
       }
       if (cmd === "get_config") return {};
-      if (cmd === "list_agent_sessions") {
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") {
         return busy
           ? { sessions: [{ agent: "lecteur", project: P, mode: "agent_process", alive: true, busy: true, lastActivity: new Date().toISOString() }] }
           : { sessions: [] };

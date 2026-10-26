@@ -312,7 +312,7 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
   /** Mock la sonde Rust list_agent_sessions. */
   const mockSessions = (sessions) => {
     vi.mocked(invoke).mockImplementation(async (cmd) =>
-      cmd === "list_agent_sessions" ? { sessions } : undefined
+      cmd === "list_agent_sessions" || cmd === "agent_activity_probe" ? { sessions } : undefined
     );
   };
   const session = (extra = {}) => (
@@ -419,7 +419,7 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
   it("sonde de sessions en erreur → verrou MAINTENU (fail-closed : jamais de libération sur incertitude)", async () => {
     beginRunWithAgent();
     vi.mocked(invoke).mockImplementation(async (cmd) => {
-      if (cmd === "list_agent_sessions") throw new Error("sonde indisponible");
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") throw new Error("sonde indisponible");
       return undefined;
     });
     // AVANT : fail-open → libération (et donc risque de double run).
@@ -483,7 +483,7 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     ctx.startedAt = Date.now() - 14 * 60 * 1000;
     ctx.lastActivityAt = ctx.startedAt;
     vi.mocked(invoke).mockImplementation(async (cmd) => {
-      if (cmd === "list_agent_sessions") return { sessions: [] };
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [] };
       if (cmd === "git_status_project") {
         // Commit tombé 4 min APRÈS le démarrage de la run.
         return { is_repo: true, head_ts: Math.round((ctx.startedAt + 4 * 60 * 1000) / 1000), pending: 0 };
@@ -503,7 +503,7 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     const ctx = beginRunWithAgent();
     ctx.lastActivityAt = Date.now() - 10 * 60 * 1000;
     vi.mocked(invoke).mockImplementation(async (cmd) => {
-      if (cmd === "list_agent_sessions") {
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") {
         return { sessions: [session({ busy: false, lastActivity: new Date(Date.now() - 10 * 60 * 1000).toISOString() })] };
       }
       if (cmd === "git_status_project") {
@@ -642,7 +642,7 @@ describe("releaseStuckRunLock — verrou orphelin : travail en file sans porteur
   };
   const mockSessions = (sessions) => {
     vi.mocked(invoke).mockImplementation(async (cmd) =>
-      cmd === "list_agent_sessions" ? { sessions } : undefined
+      cmd === "list_agent_sessions" || cmd === "agent_activity_probe" ? { sessions } : undefined
     );
   };
 
@@ -700,7 +700,7 @@ describe("releaseStuckRunLock — verrou orphelin : travail en file sans porteur
   it("sonde de sessions indisponible → verrou MAINTENU pour un travail en file (jamais de libération sur incertitude)", async () => {
     beginOrphanRun();
     vi.mocked(invoke).mockImplementation(async (cmd) => {
-      if (cmd === "list_agent_sessions") throw new Error("sonde indisponible");
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") throw new Error("sonde indisponible");
       return undefined;
     });
     await releaseStuckRunLock("projetA");

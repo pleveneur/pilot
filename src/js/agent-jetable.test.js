@@ -82,7 +82,7 @@ function instrument({ agents = REGISTRY, spawned = [], sent = [] } = {}) {
   vi.mocked(invoke).mockImplementation(async (cmd, args = {}) => {
     if (cmd === "get_config") return {};
     if (cmd === "list_agents") return agents;
-    if (cmd === "list_agent_sessions") return { sessions: [] };
+    if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [] };
     if (cmd === "register_ephemeral_agent") return args.agent;
     if (cmd === "start_agent_process") {
       spawned.push(args.agentId);

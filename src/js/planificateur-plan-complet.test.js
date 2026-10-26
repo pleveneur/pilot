@@ -108,7 +108,7 @@ async function launchPlanMission({ project, gitStatus = { is_repo: true, head_ts
   vi.mocked(invoke).mockImplementation(async (cmd, args = {}) => {
     if (cmd === "get_config") return {};
     if (cmd === "list_agents") return REGISTRY;
-    if (cmd === "list_agent_sessions") return { sessions: [] };
+    if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [] };
     if (cmd === "start_agent_process") spawned.push(args.agentId);
     if (cmd === "git_status_project") {
       if (gitStatus instanceof Error) throw gitStatus;

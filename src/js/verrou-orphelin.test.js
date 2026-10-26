@@ -104,7 +104,7 @@ const runs = () => globalThis.__agentBusState.runs;
 /** Installe une sonde `list_agent_sessions` qui ne voit AUCUNE session. */
 function mockNoSession() {
   vi.mocked(invoke).mockImplementation(async (cmd) => {
-    if (cmd === "list_agent_sessions") return { sessions: [] };
+    if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [] };
     if (cmd === "git_status_project") return { pending: 0, head_ts: 0 };
     if (cmd === "get_config") return {};
     if (cmd === "list_agents") return { agents: [] };
@@ -115,7 +115,7 @@ function mockNoSession() {
 /** Installe une sonde `list_agent_sessions` qui voit l'agent TRAVAILLER. */
 function mockWorkingSession(project, agentId) {
   vi.mocked(invoke).mockImplementation(async (cmd) => {
-    if (cmd === "list_agent_sessions") {
+    if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") {
       return {
         sessions: [
           {
@@ -458,7 +458,7 @@ describe("PREUVE 8 — un arrêt jamais terminé ne perd ni les demandes en file
         };
       }
       if (cmd === "get_config") return {};
-      if (cmd === "list_agent_sessions") return { sessions: [] };
+      if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [] };
       return undefined;
     });
     await initAgentsBus({});

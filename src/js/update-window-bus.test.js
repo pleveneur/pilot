@@ -65,7 +65,7 @@ vi.hoisted(() => {
 // activité, seule la réservation de mise à jour peut donc refuser.
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd) => {
-    if (cmd === "list_agent_sessions") return { sessions: [] };
+    if (cmd === "list_agent_sessions" || cmd === "agent_activity_probe") return { sessions: [] };
     return undefined;
   }),
 }));

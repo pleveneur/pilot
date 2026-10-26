@@ -2500,6 +2500,47 @@ impl AgentService {
         Ok(serde_json::json!({ "sessions": out }))
     }
 
+    /// SONDE LÉGÈRE d'activité, pour les appels PÉRIODIQUES.
+    ///
+    /// Répond à la SEULE question qu'une sonde répétée a le droit de poser —
+    /// « y a-t-il un agent qui TRAVAILLE sur ce projet ? » — sans jamais
+    /// construire la vue d'ensemble `list_agent_sessions`. Celle-ci est
+    /// INCOMPATIBLE avec un appel en boucle : pour chaque session VIVANTE elle
+    /// envoie un `get_state` SYNCHRONE au processus pi (timeout 2 s) et lit la
+    /// table `agents` en base. Une session figée bloque donc l'appelant pendant
+    /// des minutes, et une sonde périodique qui l'appelle gèle la file de
+    /// travail du projet (défaut constaté : file de missions bloquée 25-30 min).
+    ///
+    /// Projection MINIMALE, aux MÊMES NOMS DE CHAMPS que `list_agent_sessions`
+    /// pour les clés lues par le décideur existant (`isProjectWorking` de
+    /// `exclusivity-queue.js`) : `project`, `agent`, `alive`, et — seulement si
+    /// une activité a été observée — `busy`, `toolInProgress`, `lastActivity`.
+    /// La RÈGLE de décision reste donc à UN seul endroit (le front), pas de
+    /// duplication côté Rust. Aucun accès base, aucun RPC.
+    pub fn agent_activity_probe(&self, app: &AppHandle) -> Value {
+        let active = self.active.lock().unwrap().clone();
+        // Collecte sous le verrou, puis libération immédiate (aucun accès DB/RPC).
+        let raw = {
+            let mut sessions = self.sessions.lock().unwrap();
+            collect_session_states(&mut sessions, &active)
+        };
+        let anomaly_map = app.state::<AppState>().agent_anomaly.clone();
+        let mut out = Vec::new();
+        for (project, agent_id, _state, _mode, alive, _is_active) in raw {
+            let entry = {
+                let m = anomaly_map.lock().unwrap();
+                activity_probe_entry(
+                    &project,
+                    &agent_id,
+                    alive,
+                    m.get(&format!("{}\u{1f}{}", project, agent_id)),
+                )
+            };
+            out.push(entry);
+        }
+        serde_json::json!({ "sessions": out })
+    }
+
     // ── Reviewer d'orchestration (H2 V1) ──
     // Session dédiée `pi --mode rpc --no-session` (contexte vierge, jetable),
     // canal séparé `rpc-event-reviewer`, pas de skill/extension (lecture seule).
@@ -3977,6 +4018,36 @@ fn session_entry_json(
     entry
 }
 
+/// Entrée MINIMALE d'une session pour `AgentService::agent_activity_probe` (pure :
+/// testable sans `AppHandle`, aucun accès base ni RPC).
+///
+/// Les CLÉS sont volontairement les MÊMES que celles lues par le décideur du
+/// frontend (`isProjectWorking` de `exclusivity-queue.js`) : `project`, `agent`,
+/// `alive` et — seulement si une activité a été enregistrée — `busy`,
+/// `toolInProgress`, `lastActivity`. Absence = « aucune preuve de travail »,
+/// exactement comme dans la vue d'ensemble `list_agent_sessions`.
+fn activity_probe_entry(
+    project: &str,
+    agent: &str,
+    alive: bool,
+    activity: Option<&anomaly::AgentAnomalyState>,
+) -> Value {
+    let mut entry = serde_json::json!({
+        "project": project,
+        "agent": agent,
+        "alive": alive,
+    });
+    if let Some(a) = activity {
+        let (iso, _relative) = anomaly::last_activity_info(a);
+        entry["busy"] = Value::Bool(a.busy);
+        entry["toolInProgress"] = Value::Bool(a.tool_in_progress);
+        if let Some(la) = iso {
+            entry["lastActivity"] = Value::String(la);
+        }
+    }
+    entry
+}
+
 /// Extrait l'état brut de toutes les sessions du registre (P2) — pur, sans
 /// accès DB (testable). Retourne pour chaque session : (projet, agent, état,
 /// mode, vivacité, actif). La clé composite est "project\u{1f}agent".
@@ -4373,6 +4444,17 @@ pub fn save_agent_views(state: State<AppState>, app: AppHandle, project_path: St
 #[tauri::command]
 pub fn list_agent_sessions(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
     state.agent_service.list_agent_sessions(&app)
+}
+
+/// SONDE LÉGÈRE d'activité (appels PÉRIODIQUES uniquement).
+///
+/// Ne remplace JAMAIS `list_agent_sessions` pour l'assistant ni pour un
+/// affichage : elle ne renvoie qu'un état minimal par session (projet, agent,
+/// vivacité, activité), sans accès base et sans `get_state` RPC. C'est le SEUL
+/// appel autorisé dans une boucle (rejeu de file de missions / de délégations).
+#[tauri::command]
+pub fn agent_activity_probe(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+    Ok(state.agent_service.agent_activity_probe(&app))
 }
 
 // ── Bibliothèque commune : inventaire pour l'UI de configuration ──
@@ -5554,6 +5636,47 @@ mod tests {
             minimal.get("toolInProgress").is_none(),
             "activité inconnue → `toolInProgress` absent"
         );
+    }
+
+    /// SONDE LÉGÈRE (`agent_activity_probe`) : l'entrée minimale porte EXACTEMENT
+    /// les clés lues par le décideur du frontend (`isProjectWorking`), et rien de
+    /// plus — c'est ce qui rend la sonde répétable là où la vue d'ensemble
+    /// complète (base + `get_state` par session vivante) gelait la file.
+    #[test]
+    fn activity_probe_entry_keeps_the_minimal_frontend_contract() {
+        // Aucune activité enregistrée : clés de base seulement (fail-open JS).
+        let minimal = activity_probe_entry("/p/A", "codeur", true, None);
+        for key in ["project", "agent", "alive"] {
+            assert!(minimal.get(key).is_some(), "clé de base `{}` toujours présente", key);
+        }
+        assert!(minimal.get("busy").is_none(), "activité inconnue → `busy` absent");
+        assert!(
+            minimal.get("toolInProgress").is_none(),
+            "activité inconnue → `toolInProgress` absent"
+        );
+
+        // Activité connue (agent en cours de tâche) : les trois clés d'activité
+        // apparaîssent telles quelles.
+        let state = busy_anomaly_entry();
+        let busy = activity_probe_entry("/p/A", "codeur", true, Some(&state));
+        assert_eq!(busy["project"], serde_json::json!("/p/A"));
+        assert_eq!(busy["agent"], serde_json::json!("codeur"));
+        assert_eq!(busy["alive"], serde_json::json!(true));
+        assert_eq!(busy["busy"], serde_json::json!(true));
+        assert_eq!(busy["toolInProgress"], serde_json::json!(false));
+        assert!(
+            busy.get("lastActivity").is_some(),
+            "horodatage ISO requis : c'est la base du calcul « activité récente »"
+        );
+        // Champs d'AFFICHAGE de la vue d'ensemble : jamais dans la sonde légère
+        // (aucun consommateur de la sonde ne les lit, et ils coûtent cher).
+        for absent in ["mode", "state", "visible", "active", "prompt", "sessionId", "sessionUid"] {
+            assert!(
+                busy.get(absent).is_none(),
+                "la sonde légère ne doit pas porter le champ d'affichage `{}`",
+                absent
+            );
+        }
     }
 
     /// Mission en cours (affichage) : un envoi de prompt est mémorisé comme
