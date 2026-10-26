@@ -17,8 +17,14 @@
  *   - le CADRE bleu du haut disparait (un seul cadre accentue par colonne,
  *     celui du bloc du bas) ;
  *   - le badge « Distant » prend place a droite, avec son mot ;
- *   - le sous-titre du moteur en service (« Agent Pi » / « Agent PLh ») vit
- *     DANS le bandeau d'identification (decision Q1 = option b).
+ *   - le sous-titre du moteur en service (« Moteur · Agent Pi » /
+ *     « Moteur · Agent PLh ») vit DANS le bandeau d'identification (decision
+ *     Q1 = option b).
+ *     MISE A JOUR (decision 375 du proprietaire, `RAPPORT-badge-distant-bas.md`) :
+ *     ce sous-titre est DESCENDU dans la ligne d'information du BAS de la
+ *     colonne (`#sidebar-engine-row`), ou il nomme le moteur A COTE du badge
+ *     « Distant » qui occupait seul une ligne en haut. Le bandeau garde ses
+ *     48 px et son logo ; seule cette ligne de texte a change de place.
  *
  * Ce qui ne doit PAS changer : les identifiants des boutons conserves
  * (`btn-scratchpad`, `btn-settings`), les identifiants des quatre
@@ -42,7 +48,8 @@
  *       n'est pas tolere par le cablage (demarrage casse) ;
  *   (f) le cadre accent du haut revient, ou celui du bas disparait ;
  *   (g) le badge « Distant » n'est plus nomme, ou repasse en carre 32 x 32 ;
- *   (h) le sous-titre du moteur sort du bandeau, ou n'a plus de source ;
+ *   (h) le sous-titre du moteur quitte la ligne d'information du bas de la
+ *       colonne (ou se retrouve dans le bandeau), ou n'a plus de source ;
  *   (i) une couleur est ecrite en dur dans le bandeau (thème clair casse).
  *
  * Aucun navigateur n'est requis : lecture des fichiers (fins de ligne
@@ -221,21 +228,24 @@ describe("LOT 2 (d) — sept icones nues deviennent deux boutons nommes", () => 
         `id="${id}"`,
       );
     }
-    // Le badge « Distant » garde sa place : le conteneur reste dans le DOM.
-    expect(bloc_actions[1]).toContain('id="remote-badge"');
+    // Le badge « Distant » a QUITTE ce conteneur (decision 375 : il est
+    // descendu dans `#sidebar-engine-row`, a droite du sous-titre du moteur) :
+    // il ne doit pas revenir ici, sinon la ligne vide du haut reapparait.
+    expect(bloc_actions[1]).not.toContain('id="remote-badge"');
   });
 
   it("le conteneur du haut n'occupe plus aucune hauteur (44 px rendus)", () => {
-    // Lot A § 3.4 du rapport : marges et padding a 0 ; l'air du badge est porte
-    // par le badge lui-meme. Sans cela, 8 + 28 + 8 = 44 px resteraient vides.
+    // Lot A § 3.4 du rapport : marges et padding a 0. Depuis la decision 375,
+    // le badge n'est plus son enfant : le conteneur est VIDE, il ne peut donc
+    // plus rien depenser en hauteur (ni 28 px de badge, ni 44 px avec l'air).
     const d = declarations(bloc(css, "#global-actions"));
     expect(d).toContain("margin: 0;");
     expect(d).toContain("padding: 0;");
     expect(d).not.toMatch(/margin: 8px/);
     expect(d).not.toMatch(/padding: 0 8px 8px/);
-    // Le badge reprend l'air perdu : 44 px quand il est affiche, comme avant.
-    expect(declarations(bloc(css, ".remote-badge"))).toContain(
-      "margin: 8px 8px 8px auto;",
+    // Le badge, lui, prend son air dans la ligne qui l'accueille.
+    expect(declarations(bloc(css, "#sidebar-engine-row"))).toContain(
+      "height: 28px;",
     );
   });
 
@@ -335,14 +345,23 @@ describe("LOT 2 (g) — le badge « Distant » est nomme et a la bonne famille",
   });
 });
 
-describe("LOT 2 (h) — le sous-titre du moteur vit dans le bandeau", () => {
-  it("l'element est place DANS #project-selector, sous le nom", () => {
-    const debut = html.indexOf('id="project-selector"');
+describe("LOT 2 (h) — le sous-titre du moteur vit dans la ligne du bas", () => {
+  // MISE A JOUR (decision 375 du proprietaire) : le sous-titre a quitte le
+  // bandeau pour la LIGNE D'INFORMATION DU BAS de la colonne, ou le badge
+  // « Distant » le rejoint a sa droite. Verrou complet du nouvel emplacement :
+  // `badge-distant-bas.test.js`.
+  it("l'element est place DANS #sidebar-engine-row, qui ferme #sidebar", () => {
+    const debut = html.indexOf('id="sidebar-engine-row"');
     const moteur = html.indexOf('id="project-engine"');
-    const fin = html.indexOf('id="projects-dropdown"');
+    const fin = html.indexOf("</aside>");
     expect(debut).toBeGreaterThan(-1);
     expect(moteur).toBeGreaterThan(debut);
     expect(fin).toBeGreaterThan(moteur);
+    // Et il n'est plus dans le bandeau d'identification.
+    const bandeauDebut = html.indexOf('id="project-selector"');
+    const bandeauFin = html.indexOf('id="open-projects-bar"');
+    expect(html.indexOf('id="project-engine"')).toBeGreaterThan(bandeauFin);
+    expect(moteur).toBeGreaterThan(bandeauDebut);
   });
 
   it("il est rempli par la source UNIQUE du libelle du moteur (backend-info.js)", () => {
