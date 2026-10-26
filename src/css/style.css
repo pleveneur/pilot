@@ -265,6 +265,19 @@ body.theme-light.theme-tokyo-day #window-controls > button:active {
      prennent la hauteur de la rangee d'onglets, qui porte deja sa propre valeur
      de hauteur (36 px) : aucune hauteur nouvelle n'est donc inventee ici. */
 
+  /* Largeur REELLEMENT occupee par le groupe des trois boutons de fenetre
+     (#window-controls), a droite de la rangee d'onglets : 3 touches de 46 px
+     + les 4 px d'air a droite du groupe = 142 px (mesure, pas une invention :
+     les deux valeurs sont lues dans le bloc #window-controls). Elle est NOMMEE
+     ici parce qu'un SECOND endroit la lit : la barre du mode « Assistant
+     seul » (.sa-immersive-top) doit lui RESERVER cette largeur. Dans ce mode,
+     l'overlay recouvre la rangee d'onglets alors que les trois boutons
+     restent peints au-dessus (z-index 100001) : sans reservation, les deux
+     boutons de droite de cette barre passaient DESSOUS.
+     barre-fenetre-assistant-seul.test.js RECALCULE cette largeur depuis
+     #window-controls et echoue si les deux divergent (aucune valeur figee). */
+  --window-controls-width: 142px;
+
   /* Typographie */
   --font-ui: "Inter", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI",
     Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
@@ -10838,7 +10851,17 @@ body.pilot-loading *::after {
   align-items: center;
   gap: 12px;
   height: 58px;
-  padding: 0 18px;
+  /* Reservation de l'angle haut droit : voir --window-controls-width. Dans ce
+     mode, l'overlay est `position: fixed; inset: 0` et recouvre la rangee
+     d'onglets ; les trois boutons systeme, eux, restent AU-DESSUS (z-index
+     100001) et occupent donc l'angle haut droit de la MEME fenetre. Le ⚙ et
+     le point des agents sont les deux derniers enfants de cette barre : sans
+     cette place reservee a DROITE (largeur du groupe + 8 px d'air), ils se
+     glissaient sous les trois boutons et devenaient difficiles a cliquer.
+     La HAUTEUR de la barre (58 px) et l'air de GAUCHE (18 px) ne changent pas.
+     Le mode normal n'est pas concerne : sa rangee d'onglets porte le groupe
+     dans son PROPRE conteneur (aucun chevauchement possible). */
+  padding: 0 calc(var(--window-controls-width) + var(--space-2)) 0 18px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-1);
 }

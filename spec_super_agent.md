@@ -3067,6 +3067,31 @@ P3 (`275eb04`, une seule identité de projet).
 
 ---
 
+## Technique — angle haut droit du mode « Assistant seul »
+
+Les deux boutons de droite de la barre du haut (le point des agents et le ⚙)
+vivaient **sous** les trois boutons système de la fenêtre, donc partiellement
+recouverts et difficiles à cliquer. **Les deux modes ne partagent pas la même
+zone** : en mode normal, la rangée d'onglets (`#tab-row`) porte le groupe
+`#window-controls` dans son propre conteneur — rien ne passe dessous ; en mode
+immersif, l'overlay (`.superagent-immersive`, `position: fixed; inset: 0`)
+recouvre cette rangée alors que `#window-controls` garde `z-index: 100001` et
+reste peint **au-dessus**, au même endroit. La barre `.sa-immersive-top`
+démarre tout en haut : elle doit donc **réserver la largeur** du groupe.
+
+- La largeur n'est nommée qu'une fois : `--window-controls-width`
+  (`src/css/style.css`, `:root`), mesurée = 3 × 46 px + 4 px = **142 px**.
+- `.sa-immersive-top` réserve à **droite**
+  `calc(var(--window-controls-width) + var(--space-2))` : les deux boutons
+  restent en haut à droite, entièrement visibles et cliquables, avec de l'air.
+- **Rien ne bouge ailleurs** : hauteur de la barre (58 px), air de gauche
+  (18 px), mode normal, colonne de gauche et thème clair inchangés.
+- Verrou : `src/js/barre-fenetre-assistant-seul.test.js` **recalcule** la
+  largeur depuis `#window-controls` (aucune valeur figée) et échoue si le jeton,
+  la réservation ou l'absence de décalage vertical divergent.
+
+---
+
 *Voir aussi : `plan_dev.md` (roadmap), `spec_multiprojects.md` (gestionnaire de
 projets), `spec_session_history.md` (historique H9), `spec_gestion_agents.md`
 (agents multi-rôles).*
