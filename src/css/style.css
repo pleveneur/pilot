@@ -845,6 +845,19 @@ body.theme-light.theme-tokyo-day {
      VERS LE HAUT, donc AU-DESSUS du cadre : un conteneur qui rogne le
      masquerait entierement. */
   overflow: visible;
+  /* REPLI AU SURVOL (LOT 1 de `RAPPORT-conception-repli-menus-bas.md` § 2.4 et
+     § 2.5) : l'ANCRE est le BAS du cadre. Le contenu est colle en bas par
+     `justify-content: flex-end` : quand le cadre se reduit, c'est son BORD HAUT
+     qui descend, donc les lignes hautes sont recouvertes une a une tandis que la
+     LIGNE DU BAS ne bouge jamais d'un pixel (la cible sous le curseur reste la
+     bonne) et rien ne glisse sous la souris quand on sort par le haut. */
+  justify-content: flex-end;
+  /* Seule la HAUTEUR est animee, avec le jeton de duree existant `--transition`
+     (0.18s, jeton "spring" deja utilise partout pour les ouvertures) : aucune
+     duree nouvelle n'entre dans le projet. La valeur en pixels est posee par
+     `sidebar-footer-fold.js`, puis retiree a la fin du mouvement (le bloc
+     redevient auto-ajustable si le nombre de lignes change). */
+  transition: height var(--transition);
   /* Plafond : 60 % de la hauteur de fenetre (`RAPPORT-design-colonne-entrees.md`
      § 3.5). La 7e ligne rend la valeur precedente (50 %, heritee de la decision
      Q3 du proprietaire du 2026-10-25) insuffisante : 60 % de la fenetre minimale
@@ -863,6 +876,24 @@ body.theme-light.theme-tokyo-day {
      8 px en haut et en bas : 2 + 16 + 7 x 32 + 6 x 6 = 278 px pour les SEPT
      lignes du bloc, dans les 300 px autorises par le plafond ci-dessus. */
   padding: 8px 0;
+}
+
+/* ETAT REPLIE du bloc du bas (LOT 1 de `RAPPORT-conception-repli-menus-bas.md`
+   § 2.1 et § 5.1) : la MEME chose vue par une fente d'une ligne (50 px).
+   - `height: 50px` = 2 bordures + 2 x 8 padding + 1 ligne de 32 px. Au repos le
+     bloc est replie ; le survol, le clavier et le toucher le deploient.
+   - `overflow: clip` et non `hidden` : un `hidden` EST un conteneur de
+     defilement, le moteur ajusterait `scrollTop` a la prise de focus et la ligne
+     d'ancrage disparaitrait (§ 5.3). `clip` ne defile pas.
+   - Le rognage ne peut vivre QUE dans cette regle d'etat : `overflow: visible`
+     reste exige dans le bloc de base (le menu « Autres ecrans » s'ouvre VERS LE
+     HAUT et serait rogne).
+   - Rien n'est masque dans le DOM (`display: none` serait une ligne en moins) et
+     la hauteur animee n'utilise QUE `height` : la largeur de colonne (280 px au
+     minimum) n'est jamais touchee. */
+#project-footer.pj-replie {
+  height: 50px;
+  overflow: clip;
 }
 
 /* --- Barre de boutons projet : systeme a onglets (v8) ---
@@ -937,6 +968,12 @@ body.theme-light.theme-tokyo-day {
   align-items: stretch;
   gap: 6px;
   padding: 0;
+  /* LOT 1 du repli au survol (`RAPPORT-conception-repli-menus-bas.md` § 5.2) :
+     sans cette ligne le panneau vaut `flex: 0 1 auto`, donc il est COMPRIME des
+     que le cadre descend a 50 px : les sept boutons (32 px, `flex: 0 0 auto`)
+     sortiraient du panneau et la mesure de la hauteur depliee deviendrait fausse.
+     `0 0 auto` est donc indispensable, pas cosmetique. */
+  flex: 0 0 auto;
 }
 
 #main-area {

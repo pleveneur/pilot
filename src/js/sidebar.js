@@ -21,6 +21,11 @@ import { toastError, toastSuccess, toastInfo, toastWarning } from "./toast.js";
 // peut modifier le projet) → même politique d'admission que le chat.
 import { canSendManualCommandAsync, manualCommandBlockedMessage } from "./run-policy.js";
 import { isRunInProgress, releaseOrphanRunLock } from "./agents-bus.js";
+// REPLI AU SURVOL du bloc de menus du bas (LOT 1 de
+// `RAPPORT-conception-repli-menus-bas.md`) : module pur de decision + attache des
+// ecouteurs (souris, clavier, mouvement reduit). Aucun noeud de la page n'est
+// ajoute ou retire : seule la HAUTEUR du cadre change.
+import { initRepliMenusBas } from "./sidebar-footer-fold.js";
 
 // Mapping extension → Lucide icon name (kebab-case) for file type icons.
 // Rendu via <i data-lucide="..."> dans l'arbre (cf. icons.js / refreshIcons).
@@ -242,6 +247,14 @@ class Sidebar {
     // (les trois sous-onglets Projet / Vues / Assistant ont disparu : les quatre
     // lignes du bloc sont toujours visibles et le menu porte le reste).
     this._initProjectFooterMenu();
+
+    // REPLI AU SURVOL des menus du bas (LOT 1 de
+    // `RAPPORT-conception-repli-menus-bas.md`) : branche APRES le menu, dont il
+    // utilise la reference de fermeture (§ 5.4) pour ne jamais rogner un menu
+    // ouvert.
+    this._repliMenusBas = initRepliMenusBas({
+      fermerMenuAutresEcrans: this._fermerMenuAutresEcrans,
+    });
 
     // Bouton Projets → toggle dropdown
     this.btnOpen.addEventListener("click", (e) => {
@@ -1676,6 +1689,12 @@ class Sidebar {
       fermer();
       btn.focus();
     });
+
+    // REPLI AU SURVOL (§ 5.4 du document de conception) : le repli doit pouvoir
+    // refermer le menu AVANT de rogner. Une SEULE reference est exposee, ici,
+    // APRES l'ecouteur `keydown` — les cinq chaines que le verrou du bas de
+    // colonne exige ne sont pas touchees.
+    this._fermerMenuAutresEcrans = fermer;
   }
 
   // LOT 3 de la presentation : la methode `_initProjectTabs` (bascule des trois

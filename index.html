@@ -132,7 +132,13 @@
          (Brouillon, Options). Les cinq lignes de projet portent, elles, leur
          `project-only hidden` individuel et continuent d'etre pilotees par
          `sidebar.js` (`_showProjectButtons` / `closeProject`), sans changement. -->
-    <div id="project-footer">
+    <!-- REPLI AU SURVOL (LOT 1 de `RAPPORT-conception-repli-menus-bas.md`) : la
+         classe `pj-replie` peint l'etat AU PREMIER RENDU, sans clignotement (le
+         bloc ne s'affiche jamais deplie puis ne se replie). Elle est retiree et
+         reposee par `src/js/sidebar-footer-fold.js` ; AUCUN noeud n'est ajoute ou
+         retire : le bloc garde ses SEPT lignes, ses identifiants et ses libelles,
+         et seule sa HAUTEUR change (50 px replie). -->
+    <div id="project-footer" class="pj-replie">
       <!-- Un seul panneau, plus de rangee d'onglets : `role="tablist"` disparait
            avec les sous-onglets. -->
       <div class="pj-panel">
