@@ -11,12 +11,12 @@ l'utilisateur en te basant sur le contenu de ce handbook.
 
 Pilot est un éditeur de texte multiplateforme pensé pour les agents IA. Il
 combine un éditeur de code (CodeMirror 6), une prévisualisation Markdown, un
-terminal intégré, un agent de codage IA (« Agent Pi », onglet π) et un mode
-orchestration. Tout se fait dans une seule fenêtre, sans passer par un terminal
-externe.
+terminal intégré, un agent de codage IA (l'agent Pi **ou** PLh selon le moteur
+en service, onglet π) et un mode orchestration. Tout se fait dans une seule
+fenêtre, sans passer par un terminal externe.
 
 - **Onglets** : édition (📝), prévisualisation (👁️), mode split (📝👁️),
-  terminal (🖥️), agent Pi (π).
+  terminal (🖥️), agent (π).
 - **Barre latérale** : explorateur de fichiers du projet, filtre, favoris,
   brouillon (scratchpad).
 - **Panneau d'actions** (bas de la barre latérale, cadre accentué) : **sept** lignes
@@ -67,7 +67,8 @@ est réellement là.
 
 1. **Le moteur constaté** : quel agent répond (Pi ou PLh) et sa version. S'il ne
    répond pas, la fenêtre dit **pourquoi** et **quoi faire** (⚙️ Options →
-   « Agent Pi »), avec un bouton **Revérifier le moteur**.
+   l'onglet de l'agent, qui porte le nom du moteur en service), avec un bouton
+   **Revérifier le moteur**.
 2. **Le projet sur lequel on travaille** : le projet ouvert, ou le bouton
    **Choisir un dossier de projet** pour en ouvrir un tout de suite.
 3. **Le modèle de l'assistant** : la liste des modèles **réellement
@@ -93,7 +94,7 @@ fichier et ne modifie pas l'apparence de Pilot. La passer est sans conséquence.
 
 **La revoir plus tard** : elle ne s'affiche que sur une installation neuve et
 ne revient pas d'elle-même. Ses réglages se retrouvent dans **⚙️ Options →
-Agent Pi**, et le choix du modèle dans **⚙️ Options → Fournisseurs**.
+l'onglet de l'agent**, et le choix du modèle dans **⚙️ Options → Fournisseurs**.
 
 ### L'équipe d'agents, apprise plus tard et à la demande
 
@@ -184,7 +185,7 @@ agents** et n'écrit aucun réglage : elle explique, elle ne reconfigure rien.
 - **Thème** : bascule dark/light depuis les **Options ⚙️** (bouton du panneau
   d'actions) → section « Apparence ». Le thème est mémorisé.
 - **Options ⚙️** : les Options s'ouvrent dans un **onglet** (thème, éditeur,
-  agent Pi, accès distant, etc.). Le **✕ de l'onglet** équivaut à **« Annuler »**
+  l'agent, accès distant, etc.). Le **✕ de l'onglet** équivaut à **« Annuler »**
   (rien n'est enregistré) ; « Annuler » et « Enregistrer » ne ferment pas
   l'onglet, vous voyez le résultat de ce que vous venez de changer. L'onglet
   reste ouvert quand vous changez de projet. Toute la configuration est
@@ -403,13 +404,13 @@ travailles t'est donc proposée **sans redémarrer** l'application.
 Tu peux ouvrir **plusieurs onglets agent indépendants** sur le même projet,
 chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
 
-- **Activer** : Options ⚙️ → onglet « Agent Pi » → cocher « Multi-onglets
+- **Activer** : Options ⚙️ → onglet de l'agent → cocher « Multi-onglets
   agents ».
 - **Ouvrir un agent** : bouton « + » de la barre d'onglets (toujours en
   première position, avant les autres onglets).
 - **Renommer un onglet** : double-clic sur son nom.
-- **Configurer le nombre et les noms au démarrage** : Options ⚙️ → onglet
-  « Agent Pi » → section « Agents du projet ». Définis les agents rechargés
+- **Configurer le nombre et les noms au démarrage** : Options ⚙️ → onglet de
+  l'agent → section « Agents du projet ». Définis les agents rechargés
   automatiquement à l'ouverture du projet, chacun avec son nom. La
   configuration est enregistrée dans `.pilot/agents.json` du projet (versionnée
   et partagée entre utilisateurs).

@@ -3178,17 +3178,15 @@ diagnostic dans `RAPPORT-sonde-sessions-15s.md`).
 
 ## Technique — angle haut droit du mode « Assistant seul »
 
-Le coin haut droit a connu **deux défauts successifs**, tous deux mesurés :
-
-1. le point des agents et le ⚙ étaient posés sur la **même ligne** que les trois
-   boutons système, donc **partiellement recouverts** par eux (difficiles à
-   cliquer) ;
-2. première correction : **150 px réservés à droite** (largeur du groupe + air).
-   Effet de bord signalé par le propriétaire : les deux boutons ne sont plus
-   dans le coin, ils « flottent au milieu-droite ».
-
-**Placement retenu (état actuel, décision du propriétaire)** : les deux boutons
-sont **sous** les boutons système et **alignés sur leur bord droit**.
+**Ce qui existe sur le disque** : la barre du mode (`.sa-immersive-top`, 58 px de
+haut) se pose sur la **seconde ligne**, **sous** la rangée des trois boutons
+système, et ses **deux derniers** éléments — le point des agents puis le ⚙ —
+reprennent l'**air droit exact** de ce groupe : leur bord droit est celui de la
+fenêtre, comme le bouton Fermer. **Aucune place n'est réservée latéralement** :
+le remplissage de la barre ne contient ni la largeur du groupe ni de marge de
+ce côté (une telle réservation repoussait les deux boutons vers le milieu de la
+barre). Le placement se fait donc par **une marge haute** et **un air droit**,
+rien d'autre.
 
 **Les deux modes ne partagent pas la même zone** : en mode normal, la rangée
 `#tab-row` porte le groupe `#window-controls` dans son propre conteneur (rien
