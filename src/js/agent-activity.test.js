@@ -1270,8 +1270,9 @@ describe("isAgentWorking / isWorkingWithoutTab — travail effectif", () => {
     // 1. La fonction pure de verite ne le compte pas comme travaillant.
     expect(isAgentWorking(agentRecemmentActif)).toBe(false);
     expect(anyBusy([agentRecemmentActif])).toBe(false);
-    // 2. La liste aplatie non plus (c'est elle que consomme super-agent.js
-    //    pour la classe `superagent-input-reflecting` et les pastilles).
+    // 2. La liste aplatie non plus (c'est elle que consomment le point qui
+    //    respire, les pastilles et le compteur « Travail » de super-agent.js ;
+    //    la zone de saisie de l'assistant, elle, ne lit QUE sa propre session).
     const list = flattenAgents(makeSupervision([session(agentRecemmentActif)]));
     expect(list).toHaveLength(1);
     expect(list[0].working).toBe(false);

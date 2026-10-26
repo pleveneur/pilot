@@ -400,26 +400,30 @@ export function superAgentReflectingFromEvent(type) {
  * l'Assistant doit-elle porter le signal de travail (classe
  * `superagent-input-reflecting`, respiration du fond du champ) ?
  *
- * Le point qui respire dans la liste des agents suit l'etat PARTAGE
- * `anyBusy(list)` (agent-activity.js, via `subscribeAgentActivity`). La zone de
- * saisie doit afficher le MEME signal, sinon on ecrit sans voir qu'un agent
- * travaille encore (l'Assistant delegue puis rend la main : sa propre session
- * n'est plus « en traitement » alors que l'agent delegue commence a travailler).
+ * UNE seule question : « l'Assistant lui-meme est-il en train de travailler ? ».
+ * Le travail des AUTRES agents (agent d'un projet, agent delegue, agent sans
+ * onglet, file d'attente d'un projet) n'entre PAS dans cette decision : il a
+ * son propre signal — le point qui respire de la liste des agents — et ne doit
+ * jamais faire croire, dans l'onglet 🧭, que l'Assistant travaille. Coupler la
+ * zone de saisie a l'etat global (`anyBusy`) faisait clignoter la barre en
+ * boucle alors que l'Assistant etait au repos et qu'un seul AUTRE agent
+ * travaillait.
  *
  * Regles :
- *  - `agentReflecting` : l'Assistant lui-meme reflechit (agent_start / poll) ;
- *  - `agentsWorking` : au moins un agent travaille (etat partage, identique a
- *    celui du point du haut a droite) ;
+ *  - `agentReflecting` : l'Assistant lui-meme reflechit (agent_start, poll de
+ *    `get_agent_supervision`, remis a false des qu'il ne traite plus) ;
  *  - `pendingQuestion` : une question d'agent attend une reponse — la barre
  *    reste alors en mode normal, prete a saisir la precision (chantier #132) ;
- *    aucune teinte, quel que soit le travail en cours.
- * @param {{agentReflecting?: boolean, agentsWorking?: boolean, pendingQuestion?: boolean}} etats
+ *    aucune teinte, meme si l'Assistant reflechit.
+ * Toute autre cle d'un objet d'etats est IGNOREE (aucun second etat ne peut
+ * rallumer la zone de saisie sans passer par cette fonction).
+ * @param {{agentReflecting?: boolean, pendingQuestion?: boolean}} etats
  * @returns {boolean} true si la zone de saisie doit respirer.
  */
 export function superAgentInputReflecting(etats = {}) {
   const e = etats || {};
   if (e.pendingQuestion === true) return false;
-  return e.agentReflecting === true || e.agentsWorking === true;
+  return e.agentReflecting === true;
 }
 
 /**
@@ -3045,10 +3049,10 @@ export async function createSuperAgent(container) {
   // Réutilise le MÊME signal d'état que `busyHint`/`backendBusy` (agent_start /
   // agent_end), pas une nouvelle source de vérité. Ne verrouille pas la saisie
   // (le textarea reste utilisable) et ne touche pas au contenu saisi.
-  // Ce signal est COMPOSÉ dans `applyReflecting` : la zone de saisie respire
-  // aussi quand un agent DÉLÉGUÉ travaille (état partagé `busy`), pas seulement
-  // pendant la réflexion de l'Assistant — même décision que le point de la
-  // liste des agents. Aucune autre règle d'affichage n'est modifiée.
+  // Ce signal suit UNIQUEMENT la session de l'Assistant (voir
+  // `superAgentInputReflecting`) : le travail des agents des projets garde son
+  // propre indicateur (point de la liste, compteur « Travail ») et ne fait
+  // jamais clignoter cette zone de saisie.
   function setReflecting(reflecting) {
     superSetReflecting(reflecting);
   }
@@ -3063,12 +3067,9 @@ export async function createSuperAgent(container) {
   // une réflexion (voir applyReflecting appelé par enterImmersive /
   // exitImmersive).
   let reflectingActive = false;
-  // Travail des agents, lu sur le store PARTAGE de agent-activity.js (le meme
-  // etat `busy` = anyBusy(list) qui fait respirer le point du haut a droite).
-  // Il ne sert QU'A la zone de saisie : l'anneau du logo hero du mode assistant
-  // seul, le bandeau « occupe » et le bouton « Analyser et ranger mes donnees »
-  // gardent leur propre signal (aucun autre indicateur modifie).
-  let agentsWorkingActive = false;
+  // Aucune autre source n'alimente cette teinte : l'anneau du logo hero du mode
+  // assistant seul, le bandeau « occupe », le bouton « Analyser et ranger mes
+  // donnees » et le travail des agents des projets gardent leur propre signal.
   function applyReflecting() {
     const pending = hasPendingQuestion();
     // Anneau pulsant du logo hero (mode assistant seul) : inchange, lie a la
@@ -3079,22 +3080,14 @@ export async function createSuperAgent(container) {
     }
     // Zone de saisie : une seule decision (superAgentInputReflecting), meme
     // style et meme animation que ceux deja appliques (aucune regle CSS
-    // nouvelle).
+    // nouvelle). Aucun abonnement a l'etat global des agents : la zone ne
+    // respire que pendant le travail de l'Assistant lui-meme.
     const inputActive = superAgentInputReflecting({
       agentReflecting: reflectingActive,
-      agentsWorking: agentsWorkingActive,
       pendingQuestion: pending,
     });
     if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", inputActive);
   }
-  // Abonnement au store partage (aucun polling ni calcul nouveau : `busy` est
-  // deja calcule par agent-activity.js). Desabonne dans `unlisten`.
-  const unsubscribeAgentsWorking = subscribeAgentActivity((_list, busy) => {
-    const working = busy === true;
-    if (working === agentsWorkingActive) return;
-    agentsWorkingActive = working;
-    applyReflecting();
-  });
   superSetReflecting = (reflecting) => {
     // Chantier #132 : pendant l'attente d'un choix (question en attente), la
     // barre ne passe PAS en teinte « réflexion » — elle reste en mode normal,
@@ -3860,15 +3853,17 @@ export async function createSuperAgent(container) {
       // tout le travail. On protège uniquement les états d'erreur.
       //
       // Chantier « saisie-réflexion » : la teinte de la zone de saisie est
-      // pilotée par le MÊME signal que le cercle respirant en haut (état
-      // `processing` de get_agent_supervision), SANS la garde `!isStreaming`.
+      // pilotée par la SEULE session de l'Assistant (état `processing` de
+      // get_agent_supervision), SANS la garde `!isStreaming`.
       // Cette garde était fragile : `isStreaming` dérive de la classe
       // `agent-status-streaming` posée par le poll lui-même et NON réinitialisée
       // à l'agent_end (onEnd ne reset que le texte, pas la classe). Si
       // l'assistant se remettait à réfléchir dans la fenêtre où la classe était
       // encore `streaming` (et sans agent_start reçu), la garde sautait
       // `setReflecting(true)` → l'effet de la zone de saisie ne se déclenchait
-      // pas alors que le cercle en haut (qui n'a pas cette garde) respirait.
+      // pas alors que l'Assistant travaillait.
+      // Aucun état GLOBAL n'alimente cette teinte : le travail des autres agents
+      // a son propre signal (point de la liste, compteur « Travail »).
       if (processing && !isError) {
         backendBusy = true;
         statusEl.textContent = "Réfléchit…";
@@ -3885,10 +3880,10 @@ export async function createSuperAgent(container) {
         // backendBusy verrouillé sur true (sinon les envois suivants seraient
         // bloqués sans raison).
         backendBusy = false;
-        // Filet de sécurité : retire la part « réflexion de l'Assistant » de la
-        // teinte si elle était restée active (ex: agent_end manqué). L'effet ne
-        // reste jamais bloqué quand l'assistant ne réfléchit plus ; il ne
-        // subsiste que si un agent travaille réellement (état partagé `busy`).
+        // Filet de sécurité : retire la teinte si elle était restée active
+        // (ex: agent_end manqué). L'effet ne reste jamais bloqué quand
+        // l'assistant ne réfléchit plus — aucune autre source ne peut le
+        // rallumer (le travail des autres agents n'entre pas dans la décision).
         setReflecting(false);
       }
       // Filet périodique : si l'assistant est libre (aucun traitement) et que
@@ -3967,9 +3962,6 @@ export async function createSuperAgent(container) {
       // store, sans rendu de liste (le volet n'existe plus), prend donc le
       // relais : le compte ne se fige jamais et ne ment jamais.
       superMissionsUnsub = subscribeAgentActivity(publishSuperMissionsCount);
-      // Signal de travail de la zone de saisie : on retire notre abonnement au
-      // store partage (le store et le point du haut survivent a la fermeture).
-      unsubscribeAgentsWorking();
       // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
       // Anti-doublon Telegram (lot 3) : l'Assistant ne peut plus parler → les
       // avis bruts retardés partent MAINTENANT (aucun événement perdu), et la

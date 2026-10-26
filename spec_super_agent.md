@@ -1935,14 +1935,16 @@ rejouer.
 - **Indicateur d'activité** sous les messages : point **vert « Prêt · lecture
   seule »** au repos, **violet pulsant « Réfléchit… »** quand l'Assistant
   travaille. Le **fond de la zone de saisie** respire (halo discret animé) dans
-  les **deux modes** (standard et assistant seul) pendant que l'Assistant
-  réfléchit **et aussi pendant qu'un agent qu'il a lancé travaille** — le même
-  signal que le point qui respire dans la liste des agents, pour que vous
-  sachiez que le travail continue même après une délégation ; en complément de
-  l'**anneau pulsant autour du logo** en mode immersif. Il ne respire **pas**
-  pendant qu'une question d'agent attend votre réponse (la zone reste alors en
-  mode normal, prête à recevoir votre précision) ; au repos, aucun effet, la
-  zone reste utilisable.
+  les **deux modes** (standard et assistant seul) **uniquement pendant que
+  l'Assistant lui-même travaille**, en complément de l'**anneau pulsant autour
+  du logo** en mode immersif. Il ne respire **pas** pendant qu'une question
+  d'agent attend votre réponse (la zone reste alors en mode normal, prête à
+  recevoir votre précision) ; au repos, aucun effet, la zone reste utilisable.
+  Le travail d'un **AUTRE agent** (agent d'un projet, agent délégué, agent sans
+  onglet, file d'attente d'un projet) **n'allume jamais** cette zone : son
+  signal est le **point qui respire de la liste des agents** et le compteur
+  « Travail ». Une zone de saisie qui clignote ne dit donc qu'une chose :
+  l'Assistant travaille, ici, maintenant.
 - **Suggestions** : quatre chips (« Faire un point sur un projet », « Déléguer
   une demande à l'agent », « Préparer une livraison », « Lister les tâches en
   cours ») qui **préremplissent la zone de saisie** (elles n'envoient pas).
@@ -2075,27 +2077,35 @@ par l'Assistant était avorté quelques secondes après son démarrage).
 
 ## Technique — signal de travail de la zone de saisie 🧭
 
-Correctif du symptôme « le point de la liste des agents respire, la zone de
-saisie du chat non » : après une délégation, `delegate_to_coder` rend la main
-immédiatement, donc l'`agent_end` de l'Assistant arrive alors que l'agent du
-projet **commence** à travailler → la barre retombait au repos alors que le
-travail continuait.
+L'indicateur « la zone de saisie de l'onglet 🧭 respire » ne répond qu'à UNE
+question : **l'Assistant travaille-t-il, lui ?**
 
-- **Une seule décision, pure et testée** : `superAgentInputReflecting({ agentReflecting, agentsWorking, pendingQuestion })`
-  (`src/js/super-agent.js`) — la zone respire si l'Assistant réfléchit **ou** si
-  un agent travaille, **jamais** pendant l'attente d'une question
-  (`pendingQuestion` prioritaire).
-- **Même état que le point de la liste** : `agentsWorking` vient du store
-  partagé `agent-activity.js` (`subscribeAgentActivity` → 2ᵉ argument `busy` =
-  `anyBusy(list)`), le **même** que celui qui fait respirer le point du haut à
-  droite. Abonnement retiré à la fermeture de l'onglet (`unlisten`).
+- **Une seule décision, pure et testée** : `superAgentInputReflecting({ agentReflecting, pendingQuestion })`
+  (`src/js/super-agent.js`) — la zone respire si l'Assistant réfléchit,
+  **jamais** pendant l'attente d'une question (`pendingQuestion` prioritaire),
+  et **jamais** pour le travail d'un autre agent. Toute clé étrangère passée
+  dans l'objet d'états est ignorée (aucun second état ne peut rallumer la barre).
+- **Une seule alimentation** : `agentReflecting`, c.-à-d. `agent_start` /
+  `agent_end` et l'état `processing` de `get_agent_supervision` (poll 2 s), qui
+  **remet la teinte à zéro** dès que l'Assistant ne traite plus. Aucun abonnement
+  à l'état global des agents (`anyBusy`) : ce couplage faisait clignoter la barre
+  en boucle (`animation: assistant-input-breathe 1s ease-in-out infinite`) alors
+  que l'Assistant était au repos et qu'un **seul autre agent** travaillait.
+- **Le travail des autres agents garde son propre signal** : point qui respire de
+  la liste des agents, pastilles d'onglet, compteur « Travail », volet des
+  missions. Rien n'est supprimé, rien n'est dupliqué.
 - **Même style, aucune règle CSS ajoutée** : classe existante
   `superagent-input-reflecting` (`.agent-chat-input-bar`). L'anneau du logo
   hero (mode assistant seul), le bandeau « occupé », le bouton « Analyser et
   ranger mes données » et le libellé d'état gardent **leur propre** signal —
   aucun autre indicateur modifié.
-- **Tests** : `src/js/super-agent-reflecting.test.js`.
-- Rapport détaillé : `RAPPORT-pulsation-zone-saisie.md`.
+- **Tests** : `src/js/super-agent-reflecting.test.js` — décision pure (une clé
+  d'état global est ignorée) **et** verrou de source : `super-agent.js` ne
+  contient plus de couplage à `anyBusy` ni d'abonnement consommant le drapeau
+  global `busy`.
+- Rapports détaillés : `RAPPORT-clignotement-saisie-assistant.md` (correctif
+  actuel) et `RAPPORT-pulsation-zone-saisie.md` (historique : diagnostic
+  inverse, abandonné).
 
 ---
 

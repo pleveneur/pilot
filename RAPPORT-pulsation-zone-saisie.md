@@ -1,5 +1,16 @@
 # Rapport — « Le point de la liste des agents respire, la zone de saisie du chat non »
 
+> ⚠️ **Correction ABANDONNÉE (remplacée)** : ce rapport décrit un diagnostic qui a
+> fait respirer la zone de saisie de l'Assistant sur l'état GLOBAL des agents
+> (`anyBusy`). Ce couplage produisait le défaut inverse, signalé par le
+> propriétaire : la zone de saisie **clignotait en boucle** alors que l'Assistant
+> était au repos et qu'un **seul autre agent** travaillait. Le correctif a été
+> retiré ; l'état courant (la zone ne respire que pendant le travail de
+> l'Assistant lui-même) est décrit dans
+> **`RAPPORT-clignotement-saisie-assistant.md`** et dans `spec_super_agent.md`
+> (§ Technique — signal de travail de la zone de saisie 🧭). Ce document est
+> conservé pour l'historique du diagnostic (preuves fichier:ligne, §2 à §5).
+
 > Diagnostic demandé par le propriétaire, puis correction minimale.
 > Ce rapport est écrit à la racine du projet pour être versionné : le dossier
 > `.pilot/` est ignoré par Git (`.gitignore:44`) ; les journaux bruts des

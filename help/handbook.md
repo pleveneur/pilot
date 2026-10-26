@@ -3446,14 +3446,16 @@ rejouer.
 - **Indicateur d'activité** sous les messages : point **vert « Prêt · lecture
   seule »** au repos, **violet pulsant « Réfléchit… »** quand l'Assistant
   travaille. Le **fond de la zone de saisie** respire (halo discret animé) dans
-  les **deux modes** (standard et assistant seul) pendant que l'Assistant
-  réfléchit **et aussi pendant qu'un agent qu'il a lancé travaille** — le même
-  signal que le point qui respire dans la liste des agents, pour que vous
-  sachiez que le travail continue même après une délégation ; en complément de
-  l'**anneau pulsant autour du logo** en mode immersif. Il ne respire **pas**
-  pendant qu'une question d'agent attend votre réponse (la zone reste alors en
-  mode normal, prête à recevoir votre précision) ; au repos, aucun effet, la
-  zone reste utilisable.
+  les **deux modes** (standard et assistant seul) **uniquement pendant que
+  l'Assistant lui-même travaille**, en complément de l'**anneau pulsant autour
+  du logo** en mode immersif. Il ne respire **pas** pendant qu'une question
+  d'agent attend votre réponse (la zone reste alors en mode normal, prête à
+  recevoir votre précision) ; au repos, aucun effet, la zone reste utilisable.
+  Le travail d'un **AUTRE agent** (agent d'un projet, agent délégué, agent sans
+  onglet, file d'attente d'un projet) **n'allume jamais** cette zone : son
+  signal est le **point qui respire de la liste des agents** et le compteur
+  « Travail ». Une zone de saisie qui clignote ne dit donc qu'une chose :
+  l'Assistant travaille, ici, maintenant.
 - **Suggestions** : quatre chips (« Faire un point sur un projet », « Déléguer
   une demande à l'agent », « Préparer une livraison », « Lister les tâches en
   cours ») qui **préremplissent la zone de saisie** (elles n'envoient pas).
