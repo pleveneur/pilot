@@ -258,6 +258,19 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
    - la lecture **continue avec la voix du système** et l'état passe à
      `local-fallback` (« Voix française locale indisponible : lecture avec la
      voix du système ») ;
+   - **la raison est dite LÀ OÙ L'UTILISATEUR ÉCOUTE** : `readAloudFallbackNotice(cause)`
+     (`read-aloud.js`) affiche **une seule ligne** (`span.agent-read-notice`,
+     `role="status"`) dans la rangée du bouton « 🔊 Écouter » de la réponse —
+     « Voix locale indisponible (moteur absent) : lecture avec la voix du
+     système. » La cause courte vient du moteur, jamais inventée :
+     `localVoiceMissingCause(status)` → « moteur absent », « modèle incomplet »,
+     « état du moteur inconnu » ; `localFailureShortCause(reason)` → « la
+     synthèse locale a échoué », « le son local n'a pas pu être joué ». La
+     mention est **transmise avec l'état** (`onstate(state, cause)`), elle est
+     retirée au démarrage de la lecture suivante, et **n'existe pas** quand le
+     repli n'a pas eu lieu (voix locale qui fonctionne, ou aucune voix locale
+     choisie). Aucune fenêtre, aucun bandeau, aucune pastille, aucun espace
+     occupé en dehors du repli.
    - une ligne datée est écrite dans **`<données>/voix-locale/voix-locale.log`**
      (`tts_local_log`, rotation au-delà de 256 Ko) — **un seul journal** ;
    - rien ne bloque, rien ne lève.
@@ -340,5 +353,12 @@ encore en cours. Le son factice est soit laissé volontairement sans fin
 un `await` de quelques millisecondes. Un `sleep` court est vert sur une machine
 lente et rouge sur une machine rapide (incident : Linux/macOS rouges, Windows
 vert, sans aucune différence de comportement).
+
+`src/js/repli-voix-muet.test.js` verrouille le **repli annoncé là où l'on
+écoute** : la phrase (courte, sans jargon) et ses causes réelles, la mention
+**visible à côté du bouton** avec le texte du repli, **aucune mention** quand la
+voix locale fonctionne, **aucune mention** et aucun appel au moteur local quand
+aucune voix locale n'a été choisie, et la disparition de la mention au démarrage
+de la lecture suivante.
 
 Aide utilisateur : `help/overview.md`, bloc `HELP:lire-reponses`.

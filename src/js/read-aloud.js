@@ -610,6 +610,61 @@ export function localFailureReason(reason) {
 }
 
 /**
+ * Cause COURTE (quelques mots) d'un echec du moteur local, pour la phrase
+ * affichee PRES du bouton d'ecoute. Jamais un code technique, jamais une
+ * phrase longue : la phrase complete vit dans l'etat des Parametres.
+ * @param {string} reason
+ * @returns {string} cause courte, ou "" si elle n'apprend rien
+ */
+export function localFailureShortCause(reason) {
+  switch (reason) {
+    case "unavailable":
+      return "la synth\u00e8se locale a \u00e9chou\u00e9";
+    case "error":
+      return "le son local n'a pas pu \u00eatre jou\u00e9";
+    case "no-audio":
+      return "cette fen\u00eatre ne sait pas jouer de son";
+    case "empty":
+      return "aucun texte \u00e0 lire";
+    default:
+      return "";
+  }
+}
+
+/**
+ * Cause COURTE d'un moteur local absent ou incomplet, lue dans l'etat reel
+ * renvoye par le moteur (jamais devinee) : moteur absent, modele incomplet,
+ * etat inconnu. Une seule formulation, utilisee par le bouton d'ecoute.
+ * @param {object|null} [status] etat normalise du moteur local
+ * @returns {string}
+ */
+export function localVoiceMissingCause(status) {
+  if (!status || typeof status !== "object") return "";
+  if (status.unknown === true) return "\u00e9tat du moteur inconnu";
+  if (status.engine_present === false) return "moteur absent";
+  if (status.model_present === false) return "mod\u00e8le incomplet";
+  return "";
+}
+
+/**
+ * Phrase COURTE affichee A COTE du bouton d'ecoute quand la voix locale n'a pas
+ * pu etre utilisee et que la voix du systeme a pris le relais.
+ *
+ * Elle est montree LA OU l'utilisateur regarde pendant qu'il ecoute (sous la
+ * reponse, dans la rangee du bouton) et non seulement dans les Parametres, qui
+ * sont fermes a ce moment-la : sans elle, on entend une autre voix que celle
+ * qu'on a choisie sans savoir pourquoi. Une seule ligne, sans fenetre, sans
+ * bandeau, sans pastille.
+ * @param {string} [cause] cause courte deja lisible (« moteur absent », …)
+ * @returns {string}
+ */
+export function readAloudFallbackNotice(cause) {
+  const why = String(cause == null ? "" : cause).trim();
+  const detail = why ? ` (${why})` : "";
+  return `Voix locale indisponible${detail} : lecture avec la voix du syst\u00e8me.`;
+}
+
+/**
  * Cree un lecteur pour une fenetre. Une seule lecture a la fois pour toute
  * l'application : un nouveau `speak` arrete la lecture precedente.
  * @param {Window} win
@@ -637,11 +692,14 @@ export function createSpeaker(win, options = {}) {
    * Lit un texte (nettoye puis decoupe). Renvoie une promesse resolue a la fin
    * ou a l'arret.
    * @param {string} text
-   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty"|"no-voice"|"local-fallback") => void}} [handlers]
+   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty"|"no-voice"|"local-fallback", cause?: string) => void}} [handlers]
+   *   `cause` accompagne `local-fallback` : cause COURTE et lisible du repli
+   *   (« moteur absent », « la synth\u00e8se locale a \u00e9chou\u00e9 »…), pour
+   *   l'afficher pres du bouton d'ecoute. Absente quand elle n'apprend rien.
    */
   async function speak(text, handlers = {}) {
-    const notify = (state) => {
-      safeCall(() => handlers.onstate && handlers.onstate(state));
+    const notify = (state, cause) => {
+      safeCall(() => handlers.onstate && handlers.onstate(state, cause));
       broadcastState(state);
     };
     if (!synth || !Utterance) {
@@ -694,6 +752,8 @@ export function createSpeaker(win, options = {}) {
       const cached = localVoiceStatusFor(localModel);
       const local = cached || (await refreshLocalVoiceStatus({ ...options, model: localModel }));
       if (token.stopped || currentPlayback !== playback) return false;
+      // Cause courte du repli, pour la phrase affichee pres du bouton d'ecoute.
+      let fallbackCause = "";
       if (local && local.installed) {
         const outcome = await playLocalChunks({
           win: w,
@@ -715,17 +775,20 @@ export function createSpeaker(win, options = {}) {
             "repli sur la voix du systeme.",
           options,
         );
+        fallbackCause = localFailureShortCause(outcome.reason);
       } else {
         await logLocalVoice(
           `Voix francaise locale non installee (${(local && local.hint) || "moteur absent"}) : ` +
             "repli sur la voix du systeme.",
           options,
         );
+        fallbackCause = localVoiceMissingCause(local);
       }
       if (token.stopped || currentPlayback !== playback) return false;
       // Dit clairement a l'utilisateur que la lecture ne se fait pas avec la
-      // voix demandee (etat visible dans le panneau des Parametres).
-      notify("local-fallback");
+      // voix demandee : d'abord LA OU IL ECOUTE (la rangee du bouton, voir
+      // `readAloudFallbackNotice`), et dans l'etat des Parametres.
+      notify("local-fallback", fallbackCause);
     }
 
     // Voix du systeme : on attend leur chargement (sinon la premiere lecture
@@ -990,6 +1053,38 @@ export function createReadAloudButton({ doc, win, getText, lang, invoke, refresh
     paintIcon(spec.icon);
   };
 
+  // ── Repli sur la voix du systeme : la mention est affichee LA OU
+  // l'utilisateur regarde pendant qu'il ecoute (dans la rangee du bouton, a
+  // cote de lui), pas seulement dans les Parametres, qui sont fermes a ce
+  // moment-la. UNE ligne de texte : aucune fenetre, aucun bandeau, aucune
+  // pastille. L'element n'existe dans la page QUE pendant le repli : sans
+  // repli (voix locale qui fonctionne, ou aucune voix locale choisie), il n'y a
+  // aucune mention et aucun espace occupe.
+  const notice = d.createElement("span");
+  notice.className = "agent-read-notice";
+  notice.setAttribute("role", "status");
+  notice.hidden = true;
+  const hideNotice = () => {
+    notice.hidden = true;
+    notice.textContent = "";
+    const parent = notice.parentNode;
+    if (parent && typeof parent.removeChild === "function") {
+      safeCall(() => parent.removeChild(notice));
+    }
+  };
+  const showNotice = (text) => {
+    if (!text) {
+      hideNotice();
+      return;
+    }
+    notice.textContent = text;
+    notice.hidden = false;
+    const parent = button.parentNode;
+    if (parent && notice.parentNode !== parent && typeof parent.appendChild === "function") {
+      safeCall(() => parent.appendChild(notice));
+    }
+  };
+
   if (!speechAvailable(w)) {
     button.disabled = true;
     setState("unavailable");
@@ -1072,14 +1167,26 @@ export function createReadAloudButton({ doc, win, getText, lang, invoke, refresh
     }
     const text = safeCall(() => (typeof getText === "function" ? getText() : ""), "") || "";
     const ok = await speaker.speak(text, {
-      onstate: (state) => {
-        if (state === "speaking") setState("speaking");
-        else if (state === "empty") showEmptyState();
-        else if (state === "no-voice") showNoVoice();
-        // Repli sur la voix du systeme : la lecture CONTINUE, le bouton reste
-        // donc sur « Arreter » (et le panneau des Parametres dit le repli).
-        else if (state === "local-fallback") setState("speaking");
-        else setState("idle");
+      onstate: (state, cause) => {
+        if (state === "speaking") {
+          setState("speaking");
+          // Nouvelle lecture : la mention d'un repli precedent ne s'applique plus.
+          hideNotice();
+        } else if (state === "empty") {
+          showEmptyState();
+          hideNotice();
+        } else if (state === "no-voice") {
+          showNoVoice();
+          hideNotice();
+        }
+        // Repli sur la voix du systeme : la lecture CONTINUE (le bouton reste
+        // sur « Arreter »), et la raison courte est dite sous le bouton.
+        else if (state === "local-fallback") {
+          setState("speaking");
+          showNotice(readAloudFallbackNotice(cause));
+        } else {
+          setState("idle");
+        }
       },
     });
     return ok;

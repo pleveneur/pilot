@@ -493,9 +493,15 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   locale n'est pas encore utilisable ») au lieu d'annoncer une réussite, et la
   lecture reste sur la voix du système en attendant.
 - **Si le moteur local est absent ou échoue**, la lecture ne s'arrête pas : elle
-  **continue avec la voix du système** et le dit clairement dans la section,
-  avec une ligne dans un **journal** (dossier de la voix locale). Rien ne bloque,
-  rien ne plante.
+  **continue avec la voix du système**, et vous le **voyez là où vous écoutez** :
+  une **ligne courte** apparaît **à côté du bouton « 🔊 Écouter »** de la réponse
+  (« Voix locale indisponible (moteur absent) : lecture avec la voix du
+  système. »), avec la raison en quelques mots — moteur absent, modèle incomplet,
+  état du moteur inconnu, ou synthèse locale en échec. Si vous êtes dans les
+  Options, l'état de la section le dit aussi, et une ligne est écrite dans un
+  **journal** (dossier de la voix locale). Rien ne bloque, rien ne plante. Quand
+  la voix locale fonctionne, ou si vous n'avez jamais choisi de voix locale,
+  **aucune ligne n'apparaît**.
 - **Le choix reste le même qu'avant** : une seule voix à la fois, mémorisée,
   et le texte lu est nettoyé et découpé de la même façon quel que soit le moteur.
   Une configuration enregistrée avant cette évolution continue de fonctionner

@@ -4956,6 +4956,19 @@ body.zen-mode #project-footer {
   align-items: center;
 }
 
+/* Repli sur la voix du systeme pendant la lecture d'une reponse : UNE seule
+   ligne discrete, a cote du bouton d'ecoute (read-aloud.js). Aucune fenetre,
+   aucun bandeau, aucune pastille : le texte suffit, et il n'existe dans la page
+   que pendant le repli (donc aucun espace occupe le reste du temps). */
+.agent-read-notice {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--font-xs);
+  line-height: 1.4;
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
 /* Ecoute d'exemple des voix proposees (Parametres → Assistant → Lecture des
    reponses). Une rangee par voix : le MEME bouton devient « Arreter » pendant
    la lecture (libelle en texte clair + `aria-pressed`), le libelle de la voix
