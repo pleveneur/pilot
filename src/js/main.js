@@ -632,6 +632,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     // unique : il suit chaque re-sonde pi <-> plh), precede du seul mot ajoute
     // et d'un separateur. « Agent Pi » reste ecrit tel quel apres le point.
     if (el) el.textContent = "Moteur · " + agentDisplayLabel();
+    // Le libelle de l'onglet des Options nomme le MEME moteur : il vient donc
+    // de la meme source unique et suit la meme re-sonde. Sans cela, un
+    // utilisateur de PLh lirait « Agent Pi » dans ses Options.
+    const tabLabel = document.getElementById("settings-tab-agent-label");
+    if (tabLabel) tabLabel.textContent = agentDisplayLabel();
   };
   syncEngineSubtitle();
   window.addEventListener("pilot-backend-changed", syncEngineSubtitle);

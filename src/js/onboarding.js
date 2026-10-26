@@ -31,7 +31,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { animateModalOpen } from "./modal-anim.js";
 import { toastError, toastSuccess } from "./toast.js";
-import { checkPiHealth, getBackendInfoSync, getPiHealthSync } from "./backend-info.js";
+import { agentDisplayLabel, checkPiHealth, getBackendInfoSync, getPiHealthSync } from "./backend-info.js";
 import { isPiStartupGateBlocking } from "./pi-startup-gate.js";
 // Niveau 2 (FACULTATIF) : l'équipe d'agents. Ce module ne s'ouvre que sur un
 // geste de l'utilisateur ; la prise en main ne fait que fournir son lien.
@@ -142,18 +142,23 @@ function baseName(p) {
  * Écran 1 — le moteur CONSTATÉ, en langage simple.
  * Toujours au moins une ligne ; en cas d'échec : la cause ET la marche à suivre.
  *
- * @param {{label?: string, health?: {ok?: boolean, version?: string, error?: string, path?: string}|null}} info
+ * @param {{label?: string, optionsLabel?: string, health?: {ok?: boolean, version?: string, error?: string, path?: string}|null}} info
  * @returns {{ok: boolean, lines: string[]}}
  */
 export function onboardingEngineReport(info = {}) {
   const label = info.label || "L'agent";
   const health = info.health || null;
+  // Les marches a suivre ci-dessous renvoient vers l'onglet des Options, dont
+  // le libelle NOMME le moteur en cours. Il vient donc de la source unique
+  // (`agentDisplayLabel()`, passe par l'appelant) : renvoyer un utilisateur de
+  // PLh vers « Agent Pi » serait un mensonge. Repli : defaut de cette source.
+  const optionsTab = `⚙️ Options → « ${info.optionsLabel || "Agent Pi"} »`;
   if (!health) {
     return {
       ok: false,
       lines: [
         `L'état du moteur (${label}) n'a pas encore été relevé.`,
-        "Marche à suivre : « Revérifier le moteur » ; si cela persiste, contrôlez ⚙️ Options → « Agent Pi ».",
+        `Marche à suivre : « Revérifier le moteur » ; si cela persiste, contrôlez ${optionsTab}.`,
       ],
     };
   }
@@ -172,7 +177,7 @@ export function onboardingEngineReport(info = {}) {
         ok: false,
         lines: [
           "Aucun programme d'agent n'est configuré : Pilot ne sait pas encore quel moteur lancer.",
-          "Marche à suivre : ⚙️ Options → « Agent Pi », puis indiquez le chemin du programme (pi ou plh).",
+          `Marche à suivre : ${optionsTab}, puis indiquez le chemin du programme (pi ou plh).`,
         ],
       };
     case "not_executable":
@@ -180,7 +185,7 @@ export function onboardingEngineReport(info = {}) {
         ok: false,
         lines: [
           `Le programme configuré n'a pas répondu${path}.`,
-          "Marche à suivre : vérifiez ce chemin (⚙️ Options → « Agent Pi ») : il doit désigner le programme pi ou plh, exécutable.",
+          `Marche à suivre : vérifiez ce chemin (${optionsTab}) : il doit désigner le programme pi ou plh, exécutable.`,
         ],
       };
     case "probe_failed":
@@ -188,7 +193,7 @@ export function onboardingEngineReport(info = {}) {
         ok: false,
         lines: [
           "La vérification du moteur n'a pas pu se faire.",
-          "Marche à suivre : « Revérifier le moteur » ; si cela persiste, contrôlez ⚙️ Options → « Agent Pi ».",
+          `Marche à suivre : « Revérifier le moteur » ; si cela persiste, contrôlez ${optionsTab}.`,
         ],
       };
     default: {
@@ -197,7 +202,7 @@ export function onboardingEngineReport(info = {}) {
         ok: false,
         lines: [
           `${label} n'a pas pu être vérifié${cause}.`,
-          "Marche à suivre : « Revérifier le moteur », puis ⚙️ Options → « Agent Pi » si le problème persiste.",
+          `Marche à suivre : « Revérifier le moteur », puis ${optionsTab} si le problème persiste.`,
         ],
       };
     }
@@ -464,6 +469,9 @@ export async function openOnboardingModal(ctx = {}) {
   const renderEngine = () => {
     const report = onboardingEngineReport({
       label: engineLabel(),
+      // Meme source unique que le bandeau et l'onglet des Options : la marche a
+      // suivre nomme l'onglet tel qu'il est REELLEMENT affiche.
+      optionsLabel: agentDisplayLabel(),
       health: getPiHealthSync(),
     });
     fill(engineBody, report.lines);

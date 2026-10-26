@@ -496,7 +496,12 @@
           <div class="settings-tabs-group" role="presentation">
             <div class="settings-tabs-group-title" aria-hidden="true">IA</div>
             <div class="settings-tabs-group-items">
-              <button class="settings-tab" data-settings-tab="agent" role="tab" aria-selected="false"><i data-lucide="bot" class="icon"></i> Agent Pi</button>
+              <!-- Le libelle de cet onglet nomme le moteur EN COURS : il vient de
+                   `agentDisplayLabel()` (src/js/backend-info.js, source unique)
+                   et est rafraichi par main.js a chaque re-sonde du backend.
+                   Le texte initial est le defaut de cette fonction (avant la
+                   premiere sonde). Ne JAMAIS reecrire « Agent Pi » en dur ici. -->
+              <button class="settings-tab" data-settings-tab="agent" role="tab" aria-selected="false"><i data-lucide="bot" class="icon"></i> <span id="settings-tab-agent-label">Agent Pi</span></button>
               <button class="settings-tab" data-settings-tab="models" role="tab" aria-selected="false"><i data-lucide="cpu" class="icon"></i> Modèles IA</button>
               <button class="settings-tab" data-settings-tab="providers" role="tab" aria-selected="false"><i data-lucide="server" class="icon"></i> Fournisseurs</button>
               <button class="settings-tab" data-settings-tab="rag" role="tab" aria-selected="false"><i data-lucide="database" class="icon"></i> RAG</button>
