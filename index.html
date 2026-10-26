@@ -59,10 +59,10 @@
       </div>
     </div>
 
-    <!-- Le HAUT de la colonne ne porte plus AUCUNE porte (Lot A de
-         `RAPPORT-design-colonne-entrees.md` § 4 : « Brouillon » et « Options »
-         quittent le haut et ouvrent la liste du bas). Elles ne sont pas
-         supprimees : ce sont les DEUX PREMIERES lignes du bloc du bas
+    <!-- Le HAUT de la colonne ne porte plus AUCUNE porte
+         (`RAPPORT-design-colonne-entrees.md` § 2.1 et § 4 : « Brouillon » et
+         « Options » quittent le haut et ouvrent la liste du bas). Elles ne sont
+         pas supprimees : ce sont les DEUX PREMIERES lignes du bloc du bas
          (`#project-footer` : `btn-scratchpad` puis `btn-settings`), memes
          libelles, memes infobulles, memes icones, memes identifiants : le
          cablage de `main.js` (`getElementById`) et de `settings.js` n'a pas
@@ -89,28 +89,30 @@
     </div>
 
     <!-- Boutons de la COLONNE (bloc du bas, cadre accent). Le cadre reste visible
-         meme sans projet ouvert (Lot A) : il n'affiche alors que « Brouillon » et
-         « Options » ; les six lignes de projet portent, elles, `project-only hidden`.
+         meme sans projet ouvert : il n'affiche alors que « Brouillon » et
+         « Options » ; les cinq lignes de projet portent, elles, `project-only hidden`.
          LOT 3 de la presentation (docs/proposition-presentation-ui.md §3.3 et lot 3
          du §6), etendu par les trois decisions du proprietaire du 2026-10-25 : les
          TROIS sous-onglets « Projet / Vues / Assistant » et leurs QUATORZE lignes
-         sont remplaces par HUIT lignes de 32 px, toujours les memes, dans l'ordre
+         sont remplaces par SEPT lignes de 32 px, toujours les memes, dans l'ordre
          fige :
 
-             Brouillon · Options · Lancer l'agent (en evidence) · Assistant ·
-             Dossier du projet · Terminal · Commandes du projet · Autres écrans ▾
+             Brouillon · Options · Assistant · Dossier du projet · Terminal ·
+             Commandes du projet · Autres écrans ▾
 
          « Brouillon » et « Options » sont les DEUX PORTES GLOBALES qui etaient en
-         HAUT de la colonne (Lot A de `RAPPORT-design-colonne-entrees.md` § 4) :
+         HAUT de la colonne (`RAPPORT-design-colonne-entrees.md` § 2.2 et § 4) :
          memes libelles, memes infobulles, memes icones, memes identifiants
          (`btn-scratchpad`, `btn-settings`) et meme ordre. Elles ne portent ni
          `project-only` ni `hidden` : le bloc les affiche donc MEME SANS PROJET
          OUVERT (reponse A de la question 3 du rapport) — rien ne disparait de
          l'ecran.
-         « Lancer l'agent » reste la ligne mise en evidence du bloc (13 px / 600,
-         icone accent) ; « Autres ecrans » ouvre un menu VERS LE HAUT qui
-         accueille les ecrans consultes occasionnellement (NEUF entrees, groupes
-         inchanges).
+         AUCUNE ligne n'est plus mise en evidence : « Lancer l'agent » a quitte le
+         bloc pour la PREMIERE ligne du menu « Autres ecrans » (`§ 2.3` du
+         rapport : groupe « Mon projet », au contact du declencheur). Le bloc
+         devient une liste reguliere de sept lignes de 12 px / 400.
+         « Autres ecrans » ouvre un menu VERS LE HAUT qui accueille les ecrans
+         consultes occasionnellement (DIX entrees, groupes inchanges).
          Les IDENTIFIANTS et les FONCTIONS des quatorze entrees sont ceux d'avant :
          aucun ecran ne devient inaccessible et le cablage (`main.js`,
          `project-commands.js`, `interproject.js`) n'a pas bouge d'une ligne.
@@ -120,9 +122,9 @@
          libelle affiche de `btn-explorer` change (« Ouvrir le dossier » ->
          « Dossier du projet »).
          Le cadre accent — le SEUL de l'interface — reste celui de ce bloc. -->
-    <!-- Le cadre n'est plus `project-only hidden` (Lot A) : avec AUCUN projet
+    <!-- Le cadre n'est plus `project-only hidden` : avec AUCUN projet
          ouvert il reste visible et n'affiche que les DEUX premieres lignes
-         (Brouillon, Options). Les six lignes de projet portent, elles, leur
+         (Brouillon, Options). Les cinq lignes de projet portent, elles, leur
          `project-only hidden` individuel et continuent d'etre pilotees par
          `sidebar.js` (`_showProjectButtons` / `closeProject`), sans changement. -->
     <div id="project-footer">
@@ -130,35 +132,28 @@
            avec les sous-onglets. -->
       <div class="pj-panel">
         <!-- 1 et 2. PORTES GLOBALES DEPLACEES : « Brouillon » puis « Options »
-             (Lot A). Ni `project-only`, ni `hidden`, ni `pj-row-main` : meme
-             taille et memes etats que les autres lignes. La classe du libelle
-             reste `.ga-label` (decision §3.8 du rapport : aucun verrou de test a
-             toucher, rendu identique). -->
+             (`RAPPORT-design-colonne-entrees.md` § 2.2). Ni `project-only`, ni
+             `hidden`, ni `pj-row-main` : meme taille et memes etats que les
+             autres lignes. La classe du libelle reste `.ga-label` (decision §3.8
+             du rapport : aucun verrou de test a toucher, rendu identique). -->
         <button id="btn-scratchpad" title="Brouillon (Ctrl+Shift+N)"><i data-lucide="file-text" class="icon"></i><span class="ga-label">Brouillon</span></button>
         <button id="btn-settings" title="Options"><i data-lucide="settings" class="icon"></i><span class="ga-label">Options</span></button>
-        <!-- 3. LIGNE MISE EN EVIDENCE : lancer l'agent (meme identifiant, meme effet
-             qu'avant : conversation de l'agent, sinon terminal, sinon terminal
-             systeme). Le libelle dit enfin ce que fait le bouton. Q1 du
-             proprietaire (2026-10-25) : elle reste la PREMIERE ligne de PROJET du
-             bloc. Le Lot A ne la deplace pas : sa sortie vers le menu « Autres
-             ecrans » est une mission separee (lot C du rapport). -->
-        <button id="btn-terminal-cmd" class="project-only hidden pj-row-main" title="Lancer l'agent : ouvrir la conversation de l'agent"><i data-lucide="bot" class="icon"></i><span class="pj-btn-label">Lancer l'agent</span></button>
-        <!-- 4. Assistant : toujours visible, 1 clic (etait cache derriere un
+        <!-- 3. Assistant : toujours visible, 1 clic (etait cache derriere un
              sous-onglet). -->
         <button id="btn-superagent" class="project-only hidden" title="Assistant : suivi multi-projets (lecture seule)"><i data-lucide="compass" class="icon"></i><span class="pj-btn-label">Assistant</span></button>
-        <!-- 5. Dossier du projet : REMONTE du menu (Q2 du proprietaire,
+        <!-- 4. Dossier du projet : REMONTE du menu (Q2 du proprietaire,
              2026-10-25). C'est le bouton `btn-explorer` d'avant — meme
              identifiant, meme gestionnaire (`main.js`), meme effet : il ouvre le
              dossier du projet dans l'explorateur du systeme. Seul le libelle
              affiche est ecrit en clair. -->
         <button id="btn-explorer" class="project-only hidden" title="Dossier du projet : ouvrir le dossier dans l'explorateur du systeme"><i data-lucide="folder-open" class="icon"></i><span class="pj-btn-label">Dossier du projet</span></button>
-        <!-- 6. Terminal integre. -->
+        <!-- 5. Terminal integre. -->
         <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal"><i data-lucide="terminal" class="icon"></i><span class="pj-btn-label">Terminal</span></button>
-        <!-- 7. Commandes du projet : REMONTE du menu (proposition appliquee,
+        <!-- 6. Commandes du projet : REMONTE du menu (proposition appliquee,
              2026-10-25). C'est le bouton `btn-commands` d'avant — meme
              identifiant, meme gestionnaire (`project-commands.js`). -->
         <button id="btn-commands" class="project-only hidden" title="Commandes du projet (lancer une commande parametree)"><i data-lucide="square-terminal" class="icon"></i><span class="pj-btn-label">Commandes du projet</span></button>
-        <!-- 8. « Autres ecrans ▾ » : le declencheur du menu, toujours la
+        <!-- 7. « Autres ecrans ▾ » : le declencheur du menu, toujours la
              derniere ligne du bloc. -->
         <!-- ===== MENU « Autres écrans » (lot 3 de la presentation) =====
              Le document de conception (`docs/proposition-presentation-ui.md` §3.3)
@@ -168,9 +163,12 @@
              GROUPES NOMMES (§ 4.3 du doc de navigation).
              CHAQUE ENTREE GARDE SON IDENTIFIANT ET SA FONCTION : le cablage de
              `main.js`, de `project-commands.js` et de `interproject.js` les
-             retrouve tels quels, sans une ligne de changement. NEUF entrees y
-             restent (`btn-explorer` et `btn-commands` sont remontes dans le bloc
-             du bas : voir les lignes 5 et 7 ci-dessus).
+             retrouve tels quels, sans une ligne de changement. DIX entrees y
+             figurent : « Lancer l'agent » (`btn-terminal-cmd`) ouvre le groupe
+             « Mon projet » en PREMIERE ligne (§ 2.3 du rapport : elle reste au
+             contact du declencheur, le menu s'ouvrant vers le haut), puis les
+             neuf ecrans consultes occasionnellement (`btn-explorer` et
+             `btn-commands` restent, eux, remontes dans le bloc du bas).
              Il est ici, DANS la colonne de 280 px : sa largeur est celle du cadre,
              ses couleurs viennent des jetons de theme (sombre ET clair). -->
         <div id="pj-more-wrap" class="pj-more-wrap">
@@ -178,6 +176,7 @@
           <div id="pj-more-menu" class="pj-more-menu hidden" role="menu" aria-label="Autres écrans">
             <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-projet">
               <div class="pj-more-group-label" id="pj-more-groupe-projet">Mon projet</div>
+              <button id="btn-terminal-cmd" class="project-only hidden pj-more-item" role="menuitem" title="Lancer l'agent : ouvrir la conversation de l'agent"><i data-lucide="bot" class="icon-sm"></i><span class="pj-btn-label">Lancer l'agent</span></button>
               <button id="btn-prompt-builder" class="pj-more-item" role="menuitem" title="Prompt Builder"><i data-lucide="puzzle" class="icon-sm"></i><span class="pj-btn-label">Prompt Builder</span></button>
             </div>
             <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-comprendre">
