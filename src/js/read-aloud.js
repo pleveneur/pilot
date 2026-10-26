@@ -28,7 +28,9 @@
 //      endroit : Parametres → onglet « Assistant » → « Lecture des reponses ».
 //      Valeur par defaut : automatique (voix de la langue de l'interface). Une
 //      voix memorisee qui a disparu de l'ordinateur retombe proprement sur la
-//      voix de la langue de l'interface (aucune erreur, aucune lecture muette).
+//      voix de la langue de l'interface (aucune erreur, aucune lecture muette)
+//      et ce repli est DIT a cote du bouton d'ecoute (`system-fallback`, voir
+//      `readAloudSystemFallbackNotice`) : jamais un remplacement silencieux.
 //   7bis. Deux moteurs possibles, choisis par LE MEME reglage unique :
 //      - `""` ou une voix du systeme : synthese vocale de la fenetre ;
 //      - `LOCAL_VOICE_VALUE` : voix FRANCAISE LOCALE (Piper, hors ligne, sans
@@ -455,6 +457,11 @@ export function readAloudStateLabel(state) {
         "Voix française locale indisponible : lecture avec la voix du système " +
         "(détail dans le journal)."
       );
+    case "system-fallback":
+      return (
+        "La voix du système mémorisée n'est plus disponible : lecture avec la " +
+        "voix de la langue de l'interface."
+      );
     case "empty":
       return "Rien a lire dans ce message.";
     case "no-voice":
@@ -666,6 +673,45 @@ export function readAloudFallbackNotice(cause) {
 }
 
 /**
+ * Cause COURTE du repli sur la voix de la langue de l'interface quand la voix du
+ * SYSTEME memorisee dans le reglage n'existe plus dans cette fenetre : voix
+ * desinstallee, autre ordinateur, autre systeme. Elle est lue dans la liste
+ * REELLE des voix installees (jamais devinee).
+ * @param {SpeechSynthesisVoice[]} voices voix reellement installees
+ * @param {string} [choice] valeur memorisee du reglage (`read_aloud_voice`)
+ * @returns {string} cause courte, ou "" quand il n'y a AUCUN repli
+ */
+export function systemVoiceMissingCause(voices, choice) {
+  const wanted = String(choice == null ? "" : choice).trim();
+  // « Automatique » : la voix de la langue de l'interface EST le choix.
+  if (!wanted) return "";
+  // Voix locale : son repli a sa propre phrase (`local-fallback`).
+  if (isLocalVoiceChoice(wanted)) return "";
+  const list = (Array.isArray(voices) ? voices : []).filter(Boolean);
+  // Aucune voix du tout : c'est l'etat « no-voice » qui le dit, pas un repli.
+  if (!list.length) return "";
+  return findVoiceForChoice(list, wanted) ? "" : "voix introuvable";
+}
+
+/**
+ * Phrase COURTE affichee A COTE du bouton d'ecoute quand la voix du SYSTEME
+ * memorisee n'existe plus et que la lecture se fait avec la voix de la langue de
+ * l'interface.
+ *
+ * Meme ligne, meme endroit (la rangee du bouton « Ecouter »), meme style que le
+ * repli de la voix locale (`readAloudFallbackNotice`) : un seul mecanisme. Une
+ * phrase qui dit ce qui se passe et ce qui est utilise a la place, sans alarme
+ * et sans jargon. Le reglage de l'utilisateur n'est PAS reecrit : on l'informe.
+ * @param {string} [cause] cause courte deja lisible (« voix introuvable »)
+ * @returns {string}
+ */
+export function readAloudSystemFallbackNotice(cause) {
+  const why = String(cause == null ? "" : cause).trim();
+  const detail = why ? ` (${why})` : "";
+  return `Voix du syst\u00e8me choisie indisponible${detail} : lecture avec la voix de la langue de l'interface.`;
+}
+
+/**
  * Cree un lecteur pour une fenetre. Une seule lecture a la fois pour toute
  * l'application : un nouveau `speak` arrete la lecture precedente.
  * @param {Window} win
@@ -693,9 +739,10 @@ export function createSpeaker(win, options = {}) {
    * Lit un texte (nettoye puis decoupe). Renvoie une promesse resolue a la fin
    * ou a l'arret.
    * @param {string} text
-   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty"|"no-voice"|"local-fallback", cause?: string) => void}} [handlers]
-   *   `cause` accompagne `local-fallback` : cause COURTE et lisible du repli
-   *   (« moteur absent », « la synth\u00e8se locale a \u00e9chou\u00e9 »…), pour
+   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty"|"no-voice"|"local-fallback"|"system-fallback", cause?: string) => void}} [handlers]
+   *   `cause` accompagne les deux etats de repli (`local-fallback`,
+   *   `system-fallback`) : cause COURTE et lisible du repli (« moteur absent »,
+   *   « la synth\u00e8se locale a \u00e9chou\u00e9 », « voix introuvable »…), pour
    *   l'afficher pres du bouton d'ecoute. Absente quand elle n'apprend rien.
    */
   async function speak(text, handlers = {}) {
@@ -807,6 +854,14 @@ export function createSpeaker(win, options = {}) {
       return false;
     }
     const voice = resolveVoiceForChoice(voices, lang, choice);
+    // Voix du SYSTEME memorisee qui n'existe plus dans cette fenetre (voix
+    // desinstallee, autre ordinateur, autre systeme) : `resolveVoiceForChoice`
+    // se rabat sur la voix de la langue de l'interface. Ce repli ne doit JAMAIS
+    // etre muet : il est dit dans la MEME ligne que le repli de la voix locale,
+    // a cote du bouton d'ecoute. Aucune exception quand la voix est la : le cas
+    // normal reste muet. Le reglage de l'utilisateur n'est pas reecrit.
+    const systemFallbackCause = systemVoiceMissingCause(voices, choice);
+    if (systemFallbackCause) notify("system-fallback", systemFallbackCause);
 
     const speakIndex = (index) => {
       if (token.stopped || currentPlayback !== playback) return;
@@ -1185,6 +1240,11 @@ export function createReadAloudButton({ doc, win, getText, lang, invoke, refresh
         else if (state === "local-fallback") {
           setState("speaking");
           showNotice(readAloudFallbackNotice(cause));
+        }
+        // Voix du SYSTEME choisie qui a disparu : meme ligne, meme endroit.
+        else if (state === "system-fallback") {
+          setState("speaking");
+          showNotice(readAloudSystemFallbackNotice(cause));
         } else {
           setState("idle");
         }

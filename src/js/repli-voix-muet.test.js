@@ -1,17 +1,26 @@
-// repli-voix-muet.test.js — La voix locale qui ne peut pas servir ne doit pas
-// être un silence trompeur.
+// repli-voix-muet.test.js — Une voix qui ne peut pas servir ne doit pas être un
+// silence trompeur.
 //
-// Défaut corrigé : pendant la lecture d'une réponse, quand la voix française
+// Défaut corrigé (1) : pendant la lecture d'une réponse, quand la voix française
 // LOCALE n'a pas pu être utilisée et que Pilot se rabat sur la voix du système,
 // l'utilisateur n'en était informé QUE dans les Paramètres — fenêtre fermée à ce
 // moment-là. Il entendait donc une autre voix que celle qu'il avait choisie,
 // sans savoir pourquoi.
 //
+// Défaut corrigé (2), même décision du propriétaire : quand la voix du SYSTÈME
+// mémorisée dans le réglage n'existe plus (voix désinstallée, autre poste, autre
+// système), la lecture retombait sur la voix de la langue de l'interface SANS
+// RIEN DIRE près du bouton : même silence trompeur, même remplacement décidé
+// dans le dos de l'utilisateur.
+//
 // Règle verrouillée ici :
 //   1. en REPLI, une phrase courte et lisible apparaît À CÔTÉ du bouton
-//      « 🔊 Écouter » de la réponse (une seule ligne, aucun bandeau) ;
-//   2. quand la voix locale FONCTIONNE, aucune mention n'apparaît ;
-//   3. quand aucune voix locale n'a été choisie, rien ne change : aucune mention.
+//      « 🔊 Écouter » de la réponse (une seule ligne, aucun bandeau) — pour la
+//      voix locale COMME pour la voix du système ;
+//   2. quand la voix choisie FONCTIONNE, aucune mention n'apparaît ;
+//   3. quand aucune voix locale n'a été choisie (« Automatique »), rien ne
+//      change : aucune mention ;
+//   4. le réglage de l'utilisateur n'est jamais réécrit : on l'informe.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -23,10 +32,14 @@ import {
 import {
   createReadAloudButton,
   createSpeaker,
+  getPreferredVoiceName,
   localFailureShortCause,
   localVoiceMissingCause,
   readAloudFallbackNotice,
+  readAloudStateLabel,
+  readAloudSystemFallbackNotice,
   setPreferredVoiceName,
+  systemVoiceMissingCause,
 } from "./read-aloud.js";
 
 // ── Doublures (aucun navigateur requis) ────────────────────────────────────
@@ -274,6 +287,65 @@ describe("phrase du repli", () => {
   });
 });
 
+// ── 1 bis. Voix du SYSTÈME mémorisée qui n'existe plus ─────────────────────
+
+describe("voix du système choisie disparue", () => {
+  const hortense = fakeVoice("Microsoft Hortense", "fr-FR");
+
+  it("ne signale un repli QUE si la voix mémorisée n'est réellement plus là", () => {
+    // Voix présente (par son identité stable) : aucun repli, aucun bruit.
+    expect(systemVoiceMissingCause([hortense], "Microsoft Hortense")).toBe("");
+    expect(systemVoiceMissingCause([hortense], hortense.voiceURI)).toBe("");
+    // Voix disparue : la cause est dite, en mots simples (aucun identifiant).
+    const cause = systemVoiceMissingCause([hortense], "Voix Disparue");
+    expect(cause).toBe("voix introuvable");
+    expect(cause).not.toMatch(/voiceURI|voice-|_/);
+    // « Automatique » : la voix de la langue de l'interface EST le choix.
+    expect(systemVoiceMissingCause([hortense], "")).toBe("");
+    // Voix locale : son repli a sa propre phrase (local-fallback).
+    expect(systemVoiceMissingCause([hortense], LOCAL_VOICE_VALUE)).toBe("");
+    // Aucune voix installée du tout : c'est « no-voice » qui parle.
+    expect(systemVoiceMissingCause([], "Voix Disparue")).toBe("");
+    expect(systemVoiceMissingCause(null, "Voix Disparue")).toBe("");
+  });
+
+  it("la phrase dit ce qui se passe et ce qui est utilisé à la place", () => {
+    const phrase = readAloudSystemFallbackNotice("voix introuvable");
+    expect(phrase).toMatch(/voix du syst\u00e8me/i);
+    expect(phrase).toMatch(/indisponible/i);
+    // Ce qui est utilisé à la place, dit en clair.
+    expect(phrase).toMatch(/voix de la langue de l'interface/i);
+    expect(phrase).toContain("voix introuvable");
+    // COURTE et sans alarme : une seule ligne, pas un paragraphe.
+    expect(phrase.length).toBeLessThan(120);
+    expect(phrase).not.toContain("\n");
+    expect(phrase).not.toMatch(/erreur|\u00e9chec|probl\u00e8me|!|⚠/i);
+    // Reste compréhensible sans cause connue.
+    expect(readAloudSystemFallbackNotice("")).toMatch(/voix de la langue de l'interface/i);
+    expect(readAloudSystemFallbackNotice("")).not.toContain("(");
+  });
+
+  it("l'état publié aux Paramètres nomme le repli (jamais un silence)", () => {
+    expect(readAloudStateLabel("system-fallback")).toMatch(/plus disponible/i);
+    expect(readAloudStateLabel("system-fallback")).toMatch(/voix de la langue de l'interface/i);
+  });
+
+  it("le lecteur transmet la cause avec l'état de repli", async () => {
+    const { win } = fakeWindow(); // ne contient que Microsoft Hortense
+    const speaker = createSpeaker(win, {
+      lang: "fr-FR",
+      voiceName: "Voix Disparue",
+      waitMs: 0,
+    });
+    const events = [];
+    await speaker.speak("Bonjour.", { onstate: (state, cause) => events.push({ state, cause }) });
+    await tick();
+    const fallback = events.find((e) => e.state === "system-fallback");
+    expect(fallback).toBeTruthy();
+    expect(fallback.cause).toBe("voix introuvable");
+  });
+});
+
 // ── 2. La mention est visible LÀ OÙ L'ON ÉCOUTE ────────────────────────────
 
 describe("mention près du bouton d'écoute", () => {
@@ -354,6 +426,65 @@ describe("mention près du bouton d'écoute", () => {
     // Le moteur local n'est même pas interrogé : rien n'a changé par défaut.
     expect(calls.some((c) => c.command === "tts_local_status")).toBe(false);
     expect(calls.some((c) => c.command === "tts_local_synthesize")).toBe(false);
+    expect(holder.querySelector(".agent-read-notice")).toBeFalsy();
+  });
+
+  it("CAS 4 — voix du système disparue : la mention le dit, sans toucher au réglage", async () => {
+    // Le réglage mémorisé désigne une voix qui n'est plus installée.
+    setPreferredVoiceName("Voix Disparue");
+    const { win, synth } = fakeWindow(); // seule Microsoft Hortense existe
+    const { invoke } = fakeInvoke();
+    const { holder, button } = makeButton({ win, invoke });
+
+    await button.handlers.click[0]();
+    await tick();
+
+    // La lecture a bien continué avec la voix de la langue de l'interface…
+    expect(synth.spoken.length).toBeGreaterThan(0);
+    expect(synth.spoken[0].voice.name).toBe("Microsoft Hortense");
+    // …et c'est DIT, à l'endroit exact du repli déjà livré.
+    const notice = holder.querySelector(".agent-read-notice");
+    expect(notice).toBeTruthy();
+    expect(notice.hidden).toBe(false);
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(notice.textContent).toMatch(/voix du syst\u00e8me/i);
+    expect(notice.textContent).toMatch(/voix de la langue de l'interface/i);
+    // UNE seule ligne, un seul élément : aucun second mécanisme.
+    expect(holder.querySelectorAll(".agent-read-notice").length).toBe(1);
+    expect(notice.parentNode).toBe(holder);
+    // Le choix de l'utilisateur n'est PAS réécrit en douce : on l'informe.
+    expect(getPreferredVoiceName()).toBe("Voix Disparue");
+  });
+
+  it("CAS 5 — voix du système présente et utilisée : AUCUNE mention", async () => {
+    setPreferredVoiceName("Microsoft Hortense");
+    const { win, synth } = fakeWindow();
+    const { invoke } = fakeInvoke();
+    const { holder, button } = makeButton({ win, invoke });
+
+    await button.handlers.click[0]();
+    await tick();
+
+    expect(synth.spoken[0].voice.name).toBe("Microsoft Hortense");
+    expect(holder.querySelector(".agent-read-notice")).toBeFalsy();
+    // Le réglage reste intact.
+    expect(getPreferredVoiceName()).toBe("Microsoft Hortense");
+  });
+
+  it("la mention du repli système disparaît à la lecture suivante (voix revenue)", async () => {
+    setPreferredVoiceName("Voix Disparue");
+    const { win } = fakeWindow();
+    const { invoke } = fakeInvoke();
+    const { holder, button } = makeButton({ win, invoke });
+
+    await button.handlers.click[0]();
+    await tick();
+    expect(holder.querySelector(".agent-read-notice")).toBeTruthy();
+
+    // La voix mémorisée est de nouveau installée : plus aucun repli à dire.
+    setPreferredVoiceName("Microsoft Hortense");
+    await button.handlers.click[0]();
+    await tick();
     expect(holder.querySelector(".agent-read-notice")).toBeFalsy();
   });
 

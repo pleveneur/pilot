@@ -457,9 +457,15 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
 - Par défaut, la voix est sur **« Automatique »** : Pilot prend la voix de la
   langue de l'interface. Si vous choisissez une voix précise, **ce choix est
   mémorisé** et réutilisé aux démarrages suivants.
-- **La voix choisie a disparu de l'ordinateur** (désinstallée, autre poste) :
-  Pilot revient **proprement** sur la voix automatique, l'annonce dans la
-  section et ne produit ni erreur ni lecture muette.
+- **La voix choisie a disparu de l'ordinateur** (désinstallée, autre poste,
+  autre système) : Pilot revient **proprement** sur la voix de la langue de
+  l'interface, l'annonce dans la section et **le dit aussi là où vous écoutez** —
+  une ligne courte apparaît **à côté du bouton « 🔊 Écouter »** de la réponse
+  (« Voix du système choisie indisponible (voix introuvable) : lecture avec la
+  voix de la langue de l'interface. »). Ni erreur, ni lecture muette, et surtout
+  **jamais un remplacement silencieux** : votre choix enregistré n'est pas
+  modifié dans votre dos, vous êtes simplement informé. Quand la voix choisie
+  est bien présente et sert réellement, **aucune ligne n'apparaît**.
 - **La voix suit la langue de l'interface** (français si Pilot est en
   français) : quand vous êtes en « Automatique », Pilot demande la première
   voix disponible dans cette langue.

@@ -168,7 +168,8 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
 - **Voix mémorisée disparue** : `resolveVoiceForChoice` retombe sur la voix de la
   langue de l'interface ; la section annonce le repli (`voiceChoiceStatus` →
   `kind: "missing"`) et remet le choix sur « Automatique ». Ni erreur, ni lecture
-  muette.
+  muette — et **jamais un remplacement silencieux** : la lecture le dit aussi
+  là où l'on écoute (§ 4 ter), et le réglage enregistré n'est pas réécrit.
 - **Aucune voix installée** : `voiceChoiceStatus` → `kind: "empty"` avec une
   phrase claire (`NO_VOICE_INSTALLED_HINT`) ; le sélecteur est **désactivé** et
   le bouton de lecture passe à l'état `novoice` (visible, `disabled`, infobulle
@@ -332,6 +333,35 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
    `voice_for(Option<&str>)` retombe sur la voix par défaut pour une valeur
    absente **ou inconnue**.
 
+## 4 ter. Repli de la voix du SYSTÈME : annoncé lui aussi là où l'on écoute
+
+Même décision du propriétaire que le repli de la voix locale (§ 4.6), appliquée
+à l'autre moteur : **une voix du système mémorisée dans le réglage qui n'existe
+plus dans cette fenêtre** (voix désinstallée, autre ordinateur, autre système)
+ne se remplace **jamais en silence**.
+
+1. **Un seul endroit pour le constater** : `systemVoiceMissingCause(voices, choice)`
+   (`read-aloud.js`, pure) compare la valeur mémorisée (`read_aloud_voice`) à la
+   liste **réelle** des voix installées (`findVoiceForChoice`, identité stable
+   puis nom). Elle renvoie `"voix introuvable"` quand le repli a lieu, et **rien**
+   dans tous les autres cas : « Automatique » (`""` — la voix de la langue de
+   l'interface *est* le choix), voix locale (son repli a sa propre phrase),
+   aucune voix installée du tout (c'est `no-voice` qui parle).
+2. **Un seul mécanisme, une seule ligne** : l'état `system-fallback` est transmis
+   avec sa cause (`onstate(state, cause)`), et le bouton « 🔊 Écouter » affiche
+   `readAloudSystemFallbackNotice(cause)` dans **le même** `span.agent-read-notice`
+   que le repli local, dans la **même rangée** — aucune fenêtre, aucun bandeau,
+   aucune pastille, aucun espace occupé hors repli. Phrase d'une ligne, sans
+   alarme et sans jargon : « Voix du système choisie indisponible (voix
+   introuvable) : lecture avec la voix de la langue de l'interface. »
+3. **Cas normal muet** : la voix mémorisée est présente et sert réellement →
+   l'état n'est **pas** émis, aucune mention n'existe dans la page.
+4. **Le réglage n'est pas modifié** : on informe, on ne réécrit pas le choix de
+   l'utilisateur (la remise sur « Automatique » reste un geste de la section des
+   Options, § 3).
+5. **L'état reste lisible dans les Options** : `readAloudStateLabel("system-fallback")`
+   dit la même chose dans la ligne d'état de la section (aucun écran nouveau).
+
 ## 5. Portée
 
 100 % local : synthèse du système (`speechSynthesis`) **ou** moteur local
@@ -395,6 +425,13 @@ vert, sans aucune différence de comportement).
 **visible à côté du bouton** avec le texte du repli, **aucune mention** quand la
 voix locale fonctionne, **aucune mention** et aucun appel au moteur local quand
 aucune voix locale n'a été choisie, et la disparition de la mention au démarrage
-de la lecture suivante.
+de la lecture suivante. Il couvre **les deux moteurs** : voix locale (§ 4.6) et
+voix du système disparue (§ 4 ter) — `systemVoiceMissingCause` ne signale un
+repli que si la voix mémorisée manque réellement, la phrase dit ce qui est
+utilisé à la place, la mention apparaît près du bouton (un seul
+`span.agent-read-notice`), **aucune mention** quand la voix est là, et le
+réglage mémorisé (`getPreferredVoiceName()`) reste intact. Vérifié en cassant
+exprès le code : retirer l'émission de `system-fallback`, forcer la cause, ou
+retirer la branche d'affichage fait **échouer** ce fichier.
 
 Aide utilisateur : `help/overview.md`, bloc `HELP:lire-reponses`.
