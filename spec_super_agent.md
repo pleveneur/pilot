@@ -2780,6 +2780,15 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
   appelé sans elle (authentification refusée possible), sans bloquer le
   démarrage. Le bouton **Tester la connexion** interroge le serveur distant pour
   vérifier l'adresse et la clé.
+- **Nom des outils exposés** : chaque outil d'un serveur porte le nom
+  `mcp_<identifiant du serveur>_<nom de l'outil>` (par ex. `mcp_mcp-1_echo`).
+  Comme **un seul serveur est utilisé à la fois**, deux serveurs ne peuvent pas
+  se disputer un nom. En revanche, si **deux serveurs enregistrés ont le même
+  identifiant**, leurs outils porteraient exactement le même nom : Pilot refuse
+  alors de charger MCP et **vous dit lequel des deux serveurs est en cause** —
+  pour rétablir, désactivez l'un des deux ou donnez-leur des identifiants
+  différents. Si un serveur annonce **deux fois le même outil**, seul le premier
+  est proposé à l'agent (et c'est signalé), jamais un remplacement silencieux.
 <!-- /HELP:super-agent-mcp -->
 
 <!-- HELP:super-agent-checklist -->

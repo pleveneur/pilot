@@ -21,6 +21,13 @@
 //      `mcp_<serverId>_<name>` via pi.registerTool (exécution qui redéclenche un
 //      callTool sur le serveur).
 //
+// NOM DES OUTILS : le nom est construit par le module PUR partagé
+// `src/js/mcp-tool-names.js` (source unique, testée). Un nom d'outil ne doit
+// jamais être disputé par deux serveurs : si deux entrées de mcp.json portent le
+// même identifiant (donc les mêmes noms d'outils), le chargement est REFUSÉ avec
+// un message qui nomme les deux serveurs (§ 2 quater) ; si un serveur déclare
+// deux fois le même outil, seule la première déclaration est exposée (§ 3).
+//
 // Fail-open : toute erreur (config absente, serveur indisponible, tools/list en
 // échec) est interceptée — pi ne doit jamais planter à cause d'une extension MCP.
 //
@@ -38,6 +45,18 @@ import {
   parseSecretStrict,
   scopeMcpSecret,
 } from "../../src/js/mcp-secret-scope.js";
+// Noms d'outils MCP (source unique, module PUR partagé avec les tests) : la
+// règle `mcp_<serverId>_<outil>` et la détection des noms ambigus n'existent
+// qu'ici.
+import {
+  duplicateToolNameMessage,
+  duplicateToolNames,
+  firstDeclarationOnly,
+  mcpServerId,
+  registeredToolName,
+  serverIdClashMessage,
+  serverIdOwners,
+} from "../../src/js/mcp-tool-names.js";
 // Garde-fous du contrôle de l'écran (cœur PUR, partagé avec le frontend) :
 // bundlé par esbuild dans le fichier généré. Ils décident, POUR CHAQUE action,
 // si elle est refusée, soumise à confirmation ou simulée, et tiennent le journal.
@@ -165,7 +184,23 @@ export default async function (api: ExtensionAPI): Promise<void> {
     return; // Aucun serveur enabled (ni cible valide) — fail-open.
   }
 
-  const serverId = server.id ?? server.name ?? "mcp";
+  const serverId = mcpServerId(server);
+
+  // ── 2 quater. Nom d'outil non ambigu (identifiant de serveur unique) ──
+  // Deux entrées ACTIVÉES portant le même identifiant produiraient exactement
+  // les mêmes noms d'outils (`mcp_<id>_<outil>`) : impossible de savoir lequel
+  // des deux serveurs serait appelé, et le second serait ignoré en silence.
+  // Le cas ambigu est donc refusé EXPLICITEMENT, en nommant les deux serveurs
+  // (fail-closed : aucun outil n'est enregistré). Un identifiant unique — le cas
+  // normal — n'est jamais concerné : rien ne change pour lui.
+  const sameIdServers = serverIdOwners(enabledServers, serverId);
+  if (sameIdServers.length > 1) {
+    notifyUser(
+      serverIdClashMessage(serverId, sameIdServers) ?? "Identifiant MCP ambigu",
+      "warning"
+    );
+    return;
+  }
 
   // ── 2 bis. Garde-fous du contrôle de l'écran ──
   // Un serveur « écran » peut piloter la machine : il n'est proposé à l'agent
@@ -251,9 +286,20 @@ export default async function (api: ExtensionAPI): Promise<void> {
   }
 
   // ── 3. Enregistrement d'un outil pi par outil MCP découvert ──
-  for (const tool of discovered) {
+  // Un `tools/list` qui déclare deux fois le même nom d'outil ne doit pas faire
+  // écraser en silence la première déclaration par la seconde (pi range ses
+  // outils dans une table par nom) : la première est conservée, le doublon est
+  // signalé. Aucun nom d'outil déjà en service ne change.
+  const declaredTwice = duplicateToolNames(discovered);
+  if (declaredTwice.length > 0) {
+    notifyUser(
+      duplicateToolNameMessage(serverId, declaredTwice) ?? "Outil MCP déclaré deux fois",
+      "warning"
+    );
+  }
+  for (const tool of firstDeclarationOnly(discovered)) {
     const toolName = tool.name;
-    const registeredName = `mcp_${serverId}_${toolName}`;
+    const registeredName = registeredToolName(serverId, toolName);
     const description =
       tool.description ?? `Outil MCP \`${toolName}\` fourni par le serveur \`${serverId}\`.`;
 
