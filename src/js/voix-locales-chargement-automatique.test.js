@@ -13,7 +13,13 @@
 //      jamais en boucle, jamais périodique ;
 //   4. la section n'affiche JAMAIS une ligne vide : « vérification en cours… »,
 //      « état inconnu — cliquez sur Vérifier à nouveau », ou l'état réel ;
-//   5. aucun téléchargement n'est déclenché par ce chargement automatique.
+//   5. aucun téléchargement n'est déclenché par ce chargement automatique ;
+//   6. la CHAÎNE RÉELLE, exécutée de bout en bout (invocateur factice →
+//      `refreshLocalVoiceStatus` → état mémorisé → `voiceChoiceOptions`),
+//      remplit la liste avec les QUATRE voix locales, avec leur genre, pour le
+//      réglage par défaut (« Automatique ») comme pour une voix du système —
+//      et le dit franchement quand le moteur est absent ou la vérification en
+//      échec (aucune ligne d'état figée sur « vérification en cours… »).
 //
 // Preuve que ces tests mordent : retirer l'appel `ensureLocalVoiceChecked(...)`
 // de `refreshReadAloudVoice` fait ÉCHOUER les contrôles de branchement (voir
@@ -33,6 +39,7 @@ import {
   localVoiceSectionNote,
   localVoiceChoices,
   localVoiceStatusFor,
+  localVoiceValueFor,
   normalizeLocalVoiceStatus,
   refreshLocalVoiceStatus,
   setLocalVoiceStatus,
@@ -268,5 +275,151 @@ describe("chargement automatique dans les Paramètres (branchement)", () => {
       expect(body).not.toContain("downloadLocalVoiceModel");
       expect(body).not.toContain("startReadAloudDownload");
     }
+  });
+});
+
+// ── 4. La chaîne RÉELLE : du réglage par défaut à la liste remplie ─────────
+
+const SYSTEM_VOICES = [
+  { lang: "fr-FR", name: "Hortense", voiceURI: "Hortense" },
+  { lang: "en-US", name: "Alex", voiceURI: "Alex" },
+];
+
+/**
+ * Invocateur factice qui répond à `tts_local_status` en ÉCHO du modèle demandé
+ * (comme le fait la commande Rust : l'état porte le nom du modèle vérifié).
+ * @param {object|null} status état renvoyé (null si l'appel doit échouer)
+ * @returns {{invoke: Function, calls: {command: string, args: object}[]}}
+ */
+function statusInvoke(status) {
+  const calls = [];
+  const invoke = async (command, args) => {
+    calls.push({ command, args });
+    if (command !== "tts_local_status") return null;
+    if (!status) throw new Error("IPC indisponible");
+    return { ...status, voice: args && args.model };
+  };
+  return { invoke, calls };
+}
+
+/**
+ * Rejoue ce que fait la section à l'ouverture, SANS DOM : la demande d'état
+ * pour le modèle PAR DÉFAUT (celui que `refreshReadAloudVoice` transmet au rendu
+ * quand aucune voix locale n'est choisie), puis la liste telle que le sélecteur
+ * la compose à partir de l'état MÉMORISÉ (`localVoiceStatusFor`).
+ * @param {object|null} status état renvoyé par le moteur (null = échec)
+ * @returns {Promise<{calls: object[], known: object|null, options: object[]}>}
+ */
+async function openSection(status) {
+  setLocalVoiceStatus(null);
+  const { invoke, calls } = statusInvoke(status);
+  await refreshLocalVoiceStatus({ invoke });
+  const known = localVoiceStatusFor(DEFAULT_LOCAL_VOICE_MODEL);
+  return { calls, known, options: voiceChoiceOptions(SYSTEM_VOICES, known) };
+}
+
+/** Valeurs proposées par la liste (ordre compris). */
+function values(options) {
+  return options.map((opt) => opt.value);
+}
+
+/** Libellé affiché pour une valeur de réglage ("" si absente). */
+function labelOf(options, value) {
+  const found = options.find((opt) => opt.value === value);
+  return found ? found.label : "";
+}
+
+const INSTALLED = {
+  installed: true,
+  dir: "C:/Pilot/voix-locale",
+  engine_present: true,
+  model_present: true,
+};
+
+describe("réglage par défaut : la liste des voix se remplit vraiment", () => {
+  it("« Automatique » → les QUATRE voix locales sont proposées, genre compris", async () => {
+    const { calls, known, options } = await openSection(INSTALLED);
+    // Une seule demande, pour la voix locale PAR DÉFAUT : c'est elle qui donne
+    // le catalogue (aucune voix locale choisie au départ).
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      command: "tts_local_status",
+      args: { model: DEFAULT_LOCAL_VOICE_MODEL },
+    });
+    // L'état reçu est bien MÉMORISÉ par modèle (sans quoi la liste resterait vide).
+    expect(known).toBeTruthy();
+    expect(known.voice).toBe(DEFAULT_LOCAL_VOICE_MODEL);
+    expect(known.installed).toBe(true);
+    // La liste commence par « Automatique », puis les quatre voix locales.
+    expect(values(options)).toEqual([
+      AUTO_VOICE_VALUE,
+      ...localVoiceChoices().map((entry) => entry.value),
+      "Alex",
+      "Hortense",
+    ]);
+    // Chaque voix locale est nommée ET son genre est dit en clair.
+    for (const entry of LOCAL_VOICE_MODELS) {
+      const label = labelOf(options, localVoiceValueFor(entry.model));
+      expect(label, entry.model).toContain("Voix française locale");
+      expect(label, entry.model).toContain(entry.gender === "homme" ? "voix d'homme" : "voix de femme");
+      // Moteur et modèle présents : aucun « à télécharger » mensonger.
+      expect(label, entry.model).not.toContain("à télécharger");
+    }
+    // La valeur historique de la voix locale reste la première des voix locales.
+    expect(localVoiceValueFor(DEFAULT_LOCAL_VOICE_MODEL)).toBe(LOCAL_VOICE_VALUE);
+  });
+
+  it("la ligne d'état dit la vérité (plus jamais « vérification en cours » figée)", async () => {
+    const { known } = await openSection(INSTALLED);
+    const note = localVoiceSectionNote(known);
+    expect(note).not.toBe(LOCAL_VOICE_PENDING_HINT);
+    expect(note).not.toBe(LOCAL_VOICE_UNKNOWN_HINT);
+    expect(note).toContain("C:/Pilot/voix-locale");
+    expect(note).toContain(LOCAL_VOICE_READY_HINT);
+  });
+
+  it("une voix du SYSTÈME enregistrée → même liste, et le choix reste le sien", async () => {
+    const { known, options } = await openSection(INSTALLED);
+    for (const entry of localVoiceChoices()) {
+      expect(values(options), entry.value).toContain(entry.value);
+    }
+    const status = voiceChoiceStatus(SYSTEM_VOICES, "Hortense", known);
+    expect(status.kind).toBe("ok");
+    expect(status.value).toBe("Hortense");
+  });
+
+  it("moteur réellement absent → la liste ne fait pas semblant, elle le dit", async () => {
+    const { known, options } = await openSection({
+      installed: false,
+      dir: "C:/Pilot/voix-locale",
+      engine_present: false,
+      model_present: true,
+    });
+    // Les quatre voix restent proposées (on ne cache rien) : c'est la lecture
+    // des libellés qui doit dire la vérité.
+    for (const entry of localVoiceChoices()) {
+      expect(values(options), entry.value).toContain(entry.value);
+    }
+    // La voix dont l'état est connu dit franchement qu'il reste à télécharger.
+    expect(labelOf(options, LOCAL_VOICE_VALUE)).toContain("modèle à télécharger");
+    // Une voix locale choisie est CONSERVÉE, et l'explication nomme le moteur.
+    const status = voiceChoiceStatus(SYSTEM_VOICES, LOCAL_VOICE_VALUE, known);
+    expect(status.kind).toBe("local-missing");
+    expect(status.value).toBe(LOCAL_VOICE_VALUE);
+    expect(status.hint.toLowerCase()).toContain("moteur");
+    // La ligne d'état n'est jamais l'attente figée : elle donne le dossier utilisé.
+    const note = localVoiceSectionNote(known);
+    expect(note).not.toBe(LOCAL_VOICE_PENDING_HINT);
+    expect(note).toContain("C:/Pilot/voix-locale");
+  });
+
+  it("vérification impossible → état inconnu, liste complète, aucun blocage", async () => {
+    const { known, options } = await openSection(null);
+    expect(known).toBeTruthy();
+    expect(known.unknown).toBe(true);
+    for (const entry of localVoiceChoices()) {
+      expect(values(options), entry.value).toContain(entry.value);
+    }
+    expect(localVoiceSectionNote(known)).toBe(LOCAL_VOICE_UNKNOWN_HINT);
   });
 });
