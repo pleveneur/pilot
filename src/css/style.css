@@ -1034,8 +1034,9 @@ body.theme-light.theme-tokyo-day {
 
 /* --- Project Selector --- */
 /* LOT 2 de la presentation : bandeau d'identification de 48 px (au lieu de
-   72) — logo 20 px, nom du projet 15 px / 600 et sous-titre du moteur 11 px
-   sur deux lignes. Inset de gauche 16 px (grille § 4.2), filet bas conserve.
+   72) — logo 24 px (LOT A), nom du projet 15 px / 600 et sous-titre du moteur
+   11 px sur deux lignes. Inset de gauche 16 px (grille § 4.2), filet bas
+   conserve.
    Depuis la suppression de la bande de fenetre, ce bandeau est l'une des DEUX
    zones qui deplacent la fenetre (glisser + double-clic) : `user-select: none`
    evite qu'un double-clic selectionne le nom du projet au lieu d'agrandir la
@@ -1104,10 +1105,18 @@ body.theme-light.theme-tokyo-day {
 #btn-open-project.open .dropdown-arrow { transform: rotate(180deg); }
 
 #btn-project-logo {
-  height: 20px;
+  /* LOT A : 20 -> 24 px d'AFFICHAGE seulement. On ne recadre PAS l'image :
+     le meme fichier sert aussi au grand logo de l'ecran de chargement
+     (#boot-logo, 160 px) et au filigrane de la zone vide (#empty-logo) — un
+     recadrage les rapetisserait aussi. Bandeau inchange : 48 px.
+     LOT A2 : -3 px a gauche pour que le DESSIN VISIBLE reparte du meme bord
+     que le texte au-dessous (16,2 px pour une regle d'inset de 16 px), et
+     rendre au nom la place prise par l'agrandissement. */
+  height: 24px;
   width: auto;
   flex: 0 0 auto;
   object-fit: contain;
+  margin-left: -3px;
 }
 
 #btn-project-name {

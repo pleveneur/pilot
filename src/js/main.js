@@ -627,7 +627,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   // aucune seconde source, et elle suit chaque re-sonde du backend.
   const syncEngineSubtitle = () => {
     const el = document.getElementById("project-engine");
-    if (el) el.textContent = agentDisplayLabel();
+    // LOT B : le sous-titre dit aussi CE QUE C'EST (« Moteur »), pas seulement
+    // le nom du moteur. Le libelle reste celui de `backend-info.js` (source
+    // unique : il suit chaque re-sonde pi <-> plh), precede du seul mot ajoute
+    // et d'un separateur. « Agent Pi » reste ecrit tel quel apres le point.
+    if (el) el.textContent = "Moteur · " + agentDisplayLabel();
   };
   syncEngineSubtitle();
   window.addEventListener("pilot-backend-changed", syncEngineSubtitle);
