@@ -26,7 +26,7 @@ externe.
   brouillon (scratchpad).
 - **Panneau d'actions** (bas de la barre latérale, cadre accentué) : **sept** lignes
   nommées, **toutes de la même taille** (aucune n'est mise en évidence) et, dès qu'un
-  projet est ouvert, toutes visibles — **Brouillon**, **Options**, **Assistant**, **Dossier du projet** (ouvre le
+  projet est ouvert, toutes présentes — **Brouillon**, **Options**, **Assistant**, **Dossier du projet** (ouvre le
   dossier du projet dans l'explorateur du système), **Terminal**, **Commandes du
   projet**, puis **Autres écrans ▾** : ce dernier ouvre vers le haut un menu groupé de
   **dix** entrées, dont **Lancer l'agent** en toute première ligne (groupe « Mon
@@ -34,6 +34,16 @@ externe.
   sessions, Revue de code, Équipe d'agents, Kanban, Discussion inter-projets et GDS du
   projet. **Lancer l'agent** se fait donc maintenant en **deux clics** (ouvrir le menu,
   puis la ligne) : aucun raccourci clavier ne le double.
+- **Ce panneau est replié au repos et s'ouvre au premier geste** : au repos il
+  n'occupe qu'**une ligne de haut** et seule sa **dernière** ligne reste visible —
+  **Autres écrans ▾** quand un projet est ouvert, **Options** sans projet. Le
+  **survol** le déploie en un dixième de seconde ; la **première touche Tab**
+  l'ouvre immédiatement. Il se referme seul **un tiers de seconde** après que la
+  souris l'a quitté, et seulement si ni le clavier ni le menu « Autres écrans » ne
+  le retiennent : se déplacer **à l'intérieur** du panneau déplié ne le referme
+  jamais. Rien n'est donc perdu quand il est replié : la ligne qui reste nomme la
+  porte, et cette ligne du bas **ne bouge jamais** (le panneau s'ouvre vers le
+  haut). Sa largeur ne change pas — seul le cadre se replie en hauteur.
 - **Le haut de la barre latérale ne porte plus aucun bouton** : « Brouillon » et
   « Options » ont rejoint le panneau du bas, dont elles sont les deux premières lignes
   (mêmes libellés, mêmes icônes, mêmes infobulles, mêmes raccourcis). L'espace ainsi

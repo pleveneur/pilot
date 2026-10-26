@@ -543,6 +543,29 @@ function domFactice({ menuOuvert = false } = {}) {
   };
 }
 
+describe("LOT 1 (k) — les deux themes ne changent rien au repli", () => {
+  /** Noms de proprietes declarees dans un corps de regle (commentaires retires). */
+  const proprietes = (corps) =>
+    (corps
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .match(/(?:^|;)\s*([a-z-]+)\s*:/g) || [])
+      .map((m) => m.replace(/[;:\s]/g, ""))
+      .filter(Boolean);
+
+  it("la regle d'etat ne porte QUE la hauteur et le rognage (aucune couleur)", () => {
+    const etatCss = bloc(css, "#project-footer.pj-replie");
+    expect(proprietes(etatCss).sort()).toEqual(["height", "overflow"]);
+    // Aucune couleur propre au repli : le cadre garde son fond `accent 16 %` et
+    // sa bordure accent, lus dans les jetons de theme (sombre ET clair). Un
+    // repli qui peindrait une couleur casserait forcement un des deux themes.
+    for (const interdit of ["background", "color:", "border-color", "box-shadow", "opacity"]) {
+      expect(etatCss.includes(interdit), `couleur ajoutee au repli : ${interdit}`).toBe(
+        false,
+      );
+    }
+  });
+});
+
 describe("LOT 1 (j) — machine a etats : delais, ordre, clavier", () => {
   it("le bloc est replie au repos, et le survol ouvre apres 100 ms", () => {
     const d = domFactice();
@@ -593,6 +616,34 @@ describe("LOT 1 (j) — machine a etats : delais, ordre, clavier", () => {
     expect(d.cadre.classList.contains(CLASSE_REPLIE)).toBe(true);
     // La regle d'etat impose la hauteur : aucune valeur en pixels ne reste.
     expect(d.cadre.style.height).toBe("");
+    repli.detruire();
+  });
+
+  it("la souris qui se deplace A L'INTERIEUR du bloc deplie n'arme aucun repli", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+    d.cadre.emettre("pointerenter");
+    d.win.avancer(OUVERTURE_MS);
+    expect(repli.etat().replie).toBe(false);
+    // Deplacements DANS la zone depliee : `pointerenter` / `pointerleave` ne se
+    // declenchent qu'aux FRONTIERES du cadre (ils ne bouillonnent pas et ne
+    // repartent pas en passant d'une ligne a l'autre). Un mouvement interne ne
+    // peut donc pas armer le sursis de fermeture : le bloc reste ouvert.
+    for (let i = 0; i < 5; i += 1) {
+      d.cadre.emettre("pointerenter");
+      d.win.avancer(GRACE_MS / 2);
+      expect(
+        repli.etat().replie,
+        "le bloc s'est referme alors que la souris est toujours dedans",
+      ).toBe(false);
+    }
+    // Il ne se referme qu'a la SORTIE du cadre, et apres le sursis complet.
+    d.cadre.emettre("pointerleave");
+    d.win.avancer(GRACE_MS - 1);
+    expect(repli.etat().replie).toBe(false);
+    d.win.avancer(1);
+    expect(repli.etat().replie).toBe(true);
     repli.detruire();
   });
 

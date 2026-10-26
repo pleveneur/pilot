@@ -165,3 +165,117 @@ le deploiement soit fini ou non.
   du bas et le cas de debordement du `flex-end` n'ont pas pu etre observes ici (pas
   d'application graphique lancee) ; ils sont couverts par le verrou de valeurs et par la
   lecture du code uniquement.
+
+---
+
+## 7. SECONDE PASSE — verification apres les missions « badge Distant » et « compteur Travail »
+
+### 7.1 Etat trouve sur le disque au depart (relu, pas recopie d'un ancien rapport)
+
+**Le LOT 1 etait deja livre.** Preuves lues sur le disque avant toute action :
+
+| Element | Etat trouve |
+|---|---|
+| `src/css/style.css:830` | `#project-footer {` porte `justify-content: flex-end` et `transition: height var(--transition)` ; `overflow: visible` **intact** |
+| `src/css/style.css:894` | regle d'etat `#project-footer.pj-replie { height: 50px; overflow: clip; }` |
+| `.pj-panel` | porte `flex: 0 0 auto` |
+| `index.html:141` | `<div id="project-footer" class="pj-replie">` |
+| `src/js/sidebar-footer-fold.js` | module present (444 lignes), `OUVERTURE_MS = 100`, `GRACE_MS = 300` |
+| `src/js/sidebar.js:28 et :255` | import + appel `initRepliMenusBas({...})` dans `init()`, apres `_initProjectFooterMenu()` |
+| `src/js/repli-menus-bas.test.js` | verrou present (36 cas) |
+| `spec_pilot.md` § C | decrit deja le repli (50 px, 100 ms, 300 ms, ancre bas) |
+| commit | `c760a8d feat(colonne): lot 1 du repli au survol des menus du bas` |
+
+**Conclusion : appliquer le LOT 1 une seconde fois aurait ete un doublon.** Je ne l'ai donc
+pas refait, et je n'ai **rien supprime ni reecrit** de ce qui existe.
+
+### 7.2 Les missions posterieures n'ont rien casse (verifie)
+
+- Le **badge « Distant »** a ete descendu dans `#sidebar-engine-row`, qui est un **frere**
+  de `#project-footer`, **sous** lui (dernier enfant de `#sidebar`). Le repli s'ancre sur
+  le **bas du cadre** : la ligne d'information du bas ne bouge donc toujours pas, et le
+  cadre garde son `margin: 0 8px 8px`. **Aucune interaction** : le verrou de valeurs
+  (`lot3-colonne-bas.test.js`, 20 cas) et le verrou du repli (38 cas) sont verts.
+- Le **compteur « Travail »** vit dans la rangee d'onglets, hors de la colonne : sans
+  effet sur ce bloc.
+
+### 7.3 Le lot tel que la conception le nomme
+
+`RAPPORT-conception-repli-menus-bas.md` § 6 — **« LOT 1 — le repli et le deploiement au
+survol (le coeur, 1 test + 1 module) »**. Les lots 2 (clavier), 3 (toucher), 4
+(mouvement reduit) et 5 (documentation et cloture) portent les numeros suivants : ils
+n'ont **pas** ete faits dans cette passe.
+
+### 7.4 Ce que cette passe a reellement applique (3 retouches, aucun code de comportement)
+
+1. **`help/overview.md` (bloc `<!-- HELP:overview -->`)** — le texte d'aide decrivait les
+   menus du bas et affirmait qu'ils etaient « **toutes visibles** », ce qui etait devenu
+   **faux** depuis le repli. Corrige en « toutes presentes », et **un paragraphe ajoute**
+   decrit l'etat reel : replie au repos sur une ligne de haut, derniere ligne visible
+   (`Autres ecrans` avec un projet, `Options` sans projet), deploiement au survol (un
+   dixieme de seconde) et a la **premiere touche Tab**, refermeture un tiers de seconde
+   apres la sortie de la souris et **jamais quand on se deplace a l'interieur**, ligne du
+   bas immobile, largeur inchangee. Le **toucher n'y est pas annonce** : il appartient au
+   LOT 3 et n'est pas livre (voir 7.6).
+2. **`help/handbook.md`** — regenere par `npm run build:handbook` (45 blocs,
+   276 344 octets). Fichier **genere**, jamais edite a la main.
+3. **`src/js/repli-menus-bas.test.js`** — **2 cas ajoutes** (36 -> 38), sans en modifier
+   ni en supprimer aucun :
+   - *« la souris qui se deplace A L'INTERIEUR du bloc deplie n'arme aucun repli »* : 5
+     deplacements internes espaces de 150 ms, puis controle que le bloc ne se referme
+     qu'a la **sortie** du cadre et apres le sursis complet (point 5 des verifications
+     attendues) ;
+   - *« la regle d'etat ne porte QUE la hauteur et le rognage (aucune couleur) »* : les
+     proprietes de `#project-footer.pj-replie` sont exactement `height` et `overflow`,
+     aucune couleur/ombre/opacite (point 4 : les deux themes).
+
+### 7.5 Cas verifies, modalite par modalite
+
+| Modalite | Verifie | Preuve |
+|---|---|---|
+| **Souris** | deploiement apres 100 ms, sursis de 300 ms, retour qui annule le sursis, **deplacement interieur sans fermeture** | verrou (j) + nouveau cas ; `pointerenter`/`pointerleave` ne se declenchent qu'aux frontieres du cadre |
+| **Clavier** | `focusin` deploie **immediatement et sans animation**, `scrollTop = 0`, aucun `tabindex="-1"`, `Echap` ne double jamais le menu (ecoute en capture), `Echap` menu ferme = repli immediat + focus sur la ligne visible | verrou (g) et (j) ; code `surFocus` / `surTouche` |
+| **Toucher** | **NON LIVRE — LOT 3.** Aucun `pointerdown` / `pointerType === "touch"` dans le module, aucune media query `(hover: hover) and (pointer: fine)` dans `style.css` (verifie : 0 occurrence). Ce qui fonctionne deja au doigt : l'appui donne le focus au bouton, donc `focusin` deploie, et l'ouverture du menu **termine le mouvement** (`surMenuChange`), donc le menu n'est jamais rogne. **Il reste a livrer** : 1er appui = deploiement seul, et les etats `:hover` sous media query. | `grep` sur le module et la feuille : aucune trace |
+| **Theme clair** | le repli n'introduit **aucune couleur** (regle d'etat = `height` + `overflow`) ; le cadre garde `accent 16 %` + bordure accent ; **aucune teinte de survol** n'a ete ajoutee (`#project-footer:hover` : 0 occurrence), donc le contraste du libelle reste **4,71:1** (>= 4,5) au lieu de tomber a 4,15:1 | nouveau cas (k), conception § 5.6 |
+| **Theme sombre** | memes jetons, meme regle : contraste **6,25:1** ; rien de specifique au theme n'a ete ecrit | idem |
+
+### 7.6 Desaccords SIGNALES, non tranches par moi
+
+1. **350 ms (mission) contre 300 ms (conception et code).** La demande ecrit « se
+   referment **350 ms** apres que la souris a quitte la zone » ; le document de conception
+   qui fait foi (§ 2.3) justifie **300 ms** (= le jeton existant `--transition-smooth`) et
+   le code applique 300 ms. Je n'ai **pas** change la valeur : c'est la conception que la
+   mission elle-meme declare validee et ferme (« Applique-la, ne la reinvente pas »). A
+   trancher par le proprietaire si 350 ms est bien la decision 374.
+2. **Le LOT 1 etait deja livre** (commit `c760a8d`) alors que la mission le presente comme
+   a faire. Signale, non refait.
+3. **L'infobulle enrichie de `btn-more-screens` (Q2, conception § 3.2)** n'est **pas**
+   appliquee : le § 6 ne la range pas dans le LOT 1 et elle touche l'attribut `title` d'une
+   ligne verrouillee. Elle reste a trancher.
+4. **Le clavier et le mouvement reduit** ont ete livres **en avance** dans le module du
+   LOT 1 (la mission les exigeait comme points de vigilance) : les verrous dedies des lots
+   2 et 4 restent donc a ecrire.
+
+### 7.7 Resultats exacts des verifications de cette passe
+
+| Commande | Resultat |
+|---|---|
+| `npx vitest run src/js/repli-menus-bas.test.js` | **PASS (38) FAIL (0)** (36 avant, +2 nouveaux cas) |
+| `npx vitest run src/js/repli-menus-bas.test.js src/js/lot3-colonne-bas.test.js` | **PASS (58) FAIL (0)** (38 + 20, le verrou du bas de colonne est inchange) |
+| `npm test` (suite complete) | **191 fichiers, 3357 tests, 3357 passed, 0 failed** (11,44 s) |
+| `npm run build:handbook` | **OK** — `help/handbook.md` regenere (45 blocs, 276 344 octets) |
+
+### 7.8 Ce qui reste pour les lots suivants
+
+- **LOT 2 — clavier** : `focusin` sans animation (livre), verrou dedie a ecrire, `Echap`
+  deja couvert.
+- **LOT 3 — toucher** : `pointerdown` / `pointerType === "touch"` (1er appui = deploiement
+  seul), media query `(hover: hover) and (pointer: fine)` pour les etats `:hover`,
+  appui exterieur = repli immediat.
+- **LOT 4 — mouvement reduit** : regle `#project-footer.no-motion { transition: none }` +
+  son verrou (le comportement JS est deja en place).
+- **LOT 5 — documentation et cloture** : `spec_pilot.md` § C (deja a jour), handbook
+  (fait ici), ce rapport passe en « livre ».
+- **A l'ecran, non observe ici** : survol reel, animation de 180 ms, immobilité de la
+  ligne du bas, absence de rognage du menu (aucune application graphique lancee).
+
