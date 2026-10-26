@@ -170,3 +170,101 @@ style(colonne): le badge Distant rejoint l'info du moteur en bas
 ```
 
 Aucun envoi vers GitHub, aucun tag, aucun changement de version.
+
+---
+
+## 8. Second passage (re-verification sur le disque et a l'ecran)
+
+Le deplacement demande par la decision 375 **etait deja fait** sur le disque
+(commit `9db5ea7`, « style(colonne): le badge Distant rejoint l'info du moteur en
+bas »). Ce second passage n'a donc rien eu a deplacer : il a **re-verifie**
+l'emplacement, la tenue de la colonne et la lisibilite, et n'a **modifie aucun
+fichier de code**.
+
+### 8.1 Ou se trouve le badge aujourd'hui (fichier:ligne, verifie)
+
+| Element | Emplacement reel |
+|---|---|
+| Badge | `<span id="remote-badge" class="remote-badge hidden">` — `index.html:233`, **apres** `<span id="project-engine">` (`index.html:232`) dans `<div id="sidebar-engine-row">` |
+| Ligne d'accueil | `index.html:231-234`, **dernier element de `<aside id="sidebar">`** (donc sous le cadre accentue `#project-footer`, qui commence `index.html:141`) |
+| Conteneur du haut | `#global-actions` — `index.html:85`, **vide** (aucun enfant) |
+| Style de la ligne | `src/css/style.css:816-836` (`#sidebar-engine-row`), texte elastique `:833` |
+| Style du badge | `src/css/style.css:7418-7458` (`.remote-badge`, `:not(.off)`, `:hover`, `.off`, `.hidden`) |
+| Texte du moteur | ecrit par `src/js/main.js:629-641` (`syncEngineSubtitle`, source unique `backend-info.js`) |
+| Comportement du badge | `src/js/settings.js:3194` (clic → Options) et `3195-3212` (`pollRemoteBadge` : connecte / hors service / masque, sonde `web_status` toutes les 5 s) |
+
+### 8.2 Preuve que la colonne ne deborde pas (mesure dans un navigateur)
+
+La page de mesure reprend **telle quelle** la feuille `src/css/style.css` et le
+bloc `<aside id="sidebar">` de `index.html` (commentaires HTML retires). Elle a
+ete chargee dans Chrome et mesuree par `getBoundingClientRect()`, avec un projet
+ouvert (sept lignes du bloc du bas, classe `pj-replie` retiree) et un client
+distant connecte (compteur a 3), a la **hauteur de fenetre minimale de 500 px**
+(`minHeight: 500` de `tauri.conf.json`).
+
+| Mesure | Valeur relevee | Attendu | Verdict |
+|---|---|---|---|
+| Largeur de la colonne | **280 px** | 280 px figes | conforme |
+| Hauteur du cadre des menus (7 lignes) | **278 px** | 278 px, plafond 60 % = 300 px | conforme |
+| Hauteur de la ligne du badge | **28 px** | 28 px, une seule ligne | conforme |
+| Badge × ligne | hauteur 28 px, aligne au centre de la ligne (ecart vertical < 1,5 px) | meme ligne | conforme |
+| Bord droit du badge | **263 px** | ≤ bord interieur droit de la ligne (263 px) | ne sort pas |
+| Bas de la ligne | **492 px** | ≤ bas de la colonne (500 px) | tient dans la fenetre |
+| Ligne sous le cadre des menus | haut de ligne 464 px ≥ bas du cadre 457 px | aucun recouvrement | conforme |
+| Largeur du badge | 82,2 px (largeur au contenu, inchangee) | identique a avant | conforme |
+| Libelle de moteur long | texte tronque (`scrollWidth > clientWidth`), **badge immobile** (x = 181 px avant et apres) | le texte cede avant le badge | conforme |
+| Badge masque | largeur 0 px, texte = 247 px (toute la largeur interieure), ligne toujours a 28 px | aucun saut de la liste | conforme |
+| Place restante pour la liste des fichiers | **146 px** a 500 px de haut | > 0 | conforme |
+| Debordement horizontal de la page | **aucun** | aucun | conforme |
+| Ordre dans la ligne | `["project-engine", "remote-badge"]` | texte d'abord, badge a droite | conforme |
+| Badge = dernier enfant de la colonne | `sidebar.lastElementChild === #sidebar-engine-row` | oui | conforme |
+
+### 8.3 Le badge ne capte pas le clic d'une action voisine
+
+`document.elementFromPoint()` au centre du badge renvoie le libelle du badge
+lui-meme (`.remote-badge-label`, donc `#remote-badge` ou un de ses enfants) : il
+n'y a **aucun autre element sous le badge**. Juste au-dessus de la ligne, le
+meme test renvoie **`#project-footer`** : le badge ne recouvre aucune ligne de
+menu, et aucun bouton ne se trouve dans son rectangle. Le badge n'est **pas un
+`<button>`** (il reste un `<span>`), garde `cursor: pointer` et le meme clic vers
+les Options : ce n'est pas une action nouvelle.
+
+### 8.4 Lisibilite dans les deux themes (jetons de theme, mesures)
+
+| Etat | Theme sombre | Theme clair |
+|---|---|---|
+| Connecte (`.remote-badge`) | `#4ade80` sur `#1e2128` → **9,25:1** | `#30a46c` sur `#f0f1f4` → **2,80:1** |
+| Hors service (`.off`) | `#a0a6b4` sur `#1e2128` → **6,60:1** | `#5a6170` sur `#f0f1f4` → **5,50:1** |
+| Texte du moteur | `#a0a6b4` → **8,61:1** | `#5a6170` sur `#f4f5f7` → **5,70:1** |
+
+Le theme sombre est confortable dans les trois etats. Le theme clair est
+conforme **sauf l'etat connecte** (2,80:1 pour un libelle de 11 px / 600, alors
+que le seuil AA du texte courant est 4,5:1).
+
+### 8.5 Ecart signale, NON corrige (decision du proprietaire)
+
+Le contraste faible de l'etat connecte **en theme clair** ne vient pas du
+deplacement : le badge portait **deja** `color: var(--success)` avant, et le
+jeton clair `--success` vaut `#30a46c` (`src/css/style.css:469`). Le corriger
+serait un choix de palette, pas un deplacement : il n'a donc **pas** ete fait.
+Deux pistes possibles, aucune appliquee :
+
+1. une regle de theme clair propre au badge, `body.theme-light .remote-badge:not(.off) { color: #1f7a4d }` → **4,71:1** (mesure), sans toucher au jeton `--success` ni a la taille du badge ;
+2. changer le jeton clair `--success` (`#30a46c` → `#1a7f37` = **4,50:1**), ce qui toucherait **tous** les usages du vert dans le theme clair (badges Git, toasts, etats d'agents...).
+
+### 8.6 Tests apres ce second passage
+
+| Commande | Resultat exact |
+|---|---|
+| `npx vitest run src/js/badge-distant-bas.test.js` | **PASS (13) FAIL (0)** |
+| `npm test` (suite complete) | **PASS (3348) FAIL (0)** — fichiers 0 en echec |
+
+Aucun test n'a ete modifie ni supprime : ceux qui verrouillent l'emplacement
+decrivent deja le nouvel emplacement (bas de colonne, a droite du moteur).
+Aucune documentation d'aide (`help/`) ne cite l'emplacement du badge ;
+`spec_pilot.md:35-36` le decrit deja au bon endroit.
+
+### 8.7 Ce qui reste a faire
+
+- Trancher l'ecart 8.5 (contraste en theme clair) : rien d'autre n'est en attente.
+- Voir a l'ecran, dans l'application lancee, ce que la page de mesure ne montre pas : mode « Assistant seul », vrai client distant connecte, rendu a 125 % / 150 % de zoom systeme.
