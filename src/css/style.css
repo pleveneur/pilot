@@ -2367,9 +2367,15 @@ body.theme-light.theme-tokyo-day {
   margin-bottom: 0; /* l'espacement est géré par le gap du conteneur */
 }
 /* Issue #43 : la réflexion et les outils de l'Assistant utilisent la même
-   structure de rendu que l'agent standard, mais avec l'accent violet dédié. */
+   structure de rendu que l'agent standard, mais avec l'accent violet dédié.
+   Decision du proprietaire : le bloc de pensee de l'Assistant n'a AUCUN trait
+   vertical a sa gauche (le trait violet herite de `.agent-thinking` est retire
+   ici et seulement ici : la bulle de l'agent Pi garde le sien). Le texte ne se
+   decale pas : les 2 px qu'occupait la bordure sont rendus au retrait
+   (padding-left 10 px + 2 px de bordure = 12 px). */
 .superagent-wrapper .agent-thinking {
-  border-left-color: var(--superagent-accent);
+  border-left: none;
+  padding-left: 12px;
 }
 .superagent-wrapper .agent-tool-inline .agent-tool-label {
   color: var(--superagent-accent);
