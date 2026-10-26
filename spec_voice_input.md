@@ -131,8 +131,8 @@ le micro sur le web et afficher l'avertissement.
   éventuellement un point « ● REC »).
 - Transcription **en continu** injectée au curseur dans le `textarea` (les résultats
   intermédiaires sont remplacés par le texte final du segment en cours).
-- **2ᵉ pression** (ou `onend` du moteur) : arrête la dictée. Le texte final reste
-  dans le `textarea` ; l'utilisateur relit/modifie puis clique ➤/▶️.
+- **2ᵉ pression** (ou `onend` du moteur) : arrête la dictée. Voir §5bis pour
+  l'envoi automatique en fin de dictée.
 - **Bouton masqué** si `SpeechRecognition` non supporté par le moteur (Firefox,
   WebKit non supporté) → `if (!SR) btn.style.display = "none"`.
 - **Bouton désactivé** si `web_readonly` (web, chat déjà coupé) ou `isStreaming`
@@ -142,7 +142,52 @@ le micro sur le web et afficher l'avertissement.
 
 ---
 
-## 6. Plan d'implémentation (à faire)
+## 5bis. Envoi automatique en fin de dictée (décision du 2026-10-26)
+
+> **Décision du propriétaire, validée explicitement** : à la fin d'une dictée, le
+> message part **tout seul** — l'utilisateur n'appuie plus sur Entrée.
+> **Aucun réglage** ajouté (pas de réglage superflu) : c'est le défaut.
+
+**Portée** : onglet **agent π (desktop)** — `src/js/agent-pi.js`. L'Assistant 🧭
+(`src/js/super-agent.js`) et le **web distant** (`web/js/app.js`) gardent le
+comportement antérieur (texte dans la zone, envoi manuel) : la décision ne les
+couvrait pas, ils n'ont pas été touchés.
+
+### Décision et ordre — un seul module
+
+`src/js/voice-auto-send.js` (module **pur**, aucune dépendance, testé par
+`src/js/envoi-auto-fin-dictee.test.js`) est la **seule** source :
+
+| Fonction | Rôle |
+|---|---|
+| `decideVoiceAutoSend({ sessionActive, dictatedText })` | décide : `autoSend` + `reason` (`fin-normale-avec-texte`, `texte-vide`, `session-fermee`) |
+| `applyVoiceEnd({ sessionActive, preText, dictatedText, closeSession, write, send })` | impose l'**ordre** : refermer la session → écrire la zone → envoyer (et envoyer seulement si la décision l'autorise) |
+| `composeVoiceInputValue(preText, dictatedText)` | la composition de zone **historique**, inchangée |
+
+### Règles de sûreté tenues
+
+1. **Jamais d'envoi** d'un message vide ou composé uniquement d'espaces.
+2. **Envoi seulement sur une fin d'écoute NORMALE** : une erreur de reconnaissance,
+   un refus de permission, un arrêt par panne réseau ou un arrêt manuel referment la
+   session **avant** `onend` ⇒ rien ne part, et le texte reste dans la zone.
+3. **Aucun double envoi** : la session est refermée **avant** l'écriture et l'envoi ;
+   un second évènement de fin (ou un second `onend` du moteur) trouve la session
+   fermée ⇒ un seul message par dictée.
+4. **L'envoi est le chemin existant** : `sendPrompt` (celui de la touche Entrée et
+   du bouton ▶️). Aucun second mécanisme, et la zone de saisie est vidée par ce même
+   chemin (refus, file d'attente et verrous du projet inchangés).
+5. Le bouton micro revient à son libellé au repos à chaque fin de dictée.
+
+### Ce qui est prouvé, et ce qui ne l'est pas
+
+- Prouvé (tests) : les quatre cas ci-dessus + l'ordre refermer → écrire → envoyer +
+  le branchement de `agent-pi.js` (un seul point d'envoi, `sendPrompt` réutilisé).
+- **Non vérifié** : la dictée réelle au micro dans la fenêtre (aucun son, aucune
+  application lancée) — le comportement est prouvé par la décision et l'ordre.
+
+---
+
+## 6. Plan d'implémentation
 
 ### Web remote
 - [ ] **`web/index.html`** : ajouter `<button type="button" id="prompt-mic">🎙️</button>`
@@ -236,4 +281,9 @@ texte à la voix.
   Accès distant, puis utiliser le bouton 🎙️ depuis le téléphone/autre poste.
 - La transcription alimente directement la zone de saisie active (éditeur ou
   saisie de l'agent).
+- **Dans l'onglet agent Pi, à la fin d'une dictée, le message part tout seul**
+  (comme si vous aviez appuyé sur Entrée) : vous n'avez plus à valider. Rien ne
+  part si vous n'avez rien dicté, ni si la dictée s'arrête sur une erreur
+  (micro refusé, réseau coupé) : dans ce cas le texte reste dans la zone, à vous
+  de le relire. Un seul message part par dictée, même si vous parlez longtemps.
 <!-- /HELP:dictee-vocale -->

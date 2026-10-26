@@ -1091,6 +1091,11 @@ texte à la voix.
   Accès distant, puis utiliser le bouton 🎙️ depuis le téléphone/autre poste.
 - La transcription alimente directement la zone de saisie active (éditeur ou
   saisie de l'agent).
+- **Dans l'onglet agent Pi, à la fin d'une dictée, le message part tout seul**
+  (comme si vous aviez appuyé sur Entrée) : vous n'avez plus à valider. Rien ne
+  part si vous n'avez rien dicté, ni si la dictée s'arrête sur une erreur
+  (micro refusé, réseau coupé) : dans ce cas le texte reste dans la zone, à vous
+  de le relire. Un seul message part par dictée, même si vous parlez longtemps.
 
 ---
 

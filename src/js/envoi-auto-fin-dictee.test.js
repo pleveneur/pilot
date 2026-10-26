@@ -1,0 +1,269 @@
+// Tests — ENVOI AUTOMATIQUE à la fin d'une dictée vocale.
+//
+// Décision du propriétaire (2026-10-26) : à la fin d'une dictée, si du texte a été
+// dicté, le message part TOUT SEUL — l'utilisateur n'appuie plus sur Entrée.
+//
+// Ce que ces tests tiennent (les quatre cas qui comptent, plus les branchements) :
+//   1. fin NORMALE + texte dicté  ⇒ un seul envoi, par le chemin d'envoi existant ;
+//   2. fin sur ERREUR (reconnaissance, permission, panne réseau) ⇒ aucun envoi et
+//      le texte est laissé tel quel dans la zone de saisie ;
+//   3. texte dicté vide / uniquement des espaces ⇒ aucun envoi ;
+//   4. évènement de fin reçu DEUX fois ⇒ un seul envoi (jamais de doublon) ;
+//   5. le câblage de l'onglet agent π (agent-pi.js) utilise bien ce module pour la
+//      décision et l'ORDRE, et n'ajoute aucun second mécanisme d'envoi.
+import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  applyVoiceEnd,
+  composeVoiceInputValue,
+  decideVoiceAutoSend,
+  normalizedVoiceText,
+  VOICE_END_EMPTY,
+  VOICE_END_NO_SESSION,
+  VOICE_END_SEND,
+} from "./voice-auto-send.js";
+import { sliceSource } from "./source-slice.js";
+
+const ICI = path.dirname(fileURLToPath(import.meta.url));
+
+// ── Harnais : reproduit EXACTEMENT le motif de l'onglet agent π ──────────────
+// `voiceActive` est la seule source d'état de la session ; la fin d'écoute lit
+// ce drapeau AVANT de le refermer (c'est ce qui empêche un second envoi).
+function createAgentWindow(preText = "") {
+  const state = {
+    value: preText,
+    voiceActive: false,
+    sends: [],
+  };
+  const start = () => {
+    state.voiceActive = true;
+  };
+  // Le moteur écrit le texte reconnu (comportement de `rec.onresult`).
+  const speech = (dictatedText) => {
+    if (!state.voiceActive) return;
+    state.value = composeVoiceInputValue(preText, dictatedText);
+  };
+  // Fin sur erreur : la session est refermée AVANT que `onend` n'arrive.
+  const error = () => {
+    state.voiceActive = false;
+  };
+  // Chemin d'envoi EXISTANT (image de `sendPrompt`) : vide la zone et envoie.
+  const send = () => {
+    const text = state.value.trim();
+    if (!text) return;
+    state.sends.push(text);
+    state.value = "";
+  };
+  const end = (dictatedText) => {
+    const wasActive = state.voiceActive;
+    return applyVoiceEnd({
+      sessionActive: wasActive,
+      preText,
+      dictatedText,
+      closeSession: () => {
+        state.voiceActive = false;
+      },
+      write: (value) => {
+        state.value = value;
+      },
+      send,
+    });
+  };
+  return { state, start, speech, error, end };
+}
+
+// ── 1. Fin normale + texte dicté ⇒ un seul envoi ─────────────────────────────
+describe("fin normale d'une dictée avec du texte : la demande part toute seule", () => {
+  it("envoie une seule fois, par le chemin d'envoi existant", () => {
+    const w = createAgentWindow();
+    w.start();
+    w.speech("ouvre le fichier spec");
+    const res = w.end("ouvre le fichier spec");
+
+    expect(res.autoSend).toBe(true);
+    expect(res.sent).toBe(true);
+    expect(res.reason).toBe(VOICE_END_SEND);
+    expect(w.state.sends).toEqual(["ouvre le fichier spec"]);
+    // La zone de saisie est vidée par le chemin d'envoi lui-même (comme Entrée).
+    expect(w.state.value).toBe("");
+    // Plus d'écoute annoncée : la session est refermée.
+    expect(w.state.voiceActive).toBe(false);
+  });
+
+  it("conserve le texte déjà présent dans la zone avant la dictée", () => {
+    const w = createAgentWindow("Regarde ");
+    w.start();
+    w.speech("corrige le bug");
+    w.end("corrige le bug");
+
+    expect(w.state.sends).toEqual(["Regarde corrige le bug"]);
+  });
+});
+
+// ── 2. Fin sur erreur ⇒ aucun envoi ─────────────────────────────────────────
+describe("fin sur erreur (reconnaissance, permission, panne réseau) : aucun envoi", () => {
+  it("ne rien envoyer et laisser le texte tel quel", () => {
+    const w = createAgentWindow();
+    w.start();
+    w.speech("bonjour je voulais dire");
+    w.error(); // refus de permission / network / not-allowed
+    const res = w.end("bonjour je voulais dire");
+
+    expect(res.autoSend).toBe(false);
+    expect(res.sent).toBe(false);
+    expect(res.reason).toBe(VOICE_END_NO_SESSION);
+    expect(w.state.sends).toEqual([]);
+    // Le texte reconnu reste dans la zone : rien n'est effacé.
+    expect(w.state.value).toBe("bonjour je voulais dire");
+  });
+
+  it("un arrêt manuel (bouton micro) ne déclenche pas d'envoi", () => {
+    const w = createAgentWindow();
+    w.start();
+    w.speech("ne pars pas tout de suite");
+    w.error(); // `stopVoiceInput()` referme la session exactement de la même façon
+    w.end("ne pars pas tout de suite");
+    expect(w.state.sends).toEqual([]);
+    expect(w.state.value).toBe("ne pars pas tout de suite");
+  });
+});
+
+// ── 3. Texte vide ⇒ aucun envoi ─────────────────────────────────────────────
+describe("texte dicté vide ou blanc : aucun envoi", () => {
+  it("n'envoie pas quand rien n'a été dicté", () => {
+    const w = createAgentWindow();
+    w.start();
+    const res = w.end("");
+
+    expect(res.autoSend).toBe(false);
+    expect(res.reason).toBe(VOICE_END_EMPTY);
+    expect(w.state.sends).toEqual([]);
+  });
+
+  it("n'envoie pas un message composé uniquement d'espaces", () => {
+    const w = createAgentWindow("   ");
+    w.start();
+    const res = w.end("   \n\t ");
+
+    expect(res.autoSend).toBe(false);
+    expect(w.state.sends).toEqual([]);
+    // Aucun envoi vide : la zone ne contient toujours que des blancs.
+    expect(w.state.value.trim()).toBe("");
+  });
+});
+
+// ── 4. Double évènement de fin ⇒ un seul envoi ──────────────────────────────
+describe("évènement de fin reçu deux fois : un seul message par dictée", () => {
+  it("le second évènement de fin n'envoie rien", () => {
+    const w = createAgentWindow();
+    w.start();
+    w.speech("lance les tests");
+    const premier = w.end("lance les tests");
+    const second = w.end("lance les tests");
+
+    expect(premier.sent).toBe(true);
+    expect(second.autoSend).toBe(false);
+    expect(second.sent).toBe(false);
+    expect(w.state.sends).toEqual(["lance les tests"]);
+  });
+
+  it("la session est refermée AVANT l'envoi (aucune fenêtre de doublon)", () => {
+    const ordre = [];
+    let ouvert = true;
+    applyVoiceEnd({
+      sessionActive: true,
+      preText: "",
+      dictatedText: "go",
+      closeSession: () => {
+        ouvert = false;
+        ordre.push("close");
+      },
+      write: (v) => ordre.push("write:" + v),
+      send: () => {
+        // Au moment de l'envoi, la session est DÉJÀ refermée.
+        ordre.push(ouvert ? "send-session-ouverte" : "send-session-fermee");
+      },
+    });
+    expect(ordre).toEqual(["close", "write:go", "send-session-fermee"]);
+  });
+});
+
+// ── 5. Décision pure, isolée ────────────────────────────────────────────────
+describe("decideVoiceAutoSend — décision seule, sans effet", () => {
+  it("n'envoie que sur une fin normale ET un texte dicté non vide", () => {
+    expect(decideVoiceAutoSend({ sessionActive: true, dictatedText: "ok" }).autoSend).toBe(true);
+    expect(decideVoiceAutoSend({ sessionActive: true, dictatedText: "  " }).autoSend).toBe(false);
+    expect(decideVoiceAutoSend({ sessionActive: true, dictatedText: "" }).autoSend).toBe(false);
+    expect(decideVoiceAutoSend({ sessionActive: false, dictatedText: "ok" }).autoSend).toBe(false);
+    // Entrée manquante / malformée : jamais d'envoi.
+    expect(decideVoiceAutoSend(undefined).autoSend).toBe(false);
+    expect(decideVoiceAutoSend({}).autoSend).toBe(false);
+  });
+
+  it("ne décide rien pour un drapeau de session non strictement vrai", () => {
+    expect(decideVoiceAutoSend({ sessionActive: "true", dictatedText: "ok" }).autoSend).toBe(false);
+    expect(decideVoiceAutoSend({ sessionActive: 1, dictatedText: "ok" }).autoSend).toBe(false);
+  });
+
+  it("normalise le texte dicté (jamais null/undefined)", () => {
+    expect(normalizedVoiceText(null)).toBe("");
+    expect(normalizedVoiceText(undefined)).toBe("");
+    expect(normalizedVoiceText("  bonjour  ")).toBe("bonjour");
+  });
+
+  it("compose la zone de saisie exactement comme avant la modification", () => {
+    expect(composeVoiceInputValue("", "salut")).toBe("salut");
+    expect(composeVoiceInputValue("salut ", "ça va")).toBe("salut ça va");
+    expect(composeVoiceInputValue("salut", "ça va")).toBe("salut ça va");
+    // Comportement HISTORIQUE conservé à l'identique : une espace est ajoutée
+    // dès que le texte déjà présent n'en finit pas une (même sans texte dicté).
+    expect(composeVoiceInputValue("salut", "")).toBe("salut ");
+    expect(composeVoiceInputValue(null, "salut")).toBe("salut");
+  });
+});
+
+// ── 6. Câblage dans l'onglet agent π ───────────────────────────────────────
+describe("câblage de agent-pi.js : décision et ordre délégués, un seul envoi", () => {
+  const lire = (nom) =>
+    fs.readFileSync(path.join(ICI, nom), "utf8").replace(/\r\n/g, "\n");
+  const src = lire("agent-pi.js");
+
+  it("importe le module de décision (et rien d'autre pour l'envoi automatique)", () => {
+    expect(src).toContain('import { applyVoiceEnd } from "./voice-auto-send.js";');
+  });
+
+  it("la fin d'écoute lit le drapeau AVANT de refermer la session", () => {
+    const bloc = sliceSource(src, "    rec.onend = () => {", "    try {\n      rec.start();", 200);
+    expect(bloc).toContain("const wasActive = voiceActive;");
+    // Le drapeau est lu avant la fermeture : l'ordre exact des deux lignes compte.
+    const posLecture = bloc.indexOf("const wasActive = voiceActive;");
+    const posFermeture = bloc.indexOf("closeSession: () => { voiceActive = false;");
+    expect(posLecture).toBeGreaterThan(-1);
+    expect(posFermeture).toBeGreaterThan(posLecture);
+  });
+
+  it("n'a qu'UN seul point d'envoi, qui réutilise sendPrompt", () => {
+    const bloc = sliceSource(src, "    rec.onend = () => {", "    try {\n      rec.start();", 200);
+    expect(bloc).toContain("applyVoiceEnd({");
+    expect(bloc).toContain("sessionActive: wasActive");
+    expect(bloc).toContain("send: () => { sendPrompt(); }");
+    // Aucun second mécanisme : une seule occurrence de sendPrompt dans le bloc.
+    expect(bloc.match(/sendPrompt\(/g) || []).toHaveLength(1);
+    // La décision n'est plus prise en ligne dans agent-pi.js.
+    expect(bloc).not.toContain("decideVoiceAutoSend");
+  });
+
+  it("la fin sur erreur referme la session (donc aucun envoi derrière)", () => {
+    const blocErreur = sliceSource(src, "    rec.onerror = (ev) => {", "    rec.onend = () => {", 100);
+    expect(blocErreur).toContain("voiceActive = false;");
+  });
+
+  it("le module de décision n'envoie rien lui-même (aucune dépendance)", () => {
+    const module = lire("voice-auto-send.js");
+    expect(module).not.toContain("sendPrompt(");
+    expect(module).not.toContain("invoke(");
+    expect(module).not.toContain("import ");
+  });
+});

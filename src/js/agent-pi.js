@@ -42,6 +42,10 @@ import {
   LIVE_OUTPUT_MAX_CHARS,
 } from "./duree-travail.js";
 import { getTabsManager } from "./tabs.js";
+// Envoi AUTOMATIQUE à la fin d'une dictée vocale (décision du propriétaire du
+// 2026-10-26) : la décision « faut-il envoyer ? » vit dans un seul module pur
+// (voice-auto-send.js). L'envoi lui-même reste le chemin existant (`sendPrompt`).
+import { applyVoiceEnd } from "./voice-auto-send.js";
 
 // Tâche #140 : espace réservé des agents d'assistant (aucun projet rattaché),
 // identique à la constante Rust `agent_service::ASSISTANT_SPACE`. Ces agents
@@ -848,6 +852,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   const voiceSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   const micBtn = wrapper.querySelector(".agent-mic-btn");
   if (micBtn && !voiceSupported) micBtn.style.display = "none";
+  // Libellé au repos du bouton micro (rétabli à chaque fin de dictée : aucun
+  // bouton ne doit rester affiché « Arrêter la dictée » sans écoute).
+  const MIC_TITLE_IDLE = "Dictée vocale (transcription cloud)";
   let voiceActive = false;
   let voiceRec = null;
 
@@ -917,7 +924,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     // Empêche onresult/onend de réécrire le textarea après l'envoi.
     voiceActive = false;
     if (voiceRec) { try { voiceRec.stop(); } catch (_) {} }
-    if (micBtn) micBtn.classList.remove("rec");
+    if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
   }
 
   function toggleVoiceInput() {
@@ -966,8 +973,10 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       inputEl.scrollTop = inputEl.scrollHeight;
     };
     rec.onerror = (ev) => {
+      // Session refermée ICI : la fin d'écoute qui suit (onend) ne doit RIEN
+      // envoyer (erreur de reconnaissance, refus de permission, panne réseau).
       voiceActive = false; voiceRec = null;
-      if (micBtn) micBtn.classList.remove("rec");
+      if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
         // not-allowed = micro absent (NotFound) ou permission refusée. Sur le desktop,
         // le patch wry (vendor/wry) accorde automatiquement la permission ; un not-allowed
@@ -980,14 +989,23 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       }
     };
     rec.onend = () => {
+      // `wasActive` est lu AVANT de refermer la session : c'est la seule chose
+      // qui distingue une fin NORMALE d'une fin sur erreur / arrêt manuel, et
+      // c'est aussi ce qui empêche un second envoi si `onend` arrive deux fois.
       const wasActive = voiceActive;
-      voiceActive = false; voiceRec = null;
-      if (micBtn) micBtn.classList.remove("rec");
-      if (wasActive) {
-        const sep = preText && !preText.endsWith(" ") ? " " : "";
-        inputEl.value = preText + sep + finalText;
-        autoResizeTextarea();
-      }
+      // La décision et l'ORDRE (refermer → écrire → envoyer) vivent dans un
+      // module pur testé : `applyVoiceEnd`. L'envoi emprunte le chemin EXISTANT
+      // de la touche Entrée / du bouton ▶️ (`sendPrompt`) : aucun second
+      // mécanisme, et la zone de saisie est vidée par ce même chemin.
+      applyVoiceEnd({
+        sessionActive: wasActive,
+        preText,
+        dictatedText: finalText,
+        closeSession: () => { voiceActive = false; voiceRec = null; },
+        write: (value) => { inputEl.value = value; autoResizeTextarea(); },
+        send: () => { sendPrompt(); },
+      });
+      if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
     };
     try {
       rec.start();
