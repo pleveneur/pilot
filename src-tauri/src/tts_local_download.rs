@@ -261,8 +261,30 @@ impl BundlePlan {
     }
 }
 
+/// Voix à installer, dans l'ordre : le paquet (une femme, un homme) PUIS la
+/// voix réellement DEMANDÉE si elle n'en fait pas partie.
+///
+/// Pourquoi la voix demandée est ajoutée : le geste unique installe le paquet,
+/// mais choisir une autre voix du catalogue (`fr_FR-gilles-low`,
+/// `fr_FR-siwis-low`) doit continuer à récupérer CE modèle — sinon le geste
+/// laisserait la voix choisie définitivement manquante, ce qui serait une
+/// régression du téléchargement par voix qui existait avant le geste unique.
+/// Aucun doublon : la voix demandée n'est ajoutée que si elle est absente du
+/// paquet.
+fn install_order(requested: Option<&str>) -> Vec<&'static str> {
+    let mut order: Vec<&'static str> = BUNDLE_MODELS.to_vec();
+    let chosen = tts_local::voice_for(requested).model;
+    if !order.contains(&chosen) {
+        order.push(chosen);
+    }
+    order
+}
+
 /// Construit le plan d'installation (lecture seule : aucun fichier touché).
-pub fn plan_bundle(root: &Path, engine_root: &Path) -> BundlePlan {
+///
+/// `requested` = voix choisie dans la liste (elle est installée aussi si elle
+/// n'appartient pas au paquet ; voir [`install_order`]).
+pub fn plan_bundle(root: &Path, engine_root: &Path, requested: Option<&str>) -> BundlePlan {
     let engine_supported = tts_local::engine_install_supported();
     let mut steps: Vec<PlanStep> = Vec::new();
     if !tts_local::piper_exe(engine_root).is_file() && engine_supported {
@@ -273,7 +295,7 @@ pub fn plan_bundle(root: &Path, engine_root: &Path) -> BundlePlan {
             bytes: ENGINE_ARCHIVE_BYTES,
         });
     }
-    for model in BUNDLE_MODELS {
+    for model in install_order(requested) {
         let voice = tts_local::voice_for(Some(model));
         let files = missing_files(root, voice);
         if files.is_empty() {
@@ -585,7 +607,7 @@ fn download_bundle(
     engine_root: &Path,
     model: &str,
 ) -> DownloadState {
-    let plan = plan_bundle(root, engine_root);
+    let plan = plan_bundle(root, engine_root, Some(model));
     let total = plan.bytes_total();
     let count = plan.steps.len() as u32;
     set_state(|state| {
@@ -932,7 +954,7 @@ mod tests {
     fn le_plan_installe_le_moteur_puis_la_femme_puis_l_homme() {
         let root = temp_root("plan");
         // Rien du tout : moteur d'abord, puis la voix de femme, puis l'homme.
-        let plan = plan_bundle(&root, &root);
+        let plan = plan_bundle(&root, &root, None);
         let attendu: Vec<&str> = if tts_local::engine_install_supported() {
             vec![ENGINE_STEP, "fr_FR-siwis-medium", "fr_FR-tom-medium"]
         } else {
@@ -961,14 +983,36 @@ mod tests {
 
         // Moteur présent : il n'est JAMAIS dans le plan (ni retéléchargé ni écrasé).
         write_engine(&root);
-        let plan = plan_bundle(&root, &root);
+        let plan = plan_bundle(&root, &root, None);
         assert!(plan.steps.iter().all(|s| !s.engine));
         assert_eq!(plan.steps.len(), 2);
 
         // Tout installé : plus rien à faire (aucun téléchargement).
         write_voice(&root, "fr_FR-siwis-medium");
         write_voice(&root, "fr_FR-tom-medium");
-        assert!(plan_bundle(&root, &root).steps.is_empty());
+        assert!(plan_bundle(&root, &root, None).steps.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn la_voix_choisie_hors_du_paquet_est_installee_aussi() {
+        // Le geste unique installe le paquet (femme + homme), mais choisir une
+        // AUTRE voix du catalogue ne doit pas la laisser manquante : ce modèle
+        // est ajouté au plan, après le paquet, et une seule fois.
+        let root = temp_root("hors-paquet");
+        let order = install_order(Some("fr_FR-gilles-low"));
+        assert_eq!(order, vec!["fr_FR-siwis-medium", "fr_FR-tom-medium", "fr_FR-gilles-low"]);
+        let plan = plan_bundle(&root, &root, Some("fr_FR-gilles-low"));
+        let ids: Vec<&str> = plan.steps.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"fr_FR-gilles-low"), "le modèle choisi entre dans le plan");
+        // La voix choisie est la DERNIÈRE : le moteur et le paquet passent d'abord.
+        assert_eq!(ids.last().copied(), Some("fr_FR-gilles-low"));
+        // Aucun doublon quand la voix choisie fait déjà partie du paquet.
+        let order = install_order(Some("fr_FR-tom-medium"));
+        assert_eq!(order, vec!["fr_FR-siwis-medium", "fr_FR-tom-medium"]);
+        assert_eq!(install_order(None), vec!["fr_FR-siwis-medium", "fr_FR-tom-medium"]);
+        // Une voix inconnue retombe sur la voix par défaut, sans doublon.
+        assert_eq!(install_order(Some("fr_FR-inconnue-medium")), vec!["fr_FR-siwis-medium", "fr_FR-tom-medium"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -979,7 +1023,7 @@ mod tests {
         let other = parent.join("com.pilot.editor").join(tts_local::LOCAL_VOICE_DIR);
         std::fs::create_dir_all(&own).unwrap();
         write_engine(&other);
-        let plan = plan_bundle(&own, &other);
+        let plan = plan_bundle(&own, &other, None);
         assert!(
             plan.steps.iter().all(|s| !s.engine),
             "un moteur déjà installé n'est pas retéléchargé"

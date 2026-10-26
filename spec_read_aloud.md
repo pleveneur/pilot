@@ -237,6 +237,11 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
      (`fr_FR-siwis-medium` = voix de femme, `fr_FR-tom-medium` = voix d'homme,
      qualité moyenne) ; seuls les fichiers **absents ou incomplets** entrent dans
      le plan (un fichier présent et complet n'est **jamais** retéléchargé) ;
+   - **la voix réellement choisie est installée aussi** : `install_order(requested)`
+     ajoute le modèle choisi **après** le paquet s'il n'en fait pas partie
+     (`fr_FR-gilles-low`, `fr_FR-siwis-low`), **sans doublon**. Sans cette règle,
+     choisir une voix hors paquet la laissait définitivement manquante — régression
+     du téléchargement par voix qui existait avant le geste unique ;
    - **le moteur** vient de l'archive officielle Piper
      (`piper_windows_amd64.zip`, 22 477 236 o compressés, 38 846 222 o une fois
      décompressés), **décompressée** dans `<app_data>/voix-locale/piper/`

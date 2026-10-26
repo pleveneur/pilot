@@ -448,8 +448,10 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   réponses (même voix, même nettoyage du texte, découpage par phrases identique).
 - **Une voix pas encore téléchargée ne se fait pas passer pour une autre** :
   si son modèle manque, l'exemple ne lit **pas** la voix du système à la place ;
-  la section écrit que cette voix **n'est pas encore installée** et propose
-  « Télécharger le modèle ». Rien n'est téléchargé sans votre geste.
+  la section écrit que cette voix **n'est pas encore installée** et le bouton
+  **« Installer la voix locale »** la récupère — c'est la voix que vous avez
+  choisie qui est installée, en plus des deux voix du paquet. Rien n'est
+  téléchargé sans votre geste.
 - **Si la voix locale échoue malgré tout**, l'exemple continue avec la voix du
   système et l'écrit sous la voix concernée, avec une ligne dans le journal
   (comme pour la lecture d'une réponse). Rien ne bloque.

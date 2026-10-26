@@ -240,9 +240,25 @@ describe("les garanties de l'installation restent vraies", () => {
     expect([...settings.matchAll(/downloadLocalVoiceModel\(/g)].length).toBe(1);
   });
 
+  it("la voix réellement choisie est transmise au plan (choisir une voix la télécharge)", () => {
+    // Le geste unique installe le paquet, mais le modèle DEMANDÉ doit entrer
+    // dans le plan : sans cela, choisir `fr_FR-gilles-low` ou `fr_FR-siwis-low`
+    // le laisserait manquant pour toujours (régression du téléchargement par
+    // voix) alors que l'écran annonce que le geste installe ce qui manque.
+    expect(downloadSource).toMatch(/fn install_order\(requested: Option<&str>\)/);
+    expect(downloadSource).toMatch(/plan_bundle\(root, engine_root, Some\(model\)\)/);
+    // La voix demandée n'est ajoutée qu'une fois (aucun doublon dans le plan).
+    expect(downloadSource).toMatch(/if !order\.contains\(&chosen\)/);
+    // Et elle est ajoutée APRÈS le paquet (le moteur et les deux voix d'abord).
+    const orderFn = downloadSource.indexOf("fn install_order(");
+    const pushChosen = downloadSource.indexOf("order.push(chosen)");
+    expect(orderFn).toBeGreaterThan(-1);
+    expect(pushChosen).toBeGreaterThan(orderFn);
+  });
+
   it("le catalogue suit l'ordre du plan d'installation : moteur, puis la voix de femme, puis l'homme", () => {
     const engineStep = downloadSource.indexOf("id: ENGINE_STEP.to_string()");
-    const voiceLoop = downloadSource.indexOf("for model in BUNDLE_MODELS");
+    const voiceLoop = downloadSource.indexOf("for model in install_order(requested)");
     expect(engineStep).toBeGreaterThan(-1);
     expect(voiceLoop).toBeGreaterThan(engineStep);
     // La voix de femme est la première du paquet (c'est aussi la voix par défaut).
