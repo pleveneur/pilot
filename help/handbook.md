@@ -1089,6 +1089,11 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
   projets et répondre sur leur état. **« Agents »** restitue l'interface complète
   (agent du projet, fichiers, projets, commandes, Prompt Builder). Le mode choisi
   est mémorisé côté serveur (cohérent sur tous vos appareils).
+- **Dictée vocale 🎙️** : comme sur le bureau, **le message part tout seul à la fin
+  d'une dictée** (rien ne part si tu n'as rien dicté, si la dictée s'arrête sur une
+  erreur, ou si tu as tapé dans la zone pendant que tu dictais : ta saisie est
+  respectée). Exige HTTPS (Tailscale Serve). Arrêter la dictée en réappuyant sur
+  🎙️ n'envoie jamais le message.
 
 ---
 
@@ -1105,16 +1110,17 @@ texte à la voix.
   Accès distant, puis utiliser le bouton 🎙️ depuis le téléphone/autre poste.
 - La transcription alimente directement la zone de saisie active (éditeur ou
   saisie de l'agent, ou saisie de l'Assistant 🧭).
-- **Dans l'onglet agent Pi ET dans l'Assistant 🧭, à la fin d'une dictée, le
-  message part tout seul** (comme si vous aviez appuyé sur Entrée) : vous n'avez
-  plus à valider. Rien ne part si vous n'avez rien dicté, ni si la dictée
-  s'arrête sur une erreur (micro refusé, réseau coupé) : dans ce cas le texte
-  reste dans la zone, à vous de le relire. Un seul message part par dictée, même
-  si vous parlez longtemps.
+- **Dans l'onglet agent Pi, dans l'Assistant 🧭 ET sur le web distant, à la fin
+  d'une dictée, le message part tout seul** (comme si vous aviez appuyé sur
+  Entrée) : vous n'avez plus à valider. Rien ne part si vous n'avez rien dicté, ni
+  si la dictée s'arrête sur une erreur (micro refusé, réseau coupé) : dans ce cas
+  le texte reste dans la zone, à vous de le relire. Un seul message part par
+  dictée, même si vous parlez longtemps.
 - **Vous gardez toujours la main** : si vous tapez dans la zone pendant que vous
   dictez, ce que vous écrivez n'est pas écrasé et rien ne part sans votre
-  validation.
-- **Sur le web distant**, la dictée remplit la zone et l'envoi reste manuel.
+  validation — sur le bureau comme sur le web distant.
+- Arrêter la dictée en réappuyant sur 🎙️ n'envoie jamais le message : c'est vous
+  qui décidez.
 
 ---
 

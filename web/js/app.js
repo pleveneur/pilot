@@ -10,6 +10,13 @@
 //   - Fichiers : arborescence (lecture) + visionneuse.
 //   - Projets : récents + browse racines (whitelist backend).
 
+// Envoi AUTOMATIQUE à la fin d'une dictée vocale : MÊME décision qu'au bureau,
+// importée de sa SOURCE UNIQUE (`src/js/voice-auto-send.js`). Le web distant est
+// servi sans bundler (module ES natif) : il ne peut pas importer un fichier hors
+// de `web/`, le serveur axum sert donc ce module sous `/js/voice-auto-send.js`
+// (voir `web_server.rs`, `SHARED_VOICE_AUTO_SEND_PATH`). Aucun code recopié.
+import { applyVoiceEnd, composeVoiceInputValue } from './voice-auto-send.js?v=1';
+
 const TOKEN_KEY = 'pilot_web_token';
 // Évolution 2 : mode par défaut du web remote. « assistant » = discussion
 // minimaliste avec l'Assistant (suivi multi-projets, lecture seule), sans
@@ -814,8 +821,10 @@ function mdRender(text) {
 
 // ── Envoi prompt ──
 
-document.getElementById('prompt-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
+// Chemin d'envoi EXISTANT du web distant (Entrée / bouton ➤). Extrait du listener
+// de formulaire pour être réutilisé TEL QUEL par l'envoi automatique de fin de
+// dictée (`applyVoiceEnd`) : un seul chemin d'envoi, jamais un second.
+async function submitPrompt() {
   const input = document.getElementById('prompt-input');
   const msg = input.value.trim();
   if (!msg || state.isStreaming) return;
@@ -833,6 +842,11 @@ document.getElementById('prompt-form').addEventListener('submit', async (e) => {
   } catch (err) {
     appendSystem('❌ ' + err.message);
   }
+}
+
+document.getElementById('prompt-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await submitPrompt();
 });
 
 // Saisie web-remote comme la saisie agent : Entrée (sans Shift) valide/envoie,
@@ -1764,6 +1778,20 @@ const VOICE_LANG = 'fr-FR';
 let voiceSupported = false;
 let voiceActive = false;
 let voiceRec = null;
+// Reprise en main : `true` quand l'UTILISATEUR a tapé, collé ou vidé la zone
+// PENDANT l'écoute. Les écritures du moteur de reconnaissance sont
+// programmatiques (`input.value = …`) et n'émettent AUCUN évènement `input` :
+// tout `input` reçu pendant l'écoute vient donc de l'utilisateur. Dans ce cas la
+// zone n'est plus réécrite (sa saisie prime) et rien ne part tout seul — même
+// règle qu'au bureau (`decideVoiceAutoSend({ userEdited })`).
+let voiceUserTookOver = false;
+(function initVoiceTakeoverWatch() {
+  const input = document.getElementById('prompt-input');
+  if (!input) return;
+  input.addEventListener('input', () => {
+    if (voiceActive) voiceUserTookOver = true;
+  });
+})();
 
 function updateMicState() {
   const mic = document.getElementById('prompt-mic');
@@ -1804,6 +1832,9 @@ function toggleVoiceInput() {
   rec.continuous = true;
   const preText = input.value;
   let finalText = '';
+  // Chaque dictée repart d'une zone « non reprise en main » : le drapeau ne
+  // survit jamais à la dictée précédente.
+  voiceUserTookOver = false;
   const norm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
   rec.onresult = (e) => {
     if (!voiceActive) return;
@@ -1832,8 +1863,8 @@ function toggleVoiceInput() {
     } else {
       transcript = finalText;
     }
-    const sep = preText && !preText.endsWith(' ') ? ' ' : '';
-    input.value = preText + sep + transcript;
+    if (voiceUserTookOver) return; // l'utilisateur a repris la main : sa saisie prime
+    input.value = composeVoiceInputValue(preText, transcript);
     input.scrollTop = input.scrollHeight;
   };
   rec.onerror = (ev) => {
@@ -1847,12 +1878,24 @@ function toggleVoiceInput() {
     updateMicState();
   };
   rec.onend = () => {
+    // `wasActive` est lu AVANT de refermer la session : c'est la seule chose qui
+    // distingue une fin NORMALE d'une fin sur erreur / arrêt manuel, et c'est
+    // aussi ce qui empêche un second envoi si `onend` arrive deux fois.
     const wasActive = voiceActive;
-    voiceActive = false; voiceRec = null;
-    if (wasActive) {
-      const sep = preText && !preText.endsWith(' ') ? ' ' : '';
-      input.value = preText + sep + finalText;
-    }
+    // La décision et l'ORDRE (refermer → écrire → envoyer) vivent dans le module
+    // PARTAGÉ avec le bureau (`applyVoiceEnd`) : mêmes règles des deux côtés.
+    // L'envoi emprunte le chemin EXISTANT du formulaire (`submitPrompt`, utilisé
+    // par Entrée / ➤) : aucun second mécanisme, et la zone est vidée par ce même
+    // chemin.
+    applyVoiceEnd({
+      sessionActive: wasActive,
+      preText,
+      dictatedText: finalText,
+      userEdited: voiceUserTookOver,
+      closeSession: () => { voiceActive = false; voiceRec = null; },
+      write: (value) => { input.value = value; input.scrollTop = input.scrollHeight; },
+      send: () => { submitPrompt(); },
+    });
     if (mic) mic.classList.remove('rec');
     updateMicState();
   };

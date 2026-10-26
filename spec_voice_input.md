@@ -151,9 +151,18 @@ le micro sur le web et afficher l'avertissement.
 **Portée** : les **deux barres de saisie du desktop** — onglet **agent π**
 (`src/js/agent-pi.js`, commit `108038e`) et **Assistant 🧭**
 (`src/js/super-agent.js`, même module, même ordre, même chemin d'envoi existant
-`send()`). Le **web distant** (`web/js/app.js`) garde le comportement antérieur
-(texte dans la zone, envoi manuel) : sa logique d'écoute est une copie propre au
-web, non branchée sur le module partagé — reste à faire.
+`send()`) — **et la barre de saisie du web distant** (`web/js/app.js`, même
+module, même ordre, chemin d'envoi existant `submitPrompt()`, celui d'Entrée / ➤).
+
+> **Contrainte du web distant, et la solution retenue** : le web est servi par
+> axum **sans bundler** (module ES natif, `web/` embarqué par `include_dir!`) ;
+> il ne peut donc pas importer un fichier situé hors de `web/`. Plutôt que de
+> recopier la décision dans `web/js/`, le serveur **sert le module du bureau
+> depuis sa source unique** : `include_str!("../../src/js/voice-auto-send.js")`
+> dans `src-tauri/src/web_server.rs`, exposé sous `/js/voice-auto-send.js`
+> (`SHARED_VOICE_AUTO_SEND_PATH`). `web/js/app.js` l'importe en
+> `./voice-auto-send.js?v=1`. **Un seul fichier de décision pour les trois
+> barres**, aucune copie.
 
 ### Décision et ordre — un seul module
 
@@ -183,13 +192,15 @@ web, non branchée sur le module partagé — reste à faire.
    l'utilisateur (`voiceUserTookOver`, remis à zéro au début de chaque dictée).
 5. **L'envoi est le chemin existant du fichier appelant** : `sendPrompt` dans
    l'onglet agent π (touche Entrée / bouton ▶️), `send()` dans l'Assistant (Entrée /
-   bouton Envoyer). Aucun second mécanisme, et la zone de saisie est vidée par ce
-   même chemin (refus, file d'attente et verrous du projet inchangés). Les gardes
-   propres à `send()` de l'Assistant (question en attente, règle de démarrage,
-   Assistant occupé) s'appliquent donc **telles quelles** ; si `send()` refuse, le
-   texte dicté reste dans la zone (jamais perdu).
+   bouton Envoyer), `submitPrompt()` sur le **web distant** (Entrée / bouton ➤ — la
+   logique du `submit` du formulaire a été extraite dans cette fonction unique, pour
+   être réutilisée telle quelle). Aucun second mécanisme, et la zone de saisie est
+   vidée par ce même chemin (refus, file d'attente et verrous du projet inchangés).
+   Les gardes propres à `send()` de l'Assistant (question en attente, règle de
+   démarrage, Assistant occupé) s'appliquent donc **telles quelles** ; si `send()`
+   refuse, le texte dicté reste dans la zone (jamais perdu).
 6. Le bouton micro revient à son libellé au repos à chaque fin de dictée.
-7. Les deux barres ne recopient **pas** la décision : elles importent le même
+7. Les trois barres ne recopient **pas** la décision : elles importent le même
    module et lui confient leurs effets (refermer, écrire, envoyer).
 
 ### Ce qui est prouvé, et ce qui ne l'est pas
@@ -210,8 +221,17 @@ web, non branchée sur le module partagé — reste à faire.
 - **Non vérifié** : la dictée réelle au micro dans la fenêtre (aucun son, aucune
   application lancée) — le comportement est prouvé par la décision et l'ordre, pas
   par une parole réelle.
-- **Pas couvert (reste à faire)** : la **version web distante** (`web/js/app.js`)
-  garde l'envoi manuel et n'a pas la reprise en main.
+- **Uniquement les cas ci-dessus**, plus le branchement **du web distant**
+  (`src/js/envoi-auto-dictee-web-distant.test.js`, **19 cas**) : même décision
+  (envoi unique, fin reçue deux fois, texte vide, erreur, arrêt manuel, reprise en
+  main au clavier), câblage de `web/js/app.js` (import du module partagé, un seul
+  `applyVoiceEnd(`, `sessionActive: wasActive`, `userEdited: voiceUserTookOver`,
+  garde de reprise en main AVANT l'écriture du moteur, un seul `submitPrompt` par
+  chemin, aucun envoi dans les chemins d'erreur et d'arrêt manuel) et service du
+  module par axum depuis la source du bureau (aucune copie dans `web/js/`).
+- **Pas couvert** : la parole réelle au micro (aucun son, aucune application
+  lancée) — le comportement est prouvé par la décision et l'ordre, pas par une
+  phrase prononcée.
 
 ---
 
@@ -231,16 +251,14 @@ web, non branchée sur le module partagé — reste à faire.
       `state.isStreaming`. Masquer si non supporté (WebKit macOS à vérifier).
 - [ ] **`src/css/style.css`** : style du bouton + état « REC ».
 
-### Mutualisation (à décider)
+### Mutualisation (tranché)
 - Le web (`web/js/`) et le desktop (`src/js/`) sont deux codebases séparées (le web
-  n'a pas de build, modules ES simples). Pas de partage direct de module. Deux
-  options :
-  1. **Duplication minimale** d'une fonction `createVoiceInput(textarea, btn, opts)`
-     dans chaque codebase (~50 lignes chacune). Simple, pas de couplage.
-  2. **Module partagé** copié dans les deux (ex: `web/js/voice.js` + `src/js/voice.js`
-     maintenus en parallèle).
-  - Recommandé : option 1 (duplication) — le code est court et les contextes diffèrent
-    (DOM, état, styles).
+  n'a pas de build, modules ES simples). **Solution retenue** pour l'envoi
+  automatique de fin de dictée : **un seul module** (`src/js/voice-auto-send.js`),
+  **servi** au web par le serveur axum depuis sa source unique
+  (`include_str!` → `/js/voice-auto-send.js`) — ni duplication, ni build, ni
+  dépendance nouvelle. La **capture** vocale (Web Speech API) reste propre à
+  chaque codebase (DOM, état et styles différents).
 
 ### Documentation
 - [ ] `spec_web_remote.md` : section dictée vocale + mention HTTPS obligatoire.
@@ -309,14 +327,15 @@ texte à la voix.
   Accès distant, puis utiliser le bouton 🎙️ depuis le téléphone/autre poste.
 - La transcription alimente directement la zone de saisie active (éditeur ou
   saisie de l'agent, ou saisie de l'Assistant 🧭).
-- **Dans l'onglet agent Pi ET dans l'Assistant 🧭, à la fin d'une dictée, le
-  message part tout seul** (comme si vous aviez appuyé sur Entrée) : vous n'avez
-  plus à valider. Rien ne part si vous n'avez rien dicté, ni si la dictée
-  s'arrête sur une erreur (micro refusé, réseau coupé) : dans ce cas le texte
-  reste dans la zone, à vous de le relire. Un seul message part par dictée, même
-  si vous parlez longtemps.
+- **Dans l'onglet agent Pi, dans l'Assistant 🧭 ET sur le web distant, à la fin
+  d'une dictée, le message part tout seul** (comme si vous aviez appuyé sur
+  Entrée) : vous n'avez plus à valider. Rien ne part si vous n'avez rien dicté, ni
+  si la dictée s'arrête sur une erreur (micro refusé, réseau coupé) : dans ce cas
+  le texte reste dans la zone, à vous de le relire. Un seul message part par
+  dictée, même si vous parlez longtemps.
 - **Vous gardez toujours la main** : si vous tapez dans la zone pendant que vous
   dictez, ce que vous écrivez n'est pas écrasé et rien ne part sans votre
-  validation.
-- **Sur le web distant**, la dictée remplit la zone et l'envoi reste manuel.
+  validation — sur le bureau comme sur le web distant.
+- Arrêter la dictée en réappuyant sur 🎙️ n'envoie jamais le message : c'est vous
+  qui décidez.
 <!-- /HELP:dictee-vocale -->

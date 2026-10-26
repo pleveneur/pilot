@@ -390,10 +390,20 @@ La sécurité se construit **en même temps** que le serveur (chantier 1), pas a
 | Sélecteur de modèle + stats + statut | ✅ | `list_agent_models` / `get_session_stats` |
 | Boutons abort / new / compact | ✅ | endpoints existants |
 | Édition légère | ✅ v2 | `PUT /api/file` (édition) + `POST /api/file` (création, chemin relatif/absolu) ; textarea, max 5 Mo, refus binaire/readonly/existant |
-| Dictée vocale (micro 🎙️) | ✅ | bouton `#prompt-mic` dans `#prompt-form`, Web Speech API — voir `spec_voice_input.md` |
+| Dictée vocale (micro 🎙️) | ✅ | bouton `#prompt-mic` dans `#prompt-form`, Web Speech API — voir `spec_voice_input.md` ; **envoi automatique en fin de dictée** via le module partagé `voice-auto-send.js`, **servi** par axum depuis sa source unique (`/js/voice-auto-send.js`) |
 | **Prompt Builder (🧩)** | ✅ | onglet « 🧩 Prompt » : sélection de fichiers (bouton ＋ dans l'arborescence), instructions, templates (intégrés + personnalisés), assemblage (arborescence + contenus), envoi à l'agent, sauvegarde en `.md` — transposition de `prompt-builder.js` |
 
 > 🎙️ **Dictée vocale & secure context** : `SpeechRecognition` exige un *secure context*. En HTTP sur l'IP Tailscale le navigateur **bloque** le micro → accès via **Tailscale Serve (HTTPS)** obligatoire pour la dictée web. Détection `window.isSecureContext` : bouton désactivé + infobulle « requiert HTTPS » si non sécurisé. Détails : [`spec_voice_input.md`](./spec_voice_input.md).
+
+> ✉️ **Envoi automatique en fin de dictée (web = bureau)** : `web/js/app.js` importe
+> le module **partagé** `voice-auto-send.js` et n'a **aucune** copie de la décision.
+> Le web n'ayant pas de bundler, le serveur axum sert ce module **depuis sa source
+> unique du bureau** (`include_str!("../../src/js/voice-auto-send.js")`, route
+> `SHARED_VOICE_AUTO_SEND_PATH = "js/voice-auto-send.js"`), embarquée dans le
+> binaire : aucun fichier à copier dans `web/`, aucun build. L'envoi réutilise le
+> chemin existant du formulaire (`submitPrompt()`, appelé par Entrée / ➤).
+> Preuves : `src/js/envoi-auto-dictee-web-distant.test.js` (19 cas) +
+> `web_server::shared_voice_module_tests` (3 cas).
 
 ---
 
@@ -589,4 +599,9 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
   projets et répondre sur leur état. **« Agents »** restitue l'interface complète
   (agent du projet, fichiers, projets, commandes, Prompt Builder). Le mode choisi
   est mémorisé côté serveur (cohérent sur tous vos appareils).
+- **Dictée vocale 🎙️** : comme sur le bureau, **le message part tout seul à la fin
+  d'une dictée** (rien ne part si tu n'as rien dicté, si la dictée s'arrête sur une
+  erreur, ou si tu as tapé dans la zone pendant que tu dictais : ta saisie est
+  respectée). Exige HTTPS (Tailscale Serve). Arrêter la dictée en réappuyant sur
+  🎙️ n'envoie jamais le message.
 <!-- /HELP:web-remote -->

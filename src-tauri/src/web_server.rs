@@ -49,6 +49,16 @@ use tauri::{AppHandle, Emitter, Manager};
 /// Packaging Tauri propre, aucun fichier externe au runtime (décision 13.9).
 static WEB_DIR: Dir<'static> = include_dir::include_dir!("$CARGO_MANIFEST_DIR/../web");
 
+/// Module **partagé** bureau ↔ web distant, embarqué depuis sa SOURCE UNIQUE
+/// `src/js/voice-auto-send.js` (aucune copie, aucun build) : la décision d'envoi
+/// automatique à la fin d'une dictée vocale est la même des deux côtés. Le web
+/// distant étant servi sans bundler (module ES natif), il ne peut pas importer
+/// un fichier hors de `web/` : le serveur le sert donc sous l'URL ci-dessous.
+static SHARED_VOICE_AUTO_SEND_JS: &str = include_str!("../../src/js/voice-auto-send.js");
+/// Chemin servi (sans slash initial) — le web l'importe en `./voice-auto-send.js`
+/// depuis `/js/app.js`. La query (`?v=N`) est ignorée (`uri.path()` la retire).
+const SHARED_VOICE_AUTO_SEND_PATH: &str = "js/voice-auto-send.js";
+
 /// Contexte partagé entre les handlers axum.
 pub struct WebCtx {
     pub app_handle: AppHandle,
@@ -1604,6 +1614,10 @@ async fn handle_ws(mut socket: WebSocket, ctx: Arc<WebCtx>) {
 
 async fn serve_static(uri: axum::http::Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
+    // Module partagé avec le bureau : servi depuis sa source unique compilée.
+    if path == SHARED_VOICE_AUTO_SEND_PATH {
+        return javascript_response(SHARED_VOICE_AUTO_SEND_JS);
+    }
     let file = if path.is_empty() { "index.html" } else { path };
     match WEB_DIR.get_file(file) {
         Some(f) => {
@@ -1617,6 +1631,18 @@ async fn serve_static(uri: axum::http::Uri) -> Response {
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// Réponse JS (module ES) avec les mêmes en-têtes de sécurité que les assets
+/// embarqués (`nosniff`), pour un contenu textuel déjà connu à la compilation.
+fn javascript_response(body: &'static str) -> Response {
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/javascript; charset=utf-8".parse().unwrap(),
+    );
+    resp.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
+    resp
 }
 
 fn guess_mime(path: &str) -> &'static str {
@@ -1713,4 +1739,51 @@ fn validate_within_roots_canon(path: &str, roots: &[PathBuf]) -> Result<PathBuf,
         return Err("Hors des racines autorisées".to_string());
     }
     Ok(canon)
+}
+// ── Module partagé bureau ↔ web distant (envoi automatique de fin de dictée) ──
+
+#[cfg(test)]
+mod shared_voice_module_tests {
+    use super::*;
+
+    /// Le module est embarqué depuis LA source unique du bureau : si le fichier
+    /// est déplacé ou renommé, la compilation échoue (`include_str!`) — mais si
+    /// quelqu'un recopiait un module local dans `web/js/`, ce test ne verrait
+    /// rien. Il vérifie donc que le contenu servi EST celui du bureau.
+    #[test]
+    fn le_module_est_embarque_depuis_la_source_unique_du_bureau() {
+        let bureau = include_str!("../../src/js/voice-auto-send.js");
+        assert_eq!(SHARED_VOICE_AUTO_SEND_JS, bureau);
+        assert!(SHARED_VOICE_AUTO_SEND_JS.contains("export function applyVoiceEnd"));
+        assert!(SHARED_VOICE_AUTO_SEND_JS.contains("export function composeVoiceInputValue"));
+        assert!(SHARED_VOICE_AUTO_SEND_JS.contains("export function decideVoiceAutoSend"));
+    }
+
+    /// Le chemin servi correspond au spécificateur d'import relatif de
+    /// `web/js/app.js` (`./voice-auto-send.js` depuis `/js/app.js`).
+    #[test]
+    fn le_chemin_servi_correspond_a_l_import_du_web() {
+        assert_eq!(SHARED_VOICE_AUTO_SEND_PATH, "js/voice-auto-send.js");
+        assert_eq!(guess_mime(SHARED_VOICE_AUTO_SEND_PATH), "application/javascript; charset=utf-8");
+    }
+
+    /// `serve_static` sert bien le module (200 + type JS), query de cache-busting
+    /// ignorée, et renvoie 404 pour un chemin inconnu.
+    #[tokio::test]
+    async fn le_serveur_sert_le_module_avec_le_bon_type() {
+        let uri: axum::http::Uri = "/js/voice-auto-send.js?v=1".parse().unwrap();
+        let resp = serve_static(uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+        let corps = axum::body::to_bytes(resp.into_body(), 2_000_000).await.unwrap();
+        let texte = String::from_utf8(corps.to_vec()).unwrap();
+        assert_eq!(texte, SHARED_VOICE_AUTO_SEND_JS);
+        assert!(texte.contains("export function applyVoiceEnd"));
+
+        let inconnu: axum::http::Uri = "/js/inconnu.js".parse().unwrap();
+        assert_eq!(serve_static(inconnu).await.status(), StatusCode::NOT_FOUND);
+    }
 }
