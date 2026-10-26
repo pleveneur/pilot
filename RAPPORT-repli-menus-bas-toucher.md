@@ -212,5 +212,9 @@ l'assertion.
 
 ## 8. Commit
 
-Commit **local** uniquement (aucun envoi, aucun tag, aucune publication), message :
+Commit **local** `7a4badf` uniquement (aucun envoi, aucun tag, aucune publication),
+message :
 `feat(colonne): lot 3 du repli des menus du bas -- le doigt deploie et le panneau reste ouvert`.
+
+`src-tauri/src/agents.rs` reste modifie **par une autre mission** : ni indexe, ni
+commite ici.
