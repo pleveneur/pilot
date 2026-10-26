@@ -39,6 +39,7 @@ const MAX_FILE_LINES_PROMPT = 200;   // truncation par fichier injecté dans un 
 const MAX_TREE_DEPTH = 4;             // profondeur max de l'arborescence injectée
 const MAX_TREE_LINES = 200;           // limite globale de l'arborescence injectée
 const SUMMARY_MAX_CHARS = 200;
+const MAX_CONSTRAINT_NOTE_CHARS = 200; // remarque utilisateur d'une tâche (H4 § 2.7)
 
 // ──────────────────────────────────────────────────────────────────────────
 // Normalisation du plan (point J)
@@ -81,9 +82,217 @@ export function normalizePlan(planArray) {
         // Flag indiquant qu'une tâche est une sous-tâche issue d'une subdivision
         // (point M) : ces tâches ne sont pas re-subdivisables en cas d'échec.
         subtask: !!t.subtask,
+        // ── Socle du plan éditable (H4 — lot L1) ──
+        // Ces trois champs ne sont produits QUE par la revue humaine du plan.
+        // Ils sont relus tels quels d'une normalisation à l'autre : sans cela,
+        // toute retouche de l'utilisateur serait effacée au passage suivant
+        // (piège § 4.1 du rapport H4). Ils ne changent aucun comportement tant
+        // que le lot L4 ne les utilise pas.
+        state: normalizeTaskState(t.state),
+        constraints: normalizeTaskConstraints(t.constraints),
+        edited_by_user: t.edited_by_user === true,
       };
     })
     .filter((t) => t.id >= 0);
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Socle du plan éditable (H4 — lot L1) : états de tâche, contraintes,
+// comptage, porte d'approbation. Fonctions PURES, sans effet de bord : ce lot
+// ne branche rien (aucun écran, aucun appel depuis agent-pi.js).
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Les trois états d'une tâche (vocabulaire unique, rapport H4 § 3.1).
+ *   - `todo`     : tâche engagée, exécutée normalement (défaut).
+ *   - `dropped`  : tâche écartée par l'utilisateur (case décochée) — jamais exécutée.
+ *   - `deferred` : tâche gardée « à plus tard » (flèche ↺) — hors de la passe courante.
+ * Aucun de ces états n'est produit par l'agent : ils ne viennent que de la revue
+ * humaine du plan.
+ */
+export const TASK_STATES = Object.freeze({
+  TODO: "todo",
+  DROPPED: "dropped",
+  DEFERRED: "deferred",
+});
+
+const TASK_STATE_VALUES = new Set(Object.values(TASK_STATES));
+
+/**
+ * Ramène une valeur quelconque à l'un des trois états connus.
+ * Une valeur absente ou inconnue vaut `todo` : un plan produit par l'agent (qui
+ * ne pose jamais d'état) reste donc intégralement exécutable.
+ *
+ * @param {*} value - état candidat
+ * @returns {string} `todo`, `dropped` ou `deferred`
+ */
+export function normalizeTaskState(value) {
+  return TASK_STATE_VALUES.has(value) ? value : TASK_STATES.TODO;
+}
+
+/**
+ * Contraintes vierges d'une tâche (rapport H4 § 2.7).
+ * `limits` est un **emplacement réservé, vide et non affiché** (§ 2.10 — le coût
+ * par tâche reste hors périmètre).
+ *
+ * @returns {{forbidden_files: string[], note: string, limits: object}}
+ */
+export function defaultTaskConstraints() {
+  return { forbidden_files: [], note: "", limits: {} };
+}
+
+/**
+ * Normalise les contraintes d'une tâche : chemins interdits (tableau de chaînes
+ * non vides, espaces retirés), remarque bornée à 200 caractères, emplacement
+ * `limits` conservé tel quel s'il est un objet.
+ *
+ * @param {*} raw - contraintes brutes (peut être absent)
+ * @returns {{forbidden_files: string[], note: string, limits: object}}
+ */
+export function normalizeTaskConstraints(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const forbidden = Array.isArray(source.forbidden_files)
+    ? source.forbidden_files
+        .filter((f) => typeof f === "string" && f.trim() !== "")
+        .map((f) => f.trim())
+    : [];
+  const note = typeof source.note === "string" ? source.note.slice(0, MAX_CONSTRAINT_NOTE_CHARS) : "";
+  const limits =
+    source.limits && typeof source.limits === "object" && !Array.isArray(source.limits)
+      ? { ...source.limits }
+      : {};
+  return { forbidden_files: forbidden, note, limits };
+}
+
+/**
+ * Indique si une tâche porte au moins une contrainte utilisateur.
+ *
+ * @param {object} task - tâche du plan
+ * @returns {boolean}
+ */
+export function taskHasConstraints(task) {
+  const c = task?.constraints;
+  if (!c || typeof c !== "object") return false;
+  const forbidden = Array.isArray(c.forbidden_files) ? c.forbidden_files.length : 0;
+  const note = typeof c.note === "string" ? c.note.trim().length : 0;
+  return forbidden > 0 || note > 0;
+}
+
+/**
+ * Tâches réellement exécutables : tout sauf les tâches écartées (`dropped`) et
+ * mises « à plus tard » (`deferred`). Accepte le plan complet (`{plan: [...]}`)
+ * ou directement le tableau de tâches.
+ *
+ * Ne renomme rien et ne modifie aucune entrée : `pickNextTask` / `isPlanBlocked`
+ * restent inchangés, ils reçoivent simplement cette liste.
+ *
+ * @param {object|Array} plan - plan `{plan: Array}` ou tableau de tâches
+ * @returns {Array} tâches candidates à l'exécution
+ */
+export function executableTasks(plan) {
+  const tasks = Array.isArray(plan)
+    ? plan
+    : Array.isArray(plan?.plan)
+      ? plan.plan
+      : [];
+  return tasks.filter(
+    (t) => t && t.state !== TASK_STATES.DROPPED && t.state !== TASK_STATES.DEFERRED
+  );
+}
+
+/**
+ * Compte les catégories d'un plan, dans le vocabulaire de la revue
+ * (`kept` = gardées, donc réellement exécutables).
+ *
+ * @param {object|Array} plan - plan `{plan: Array}` ou tableau de tâches
+ * @returns {{total: number, kept: number, dropped: number, deferred: number, constraints: number}}
+ */
+export function planCounts(plan) {
+  const tasks = Array.isArray(plan)
+    ? plan
+    : Array.isArray(plan?.plan)
+      ? plan.plan
+      : [];
+  const list = tasks.filter((t) => t && typeof t === "object");
+  const dropped = list.filter((t) => t.state === TASK_STATES.DROPPED).length;
+  const deferred = list.filter((t) => t.state === TASK_STATES.DEFERRED).length;
+  return {
+    total: list.length,
+    kept: list.length - dropped - deferred,
+    dropped,
+    deferred,
+    constraints: list.filter((t) => taskHasConstraints(t)).length,
+  };
+}
+
+/**
+ * Les trois modes de la porte d'approbation (rapport H4 § 3.5).
+ *   - `pending` : plan proposé, en attente d'accord humain — JAMAIS exécuté ;
+ *   - `human`   : accord donné explicitement par l'utilisateur ;
+ *   - `auto`    : passe interne d'un plan déjà approuvé (reprise, subdivision,
+ *                 révision périodique, vérification finale) — jamais un plan
+ *                 initial.
+ */
+export const APPROVAL_MODES = Object.freeze({
+  PENDING: "pending",
+  HUMAN: "human",
+  AUTO: "auto",
+});
+
+const APPROVAL_MODE_VALUES = new Set(Object.values(APPROVAL_MODES));
+
+/**
+ * Trace d'approbation d'un plan neuf : en attente, rien d'approuvé.
+ *
+ * @returns {object} `{mode, at, edited, edits, dropped, deferred, constraints, via}`
+ */
+export function pendingApproval() {
+  return {
+    mode: APPROVAL_MODES.PENDING,
+    at: null,
+    edited: false,
+    edits: 0,
+    dropped: 0,
+    deferred: 0,
+    constraints: 0,
+    via: null,
+  };
+}
+
+/**
+ * Garantit qu'un plan porte une trace d'approbation valide, **sans jamais
+ * écraser un accord déjà donné** : un plan `human` ou `auto` reste tel quel
+ * (sinon une reprise redemanderait l'accord à chaque tâche).
+ * Les champs manquants d'une trace existante sont complétés par les valeurs par
+ * défaut ; un mode inconnu retombe sur `pending` (prudence : on ne considère
+ * jamais approuvé ce qu'on ne comprend pas).
+ *
+ * @param {object} plan - plan éventuel
+ * @returns {object} copie superficielle du plan avec `approval` valide
+ */
+export function ensureApproval(plan) {
+  const source = plan && typeof plan === "object" ? plan : {};
+  const current = source.approval;
+  const valid = current && typeof current === "object" && APPROVAL_MODE_VALUES.has(current.mode);
+  return {
+    ...source,
+    approval: valid ? { ...pendingApproval(), ...current } : pendingApproval(),
+  };
+}
+
+/**
+ * Nombre de tâches **engagées** : le total, moins les tâches écartées et mises
+ * « à plus tard » (qui ne sont ni réussies ni échouées).
+ *
+ * @param {object} progress - `{dropped, deferred, ...}`
+ * @param {number} total - nombre total de tâches du plan
+ * @returns {number} total engagé (jamais négatif)
+ */
+export function engagedTaskCount(progress, total) {
+  const dropped = Array.isArray(progress?.dropped) ? progress.dropped.length : 0;
+  const deferred = Array.isArray(progress?.deferred) ? progress.deferred.length : 0;
+  const base = Number.isFinite(total) ? total : 0;
+  return Math.max(0, base - dropped - deferred);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1277,7 +1486,13 @@ export function compactTaskPrompt(prompt, maxTokens) {
 /**
  * Produit un résumé textuel des métriques finales du plan.
  *
- * @param {object} progress - { completed, escalated, failed, task_attempts }
+ * Le taux est calculé sur les tâches **engagées** (H4 — lot L1) : les tâches
+ * écartées et mises « à plus tard » ne sont ni réussies ni échouées, elles ne
+ * doivent donc pas peser comme des échecs. Tant que `progress.dropped` et
+ * `progress.deferred` sont vides (état actuel), le total engagé vaut le total
+ * et le texte est rigoureusement identique à avant.
+ *
+ * @param {object} progress - { completed, escalated, failed, task_attempts, dropped, deferred }
  * @param {number} total - nombre total de tâches
  * @returns {string} résumé affichable dans le chat
  */
@@ -1288,8 +1503,9 @@ export function summarizePlan(progress, total) {
   let totalAttempts = 0;
   for (const n of Object.values(attempts)) totalAttempts += n || 0;
   const coderTasks = completed; // tâches réussies par le codeur (escalated = orchestrateur)
-  const rate = total > 0 ? Math.round((coderTasks / total) * 100) : 0;
-  return `📊 Bilan du plan : ${coderTasks}/${total} tâches réussies par le codeur, ${escalated} escaladée(s) à l'orchestrateur. ${totalAttempts} tentative(s) au total. Taux de réussite codeur : ${rate}%.`;
+  const engaged = engagedTaskCount(progress, total);
+  const rate = engaged > 0 ? Math.round((coderTasks / engaged) * 100) : 0;
+  return `📊 Bilan du plan : ${coderTasks}/${engaged} tâches réussies par le codeur, ${escalated} escaladée(s) à l'orchestrateur. ${totalAttempts} tentative(s) au total. Taux de réussite codeur : ${rate}%.`;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1565,6 +1781,14 @@ export function replaceTaskWithSubtasks(currentPlan, failedTaskId, subtasksRaw) 
       context: typeof t.context === "string" ? t.context : "",
       depends_on: [...externalDeps, ...internalDeps],
       subtask: true,
+      // Socle du plan éditable (H4 — lot L1) : une sous-tâche porte la même
+      // forme qu'une tâche normale (10 clés), sinon `executableTasks`/
+      // `planCounts` verraient deux sortes de tâches. Les contraintes de la
+      // tâche d'origine ne sont PAS recopiées : leur sort à la subdivision est
+      // tranché par le lot L6, pas ici.
+      state: TASK_STATES.TODO,
+      constraints: defaultTaskConstraints(),
+      edited_by_user: false,
     });
     prevId = newId;
   });
