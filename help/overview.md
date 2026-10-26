@@ -41,7 +41,13 @@ externe.
   l'ouvre immédiatement. Il se referme seul **un tiers de seconde** après que la
   souris l'a quitté, et seulement si ni le clavier ni le menu « Autres écrans » ne
   le retiennent : se déplacer **à l'intérieur** du panneau déplié ne le referme
-  jamais. Rien n'est donc perdu quand il est replié : la ligne qui reste nomme la
+  jamais, et son menu « Autres écrans » non plus (on peut y circuler au clavier,
+  `Échap` le referme tout seul). **Au doigt**, le premier appui déploie le panneau
+  sans rien déclencher d'autre — un second appui agit ; toucher ailleurs le
+  replie aussitôt. Si votre système demande de **réduire les animations** (et que
+  le réglage « Animer l'ouverture des modales » est désactivé), le panneau
+  s'ouvre et se referme **sans animation**, en gardant les mêmes temps de
+  décision. Rien n'est donc perdu quand il est replié : la ligne qui reste nomme la
   porte, et cette ligne du bas **ne bouge jamais** (le panneau s'ouvre vers le
   haut). Sa largeur ne change pas — seul le cadre se replie en hauteur.
 - **Le haut de la barre latérale ne porte plus aucun bouton** : « Brouillon » et

@@ -37,9 +37,12 @@ import { fileURLToPath } from "node:url";
 import { sliceSource, sliceFrom } from "./source-slice.js";
 import {
   CLASSE_REPLIE,
+  CLASSE_SANS_MOUVEMENT,
   GRACE_MS,
   OUVERTURE_MS,
+  appliquerSansMouvement,
   doitResterDeplie,
+  estAppuiTactile,
   hauteurDeplieePx,
   initRepliMenusBas,
   mouvementCoupe,
@@ -841,5 +844,331 @@ describe("LOT 1 (l) — l'infobulle de la ligne visible nomme les six autres lig
       .split("\n")
       .filter((l) => l.startsWith("        <button") || l.includes('id="pj-more-wrap"'));
     expect(lignes).toHaveLength(7);
+  });
+});
+
+// ── LOT 2 (m) — le parcours CLAVIER COMPLET ────────────────────────────────
+//
+// Le LOT 1 avait livre d'avance le clavier (focusin immediat, Echap qui ne double
+// pas le menu). Ce bloc tient le PARCOURS ENTIER, pas ses morceaux : on atteint le
+// bloc au clavier, on atteint sa ligne d'ancrage, on ouvre le menu, on CIRCULE
+// dedans, on en sort, et Echap ferme sans double emploi. La regle qui compte : le
+// repli ne se declenche JAMAIS quand le focus est encore dans le menu.
+describe("LOT 2 (m) — parcours clavier complet : entrer, ouvrir, circuler, sortir, Echap", () => {
+  /** DOM factice dont le menu contient DEUX lignes focalisables (comme la page). */
+  function domAvecMenu() {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const items = ["m1", "m2"].map((nom) => {
+      const b = elementFactice("button");
+      b.id = nom;
+      b.document = d.doc;
+      b.parent = d.menu;
+      return b;
+    });
+    d.menu.enfants = items;
+    return { d, items };
+  }
+
+  it("du premier Tab a la sortie : deploye sans animation, et jamais replie pendant le parcours", () => {
+    const { d, items } = domAvecMenu();
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+
+    // 1. Un `Tab` arrive dans le bloc replie : deploiement IMMEDIAT, sans animation.
+    d.cadre.emettre("focusin");
+    expect(repli.etat().replie, "le premier Tab doit deployer").toBe(false);
+    expect(d.cadre.style.height, "aucune hauteur en pixels = aucune animation").toBe("");
+    expect(d.cadre.scrollTop, "le defilement est force a zero (anneau de focus vu)").toBe(0);
+
+    // 2. Le focus atteint la ligne d'ancrage (derniere ligne du bloc).
+    d.cadre.emettre("focusout", { relatedTarget: d.lignes[2] });
+    d.cadre.emettre("focusin");
+    d.win.avancer(GRACE_MS * 2);
+    expect(repli.etat().replie, "le focus est encore dans le bloc").toBe(false);
+
+    // 3. La ligne d'ancrage est activee : le menu s'ouvre (c'est `sidebar.js`).
+    d.ouvrirMenu();
+    expect(repli.etat().replie, "un menu ouvert ne se rogne jamais").toBe(false);
+
+    // 4. Le focus ENTRE dans le menu et CIRCULE : rien ne se replie, meme apres
+    //    plusieurs sursis complets (le focus est dedans ET le menu est ouvert).
+    for (const item of items) {
+      d.cadre.emettre("focusout", { relatedTarget: item });
+      d.cadre.emettre("focusin");
+      d.win.avancer(GRACE_MS * 3);
+      expect(
+        repli.etat().replie,
+        `le bloc s'est replie alors que le focus est dans le menu (${item.id})`,
+      ).toBe(false);
+    }
+
+    // 5. On SORT du bloc par `Tab` (le menu est ferme au passage).
+    d.fermerMenu();
+    d.cadre.emettre("focusout", { relatedTarget: null });
+    d.win.avancer(GRACE_MS - 1);
+    expect(repli.etat().replie, "replie avant la fin du sursis").toBe(false);
+    d.win.avancer(1);
+    expect(repli.etat().replie, "le sursis doit replier le bloc").toBe(true);
+    expect(d.cadre.classList.contains(CLASSE_REPLIE)).toBe(true);
+    repli.detruire();
+  });
+
+  it("le repli ne se declenche JAMAIS quand le focus est encore dans le menu", () => {
+    const { d, items } = domAvecMenu();
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+    d.cadre.emettre("focusin");
+    d.ouvrirMenu();
+    // Focus dans le menu, souris ailleurs : le focus seul doit suffire a retenir.
+    d.cadre.emettre("focusout", { relatedTarget: items[0] });
+    d.cadre.emettre("focusin");
+    d.cadre.emettre("pointerleave");
+    d.win.avancer(GRACE_MS * 5);
+    expect(repli.etat().replie, "le menu ne doit jamais etre rogne sous le focus").toBe(
+      false,
+    );
+
+    // Menu REFERME mais focus encore sur une ligne du menu : le focus retient seul.
+    d.fermerMenu();
+    d.cadre.emettre("focusout", { relatedTarget: items[1] });
+    d.cadre.emettre("focusin");
+    d.win.avancer(GRACE_MS * 5);
+    expect(repli.etat().replie, "le focus dans le menu retient le bloc").toBe(false);
+    repli.detruire();
+  });
+
+  it("Echap dans le menu ne double jamais le menu, et ne replie pas", () => {
+    const { d, items } = domAvecMenu();
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+    d.cadre.emettre("focusin");
+    d.ouvrirMenu();
+    d.cadre.emettre("focusin");
+    d.doc.activeElement = items[0];
+    d.doc.emettre("keydown", { key: "Escape" });
+    // Le module s'efface : `sidebar.js` referme le menu et rend le focus au
+    // declencheur. Un seul geste, un seul effet, et aucun rognage.
+    expect(repli.etat().replie).toBe(false);
+
+    // Ce que fait `sidebar.js` : le menu se ferme, le focus revient a la ligne.
+    d.fermerMenu();
+    d.doc.activeElement = d.lignes[2];
+    d.cadre.emettre("focusout", { relatedTarget: d.lignes[2] });
+    d.cadre.emettre("focusin");
+    d.win.avancer(GRACE_MS * 2);
+    expect(repli.etat().replie, "le focus est revenu dans le bloc").toBe(false);
+    repli.detruire();
+  });
+
+  it("Echap menu ferme : repli immediat et focus sur la ligne visible", () => {
+    const { d } = domAvecMenu();
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+    d.cadre.emettre("focusin");
+    d.doc.activeElement = d.lignes[0];
+    d.doc.emettre("keydown", { key: "Escape" });
+    expect(repli.etat().replie, "geste explicite : pas de sursis").toBe(true);
+    expect(d.cadre.style.height).toBe("");
+    expect(d.doc.activeElement, "le focus revient a la ligne visible").toBe(
+      d.lignes[d.lignes.length - 1],
+    );
+    repli.detruire();
+  });
+
+  it("le menu vit DANS le cadre repliable (le focus du menu est donc « dedans »)", () => {
+    // C'est ce qui rend la regle « focus dans le menu » vraie sans second
+    // mecanisme : `#pj-more-menu` est un descendant de `#project-footer`, donc
+    // `cadre.contains(focus du menu)` est vrai et `focusin` deploye le bloc.
+    const zone = sliceSource(
+      html,
+      '<div id="project-footer"',
+      '<div id="sidebar-engine-row"',
+      20,
+    );
+    expect(zone).toContain('id="pj-more-wrap"');
+    expect(zone).toContain('id="pj-more-menu"');
+    // Aucune ligne du bloc ne perd son acces clavier.
+    expect(zone).not.toContain('tabindex="-1"');
+  });
+});
+
+// ── LOT 3 (n) — le TOUCHER (decision Q1 du proprietaire du 2026-10-26) ──────
+//
+// « Au toucher, le premier appui DEPLOIE SANS RIEN FAIRE ; le second appui agit. »
+// Un seul chemin de detection : `pointerdown` avec `pointerType === "touch"`.
+describe("LOT 3 (n) — le toucher : premier appui = deploiement seul (Q1)", () => {
+  it("un appui tactile sur le bloc replie deploie et CONSOMME l'appui", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+    let consomme = false;
+    d.doc.emettre("pointerdown", {
+      pointerType: "touch",
+      target: d.lignes[2],
+      preventDefault: () => {
+        consomme = true;
+      },
+      stopPropagation: () => {},
+    });
+    expect(repli.etat().replie, "le premier appui deploie").toBe(false);
+    expect(consomme, "l'appui est consomme : aucun clic ne part").toBe(true);
+    repli.detruire();
+  });
+
+  it("un second appui, sur le bloc deploye, n'est plus consomme (la ligne agit)", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+    d.doc.emettre("pointerdown", {
+      pointerType: "touch",
+      target: d.lignes[2],
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    });
+    expect(repli.etat().replie).toBe(false);
+    let consomme = false;
+    d.doc.emettre("pointerdown", {
+      pointerType: "touch",
+      target: d.lignes[1],
+      preventDefault: () => {
+        consomme = true;
+      },
+      stopPropagation: () => {},
+    });
+    expect(consomme, "le second appui doit atteindre la ligne").toBe(false);
+    repli.detruire();
+  });
+
+  it("l'appui a la SOURIS ne deploie pas : le survol garde son role (aucune regression)", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+    d.doc.emettre("pointerdown", {
+      pointerType: "mouse",
+      target: d.lignes[2],
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    });
+    expect(repli.etat().replie, "un clic de souris ne deploie pas").toBe(true);
+    repli.detruire();
+  });
+
+  it("un appui tactile HORS du bloc deploye le replie tout de suite", () => {
+    const d = domFactice();
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+    d.cadre.emettre("pointerenter");
+    d.win.avancer(OUVERTURE_MS);
+    expect(repli.etat().replie).toBe(false);
+    const dehors = elementFactice("div");
+    d.doc.emettre("pointerdown", {
+      pointerType: "touch",
+      target: dehors,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    });
+    // Au doigt il n'y a pas de « sortie de survol » a absorber : aucun sursis.
+    expect(repli.etat().replie, "aucun sursis au doigt").toBe(true);
+    expect(d.cadre.classList.contains(CLASSE_REPLIE)).toBe(true);
+    repli.detruire();
+  });
+
+  it("la detection ne regarde que `pointerType` (un seul chemin, pas `touchstart`)", () => {
+    expect(estAppuiTactile({ pointerType: "touch" })).toBe(true);
+    expect(estAppuiTactile({ pointerType: "mouse" })).toBe(false);
+    expect(estAppuiTactile({ pointerType: "pen" })).toBe(false);
+    expect(estAppuiTactile(null)).toBe(false);
+    expect(moduleJs).toContain('doc.addEventListener("pointerdown", surAppui, true);');
+    // Aucun second chemin : la seule occurrence de `touchstart` est dans le
+    // commentaire qui explique pourquoi il n'est pas utilise.
+    expect(sansCommentaires(moduleJs), "aucun second chemin tactile").not.toContain(
+      "touchstart",
+    );
+  });
+});
+
+// ── LOT 4 (o) — le MOUVEMENT REDUIT tenu aussi par la feuille de style ─────
+//
+// Decision Q3 : « garder les delais, retirer seulement l'animation ». La decision
+// est prise en JS (convention `modal-anim.js`) ET portee par la feuille de style
+// via la classe `no-motion`, posee sur le cadre.
+describe("LOT 4 (o) — le mouvement reduit est tenu aussi par la feuille de style", () => {
+  /** Noms de proprietes declarees dans un corps de regle (commentaires retires). */
+  const proprietes = (corps) =>
+    (corps.replace(/\/\*[\s\S]*?\*\//g, " ").match(/(?:^|;)\s*([a-z-]+)\s*:/g) || [])
+      .map((m) => m.replace(/[;:\s]/g, ""))
+      .filter(Boolean);
+
+  it("`#project-footer.no-motion` retire l'animation, et rien d'autre", () => {
+    const corps = bloc(css, `#project-footer.${CLASSE_SANS_MOUVEMENT}`);
+    expect(declarations(corps)).toContain("transition: none");
+    // Une seule declaration : le repli ne recoit ni duree, ni couleur de plus.
+    expect(proprietes(corps)).toEqual(["transition"]);
+    // La regle d'etat du repli, elle, ne porte toujours QUE hauteur et rognage.
+    expect(proprietes(bloc(css, "#project-footer.pj-replie")).sort()).toEqual([
+      "height",
+      "overflow",
+    ]);
+  });
+
+  it("la classe du CSS est celle du module (`no-motion`)", () => {
+    expect(CLASSE_SANS_MOUVEMENT).toBe("no-motion");
+    expect(css).toContain(`#project-footer.${CLASSE_SANS_MOUVEMENT} {`);
+    expect(moduleJs).toContain("appliquerSansMouvement(cadre, sansMouvement())");
+  });
+
+  it("appliquerSansMouvement pose la classe si et seulement si le mouvement est coupe", () => {
+    const d = domFactice();
+    expect(appliquerSansMouvement(d.cadre, true)).toBe(true);
+    expect(d.cadre.classList.contains(CLASSE_SANS_MOUVEMENT)).toBe(true);
+    expect(appliquerSansMouvement(d.cadre, false)).toBe(false);
+    expect(d.cadre.classList.contains(CLASSE_SANS_MOUVEMENT)).toBe(false);
+    // Un cadre absent ne fait jamais echouer le module.
+    expect(appliquerSansMouvement(null, true)).toBe(false);
+  });
+
+  it("la classe n'est posee que si la reduction est demandee ET le reglage desactive", () => {
+    // Reduction seule : le reglage Pilot (defaut ON) garde l'animation.
+    const reduction = domFactice();
+    reduction.win.matchMedia = () => ({ matches: true });
+    const a = initRepliMenusBas({ document: reduction.doc, window: reduction.win });
+    expect(reduction.cadre.classList.contains(CLASSE_SANS_MOUVEMENT)).toBe(false);
+    a.detruire();
+
+    // Reduction ET reglage desactive : la classe est posee.
+    const deux = domFactice();
+    deux.win.matchMedia = () => ({ matches: true });
+    deux.win._pilotModalAnimations = false;
+    const b = initRepliMenusBas({ document: deux.doc, window: deux.win });
+    expect(deux.cadre.classList.contains(CLASSE_SANS_MOUVEMENT)).toBe(true);
+    b.detruire();
+
+    // Reglage desactive SANS reduction : rien ne change (l'animation reste).
+    const reglage = domFactice();
+    reglage.win._pilotModalAnimations = false;
+    const c = initRepliMenusBas({ document: reglage.doc, window: reglage.win });
+    expect(reglage.cadre.classList.contains(CLASSE_SANS_MOUVEMENT)).toBe(false);
+    c.detruire();
+  });
+
+  it("en mouvement reduit les DEUX delais restent actifs, seule l'animation tombe", () => {
+    const d = domFactice();
+    d.win.matchMedia = () => ({ matches: true });
+    d.win._pilotModalAnimations = false;
+    d.panneau.offsetHeight = 260;
+    const repli = initRepliMenusBas({ document: d.doc, window: d.win });
+
+    // Ouverture : le delai de 100 ms est conserve, la bascule est franche.
+    d.cadre.emettre("pointerenter");
+    d.win.avancer(OUVERTURE_MS - 1);
+    expect(repli.etat().replie, "le delai d'ouverture doit rester actif").toBe(true);
+    d.win.avancer(1);
+    expect(repli.etat().replie).toBe(false);
+    expect(d.cadre.style.height, "aucune interpolation : pas de hauteur posee").toBe("");
+
+    // Repli : le sursis de 300 ms est conserve lui aussi.
+    d.cadre.emettre("pointerleave");
+    d.win.avancer(GRACE_MS - 1);
+    expect(repli.etat().replie, "le sursis doit rester actif").toBe(false);
+    d.win.avancer(1);
+    expect(repli.etat().replie).toBe(true);
+    repli.detruire();
   });
 });

@@ -20,8 +20,13 @@
 //     dans le bloc, le repli est immediat et le focus revient a la ligne visible ;
 //   - MOUVEMENT REDUIT : convention EXISTANTE du projet (`modal-anim.js`), coupee
 //     uniquement si le systeme demande une reduction ET que le reglage
-//     `window._pilotModalAnimations` est explicitement a `false`. Les DELAIS sont
-//     conserves : ce sont des absorbeurs de gestes, pas du mouvement.
+//     `window._pilotModalAnimations` est explicitement a `false`. La decision est
+//     AUSSI portee par la feuille de style (classe `no-motion` sur le cadre).
+//     Les DELAIS sont conserves : ce sont des absorbeurs de gestes, pas du
+//     mouvement ;
+//   - TOUCHER (LOT 3, decision Q1) : le premier appui sur le bloc replie deploie
+//     et ne fait rien d'autre (appui consomme) ; un appui hors du bloc deploye le
+//     replie tout de suite.
 //
 // Aucune dependance Tauri ni DOM au chargement : le module s'importe dans les
 // tests (`environment: node`) sans navigateur.
@@ -34,6 +39,20 @@ export const GRACE_MS = 300;
 
 /** Classe d'etat du cadre replie (`style.css` : `height: 50px; overflow: clip`). */
 export const CLASSE_REPLIE = "pj-replie";
+
+/**
+ * Classe d'etat du MOUVEMENT REDUIT (`style.css` : `transition: none`).
+ *
+ * LOT 4 du document de conception (§ 4.3 et decision Q3 du proprietaire du
+ * 2026-10-26). La decision reste prise en JS par `mouvementCoupe()` — c'est la
+ * convention EXISTANTE du projet (`modal-anim.js`) — et la classe ne fait que
+ * la rendre tenue par la feuille de style : si un chemin oubliait la decision,
+ * l'animation ne pourrait pas demarrer malgre tout.
+ */
+export const CLASSE_SANS_MOUVEMENT = "no-motion";
+
+/** Type d'appui qui declenche le deploiement au doigt (LOT 3, decision Q1). */
+export const TYPE_APPUI_TACTILE = "touch";
 
 /** Selecteur du cadre des menus du bas de la colonne. */
 const SELECTEUR_CADRE = "#project-footer";
@@ -106,6 +125,39 @@ export function mouvementCoupe(win) {
   }
   const reduit = Boolean(requete && requete.matches);
   return reduit && w._pilotModalAnimations === false;
+}
+
+/**
+ * Pose ou retire la classe de MOUVEMENT REDUIT sur le cadre.
+ *
+ * PURE au sens du module : aucune lecture du DOM, seulement la classe demandee.
+ * Elle est posee SI ET SEULEMENT SI `mouvementCoupe()` est vrai (reduction
+ * demandee par le systeme ET reglage « Animer l'ouverture des modales »
+ * desactive). Les DELAIS du repli ne sont PAS touches : ce sont des absorbeurs
+ * de gestes, pas du mouvement (§ 4.3).
+ *
+ * @param {HTMLElement} cadre
+ * @param {boolean} coupe
+ * @returns {boolean} etat pose
+ */
+export function appliquerSansMouvement(cadre, coupe) {
+  if (!cadre || !cadre.classList) return false;
+  if (coupe) cadre.classList.add(CLASSE_SANS_MOUVEMENT);
+  else cadre.classList.remove(CLASSE_SANS_MOUVEMENT);
+  return Boolean(coupe);
+}
+
+/**
+ * L'evenement est-il un APPUI TACTILE ? (LOT 3)
+ *
+ * On ne regarde que `pointerType` : un seul chemin, celui du reste de
+ * l'application (§ 4.2), jamais `touchstart` en plus.
+ *
+ * @param {Object} evenement
+ * @returns {boolean}
+ */
+export function estAppuiTactile(evenement) {
+  return Boolean(evenement && evenement.pointerType === TYPE_APPUI_TACTILE);
 }
 
 /**
@@ -186,6 +238,12 @@ export function initRepliMenusBas(options = {}) {
 
   const sansMouvement = () => mouvementCoupe(win);
 
+  // MOUVEMENT REDUIT (LOT 4) : la classe du cadre suit la MEME decision que le
+  // JS (`mouvementCoupe`). Elle est (re)posee a chaque decision et au changement
+  // de preference du systeme, pour qu'un reglage bascule sans rechargement.
+  const synchroniserMouvement = () => appliquerSansMouvement(cadre, sansMouvement());
+  synchroniserMouvement();
+
   const menuEstOuvert = () => Boolean(menu && !menu.classList.contains("hidden"));
 
   const annulerOuverture = () => {
@@ -236,6 +294,7 @@ export function initRepliMenusBas(options = {}) {
     annulerOuverture();
     annulerFermeture();
     annulerSecurite();
+    synchroniserMouvement();
     if (!etat.replie) {
       // Deja deplie : on s'assure seulement que la valeur en pixels ne traine pas.
       finirDeploiement();
@@ -264,6 +323,7 @@ export function initRepliMenusBas(options = {}) {
     annulerOuverture();
     annulerFermeture();
     annulerSecurite();
+    synchroniserMouvement();
     if (etat.replie) {
       finirRepli();
       return;
@@ -381,6 +441,27 @@ export function initRepliMenusBas(options = {}) {
     }
   };
 
+  // ── Toucher (LOT 3, decision Q1 du proprietaire du 2026-10-26) ──────────────
+  // Le PREMIER appui sur le bloc replie DEPLOIE et ne fait rien d'autre : l'appui
+  // est consomme, aucun clic ne part, donc la ligne sous le doigt n'agit pas. Un
+  // SECOND appui agit normalement. Un appui HORS du bloc deploye le replie tout
+  // de suite : il n'y a pas de « sortie de survol » a absorber au doigt.
+  const surAppui = (e) => {
+    if (!estAppuiTactile(e)) return;
+    const cible = e.target || null;
+    const dedans =
+      cible && typeof cadre.contains === "function" ? cadre.contains(cible) : false;
+    if (!dedans) {
+      etat.survol = false;
+      if (!etat.replie) replier({ immediat: true });
+      return;
+    }
+    if (!etat.replie) return;
+    deplier();
+    if (typeof e.preventDefault === "function") e.preventDefault();
+    if (typeof e.stopPropagation === "function") e.stopPropagation();
+  };
+
   // ── Redimensionnement / etat du menu ────────────────────────────────────────
   // Une fenetre redimensionnee pendant l'animation rend la valeur en pixels
   // fausse (§ 5.5) : on termine l'etat logique, la valeur est remesuree ensuite.
@@ -413,11 +494,33 @@ export function initRepliMenusBas(options = {}) {
     else finirDeploiement();
   };
 
+  // Changement de preference d'animation du systeme : la classe suit, et un
+  // deploiement en cours est termine proprement (plus d'animation a attendre).
+  let requeteMouvement = null;
+  const surChangementMouvement = () => {
+    synchroniserMouvement();
+    if (etat.replie) finirRepli();
+    else finirDeploiement();
+  };
+  if (typeof win.matchMedia === "function") {
+    try {
+      requeteMouvement = win.matchMedia("(prefers-reduced-motion: reduce)");
+    } catch (_) {
+      requeteMouvement = null;
+    }
+  }
+  if (requeteMouvement && typeof requeteMouvement.addEventListener === "function") {
+    requeteMouvement.addEventListener("change", surChangementMouvement);
+  }
+
   cadre.addEventListener("pointerenter", surEntree);
   cadre.addEventListener("pointerleave", surSortie);
   cadre.addEventListener("focusin", surFocus);
   cadre.addEventListener("focusout", surPerteFocus);
   cadre.addEventListener("transitionend", surTransition);
+  // Capture : l'appui est vu avant le bouton sous le doigt, ce qui permet de le
+  // consommer (Q1) sans dependre de l'ordre des ecouteurs des lignes.
+  doc.addEventListener("pointerdown", surAppui, true);
   doc.addEventListener("keydown", surTouche, true);
   win.addEventListener("resize", surRedimensionnement);
   if (menu && typeof win.MutationObserver === "function") {
@@ -435,8 +538,12 @@ export function initRepliMenusBas(options = {}) {
       cadre.removeEventListener("focusin", surFocus);
       cadre.removeEventListener("focusout", surPerteFocus);
       cadre.removeEventListener("transitionend", surTransition);
+      doc.removeEventListener("pointerdown", surAppui, true);
       doc.removeEventListener("keydown", surTouche, true);
       win.removeEventListener("resize", surRedimensionnement);
+      if (requeteMouvement && typeof requeteMouvement.removeEventListener === "function") {
+        requeteMouvement.removeEventListener("change", surChangementMouvement);
+      }
       if (observateur) observateur.disconnect();
     },
     etat: () => ({ ...etat }),

@@ -891,6 +891,22 @@ body.theme-light.theme-tokyo-day {
   overflow: clip;
 }
 
+/* MOUVEMENT REDUIT du bloc du bas (LOT 4 de `RAPPORT-conception-repli-menus-bas.md`
+   § 4.3 et decision Q3 du proprietaire du 2026-10-26 : « garder les delais,
+   retirer seulement l'animation »).
+   - La classe `no-motion` est posee par `sidebar-footer-fold.js` avec la
+     convention EXISTANTE du projet (`modal-anim.js`) : reduction demandee par le
+     systeme ET reglage « Animer l'ouverture des modales » desactive.
+   - Le bloc bascule alors franchement, sans interpolation.
+   - Les DELAIS de 100 ms et 300 ms RESTENT actifs : ce sont des absorbeurs de
+     gestes, pas du mouvement (les supprimer ferait clignoter le bloc au moindre
+     passage de souris, exactement ce que l'accessibilite cherche a eviter).
+   - Regle SEPAREE de `#project-footer.pj-replie` : le repli ne porte que sa
+     hauteur et son rognage, jamais une duree ni une couleur de plus. */
+#project-footer.no-motion {
+  transition: none;
+}
+
 /* --- Barre de boutons projet : systeme a onglets (v8) ---
    LOT 3 de la presentation : la rangee de sous-onglets « Projet / Vues /
    Assistant » N'EXISTE PLUS (les SEPT lignes du bloc sont toujours visibles
