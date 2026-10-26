@@ -826,7 +826,33 @@ mod tests {
         // Le geste unique est nommé, et rien ne se télécharge sans lui : la
         // phrase le dit (plus de « déposez le dossier »).
         assert!(status.hint.contains("Installer la voix locale"));
-        assert!(status.hint.contains("sur votre demande"));
+        // Le MOTEUR, lui, ne se télécharge que là où Pilot sait l'installer
+        // (Windows). Ailleurs (macOS, Linux), la phrase doit dire la limite et
+        // le geste qui reste à faire — jamais promettre une installation que
+        // Pilot ne sait pas faire.
+        if engine_install_supported() {
+            assert!(
+                status.hint.contains("sur votre demande"),
+                "le téléchargement doit être dit « sur votre demande » : {}",
+                status.hint
+            );
+        } else {
+            assert!(
+                status.hint.contains("ne fournit pas le moteur"),
+                "la limite de la plateforme doit être dite : {}",
+                status.hint
+            );
+            assert!(
+                status.hint.contains(&piper_dir(&root).display().to_string()),
+                "le dossier attendu du moteur doit être donné : {}",
+                status.hint
+            );
+            assert!(
+                status.hint.contains("Vérifier à nouveau"),
+                "le geste à faire doit être nommé : {}",
+                status.hint
+            );
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
