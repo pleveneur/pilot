@@ -333,11 +333,11 @@ par des tests :
 
 ## 12. Reste à faire (futur)
 
-- [ ] Modèle par défaut configurable dans les paramètres (sélecteur dans settings)
+- [x] Modèle par défaut configurable dans les paramètres ✅ (Paramètres → Fournisseurs → « Modèle par défaut », `model-switch.json` ; modèles par défaut propres à l'Assistant et à l'orchestration dans Paramètres → Modèles IA)
 - [x] Niveau de thinking configurable dans les paramètres ✅ (par agent, général et Assistant — § 4ter)
 - [x] Réappliquer et clamper le niveau de réflexion après un **changement de modèle en cours de session** dans l'onglet π, avec message d'ajustement ✅ (T8 : le sélecteur de modèle et les alias `/…` ramènent le niveau voulu aux paliers du nouveau modèle ; le moteur signale déjà ses changements via `thinking_level_change`, déjà affiché)
-- [ ] Éditeur intégré pour le dialogue `extension_ui_request` type `editor` (actuellement un simple prompt)
-- [ ] Export conversation (HTML/Markdown)
+- [x] Éditeur intégré pour le dialogue `extension_ui_request` type `editor` ✅ (`appendExtensionEditor` dans `src/js/agent-pi.js` : zone de saisie multiligne dans le chat, Ctrl+Entrée pour valider)
+- [x] Export conversation (HTML/Markdown) ✅ (`src/js/conversation-export.js` ; boutons « Exporter la conversation en Markdown » et « Copier la conversation en HTML »)
 - [ ] Tests multi-plateforme (macOS, Linux)
 - [x] Images dans les prompts (drag & drop / Ctrl+V dans la zone de chat) ✅
 

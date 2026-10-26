@@ -1,6 +1,6 @@
 # Spec — Dictée vocale (micro à côté du bouton envoyer)
 
-> Document de spécification — Statut : ✅ **Implémenté (2026-07)** — voie web remote (micro Chrome HTTPS via Tailscale Serve) ; bouton 🎙️ desktop présent mais informatif (micro WebView bloqué par wry/Tauri, voir Évolution 8).
+> Document de spécification — Statut : ✅ **Implémenté (2026-07)** sur les **deux** interfaces : desktop (bouton 🎙️ de l'onglet π et de l'Assistant, micro débloqué par le patch local de wry, voir §8) et web remote (micro Chrome HTTPS via Tailscale Serve).
 > Décisions validées par l'utilisateur le 10/07/2026.
 > Suivi : voir « Évolution 8 » dans `Bugs et Evolutions.md`.
 
@@ -214,7 +214,8 @@ le micro sur le web et afficher l'avertissement.
   `PermissionRequested` de wry ne gérait que le presse-papiers, et `SpeechRecognition`
   échouait avec `not-allowed` sur le desktop Windows. Pilot embarque désormais une
   copie locale patchée de wry (`src-tauri/vendor/wry`, branchée via `[patch.crates-io]`
-  dans `src-tauri/Cargo.toml`) dont le handler autorise `MICROPHONE` (uniquement).
+  dans le `Cargo.toml` **racine** du workspace — une section `[patch]` n'est honorée que
+  par le manifeste racine) dont le handler autorise `MICROPHONE` (uniquement).
   La dictée desktop fonctionne ; la dictée web remote reste la voie alternative (Chrome
   Android via Tailscale Serve). **Maintenance** : à chaque montée de version de
   Tauri/wry, récupérer la nouvelle source wry, réappliquer la modification du handler

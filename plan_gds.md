@@ -11,6 +11,15 @@
 > web)** est **inchangée** et reste à faire. Chaque chantier passe au
 > **protocole quality-gate** (`.pi/skills/quality-gate/SKILL.md`).
 >
+> **Note de lecture (chemins)** : dans les sections historiques de ce document,
+> `gds_db.rs` et `gds_git.rs` désignent aujourd'hui les modules du **socle
+> partagé** `gds-core/src/db.rs` et `gds-core/src/git.rs` (extraits du poste lors
+> de la refonte GDS, L1.4 et L1.5) ; le poste les lit via les alias `gds_db` /
+> `gds_git` de `src-tauri/src/lib.rs`. Il n'existe **plus** de `gds_db.rs` ni de
+> `gds_git.rs` dans `src-tauri/src/` (à ne pas confondre avec
+> `src-tauri/src/db.rs`, la base SQLite locale `pilot.db`, et
+> `src-tauri/src/git.rs`, le Git intégré du poste).
+>
 > **Décision du 29/08/2026 (non négociable)** : le GDS est **activé par projet**
 > — chaque projet désigne **son** serveur GDS via `.pilot/gds.json` (activation
 > on/off, URL du serveur, identité) ; **ni serveur par défaut, ni config
@@ -257,7 +266,7 @@ Chaque fonctionnalité : objectif, modules, critère de fin.
 - **Inscription** : premier user provisionné à l'auto-provisioning ; les suivants
   via l'admin desktop (invitation par email, mot de passe initial) ou auto-ajout
   par clef SSH fournie.
-- **Modules** : `gds.rs`, `gds_db.rs` (table `users`), `gds_git.rs` (autorisations clefs).
+- **Modules** : `gds.rs`, `gds-core/src/db.rs` (table `users` ; ex-`gds_db.rs`), `gds-core/src/git.rs` (autorisations clefs ; ex-`gds_git.rs`).
 - **Critère de fin** : deux devs avec deux emails se connectent et voient le même
   ensemble de projets.
 
@@ -411,7 +420,7 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   connect / clone / remove branchés local/distant), `gds_git.rs`
   (`add_project_remote`, `repo_name_for`), `gds_ssh.rs`
   (`ensure_poste_key_remote`, `poste_key_response`, `record_poste_key`),
-  `gds_db.rs` (`project_has_git_repo`), `gds_client.rs` (sync), `src/js/gds.js`
+  `gds-core/src/db.rs` (`project_has_git_repo`), `gds_client.rs` (sync), `src/js/gds.js`
   (port SSH, racine serveur, dossier local, enregistrement config, ressaisie des
   mots de passe, instructions manuelles).
 - Docs : `docs/gds-server-setup.md` (procédure serveur + protocole de test).

@@ -1,6 +1,6 @@
 # Spec — Service Laya (pilotage du service local de classification)
 
-> Document de spécification — Statut : **✅ Marche 5 implémentée et testée**
+> Document de spécification — Statut : **✅ Marches 2 à 6 implémentées et testées**
 > (branche `feat/laya-marche2`). Marche 2 = pilotage : démarrage, veille,
 > arrêt, trace. Marche 3 = interface : onglet « Service Laya » dans les
 > Réglages. Marche 4 = **modèle géré par Pilot** : téléchargement automatique
@@ -9,9 +9,12 @@
 > le service, l'interpréteur et la bibliothèque d'inférence sont livrés avec
 > Pilot, le modèle va dans les données de Pilot, tout fonctionne sans rien
 > installer. Le **classement** lui-même est fait par le service, pas par Pilot.
-> Marche 6 = **appartenance du service** : une copie de Pilot ne referme jamais
-> le service lancé par une autre, le service a un **journal**, et un bouton
-> permet de le démarrer tout de suite en affichant l'issue réelle.
+> Marche 6 = **appartenance du service** (✅ faite, `src-tauri/src/laya.rs`) : une
+> copie de Pilot ne referme jamais le service lancé par une autre (la trace
+> `laya.pid` porte le propriétaire, le nettoyage du démarrage ne referme un
+> service restant que si son propriétaire n'est plus vivant), le service a un
+> **journal** (`laya.log`), et un bouton des Réglages le démarre tout de suite en
+> affichant l'issue réelle.
 
 ---
 
@@ -388,12 +391,11 @@ Avatar (PLface) :
 
 ## 7. Ce qui n'est PAS fait (assumé)
 
-- **Pas de trace par copie de Pilot** (marche 6) : les deux copies partagent le
-  même `<app_data_dir>/laya.pid`. Chaque copie ne referme donc que le service
-  qu'elle a lancé, mais si le propriétaire se ferme, le service disparaît aussi
-  pour une copie restée ouverte (elle le relance au besoin : bouton de démarrage
-  à la demande ou redémarrage). Un fichier de trace par copie serait le remède
-  si le partage gênait en pratique.
+- ~~**Pas de trace par copie de Pilot**~~ → **fait en marche 6** : la trace
+  `<app_data_dir>/laya.pid` porte désormais le **propriétaire** (identifiant +
+  nom de programme de Pilot). Le nettoyage du démarrage ne referme donc un
+  service restant que si son propriétaire n'est **plus vivant** ; une copie
+  vivante garde le sien et la nouvelle le réutilise.
 - **Pas de rotation du journal** `laya.log` : un repère par tentative, le service
   écrit très peu — la taille reste négligeable ; aucune purge automatique.
 - **Trace d'une version antérieure** (deux lignes) : traitée comme illisible →

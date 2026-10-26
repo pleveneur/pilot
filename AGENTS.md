@@ -293,9 +293,12 @@ pilot/
         ├── tts_local_download.rs # Téléchargement d'un modèle de voix locale, UNIQUEMENT sur geste de l'utilisateur : URL exactes du dépôt rhasspy/piper-voices, un seul modèle/fichier à la fois (garde atomique), fichier `.part` + reprise `Range` + renommage une fois complet, progression poussée (évènement tts-local-download-progress : taille + %), arrêt (tts_local_cancel_download) qui n'efface RIEN, état relisible (tts_local_download_state) ; aucune suppression, aucun autre modèle téléchargé
         ├── mcp_config.rs     # POC MCP consommateur : mcp.json (app_data_dir), serveurs stdio, test connexion
         ├── gds.rs            # GDS Phase A : config projet .pilot/gds.json + provision + commandes (gds_provision/gds_validate_user/gds_add_project)
-        ├── gds_db.rs         # GDS : pool PostgreSQL sqlx, provision idempotent, migrations, CRUD users/projects/git_repos
-        ├── gds_git.rs        # GDS : repo bare par projet, validation chemins, association membre
         ├── gds_web.rs        # GDS : routes axum Phase A (provision, identité, projets, git) + routes B/C réservées
+        ├── gds_admin.rs      # GDS : écran « 🖥️ GDS Serveur » du poste (appels HTTP à l'API du serveur, jamais de SQL direct)
+        ├── gds_service.rs    # GDS : opérations de projet parlant au SERVICE avec le compte GDS de l'utilisateur (repli sur la base directe si le projet n'a pas d'identité mémorisée)
+        ├── gds_ssh.rs        # GDS : clef SSH du POSTE dev (génération/lecture, enregistrement, réponse de clef)
+        ├── gds_client.rs     # GDS : synchronisation du poste (`gds_sync_project` — clone / fetch / pull depuis le remote `gds`)
+        ├── gds_sync.rs       # GDS : pont bidirectionnel du suivi SQLite ↔ PostgreSQL (clients/projets/tâches/décisions)
         ├── gds_handover.rs   # Mode réseau multi-postes (côté poste) : prise en main d'un projet, présence automatique (1 appel / 3 min, repère local), restitution ORDONNÉE (code → avancement → return, reprise sans saut d'étape), verdicts d'écriture lisibles
         ├── gds_write_guard.rs # Garde d'écriture tenue par le SOCLE (pas par l'écran) : refuse une écriture de fichier / le lancement d'un agent si le serveur a confirmé qu'un AUTRE poste tient le projet — **fail-open** (panne, GDS désactivé, projet libre, prise expirée ⇒ autorisé)
         └── super_agent.rs    # Assistant : session RPC dédiée + base SQLite (clients/projets/tâches) — une remise de compte rendu n'est réputée faite que sur ACCUSÉ du moteur (`injection_ack` + `send_injection_with_ack`, attente bornée hors thread principal) ; un refus ou un délai laisse la ligne en attente, jamais `delivered=1`

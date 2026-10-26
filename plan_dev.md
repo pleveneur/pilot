@@ -5,23 +5,23 @@
 
 ## Statut global
 - Phases 1 à 10 : ✅ terminées. Prochaine étape hors GDS : **H4 (Plan Editor)**.
-- 🟠 **Mode réseau multi-postes : plan figé (v4 + 7 arbitrages), réalisation à démarrer** — rien d'implémenté : [`PLAN-mode-reseau-multipostes.md`](PLAN-mode-reseau-multipostes.md).
+- ✅ **Mode réseau multi-postes : le portage est implémenté** — étapes 1 à 5
+  (règle pure `gds-core/src/handover.rs`, table `0008_project_handover`, routes,
+  présence, garde d'écriture, bandeau et boutons). Restent les étapes 6 et 7
+  (avancement partagé, migration `0009`) et l'étape 9 (test entre deux postes).
+  Voir [`spec_reseau.md`](spec_reseau.md) ; plan : [`PLAN-mode-reseau-multipostes.md`](PLAN-mode-reseau-multipostes.md).
 - ✅ **Refonte serveur GDS** (2026-08) — `gds-server/` tout-en-un, socle `gds-core/`, rôles
-  admin/dev/standard, **verrous de projet supprimés**, deux écrans transverses (🖥️ Serveur · ⚙️ GDS).
-  Voir [`spec_gds.md`](spec_gds.md).
+  admin/dev/standard, **verrous supprimés**, écrans 🖥️ Serveur · ⚙️ GDS — [`spec_gds.md`](spec_gds.md).
 - Reportés : H6 (routing multi-modèle) · H10 (MCP extensible).
 
-## 🟠 Super-agent 🧭 — reste à traiter
-Signaux utilisateur depuis la TÂCHE 2 : `open_project` / `delegate_to_coder` (**non
-reproduits** ; défauts voisins corrigés depuis `8ae8551`), console de l'onglet (**aucune
-erreur reproduite**). ✅ Corrigés : **projet → client** (`0b0df74`, base de suivi = source de
-vérité) et **nom de l'assistant** (`ff7b43f`, plus de « Magnus » en dur ; `f15a25c`).
-Voir [`spec_super_agent.md`](spec_super_agent.md).
+## 🟠 Assistant 🧭 — reste à traiter
+Deux signaux utilisateur **non reproduits** (`open_project`, `delegate_to_coder`) et la
+console de l'onglet — détail : [`spec_super_agent.md`](spec_super_agent.md).
 
 ## Ce qui reste (specs détaillées)
 | Domaine | Fichier |
 |---|---|
-| Mode réseau multi-postes (plan figé v4, rien d'implémenté) | [`PLAN-mode-reseau-multipostes.md`](PLAN-mode-reseau-multipostes.md) |
+| Mode réseau multi-postes (portage fait ; restent étapes 6, 7 et 9) | [`spec_reseau.md`](spec_reseau.md) |
 | GDS (gestionnaire de sources) | [`spec_gds.md`](spec_gds.md) |
 | Sous-projets liés (ouverture groupée) | [`spec_subprojects.md`](spec_subprojects.md) |
 | Composant web (issue #56) | [`spec_web_component.md`](spec_web_component.md) |
