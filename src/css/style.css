@@ -4156,6 +4156,57 @@ body.zen-mode #project-footer {
   padding: 4px 12px;
 }
 
+/* REÇU d'un compte rendu remis à l'Assistant : CONTENU de la conversation, pas
+   un repère d'onglet (aucune pastille, aucun badge). Bloc pleine largeur, texte
+   replié fermé par défaut : la conversation reste lisible, et l'arrivée du
+   compte rendu reste toujours visible. */
+.agent-message-system.agent-message-receipt {
+  align-self: stretch;
+  font-style: normal;
+  text-align: left;
+  padding: 8px 12px;
+  margin: 6px 0;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 6px;
+}
+.agent-receipt-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.agent-receipt-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.agent-receipt-details {
+  margin-top: 6px;
+}
+.agent-receipt-details > summary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.agent-receipt-details[open] > summary {
+  margin-bottom: 4px;
+}
+.agent-receipt-text {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 340px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--surface-1);
+  border-radius: 4px;
+}
+
 .agent-message-error {
   align-self: center;
   font-size: 12px;

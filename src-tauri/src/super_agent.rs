@@ -14,7 +14,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::agent_service::{
-    normalize_mission_resume, prompt_command_with_resume, SUPERAGENT_ID,
+    normalize_mission_resume, prompt_command_with_resume, AgentService, SUPERAGENT_ID,
 };
 use crate::AppState;
 
@@ -4187,6 +4187,113 @@ const SUPER_AGENT_REPLAY_INTERVAL_MS: u64 = 150;
 static REPLAY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 const REPLAY_TRIGGER_DELAY_MS: u64 = 400;
 
+// ── ACCUSÉ DE REMISE (C2 du diagnostic du 2026-10-26) ──
+//
+// LE DÉFAUT : une remise était réputée faite dès que la commande avait pu être
+// ÉCRITE sur l'entrée standard du moteur (`send_superagent`). Une écriture dans
+// un tuyau ne prouve pas une lecture : `pi` peut refuser le prompt (agent déjà
+// en cours de génération, compaction, modèle ou clé absents) et la ligne restait
+// pourtant marquée `delivered=1` — donc jamais rejouée, donc perdue en silence.
+//
+// LA RÈGLE : seule une réponse EXPLICITE du moteur vaut remise
+// (`{type:"response", command:"prompt", success:true}`). Refus, délai dépassé
+// (aucun accusé) ou session morte ⇒ le compte rendu reste `delivered=0` et sera
+// RÉESSAYÉ par le rejeu (rien n'est jamais réputé livré sans accusé).
+const INJECTION_ACK_TIMEOUT_SECS: u64 = 8;
+// Nombre d'ESSAIS ratés tolérés par ligne avant de cesser de la représenter au
+// moteur. Sans ce plafond, un moteur qui refuse systématiquement (modèle ou clé
+// absents) recevrait la même demande à chaque cycle de rejeu — sans que rien ne
+// puisse jamais aboutir. Au-delà, la ligne RESTE en attente (`delivered=0`) :
+// elle n'est donc jamais présentée comme livrée, elle cesse seulement d'être
+// harcelée. Compteur en mémoire (remis à zéro au redémarrage).
+const MAX_INJECTION_ACK_ATTEMPTS: u32 = 5;
+static ACK_FAILURES: std::sync::OnceLock<std::sync::Mutex<HashMap<i64, u32>>> =
+    std::sync::OnceLock::new();
+
+fn ack_failures() -> &'static std::sync::Mutex<HashMap<i64, u32>> {
+    ACK_FAILURES.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Enregistre un essai raté pour cette ligne et rend le nombre d'essais ratés.
+fn note_ack_failure(rowid: i64) -> u32 {
+    let mut map = ack_failures().lock().unwrap();
+    let counter = map.entry(rowid).or_insert(0);
+    *counter += 1;
+    *counter
+}
+
+/// Oublie les essais ratés de cette ligne (elle vient d'être accusée).
+fn clear_ack_failure(rowid: i64) {
+    ack_failures().lock().unwrap().remove(&rowid);
+}
+
+/// Cette ligne a-t-elle épuisé ses essais (ne plus la présenter au moteur) ?
+fn ack_attempts_exhausted(rowid: i64) -> bool {
+    ack_failures()
+        .lock()
+        .unwrap()
+        .get(&rowid)
+        .map(|n| *n >= MAX_INJECTION_ACK_ATTEMPTS)
+        .unwrap_or(false)
+}
+
+/// Lit l'ACCUSÉ rendu par le moteur pour un prompt envoyé (fonction PURE).
+///
+/// Le protocole RPC répond `{type:"response", command:"prompt", success:true,
+/// data:{disposition}}` après le préflight, ou `{success:false, error}` en cas
+/// de refus (le champ `ok` est accepté aussi, par tolérance de backend). Tout ce
+/// qui n'est pas un `true` explicite est un ÉCHEC : un accusé absent ou illisible
+/// ne vaut jamais une remise.
+/// @returns `Ok(detail)` le libellé honnête de l'accusé (`started`, `queued`,
+///   `handled`), ou `Err(raison)` si le compte rendu n'a pas été pris.
+pub(crate) fn injection_ack(response: &Value) -> Result<String, String> {
+    let accepted = response
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .or_else(|| response.get("ok").and_then(|v| v.as_bool()));
+    match accepted {
+        Some(true) => {
+            let disposition = response
+                .get("data")
+                .and_then(|d| d.get("disposition"))
+                .and_then(|d| d.as_str())
+                .unwrap_or("accepté");
+            Ok(format!("accusé : {}", disposition))
+        }
+        Some(false) => {
+            let why = response
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("refus sans raison donnée");
+            Err(format!("le moteur n'a pas pris le compte rendu : {}", why))
+        }
+        None => Err(
+            "aucun accusé de remise lisible (le moteur n'a rien confirmé) — remise non prouvée"
+                .to_string(),
+        ),
+    }
+}
+
+/// Envoie un prompt d'injection au moteur et n'accepte comme remise que ce qu'il
+/// a RÉELLEMENT accusé (C2). Remplace l'ancien envoi « écriture seule »
+/// (`send_superagent`), dont le succès ne prouvait qu'une écriture dans le tuyau.
+///
+/// C3 (optionnel) : `streamingBehavior: "followUp"` est posé ICI et nulle part
+/// ailleurs. `pi` ne le consulte que s'il est DÉJÀ en train de générer
+/// (`agent-session.js`) ; dans cette seule fenêtre, il met le compte rendu en
+/// file et accuse réception (`queued`) au lieu de le REFUSER. Hors génération,
+/// le champ est ignoré : aucun autre comportement ne change (même message, même
+/// session), et `prompt_command_with_resume` (forme de la commande simple) reste
+/// intact, verrouillé par son test.
+fn send_injection_with_ack(service: &AgentService, msg: &str) -> Result<String, String> {
+    let mut cmd = superagent_prompt_command(msg, msg);
+    if let Value::Object(map) = &mut cmd {
+        map.insert("streamingBehavior".to_string(), Value::String("followUp".to_string()));
+    }
+    let response = service.send_superagent_sync_timeout(cmd, INJECTION_ACK_TIMEOUT_SECS)?;
+    injection_ack(&response)
+}
+
 /// Construit le message réellement injecté à l'assistant : message complet
 /// borné au plafond UNIQUE `MAX_INJECTED_MESSAGE_CHARS`. Au-delà, on tronque en
 /// ANNONÇANT honnêtement la troncature (nombre de caractères omis + où lire la
@@ -4371,8 +4478,8 @@ where
 /// n'est pas tentée (l'assistant est occupé côté interface) ; le rejeu la
 /// délivrera plus tard.
 #[tauri::command]
-pub fn inject_session_summary(
-    state: State<AppState>,
+pub async fn inject_session_summary(
+    state: State<'_, AppState>,
     app: AppHandle,
     project_path: Option<String>,
     session_id: Option<String>,
@@ -4418,17 +4525,39 @@ pub fn inject_session_summary(
     // en attente (delivered=0) : le rejeu le délivrera à la prochaine
     // opportunité.
     if superagent_available(state.inner()) {
-        let msg = build_capped_injection_message(project_path.as_deref(), &summary);
-        let cmd = superagent_prompt_command(&msg, &msg);
-        match state.agent_service.send_superagent(cmd) {
-            Ok(()) => {
+        // C2 : la remise n'est réputée faite que sur ACCUSÉ du moteur. L'attente
+        // de la réponse dure jusqu'à `INJECTION_ACK_TIMEOUT_SECS` : elle ne doit
+        // donc JAMAIS se produire sur le thread principal (même raison que
+        // `get_super_agent_state`) → `spawn_blocking`.
+        let service = state.inner().agent_service.clone();
+        let path_for_msg = project_path.clone();
+        let attempt = tauri::async_runtime::spawn_blocking(move || {
+            let msg = build_capped_injection_message(path_for_msg.as_deref(), &summary);
+            send_injection_with_ack(&service, &msg)
+        })
+        .await
+        .map_err(|e| format!("Erreur interne (join) inject_session_summary: {}", e))?;
+        match attempt {
+            Ok(detail) => {
+                clear_ack_failure(summary_rowid);
                 mark_session_summary_delivered(&conn, summary_rowid)?;
-                log_injection(&conn, project_id, "delivered", true, "ok");
+                log_injection(&conn, project_id, "delivered", true, &detail);
                 drop(conn);
-                Ok(serde_json::json!({"status": "delivered", "detail": "ok"}))
+                Ok(serde_json::json!({"status": "delivered", "detail": detail}))
             }
             Err(e) => {
-                log_injection(&conn, project_id, "error", false, &e);
+                // AUCUN ACCUSÉ (refus, délai dépassé, session morte) : le compte
+                // rendu n'est PAS livré. La ligne reste `delivered=0` et sera
+                // RÉESSAYÉE par le rejeu ; l'erreur est journalisée et remontée
+                // pour que l'interface la montre (plus de perte silencieuse).
+                let attempts = note_ack_failure(summary_rowid);
+                log_injection(
+                    &conn,
+                    project_id,
+                    "error",
+                    false,
+                    &format!("{} (essai {}/{})", e, attempts, MAX_INJECTION_ACK_ATTEMPTS),
+                );
                 drop(conn);
                 Ok(serde_json::json!({"status": "error", "detail": e}))
             }
@@ -4513,15 +4642,25 @@ fn replay_pending_superagent_summaries_inner(
             break;
         }
         let _ = session_id;
+        // Plafond d'essais : une ligne que le moteur refuse systématiquement
+        // n'est plus présentée à chaque cycle (elle reste en attente, jamais
+        // réputée livrée : aucun mensonge, seulement plus de harcèlement).
+        if ack_attempts_exhausted(id) {
+            continue;
+        }
         // Livraison déléguée à la fonction pure testable : marque delivered=1 et
         // journalise en cas de succès, laisse en attente en cas d'échec.
+        // C2 : le `send` attend l'ACCUSÉ du moteur — un simple succès d'écriture
+        // ne suffit plus à marquer le compte rendu livré.
+        let service = state.agent_service.clone();
         let sent = deliver_one_summary(&conn, id, project_id, &summary, |msg| {
-            state
-                .agent_service
-                .send_superagent(superagent_prompt_command(msg, msg))
+            send_injection_with_ack(&service, msg).map(|_| ())
         })?;
         if sent {
+            clear_ack_failure(id);
             delivered_count += 1;
+        } else {
+            note_ack_failure(id);
         }
         // Espace les injections (chaque rejeu = un tour de génération).
         std::thread::sleep(Duration::from_millis(SUPER_AGENT_REPLAY_INTERVAL_MS));
@@ -6619,6 +6758,8 @@ mod tests {
         db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
         deliver_one_summary,
+        ack_attempts_exhausted, clear_ack_failure, injection_ack, note_ack_failure,
+        MAX_INJECTION_ACK_ATTEMPTS,
         enqueue_session_summary, init_db, is_task_open, kanban_ideas,
         kanban_tasks, period_report,
         mark_session_summary_delivered, parse_memory_trash, parse_session_memory,
@@ -8348,6 +8489,116 @@ mod tests {
         // Le marquage est idempotent.
         mark_session_summary_delivered(&conn, enq.rowid).unwrap();
         assert!(pending_session_summaries(&conn).unwrap().is_empty());
+    }
+
+    // ── C2 : un compte rendu non accusé n'est JAMAIS réputé livré ──
+    //
+    // Défaut corrigé (diagnostic `RAPPORT-diag-restitution-perdue.md`) : une
+    // remise était réputée faite dès que la commande avait pu être ÉCRITE sur
+    // l'entrée standard du moteur. Une écriture dans un tuyau ne prouve pas une
+    // lecture : `pi` peut refuser (agent déjà en cours, compaction, modèle ou
+    // clé absents) et la ligne était pourtant marquée `delivered=1` — donc
+    // jamais rejouée, donc perdue en silence. Ces tests mordent : accepter tout
+    // ce qui arrive dans `injection_ack` les fait échouer.
+
+    #[test]
+    fn injection_ack_reads_only_an_explicit_engine_answer() {
+        // Accusé positif du protocole RPC : la disposition réelle est rapportée.
+        let started = serde_json::json!({
+            "type": "response", "id": "rpc-1", "command": "prompt",
+            "success": true, "data": { "disposition": "started" }
+        });
+        assert_eq!(injection_ack(&started).unwrap(), "accusé : started");
+        // Mise en file : le moteur a PRIS le compte rendu (il le traitera).
+        let queued = serde_json::json!({"success": true, "data": {"disposition": "queued"}});
+        assert!(injection_ack(&queued).unwrap().contains("queued"));
+        // Refus explicite : la raison du moteur est remontée telle quelle.
+        let refused = serde_json::json!({
+            "success": false, "error": "Agent is already processing."
+        });
+        assert!(injection_ack(&refused).unwrap_err().contains("already processing"));
+        // Accusé absent ou illisible : JAMAIS une remise.
+        for void in [
+            serde_json::json!({"type": "response", "id": "rpc-2"}),
+            serde_json::json!({}),
+            serde_json::json!({"success": "yes"}),
+        ] {
+            assert!(
+                injection_ack(&void).is_err(),
+                "accusé illisible accepté comme une remise : {}",
+                void
+            );
+        }
+    }
+
+    #[test]
+    fn unacknowledged_report_is_not_delivered_and_is_retried() {
+        let conn = mem_conn();
+        let report = "[mission #3 · agents : concepteur-ui]\n## Résultat\nBandeau corrigé.";
+        let enq =
+            enqueue_session_summary(&conn, Some("/proj/ack"), None, report, false).unwrap();
+        let delivered_of = |conn: &Connection, id: i64| -> i64 {
+            conn.query_row(
+                "SELECT delivered FROM session_summaries WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(delivered_of(&conn, enq.rowid), 0);
+
+        // 1. Le moteur REFUSE (agent déjà en cours de génération) : l'ancien
+        //    chemin « écriture seule » aurait répondu « livré » ici.
+        let refused = serde_json::json!({"success": false, "error": "Agent is already processing."});
+        let sent = deliver_one_summary(&conn, enq.rowid, enq.project_id, report, |_msg| {
+            injection_ack(&refused).map(|_| ())
+        })
+        .unwrap();
+        assert!(!sent, "un refus du moteur ne doit pas compter comme une remise");
+        assert_eq!(
+            delivered_of(&conn, enq.rowid),
+            0,
+            "un compte rendu refusé ne doit pas être marqué livré (il serait perdu)"
+        );
+        assert_eq!(
+            pending_session_summaries(&conn).unwrap().len(),
+            1,
+            "il doit rester en file pour être réessayé"
+        );
+
+        // 2. Aucun accusé du tout (délai dépassé) : même verdict.
+        let sent = deliver_one_summary(&conn, enq.rowid, enq.project_id, report, |_msg| {
+            Err("Timeout (8s) en attente de l'accusé".to_string())
+        })
+        .unwrap();
+        assert!(!sent);
+        assert_eq!(delivered_of(&conn, enq.rowid), 0);
+
+        // 3. Le moteur ACCUSE enfin : livré UNE fois, plus rien en attente.
+        let ok = serde_json::json!({"success": true, "data": {"disposition": "started"}});
+        let sent = deliver_one_summary(&conn, enq.rowid, enq.project_id, report, |_msg| {
+            injection_ack(&ok).map(|_| ())
+        })
+        .unwrap();
+        assert!(sent);
+        assert_eq!(delivered_of(&conn, enq.rowid), 1);
+        assert!(pending_session_summaries(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn repeated_refusals_stop_after_the_cap_without_claiming_delivery() {
+        // Un moteur qui refuse SYSTEMATIQUEMENT (modèle ou clé absents) ne doit
+        // pas être harcelé à chaque cycle — sans jamais être cru sur parole.
+        let rowid = 9_876_543_i64;
+        for expected in 1..=MAX_INJECTION_ACK_ATTEMPTS {
+            assert_eq!(note_ack_failure(rowid), expected);
+            assert_eq!(
+                ack_attempts_exhausted(rowid),
+                expected >= MAX_INJECTION_ACK_ATTEMPTS
+            );
+        }
+        clear_ack_failure(rowid);
+        assert!(!ack_attempts_exhausted(rowid), "un accusé reçu remet le compteur à zéro");
     }
 
     // ── Plafond UNIQUE de ce qui est versé dans la conversation de l'assistant ──

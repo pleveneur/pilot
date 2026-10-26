@@ -298,7 +298,7 @@ pilot/
         ├── gds_web.rs        # GDS : routes axum Phase A (provision, identité, projets, git) + routes B/C réservées
         ├── gds_handover.rs   # Mode réseau multi-postes (côté poste) : prise en main d'un projet, présence automatique (1 appel / 3 min, repère local), restitution ORDONNÉE (code → avancement → return, reprise sans saut d'étape), verdicts d'écriture lisibles
         ├── gds_write_guard.rs # Garde d'écriture tenue par le SOCLE (pas par l'écran) : refuse une écriture de fichier / le lancement d'un agent si le serveur a confirmé qu'un AUTRE poste tient le projet — **fail-open** (panne, GDS désactivé, projet libre, prise expirée ⇒ autorisé)
-        └── super_agent.rs    # Assistant : session RPC dédiée + base SQLite (clients/projets/tâches)
+        └── super_agent.rs    # Assistant : session RPC dédiée + base SQLite (clients/projets/tâches) — une remise de compte rendu n'est réputée faite que sur ACCUSÉ du moteur (`injection_ack` + `send_injection_with_ack`, attente bornée hors thread principal) ; un refus ou un délai laisse la ligne en attente, jamais `delivered=1`
 ```
 
 ---

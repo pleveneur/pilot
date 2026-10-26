@@ -86,6 +86,10 @@ import {
 import { shouldFinalizeOnAgentEnd } from "./agent-hardening.js";
 import { toastInfo } from "./toast.js";
 import { createReportDeliveryGate } from "./super-agent-reports.js";
+// REÇU VISIBLE d'un compte rendu remis (invariant : un compte rendu remis laisse
+// TOUJOURS une trace visible dans la conversation, quoi que dise ou ne dise pas
+// le modèle). Module pur ; le rendu DOM de la bulle est juste en dessous.
+import { deliverReportReceipt } from "./super-agent-receipt.js";
 // RÈGLE 4 : identité de MISSION d'une demande mise en file (numéro monotone +
 // agents visés). Une demande rejouée porte TOUJOURS la sienne — le rapport livré
 // et le journal d'abandon la NOMMENT, donc une incohérence devient visible.
@@ -2751,6 +2755,10 @@ export async function createSuperAgent(container) {
   const messagesEl = document.createElement("div");
   superWarnMessagesEl = messagesEl; // T6 : cible des alertes d'échec d'injection
   superMessagesEl = messagesEl; // cible du rendu des réponses aux questions
+  // Reçus de comptes rendus arrivés AVANT l'ouverture de cet onglet : ils sont
+  // affichés maintenant (la bulle est produite à la remise, pas à la fin d'un
+  // rendu ; une surface montée plus tard ne doit rien perdre).
+  flushPendingReportReceipts();
   messagesEl.className = "agent-chat-messages";
   wrapper.appendChild(messagesEl);
 
@@ -7513,6 +7521,67 @@ const injectionWarnLast = {}; // catégorie → timestamp (ms)
 const INJECTION_WARN_MIN_INTERVAL = 60_000;
 let superWarnMessagesEl = null; // défini par createSuperAgent
 
+// ── REÇU VISIBLE d'un compte rendu remis (C1 du diagnostic du 2026-10-26) ──
+// Un compte rendu pouvait être écrit en base, remis, LU et exploité sans que
+// RIEN ne l'affiche : la seule surface était le texte libre du modèle, qu'un
+// tour d'outils peut terminer sans un mot. Chaque remise affiche donc
+// maintenant une BULLE de reçu dans la CONVERSATION (contenu, jamais un repère
+// d'onglet : aucune pastille, aucun badge).
+// Reçus produits alors que la conversation n'est pas montée (onglet 🧭 jamais
+// ouvert) : gardés en mémoire et affichés dès sa création. Le texte affiché est
+// toujours le texte RÉELLEMENT remis (aucune réécriture du compte rendu).
+const pendingReportReceipts = [];
+
+/**
+ * Affiche la bulle de reçu d'un compte rendu remis (titre + projet/taille/statut
+ * + texte replié). Le texte n'est jamais réécrit : seule sa lecture est bornée
+ * (`super-agent-receipt.js`, `REPORT_RECEIPT_FOLD_MAX`).
+ * @param {HTMLElement|null} messagesEl - conversation de l'assistant.
+ * @param {object|null} receipt - reçu construit (module pur).
+ * @returns {boolean} vrai si la bulle est affichée.
+ */
+function appendReportReceipt(messagesEl, receipt) {
+  if (!receipt) return false;
+  if (!messagesEl) {
+    pendingReportReceipts.push(receipt);
+    return false;
+  }
+  const el = document.createElement("div");
+  el.className = "agent-message agent-message-system agent-message-receipt";
+  const head = document.createElement("div");
+  head.className = "agent-receipt-title";
+  head.textContent = receipt.title;
+  const meta = document.createElement("div");
+  meta.className = "agent-receipt-meta";
+  meta.textContent = receipt.meta;
+  el.appendChild(head);
+  el.appendChild(meta);
+  // Texte REPLIÉ : fermé par défaut (on ne submerge pas la conversation),
+  // ouvrable d'un clic. `<details>` natif : aucune dépendance, accessible.
+  if (receipt.shown) {
+    const details = document.createElement("details");
+    details.className = "agent-receipt-details";
+    const summaryEl = document.createElement("summary");
+    summaryEl.textContent = receipt.truncated ? "Ouvrir le texte reçu (extrait)" : "Ouvrir le texte reçu";
+    const pre = document.createElement("pre");
+    pre.className = "agent-receipt-text";
+    pre.textContent = receipt.shown;
+    details.appendChild(summaryEl);
+    details.appendChild(pre);
+    el.appendChild(details);
+  }
+  messagesEl.appendChild(el);
+  scrollSuperToBottom(messagesEl);
+  return true;
+}
+
+/** Affiche les reçus mis en attente faute de conversation montée. */
+function flushPendingReportReceipts() {
+  if (!superWarnMessagesEl || pendingReportReceipts.length === 0) return;
+  const pending = pendingReportReceipts.splice(0, pendingReportReceipts.length);
+  for (const receipt of pending) appendReportReceipt(superWarnMessagesEl, receipt);
+}
+
 function warnInjectionFailure(status, detail, category) {
   if (status !== "error") return;
   const now = Date.now();
@@ -7589,6 +7658,17 @@ async function sendSuperAgentReport(entry, opts = {}) {
     const reportProjectName = pathTailName(entry.projectPath);
     currentTurnProjectBadges = reportProjectName ? [reportProjectName] : null;
   }
+  // INVARIANT : un compte rendu remis laisse TOUJOURS une trace visible, quel
+  // que soit ce que le modèle décide d'écrire (un tour d'outils peut n'avoir
+  // aucun texte). Sans cela, un rapport peut être remis, lu et exploité sans que
+  // le propriétaire puisse constater son arrivée (défaut du 2026-10-26, mission
+  // #3). L'appel est INCONDITIONNEL : les trois statuts (delivered/queued/error)
+  // produisent une bulle, avec le statut réel.
+  deliverReportReceipt(entry, res, {
+    summary,
+    projectName: pathTailName(entry.projectPath),
+    append: (receipt) => appendReportReceipt(superWarnMessagesEl, receipt),
+  });
   return res;
 }
 

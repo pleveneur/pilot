@@ -2990,6 +2990,65 @@ disque à chaque lancement de session.
 | `src/js/super-agent.js` | Onglet 🧭 : chat (session persistante + streaming), questions (boutons pilot-choices), actions (open_project / delegate_to_coder), initialisation, panneau Projets & clients (association projet→client). Résolution de la cible de délégation (`resolveDelegationTargetDecision`, pure) : repli codeur→défaut **uniquement** si aucun agent n'est demandé ; id demandé inconnu → erreur explicite, aucune cible. |
 | `src/js/super-agent-config.js` | Paramètres ⚙️ : nom, clients, association projet→client. |
 
+## Technique — compte rendu de fin de mission : trace VISIBLE et remise prouvée
+
+> Défaut d'origine (`RAPPORT-diag-restitution-perdue.md`) : un compte rendu était
+> écrit en base, remis à l'assistant, **lu** et exploité — mais rien ne
+> l'affichait. La seule surface était le texte libre du modèle, et un tour
+> d'outils peut se terminer sans un mot. Deux verrous ont été posés.
+
+### C1 — la bulle de reçu (contenu de la conversation, jamais un repère d'onglet)
+
+Chaque remise de compte rendu produit un **message de reçu** dans la
+conversation de l'Assistant 🧭, **quel que soit le statut** (livré, mis en
+attente, non remis) : si un compte rendu a été remis, il en reste toujours une
+trace lisible.
+
+| Élément | Rôle |
+|---|---|
+| `src/js/super-agent-receipt.js` | **source unique** du reçu (pures) : `parseReportMission` (étiquette `[mission #N · agents : …]`, ancienne variante à tiret cadratin, `{id:null, agentsId:[]}` si absente — aucune identité inventée), `formatReportSize`, `receiptStatusLabel` (livré / mis en attente / **NON remis — sera réessayé** / illisible), `shouldShowReportReceipt` (jamais pour la catégorie `telegram` : c'est le texte du propriétaire), `buildReportReceipt` (titre, ligne projet/taille/statut, texte replié à `REPORT_RECEIPT_FOLD_MAX = 1200` avec troncature **annoncée**), `deliverReportReceipt` (décide puis **appelle** l'affichage). |
+| `src/js/super-agent.js` | `sendSuperAgentReport` appelle `deliverReportReceipt(...)` **sans condition** avant de rendre le résultat ; `appendReportReceipt` construit le message (`.agent-message.agent-message-system.agent-message-receipt`, `<details>` + `<pre>`) et l'ajoute à la conversation (`messagesEl.appendChild`), puis fait défiler. Si la conversation n'existe pas encore (onglet 🧭 jamais ouvert), le reçu est **gardé** (`pendingReportReceipts`) et affiché à sa création (`flushPendingReportReceipts`). |
+| `src/css/style.css` | styles du seul reçu (`.agent-receipt-title`, `.agent-receipt-meta`, `.agent-receipt-details[open]`, `.agent-receipt-text`). |
+
+Contraintes tenues : **aucun** badge, point ou pastille d'onglet ; **aucun** réglage,
+bouton ni option ; le **contenu** du compte rendu (format, longueur, plafond
+`MAX_INJECTED_MESSAGE_CHARS`) n'est pas touché — la bulle n'affiche qu'une
+**lecture** du texte déjà remis.
+
+### C2 — l'accusé du moteur fait foi
+
+Une **écriture dans le tuyau n'est pas une lecture** : `pi` peut refuser un
+prompt (agent déjà en cours, compaction, modèle ou clé absents). L'ancien chemin
+marquait pourtant la ligne `delivered=1` — donc elle n'était plus jamais rejouée :
+compte rendu **perdu en silence**.
+
+| Élément | Rôle |
+|---|---|
+| `injection_ack(&Value) -> Result<String,String>` | **pure** : `success:true` (ou `ok:true`) → `Ok("accusé : <disposition>")` ; `false` → `Err(raison du moteur)` ; champ **absent** ou non booléen → `Err("aucun accusé de remise lisible")`. Un seul `true` explicite vaut remise. |
+| `send_injection_with_ack` | envoie l'injection **avec attente de l'accusé** (`send_superagent_sync_timeout`, `INJECTION_ACK_TIMEOUT_SECS = 8`). Seul chemin d'envoi d'une injection. |
+| `deliver_one_summary` | **réutilisée** : `delivered=1` seulement si le `send` a rendu un accusé ; sinon la ligne reste `delivered=0`, `injection_logs` écrit `error`, le statut rendu est `"error"` et le rejeu redélivre. |
+| `inject_session_summary` | `async` + `spawn_blocking` : l'attente de l'accusé ne gèle jamais le thread principal. |
+| rejeu (`replay_pending_superagent_summaries_inner`) | même contrat : un rejeu refusé laisse la ligne en attente (jamais « rejouée »). |
+| `note_ack_failure` / `ack_attempts_exhausted` | un refus **systématique** n'est plus présenté au moteur au-delà de `MAX_INJECTION_ACK_ATTEMPTS = 5` (la ligne reste non livrée ; un accusé reçu remet le compteur à zéro). |
+
+### C3 — mise en file plutôt que refus
+
+`streamingBehavior: "followUp"` est posé **uniquement** dans
+`send_injection_with_ack`. `pi` ne le consulte que s'il génère **déjà** : dans
+cette seule fenêtre il accepte et met en file (`queued`) au lieu de refuser. Hors
+génération le champ est ignoré, et `prompt_command_with_resume` (forme de la
+commande simple) reste intact — verrouillé par
+`prompt_command_with_resume_is_additive_only`.
+
+### Anti-régression de cette évolution
+
+| Test | Ce qu'il empêche |
+|---|---|
+| `src/js/super-agent-receipt.test.js` (11 tests) | la bulle disparaît (appel supprimé, élément jamais ajouté à la conversation), un statut faux est affiché, une identité de mission est inventée, un repère d'onglet est introduit, un reçu s'affiche pour Telegram |
+| `super_agent::tests::injection_ack_reads_only_an_explicit_engine_answer` | l'accusé redevient permissif (tout vaut remise) |
+| `super_agent::tests::unacknowledged_report_is_not_delivered_and_is_retried` | un refus ou un délai marque le compte rendu livré |
+| `super_agent::tests::repeated_refusals_stop_after_the_cap_without_claiming_delivery` | le plafond d'essais conclut à une remise |
+
 ## 12. Anti-régression
 
 - Session et canal dédiés (`rpc-event-superagent`).
