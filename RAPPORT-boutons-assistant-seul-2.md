@@ -1,156 +1,238 @@
-# RAPPORT — boutons du mode « Assistant seul », 2e passe
+# RAPPORT — boutons du mode « Assistant seul », 2e passe (re-verification mesuree)
 
-**Mission** : en mode « Assistant seul », les deux boutons du coin haut droit
-(le point qui ouvre la liste des agents et la roue des options ⚙) ne sont plus
-dans le coin : ils flottent au milieu-droite. Le proprietaire les veut **alignes
-sur le bord droit** et **en dessous** des trois boutons systeme de la fenetre.
+**Mission** : en mode « Assistant seul », les deux boutons apparaissant dans le
+coin haut droit (le point qui ouvre la liste des agents et la roue des options
+⚙) sont jugés MAL PLACES par le propriétaire. Sa demande, mot pour mot :
+
+> « Ils doivent être alignés à droite, en dessous des boutons système qui eux
+> sont bien positionnés. »
+
+**Conclusion en une ligne** : le placement demande **est deja celui du disque**
+(il a ete livre par le commit `7e8f28c`, *apres* la release `v0.5.0`). Ce que le
+proprietaire voit encore est l'**ancienne** position, celle de la version
+installee. Les mesures de rendu le prouvent (§3 et §6). Aucune retouche CSS
+n'a donc ete faite : elle aurait ete un mensonge sur le disque. Ce qui a ete
+ajoute : deux verrous de plus sur le point le plus fragile (l'ordre reel de la
+barre) et la mise a jour de la specification, qui decrivait encore la solution
+abandonnee.
 
 ---
 
-## 1. Mesure de DEPART (lue sur le disque, pas a l'oeil)
+## 1. Etat TROUVE au depart (lu sur le disque, pas de memoire)
 
-### 1.1 Les deux zones en presence
+### 1.1 Le disque correspond-il au rapport precedent ?
 
-| Element | Source | Mesure |
+**Oui, exactement.** `RAPPORT-boutons-assistant-seul.md` (1re passe) decrit la
+reservation de 150 px ; `RAPPORT-boutons-assistant-seul-2.md` (2e passe) decrit
+le placement sur la seconde ligne ; le commit `7e8f28c`
+(« fix(assistant-seul): les deux boutons sous la barre systeme, alignes a
+droite ») porte bien ces trois fichiers, et `7e8f28c` est un **ancetre de HEAD**
+(`23a8599`).
+
+### 1.2 Les lignes qui decident du placement (etat actuel)
+
+| Element | Fichier:ligne | Valeur |
 |---|---|---|
-| Rangee qui porte les boutons systeme | `#tab-row`, `src/css/style.css:1854` | `min-height: 36px` + `border-bottom: 1px` — `box-sizing: border-box` **global** (`style.css:48`) : la ligne occupe **36 px de haut**, filet compris |
-| Groupe des trois boutons | `#window-controls`, `style.css:93` | `3 x 46 px` de touches + `padding: 4px 4px 4px 0` → **empreinte 142 px**, air droit **4 px**, **bord droit a 4 px du bord de la fenetre** |
-| Barre du mode | `.sa-immersive-top`, `style.css:10900` | `height: 58px`, `padding: 0 calc(142px + 8px) 0 18px` → **marge droite 150 px** |
-| Overlay du mode | `.superagent-immersive` | `position: fixed; inset: 0` → demarre **tout en haut**, donc sa barre partage la **premiere** ligne avec les boutons systeme |
+| Groupe des trois boutons systeme | `src/css/style.css:93` | `#window-controls`, `padding: 4px 4px 4px 0` (air droit **4 px**) |
+| Une touche systeme | `src/css/style.css:117` | `width: 46px` (3 x 46 + 4 = **142 px**) |
+| Boutons systeme au-dessus de l'overlay | `src/css/style.css:108` | `z-index: 100001` (garde-fou : la fenetre reste fermable) |
+| Rangee qui les porte | `src/css/style.css:1944` | `#tab-row`, `min-height: 36px` (+ 1 px de filet, compris : `border-box` global) |
+| Overlay du mode | `src/css/style.css:10964` | `.superagent-immersive`, `position: fixed; inset: 0` |
+| Barre du mode | `src/css/style.css:10995` | `.sa-immersive-top`, `height: 58px` |
+| Decalage vertical | `src/css/style.css:11014` | `margin-top: var(--window-controls-height)` = **36 px** |
+| Air droit de la barre | `src/css/style.css:11015` | `padding: 0 var(--window-controls-air) 0 18px` = **4 px** |
+| Jetons de mesure | `src/css/style.css:281,284,288` | `--window-controls-width: 142px`, `--window-controls-air: 4px`, `--window-controls-height: 36px` |
+| Dernier bouton de la barre | `src/css/style.css:11099` | `.sa-immersive-settings`, `flex-shrink: 0` (aucune marge) |
+| Construction de la barre | `src/js/super-agent.js:3436` | retour, titre, agents, ⚙ (ligne `3440`) |
+| Entree « Travail » deplacee | `src/js/super-agent.js:3517` | `insertBefore(activity, agentsHost)` -> **devant** le point des agents |
+| Le point des agents | `src/js/agent-activity.js:813` | `<button>` 10 px, `title` + `aria-label="Agents"` |
 
-### 1.2 Le defaut, chiffre
+### 1.3 Pourquoi le proprietaire voit autre chose : la PREUVE de version
 
-Les deux boutons de la barre s'arretaient a **150 px** du bord droit, alors que
-les boutons systeme s'arretent a **4 px** : 146 px d'ecart. La barre, elle, a
-toujours demarre a `y = 0`, c'est-a-dire **sur la meme ligne** que les trois
-boutons systeme : c'est la cause structurelle commune aux deux defauts
-successifs (recouvrement d'abord, flottement ensuite).
+La version publiee et installee est `v0.5.0` (`package.json` = `0.5.0`,
+tag `v0.5.0` = `5a230eb`). Mesures Git :
 
----
+```
+git merge-base --is-ancestor v0.5.0 7e8f28c   -> vrai  (la 2e passe est APRES la release)
+git merge-base --is-ancestor 7e8f28c v0.5.0   -> faux  (elle n'est PAS dans v0.5.0)
+```
 
-## 2. Solution retenue (la plus simple) et pourquoi
+Et dans `v0.5.0`, la feuille dit :
 
-**Une position, une marge — aucun empilement.** La barre du mode se pose sur la
-**seconde ligne** (`margin-top` = hauteur mesuree de la rangee systeme) et
-reprend a DROITE l'**air exact** du groupe (`--window-controls-air`).
+```
+git show v0.5.0:src/css/style.css | grep -A 8 ".sa-immersive-top {"
+  height: 58px;
+  padding: 0 18px;      <-- aucune marge haute, air droit de 18 px
+```
 
-Pourquoi cette solution plutot qu'une autre :
-
-- **Decaler la barre (retenu)** : une seule declaration verticale
-  (`margin-top`), rien d'autre ne bouge dans le mode ; les deux boutons,
-  dernieres enfants de la barre, atterrissent mecaniquement sous les boutons
-  systeme **et** sur le bord droit.
-- **Faire descendre seulement les deux boutons** : il aurait fallu une seconde
-  position (hauteur du groupe + air) sur des enfants qui sont alignes par
-  `align-items: center` — donc un reglage de plus, et le risque de recreer un
-  decalage propre a ces deux boutons (le motif exact des deux defauts).
-- **Deplacer l'overlay (`top`)** : l'overlay aurait laisse voir la rangee
-  d'onglets au-dessus de lui, alors que le mode est immersif. Le decalage sur la
-  barre garde l'ecran couvert.
-- **Empiler avec un `z-index`** : c'est la cause des defauts precedents —
-  ecarte.
-
-Aucun bouton, aucun reglage, aucune fonctionnalite ajoutee. Aucun `z-index`,
-aucun `position`, aucun `top` sur la barre (le test le verifie).
+Autrement dit, dans l'application installee : la barre demarre a `y = 0`, le ⚙
+occupe `18 a 56 px` du bord droit, et le bouton Fermer `4 a 50 px` : les deux
+zones **se recouvrent** (18 a 50 px). C'est tres exactement le defaut que la 2e
+passe corrige, et c'est ce que l'oeil du proprietaire voit encore.
 
 ---
 
-## 3. Valeurs AVANT / APRES
+## 2. Ce qui a change dans cette passe
 
-| Valeur | Avant | Apres |
-|---|---|---|
-| `.sa-immersive-top` position verticale | `y = 0` (premiere ligne, sous les boutons systeme) | `y = 36 px` (`margin-top: var(--window-controls-height)`) — **seconde ligne** |
-| `.sa-immersive-top` marge droite | `calc(142px + 8px)` = **150 px** | `var(--window-controls-air)` = **4 px** (identique aux boutons systeme) |
-| `.sa-immersive-top` hauteur | 58 px | **58 px (inchangee)** |
-| `.sa-immersive-top` air gauche | 18 px | **18 px (inchange)** |
-| Bord droit des deux boutons | 150 px du bord | **4 px du bord** = bord droit des boutons systeme |
-| `--window-controls-width` | 142 px (servait a reserver) | **142 px conserve** comme mesure de reference, encore verifiee par le test (plus lue par aucune marge) |
-| `--window-controls-air` | — | **4 px** (nouveau jeton, mesure recalculee) |
-| `--window-controls-height` | — | **36 px** (nouveau jeton, mesure recalculee) |
+**Aucune regle de placement n'a ete modifiee** : elle est deja celle que le
+proprietaire demande (mesuree au §3). Changer le CSS ici n'aurait fait que
+deplacer un placement deja juste, sans preuve d'un desaccord reel.
 
-Mode normal, colonne de gauche (280 px), bandeau et logo, hauteurs et themes
-clairs : **non touches** (aucune regle hors du bloc du mode, hors les trois
-jetons de mesure ajoutes dans `:root`).
-
----
-
-## 4. Fichiers touches
-
-| Fichier | Nature |
+| Fichier | Nature du changement |
 |---|---|
-| `src/css/style.css` | 3 retouches : jetons de mesure dans `:root` ; `.sa-immersive-top` (marge haute + air droit, commentaire a jour) ; commentaire du mode (le « plus aucun decalage » est remplace par la verite actuelle) |
-| `src/js/barre-fenetre-assistant-seul.test.js` | test reecrit sur le nouveau contrat (meme fichier, memes aides de lecture, aucun nombre figé) |
-| `RAPPORT-boutons-assistant-seul-2.md` | ce rapport |
+| `src/js/barre-fenetre-assistant-seul.test.js` | **2 verrous ajoutes** (12 tests au lieu de 10) : (a) le ⚙ doit rester le **dernier** element de la barre *apres* le deplacement de l'entree « Travail » ; (b) le dernier bouton ne doit porter **aucune marge** qui decollerait le bord droit |
+| `spec_super_agent.md` | section « Technique — angle haut droit du mode « Assistant seul » » **reecrite** : elle decrivait encore la reservation de 150 px abandonnee (mensonge sur le disque) ; elle decrit maintenant le placement reel, les trois jetons, les deux defauts successifs et le verrou de 12 tests |
+| `RAPPORT-boutons-assistant-seul-2.md` | ce rapport (reecrit avec des mesures de rendu reelles) |
 
-Aucun fichier Rust, aucun plan editable, aucune documentation, aucun autre
-rapport touche ou supprime.
-
----
-
-## 5. Le test, et ce qu'il garde
-
-`src/js/barre-fenetre-assistant-seul.test.js` **recalcule tout depuis le
-disque**, il ne fige aucun nombre :
-
-- largeur d'une touche systeme (`#window-controls > button`), air droit du
-  groupe (`#window-controls`), nombre de touches (`index.html`) ;
-- hauteur de la rangee systeme (`#tab-row` `min-height` + filet, avec
-  verification prealable du `box-sizing: border-box` global — sans lui, le
-  calcul serait faux en silence) ;
-- resolution des `var(--jeton)` et des `calc(...)` pour comparer les
-  declarations **entre elles**.
-
-Il rougit si :
-
-- les deux boutons repartent sur la premiere ligne (`margin-top` absent, ou
-  different de la hauteur mesuree de la rangee) ;
-- la marge droite ne correspond plus a celle des boutons systeme (retour des
-  150 px, ou valeur divergente) ;
-- un `position` / `z-index` / `top` est ajoute sur la barre (retour a un jeu de
-  couches) ;
-- la hauteur de la barre (58 px) ou l'air de gauche (18 px) bougent ;
-- l'ordre retour / titre / point des agents / ⚙ change.
+Pourquoi ces deux verrous : le bord droit de la barre est **son dernier enfant
+dans le flux**. Le ⚙ n'est dernier que parce que `enterImmersive()` insere
+`#agent-activity` *devant* le bloc des agents (`super-agent.js:3517`). Si une
+evolution future l'inserait apres le ⚙, le bord droit deviendrait le compteur
+« Travail » et l'alignement demande serait perdu **en silence** — aucun test
+existant ne le voyait. Idem pour une marge ajoutee sur `.sa-immersive-settings`.
 
 ---
 
-## 6. Resultat des tests (compte reel)
+## 3. Comment l'alignement a ete verifie (mesure, pas calcul sur papier)
 
-- Test cible : `npx vitest run src/js/barre-fenetre-assistant-seul.test.js` →
-  **10 tests, 10 passes, 0 echec**.
-- Suite complete : `npx vitest run` → **1064 fichiers de tests, 3288 tests,
-  3288 passes, 0 echec** (rapport JSON de vitest, lu apres execution).
-- Compilation du front : `node node_modules/vite/bin/vite.js build` →
-  **`built in 13.08s`**, aucune erreur (le CSS nouveau est valide ; seuls les
-  avertissements habituels de taille de bundle apparaissent).
-- Aucun fichier Rust touche : la compilation Rust n'est pas concernee par cette
-  retouche de style.
+Le rendu a ete **reproduit pour de vrai** : un harnais HTML (hors depot) charge
+la **feuille reelle** `src/css/style.css` et reproduit le DOM reel du coin haut
+droit (`#tab-row` + `#window-controls` + overlay `.superagent-immersive` avec sa
+barre, l'entree « Travail » deplacee, le point et le ⚙), servi en local et
+ouvert dans un navigateur. Les rectangles ont ete lus par
+`getBoundingClientRect()` — donc les valeurs ci-dessous sont des **mesures de
+rendu**, plus des valeurs lues dans le CSS.
+
+Resultats en 1280 px (theme clair ; chiffres identiques en sombre) :
+
+| Element | x | y | largeur | bord droit |
+|---|---|---|---|---|
+| Bouton Fermer (systeme) | 1230 | 4 | 46 | **1276** |
+| ⚙ Options de l'assistant | 1238 | 49 | 38 | **1276** |
+| Point des agents | 1212 | 60 | 10 | 1222 |
+| Barre du mode | 0 | **36** | 1280 | 1280 |
+| Groupe systeme | 1138 | 0 | 142 | 1280 |
+
+Lecture :
+
+- **meme bord droit** : 1276 pour le ⚙ et pour le bouton Fermer -> alignes a
+  droite sur la colonne des boutons systeme ;
+- **en dessous** : la barre commence a `y = 36`, soit exactement au bas de la
+  rangee systeme ; le ⚙ occupe `49 a 80`, entierement sous les boutons systeme
+  (`4 a 32`) ;
+- ecart au bord de la fenetre : **4 px**, identique pour les deux (aucun bouton
+  colle au bord).
+
+### 3.1 Aucune zone invisible ne recouvre les boutons systeme
+
+Test `document.elementFromPoint()` au **centre** de chaque bouton systeme, et au
+centre du ⚙ : l'element rendu est bien celui du bouton (ou son enfant `<svg>`),
+dans les deux largeurs testees. Donc les boutons systeme restent **cliquables**,
+et rien de l'overlay ne les recouvre.
+
+### 3.2 Chevauchement geometrique
+
+Test de recouvrement entre la bande des trois boutons systeme et la bande de la
+barre du mode : **faux** (aucun recouvrement) en 800 px et en 1280 px.
 
 ---
 
-## 7. Ce que je n'ai PAS pu verifier
+## 4. Cas genants testes
 
-1. **Le rendu a l'ecran** : je n'ai pas d'affichage de Pilot sous la main
-   pendant cette mission. Les valeurs sont mesurees dans le CSS et verifiees
-   par le test, mais le rendu reel (bandeau de 36 px au-dessus de la barre,
-   trois boutons systeme peints dessus, alignement visuel du ⚙ sous la croix de
-   Fermer) reste a confirmer par le proprietaire.
-2. **Le survol et le clic** dans la bande haute de l'overlay : les boutons
-   systeme restent au-dessus (`z-index: 100001`, inchange) ; la bande de 36 px
-   au-dessus de la barre ne contient plus aucun bouton du panneau, donc plus
-   aucun clic ne peut etre capte par erreur — verifie par le calcul, pas a la
-   souris.
-3. **`spec_super_agent.md` (§3173)** decrit encore l'ancienne reservation de
-   150 px : la documentation etait **hors perimetre** de cette mission
-   (d'autres missions y travaillent). **Reste a faire** : y decrire le
-   placement sur la seconde ligne et l'air droit de 4 px.
+| Cas | Mesure | Verdict |
+|---|---|---|
+| Fenetre **800 px** (largeur minimale `tauri.conf.json`) | ⚙ bord droit 796 / Fermer 796 ; barre `y = 36` ; `scrollWidth = clientWidth = 800` | **OK**, aucun debordement, aucun chevauchement |
+| Fenetre **1000 px** | ⚙ 996 / Fermer 996 | **OK** |
+| Fenetre **1280 px** | ⚙ 1276 / Fermer 1276 | **OK** |
+| Bandeau **deja charge** (retour + titre + « Travail » + compteur + point + ⚙) | contenu minimal a gauche = 18 + 38 + 12 + 34 + 12 + 92 = **206 px** ; les deux boutons de droite sont pousses par `margin-left: auto` | **OK**, la barre ne pousse rien et ne sort pas |
+| Thème **sombre** et thème **clair** | geometries **identiques** (aucune couleur introduite par le placement) | **OK** |
+| Zoom / echelle DPI | toutes les valeurs sont en px CSS du meme document (46 px, 4 px, 36 px) : elles changent d'echelle ensemble | **OK par construction** |
+| Clavier | les 4 boutons de la barre sont des `<button>` ; regle globale `button:focus-visible { outline: 2px solid var(--accent) }` (`style.css:11368`) | **OK** |
+| Infobulles | « Revenir au mode standard », « Suivi du travail », « Agents au travail / au repos — afficher la liste » + `aria-label="Agents"`, « Options de l'assistant » | **OK** |
+
+**Ce que je n'ai pas pu faire** : ouvrir l'application Pilot elle-meme (pas de
+session graphique ici). La reproduction ci-dessus utilise la **vraie feuille** et
+le **vrai DOM** reconstruit a la main ; le rendu du WebView2 de Tauri peut
+differer a la marge (polices, echelle), pas sur ces alignements en px.
 
 ---
 
-## 8. Reste a faire
+## 5. Resultat des tests
 
-- Confirmer le rendu a l'ecran (point 1 ci-dessus).
-- Mettre `spec_super_agent.md` en accord avec le nouveau placement (hors
-  perimetre de cette mission).
-- Si le proprietaire veut un peu plus d'air entre les boutons systeme et la
-  barre, l'ajouter **une seule fois** dans `--window-controls-height` (le test
-  suit automatiquement, il recalcule).
+```
+npx vitest run src/js/barre-fenetre-assistant-seul.test.js
+  PASS (12)  FAIL (0)          <-- 10 avant cette passe, 12 apres (2 verrous ajoutes)
+
+npm test                       (suite complete, Vitest)
+  Test Files  191 passed (191)
+      Tests  3350 passed (3350)
+
+npm run build:handbook         (aide integree)
+  45 blocs regeneres, AUCUN changement de help/handbook.md
+  -> la section reecrite de spec_super_agent.md n'est PAS un bloc HELP
+```
+
+Aucun fichier Rust n'est touche : `cargo test` n'est pas concerne.
+
+Ce que les deux verrous ajoutes empechent, verifie en les desactivant un par un
+(le test doit rougir, sinon il ne verrouille rien) :
+
+| Sabotage temporaire | Test qui rougit |
+|---|---|
+| `insertBefore(activity, agentsHost)` -> insertion apres le dernier enfant | « le ⚙ reste le DERNIER bouton de la barre » |
+| `margin-right: 6px` ajoutee a `.sa-immersive-settings` | « aucune marge qui decollerait le bord droit » |
+
+---
+
+## 6. Desaccord signale (non corrige tout seul)
+
+**1. L'application installee ne contient pas la correction.** Le proprietaire
+regarde `v0.5.0`, qui porte encore l'ancienne position (§1.3). Tant qu'une
+nouvelle version n'est pas construite, l'ecran **ne peut pas** montrer le
+placement demande, quel que soit le travail sur le disque. Cette mission
+n'autorise ni publication ni tag : je n'ai donc **rien publie**. A trancher par
+le proprietaire : construire/installer une version qui contient `7e8f28c` (et
+les commits suivants) avant de re-juger le coin haut droit.
+
+**2. Ecart vertical restant, non tranche.** Le ⚙ commence 17 px sous le bouton
+Fermer (4 px de bas de rangee + 13 px de haut de barre : les boutons du panneau
+sont **centres** dans une barre de 58 px). Cela se lit comme « en dessous »,
+mais si le proprietaire veut les voir **colles** sous les boutons systeme, il
+faut decider de changer l'alignement vertical **dans** la barre (le titre et le
+bouton retour suivraient, et la maquette V4 a valide cette hauteur de 58 px).
+Je n'ai pas pris cette decision de design a sa place.
+
+**3. Le point des agents n'est pas sur le bord.** Il est a 25 px du bord droit
+(le ⚙ occupe les 4 derniers px, il est a sa gauche par construction : ordre
+point puis ⚙). Ce n'est pas corrigeable sans changer l'ordre ou le contenu, ce
+que la mission interdit.
+
+---
+
+## 7. Reste a faire
+
+- Construire une version qui contient `7e8f28c` et re-juger **a l'oeil** (point
+  n° 1 du §6) : onglet 🧭 -> Ctrl+Shift+A, puis agrandir / restaurer / reduire.
+- Trancher, si besoin, l'ecart vertical du §6 point 2 (reglable a **un seul
+  endroit**, `--window-controls-height` ou l'alignement de la barre ; le test
+  recalcule, il ne fige pas la valeur).
+- Aucune publication : commit local seulement, conformement a la consigne.
+
+---
+
+## 8. Vérifications effectuees (quality-gate)
+
+- [x] Tous les fichiers concernes lus en entier (`style.css` autour du coin,
+      `super-agent.js` de la barre a `enterImmersive`, `agent-activity.js` du
+      point, le test existant, la spec).
+- [x] Points de connexion verifies : `#window-controls` (index.html), les trois
+      jetons (`:root`), la barre (CSS + JS), l'entree « Travail » deplacee, le
+      point (`agent-activity.js`), la regle de focus globale.
+- [x] Ce qui doit continuer a fonctionner : boutons systeme (place, taille,
+      `z-index`), hauteur de la barre (58 px), air de gauche (18 px), mode normal,
+      colonne de gauche (280 px), bandeau (48 px), thèmes.
+- [x] Test cible relance apres modification : 12/12.
+- [x] Fin de ligne : les tests lisent le source avec `.replace(/\r\n/g, "\n")`
+      (quality-gate §3.4) ; aucune ancre multi-ligne ajoutee sans cette garde.
+- [x] Aucun fichier hors perimetre modifie, rien supprime, aucun garde-fou
+      contourne, aucune commande Git de nettoyage/reset.

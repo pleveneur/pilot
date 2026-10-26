@@ -240,6 +240,39 @@ describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee sys
     expect([...ordre].sort((a, b) => a - b)).toEqual(ordre);
   });
 
+  it("le ⚙ reste le DERNIER bouton de la barre apres le deplacement de l'entree Travail", () => {
+    // Le bord droit de la barre, c'est son dernier enfant place dans le flux :
+    // seul le ⚙ touche donc le bord. Or l'entree « Travail » est DEPLACEE dans
+    // la barre a chaque entree en mode (super-agent.js, enterImmersive). Si
+    // elle etait posee APRES le ⚙, le bord droit serait le compteur et les
+    // deux boutons vises ne seraient plus alignes sur celui des boutons
+    // systeme — sans qu'aucun test ne rougisse. Cet ordre n'existe que dans le
+    // source (aucun DOM ici) : on lit donc l'insertion elle-meme.
+    const js = lire("src/js/super-agent.js");
+    const insertion = sliceSource(
+      js,
+      "const agentsHost = immersiveOverlay.querySelector(",
+      "document.body.appendChild(immersiveOverlay);",
+      100,
+    );
+    expect(insertion).toContain("insertBefore(activity, agentsHost)");
+    // Jamais a la fin de la barre : ni `appendChild`, ni insertion apres le
+    // dernier enfant, ni insertion a cote du ⚙.
+    expect(insertion).not.toContain("appendChild(activity)");
+    expect(insertion).not.toContain("insertBefore(activity, null)");
+    expect(insertion).not.toContain("settings");
+  });
+
+  it("le dernier bouton ne porte aucune marge qui decollerait le bord droit", () => {
+    // L'air droit est porte par le REMPLISSAGE de la barre (l'air du groupe
+    // systeme). Une marge propre au ⚙ s'y ajouterait : le bord droit des deux
+    // boutons ne coinciderait plus avec celui des boutons systeme.
+    const dernier = bloc(".sa-immersive-settings");
+    const sansCommentaires = dernier.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(sansCommentaires).not.toMatch(/(?:^|[;{])\s*margin[^:]*:/);
+    expect(propriete(dernier, "flex-shrink")).toBe("0");
+  });
+
   it("le coin des deux boutons est SOUS et a DROITE de celui des boutons systeme", () => {
     // Le test qui doit rougir si quelqu'un remet les deux boutons a cheval :
     //   - verticalement, la barre (donc ses boutons) demarre au bas de la

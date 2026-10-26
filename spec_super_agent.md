@@ -3160,26 +3160,54 @@ diagnostic dans `RAPPORT-sonde-sessions-15s.md`).
 
 ## Technique — angle haut droit du mode « Assistant seul »
 
-Les deux boutons de droite de la barre du haut (le point des agents et le ⚙)
-vivaient **sous** les trois boutons système de la fenêtre, donc partiellement
-recouverts et difficiles à cliquer. **Les deux modes ne partagent pas la même
-zone** : en mode normal, la rangée d'onglets (`#tab-row`) porte le groupe
-`#window-controls` dans son propre conteneur — rien ne passe dessous ; en mode
-immersif, l'overlay (`.superagent-immersive`, `position: fixed; inset: 0`)
-recouvre cette rangée alors que `#window-controls` garde `z-index: 100001` et
-reste peint **au-dessus**, au même endroit. La barre `.sa-immersive-top`
-démarre tout en haut : elle doit donc **réserver la largeur** du groupe.
+Le coin haut droit a connu **deux défauts successifs**, tous deux mesurés :
 
-- La largeur n'est nommée qu'une fois : `--window-controls-width`
-  (`src/css/style.css`, `:root`), mesurée = 3 × 46 px + 4 px = **142 px**.
-- `.sa-immersive-top` réserve à **droite**
-  `calc(var(--window-controls-width) + var(--space-2))` : les deux boutons
-  restent en haut à droite, entièrement visibles et cliquables, avec de l'air.
-- **Rien ne bouge ailleurs** : hauteur de la barre (58 px), air de gauche
-  (18 px), mode normal, colonne de gauche et thème clair inchangés.
-- Verrou : `src/js/barre-fenetre-assistant-seul.test.js` **recalcule** la
-  largeur depuis `#window-controls` (aucune valeur figée) et échoue si le jeton,
-  la réservation ou l'absence de décalage vertical divergent.
+1. le point des agents et le ⚙ étaient posés sur la **même ligne** que les trois
+   boutons système, donc **partiellement recouverts** par eux (difficiles à
+   cliquer) ;
+2. première correction : **150 px réservés à droite** (largeur du groupe + air).
+   Effet de bord signalé par le propriétaire : les deux boutons ne sont plus
+   dans le coin, ils « flottent au milieu-droite ».
+
+**Placement retenu (état actuel, décision du propriétaire)** : les deux boutons
+sont **sous** les boutons système et **alignés sur leur bord droit**.
+
+**Les deux modes ne partagent pas la même zone** : en mode normal, la rangée
+`#tab-row` porte le groupe `#window-controls` dans son propre conteneur (rien
+ne passe dessous) ; en mode immersif, l'overlay `.superagent-immersive`
+(`position: fixed; inset: 0`) recouvre cette rangée alors que `#window-controls`
+garde `z-index: 100001` et reste peint **au-dessus**, à la même place. La barre
+`.sa-immersive-top` doit donc se placer **sous** eux, sans jamais de couches.
+
+- Trois jetons de **mesure** nommés une seule fois (`src/css/style.css`,
+  `:root`), tous recalculés par le test :
+  `--window-controls-width` (3 × 46 px + 4 px = **142 px**, mesure de
+  référence du groupe), `--window-controls-air` (**4 px**, air droit du groupe)
+  et `--window-controls-height` (**36 px**, hauteur de la rangée système, filet
+  compris — `box-sizing: border-box` est global).
+- `.sa-immersive-top` : `margin-top: var(--window-controls-height)` la pose sur
+  la **seconde ligne**, et `padding: 0 var(--window-controls-air) 0 18px` lui
+  fait reprendre l'**air droit exact** du groupe. Les deux derniers enfants de
+  la barre (point des agents, ⚙) ont donc le **même bord droit** que le bouton
+  Fermer, et se trouvent entièrement **sous** la ligne système.
+- **Une position, une marge — aucun empilement** : pas de `position`, pas de
+  `z-index`, pas de `top` ajoutés sur la barre (le test le vérifie).
+- **Rien d'autre ne bouge** : hauteur de la barre (58 px), air de gauche
+  (18 px), mode normal, colonne de gauche (280 px), bandeau (48 px) et thèmes
+  clair/sombre inchangés (aucune couleur introduite).
+- Le ⚙ doit rester le **dernier** élément de la barre : l'entrée « Travail »,
+  déplacée dans la barre à chaque entrée en mode, est insérée **devant** le
+  bloc des agents. Posée après le ⚙, elle prendrait le bord droit et
+  l'alignement serait perdu en silence (verrouillé par le test).
+- Verrou : `src/js/barre-fenetre-assistant-seul.test.js` (12 tests). Il
+  **recalcule** largeur, air et hauteur depuis `index.html`, `#window-controls`
+  et `#tab-row` — **aucune valeur figée** — et rougit si les deux boutons
+  repassent sur la ligne système, si la marge droite s'écarte de l'air du
+  groupe, si une couche est ajoutée, ou si l'ordre de la barre change.
+- Vérifié au rendu (navigateur, DOM réel + feuille réelle) en 800, 1000 et
+  1280 px et dans les deux thèmes : bords droits confondus, aucun chevauchement,
+  aucun débordement de la barre, et aucun élément ne recouvre les trois boutons
+  système (`elementFromPoint` sur leur centre rend le bouton).
 
 ---
 
