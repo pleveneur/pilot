@@ -443,11 +443,10 @@ describe("9. coordination avec la lecture et l'envoi (§3.3)", () => {
     expect(corps).toMatch(/if \(!vocalOverlay\) return/);
   });
 
-  it("aucune coupure de la parole par la voix (lot 4) : l'etat d'ecoute vient du NIVEAU mesure", () => {
+  it("aucune synthese vocale propre a l'ecran : la parole vient de la lecture existante", () => {
     // L'etat de l'ecran ne connait que trois sources, dans cet ordre : la
     // LECTURE (parole), le travail de l'assistant (reflexion) et le niveau du
     // micro (ecoute, lot 3) — et ce dernier n'est vrai que si le micro CAPTE.
-    // Rien n'ecoute pour faire taire Pilot : le lot 4 n'est ni fait ni simule.
     const corps = corpsFonction(SUPER, "function applyVocalState");
     expect(corps).toMatch(/speaking: vocalSpeaking/);
     expect(corps).toMatch(/reflecting: reflectingActive/);
@@ -457,6 +456,21 @@ describe("9. coordination avec la lecture et l'envoi (§3.3)", () => {
     // Aucune reconnaissance de parole dans l'ecran : le niveau ne sert qu'a la
     // longueur du trait (la dictee garde son propre moteur dans la saisie).
     expect(corps).not.toMatch(/SpeechRecognition/);
+  });
+
+  it("LOT 4a : parler par-dessus la lecture l'ARRETE, par la seule voie existante", () => {
+    // La COUPURE existe depuis le lot 4a, mais elle n'ajoute aucun lecteur :
+    // l'arret emprunte `stopReading` (read-aloud.js), comme la sortie du mode.
+    const corps = corpsFonction(SUPER, "function vocalBargeIn");
+    expect(corps).toMatch(/stopReading\(\)/);
+    expect(corps).not.toMatch(/speechSynthesis|SpeechSynthesisUtterance|new Audio\(/);
+    // La decision vient de la GARDE du micro, jamais d'un seuil ecrit ici.
+    expect(corps).not.toMatch(/getUserMedia|AudioContext|AnalyserNode|rmsOf|0\.0[0-9]/);
+    // Hors mode Vocal : rien ne change pour les autres ecrans.
+    expect(corps).toMatch(/if \(!vocalOverlay\) return;/);
+    // Et pas de reprise automatique : couper ne relance aucune lecture.
+    expect(corps).toMatch(/if \(!vocalSpeaking\) return;/);
+    expect(corps).not.toMatch(/agent-read-btn|\.click\(\)/);
   });
 
   it("quitter l'ecran rend le silence : la voix lancee ici ne continue pas ailleurs", () => {

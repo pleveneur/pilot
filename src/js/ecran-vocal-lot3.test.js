@@ -13,8 +13,9 @@
 //      contexte audio ferme, boucle de mesure annulee — pas seulement ignore.
 //   5. Un seul mecanisme : les API micro vivent dans vocal-mic.js, jamais dans
 //      super-agent.js ; aucune reconnaissance de parole n'y entre.
-//   6. Le lot 4 (couper Pilot en parlant) n'est pas fait : le niveau ne sert
-//      qu'a la longueur du trait.
+//   6. Le micro ne tient AUCUN lecteur : depuis le lot 4a il signale une prise
+//      de parole (`onSpeechStart`), le niveau continue de ne servir qu'a la
+//      longueur du trait, et l'arret de la lecture vit dans super-agent.js.
 //   7. En mouvement reduit, la longueur reste figee par etat : aucune valeur
 //      n'est posee (sinon elle ecraserait la regle CSS figee).
 //
@@ -438,9 +439,11 @@ describe("5. un seul mecanisme : la capture vit dans vocal-mic.js", () => {
     expect(MIC).not.toMatch(/transcript|interimResults/);
   });
 
-  it("aucune coupure de la parole (lot 4) : le niveau ne pilote pas la lecture", () => {
-    // vocal-mic.js ne connait ni `stopReading` ni la synthese vocale.
+  it("le micro ne tient AUCUN lecteur : il signale une prise de parole, il n'arrete rien", () => {
+    // vocal-mic.js ne connait ni `stopReading` ni la synthese vocale : depuis le
+    // lot 4a il SIGNALE (`onSpeechStart`), l'arret reste chez l'appelant.
     expect(MIC).not.toMatch(/stopReading|speechSynthesis|SpeechSynthesisUtterance/);
+    expect(MIC).toMatch(/onSpeechStart/);
     // Et l'ecran ne fait que poser une longueur.
     const niveau = corpsFonction(SUPER, "function vocalSetLevel");
     expect(niveau).toMatch(/--vocal-level/);

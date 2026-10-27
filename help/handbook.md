@@ -448,8 +448,17 @@ En mode **Vocal** :
   — rien n'est bloqué, et Pilot ne redemande pas tout seul.
 - **En quittant le mode, le micro est coupé** (le témoin du système s'éteint) :
   Pilot ne vous écoute pas en dehors de cet écran.
+- **Parler par-dessus Pilot le fait taire** : pendant qu'il lit, prendre la
+  parole **arrête la lecture net** (entre deux phrases, jamais au milieu d'un
+  mot), l'objet repasse en **écoute** et la zone de saisie **reprend la main**.
+  Pilot **ne se coupe jamais lui-même** : il vérifie que votre micro n'entend
+  pas ses propres haut-parleurs (annulation d'écho, mesure du son résiduel au
+  début de chaque lecture, seuil posé au-dessus) et, si cette vérification n'est
+  pas concluante, **il ne coupe pas** et lit jusqu'au bout. Le **casque** est la
+  situation où cela marche le mieux.
 - La réponse se **lit à voix haute** (voir « Écouter une réponse à voix
-  haute »). Couper Pilot en parlant n'est pas encore disponible.
+  haute »). Reprendre l'écoute après la réponse (mode conversation continue)
+  n'est pas encore disponible.
 
 ---
 

@@ -3835,10 +3835,12 @@ export async function createSuperAgent(container) {
   // du lot 2) : seulement l'objet, la ligne d'etat et la saisie.
   //
   // Ce que ce mode N'A PAS (et ne pretend pas avoir) :
-  //   - la coupure de Pilot en parlant (lot 4) : le niveau du micro ne sert
-  //     JAMAIS a faire taire Pilot, seulement a allonger le trait ;
+  //   - la REPRISE de l'ecoute apres la reponse et le mode conversation
+  //     continue (suite du lot 4) : Pilot ne relance jamais une lecture tout
+  //     seul apres avoir ete coupe ;
   //   - d'historique : l'ecran ne montre rien de la conversation.
-  // Le micro et le niveau reel sont du LOT 3 (voir vocal-mic.js).
+  // Le micro et le niveau reel sont du LOT 3 (voir vocal-mic.js). La COUPURE de
+  // Pilot quand on parle par-dessus lui est du LOT 4a : voir `vocalBargeIn`.
   const VOCAL_ACTIVE_CLASS = "pilot-vocal-active";
   // Les etats de l'ecran Vocal (`vocalOverlay`, places d'origine, `vocalSpeaking`)
   // sont declares plus HAUT, juste apres `reflectingActive` : `setReflecting` les
@@ -3899,7 +3901,11 @@ export async function createSuperAgent(container) {
     });
     if (!demander) return;
     vocalMicDemande = true;
-    vocalMic.demander();
+    vocalMic.demander().then(() => {
+      // LOT 4a : le micro vient peut-etre de s'ouvrir PENDANT que Pilot lit ;
+      // la garde doit alors s'armer sur l'etat reel de la lecture.
+      vocalSyncMicSpeaking();
+    });
   }
 
   function buildVocalOverlay() {
@@ -3955,6 +3961,64 @@ export async function createSuperAgent(container) {
     if (fix) fix.classList.toggle("hidden", !vocalMicFerme);
   }
 
+  /**
+   * LOT 4a : « Pilot parle » est le SEUL signal qui arme la garde du micro
+   * (`setSpeaking` dans vocal-mic.js). Il n'est jamais devine ici : il vient de
+   * l'etat de la lecture, et la garde se remet a zero des qu'il retombe.
+   */
+  function vocalSyncMicSpeaking() {
+    if (!vocalMic) return;
+    vocalMic.setSpeaking(vocalSpeaking);
+  }
+
+  /**
+   * LOT 4a : L'UTILISATEUR PARLE PAR-DESSUS PILOT -> Pilot se tait, tout de
+   * suite et proprement (pas de phrase hachee, pas de reprise : une phrase est
+   * toujours arretee entre deux morceaux, jamais au milieu d'un souffle).
+   *
+   * Trois regles tenues ici :
+   *   1. L'ARRET emprunte la SEULE voie existante (`stopReading`, read-aloud.js) :
+   *      aucun second lecteur, aucun second mecanisme.
+   *   2. La DECISION d'arreter n'est pas prise ici : c'est la garde du micro
+   *      (vocal-mic.js) qui la prend, et elle ne se declenche que si
+   *      l'annulation d'echo est averee ET si le niveau depasse le residu d'echo
+   *      qu'elle vient de mesurer. Une voix qui n'est que l'echo de Pilot ne peut
+   *      donc pas le faire taire (voir `bargeInReport`).
+   *   3. HORS mode Vocal, cette fonction ne fait rien : les autres ecrans lisent
+   *      leurs reponses jusqu'au bout, comme avant.
+   * @param {{residuel?: number, seuil?: number}} [rapport] chiffres de la mesure
+   */
+  function vocalBargeIn(rapport) {
+    if (!vocalOverlay) return;
+    if (!vocalSpeaking) return;
+    // Trace chiffree de la mesure : elle ne s'affiche pas, elle sert a verifier
+    // au vrai micro qu'aucune coupure ne part toute seule (residuel << seuil).
+    try {
+      if (typeof console !== "undefined" && console.info) {
+        console.info(
+          "[vocal] prise de parole : residu=" +
+            (rapport ? rapport.residuel : "?") +
+            " seuil=" +
+            (rapport ? rapport.seuil : "?")
+        );
+      }
+    } catch (_) {
+      /* une console absente ne doit pas empecher de se taire */
+    }
+    stopReading();
+    // L'objet repasse en « ecoute » (le micro capte deja, l'etat suit) et la
+    // saisie reprend la main : le curseur y retourne pour dicter ou corriger
+    // tout de suite. Aucune modale ouverte ne se fait voler le curseur.
+    applyVocalState();
+    if (inputEl && !document.querySelector(".modal:not(.hidden)")) {
+      try {
+        inputEl.focus();
+      } catch (_) {
+        /* un champ absent ne bloque rien */
+      }
+    }
+  }
+
   function enterVocal() {
     if (vocalOverlay) return;
     // REGLE DE COORDINATION (§3.2) : deux pleins ecrans ne se superposent
@@ -3991,7 +4055,12 @@ export async function createSuperAgent(container) {
       onLevel: vocalSetLevel,
       onListening: vocalSetListening,
       onFailure: vocalMicFailure,
+      // LOT 4a : voix detectee par-dessus la lecture -> Pilot se tait.
+      onSpeechStart: vocalBargeIn,
     });
+    // Si Pilot lit DEJA au moment ou le micro s'ouvre, la garde part armee :
+    // l'etat de la lecture est repose, jamais devine.
+    vocalSyncMicSpeaking();
     vocalOverlay.addEventListener("pointerdown", onVocalFirstGesture);
     // La touche est ecoutee sur le document (et non sur l'ecran) : le mode Vocal
     // est le seul ecran visible a ce moment-la, et un focus qui n'est encore
@@ -4005,7 +4074,11 @@ export async function createSuperAgent(container) {
         vocalMicFerme = "";
         vocalMicDemande = true;
         applyVocalState();
-        if (vocalMic) vocalMic.demander();
+        if (vocalMic) {
+          vocalMic.demander().then(() => {
+            vocalSyncMicSpeaking();
+          });
+        }
       });
     }
     // Placeholder plus court : ici, le modele de phrase de l'assistant (28 mots)
@@ -4132,6 +4205,9 @@ export async function createSuperAgent(container) {
     const etat = e && e.detail ? e.detail.state : "";
     const parlait = vocalSpeaking;
     vocalSpeaking = etat === "speaking";
+    // LOT 4a : la garde du micro ne s'arme QUE pendant la lecture, et se remet a
+    // zero a la fin (le residu d'echo d'une lecture ne vaut pas pour la suivante).
+    vocalSyncMicSpeaking();
     if (parlait !== vocalSpeaking) applyVocalState();
   };
   window.addEventListener(READ_ALOUD_STATE_EVENT, onVocalReadAloudState);

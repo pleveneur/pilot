@@ -11,10 +11,27 @@
 // Ce que ce module NE fait PAS :
 //   - aucune reconnaissance de parole (la dictee garde son propre moteur, dans
 //     la barre de saisie) ;
-//   - aucune coupure de la parole de Pilot (lot 4) : le niveau n'est lu que
-//     pour la longueur du trait, jamais pour decider de se taire ;
+//   - il n'ARRETE rien lui-meme : depuis le lot 4a il SIGNALE seulement qu'une
+//     voix vient de commencer par-dessus la lecture (`onSpeechStart`) ; l'arret
+//     de la lecture reste a l'appelant, par la voie qui existe deja ;
 //   - aucun ecran de reglage et aucune memoire : la demande part au premier
 //     geste dans le mode, jamais a l'entree.
+//
+// ── LOT 4a : QUE PILOT NE SE COUPE PAS LUI-MEME ──────────────────────────────
+// Le micro entend la voix de Pilot sortir des haut-parleurs. Une detection
+// naive le ferait donc se taire aussitot, en boucle. Trois gardes, dans cet
+// ordre :
+//   1. l'ANNULATION D'ECHO est DEMANDEE au navigateur (contraintes ci-dessous)
+//      puis RELUE sur la piste reellement obtenue (`getSettings`) : le
+//      navigateur dit ce qu'il a applique, pas ce qu'on a souhaite ;
+//   2. le RESIDU D'ECHO est MESURE au debut de chaque lecture (niveau maximal
+//      observe pendant `BARGE_IN_CALIBRATION_MS`) et le seuil de detection est
+//      pose AU-DESSUS de ce residu mesure ;
+//   3. si l'annulation d'echo n'est pas averee, ou si le residu depasse
+//      `BARGE_IN_RESIDUAL_MAX`, la detection n'est PAS armee : Pilot lit sa
+//      reponse jusqu'au bout, comme avant. Un silence vaut mieux qu'une
+//      coupure qui se declenche toute seule.
+// Les chiffres REELLEMENT mesures sont rendus par `bargeInReport()`.
 //
 // Toutes les dependances du navigateur sont INJECTABLES (`navigator`,
 // `AudioContext`, `requestAnimationFrame`) : le moteur se teste donc sans
@@ -124,6 +141,184 @@ export function shouldAskVocalMic(etats = {}) {
 }
 
 /**
+ * Contraintes DEMANDEES pour la capture du mode Vocal. L'annulation d'echo est
+ * la premiere garde du lot 4a : sans elle, Pilot s'entend lui-meme. Aucune des
+ * trois options n'est obligatoire pour un peripherique : celui qui les ignore
+ * les ignore, et `getSettings()` dit ensuite ce qui a REELLEMENT ete applique.
+ */
+export const MIC_CONSTRAINTS = {
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+};
+
+// ── LOT 4a : la garde « l'utilisateur parle par-dessus Pilot » ──────────────
+//
+// Toutes les durees sont en millisecondes ; tous les niveaux sont des RMS
+// (0..1), la meme unite que `rmsOf` et que la longueur du trait.
+
+/** Duree de MESURE du residu d'echo, au debut de chaque lecture. */
+export const BARGE_IN_CALIBRATION_MS = 600;
+/** Plancher absolu du seuil : sous ce niveau, personne ne parle (bruit de fond). */
+export const BARGE_IN_MIN_LEVEL = 0.05;
+/** Marge exigee au-dessus du residu d'echo mesure. */
+export const BARGE_IN_RESIDUAL_FACTOR = 1.8;
+/** Residu tolere quand le navigateur PROUVE l'annulation d'echo. */
+export const BARGE_IN_RESIDUAL_MAX = 0.03;
+/** Residu tolere quand le navigateur ne le prouve PAS (casque, enceintes muettes). */
+export const BARGE_IN_RESIDUAL_UNPROVEN_MAX = 0.01;
+/** Duree de voix CONTINUE avant de couper (anti-claquement, anti-toussotement). */
+export const BARGE_IN_MIN_MS = 200;
+/** Pas de temps maximal pris en compte pour une image (anti-saut d'horloge). */
+export const BARGE_IN_MAX_STEP_MS = 50;
+
+/** Un echec de capture du a une CONTRAINTE (et non a un refus) ? PURE. */
+export function isConstraintRejection(nom) {
+  const n = String(nom || "");
+  return n === "OverconstrainedError" || n === "TypeError" || n === "NotSupportedError";
+}
+
+/**
+ * Annulation d'echo REELLEMENT appliquee a un flux, lue dans `getSettings()`.
+ * PURE. Trois reponses, et la troisieme compte :
+ *   - `true`  : le navigateur dit l'avoir appliquee ;
+ *   - `false` : il dit ne pas l'appliquer — le micro entendra Pilot ;
+ *   - `null`  : il ne le dit pas (ou le flux n'a pas de piste) — INCONNU.
+ * @param {any} flux flux rendu par la capture
+ * @returns {boolean|null}
+ */
+export function echoCancellationOf(flux) {
+  if (!flux || typeof flux.getTracks !== "function") return null;
+  let pistes = [];
+  try {
+    pistes = flux.getTracks() || [];
+  } catch (_) {
+    return null;
+  }
+  let vu = null;
+  for (const piste of pistes) {
+    if (!piste || typeof piste.getSettings !== "function") continue;
+    let reglages = null;
+    try {
+      reglages = piste.getSettings();
+    } catch (_) {
+      reglages = null;
+    }
+    if (!reglages || typeof reglages.echoCancellation !== "boolean") continue;
+    if (reglages.echoCancellation === true) return true;
+    vu = false;
+  }
+  return vu;
+}
+
+/**
+ * Seuil de detection d'une prise de parole, pose AU-DESSUS du residu d'echo
+ * mesure. PURE : jamais sous `BARGE_IN_MIN_LEVEL` (bruit de fond), et aucune
+ * valeur inventee quand la mesure manque (0).
+ * @param {number} residuel niveau maximal observe pendant le calibrage
+ * @returns {number}
+ */
+export function vocalEchoThreshold(residuel) {
+  const r = Number.isFinite(residuel) ? Math.max(0, Math.min(1, residuel)) : 0;
+  return Math.max(BARGE_IN_MIN_LEVEL, r * BARGE_IN_RESIDUAL_FACTOR);
+}
+
+/**
+ * La detection est-elle ARMEE ? PURE. Elle ne l'est que si l'echo est maitrise :
+ * annulation d'echo averee, ou — a defaut de preuve du navigateur — un residu
+ * mesure vraiment negligeable. Une annulation d'echo declaree ABSENTE interdit
+ * la detection, quel que soit le niveau : c'est la garde qui empeche Pilot de
+ * se couper lui-meme.
+ * @param {boolean|null} echoAnnule ce que dit `getSettings()`
+ * @param {number} residuel residu d'echo mesure
+ * @returns {boolean}
+ */
+export function bargeInArmed(echoAnnule, residuel) {
+  const r = Number.isFinite(residuel) ? Math.max(0, Math.min(1, residuel)) : 0;
+  if (echoAnnule === false) return false;
+  if (r > BARGE_IN_RESIDUAL_MAX) return false;
+  if (echoAnnule === true) return true;
+  return r <= BARGE_IN_RESIDUAL_UNPROVEN_MAX;
+}
+
+/** Etat initial (et remis a zero) de la garde. PURE. */
+export function emptySpeechGate() {
+  return { dessusMs: 0, calibreMs: 0, residuel: 0, declenche: false };
+}
+
+/**
+ * UN pas de la garde. PURE : tout entre et sort par les arguments, donc la
+ * garde se verifie sans micro et sans fenetre.
+ *
+ * Deroulement d'une lecture :
+ *   - « calibrage » : on ne coupe jamais, on MESURE le residu (maximum vu) ;
+ *   - ensuite une voix doit depasser le seuil SANS INTERRUPTION pendant
+ *     `BARGE_IN_MIN_MS` pour que la garde se declenche ;
+ *   - elle ne se declenche qu'UNE fois par lecture (`declenche`), et l'etat est
+ *     remis a zero des que la lecture s'arrete : le residu d'une lecture ne
+ *     vaut pas pour la suivante.
+ *
+ * @param {{dessusMs?: number, calibreMs?: number, residuel?: number, declenche?: boolean}} etat
+ * @param {number} mesure niveau lisse courant (0..1)
+ * @param {{parlant?: boolean, dtMs?: number, echoAnnule?: boolean|null}} [contexte]
+ * @returns {{etat: object, declenche: boolean, arme: boolean, seuil: number, motif: string}}
+ */
+export function stepSpeechGate(etat, mesure, contexte = {}) {
+  const e = etat || {};
+  const c = contexte || {};
+  const m = Number.isFinite(mesure) ? Math.max(0, Math.min(1, mesure)) : 0;
+  const dt = Number.isFinite(c.dtMs) ? Math.max(0, Math.min(BARGE_IN_MAX_STEP_MS, c.dtMs)) : 0;
+  const echoAnnule = c.echoAnnule === true ? true : c.echoAnnule === false ? false : null;
+  const suivant = {
+    dessusMs: Number.isFinite(e.dessusMs) ? Math.max(0, e.dessusMs) : 0,
+    calibreMs: Number.isFinite(e.calibreMs) ? Math.max(0, e.calibreMs) : 0,
+    residuel: Number.isFinite(e.residuel) ? Math.max(0, Math.min(1, e.residuel)) : 0,
+    declenche: e.declenche === true,
+  };
+  // Hors lecture : la garde dort, et rien de ce qu'elle a mesure ne survit.
+  if (c.parlant !== true) {
+    return { etat: emptySpeechGate(), declenche: false, arme: false, seuil: vocalEchoThreshold(0), motif: "hors-lecture" };
+  }
+  const arme = bargeInArmed(echoAnnule, suivant.residuel);
+  const seuil = vocalEchoThreshold(suivant.residuel);
+  if (suivant.declenche) {
+    return { etat: suivant, declenche: false, arme, seuil, motif: "deja-coupe" };
+  }
+  if (suivant.calibreMs < BARGE_IN_CALIBRATION_MS) {
+    suivant.calibreMs += dt;
+    suivant.residuel = Math.max(suivant.residuel, m);
+    return { etat: suivant, declenche: false, arme, seuil: vocalEchoThreshold(suivant.residuel), motif: "calibrage" };
+  }
+  if (!arme) {
+    // Echo non maitrise : on ne coupe pas, et on le DIT (motif lisible dans
+    // `bargeInReport`). Le calibrage continue de suivre le residu.
+    if (m <= seuil) suivant.residuel = Math.max(suivant.residuel, m);
+    return {
+      etat: suivant,
+      declenche: false,
+      arme: false,
+      seuil,
+      motif: echoAnnule === false ? "echo-non-annule" : "residuel-eleve",
+    };
+  }
+  if (m > seuil) {
+    suivant.dessusMs += dt;
+    if (suivant.dessusMs >= BARGE_IN_MIN_MS) {
+      suivant.declenche = true;
+      return { etat: suivant, declenche: true, arme: true, seuil, motif: "voix-detectee" };
+    }
+    return { etat: suivant, declenche: false, arme: true, seuil, motif: "voix-en-cours" };
+  }
+  suivant.dessusMs = 0;
+  // Le residu ne monte que sur les moments CALMES : une voix qui depasse le
+  // seuil ne doit jamais devenir elle-meme la reference qui l'empeche de couper.
+  suivant.residuel = Math.max(suivant.residuel, m);
+  return { etat: suivant, declenche: false, arme: true, seuil: vocalEchoThreshold(suivant.residuel), motif: "attente" };
+}
+
+/**
  * Puissance efficace (RMS) d'un bloc d'echantillons [-1, 1]. PURE.
  * @param {ArrayLike<number>} echantillons
  * @returns {number} 0..1
@@ -142,25 +337,39 @@ export function rmsOf(echantillons) {
 /**
  * Moteur du micro de l'ecran Vocal.
  *
- * Trois retours, tous facultatifs :
+ * Tres retours, tous facultatifs :
  *   - `onLevel(niveau)` : niveau lisse (0..1), a chaque image utile ;
  *   - `onListening(actif)` : vrai SEULEMENT quand le micro capte reellement ;
  *   - `onFailure(message)` : message clair quand le micro est ferme (refus,
  *     absence, occupation, panne) — le mode reste utilisable.
  *
+ * Et un quatrieme depuis le lot 4a : `onSpeechStart(rapport)` — une voix vient
+ * de depasser le seuil de la garde PENDANT que Pilot lit a voix haute. Il ne
+ * part qu'une fois par lecture, et seulement si la garde est armee.
+ *
  * @param {{
  *   onLevel?: (niveau: number) => void,
  *   onListening?: (actif: boolean) => void,
  *   onFailure?: (message: string) => void,
+ *   onSpeechStart?: (rapport: {residuel: number, seuil: number}) => void,
  *   navigator?: any, AudioContext?: any,
  *   requestAnimationFrame?: (cb: Function) => number,
  *   cancelAnimationFrame?: (id: number) => void,
+ *   now?: () => number,
  * }} [options]
  */
 export function createVocalMic(options = {}) {
   const surNiveau = typeof options.onLevel === "function" ? options.onLevel : () => {};
   const surEcoute = typeof options.onListening === "function" ? options.onListening : () => {};
   const surPanne = typeof options.onFailure === "function" ? options.onFailure : () => {};
+  const surParole = typeof options.onSpeechStart === "function" ? options.onSpeechStart : () => {};
+  const maintenant =
+    typeof options.now === "function"
+      ? options.now
+      : () =>
+          typeof performance !== "undefined" && typeof performance.now === "function"
+            ? performance.now()
+            : Date.now();
   const nav = options.navigator || (typeof navigator !== "undefined" ? navigator : null);
   const contexteCtor =
     options.AudioContext ||
@@ -185,6 +394,14 @@ export function createVocalMic(options = {}) {
   let niveau = 0;
   let actif = false;
   let ferme = false;
+  // ── LOT 4a ──
+  // `parlant` : Pilot lit a voix haute MAINTENANT (pose par l'appelant a partir
+  // de l'etat de la lecture, jamais devine ici). `echoAnnule` : ce que le
+  // peripherique dit de son annulation d'echo (true / false / null = inconnu).
+  let parlant = false;
+  let echoAnnule = null;
+  let garde = emptySpeechGate();
+  let dernierTemps = 0;
 
   function arreterBoucle() {
     if (boucle && typeof caf === "function") {
@@ -239,6 +456,11 @@ export function createVocalMic(options = {}) {
       }
     }
     niveau = 0;
+    // La garde du lot 4a repart d'une mesure neuve : aucun residu d'une session
+    // precedente ne survit a une nouvelle capture.
+    parlant = false;
+    garde = emptySpeechGate();
+    dernierTemps = 0;
     if (etait) surEcoute(false);
   }
 
@@ -258,8 +480,28 @@ export function createVocalMic(options = {}) {
     } catch (_) {
       /* un ecran absent ne doit pas arreter la mesure */
     }
+    mesurerParole();
     if (typeof raf === "function") {
       boucle = raf(mesurer);
+    }
+  }
+
+  /**
+   * LOT 4a : un pas de la garde, sur le niveau que l'ecran vient d'afficher (le
+   * meme chiffre, pas une seconde mesure). Le signal ne part qu'une fois : la
+   * garde se verrouille jusqu'au debut de la lecture suivante.
+   */
+  function mesurerParole() {
+    const instant = maintenant();
+    const dtMs = dernierTemps ? Math.max(0, instant - dernierTemps) : 0;
+    dernierTemps = instant;
+    const pas = stepSpeechGate(garde, niveau, { parlant, dtMs, echoAnnule });
+    garde = pas.etat;
+    if (!pas.declenche) return;
+    try {
+      surParole({ residuel: garde.residuel, seuil: pas.seuil });
+    } catch (_) {
+      /* l'appelant ne doit pas casser la mesure */
     }
   }
 
@@ -311,14 +553,36 @@ export function createVocalMic(options = {}) {
       return false;
     }
     let brut = null;
+    let echec = null;
+    // UN SEUL appel de capture pour tout le fichier (verrouille par test) : il
+    // sert aux contraintes du lot 4a ET au repli simple ci-dessous.
+    const demanderFlux = (contraintes) => md.getUserMedia(contraintes);
     try {
-      brut = await md.getUserMedia({ audio: true });
+      brut = await demanderFlux(MIC_CONSTRAINTS);
     } catch (err) {
+      echec = err;
+      // Un peripherique qui refuse une contrainte precise n'est PAS un micro
+      // absent ni un refus de l'utilisateur : on redemande le micro simple, une
+      // seule fois. L'annulation d'echo repasse alors a l'appreciation du
+      // navigateur, et `getSettings()` dira ce qu'il en est reellement.
+      if (isConstraintRejection(err && err.name)) {
+        try {
+          brut = await demanderFlux({ audio: true });
+          echec = null;
+        } catch (err2) {
+          echec = err2;
+        }
+      }
+    }
+    if (!brut) {
       // Le mode a pu etre quitte pendant la demande : l'echec ne concerne plus
       // aucun ecran, il n'est donc pas signale.
-      if (!ferme) surPanne(micFailureMessage(err && err.name ? err.name : ""));
+      if (!ferme) surPanne(micFailureMessage(echec && echec.name ? echec.name : ""));
       return false;
     }
+    // PREUVE de l'annulation d'echo, lue sur la piste REELLEMENT obtenue : c'est
+    // elle qui autorise (ou interdit) la detection d'une prise de parole.
+    echoAnnule = echoCancellationOf(brut);
     // Le mode a ete quitte pendant la demande : le flux obtenu est REFERME tout
     // de suite, jamais laisse ouvert en arriere-plan.
     if (ferme) {
@@ -375,9 +639,55 @@ export function createVocalMic(options = {}) {
     liberer();
   }
 
+  /**
+   * LOT 4a : Pilot se met a lire (vrai) ou cesse de lire (faux). Appele par
+   * l'ecran a partir de l'etat de la lecture : le micro ne devine jamais qui
+   * parle. La garde ne s'arme que sur un debut de lecture, et se remet a zero
+   * des la fin — le residu d'une lecture ne vaut pas pour la suivante.
+   * @param {boolean} actif
+   */
+  function setSpeaking(actif) {
+    const etat = actif === true;
+    if (etat === parlant) return;
+    parlant = etat;
+    if (!etat) {
+      garde = emptySpeechGate();
+      dernierTemps = 0;
+    }
+  }
+
+  /**
+   * Les CHIFFRES de la garde, tels qu'ils sont mesures sur ce micro : de quoi
+   * verifier au vrai peripherique qu'aucune coupure ne peut partir toute seule
+   * (residu, seuil, arme ou non).
+   * @returns {{echoCancellation: boolean|null, residuel: number, seuil: number,
+   *   arme: boolean, calibre: boolean, motif: string}}
+   */
+  function bargeInReport() {
+    const seuil = vocalEchoThreshold(garde.residuel);
+    const arme = bargeInArmed(echoAnnule, garde.residuel);
+    const calibre = garde.calibreMs >= BARGE_IN_CALIBRATION_MS;
+    let motif = "hors-lecture";
+    if (parlant) {
+      if (!calibre) motif = "calibrage";
+      else if (!arme) motif = echoAnnule === false ? "echo-non-annule" : "residuel-eleve";
+      else motif = garde.declenche ? "voix-detectee" : "a-l-ecoute";
+    }
+    return {
+      echoCancellation: echoAnnule,
+      residuel: Math.round(garde.residuel * 1000) / 1000,
+      seuil: Math.round(seuil * 1000) / 1000,
+      arme,
+      calibre,
+      motif,
+    };
+  }
+
   return {
     demander,
     fermer,
+    setSpeaking,
+    bargeInReport,
     estActif: () => actif,
   };
 }

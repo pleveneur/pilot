@@ -16,6 +16,36 @@ Bouton **« 🔊 Écouter » / « ⏹ Arrêter »** sous chaque réponse de l'ag
      Hors mode Vocal, la règle « rien ne se lit tout seul » est inchangée, et
      l'état « Pilot parle » de l'écran vient uniquement de
      `READ_ALOUD_STATE_EVENT` (aucune seconde source).
+   - **Parler par-dessus Pilot arrête la lecture (lot 4a).** Pendant que Pilot
+     lit **en mode Vocal**, une prise de parole de l'utilisateur arrête la
+     lecture **immédiatement et proprement** : l'arrêt emprunte `stopReading()`
+     (même voie que la sortie du mode), donc il tombe **entre deux morceaux**, et
+     aucune reprise n'est programmée. L'écran repasse en « écoute » (le micro
+     capte déjà) et le curseur revient dans la zone de saisie. **Hors mode
+     Vocal, rien ne change** : les autres écrans lisent jusqu'au bout, et le
+     micro n'y est pas ouvert.
+   - **Pilot ne se coupe pas lui-même — c'est mesuré, pas supposé.** Le risque
+     est que le micro entende la voix de Pilot sortant des haut-parleurs. Trois
+     gardes, dans cet ordre (`vocal-mic.js`, fonctions pures) :
+     1. **Annulation d'écho demandée puis relue** : les contraintes de capture
+        demandent `echoCancellation` / `noiseSuppression` / `autoGainControl`,
+        et `echoCancellationOf` lit ce que le périphérique **dit avoir appliqué**
+        (`getSettings()`). Une réponse `false` **interdit** la détection ; une
+        absence de réponse vaut **inconnue**, jamais « vrai par défaut ».
+     2. **Seuil posé au-dessus du résidu mesuré** : au début de chaque lecture,
+        `BARGE_IN_CALIBRATION_MS` (600 ms) mesure le niveau maximal (le résidu
+        d'écho) sans jamais couper ; ensuite le seuil vaut
+        `max(BARGE_IN_MIN_LEVEL = 0,05 ; résidu × 1,8)`. Le résidu ne remonte que
+        sur les moments **calmes** : une voix ne devient jamais la référence qui
+        l'empêcherait de couper.
+     3. **Détection désarmée si l'écho n'est pas maîtrisé** : résidu >
+        `BARGE_IN_RESIDUAL_MAX` (0,03 avec annulation averée, 0,01 quand le
+        périphérique ne dit rien) ⇒ **aucune coupure** : Pilot lit jusqu'au bout,
+        comme avant. Un silence vaut mieux qu'une réponse qui bégaie.
+     Une coupure exige `BARGE_IN_MIN_MS` (200 ms) de voix **continue** au-dessus
+     du seuil, et ne part **qu'une fois** par lecture. Les chiffres réellement
+     mesurés sont rendus par `bargeInReport()` et écrits une fois par coupure
+     (console : `[vocal] prise de parole : residu=… seuil=…`).
 2. **Une seule lecture à la fois** : lancer une autre réponse arrête la
    précédente (`stopReading` avant toute nouvelle prise de parole).
 3. **Texte nettoyé — un seul endroit** : `textForSpeech` (`src/js/speech-text.js`),
@@ -444,3 +474,24 @@ exprès le code : retirer l'émission de `system-fallback`, forcer la cause, ou
 retirer la branche d'affichage fait **échouer** ce fichier.
 
 Aide utilisateur : `help/overview.md`, bloc `HELP:lire-reponses`.
+
+## 6. Coupure par la voix (lot 4a) — tests et limites
+
+`src/js/ecran-vocal-lot4a.test.js` verrouille ce qui précède : le seuil au-dessus
+du résidu (et jamais sous le plancher), **trente secondes** de lecture avec un
+résidu d'écho **sans aucune coupure**, une voix continue qui coupe **une seule
+fois** après 200 ms, un claquement court qui ne coupe pas, la fin de lecture qui
+remet la garde à zéro, l'`echoCancellation` **demandée** puis **relue**, la
+**preuve par neutralisation** (même niveau, même lecture : annulation averée ⇒
+coupure, annulation déclarée absente ⇒ aucune coupure), le repli sur le micro
+simple quand une contrainte est refusée (un refus de l'utilisateur n'est jamais
+retenté), le branchement unique `onSpeechStart` → `vocalBargeIn` → `stopReading`,
+l'absence de tout lecteur supplémentaire et de toute reprise automatique, et le
+fait que la coupure **n'arrête aucun agent** (c'est un arrêt d'écoute, pas un
+arrêt de travail : l'entonnoir `agent-stop-funnel.js` n'a rien à y tracer).
+
+**Ce que ces tests ne peuvent pas prouver**, et qui se vérifie au vrai micro : le
+niveau d'écho réel de la pièce. La démarche est chiffrée dans
+`.pilot/rapports/rapport-lot4a-coupure-parole.md` (lire `bargeInReport()` / la
+ligne de console, comparer résidu et seuil). Si le résidu mesuré dépasse les
+limites ci-dessus, la détection ne s'arme pas : c'est le comportement voulu.

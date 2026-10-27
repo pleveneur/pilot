@@ -120,6 +120,17 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - **La réponse s'y lit à voix haute** (même voix et même bouton « 🔊 Écouter »
   que dans les autres écrans). **Écrire ou valider pendant la lecture l'arrête**
   et envoie votre message.
+- **Parler par-dessus Pilot le fait taire** : pendant qu'il lit, si vous prenez
+  la parole, la lecture **s'arrête net** (jamais au milieu d'un mot : entre deux
+  phrases), l'objet repasse en **écoute** et la zone de saisie **reprend la
+  main**. Pilot **ne se coupe jamais lui-même** : il vérifie d'abord que votre
+  micro n'entend pas ses propres haut-parleurs (annulation d'écho de l'ordinateur,
+  mesure du son résiduel au début de chaque lecture, seuil posé au-dessus). Si
+  cette vérification n'est pas concluante — hauts-parleurs puissants, micro qui
+  reprend la voix de Pilot —, **il ne coupe pas** et lit sa réponse jusqu'au
+  bout, comme avant : un silence vaut mieux qu'une réponse qui bégaie. Le
+  **casque** est la situation où cela marche le mieux. Hors du mode Vocal, rien
+  ne change : les réponses se lisent jusqu'au bout.
 - La **zone de saisie** reste visible en bas et grandit quand vous écrivez
   (jusqu'à 120 px) ; elle garde son micro de dictée 🎙️.
 - **On en sort par les trois mêmes chemins** : le **même bouton** (mode suivant),
@@ -134,7 +145,8 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   **dit en une phrase** et propose **« Autoriser le micro »** : le mode Vocal
   reste entièrement utilisable (écrire, envoyer, écouter). En quittant le mode,
   **le micro est coupé** (le témoin du système s'éteint).
-- Ce qui **reste à venir** : la coupure de Pilot en parlant.
+- Ce qui **reste à venir** : la reprise de l'écoute après la réponse et le mode
+  conversation continue.
 
 ### Écouter une réponse de l'assistant (🔊)
 - Chaque réponse de l'agent (onglet **π**) et de l'Assistant (onglet **🧭**) porte un bouton
