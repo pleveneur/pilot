@@ -8,8 +8,9 @@
 //   - UN SEUL bouton, un seul noeud dans tout le document, place entre l'entree
 //     « Travail » et les trois boutons systeme (aucune creation, aucune copie) ;
 //   - les libelles, les infobulles et les icones EXACTS du rapport ;
-//   - au lot 1, « Vocal » emprunte l'ecran de « Assistant seul » (aucun ecran
-//     vocal n'est dessine : c'est le lot 2).
+//   - « Vocal » demande un PLEIN ECRAN comme « Assistant seul » ; depuis le
+//     lot 2 il a son propre ecran (verrouille par ecran-vocal-lot2.test.js),
+//     ce fichier ne verrouille que le bouton et la cle de memoire.
 //
 // Aucun navigateur n'est requis (lecture des fichiers, fins de ligne
 // normalisees, cf. quality-gate 3.4).
@@ -107,7 +108,7 @@ describe("1. les trois modes, dans l'ordre du cycle (§1.2)", () => {
     expect(screenModeTitle("vocal")).toBe("Mode d'écran : Vocal. Passer à « Détaillé ».");
   });
 
-  it("au lot 1, « Vocal » demande le plein ecran de l'assistant (ecran emprunte)", () => {
+  it("« Vocal » demande un plein ecran (son propre ecran depuis le lot 2)", () => {
     expect(isImmersiveScreenMode("detailed")).toBe(false);
     expect(isImmersiveScreenMode("assistant")).toBe(true);
     expect(isImmersiveScreenMode("vocal")).toBe(true);

@@ -7,6 +7,15 @@ Bouton **« 🔊 Écouter » / « ⏹ Arrêter »** sous chaque réponse de l'ag
 
 1. **Un clic lit, un second arrête.** Aucune lecture automatique : rien ne se lit
    à l'ouverture de Pilot ni à l'arrivée d'un message.
+   - **Seule exception, le mode d'écran « Vocal »** (lot 2) : la réponse de
+     l'Assistant s'y lit à voix haute sans clic. Ce n'est pas un second
+     mécanisme — `autoReadVocalReply()` (`super-agent.js`) actionne le **bouton
+     « 🔊 Écouter » déjà posé** sous le dernier message ; même nettoyage du
+     texte, même découpage, mêmes voix, une seule lecture à la fois. Écrire ou
+     valider pendant la lecture l'arrête (`stopReading`) puis le message part.
+     Hors mode Vocal, la règle « rien ne se lit tout seul » est inchangée, et
+     l'état « Pilot parle » de l'écran vient uniquement de
+     `READ_ALOUD_STATE_EVENT` (aucune seconde source).
 2. **Une seule lecture à la fois** : lancer une autre réponse arrête la
    précédente (`stopReading` avant toute nouvelle prise de parole).
 3. **Texte nettoyé — un seul endroit** : `textForSpeech` (`src/js/speech-text.js`),

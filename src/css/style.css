@@ -375,6 +375,17 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   --danger: #f87171;
   --success: #4ade80;
   --warning: #fbbf24;
+  /* Ecran Vocal (lot 2, RAPPORT-trois-modes-ecran-vocal.md §4.1) : les quatre
+     teintes d'etat. En theme sombre ce sont EXACTEMENT des couleurs du projet
+     (accent de texte, succes, violet de l'assistant, alerte) : aucun jeton
+     nouveau en dur. Elles ne portent JAMAIS de texte — la ligne d'etat reste
+     --text-primary (15,4:1) —, ce qui autorise le seuil de 3:1 d'un element
+     graphique non textuel. Contrastes mesures sur le fond de l'application :
+     6,97 / 10,84 / 5,78 / 11,32. Les sous-themes heritent (classes cumulees). */
+  --vocal-rest: var(--accent-text);
+  --vocal-listen: var(--success);
+  --vocal-think: var(--superagent-accent);
+  --vocal-speak: var(--warning);
 
   /* Ombres & lumières */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.12);
@@ -468,6 +479,16 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   --danger: #e5484d;
   --success: #30a46c;
   --warning: #f5a524;
+  /* Ecran Vocal (lot 2) : en theme CLAIR, --success (2,89:1) et --warning
+     (1,87:1) echouent meme le seuil de 3:1 sur le fond de l'application. On
+     reprend donc les MEMES teintes, ASSOMBRIES — exactement la methode deja
+     suivie pour --accent-text (voir plus bas). Contrastes mesures sur le fond
+     clair : 5,47 / 5,09 / 6,81 / 4,81. Aucun nouvel ecran de reglage : ces
+     jetons suivent le theme et ne sont pas modifiables par l'utilisateur. */
+  --vocal-rest: var(--accent-text);
+  --vocal-listen: #1f7a4d;
+  --vocal-think: #6d28d9;
+  --vocal-speak: #b45309;
 
   /* Ombres & lumières */
   --shadow-xs: 0 1px 2px rgba(26, 29, 36, 0.08);
@@ -11485,6 +11506,286 @@ summary:focus-visible {
 }
 
 /* ================================================================
+   LOT 2 — ECRAN DU MODE VOCAL (RAPPORT-trois-modes-ecran-vocal.md §2 a §4)
+   Un SECOND plein ecran, de la meme famille que celui de l'assistant seul
+   (§2 : meme patron `position: fixed; inset: 0; z-index: 99990`), mais qui ne
+   montre RIEN de la conversation : un objet lumineux au centre, UNE ligne
+   d'etat, la barre de saisie existante (deplacee, jamais dupliquee) et le
+   bouton unique des trois modes dans une barre de 44 px.
+   Ce que cet ecran ne fait pas encore (et ne simule pas) :
+     - le micro et le NIVEAU REEL (lot 3) : le trait de niveau reste inerte,
+       a 8 % de sa largeur, comme au repos ;
+     - la coupure de Pilot en parlant (lot 4).
+   Aucune couleur en dur : les quatre teintes d'etat viennent des jetons
+   --vocal-* (definis dans les deux themes de base, herites par les
+   sous-themes). Le texte, lui, est toujours --text-primary.
+   ================================================================ */
+.pilot-vocal {
+  position: fixed;
+  inset: 0;
+  z-index: 99990;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  /* Entree / sortie : 0,3 s de fondu du fond — pas de zoom, on change d'ecran
+     et on ne deplie pas un panneau (§4.2). */
+  animation: vocal-fade-in var(--transition-smooth);
+}
+/* Le plein ecran ne laisse rien defiler derriere lui. */
+.pilot-vocal-active {
+  overflow: hidden;
+}
+/* Modales (Parametres…) et toasts AU-DESSUS de l'overlay, comme en mode
+   assistant seul. Hors de ce mode, les z-index ne changent pas. */
+.pilot-vocal-active .modal {
+  z-index: 99995;
+}
+.pilot-vocal-active #toast-container {
+  z-index: 99995;
+}
+
+/* --- §2.1 La barre du haut : 44 px, sur la SECONDE ligne de la fenetre ---
+   Meme regle de placement que .sa-immersive-top : l'overlay demarre tout en
+   haut, la marge haute vit sur la BARRE, sous la rangee des trois boutons
+   systeme (z-index 100001, non touche ici). */
+.vocal-top {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  width: 100%;
+  margin-top: var(--window-controls-height);
+  padding: 0 var(--window-controls-air) 0 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+/* Le bouton des trois modes, DEPLACE ici : largeur AUTO (icone + mot) au lieu
+   des 88 px de la rangee d'onglets, pour que « Assistant seul » ne soit jamais
+   tronque. Meme noeud, memes etats, aucune copie. */
+body.pilot-vocal-active #screen-mode-button {
+  width: auto;
+  padding: 0 8px;
+  margin: 0;
+}
+
+/* --- §2.2 Le centre : l'objet lumineux --- */
+/* Esprit « interface Cornelius » : pas de cadre, pas de carte, pas de
+   bordure. Le bloc (disque + trait + ligne d'etat) est centre dans l'espace
+   entre la barre haute et la zone de saisie, et suit la fenetre sans calcul. */
+.vocal-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* 24 px entre le disque et son trait, puis entre le trait et la ligne
+     d'etat (§2.2 et §2.3). */
+  gap: 24px;
+  padding: 16px;
+}
+/* Teinte de l'etat : UNE seule variables, posee par UNE seule classe d'etat
+   sur l'overlay (deux etats simultanes sont impossibles par construction). */
+.pilot-vocal.vocal-state-idle { --vocal-state: var(--vocal-rest); }
+.pilot-vocal.vocal-state-listening { --vocal-state: var(--vocal-listen); }
+.pilot-vocal.vocal-state-thinking { --vocal-state: var(--vocal-think); }
+.pilot-vocal.vocal-state-speaking { --vocal-state: var(--vocal-speak); }
+
+/* Disque de 168 px : anneau de 2 px dans la couleur d'etat (stable, lisible
+   meme quand le remplissage est tres transparent) + remplissage radial de
+   18 % au centre a 0 % aux bords — la « lumiere », sans aucune image. */
+.vocal-orb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  border: 2px solid var(--vocal-state, var(--vocal-rest));
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 18%, transparent) 0%,
+    transparent 100%
+  );
+  transition: border-color var(--transition-smooth), background var(--transition-smooth);
+}
+/* Halo de la PAROLE : une enveloppe douce qui ondule (1,6 s), bornee et jamais
+   synchrone avec les mots — la synthese vocale ne rend pas son signal, on ne
+   pretend donc pas mesurer la voix. */
+.vocal-orb::before {
+  content: "";
+  position: absolute;
+  inset: -18px;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 22%, transparent) 0%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity var(--transition-smooth);
+  pointer-events: none;
+}
+.pilot-vocal.vocal-state-speaking .vocal-orb::before {
+  opacity: 1;
+  animation: vocal-halo 1.6s ease-in-out infinite;
+}
+/* Arc de la REFLEXION : 60 degres qui tournent en 3 s autour de l'anneau. */
+.vocal-orb::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    var(--vocal-state, var(--vocal-rest)) 0deg,
+    transparent 60deg
+  );
+  /* Masque de DECOUPE (canal alpha seulement) : #000 n'est pas une couleur
+     affichee, il dit "opaque" — aucune teinte de l'ecran ne vient d'ici. */
+  -webkit-mask: radial-gradient(closest-side, transparent 82%, #000 84%);
+  mask: radial-gradient(closest-side, transparent 82%, #000 84%);
+  opacity: 0;
+  transition: opacity var(--transition-smooth);
+  pointer-events: none;
+}
+.pilot-vocal.vocal-state-thinking .vocal-orb::after {
+  opacity: 1;
+  animation: vocal-spin 3s linear infinite;
+}
+/* Repos : respiration lente de 4 s. Ecoute : aucune pulsation propre — le
+   disque ne bouge pas, il suit le micro (lot 3). */
+.pilot-vocal.vocal-state-idle .vocal-orb {
+  animation: vocal-breathe 4s ease-in-out infinite;
+}
+
+/* Le trait du niveau : 200 x 3 px, rayon 2 px, a 24 px sous le disque (le `gap`
+   du bloc le pose). Sa LONGUEUR est la seule variation : 8 % au silence, elle
+   grandit en se centrant. Aucun fond de piste (un seul trait a l'ecran). */
+.vocal-level {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 200px;
+  height: 3px;
+}
+.vocal-level-bar {
+  display: block;
+  width: 8%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--vocal-state, var(--vocal-rest));
+  /* 80 ms en lineaire : plus court que la couleur, la voix doit se voir
+     « en direct » (§4.2). */
+  transition: width 80ms linear, background var(--transition-smooth);
+}
+/* LOT 2 : sans micro, l'etat « ecoute » n'a pas de niveau a suivre — le trait
+   reste au silence. Le lot 3 n'aura qu'a fournir la largeur reelle. */
+.pilot-vocal.vocal-state-listening .vocal-level-bar {
+  width: 8%;
+}
+.pilot-vocal.vocal-state-thinking .vocal-level-bar {
+  animation: vocal-think-pulse 1.4s ease-in-out infinite;
+}
+.pilot-vocal.vocal-state-speaking .vocal-level-bar {
+  animation: vocal-speak-envelope 1.6s ease-in-out infinite;
+}
+
+/* --- §2.3 L'UNIQUE ligne d'etat ---
+   Un seul texte, 15 px (--font-zone), graisse 500, centre. Couleur TOUJOURS
+   neutre : la couleur d'etat vit dans l'objet, jamais dans le texte
+   (--text-primary : 15,4:1 en sombre, 15,6:1 en clair). --text-muted est
+   interdit ici (2,90:1 en clair). */
+.vocal-status {
+  flex: 0 0 auto;
+  max-width: 640px;
+  font-family: var(--font-ui);
+  font-size: var(--font-zone);
+  font-weight: var(--fw-medium);
+  line-height: 1.4;
+  text-align: center;
+  color: var(--text-primary);
+  transition: opacity var(--transition);
+}
+
+/* --- §2.4 La zone de saisie : toujours visible, discrete ---
+   C'est la barre de saisie de l'onglet Assistant, DEPLACEE ici : meme noeud,
+   meme envoi, meme dictee. Seule son apparence change — barre de 720 px au
+   plus, centree, 16 px de marge en bas, sans filet ni fond pleine largeur (le
+   champ garde son propre contour : --border-subtle au repos, --accent + --ring
+   au focus, regles existantes inchantees). */
+.vocal-input {
+  flex: 0 0 auto;
+  width: min(720px, calc(100vw - 32px));
+  margin: 0 auto 16px;
+}
+.vocal-input .agent-chat-input-bar {
+  padding: 0;
+  border-top: none;
+  background: transparent;
+}
+.vocal-input .agent-input {
+  /* Texte au repos en --text-secondary (§2.4) : la saisie se distingue du vide
+     sans attirer l'oeil. Le focus garde son contour --accent + --ring. */
+  color: var(--text-secondary);
+}
+.vocal-input .agent-input::placeholder {
+  color: var(--text-secondary);
+}
+
+/* --- §4.2/§4.3 Mouvement reduit : le MEME drapeau que les animations
+   d'ouverture (prefers-reduced-motion + parametre modal_animations, pose par
+   super-agent.js via la classe .vocal-reduced). Disque immobile — la couleur
+   et le mot portent l'etat —, longueur du trait FIXE par etat, transitions 0 s.
+   Aucun nouvel ecran de reglage n'est cree pour cela. */
+.pilot-vocal.vocal-reduced,
+.pilot-vocal.vocal-reduced .vocal-orb,
+.pilot-vocal.vocal-reduced .vocal-orb::before,
+.pilot-vocal.vocal-reduced .vocal-orb::after,
+.pilot-vocal.vocal-reduced .vocal-level-bar,
+.pilot-vocal.vocal-reduced .vocal-status {
+  animation: none;
+  transition: none;
+}
+.pilot-vocal.vocal-reduced .vocal-orb::before,
+.pilot-vocal.vocal-reduced .vocal-orb::after {
+  opacity: 0;
+}
+.pilot-vocal.vocal-reduced.vocal-state-idle .vocal-level-bar { width: 8%; }
+.pilot-vocal.vocal-reduced.vocal-state-listening .vocal-level-bar { width: 45%; }
+.pilot-vocal.vocal-reduced.vocal-state-thinking .vocal-level-bar { width: 20%; }
+.pilot-vocal.vocal-reduced.vocal-state-speaking .vocal-level-bar { width: 70%; }
+
+@keyframes vocal-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes vocal-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+@keyframes vocal-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes vocal-halo {
+  0%, 100% { transform: scale(0.94); opacity: 0.45; }
+  50% { transform: scale(1.06); opacity: 0.85; }
+}
+@keyframes vocal-think-pulse {
+  0%, 100% { width: 8%; }
+  50% { width: 16%; }
+}
+@keyframes vocal-speak-envelope {
+  0%, 100% { width: 30%; }
+  35% { width: 62%; }
+  70% { width: 45%; }
+}
+/* ================================================================
    PRISE EN MAIN — NIVEAU 2 : l'équipe d'agents (spec_onboarding.md)
    Deux écrans FACULTATIFS qui apprennent, à la demande, comment se sert
    l'équipe d'agents. Ils réutilisent les classes de la prise en main
@@ -11545,3 +11846,4 @@ summary:focus-visible {
 .onboarding-link-btn:hover {
   color: var(--text-primary);
 }
+

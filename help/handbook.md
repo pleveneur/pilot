@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-26 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-27 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -431,7 +431,10 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   alors **« ⏹ Arrêter »** (le libellé, l'icône et l'encadré changent — l'état se
   comprend même sans couleur).
 - **Rien ne se lit tout seul** : aucune lecture automatique et aucun son à
-  l'ouverture de Pilot. C'est vous qui décidez, message par message.
+  l'ouverture de Pilot. C'est vous qui décidez, message par message — **sauf en
+  mode « Vocal »**, où la réponse se lit à voix haute (c'est le principe même de
+  cet écran, voir la section sur les modes d'écran). Écrire ou valider pendant la
+  lecture l'arrête aussitôt, et sortir du mode Vocal aussi.
 - **Une seule lecture à la fois** : lancer une autre réponse arrête proprement
   la précédente, jamais deux voix ensemble.
 - **La voix ne débite pas le balisage** : titres, puces, gras, tableaux, liens

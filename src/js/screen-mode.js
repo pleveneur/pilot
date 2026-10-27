@@ -6,17 +6,19 @@
 //   « Assistant seul » -> le plein ecran de l'onglet Assistant. Il EXISTE DEJA
 //                         (overlay de super-agent.js) : ce module ne le refait
 //                         pas, il demande a y entrer ;
-//   « Vocal »          -> PROVISOIRE au lot 1 : branche sur l'ecran de
-//                         l'assistant seul. L'ecran vocal arrive au lot 2 ;
-//                         une seule ligne a changer ici (`IMMERSIVE_SCREEN_MODES`).
+//   « Vocal »          -> l'ecran Vocal (lot 2) : son PROPRE plein ecran
+//                         `.pilot-vocal` (un objet lumineux au centre, une
+//                         seule ligne d'etat, la barre de saisie deplacee).
+//                         `screenModeScreen()` est la SEULE source de cette
+//                         correspondance mode -> ecran.
 //
 // Ce module ne dessine AUCUN ecran : l'entree et la sortie du plein ecran
-// restent la propriete de super-agent.js (`enterImmersive` / `exitImmersive`).
-// Il publie `pilot-screen-mode-apply` et il tient le bouton (libelle du mode
-// COURANT, infobulle du mode SUIVANT, pastille de la teinte du mode courant).
-// Aucun second mecanisme, aucun ecran de reglage.
+// restent la propriete de super-agent.js (`enterImmersive` / `exitImmersive`,
+// `enterVocal` / `exitVocal`). Il publie `pilot-screen-mode-apply` et il tient
+// le bouton (libelle du mode COURANT, infobulle du mode SUIVANT, pastille de la
+// teinte du mode courant). Aucun second mecanisme, aucun ecran de reglage.
 //
-// Reference : RAPPORT-trois-modes-ecran-vocal.md §1 et §5 « Lot 1 ».
+// Reference : RAPPORT-trois-modes-ecran-vocal.md §1, §2 et §5 (« Lot 1 », « Lot 2 »).
 
 import { setIcon } from "./icons.js";
 
@@ -39,8 +41,9 @@ export const SCREEN_MODES = [
   { id: "vocal", label: "Vocal", icon: "audio-lines" },
 ];
 
-// Modes qui demandent un PLEIN ECRAN. Au lot 1, « Vocal » emprunte l'ecran de
-// l'assistant seul : c'est la seule ligne a modifier au lot 2.
+// Modes qui demandent un PLEIN ECRAN (tout sauf « Detaille »). La question
+// « quel ECRAN ? » est tranchee par `screenModeScreen()`, une seule fois :
+// « Vocal » a le sien depuis le lot 2.
 const IMMERSIVE_SCREEN_MODES = ["assistant", "vocal"];
 
 /** Mode connu exact, ou null si la valeur n'est pas l'un des trois modes. */
@@ -70,6 +73,19 @@ export function nextScreenMode(mode) {
 /** true si le mode demande un plein ecran (tout sauf « Detaille »). */
 export function isImmersiveScreenMode(mode) {
   return IMMERSIVE_SCREEN_MODES.includes(normalizeScreenMode(mode));
+}
+
+/**
+ * Ecran qui possede un mode — SOURCE UNIQUE de cette correspondance :
+ *   « detailed »  -> l'ecran normal de Pilot (rangee d'onglets + colonne) ;
+ *   « assistant » -> l'overlay du mode assistant seul (super-agent.js) ;
+ *   « vocal »     -> l'ecran Vocal `.pilot-vocal` (super-agent.js, lot 2).
+ * Aucun autre module ne decide ou « Vocal » est dessine.
+ * @param {"detailed"|"assistant"|"vocal"|string} mode
+ * @returns {"detailed"|"assistant"|"vocal"}
+ */
+export function screenModeScreen(mode) {
+  return normalizeScreenMode(mode);
 }
 
 /**

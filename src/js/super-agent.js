@@ -12,7 +12,10 @@ import { refreshIcons } from "./icons.js";
 // Lecture a voix haute des reponses de l'assistant : rangee d'actions sous la
 // bulle (bouton Ecouter / Arreter). Regles (nettoyage du balisage, decoupage en
 // phrases, une seule lecture a la fois) regroupees dans read-aloud.js.
-import { attachReadAloud } from "./read-aloud.js";
+// LOT 2 (ecran Vocal) : `READ_ALOUD_STATE_EVENT` est la SEULE source de l'etat
+// « Pilot parle » de cet ecran, et `stopReading` est le SEUL arret : aucun
+// second mecanisme de lecture n'est cree.
+import { attachReadAloud, READ_ALOUD_STATE_EVENT, stopReading } from "./read-aloud.js";
 // Envoi AUTOMATIQUE a la fin d'une dictee vocale : la decision et l'ORDRE
 // (refermer la session -> ecrire la zone -> envoyer) vivent dans CE module, le
 // meme que celui de l'onglet agent pi — aucune copie de logique ici, et le
@@ -157,13 +160,14 @@ import {
 // fonction du projet (`projectShortName`) — jamais un chemin, jamais un nom
 // recopié à la main. « Assistant » seulement si aucun projet n'est ouvert.
 import { projectShortName } from "./telegram-messages.js";
-// TROIS MODES D'ECRAN (lot 1, RAPPORT-trois-modes-ecran-vocal.md §1) : le mode
-// est decide et memorise par `screen-mode.js` (source unique). Ici, l'onglet
-// Assistant ne fait que deux choses : DEPLACER le bouton unique dans sa barre
-// quand il entre en plein ecran (et le restituer a la sortie), et SIGNALER
-// l'entree / la sortie REELLES pour que la cle de memoire reste juste (bouton
-// retour, Echap, fermeture de l'onglet). Aucun second bouton, aucun ecran
-// redessine.
+// TROIS MODES D'ECRAN (lot 1 puis lot 2, RAPPORT-trois-modes-ecran-vocal.md §1
+// a §3) : le mode est decide et memorise par `screen-mode.js` (source unique),
+// qui dit aussi QUEL ecran possede chaque mode (`screenModeScreen`). Ici,
+// l'onglet Assistant ne fait que trois choses : DEPLACER le bouton unique dans
+// la barre de l'ecran ouvert (et le restituer a la sortie), entrer dans
+// l'ecran demande / en sortir, et SIGNALER l'entree / la sortie REELLES pour
+// que la cle de memoire reste juste (bouton retour, Echap, fermeture de
+// l'onglet). Aucun second bouton, aucun ecran de « Detaille » redessine.
 import {
   LEGACY_IMMERSIVE_KEY,
   SCREEN_MODE_APPLY_EVENT,
@@ -172,6 +176,8 @@ import {
   isImmersiveScreenMode,
   noteImmersiveEntered,
   noteImmersiveExited,
+  rememberScreenMode,
+  screenModeScreen,
 } from "./screen-mode.js";
 
 /**
@@ -445,6 +451,67 @@ export function superAgentReflectingFromEvent(type) {
  * @param {{agentReflecting?: boolean, pendingQuestion?: boolean}} etats
  * @returns {boolean} true si la zone de saisie doit respirer.
  */
+/**
+ * Etat AFFICHE de l'ecran Vocal (lot 2, RAPPORT-trois-modes-ecran-vocal.md §4).
+ * UN SEUL etat a la fois, par ordre de priorite : la parole (la voix sort)
+ * prime sur la reflexion, qui prime sur l'ecoute. « Ecoute » n'est atteignable
+ * qu'au lot 3 (le micro n'existe pas encore) : il est declare ici pour que le
+ * lot 3 n'ait qu'a fournir le niveau reel.
+ * @param {{speaking?: boolean, reflecting?: boolean, listening?: boolean}} [etats]
+ * @returns {"idle"|"listening"|"thinking"|"speaking"}
+ */
+export function vocalScreenState(etats = {}) {
+  const e = etats || {};
+  if (e.speaking === true) return "speaking";
+  if (e.reflecting === true) return "thinking";
+  if (e.listening === true) return "listening";
+  return "idle";
+}
+
+/** Classe CSS de l'etat de l'ecran Vocal (une seule classe a la fois). */
+export function vocalStateClass(etats = {}) {
+  return `vocal-state-${vocalScreenState(etats)}`;
+}
+
+/**
+ * L'UNIQUE ligne d'etat de l'ecran Vocal (§2.3) : une seule phrase, jamais
+ * coloree par l'etat (la couleur vit dans l'objet). Le texte est lu tel quel
+ * dans le rapport.
+ * @param {"idle"|"listening"|"thinking"|"speaking"} state
+ * @returns {string}
+ */
+export function vocalStatusText(state) {
+  switch (state) {
+    case "listening":
+      return "Je vous écoute…";
+    case "thinking":
+      return "Je réfléchis…";
+    case "speaking":
+      return "Je réponds.";
+    default:
+      return "Je vous écoute.";
+  }
+}
+
+/**
+ * Reduction de mouvement (§4.3) : l'ecran Vocal lit le MEME drapeau que les
+ * animations d'ouverture (modal-anim.js) — `prefers-reduced-motion` PLUS le
+ * parametre utilisateur `_pilotModalAnimations` (défaut : respecter la
+ * preference systeme). Aucun nouveau reglage n'est cree.
+ * @returns {boolean}
+ */
+export function vocalReducedMotion(win) {
+  const w = win || (typeof window !== "undefined" ? window : null);
+  if (!w || typeof w.matchMedia !== "function") return false;
+  let reduit = false;
+  try {
+    reduit = !!w.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch (_) {
+    return false;
+  }
+  return reduit && w._pilotModalAnimations !== true;
+}
+
 export function superAgentInputReflecting(etats = {}) {
   const e = etats || {};
   if (e.pendingQuestion === true) return false;
@@ -3138,6 +3205,24 @@ export async function createSuperAgent(container) {
   // une réflexion (voir applyReflecting appelé par enterImmersive /
   // exitImmersive).
   let reflectingActive = false;
+  // ── LOT 2 : etat de l'ecran Vocal (RAPPORT-trois-modes-ecran-vocal.md §2 a §4) ──
+  // Declares ICI, et pas dans la section de l'ecran, pour une raison d'ORDRE :
+  // `setReflecting` (juste en dessous) est appele des l'ouverture de l'onglet et
+  // resynchronise cet ecran (`applyVocalState`). Les declarer plus bas les
+  // exposerait a la zone morte temporelle (`let`) pendant ces premiers appels.
+  let vocalOverlay = null;
+  // Places d'origine (parent + voisin suivant) des deux noeuds DEPLACES : le
+  // bouton unique des modes et la barre de saisie. Patron identique a celui de
+  // « Travail » : restitution exacte, sans doublon ni perte.
+  let vocalModeButtonHome = null;
+  let vocalInputHome = null;
+  // Placeholder d'origine de la zone de saisie : l'ecran Vocal en pose un plus
+  // court (§2.4, « Écrivez, ou parlez. ») et le restitue tel quel a la sortie.
+  let vocalPlaceholderHome = null;
+  // true pendant que la lecture a voix haute tourne (evenement
+  // `pilot-read-aloud-state`, emis par read-aloud.js) : SEULE source de l'etat
+  // « Pilot parle ». Aucun second lecteur n'est cree.
+  let vocalSpeaking = false;
   // Aucune autre source n'alimente cette teinte : l'anneau du logo hero du mode
   // assistant seul, le bandeau « occupe », le bouton « Analyser et ranger mes
   // donnees » et le travail des agents des projets gardent leur propre signal.
@@ -3166,6 +3251,9 @@ export async function createSuperAgent(container) {
     // réel (aucune question en attente).
     reflectingActive = !!reflecting;
     applyReflecting();
+    // LOT 2 : l'ecran Vocal suit la MEME source d'etat (aucune nouvelle source
+    // de verite) — l'objet passe en « reflexion » des que l'Assistant traite.
+    applyVocalState();
     // Bouton « Analyser et ranger mes données » : désactivé pendant que
     // l'Assistant travaille (MÊME signal que la teinte de réflexion, pas une
     // nouvelle source de vérité). Deux conséquences voulues : l'utilisateur
@@ -3343,9 +3431,18 @@ export async function createSuperAgent(container) {
     if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
   }
 
+  /**
+   * Plafond de hauteur de la zone de saisie : 200 px dans l'onglet, 120 px en
+   * mode Vocal (§2.4) — l'objet lumineux ne doit jamais etre ecrase par une
+   * saisie qui grandit. Aucune autre difference : meme noeud, meme envoi.
+   */
+  function inputMaxHeight() {
+    return vocalOverlay ? 120 : 200;
+  }
+
   function resizeInput() {
     inputEl.style.height = "auto";
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
+    inputEl.style.height = Math.min(inputEl.scrollHeight, inputMaxHeight()) + "px";
   }
 
   function toggleVoiceInput() {
@@ -3460,6 +3557,10 @@ export async function createSuperAgent(container) {
         // Assistant libéré → rejouer les comptes rendus mis en attente (fin de
         // run survenue pendant que l'assistant rédigeait).
         flushPendingSuperAgentReports().catch(() => {});
+        // LOT 2 (§5) : en mode Vocal, la réponse qui vient de se terminer est lue
+        // à voix haute. On actionne le bouton d'écoute existant (aucune seconde
+        // lecture) ; hors mode Vocal, cette fonction ne fait rien.
+        autoReadVocalReply();
       });
     } catch (err) {
       console.error("[rpc-event-superagent] erreur:", err);
@@ -3573,6 +3674,10 @@ export async function createSuperAgent(container) {
 
   function enterImmersive() {
     if (immersiveOverlay) return;
+    // JAMAIS deux pleins ecrans superposes (§3.2) : le mode Vocal se retire
+    // d'abord, meme si l'appelant (raccourci, bascule, restauration) a oublie
+    // de le faire. La garde est ici, au seul endroit qui cree l'overlay.
+    if (vocalOverlay) exitVocal();
     immersiveOverlay = buildImmersiveOverlay();
     // Résumé des agents : replié en un point qui respire quand un agent ou
     // l'assistant travaille ; un clic déploie la liste, un second replie.
@@ -3695,34 +3800,229 @@ export async function createSuperAgent(container) {
     applyReflecting();
   }
 
+  // ── LOT 2 : ecran du mode Vocal (RAPPORT-trois-modes-ecran-vocal.md §2 a §4) ──
+  // Un SECOND plein ecran, JAMAIS superpose a celui de l'assistant seul : on
+  // sort d'abord de l'autre mode, puis on entre ici. Rien du chat n'est
+  // redessine : la barre de saisie de l'onglet Assistant est DEPLACEE ici (meme
+  // noeud, meme envoi, meme dictee) et restituee exactement a la sortie. Aucun
+  // historique n'est affiche pendant la conversation (decision de coordination
+  // du lot 2) : seulement l'objet, la ligne d'etat et la saisie.
+  //
+  // Ce que ce mode N'A PAS (et ne pretend pas avoir) :
+  //   - le micro et le niveau reel (lot 3) : le trait de niveau reste INERTE,
+  //     a 8 % de sa largeur, sans suivre aucune voix ;
+  //   - la coupure de Pilot en parlant (lot 4).
+  const VOCAL_ACTIVE_CLASS = "pilot-vocal-active";
+  // Les etats de l'ecran Vocal (`vocalOverlay`, places d'origine, `vocalSpeaking`)
+  // sont declares plus HAUT, juste apres `reflectingActive` : `setReflecting` les
+  // lit des l'ouverture de l'onglet. Ici ne restent que les fonctions.
+
+  function buildVocalOverlay() {
+    const ov = document.createElement("div");
+    ov.className = "pilot-vocal vocal-state-idle";
+    // Mouvement REDUIT (§4.3) : meme drapeau que les animations d'ouverture,
+    // aucun nouveau reglage. Le CSS coupe alors les animations et fige la
+    // longueur du trait par etat.
+    if (vocalReducedMotion()) ov.classList.add("vocal-reduced");
+    // Structure (de haut en bas) : la barre de 44 px (qui recoit le bouton des
+    // modes), l'objet lumineux + son trait + l'UNIQUE ligne d'etat, puis la
+    // zone de saisie discrete. Aucun cadre, aucune carte, aucune bordure
+    // autour de l'objet.
+    ov.innerHTML = `
+      <div class="vocal-top"></div>
+      <div class="vocal-stage">
+        <div class="vocal-orb" aria-hidden="true"></div>
+        <div class="vocal-level" aria-hidden="true"><span class="vocal-level-bar"></span></div>
+        <div class="vocal-status" role="status" aria-live="polite">Je vous écoute.</div>
+      </div>
+      <div class="vocal-input"></div>
+    `;
+    return ov;
+  }
+
+  /** Applique l'etat visuel : UNE seule classe d'etat, et la ligne de texte. */
+  function applyVocalState() {
+    if (!vocalOverlay) return;
+    const state = vocalScreenState({ speaking: vocalSpeaking, reflecting: reflectingActive });
+    vocalOverlay.classList.remove(
+      "vocal-state-idle",
+      "vocal-state-listening",
+      "vocal-state-thinking",
+      "vocal-state-speaking"
+    );
+    vocalOverlay.classList.add(vocalStateClass({ speaking: vocalSpeaking, reflecting: reflectingActive }));
+    const ligne = vocalOverlay.querySelector(".vocal-status");
+    const texte = vocalStatusText(state);
+    if (ligne && ligne.textContent !== texte) ligne.textContent = texte;
+  }
+
+  function enterVocal() {
+    if (vocalOverlay) return;
+    // REGLE DE COORDINATION (§3.2) : deux pleins ecrans ne se superposent
+    // jamais. On sort d'abord de « Assistant seul ».
+    if (immersiveOverlay) exitImmersive();
+    vocalOverlay = buildVocalOverlay();
+    // Barre de saisie de l'onglet Assistant : DEPLACEE (meme noeud, meme envoi,
+    // meme dictee). Sa place d'origine est memorisee pour une restitution
+    // exacte a la sortie.
+    const zone = vocalOverlay.querySelector(".vocal-input");
+    if (inputBar && zone) {
+      vocalInputHome = { parent: inputBar.parentNode, next: inputBar.nextSibling };
+      zone.appendChild(inputBar);
+    }
+    // Bouton UNIQUE des modes : DEPLACE dans la barre haute (une seule barre de
+    // 44 px, le bouton a gauche). Aucune copie, aucun second bouton.
+    const barre = vocalOverlay.querySelector(".vocal-top");
+    const modeButton = document.getElementById(SCREEN_MODE_BUTTON_ID);
+    if (modeButton && barre) {
+      vocalModeButtonHome = { parent: modeButton.parentNode, next: modeButton.nextSibling };
+      barre.appendChild(modeButton);
+    }
+    document.body.appendChild(vocalOverlay);
+    document.body.classList.add(VOCAL_ACTIVE_CLASS);
+    refreshIcons(vocalOverlay);
+    // Placeholder plus court : ici, le modele de phrase de l'assistant (28 mots)
+    // serait du bruit (§2.4). Restitue a la sortie.
+    if (inputEl) {
+      vocalPlaceholderHome = inputEl.placeholder;
+      inputEl.placeholder = "Écrivez, ou parlez.";
+      resizeInput();
+    }
+    // Le mode REELLEMENT affiche est ecrit par la SEULE source des modes
+    // (`screen-mode.js`) : entrer ici, c'est etre en « Vocal », meme quand on
+    // vient de « Assistant seul » (dont la sortie a ecrit « Detaille »).
+    rememberScreenMode("vocal");
+    applyVocalState();
+  }
+
+  function exitVocal() {
+    if (!vocalOverlay) return;
+    // QUITTER l'ecran, c'est rendre le silence : si Pilot est en train de lire
+    // (lecture declenchee par ce mode), sortir l'arrete. Sans cela, une voix
+    // lancee ici continuerait dans « Detaille », qui ne doit rien changer a son
+    // propre comportement. L'arret passe par la SEULE voie existante.
+    if (vocalSpeaking) stopReading();
+    // Symetrie exacte de enterVocal : le bouton des modes d'abord (il doit
+    // sortir de l'overlay AVANT son retrait, sinon le noeud serait detruit),
+    // puis la barre de saisie.
+    const modeHome = vocalModeButtonHome;
+    const modeButton = document.getElementById(SCREEN_MODE_BUTTON_ID);
+    if (modeButton && modeHome && modeHome.parent) {
+      const next = modeHome.next && modeHome.next.parentNode === modeHome.parent ? modeHome.next : null;
+      modeHome.parent.insertBefore(modeButton, next);
+    }
+    vocalModeButtonHome = null;
+    if (inputBar && vocalInputHome && vocalInputHome.parent) {
+      const next = vocalInputHome.next && vocalInputHome.next.parentNode === vocalInputHome.parent ? vocalInputHome.next : null;
+      vocalInputHome.parent.insertBefore(inputBar, next);
+    }
+    vocalInputHome = null;
+    vocalOverlay.remove();
+    vocalOverlay = null;
+    document.body.classList.remove(VOCAL_ACTIVE_CLASS);
+    // Placeholder d'origine de la zone de saisie, et hauteur replafonnee pour
+    // l'onglet (200 px) : la barre revient exactement comme elle etait.
+    if (inputEl && vocalPlaceholderHome !== null) {
+      inputEl.placeholder = vocalPlaceholderHome;
+      vocalPlaceholderHome = null;
+      resizeInput();
+    }
+    // Mode REELLEMENT affiche : retour a « Detaille » dans la cle de memoire.
+    noteImmersiveExited();
+    // La teinte de reflexion de la zone de saisie (desormais revenue dans
+    // l'onglet) est resynchronisee sur l'etat reel.
+    applyReflecting();
+  }
+
+  /**
+   * LOT 2 (§5) : en mode Vocal, la reponse de l'Assistant est lue a voix haute
+   * AUTOMATIQUEMENT. Aucun second mecanisme de lecture n'est cree : on actionne
+   * le bouton d'ecoute DEJA pose sous la derniere reponse (`attachReadAloud`,
+   * read-aloud.js) — meme nettoyage du texte, meme decoupage, memes voix, une
+   * seule lecture a la fois. Hors mode Vocal : rien du tout (la regle « aucune
+   * lecture automatique » ne change pas).
+   */
+  function autoReadVocalReply() {
+    if (!vocalOverlay) return;
+    const boutons = messagesEl.querySelectorAll(".agent-message-assistant .agent-read-btn");
+    const bouton = boutons.length ? boutons[boutons.length - 1] : null;
+    if (!bouton || bouton.disabled) return;
+    // Deja en lecture (ou en attente de voix) : on ne relance pas une seconde
+    // lecture par-dessus la premiere.
+    const etat = bouton.dataset ? bouton.dataset.readState : "";
+    if (etat && etat !== "idle") return;
+    try {
+      bouton.click();
+    } catch (_) {
+      /* une lecture qui ne part pas ne bloque jamais la conversation */
+    }
+  }
+
   // Raccourci clavier de bascule (maquette V4) : Ctrl+Shift+A (Cmd+Shift+A sur
   // macOS) entre en mode assistant seul / en sort. Actif tant que l'onglet 🧭
   // existe (les éléments du chat vivent dans sa vue) ; retiré à sa fermeture.
   const onImmersiveKeydown = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "A" || e.key === "a")) {
       e.preventDefault();
-      if (immersiveOverlay) exitImmersive();
+      // LOT 2 : si l'ecran Vocal est ouvert, ce raccourci en SORT (on ne
+      // superpose jamais deux pleins ecrans). Sinon, comportement inchange.
+      if (vocalOverlay) exitVocal();
+      else if (immersiveOverlay) exitImmersive();
       else enterImmersive();
     }
   };
   document.addEventListener("keydown", onImmersiveKeydown);
+
+  // LOT 2 (§3.2) : la TROISIEME facon de quitter l'ecran Vocal — la touche
+  // Echap, comme le bouton des modes et la fermeture de l'onglet. Cet ecouteur
+  // ne concerne QUE le mode Vocal : « Detaille » et « Assistant seul » gardent
+  // exactement leur comportement. Si une modale est ouverte, Echap lui
+  // appartient : on ne quitte pas le mode sous elle.
+  const onVocalKeydown = (e) => {
+    if (!vocalOverlay || e.key !== "Escape") return;
+    if (document.querySelector(".modal:not(.hidden)")) return;
+    e.preventDefault();
+    exitVocal();
+  };
+  document.addEventListener("keydown", onVocalKeydown);
+
+  // LOT 2 : etat « Pilot parle ». `pilot-read-aloud-state` est la SEULE source
+  // de cet etat (emis par read-aloud.js a chaque changement) ; l'ecran Vocal ne
+  // devine jamais la parole et ne cree aucun second lecteur.
+  const onVocalReadAloudState = (e) => {
+    const etat = e && e.detail ? e.detail.state : "";
+    const parlait = vocalSpeaking;
+    vocalSpeaking = etat === "speaking";
+    if (parlait !== vocalSpeaking) applyVocalState();
+  };
+  window.addEventListener(READ_ALOUD_STATE_EVENT, onVocalReadAloudState);
 
   // Lot B « Reglages en onglet » : ouvrir les Options quitte D'ABORD le mode
   // assistant seul. L'overlay immersif vit au-dessus de tout : sans cette
   // sortie, l'onglet ouvert s'afficherait DERRIERE lui (voile plein écran).
   // Écouteur unique, retiré avec les autres à la fermeture de l'onglet 🧭.
   const onExitAssistantOnly = () => {
+    if (vocalOverlay) exitVocal();
     if (immersiveOverlay) exitImmersive();
   };
   window.addEventListener("pilot-exit-assistant-only", onExitAssistantOnly);
 
   // LOT 1 (trois modes d'ecran) : le bouton UNIQUE demande un mode en publiant
   // `pilot-screen-mode-apply` (src/js/screen-mode.js). Ici on ne fait qu'entrer
-  // dans le plein ecran EXISTANT ou en sortir — aucun ecran n'est redessine, et
-  // « Vocal » emprunte le meme ecran jusqu'au lot 2.
+  // dans l'ecran correspondant ou en sortir — aucun ecran de « Detaille » ni
+  // d'« Assistant seul » n'est redessine.
+  // LOT 2 : « Vocal » a desormais SON ecran (§2) ; on sort d'abord de l'autre
+  // plein ecran pour ne jamais en superposer deux.
   const onScreenModeApply = (e) => {
     const mode = e && e.detail ? e.detail.mode : "";
-    if (isImmersiveScreenMode(mode)) {
+    // Ecran REELLEMENT demande, decide une seule fois par `screen-mode.js`.
+    const ecran = screenModeScreen(mode);
+    if (ecran === "vocal") {
+      if (!vocalOverlay) enterVocal();
+      return;
+    }
+    if (vocalOverlay) exitVocal();
+    if (ecran === "assistant") {
       if (!immersiveOverlay) enterImmersive();
     } else if (immersiveOverlay) {
       exitImmersive();
@@ -3789,6 +4089,11 @@ export async function createSuperAgent(container) {
 
   // ── Envoi (session persistante : streaming + mémoire de conversation) ──
   async function send() {
+    // LOT 2 (§3.1) : en mode Vocal, ecrire puis valider pendant que Pilot parle
+    // ARRETE la lecture et le message part — une seule voix a la fois. Cet
+    // arret ne concerne QUE l'ecran Vocal : dans l'onglet, la lecture en cours
+    // n'est pas interrompue par un envoi (comportement inchange).
+    if (vocalOverlay) stopReading();
     // Chantier #132 : si une question est en attente, on valide la question
     // (la précision saisie dans la barre devient la note) au lieu d'envoyer un
     // nouveau message chat. Le champ n'est pas vidé en cas d'échec.
@@ -3904,10 +4209,10 @@ export async function createSuperAgent(container) {
   // soit bien capté (issue #62).
   inputBar.querySelector('[data-action="voice"]').addEventListener("click", toggleVoiceInput);
 
-  // Auto-resize
+  // Auto-resize (plafond : 200 px dans l'onglet, 120 px en mode Vocal)
   inputEl.addEventListener("input", () => {
     inputEl.style.height = "auto";
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
+    inputEl.style.height = Math.min(inputEl.scrollHeight, inputMaxHeight()) + "px";
   });
 
   appendSystemMessage(messagesEl, `🧭 ${superAgentDisplayLabel()} prêt. Je suis en lecture seule : je suis vos projets (par client) de la demande à la livraison.`);
@@ -4081,10 +4386,12 @@ export async function createSuperAgent(container) {
 
   // A19 / LOT 1 (trois modes d'ecran) : restaurer le dernier mode choisi a la
   // reouverture de l'onglet Assistant. La lecture passe par screen-mode.js (qui
-  // porte la migration de l'ancien reglage binaire) ; « Vocal » ouvre le meme
-  // ecran que « Assistant seul » jusqu'au lot 2.
-  if (isImmersiveScreenMode(getScreenMode())) {
-    enterImmersive();
+  // porte la migration de l'ancien reglage binaire) ; LOT 2 : « Vocal » ouvre
+  // desormais SON ecran, les deux autres gardent le leur.
+  {
+    const modeAuMontage = getScreenMode();
+    if (screenModeScreen(modeAuMontage) === "vocal") enterVocal();
+    else if (isImmersiveScreenMode(modeAuMontage)) enterImmersive();
   }
 
   return {
@@ -4102,6 +4409,13 @@ export async function createSuperAgent(container) {
       stopScheduleTicker();
       // A19 : si l'onglet est fermé en mode immersif, remettre les éléments
       // dans le wrapper et retirer l'overlay (évite des éléments orphelins).
+      // LOT 2 (§3.2) : fermer l'onglet Assistant quitte AUSSI le mode Vocal
+      // (troisieme voie de sortie), et l'etat « Pilot parle » est oublie.
+      if (vocalOverlay) {
+        stopReading();
+        exitVocal();
+      }
+      vocalSpeaking = false;
       if (immersiveOverlay) exitImmersive();
       origUnlisten();
       unlistenStateChanged();
@@ -4110,6 +4424,8 @@ export async function createSuperAgent(container) {
       window.removeEventListener("pilot-config-changed", onConfigChanged);
       window.removeEventListener("pilot-config-changed", onTelegramPrefsChanged);
       document.removeEventListener("keydown", onImmersiveKeydown);
+      document.removeEventListener("keydown", onVocalKeydown);
+      window.removeEventListener(READ_ALOUD_STATE_EVENT, onVocalReadAloudState);
       window.removeEventListener("pilot-exit-assistant-only", onExitAssistantOnly);
       window.removeEventListener(SCREEN_MODE_APPLY_EVENT, onScreenModeApply);
       window._pilotSuperAgentOpen = false;

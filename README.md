@@ -105,10 +105,36 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - Chaque commande : un **nom**, une **commande shell** et un **dossier de travail** optionnel (vide = racine du projet).
 - Un clic lance la commande dans le dossier choisi dans un **onglet terminal** (titre = nom de la commande) ; la liste des commandes se ferme et vous pouvez continuer à travailler. Relancer la même commande bascule sur l'onglet déjà ouvert ; fermer l'onglet arrête le process.
 
+### Trois modes d'écran : Détaillé · Assistant seul · Vocal
+- Un **seul bouton**, à gauche de la rangée d'onglets, fait passer d'un mode à
+  l'autre : **Détaillé** → **Assistant seul** → **Vocal** → **Détaillé** … Son
+  libellé et sa pastille montrent le mode **courant** ; l'infobulle annonce le
+  **suivant**. Le mode choisi est **mémorisé** d'une ouverture à l'autre.
+- **Détaillé** est l'écran habituel : explorateur, onglets, agent, tout est là.
+- **Assistant seul** ne garde que la conversation de l'Assistant (🧭), en plein
+  écran.
+- **Vocal** est un écran plein, sans micro pour l'instant : au centre, un
+  **objet lumineux** dont la couleur dit l'état (**repos**, **écoute**,
+  **réflexion**, **parole**), un **trait de niveau** juste dessous et **une seule
+  ligne de texte** (« Je vous écoute. », « Je réfléchis. », « Je réponds. »).
+  Rien de la conversation n'y est affiché.
+- **La réponse s'y lit à voix haute** (même voix et même bouton « 🔊 Écouter »
+  que dans les autres écrans). **Écrire ou valider pendant la lecture l'arrête**
+  et envoie votre message.
+- La **zone de saisie** reste visible en bas et grandit quand vous écrivez
+  (jusqu'à 120 px) ; elle garde son micro de dictée 🎙️.
+- **On en sort par les trois mêmes chemins** : le **même bouton** (mode suivant),
+  la touche **Échap**, ou la **fermeture de l'onglet**. Deux pleins écrans ne se
+  superposent jamais : passer en « Assistant seul » ou en « Vocal » sort d'abord
+  de l'autre.
+- Ce qui **reste à venir** : le micro et le niveau réel de la voix (le trait
+  reste donc inerte), et la coupure de Pilot en parlant.
+
 ### Écouter une réponse de l'assistant (🔊)
 - Chaque réponse de l'agent (onglet **π**) et de l'Assistant (onglet **🧭**) porte un bouton
   **« 🔊 Écouter »** : un clic lit la réponse à voix haute, un second l'arrête. Rien ne se lit
-  tout seul, et une seule lecture tourne à la fois.
+  tout seul, **sauf en mode Vocal** où la réponse est lue automatiquement, et une seule lecture
+  tourne à la fois.
 - **Le réglage de la voix vit à un seul endroit** : ⚙️ **Options → onglet « Assistant »** →
   section **« Lecture des réponses »** (choix de la voix, état de la lecture, explication).
   Par défaut : **automatique** (la voix de la langue de l'interface) ; le choix est mémorisé, et
