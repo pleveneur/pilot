@@ -39,6 +39,11 @@ import { refreshIcons } from "./icons.js";
 // Bande de fenetre Pilot : glisser, double-clic et les trois boutons systeme
 // (reduire, agrandir/restaurer, fermer) — etats et clavier du lot 0.2.
 import { initWindowControls } from "./window-controls.js";
+// TROIS MODES D'ECRAN (lot 1, RAPPORT-trois-modes-ecran-vocal.md §1) : le bouton
+// UNIQUE et la cle de memoire du poste vivent dans un seul module. Le mode
+// memorise est applique AVANT le masquage de l'ecran de chargement, donc
+// l'utilisateur ne voit jamais l'ecran « Detaille » clignoter.
+import { initScreenMode, isImmersiveScreenMode, getScreenMode, SCREEN_MODE_APPLY_EVENT } from "./screen-mode.js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -533,6 +538,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   // lecture de l'etat de la fenetre au demarrage (elle demarre agrandie).
   initWindowControls();
 
+  // 2 ter. Trois modes d'ecran (lot 1) : cablage du bouton UNIQUE (il vit dans
+  // la rangee d'onglets, index.html) et application de la migration de l'ancien
+  // reglage binaire `pilot_superagent_immersive` vers la cle unique
+  // `pilot_screen_mode`. Le mode memorise est REJOUE plus bas, une fois l'onglet
+  // Assistant eventuellement ouvert (c'est lui qui porte le plein ecran).
+  initScreenMode();
+
   // Enregistrer la position du dernier clic → origine des animations d'ouverture
   // des nouveaux onglets (tabs.js / modal-anim.js). Phase de capture pour couvrir
   // toutes les surfaces (arbre de fichiers, boutons du panneau bas, barre d'onglets).
@@ -545,6 +557,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Exposé globalement pour la prévisualisation Markdown (issue #22) :
   // le handler de clic sur les liens internes ouvre le fichier cible via tabs.openFile.
   window._pilotTabs = tabs;
+
+  // TROIS MODES D'ECRAN (lot 1) : le plein ecran de « Assistant seul » et de
+  // « Vocal » est porte par l'onglet 🧭 (c'est son overlay, inchange). Si cet
+  // onglet a ete ferme, un clic sur le bouton doit donc l'OUVRIR avant que le
+  // mode s'applique : sans cela, le mode serait memorise sans ecran visible.
+  // Quand l'onglet est deja monte, c'est son propre ecouteur (super-agent.js)
+  // qui agit et celui-ci ne fait rien — un seul chemin par situation.
+  window.addEventListener(SCREEN_MODE_APPLY_EVENT, async (e) => {
+    if (!e || !e.detail || !isImmersiveScreenMode(e.detail.mode)) return;
+    if (window._pilotSuperAgentOpen === true) return;
+    try {
+      const { superAgentDisplayLabel, switchToSuperAgent } = await import("./super-agent.js");
+      await tabs.openFile(superAgentDisplayLabel(), "superagent");
+      switchToSuperAgent();
+    } catch (err) {
+      console.warn("Ouverture de l'onglet Assistant impossible :", err);
+    }
+  });
   // Suivi du travail (haut droite, a droite de la rangee d'onglets) : pastille
   // respirante + UN SEUL panneau a trois onglets (Agents, Taches, Evenements)
   // + fiche agent. Unique endroit ou le travail se suit dans l'interface. Le
@@ -1228,9 +1258,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   // default true — hence `!== false`: undefined = enabled for old configs) or
   // when the tab was open at Pilot shutdown (persisted super_agent_open flag,
   // legacy mechanism kept).
+  //
+  // TROIS MODES D'ECRAN (lot 1) : le mode memorise s'ajoute a ces deux raisons.
+  // « Assistant seul » et « Vocal » SONT le plein ecran de cet onglet : sans
+  // l'onglet, l'ecran memorise n'existe pas et le bouton annoncerait un ecran
+  // qui n'est pas affiche. Quitter Pilot en mode « Assistant seul » est un
+  // choix plus precis et plus recent que le reglage d'ouverture au lancement.
   try {
     const cfg = await invoke("get_config");
-    if (cfg.super_agent_open === true || cfg.super_agent_start_on_launch !== false) {
+    if (
+      cfg.super_agent_open === true ||
+      cfg.super_agent_start_on_launch !== false ||
+      isImmersiveScreenMode(getScreenMode())
+    ) {
       const { superAgentDisplayLabel, switchToSuperAgent } = await import("./super-agent.js");
       await tabs.openFile(superAgentDisplayLabel(), "superagent");
       // Issue #46 : au démarrage, une fois le projet chargé et l'onglet assistant

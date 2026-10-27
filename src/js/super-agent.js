@@ -157,6 +157,22 @@ import {
 // fonction du projet (`projectShortName`) — jamais un chemin, jamais un nom
 // recopié à la main. « Assistant » seulement si aucun projet n'est ouvert.
 import { projectShortName } from "./telegram-messages.js";
+// TROIS MODES D'ECRAN (lot 1, RAPPORT-trois-modes-ecran-vocal.md §1) : le mode
+// est decide et memorise par `screen-mode.js` (source unique). Ici, l'onglet
+// Assistant ne fait que deux choses : DEPLACER le bouton unique dans sa barre
+// quand il entre en plein ecran (et le restituer a la sortie), et SIGNALER
+// l'entree / la sortie REELLES pour que la cle de memoire reste juste (bouton
+// retour, Echap, fermeture de l'onglet). Aucun second bouton, aucun ecran
+// redessine.
+import {
+  LEGACY_IMMERSIVE_KEY,
+  SCREEN_MODE_APPLY_EVENT,
+  SCREEN_MODE_BUTTON_ID,
+  getScreenMode,
+  isImmersiveScreenMode,
+  noteImmersiveEntered,
+  noteImmersiveExited,
+} from "./screen-mode.js";
 
 /**
  * Projet à afficher en tête des messages Telegram de l'Assistant : le nom court
@@ -3459,7 +3475,10 @@ export async function createSuperAgent(container) {
   // (localStorage) et restauré à la réouverture de l'onglet.
   // Ajustements A19 : ni bouton de synthèse vocale (🔊), ni suivi du travail
   // (cercle + panneau) dans ce mode — ils restent propres au mode standard.
-  const IMMERSIVE_KEY = "pilot_superagent_immersive";
+  // Le NOM de la cle est celui de `screen-mode.js` (une seule source) : il
+  // n'est plus lu ici, il continue d'etre ECRIT pour permettre un retour
+  // arriere vers une version anterieure (RAPPORT §1.3).
+  const IMMERSIVE_KEY = LEGACY_IMMERSIVE_KEY;
   let immersiveOverlay = null;
   // Résumé des agents repliable (point ⇆ liste, barre du haut) : désabonnement
   // au store partagé de agent-activity.js, posé à l'entrée et retiré à la
@@ -3471,6 +3490,11 @@ export async function createSuperAgent(container) {
   // d'origine (parent + voisin suivant) pour une restitution EXACTE a la
   // sortie : aucune place perdue, aucun doublon.
   let immersiveActivityHome = null;
+  // LOT 1 (trois modes d'ecran) : le bouton UNIQUE des modes est DEPLACE dans
+  // la barre du mode, juste apres le titre « Pilot » (meme noeud, jamais
+  // recopie), avec memorisation de sa place d'origine pour une restitution
+  // EXACTE a la sortie — meme patron que « Travail » juste au-dessus.
+  let immersiveModeButtonHome = null;
   // Éléments créés avec l'overlay, réutilisés à chaque entrée en mode immersif.
   let immersiveSuggestions = null;
   let immersiveDisclaimer = null;
@@ -3580,10 +3604,28 @@ export async function createSuperAgent(container) {
       immersiveActivityHome = { parent: activity.parentNode, next: activity.nextSibling };
       agentsHost.parentNode.insertBefore(activity, agentsHost);
     }
+    // LOT 1 (trois modes d'ecran) : le bouton UNIQUE des modes est DEPLACE ici,
+    // juste apres le titre « Pilot » — donc AVANT l'entree « Travail », qui
+    // reste elle-meme avant le point des agents (ordre : retour, titre, MODE,
+    // Travail, agents, ⚙). Un seul noeud dans tout le document : la rangee
+    // d'onglets ne le perd pas, il y revient a la sortie.
+    const screenModeButton = document.getElementById(SCREEN_MODE_BUTTON_ID);
+    if (screenModeButton && agentsHost && agentsHost.parentNode) {
+      immersiveModeButtonHome = {
+        parent: screenModeButton.parentNode,
+        next: screenModeButton.nextSibling,
+      };
+      const ancre =
+        activity && activity.parentNode === agentsHost.parentNode ? activity : agentsHost;
+      agentsHost.parentNode.insertBefore(screenModeButton, ancre);
+    }
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
     refreshIcons(immersiveOverlay);
     localStorage.setItem(IMMERSIVE_KEY, "1");
+    // Mode REELLEMENT affiche : la cle de memoire suit (sans ecraser un mode
+    // demande par le bouton — « Vocal » emprunte cet ecran au lot 1).
+    noteImmersiveEntered();
     // Ajustements A19 : si l'assistant réfléchissait déjà au moment de la
     // bascule, reporter l'indicateur sur le logo hero (et calmer la barre).
     applyReflecting();
@@ -3618,6 +3660,21 @@ export async function createSuperAgent(container) {
     // Suivi du travail : restitution EXACTE dans la rangee d'onglets (meme
     // parent, meme voisin), AVANT le retrait de l'overlay — sinon le noeud
     // serait detruit avec lui et le mode normal perdrait son compteur.
+    //
+    // ORDRE DE RESTITUTION (lot 1) : le bouton des MODES d'abord, l'entree
+    // « Travail » ensuite. A l'entree, la place d'origine de « Travail » etait
+    // le bouton des modes ; comme celui-ci est lui aussi dans l'overlay, son
+    // voisin est momentanement introuvable et « Travail » serait ajoute en fin
+    // de rangee (apres les boutons systeme). En restaurant le bouton d'abord,
+    // le voisin de « Travail » redevient valide : l'ordre d'origine
+    // (« Travail » -> MODE -> boutons systeme) est rendu a l'identique.
+    const modeHome = immersiveModeButtonHome;
+    const modeButton = document.getElementById(SCREEN_MODE_BUTTON_ID);
+    if (modeButton && modeHome && modeHome.parent) {
+      const next = modeHome.next && modeHome.next.parentNode === modeHome.parent ? modeHome.next : null;
+      modeHome.parent.insertBefore(modeButton, next);
+    }
+    immersiveModeButtonHome = null;
     const activity = document.getElementById("agent-activity");
     if (activity && immersiveActivityHome && immersiveActivityHome.parent) {
       const home = immersiveActivityHome;
@@ -3631,6 +3688,8 @@ export async function createSuperAgent(container) {
     immersiveOverlay = null;
     document.body.classList.remove("superagent-immersive-active");
     localStorage.setItem(IMMERSIVE_KEY, "0");
+    // Mode REELLEMENT affiche : retour a « Detaille » dans la cle de memoire.
+    noteImmersiveExited();
     // Ajustements A19 : si l'assistant réfléchissait encore, reporter
     // l'indicateur sur la barre de saisie (comportement du mode standard).
     applyReflecting();
@@ -3656,6 +3715,20 @@ export async function createSuperAgent(container) {
     if (immersiveOverlay) exitImmersive();
   };
   window.addEventListener("pilot-exit-assistant-only", onExitAssistantOnly);
+
+  // LOT 1 (trois modes d'ecran) : le bouton UNIQUE demande un mode en publiant
+  // `pilot-screen-mode-apply` (src/js/screen-mode.js). Ici on ne fait qu'entrer
+  // dans le plein ecran EXISTANT ou en sortir — aucun ecran n'est redessine, et
+  // « Vocal » emprunte le meme ecran jusqu'au lot 2.
+  const onScreenModeApply = (e) => {
+    const mode = e && e.detail ? e.detail.mode : "";
+    if (isImmersiveScreenMode(mode)) {
+      if (!immersiveOverlay) enterImmersive();
+    } else if (immersiveOverlay) {
+      exitImmersive();
+    }
+  };
+  window.addEventListener(SCREEN_MODE_APPLY_EVENT, onScreenModeApply);
 
   // ── Actions ──
   toolbar.addEventListener("click", async (e) => {
@@ -4006,9 +4079,11 @@ export async function createSuperAgent(container) {
   // Chantier #13 : ticker des relances programmées (toutes les 10 s).
   startScheduleTicker();
 
-  // A19 : restaurer le dernier mode choisi (immersif ou normal) à la réouverture
-  // de l'onglet Assistant.
-  if (localStorage.getItem(IMMERSIVE_KEY) === "1") {
+  // A19 / LOT 1 (trois modes d'ecran) : restaurer le dernier mode choisi a la
+  // reouverture de l'onglet Assistant. La lecture passe par screen-mode.js (qui
+  // porte la migration de l'ancien reglage binaire) ; « Vocal » ouvre le meme
+  // ecran que « Assistant seul » jusqu'au lot 2.
+  if (isImmersiveScreenMode(getScreenMode())) {
     enterImmersive();
   }
 
@@ -4036,6 +4111,7 @@ export async function createSuperAgent(container) {
       window.removeEventListener("pilot-config-changed", onTelegramPrefsChanged);
       document.removeEventListener("keydown", onImmersiveKeydown);
       window.removeEventListener("pilot-exit-assistant-only", onExitAssistantOnly);
+      window.removeEventListener(SCREEN_MODE_APPLY_EVENT, onScreenModeApply);
       window._pilotSuperAgentOpen = false;
       // Chantier #132 + tâche #141 : nettoyer la barre des questions en attente.
       // IMPORTANT : avant de vider la file, LIBÉRER le backend pour chaque

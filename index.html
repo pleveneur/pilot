@@ -243,7 +243,8 @@
          docs/proposition-bande-contexte-allegee.md §4). Une seule rangee de
          36 px, dans le flux : elle commence EN HAUT de la fenetre (la bande de
          fenetre de 32 px a disparu) puis vient le contenu. Elle porte, de
-         gauche a droite : la barre d'onglets, l'entree « Travail » et, tout a
+         gauche a droite : la barre d'onglets, l'entree « Travail », le bouton
+         des trois modes d'ecran (#screen-mode-button, lot 1) et, tout a
          DROITE, les trois boutons systeme (#window-controls). Chaque bloc est
          dans un conteneur SEPARE : ni l'entree ni les boutons ne peuvent aller
          dans `#tab-bar` (tabs.js suppose que ses enfants sont « les onglets +
@@ -320,6 +321,18 @@
       </div>
         <div id="agent-activity-card" class="hidden"></div>
       </div>
+      <!-- Bouton UNIQUE des trois modes d'ecran (lot 1,
+           RAPPORT-trois-modes-ecran-vocal.md §1). UN SEUL noeud dans tout le
+           document : il vit ici, entre l'entree « Travail » et les trois
+           boutons systeme, et il est DEPLACE dans la barre du mode assistant
+           seul, puis restitue EXACTEMENT a sa place a la sortie
+           (src/js/super-agent.js : enterImmersive / exitImmersive). Aucun
+           second bouton, aucun ecran de reglage.
+           Le libelle dit le mode COURANT, l'infobulle annonce le SUIVANT.
+           L'etat ecrit ici est celui du mode « Detaille » ; il est reecrit au
+           demarrage par src/js/screen-mode.js (mode memorise + migration).
+           Ordre du DOM : barre d'onglets -> « Travail » -> MODE -> boutons. -->
+      <button type="button" id="screen-mode-button" data-screen-mode="detailed" title="Mode d'écran : Détaillé. Passer à « Assistant seul »." aria-label="Mode d'écran : Détaillé. Passer à « Assistant seul »."><span class="screen-mode-icon"><i data-lucide="panels-top-left" class="icon-sm"></i></span><span class="screen-mode-dot" aria-hidden="true"></span><span class="screen-mode-label">Détaillé</span></button>
       <!-- Boutons de fenetre : groupe fixe en haut a DROITE, AU BOUT de la
            rangee d'onglets (decision du proprietaire, Q1 : plus de bande de
            32 px). Dernier enfant de #tab-row : leur place est RESERVEE dans le

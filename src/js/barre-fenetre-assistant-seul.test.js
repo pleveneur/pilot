@@ -238,6 +238,29 @@ describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee sys
       .map((classe) => barreJs.indexOf(classe));
     expect(ordre.every((i) => i >= 0), "les quatre elements de la barre doivent etre presents").toBe(true);
     expect([...ordre].sort((a, b) => a - b)).toEqual(ordre);
+    // LOT 1 « trois modes d'ecran » (RAPPORT-trois-modes-ecran-vocal.md §1.1) :
+    // le bouton UNIQUE des modes entre dans cette barre en 3e position — retour,
+    // titre, MODE, agents, ⚙ — c'est-a-dire AVANT le point des agents, donc
+    // juste apres le titre. Le test GAGNE ce controle, il n'en perd aucun :
+    // l'ordre des quatre elements d'origine reste verifie ci-dessus.
+    expect(
+      (html.match(/id="screen-mode-button"/g) || []).length,
+      "un seul et meme noeud pour les trois ecrans (jamais recopie)",
+    ).toBe(1);
+    const insertionMode = sliceSource(
+      js,
+      "const screenModeButton = document.getElementById(",
+      "document.body.appendChild(immersiveOverlay);",
+      100,
+    );
+    expect(insertionMode).toContain("insertBefore(screenModeButton, ancre)");
+    // L'ancre est l'entree « Travail » quand elle a bien ete deplacee : le
+    // bouton passe donc AVANT elle, et le ⚙ reste le dernier enfant.
+    expect(insertionMode).toContain("activity && activity.parentNode === agentsHost.parentNode");
+    expect(insertionMode).not.toContain("settings");
+    expect(insertionMode).not.toContain("appendChild(screenModeButton)");
+    // La place d'origine du bouton est memorisee, donc restituee a la sortie.
+    expect(js).toContain("immersiveModeButtonHome");
   });
 
   it("le ⚙ reste le DERNIER bouton de la barre apres le deplacement de l'entree Travail", () => {
