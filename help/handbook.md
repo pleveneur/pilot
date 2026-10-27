@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-27 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-27 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -418,6 +418,38 @@ chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
   configuré.
 - Le bouton « + » reste disponible pour ajouter des agents au-delà de ceux
   configurés.
+
+---
+
+<!-- HELP-TOPIC:modes-ecran -->
+## Trois modes d'écran : Détaillé · Assistant seul · Vocal
+
+Un **seul bouton** fait le tour des trois modes : **Détaillé** → **Assistant
+seul** → **Vocal** → **Détaillé** … Le mode courant est rappelé par son libellé
+et une pastille ; l'infobulle annonce le **mode suivant**. Aucun de ces modes ne
+change le contenu de votre projet : ils ne font que choisir ce qui est affiché.
+
+- **Détaillé** : l'écran habituel (explorateur, onglets, éditeur, agent).
+- **Assistant seul** : uniquement la conversation de l'assistant 🧭, en plein
+  écran.
+- **Vocal** : un objet lumineux dont la couleur dit l'état (**repos**,
+  **écoute**, **réflexion**, **parole**), un trait de niveau juste dessous et
+  **une seule ligne de texte**. Rien de la conversation n'y est affiché.
+
+En mode **Vocal** :
+
+- **Le trait suit votre voix** : il s'allonge quand vous parlez et retombe
+  doucement au silence, sans à-coups.
+- **Pilot demande le micro à votre premier geste** dans cet écran (un clic, une
+  touche) — jamais à l'ouverture du mode, et jamais dans les autres modes.
+- **Si vous refusez**, si aucun micro n'est branché, s'il est occupé ou s'il
+  tombe en panne : l'écran le **dit en une phrase** et propose **« Autoriser le
+  micro »**. Le mode reste **entièrement utilisable** (écrire, envoyer, écouter)
+  — rien n'est bloqué, et Pilot ne redemande pas tout seul.
+- **En quittant le mode, le micro est coupé** (le témoin du système s'éteint) :
+  Pilot ne vous écoute pas en dehors de cet écran.
+- La réponse se **lit à voix haute** (voir « Écouter une réponse à voix
+  haute »). Couper Pilot en parlant n'est pas encore disponible.
 
 ---
 

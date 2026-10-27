@@ -16,6 +16,16 @@ import { refreshIcons } from "./icons.js";
 // « Pilot parle » de cet ecran, et `stopReading` est le SEUL arret : aucun
 // second mecanisme de lecture n'est cree.
 import { attachReadAloud, READ_ALOUD_STATE_EVENT, stopReading } from "./read-aloud.js";
+// LOT 3 (ecran Vocal) : le NIVEAU DU MICRO. Toute la capture (demande de
+// permission, flux, analyseur, lissage, ARRET reel) vit dans vocal-mic.js ; ce
+// fichier ne fait que brancher ses trois retours et ne contient donc aucune des
+// API micro (ce que verrouille ecran-vocal-lot2.test.js).
+import {
+  createVocalMic,
+  planLevel,
+  shouldAskVocalMic,
+  MIC_FERME,
+} from "./vocal-mic.js";
 // Envoi AUTOMATIQUE a la fin d'une dictee vocale : la decision et l'ORDRE
 // (refermer la session -> ecrire la zone -> envoyer) vivent dans CE module, le
 // meme que celui de l'onglet agent pi — aucune copie de logique ici, et le
@@ -454,9 +464,10 @@ export function superAgentReflectingFromEvent(type) {
 /**
  * Etat AFFICHE de l'ecran Vocal (lot 2, RAPPORT-trois-modes-ecran-vocal.md §4).
  * UN SEUL etat a la fois, par ordre de priorite : la parole (la voix sort)
- * prime sur la reflexion, qui prime sur l'ecoute. « Ecoute » n'est atteignable
- * qu'au lot 3 (le micro n'existe pas encore) : il est declare ici pour que le
- * lot 3 n'ait qu'a fournir le niveau reel.
+ * prime sur la reflexion, qui prime sur l'ecoute. Depuis le lot 3, « ecoute »
+ * est alimente par le NIVEAU REELLEMENT MESURE (vocal-mic.js) : l'appelant ne
+ * passe `listening` que si le micro capte, jamais pour signaler une demande de
+ * permission ni une intention.
  * @param {{speaking?: boolean, reflecting?: boolean, listening?: boolean}} [etats]
  * @returns {"idle"|"listening"|"thinking"|"speaking"}
  */
@@ -3223,6 +3234,21 @@ export async function createSuperAgent(container) {
   // `pilot-read-aloud-state`, emis par read-aloud.js) : SEULE source de l'etat
   // « Pilot parle ». Aucun second lecteur n'est cree.
   let vocalSpeaking = false;
+  // ── LOT 3 : le micro REEL de l'ecran Vocal ──
+  // La mecanique (flux, analyseur, lissage, arret des pistes) vit dans
+  // vocal-mic.js. Ici, trois etats seulement :
+  //  - `vocalMicListening` : vrai SEULEMENT quand le micro capte reellement —
+  //    c'est la SEULE source de l'etat « ecoute » (ni une intention, ni une
+  //    demande de permission) ;
+  //  - `vocalMicFerme` : message clair quand le micro est ferme (refus, absence,
+  //    occupation, panne) — le mode reste utilisable et rien n'est bloque ;
+  //  - `vocalMicDemande` : la demande de permission est partie. Elle ne se
+  //    represente pas toute seule : seul le bouton « Autoriser le micro » la
+  //    relance (jamais une demande a l'entree du mode).
+  let vocalMic = null;
+  let vocalMicListening = false;
+  let vocalMicFerme = "";
+  let vocalMicDemande = false;
   // Aucune autre source n'alimente cette teinte : l'anneau du logo hero du mode
   // assistant seul, le bandeau « occupe », le bouton « Analyser et ranger mes
   // donnees » et le travail des agents des projets gardent leur propre signal.
@@ -3809,13 +3835,72 @@ export async function createSuperAgent(container) {
   // du lot 2) : seulement l'objet, la ligne d'etat et la saisie.
   //
   // Ce que ce mode N'A PAS (et ne pretend pas avoir) :
-  //   - le micro et le niveau reel (lot 3) : le trait de niveau reste INERTE,
-  //     a 8 % de sa largeur, sans suivre aucune voix ;
-  //   - la coupure de Pilot en parlant (lot 4).
+  //   - la coupure de Pilot en parlant (lot 4) : le niveau du micro ne sert
+  //     JAMAIS a faire taire Pilot, seulement a allonger le trait ;
+  //   - d'historique : l'ecran ne montre rien de la conversation.
+  // Le micro et le niveau reel sont du LOT 3 (voir vocal-mic.js).
   const VOCAL_ACTIVE_CLASS = "pilot-vocal-active";
   // Les etats de l'ecran Vocal (`vocalOverlay`, places d'origine, `vocalSpeaking`)
   // sont declares plus HAUT, juste apres `reflectingActive` : `setReflecting` les
   // lit des l'ouverture de l'onglet. Ici ne restent que les fonctions.
+
+  /**
+   * LOT 3 : longueur du trait = NIVEAU MESURE. En mouvement reduit, rien n'est
+   * pose : le CSS fige alors la longueur par etat (§4.3), et une valeur posee
+   * en ligne ecraserait cette regle figee.
+   */
+  function vocalSetLevel(niveau) {
+    if (!vocalOverlay) return;
+    const plan = planLevel({ niveau, reduit: vocalReducedMotion() });
+    if (!plan.ecrire) return;
+    vocalOverlay.style.setProperty("--vocal-level", plan.largeur + "%");
+  }
+
+  /** Retire la valeur posee : le trait retombe au silence (8 %). */
+  function vocalClearLevel() {
+    if (!vocalOverlay) return;
+    vocalOverlay.style.removeProperty("--vocal-level");
+  }
+
+  /**
+   * Etat « ecoute » : vrai SEULEMENT quand le micro capte vraiment (§2.3).
+   * Aucune demande de permission, aucune intention ne l'allume.
+   */
+  function vocalSetListening(actif) {
+    const etait = vocalMicListening;
+    vocalMicListening = actif === true;
+    if (!vocalMicListening) vocalClearLevel();
+    if (etait !== vocalMicListening) applyVocalState();
+  }
+
+  /**
+   * Micro ferme (refus, absence, occupation, panne) : un message clair le dit et
+   * un bouton permet de reessayer. Le mode Vocal reste entierement utilisable
+   * (ligne d'etat, saisie, envoi, lecture) : jamais de blocage.
+   */
+  function vocalMicFailure(message) {
+    vocalMicListening = false;
+    vocalMicFerme = String(message || MIC_FERME);
+    vocalClearLevel();
+    applyVocalState();
+  }
+
+  /**
+   * La permission part au PREMIER GESTE dans le mode, jamais a l'entree. Un seul
+   * essai automatique : un refus ne se represente pas tout seul, c'est le bouton
+   * « Autoriser le micro » qui relance (geste explicite).
+   */
+  function onVocalFirstGesture() {
+    if (!vocalOverlay || !vocalMic) return;
+    const demander = shouldAskVocalMic({
+      geste: true,
+      dejaDemande: vocalMicDemande,
+      microActif: vocalMicListening,
+    });
+    if (!demander) return;
+    vocalMicDemande = true;
+    vocalMic.demander();
+  }
 
   function buildVocalOverlay() {
     const ov = document.createElement("div");
@@ -3834,6 +3919,10 @@ export async function createSuperAgent(container) {
         <div class="vocal-orb" aria-hidden="true"></div>
         <div class="vocal-level" aria-hidden="true"><span class="vocal-level-bar"></span></div>
         <div class="vocal-status" role="status" aria-live="polite">Je vous écoute.</div>
+        <!-- LOT 3 (§2.5) : bouton de depannage, MASQUE tant que le micro capte.
+             Il n'apparait que si le micro est ferme (refus, absence, panne) ;
+             le mode reste utilisable sans lui. -->
+        <button type="button" class="vocal-mic-fix hidden">Autoriser le micro</button>
       </div>
       <div class="vocal-input"></div>
     `;
@@ -3843,17 +3932,27 @@ export async function createSuperAgent(container) {
   /** Applique l'etat visuel : UNE seule classe d'etat, et la ligne de texte. */
   function applyVocalState() {
     if (!vocalOverlay) return;
-    const state = vocalScreenState({ speaking: vocalSpeaking, reflecting: reflectingActive });
+    const etats = {
+      speaking: vocalSpeaking,
+      reflecting: reflectingActive,
+      listening: vocalMicListening,
+    };
+    const state = vocalScreenState(etats);
     vocalOverlay.classList.remove(
       "vocal-state-idle",
       "vocal-state-listening",
       "vocal-state-thinking",
       "vocal-state-speaking"
     );
-    vocalOverlay.classList.add(vocalStateClass({ speaking: vocalSpeaking, reflecting: reflectingActive }));
+    vocalOverlay.classList.add(vocalStateClass(etats));
     const ligne = vocalOverlay.querySelector(".vocal-status");
-    const texte = vocalStatusText(state);
+    // Une seule ligne (§2.3) : les trois phrases de l'ecran, et — au repos
+    // seulement — le message clair du micro ferme quand il y en a un. La
+    // parole et la reflexion gardent la priorite sur ce message.
+    const texte = state === "idle" && vocalMicFerme ? vocalMicFerme : vocalStatusText(state);
     if (ligne && ligne.textContent !== texte) ligne.textContent = texte;
+    const fix = vocalOverlay.querySelector(".vocal-mic-fix");
+    if (fix) fix.classList.toggle("hidden", !vocalMicFerme);
   }
 
   function enterVocal() {
@@ -3881,6 +3980,34 @@ export async function createSuperAgent(container) {
     document.body.appendChild(vocalOverlay);
     document.body.classList.add(VOCAL_ACTIVE_CLASS);
     refreshIcons(vocalOverlay);
+    // ── LOT 3 : le micro de cet ecran ──
+    // RIEN n'est ouvert a l'entree : la demande de permission part au PREMIER
+    // GESTE dans le mode (un clic, une touche). On arme simplement l'ecoute des
+    // gestes ; le moteur (vocal-mic.js) reste inerte jusque-la.
+    vocalMicDemande = false;
+    vocalMicListening = false;
+    vocalMicFerme = "";
+    vocalMic = createVocalMic({
+      onLevel: vocalSetLevel,
+      onListening: vocalSetListening,
+      onFailure: vocalMicFailure,
+    });
+    vocalOverlay.addEventListener("pointerdown", onVocalFirstGesture);
+    // La touche est ecoutee sur le document (et non sur l'ecran) : le mode Vocal
+    // est le seul ecran visible a ce moment-la, et un focus qui n'est encore
+    // dans aucun champ ne doit pas laisser le micro ferme pour toujours.
+    document.addEventListener("keydown", onVocalFirstGesture);
+    const fixMic = vocalOverlay.querySelector(".vocal-mic-fix");
+    if (fixMic) {
+      fixMic.addEventListener("click", () => {
+        // Geste EXPLICITE : la demande repart. Un refus precedent ne condamne
+        // pas l'ecran (par exemple apres avoir autorise le micro dans Windows).
+        vocalMicFerme = "";
+        vocalMicDemande = true;
+        applyVocalState();
+        if (vocalMic) vocalMic.demander();
+      });
+    }
     // Placeholder plus court : ici, le modele de phrase de l'assistant (28 mots)
     // serait du bruit (§2.4). Restitue a la sortie.
     if (inputEl) {
@@ -3902,6 +4029,18 @@ export async function createSuperAgent(container) {
     // lancee ici continuerait dans « Detaille », qui ne doit rien changer a son
     // propre comportement. L'arret passe par la SEULE voie existante.
     if (vocalSpeaking) stopReading();
+    // LOT 3 : le micro est COUPE a la sortie — flux ARRETE (pistes `stop()`),
+    // contexte audio ferme, boucle de mesure annulee. Pas seulement « ignore » :
+    // aucun peripherique ne reste ouvert derriere l'ecran. Les deux ecouteurs de
+    // geste disparaissent avec l'overlay.
+    if (vocalMic) {
+      vocalMic.fermer();
+      vocalMic = null;
+    }
+    vocalMicListening = false;
+    vocalMicFerme = "";
+    vocalMicDemande = false;
+    document.removeEventListener("keydown", onVocalFirstGesture);
     // Symetrie exacte de enterVocal : le bouton des modes d'abord (il doit
     // sortir de l'overlay AVANT son retrait, sinon le noeud serait detruit),
     // puis la barre de saisie.

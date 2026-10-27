@@ -15,8 +15,11 @@
 //   5. Trois sorties (meme bouton, Echap, fermeture de l'onglet) et une
 //      restitution SYMETRIQUE des deux noeuds deplaces (bouton de mode et
 //      barre de saisie) : aucun noeud perdu, aucun doublon.
-//   6. Le lot 2 ne fait pas le lot 3 (aucun micro) ni le lot 4 (aucune coupure
-//      de la parole par la voix) : le trait de niveau reste inerte a 8 %.
+//   6. Le lot 2 ne fait pas le lot 4 (aucune coupure de la parole par la voix).
+//      Depuis le LOT 3, la longueur du trait vient du NIVEAU REELLEMENT MESURE,
+//      mais la capture vit dans `vocal-mic.js` : ce fichier verifie donc que
+//      `super-agent.js` ne contient AUCUNE des API micro (un seul mecanisme,
+//      aucun doublon) et que le silence reste le repli (8 %).
 //
 // Les commentaires sont en ASCII ; les chaines qui viennent de l'interface
 // (textes affiches, selecteurs CSS) sont copiees telles quelles.
@@ -228,11 +231,13 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
     expect(bloc(CSS, ".vocal-stage")).toMatch(/gap:\s*24px/);
   });
 
-  it("LOT 2 : sans micro, le trait d'ecoute reste au silence (8 %)", () => {
+  it("LOT 3 : en ecoute, le trait suit le niveau MESURE (repli 8 % au silence)", () => {
+    // La longueur vient de la variable posee par vocal-mic.js ; sans mesure
+    // (micro ferme, refuse, en panne) le repli est le silence.
     expect(bloc(CSS, ".pilot-vocal.vocal-state-listening .vocal-level-bar")).toMatch(
-      /width:\s*8%/,
+      /width:\s*var\(--vocal-level, 8%\)/,
     );
-    // Aucun niveau invente : la seule source serait le micro, absent au lot 2.
+    // Un seul mecanisme : les API micro ne sont PAS dans super-agent.js.
     expect(SUPER).not.toMatch(/getUserMedia|AudioContext|mediaDevices/);
   });
 
@@ -334,7 +339,8 @@ describe("6. l'ecran ne montre RIEN de la conversation", () => {
 
   it("la barre de saisie emportee garde son micro de dictee et son envoi", () => {
     // Elle est DEPLACEE telle quelle (§2.4) : on ne reconstruit rien, donc le
-    // micro de dictee existant suit. Aucun micro d'ECOUTE n'est ajoute au lot 2.
+    // micro de dictee existant suit. Le micro d'ECOUTE du lot 3 vit dans
+    // vocal-mic.js : aucune API micro n'entre dans ce fichier.
     expect(SUPER).not.toMatch(/getUserMedia|AudioContext|AnalyserNode|mediaDevices/);
     expect(SUPER).toMatch(/agent-mic-btn/);
   });
@@ -437,14 +443,20 @@ describe("9. coordination avec la lecture et l'envoi (§3.3)", () => {
     expect(corps).toMatch(/if \(!vocalOverlay\) return/);
   });
 
-  it("aucune coupure de la parole par la voix (lot 4) : l'etat vient de la lecture seule", () => {
-    // L'etat de l'ecran ne connait que deux sources : la LECTURE (parole) et le
-    // travail de l'assistant (reflexion). Rien n'ecoute le micro : le lot 4
-    // (« couper Pilot en parlant ») n'est donc ni fait ni simule ici.
+  it("aucune coupure de la parole par la voix (lot 4) : l'etat d'ecoute vient du NIVEAU mesure", () => {
+    // L'etat de l'ecran ne connait que trois sources, dans cet ordre : la
+    // LECTURE (parole), le travail de l'assistant (reflexion) et le niveau du
+    // micro (ecoute, lot 3) — et ce dernier n'est vrai que si le micro CAPTE.
+    // Rien n'ecoute pour faire taire Pilot : le lot 4 n'est ni fait ni simule.
     const corps = corpsFonction(SUPER, "function applyVocalState");
-    expect(corps).toMatch(/vocalScreenState\(\{ speaking: vocalSpeaking, reflecting: reflectingActive \}\)/);
-    expect(corps).not.toMatch(/micro|getUserMedia|AudioContext/);
+    expect(corps).toMatch(/speaking: vocalSpeaking/);
+    expect(corps).toMatch(/reflecting: reflectingActive/);
+    expect(corps).toMatch(/listening: vocalMicListening/);
+    expect(corps).not.toMatch(/getUserMedia|AudioContext/);
     expect(SUPER).not.toMatch(/getUserMedia|AudioContext|AnalyserNode/);
+    // Aucune reconnaissance de parole dans l'ecran : le niveau ne sert qu'a la
+    // longueur du trait (la dictee garde son propre moteur dans la saisie).
+    expect(corps).not.toMatch(/SpeechRecognition/);
   });
 
   it("quitter l'ecran rend le silence : la voix lancee ici ne continue pas ailleurs", () => {

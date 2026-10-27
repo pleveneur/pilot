@@ -113,11 +113,10 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - **Détaillé** est l'écran habituel : explorateur, onglets, agent, tout est là.
 - **Assistant seul** ne garde que la conversation de l'Assistant (🧭), en plein
   écran.
-- **Vocal** est un écran plein, sans micro pour l'instant : au centre, un
-  **objet lumineux** dont la couleur dit l'état (**repos**, **écoute**,
-  **réflexion**, **parole**), un **trait de niveau** juste dessous et **une seule
-  ligne de texte** (« Je vous écoute. », « Je réfléchis. », « Je réponds. »).
-  Rien de la conversation n'y est affiché.
+- **Vocal** est un écran plein : au centre, un **objet lumineux** dont la couleur
+  dit l'état (**repos**, **écoute**, **réflexion**, **parole**), un **trait de
+  niveau** juste dessous et **une seule ligne de texte** (« Je vous écoute. »,
+  « Je réfléchis. », « Je réponds. »). Rien de la conversation n'y est affiché.
 - **La réponse s'y lit à voix haute** (même voix et même bouton « 🔊 Écouter »
   que dans les autres écrans). **Écrire ou valider pendant la lecture l'arrête**
   et envoie votre message.
@@ -127,8 +126,15 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   la touche **Échap**, ou la **fermeture de l'onglet**. Deux pleins écrans ne se
   superposent jamais : passer en « Assistant seul » ou en « Vocal » sort d'abord
   de l'autre.
-- Ce qui **reste à venir** : le micro et le niveau réel de la voix (le trait
-  reste donc inerte), et la coupure de Pilot en parlant.
+- Le **trait de niveau suit votre voix** : il s'allonge quand vous parlez et
+  retombe doucement au silence, sans sautillement. Pilot **demande le micro à
+  votre premier geste** dans cet écran (un clic, une touche) — jamais à
+  l'ouverture du mode, et le micro n'est **pas** ouvert dans les autres écrans.
+  Si vous refusez, si aucun micro n'est branché ou s'il est occupé, l'écran le
+  **dit en une phrase** et propose **« Autoriser le micro »** : le mode Vocal
+  reste entièrement utilisable (écrire, envoyer, écouter). En quittant le mode,
+  **le micro est coupé** (le témoin du système s'éteint).
+- Ce qui **reste à venir** : la coupure de Pilot en parlant.
 
 ### Écouter une réponse de l'assistant (🔊)
 - Chaque réponse de l'agent (onglet **π**) et de l'Assistant (onglet **🧭**) porte un bouton

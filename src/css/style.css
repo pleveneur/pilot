@@ -11683,10 +11683,12 @@ body.pilot-vocal-active #screen-mode-button {
      « en direct » (§4.2). */
   transition: width 80ms linear, background var(--transition-smooth);
 }
-/* LOT 2 : sans micro, l'etat « ecoute » n'a pas de niveau a suivre — le trait
-   reste au silence. Le lot 3 n'aura qu'a fournir la largeur reelle. */
+/* LOT 3 : en ecoute, la longueur du trait vient du NIVEAU REELLEMENT MESURE
+   (`--vocal-level`, pose sur l'overlay par vocal-mic.js). Sans mesure — micro
+   ferme, refuse, en panne — la valeur est absente et le trait retombe au
+   silence (8 %) : aucune longueur inventee. */
 .pilot-vocal.vocal-state-listening .vocal-level-bar {
-  width: 8%;
+  width: var(--vocal-level, 8%);
 }
 .pilot-vocal.vocal-state-thinking .vocal-level-bar {
   animation: vocal-think-pulse 1.4s ease-in-out infinite;
@@ -11735,6 +11737,35 @@ body.pilot-vocal-active #screen-mode-button {
 }
 .vocal-input .agent-input::placeholder {
   color: var(--text-secondary);
+}
+
+/* --- §2.5 (lot 3) Le bouton de depannage du micro ---
+   Masque tant que le micro capte. Il n'apparait que si le micro est ferme
+   (refus, absence, occupation, panne) : il ne remplace aucune commande et ne
+   bloque rien, il relance simplement la demande sur un geste explicite.
+   Texte en --text-primary (contraste du projet), contour --border-subtle. */
+.vocal-mic-fix {
+  flex: 0 0 auto;
+  font-family: var(--font-ui);
+  font-size: var(--font-zone);
+  font-weight: var(--fw-medium);
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+.vocal-mic-fix:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+/* Etat par defaut : le bouton de depannage n'existe pas a l'ecran. `hidden`
+   n'est PAS global dans cette feuille : la regle doit etre explicite, sinon le
+   bouton resterait visible en permanence. */
+.vocal-mic-fix.hidden {
+  display: none;
 }
 
 /* --- §4.2/§4.3 Mouvement reduit : le MEME drapeau que les animations
