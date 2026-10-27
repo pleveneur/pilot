@@ -63,6 +63,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Réponse sur la documentation (ex-aide intégrée ❓) | `spec_help.md` |
 | Revue de code assistée (H5) | `spec_review.md` |
 | Lecture des réponses à voix haute (bouton 🔊, réglage unique de la voix, voix française locale hors ligne) | `spec_read_aloud.md` |
+| Trois modes d'écran (Détaillé · Assistant seul · Vocal) et écran Vocal (micro, coupure de la parole) | `spec_modes_ecran_vocal.md` |
 | Conversation parlée interruptible (couper Pilot en pleine phrase) — document de conception à trancher | `docs/architecture-conversation-vocale-interruptible.md` |
 | Context Engine (auto-contexte agent) | `spec_context_engine.md` |
 | Code Graph (graphe de connaissances projet) | `spec_code_graph.md` |
