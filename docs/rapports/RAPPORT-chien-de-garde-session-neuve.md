@@ -100,6 +100,23 @@ Allonger un délai sans repère n'aurait rien réglé : le seuil qui compte n'es
 pas « depuis quand la run ne parle plus » mais « depuis quand CETTE SESSION
 existe ». Aucune valeur de délai ne peut compenser un repère absent.
 
+### 2.5 Pourquoi le plancher existant (`RUN_LOCK_SWEEP_START_GRACE_MS`, 60 s) n'a pas protégé la mission tuée à 22 s
+
+Trois explications étaient possibles ; deux sont écartées, la troisième est la
+cause racine.
+
+| Hypothèse | Verdict |
+|---|---|
+| « un autre chemin de libération » | **Partiellement vrai, mais non décisif.** Le balayage périodique (`sweepOrphanRunLocks`, `agents-bus.js:1277`) et les appels de `super-agent.js` (`isRunStillActive`, `agents-bus.js` via `releaseStuckRunLock`) réutilisent **tous** `releaseStuckRunLockForKey` : la porte `ghosts` est la seule autorité (`isSessionWorking` / `classifyExclusivitySession` ne sont appelés nulle part ailleurs — vérifié par recherche dans `src/js`). Aucun second décideur n'a donc été oublié. |
+| « la run est plus vieille que la session » | **Vrai, et c'est structurel.** Tous les planchers existants mesurent l'âge de la **RUN** : `RUN_LOCK_SWEEP_START_GRACE_MS` compare `now - (ctx.lastActivityAt \|\| ctx.startedAt)` (`agents-bus.js:1285`), et `requireIdleMs` mesure exactement la même chose (`agents-bus.js:1106`). Une run ouverte depuis longtemps qui porte une session **neuve** (mission suivante de la file, relance, redémarrage à contexte vierge — exactement la ligne `stale-session-restart` du journal) est donc **déjà au-delà de tous les planchers** : aucun d'eux ne pouvait la protéger, quel que soit le chiffre choisi. |
+| « absence de repère de démarrage de session » | **La cause racine.** La sonde Rust (`activity_probe_entry`, `agent_service.rs:4029`) ne publie aucune date de session, et le front n'en tenait aucune : un plancher, même correct, n'avait **rien à mesurer**. Un délai plus long aurait seulement déplacé la mort de 24 s à 60 s. |
+
+Conclusion opérationnelle : allonger `RUN_LOCK_SWEEP_START_GRACE_MS` aurait été
+un faux correctif (il ne voit que la run) ; la seule référence juste est
+l'instant de **démarrage de la session**, connu du bus au moment où il demande
+le spawn. C'est ce repère qui est posé (§ 3) et qui protège **tous** les chemins
+de libération, y compris le balayage (§ 6.1).
+
 ---
 
 ## 3. Correction
@@ -208,6 +225,11 @@ libérer la run*, et cette garde ne dépend plus du bon vouloir de l'appelant.
 - **Pas de protection inventée** : sans horodatage de démarrage connu,
   `isSessionRecentlyStarted` répond `false` — le défaut d'origine ne peut pas
   renaître sous une autre forme.
+- **Aucun plancher existant n'est rallongé** : `RUN_LOCK_SWEEP_START_GRACE_MS`
+  (60 s) mesure la **RUN**, pas la session ; l'allonger n'aurait fait que
+  déplacer la mort (24 s → 60 s) sans jamais voir la jeunesse de la session. La
+  grâce ajoutée est **indépendante de tout plancher d'appelant** et s'applique
+  sur les deux chemins de libération (watchdog direct et balayage périodique).
 
 ---
 
@@ -225,6 +247,31 @@ les durées sont recalculées depuis `RECENT_ACTIVITY_WINDOW_MS`) :
 | session avec **activité récente** | run **MAINTENUE** |
 | session neuve + `requireIdleMs = 0` (appelant sans plancher, cas du journal) | run **MAINTENUE** |
 | session **morte** même très récente | run **libérée** (la mort est éliminatoire) |
+| session **neuve** dans une run **ANCIENNE** (balayage périodique) | run **MAINTENUE** |
+| session **ancienne** dans une run ancienne (balayage) | run **libérée** après la double mesure |
+| plancher d'inactivité de l'appelant **dépassé** (il mesure la RUN) + session neuve | run **MAINTENUE** |
+| même plancher dépassé + session ancienne | run **libérée** (la protection ne bloque pas le vrai fantôme) |
+
+### 6.1 Deuxième chemin de libération vérifié : le balayage périodique
+
+Le balayage (`sweepOrphanRunLocks`) a ses **propres** planchers, tous mesurés sur
+la RUN (`RUN_LOCK_SWEEP_START_GRACE_MS`, `RUN_LOCK_SWEEP_MIN_IDLE_MS`). Une run
+ancienne portant une session neuve les franchit donc tous les deux : c'est
+précisément le scénario du journal (run ouverte depuis longtemps, session de
+24 s). Quatre tests le verrouillent désormais **sans écrire aucune durée en dur**
+(tout est recalculé depuis les constantes) :
+
+- session neuve dans une run ancienne → `sweepOrphanRunLocks()` ne libère rien ;
+- session ancienne dans une run ancienne → le balayage libère (après sa double
+  mesure, attendue par `vi.waitFor`) : le vrai fantôme reste coupé ;
+- plancher d'inactivité de l'appelant largement dépassé (il mesure la RUN) mais
+  session neuve → run maintenue, et `startGraceOpen` prouve que c'est bien le
+  repère de SESSION qui protège ;
+- même plancher, session ancienne → libération.
+
+**Aucun code n'a eu à changer sur ce chemin** : le balayage délègue à la porte
+`ghosts`, qui consulte la grâce de démarrage. C'est la preuve que le correctif
+est posé au bon endroit (le seul décideur) et non dupliqué par chemin.
 
 Tests existants : `agents-bus.test.js`, `chien-de-garde-compilation.test.js`,
 `verrou-orphelin.test.js`, `verrou-par-projet.test.js`,
@@ -235,11 +282,11 @@ n'a jamais horodaté le démarrage, donc leur verdict est inchangé).
 
 Résultats mesurés (2026-10-28, `npx vitest run`) :
 
-- `src/js/chien-de-garde-session-neuve.test.js` → **21 tests, 0 échec** ;
+- `src/js/chien-de-garde-session-neuve.test.js` → **25 tests, 0 échec** (dont les 4 du balayage, § 6.1) ;
 - suites voisines (`agents-bus`, `exclusivity-queue`,
   `chien-de-garde-compilation`, `verrou-orphelin`, `verrou-par-projet`,
   `sonde-rejeu-sans-liste-sessions`) → **226 tests, 0 échec** ;
-- suite front complète (`npm test`) → **223 fichiers, 4143 tests, 0 échec**.
+- suite front complète (`npm test`) → **223 fichiers, 4147 tests, 0 échec**.
 
 Aucune compilation Rust n'a été lancée (consigne) : la modification est
 entièrement côté front et aucun test Rust n'est concerné par ces fichiers.

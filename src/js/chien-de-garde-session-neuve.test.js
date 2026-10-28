@@ -40,6 +40,9 @@ import {
   latestSessionStartAt,
   startGraceOpen,
   annotateSessionStartTimes,
+  sweepOrphanRunLocks,
+  RUN_LOCK_SWEEP_START_GRACE_MS,
+  RUN_LOCK_SWEEP_MIN_IDLE_MS,
   __setWatchdogConfirmDelayForTest,
 } from "./agents-bus.js";
 import {
@@ -252,6 +255,67 @@ describe("releaseStuckRunLock — la porte `ghosts` ne tue plus une session neuv
     beginRunWithAgent();
     mockProbe([]);
     await mesureTwice();
+    expect(getRunState(PROJECT)).toBe("idle");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Le second chemin de libération (balayage périodique, RUN_LOCK_SWEEP_*) mesure
+// l'âge de la RUN, jamais celui de la SESSION. Une run ANCIENNE peut porter une
+// session NEUVE (mission suivante de la file, relance, redémarrage à contexte
+// vierge) : c'est le cas du journal (run ouverte depuis longtemps, session de
+// 24 s tuée). Les protections de RUN ne peuvent pas l'attraper ; seule
+// l'horodatage de SESSION le peut — ces tests le verrouillent.
+describe("balayage périodique — une run ANCIENNE peut porter une session NEUVE", () => {
+  /**
+   * Run dont les repères de RUN sont périmés (au-delà de TOUTES les fenêtres de
+   * run : grâce de balayage et plancher d'inactivité), avec une session dont
+   * l'âge est celui demandé. Aucune durée n'est écrite en dur : tout est
+   * recalculé depuis les constantes.
+   */
+  function oldRunWithSession({ sessionAgeMs }) {
+    const ctx = beginRunWithAgent();
+    const now = Date.now();
+    ctx.startedAt = now - 10 * RUN_LOCK_SWEEP_START_GRACE_MS;
+    ctx.lastActivityAt = now - 10 * RUN_LOCK_SWEEP_MIN_IDLE_MS;
+    markSessionStarted(ctx, AGENT, now - sessionAgeMs);
+    return ctx;
+  }
+
+  it("session NEUVE dans une run ANCIENNE → le balayage NE libère pas (cas du journal)", async () => {
+    oldRunWithSession({ sessionAgeMs: 1_000 });
+    mockProbe([bareSession()]);
+    const released = await sweepOrphanRunLocks();
+    expect(released).toEqual([]);
+    expect(getRunState(PROJECT)).toBe("running");
+  });
+
+  it("session ANCIENNE dans une run ancienne → le balayage libère (vrai fantôme toujours coupé)", async () => {
+    oldRunWithSession({ sessionAgeMs: RECENT_ACTIVITY_WINDOW_MS + 60_000 });
+    mockProbe([bareSession()]);
+    // La porte est AMBIGUË : le balayage arme sa revérification et ne libère
+    // qu'à la seconde mesure concordante — on attend cette issue, sans fixer de
+    // durée métier.
+    await sweepOrphanRunLocks();
+    await vi.waitFor(() => expect(getRunState(PROJECT)).toBe("idle"));
+  });
+
+  it("plancher d'inactivité de l'appelant dépassé (il mesure la RUN) → session neuve protectrice quand même", async () => {
+    const ctx = oldRunWithSession({ sessionAgeMs: 1_000 });
+    mockProbe([bareSession()]);
+    // Le plancher est LARGEMENT dépassé par l'inactivité de la run : sans la
+    // protection de SESSION, cette mesure libérait la run.
+    expect(Date.now() - (ctx.lastActivityAt || 0)).toBeGreaterThan(RUN_LOCK_SWEEP_MIN_IDLE_MS);
+    expect(startGraceOpen(ctx)).toBe(true);
+    await mesureTwice({ requireIdleMs: RUN_LOCK_SWEEP_MIN_IDLE_MS });
+    expect(getRunState(PROJECT)).toBe("running");
+  });
+
+  it("même plancher, session ANCIENNE → libération (la protection ne bloque pas le vrai fantôme)", async () => {
+    const ctx = oldRunWithSession({ sessionAgeMs: RECENT_ACTIVITY_WINDOW_MS + 60_000 });
+    mockProbe([bareSession()]);
+    expect(startGraceOpen(ctx)).toBe(false);
+    await mesureTwice({ requireIdleMs: RUN_LOCK_SWEEP_MIN_IDLE_MS });
     expect(getRunState(PROJECT)).toBe("idle");
   });
 });
