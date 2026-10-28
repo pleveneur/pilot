@@ -11550,6 +11550,18 @@ summary:focus-visible {
 .pilot-vocal-active {
   overflow: hidden;
 }
+/* ECRAN NU (decision du proprietaire, 2026-10-28) : en mode Vocal, AUCUN
+   echange de la conversation n'est peint. L'overlay opaque ci-dessus suffisait
+   deja, mais la promesse ne doit pas tenir a une seule couleur de fond : la
+   zone des messages est rendue invisible TANT QUE l'ecran Vocal est actif.
+   `visibility` et non `display` : les mesures de defilement de la conversation
+   restent intactes (aucun saut de l'historique a la sortie), aucun noeud n'est
+   deplace ni detruit, et le bouton de lecture de la derniere reponse reste
+   actionnable par `autoReadVocalReply` — la lecture a voix haute ne depend donc
+   pas de ce qui est affiche. */
+body.pilot-vocal-active .agent-chat-messages {
+  visibility: hidden;
+}
 /* Modales (Parametres…) et toasts AU-DESSUS de l'overlay, comme en mode
    assistant seul. Hors de ce mode, les z-index ne changent pas. */
 .pilot-vocal-active .modal {

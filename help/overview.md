@@ -427,9 +427,11 @@ change le contenu de votre projet : ils ne font que choisir ce qui est affiché.
 - **Détaillé** : l'écran habituel (explorateur, onglets, éditeur, agent).
 - **Assistant seul** : uniquement la conversation de l'assistant 🧭, en plein
   écran.
-- **Vocal** : un objet lumineux dont la couleur dit l'état (**repos**,
-  **écoute**, **réflexion**, **parole**), un trait de niveau juste dessous et
-  **une seule ligne de texte**. Rien de la conversation n'y est affiché.
+- **Vocal** : un **écran nu** — un objet lumineux dont la couleur dit l'état
+  (**repos**, **écoute**, **réflexion**, **parole**), un trait de niveau juste
+  dessous et **une seule ligne de texte**. **Rien de la conversation n'y est
+  affiché** (aucun message, pas même en petit) : la conversation reste entière
+  dans l'onglet de l'agent, où vous la retrouvez en quittant le mode.
 
 En mode **Vocal** :
 
@@ -460,7 +462,8 @@ En mode **Vocal** :
   parlez dans les tout premiers instants d'une phrase, pendant cette mesure, il
   ne s'arrête pas. Le **casque** est la situation où cela marche le mieux.
 - La réponse se **lit à voix haute** (voir « Écouter une réponse à voix
-  haute »). Reprendre l'écoute après la réponse (mode conversation continue)
+  haute ») : comme l'écran est nu, c'est le moyen d'entendre la réponse.
+  Reprendre l'écoute après la réponse (mode conversation continue)
   n'est pas encore disponible.
 <!-- /HELP:modes-ecran -->
 

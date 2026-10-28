@@ -65,12 +65,36 @@ et fermable.
 - **Aucun écran de réglage** n'a été créé pour cela : le choix du mode est un geste
   d'écran, pas une préférence à configurer.
 
-## 3. L'écran Vocal, de haut en bas
+## 3. L'écran Vocal, de haut en bas — un écran nu
 
 Plein écran `.pilot-vocal` (`position: fixed; inset: 0; z-index: 99990`), de la
 même famille que celui de l'assistant seul, avec un **fondu de 0,3 s** à l'entrée
 et à la sortie (pas de zoom : on change d'écran, on ne déplie pas un panneau).
 Aucun cadre, aucune carte, aucune bordure.
+
+**Un écran nu** — décision du propriétaire, 2026-10-28, ferme : on n'y voit que
+l'objet, le trait de niveau, la ligne d'état et la barre de saisie. **Aucun
+échange de la conversation ne s'y affiche** : ni bulle, ni texte, ni « les deux
+ou trois derniers échanges » en petit sous l'objet, ni par un réglage. La
+conversation n'est pas perdue pour autant : elle reste **entière dans l'onglet de
+l'agent**, où on la retrouve en quittant le mode.
+
+Comme la réponse ne se lit plus à l'écran, c'est la **lecture à voix haute** qui
+la porte (détail : `spec_read_aloud.md` § 1). Elle ne dépend de rien de ce qui
+est affiché : elle actionne le bouton « 🔊 Écouter » de la **dernière réponse**,
+posé par `read-aloud.js` dans la conversation de l'onglet — même nettoyage du
+texte, même découpage, mêmes voix, une seule lecture à la fois. Aucun second
+lecteur n'existe pour cet écran, donc rien ne devient muet quand l'écran est nu.
+
+Comment la règle est tenue (trois verrous, aucun réglage) : l'overlay est
+**opaque** (`background: var(--bg-app)`) ; la zone des messages de la
+conversation est rendue **invisible tant que l'écran Vocal est actif**
+(`body.pilot-vocal-active .agent-chat-messages { visibility: hidden }` —
+`visibility` et jamais `display: none`, pour ne pas perdre la position de
+défilement à la sortie) ; **aucun conteneur de conversation n'est déplacé** dans
+l'écran (seuls la barre de saisie et le bouton des modes le sont). Le retour de
+la conversation sur cet écran est interdit par un test dédié
+(`src/js/ecran-vocal-nu.test.js`).
 
 1. **Barre de 44 px**, juste **sous** la bande des trois boutons de fenêtre
    (`margin-top: var(--window-controls-height)`) : elle ne porte que le bouton des
@@ -89,7 +113,8 @@ Aucun cadre, aucune carte, aucune bordure.
    (`.vocal-mic-fix`), qui n'apparaît que si le micro est fermé.
 
 **Rien de la conversation n'est affiché** sur cet écran : ni les messages, ni les
-outils, ni l'état des agents. C'est le principe même du mode.
+outils, ni l'état des agents, ni un résumé des derniers échanges. C'est le
+principe même du mode, et il ne dépend d'aucun réglage.
 
 ## 4. Les quatre états visuels
 
