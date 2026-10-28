@@ -132,6 +132,71 @@ const QUEUED_ORPHAN_GRACE_MS = 60 * 1000;
 // vraiment fantôme est libéré comme avant.
 export const RUN_LAUNCH_MIN_STUCK_IDLE_MS = 2 * 60 * 1000;
 
+// OUTIL EN COURS = ACTIVITÉ PROUVÉE (mission « chien de garde / compilation »).
+//
+// Constat mesuré (2026-10-28) : cinq missions d'agents ont été libérées par la
+// porte `ghosts` (« agents déclarés actifs mais plus aucun ne travaille ») avec
+// des inactivités mesurées de 5, 9, 11 et 18 minutes — pendant qu'elles
+// COMPILAIENT le workspace Rust (desktop + gds-core + gds-server), opération
+// longue et parfaitement SILENCIEUSE : aucun événement n'est émis entre
+// `tool_execution_start` et `tool_execution_end`. Le code produit était bon
+// (certaines missions ont livré et committé) : c'est la DÉTECTION qui se
+// trompait de cible.
+//
+// Cause exacte : la porte `ghosts` ne jugeait que sur la sonde Rust
+// (`agent_activity_probe`). Quand cette sonde ne porte pas la preuve — pas
+// d'entrée d'anomalie pour la session (session relancée, chemin de projet
+// réécrit) ou entrée remise à zéro par un événement de process — la session
+// apparaissait « vivante mais sans evidence de travail » et la run était
+// coupée au milieu de l'outil. Le bus, lui, SAIT qu'un outil tourne : il reçoit
+// `tool_execution_start` / `tool_execution_end`. Ce repère LOCAL est désormais
+// une activité de PREMIÈRE CLASSE pour les portes ambiguës.
+//
+// Règle : un outil en cours d'exécution compte comme activité, SANS plafond
+// arbitraire — jamais de coupure pendant ce temps (un build, une campagne de
+// tests ou une installation peuvent légitimement durer longtemps sans rien
+// afficher). Seule la MORT de la session (process_exit / process_error /
+// extension_error), la fin de tour (`agent_end` final, `agent_settled`) ou un
+// `tool_execution_end` lèvent le repère. La SEULE borne est celle qui existe
+// déjà côté moteur (`anomaly::TOOL_IN_PROGRESS_MAX_SUSPEND_SECS`, 60 min) :
+// au-delà, un `tool_execution_end` perdu est réputé perdu, sinon un marqueur
+// coincé retiendrait un verrou à vie.
+export const TOOL_IN_PROGRESS_MAX_MS = 60 * 60 * 1000;
+
+/**
+ * Pure : l'opération d'outil ouverte à `startedAt` est-elle PERDUE à `now`
+ * (aucune clôture reçue depuis plus de `TOOL_IN_PROGRESS_MAX_MS`) ?
+ *
+ * Un `startedAt` inconnu (0/absent/non numérique) est traité comme PERDU : on
+ * ne peut pas prouver qu'un outil tourne, et un marqueur sans horodatage ne
+ * doit jamais retenir un verrou indéfiniment (fail-safe anti-blocage).
+ * @param {number|null|undefined} startedAt - instant du `tool_execution_start` (ms epoch)
+ * @param {number} [now]
+ * @param {number} [maxMs]
+ * @returns {boolean}
+ */
+export function toolOperationLost(startedAt, now = Date.now(), maxMs = TOOL_IN_PROGRESS_MAX_MS) {
+  const t = Number(startedAt) || 0;
+  if (t <= 0) return true;
+  return now - t >= maxMs;
+}
+
+/**
+ * Pure : au moins UN agent a-t-il un outil RÉELLEMENT en cours d'exécution ?
+ * `tools` est la map du contexte de run (`toolInProgressByAgent` : agentId →
+ * instant du `tool_execution_start`). Un outil en cours est une activité qui
+ * avance : jamais de coupure pendant ce temps (borne de sécurité :
+ * `TOOL_IN_PROGRESS_MAX_MS`).
+ * @param {Record<string, number>|null|undefined} tools
+ * @param {number} [now]
+ * @param {number} [maxMs]
+ * @returns {boolean}
+ */
+export function isAnyToolInProgress(tools, now = Date.now(), maxMs = TOOL_IN_PROGRESS_MAX_MS) {
+  if (!tools || typeof tools !== "object") return false;
+  return Object.keys(tools).some((agentId) => !toolOperationLost(tools[agentId], now, maxMs));
+}
+
 // Prudence (mission « libération abusive du verrou de run ») : les portes
 // AMBIGUËS (agents déclarés actifs mais silencieux, travail en file sans
 // porteur) ne libèrent le verrou que si DEUX mesures espacées du même écart
@@ -651,6 +716,13 @@ function newRunCtx(key, project) {
     // db_query/db_execute) pour détecter une boucle d'OUTILS identiques, même
     // sans texte streamé répété.
     toolCallsByAgent: {},
+    // OUTIL EN COURS par agent : agentId → instant du `tool_execution_start`.
+    // Preuve LOCALE (le bus reçoit lui-même les événements d'outil) qu'une
+    // opération tourne encore — indépendante de la sonde Rust. Sert au chien de
+    // garde : un outil en cours est une activité qui avance, jamais une session
+    // fantôme (voir `isAnyToolInProgress`). Levé par `tool_execution_end`,
+    // `agent_start`, `agent_end` final, `agent_settled` et la mort du process.
+    toolInProgressByAgent: {},
     // Issue : empreintes des derniers tool calls de LECTURE PURE par agent
     // (read/search/grep/list/glob/find). Exclus du comptage principal (P0-2,
     // faux positifs sur l'exploration légitime) mais suivis dans un historique
@@ -950,6 +1022,11 @@ async function releaseStuckRunLockForKey(key, opts = {}) {
   // 3. Agents fantômes / inactifs : activeAgents non vide mais plus AUCUN agent
   //    réellement en activité (busy, ou dernière activité plus récente que la
   //    fenêtre de grâce / non busy-stale — isAnyAgentWorking).
+  // OUTIL EN COURS (compilation, suite de tests, build) : activité PROUVÉE par
+  // le bus lui-même (`tool_execution_start` reçu, aucune clôture depuis). Un
+  // outil long et silencieux n'est donc plus jamais pris pour une session
+  // fantôme, même si la sonde Rust ne porte pas la preuve.
+  const toolRunning = isAnyToolInProgress(ctx.toolInProgressByAgent);
   let ghosts = false;
   if (!noActive) {
     const working = await anyActiveAgentWorking(key);
@@ -959,7 +1036,7 @@ async function releaseStuckRunLockForKey(key, opts = {}) {
     // non concordant) alors que le travail continue réellement (outil long
     // silencieux, commit en cours), la run était libérée en ÉCHEC au milieu du
     // travail. Même règle que la porte `orphanQueue` (sonde projet-large).
-    ghosts = !working && !(await projectHasWorkingSession(key));
+    ghosts = !working && !toolRunning && !(await projectHasWorkingSession(key));
   }
 
   // 3 bis (issue #87) : DEMANDE EN FILE SANS PORTEUR. Groupe parallèle avec du
@@ -976,7 +1053,7 @@ async function releaseStuckRunLockForKey(key, opts = {}) {
   if (noActive && !noParallel && ctx.parallelGroup.pending > 0) {
     const idleSince = ctx.lastActivityAt || ctx.startedAt || 0;
     if (idleSince && Date.now() - idleSince > QUEUED_ORPHAN_GRACE_MS) {
-      orphanQueue = !(await projectHasWorkingSession(key));
+      orphanQueue = !toolRunning && !(await projectHasWorkingSession(key));
     }
   }
 
@@ -2516,6 +2593,9 @@ export function handleAgentEvent(ev) {
     // PÉRIMÉ de la run précédente (session processus réutilisée, cross-talk) :
     // settleAgentTurn le rejettera grâce à ce marqueur.
     ctx.startedByAgent[agentId] = true;
+    // Anti-fuite : nouvelle exécution → aucun outil n'est encore ouvert (un
+    // `tool_execution_end` de la run précédente a pu être perdu).
+    delete ctx.toolInProgressByAgent[agentId];
     return;
   }
 
@@ -2571,6 +2651,10 @@ export function handleAgentEvent(ev) {
   } else if (type === "tool_execution_start") {
     const toolName = event.toolName || event.tool || "outil";
     console.log("[agents-bus] tool:", toolName, "agent=" + agentId);
+    // ACTIVITÉ PROUVÉE : l'outil tourne (build, tests, compilation…), même si
+    // rien n'est affiché avant son `tool_execution_end`. Posé AVANT le retour
+    // anticipé des lectures (une lecture longue est aussi un travail en cours).
+    ctx.toolInProgressByAgent[agentId] = Date.now();
     emit("toolStart", { agentId, toolName });
     // Issue #10 : accumuler une empreinte du tool call (ex: requête DB) pour
     // détecter une boucle d'OUTILS identiques, même sans texte streamé répété.
@@ -2586,6 +2670,7 @@ export function handleAgentEvent(ev) {
     }
     const fp = buildToolLoopFingerprint(toolName, toolArgs);
     const arr = (ctx.toolCallsByAgent[agentId] = ctx.toolCallsByAgent[agentId] || []);
+    // (repère d'outil en cours déjà posé ci-dessus)
     // Issue #35 : on accumule CHAQUE empreinte (pas de déduplication des
     // consécutives identiques). L'ancienne déduplication effondrait une séquence
     // de N commandes bash identiques en UNE seule entrée → detectRepeatedToolCalls
@@ -2596,6 +2681,9 @@ export function handleAgentEvent(ev) {
     arr.push(fp);
     if (arr.length > 40) arr.splice(0, arr.length - 40);
     maybeDetectAgentLoop(agentId, ctx);
+  } else if (type === "tool_execution_end") {
+    // L'outil est terminé : plus aucune preuve locale de travail par outil.
+    delete ctx.toolInProgressByAgent[agentId];
   } else if (type === "extension_ui_request") {
     handleExtensionUiRequest(agentId, event, ctx);
   } else if (type === "agent_end") {
@@ -2681,6 +2769,8 @@ export function handleAgentEvent(ev) {
       resetTimeout(ctx);
       return;
     }
+    // Fin de tour FINALE : plus aucun outil ouvert (anti-fuite).
+    delete ctx.toolInProgressByAgent[agentId];
     settleAgentTurn(agentId, ctx);
   } else if (type === "auto_retry_start") {
     // pi se relance tout seul sur une erreur transitoire : l'erreur en attente
@@ -2699,8 +2789,12 @@ export function handleAgentEvent(ev) {
     // finalisation ET l'agrégat vers l'assistant (inject_session_summary)
     // sont déclenchés ICI au lieu d'être perdus. Idempotent : un agent déjà
     // finalisé (agent_end) ou non actif est ignoré.
+    delete ctx.toolInProgressByAgent[agentId];
     settleAgentTurn(agentId, ctx);
   } else if (type === "process_exit" || type === "process_error" || type === "extension_error") {
+    // Mort du process : aucun outil ne tourne plus (la VRAIE session fantôme
+    // doit rester coupable : le repère d'outil ne la protège pas).
+    delete ctx.toolInProgressByAgent[agentId];
     // Bug : un abort déclenché par la détection de boucle (maybeDetectAgentLoop)
     // tue le process → process_exit arrive avec un reason muet (« processus
     // arrêté »). On propage la cause réelle (boucle détectée) au résultat agrégé
