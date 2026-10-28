@@ -1,7 +1,7 @@
 # Pilot — Les trois modes d'écran et l'écran Vocal (spec)
 
 > **Statut : ✅ livré** — lot 1 (`e3f147b`), lot 2 (`944bd0c`), lot 3 (`70fe93e`),
-> lot 4a (`174cc45`).
+> lot 4a (`174cc45`), lot 4b (couper la réflexion, voir ce fichier §6).
 >
 > Ce document décrit **ce que Pilot fait réellement**, relu dans le code livré.
 > Les raisons de conception (mesures de contraste, choix de placement, découpage
@@ -120,7 +120,9 @@ principe même du mode, et il ne dépend d'aucun réglage.
 
 **Une seule** classe d'état à la fois sur l'overlay : deux états simultanés sont
 impossibles par construction. Priorité : **parole** > **réflexion** > **écoute** >
-**repos**.
+**repos**. Cette priorité n'est pas qu'un choix de couleur : elle décide aussi de
+**ce que la voix interrompt** (§6), par une seule fonction pure
+(`vocalInterruptTarget`).
 
 | État | Quand | Teinte (jeton `--vocal-*`) | Mouvement | Ligne d'état |
 |---|---|---|---|---|
@@ -180,10 +182,13 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
   l'état affiché** (voir §4) : le trait qui s'allonge et le passage en « écoute »
   viennent d'une seule et même mesure, jamais de deux chemins séparés.
 
-## 6. Parler par-dessus Pilot : comment cela marche
+## 6. Parler par-dessus Pilot : lire **et** travailler
 
-Pendant que Pilot lit une réponse **en mode Vocal**, prendre la parole
-l'**arrête**. Le mécanisme est borné, et il est volontairement prudent.
+Prendre la parole en mode Vocal **interrompt Pilot**, dans les deux cas : quand
+il **lit** une réponse, et quand il **réfléchit** (l'agent travaille). Un seul
+signal, une seule garde, **deux** cibles choisies par la priorité des états (§4).
+
+### 6.1 Pilot lit sa réponse (lot 4a)
 
 - **Un seul signal « Pilot parle »** : l'état de la lecture à voix haute
   (`pilot-read-aloud-state`, émis par `read-aloud.js`). L'écran ne devine jamais la
@@ -202,8 +207,36 @@ l'**arrête**. Le mécanisme est borné, et il est volontairement prudent.
   lecture du projet, donc l'arrêt tombe **entre deux phrases**, jamais au milieu
   d'un mot ; l'objet repasse en « écoute » ; le curseur revient dans la zone de
   saisie. **Aucun agent n'est arrêté** : la voix coupe l'écoute, pas le travail.
-- **Hors mode Vocal, rien ne change** : les autres écrans lisent jusqu'au bout, et
-  le micro n'y est pas ouvert.
+
+### 6.2 Pilot réfléchit (lot 4b)
+
+- **Même garde, même mesure, mêmes 200 ms.** Le moteur micro reçoit simplement
+  l'état « réflexion », par `setThinking`, depuis le **même** signal que l'écran
+  (`reflectingActive`, alimenté par `agent_start` / `agent_end`).
+- **Aucun calibrage dans ce cas, et c'est voulu** : Pilot est muet pendant qu'il
+  réfléchit, il n'y a **aucun écho à mesurer**. La garde applique donc directement
+  le plancher de bruit déjà utilisé par la lecture (0,05) — **aucun seuil, aucune
+  durée, aucun réglage nouveau** n'a été ajouté.
+- **Ce que fait la coupure** : **le chemin d'arrêt du bouton Stop**, à l'identique
+  (`stopSuperAgentTurn` → `invoke("abort_super_agent")`). Il n'existe **pas** de
+  second mécanisme d'arrêt : la voix et le bouton empruntent la **même** fonction,
+  donc les mêmes effets — l'arrêt est demandé au moteur, le texte **déjà produit**
+  est conservé et affiché, l'état de la conversation retombe (`agent_end`), la
+  file de missions du projet est **tenue** et l'arrêt est **tracé** dans
+  `.pilot/agent-stops.log` comme tout arrêt.
+- **Une seule coupure par prise de parole** : tant que la voix ne retombe pas, la
+  garde ne recoupe pas. Quand vous vous taisez, elle **se réarme** d'elle-même —
+  sans délai à régler — pour la phrase suivante.
+- **Votre parole n'est pas perdue** : le curseur revient dans la zone de saisie,
+  prêt à recevoir la dictée ou votre correction. Pilot **ne relance pas** l'agent
+  avec ce qui vient d'être dit (ce n'est pas fait, §9).
+
+### 6.3 Commun aux deux cas
+
+- **Hors mode Vocal, rien ne change** : les autres écrans lisent jusqu'au bout et
+  laissent travailler l'assistant ; le micro n'y est pas ouvert, et la fonction de
+  coupure sort immédiatement si l'écran Vocal n'est pas affiché.
+- **L'écran ne change pas** : ni bouton, ni réglage, ni ligne d'état nouveaux.
 
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 
@@ -216,10 +249,15 @@ ci-dessous sont **voulus** et se produisent sans que rien ne soit cassé.
 | **Rien ne se coupe quand vous parlez** | La machine ne **prouve** pas qu'elle annule l'écho : le navigateur ne répond pas « oui » (champ absent) ou répond « non » à l'annulation d'écho. Sans cette preuve, la détection reste **désarmée** et Pilot lit jusqu'au bout. | Casque (l'écho disparaît), ou accepter la lecture complète. Le motif est lisible sans coupure : `bargeInReport()` (`echoCancellation`, `residu`, `seuil`, `arme`, `calibre`, `motif`). |
 | **Rien ne se coupe si vous parlez tout de suite** | Les **600 premières millisecondes** d'une lecture servent à mesurer le son de Pilot lui-même : couper pendant cette mesure reviendrait à juger avec un seuil qui n'existe pas encore. | Parler après le tout début d'une phrase. |
 | **Rien ne se coupe avec des haut-parleurs forts** | Le **résidu d'écho mesuré** dépasse la limite (0,03 quand l'annulation d'écho est prouvée, 0,01 quand le navigateur ne dit rien) : la détection se désarme d'elle-même. | Baisser le volume, rapprocher le micro, ou mettre un casque — puis relire la mesure. |
-| **Il faut vraiment insister** | Une voix **brève ou hachée** (moins de 200 ms continues au-dessus du seuil) n'est pas une prise de parole : c'est un bruit. | Parler d'une traite, une phrase entière. |
+| **Il faut vraiment insister** | Une voix **brève ou hachée** (moins de 200 ms continues au-dessus du seuil) n'est pas une prise de parole : c'est un bruit — que Pilot **lise** ou qu'il **réfléchisse**. | Parler d'une traite, une phrase entière. |
+
+Ces trois premières protections ne concernent que la **lecture** : pendant une
+réflexion, Pilot n'émet aucun son, il n'y a donc ni calibrage ni désarmement d'écho
+à appliquer (§6.2).
 
 Conséquence assumée : sur un poste où le navigateur ne rapporte pas l'annulation
-d'écho, **la coupure ne marchera pas** — et Pilot **lit jusqu'au bout**, exactement
+d'écho, **la coupure de la lecture ne marchera pas** — et Pilot **lit jusqu'au
+bout**, exactement
 comme avant le lot 4a. Aucun réglage n'a été ajouté pour forcer la détection : ce
 serait le moyen le plus sûr de faire bégayer Pilot.
 
@@ -245,7 +283,8 @@ place et dans le bon ordre, avec son texte d'invite et sa hauteur d'origine.
 - **La conversation continue** : après une réponse, Pilot **ne reprend pas**
   l'écoute tout seul (c'est la suite du lot 4, non commencée).
 - **La réorientation de l'agent** quand on le coupe : la coupure arrête la
-  **lecture**, elle ne relance pas l'agent avec ce qui vient d'être dit.
+  **lecture** ou le **travail en cours** (lot 4b), mais elle ne **relance pas**
+  l'agent avec ce qui vient d'être dit. Il faut redemander.
 - **La dictée vocale** reste celle du navigateur (le son peut sortir du poste) :
   rien de local n'a été ajouté ici.
 - **Deux éléments du rapport de conception ne sont pas livrés** : le bouton
@@ -257,14 +296,16 @@ place et dans le bon ordre, avec son texte d'invite et sa hauteur d'origine.
 | Fichier | Rôle |
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
-| `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` (pures) |
-| `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`) |
+| `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) |
+| `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique (`.screen-mode-*`), l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 
 Verrous : `trois-modes-ecran.test.js` (lot 1), `ecran-vocal-lot2.test.js` (écran,
 états, trois sorties, symétrie), `ecran-vocal-lot3.test.js` (micro, arrêt réel,
-messages), `ecran-vocal-lot4a.test.js` (garde anti-auto-coupure, chiffres).
+messages), `ecran-vocal-lot4a.test.js` (garde anti-auto-coupure, chiffres),
+`vocal-couper-la-reflexion.test.js` (lot 4b : chemin d'arrêt **réutilisé**, une
+seule coupure, négatifs bruit court / silence / écho, écran inchangé).
 
 ## 11. Ce qui est prouvé, et ce qui dépend de votre matériel
 
@@ -273,6 +314,9 @@ le libellé et l'infobulle, la structure de l'écran, une seule classe d'état, 
 priorité parole > réflexion > écoute, les trois sorties, la restitution des nœuds,
 l'arrêt réel du micro, et — sur images audio simulées — **zéro auto-coupure** sur
 30 s d'écho résiduel puis **une** coupure quand une voix continue dépasse le seuil.
+Est aussi prouvé que la coupure pendant une réflexion ne part **qu'une fois**, ne
+part **pas** sur un bruit court ni sur un silence, et emprunte le **même** chemin
+d'arrêt que le bouton Stop (aucun second `invoke` d'arrêt dans le code).
 
 **Non prouvable par un test, à vérifier chez vous** : le niveau d'écho **réel** de
 votre pièce (haut-parleurs, volume, distance, pilote audio). Pilot ne le suppose

@@ -14,6 +14,9 @@
 //      CONTINUE au-dessus du seuil, et UNE seule coupure par lecture.
 //   3. L'arret emprunte la SEULE voie existante (`stopReading`, read-aloud.js) ;
 //      aucun second lecteur, aucune reprise automatique.
+//      Depuis le lot 4b, la MEME garde sert aussi a couper le TRAVAIL quand la
+//      voix prend la parole pendant une reflexion (vocal-couper-la-reflexion.test.js) :
+//      l'arret de LECTURE, lui, reste un arret d'ecoute et n'arrete aucun agent.
 //   4. Hors mode Vocal, rien ne change : les autres ecrans lisent jusqu'au bout.
 //   5. Le micro reste dans vocal-mic.js ; l'ecran ne gagne aucune API audio.
 //
@@ -427,9 +430,12 @@ describe("4. l'ecran : couper passe par la SEULE voie existante (stopReading)", 
     expect(corps).toMatch(/inputEl\.focus\(\)/);
     // Aucune synthese vocale propre a l'ecran, aucune seconde lecture.
     expect(corps).not.toMatch(/speechSynthesis|SpeechSynthesisUtterance|new Audio\(|\.click\(\)/);
-    // Et l'arret n'arrete AUCUN agent : c'est un arret d'ecoute, pas un arret de
-    // travail (l'entonnoir des arrets d'agents n'a donc rien a tracer ici).
-    expect(corps).not.toMatch(/stopAgent|agent_stop|abort|kill/i);
+    // L'arret de LECTURE n'arrete AUCUN agent : c'est un arret d'ecoute, pas un
+    // arret de travail. Depuis le LOT 4b, c'est l'AUTRE etat (reflexion) qui
+    // coupe le travail, et il le fait par le chemin d'arret PARTAGE du bouton
+    // Stop (`stopSuperAgentTurn`) : aucun IPC d'arrete n'est ecrit dans cette
+    // fonction, donc aucun second mecanisme n'apparait ici.
+    expect(corps).not.toMatch(/invoke\(|agent_stop|abort_\w+|\bkill\b/i);
   });
 
   it("la trace chiffree de la mesure est ecrite (verifiable au vrai micro)", () => {

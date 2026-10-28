@@ -33,6 +33,15 @@
 //      coupure qui se declenche toute seule.
 // Les chiffres REELLEMENT mesures sont rendus par `bargeInReport()`.
 //
+// ── LOT 4b : PRENDRE LA PAROLE PENDANT QUE PILOT REFLECHIT ───────────────────
+// Meme garde, meme signal (`onSpeechStart`), meme decision d'arreter cote
+// appelant : la phase a change, pas le mecanisme. Pendant la reflexion Pilot
+// ne produit AUCUN son — il n'y a donc rien a calibrer et rien a distinguer de
+// sa propre voix : la garde reprend les DEUX regles qui protegent deja la
+// lecture (plancher de bruit `BARGE_IN_MIN_LEVEL`, voix CONTINUE
+// `BARGE_IN_MIN_MS`) et se rearne des que la voix retombe (une coupure par
+// prise de parole). Aucun seuil nouveau, aucun reglage nouveau.
+//
 // Toutes les dependances du navigateur sont INJECTABLES (`navigator`,
 // `AudioContext`, `requestAnimationFrame`) : le moteur se teste donc sans
 // fenetre, et une panne de l'un d'eux ne peut jamais lever d'exception vers
@@ -260,9 +269,15 @@ export function emptySpeechGate() {
  *     remis a zero des que la lecture s'arrete : le residu d'une lecture ne
  *     vaut pas pour la suivante.
  *
+ * Deroulement d'une REFLEXION (`reflechi`, lot 4b) : meme garde, sans
+ * calibrage — Pilot est muet, il n'y a pas d'echo a mesurer. Seules comptent la
+ * voix CONTINUE (`BARGE_IN_MIN_MS`) et le plancher de bruit existant. Le
+ * verrou `declenche` se REOUVRE quand la voix retombe sous le seuil : une
+ * coupure par prise de parole, jamais deux pour la meme phrase.
+ *
  * @param {{dessusMs?: number, calibreMs?: number, residuel?: number, declenche?: boolean}} etat
  * @param {number} mesure niveau lisse courant (0..1)
- * @param {{parlant?: boolean, dtMs?: number, echoAnnule?: boolean|null}} [contexte]
+ * @param {{parlant?: boolean, reflechi?: boolean, dtMs?: number, echoAnnule?: boolean|null}} [contexte]
  * @returns {{etat: object, declenche: boolean, arme: boolean, seuil: number, motif: string}}
  */
 export function stepSpeechGate(etat, mesure, contexte = {}) {
@@ -277,9 +292,35 @@ export function stepSpeechGate(etat, mesure, contexte = {}) {
     residuel: Number.isFinite(e.residuel) ? Math.max(0, Math.min(1, e.residuel)) : 0,
     declenche: e.declenche === true,
   };
-  // Hors lecture : la garde dort, et rien de ce qu'elle a mesure ne survit.
-  if (c.parlant !== true) {
+  // Hors lecture ET hors reflexion : la garde dort, et rien de ce qu'elle a
+  // mesure ne survit.
+  if (c.parlant !== true && c.reflechi !== true) {
     return { etat: emptySpeechGate(), declenche: false, arme: false, seuil: vocalEchoThreshold(0), motif: "hors-lecture" };
+  }
+  // ── LOT 4b : Pilot REFLECHIT (aucune voix de Pilot a distinguer) ──
+  // Aucun calibrage : il n'y a pas d'echo a mesurer. Aucune condition
+  // d'annulation d'echo : elle protege de la voix de Pilot, or Pilot se tait.
+  if (c.parlant !== true) {
+    const seuilReflexion = vocalEchoThreshold(0);
+    if (suivant.declenche) {
+      if (m <= seuilReflexion) {
+        // La prise de parole est FINIE : la garde se rearne pour la suivante.
+        suivant.declenche = false;
+        suivant.dessusMs = 0;
+        return { etat: suivant, declenche: false, arme: true, seuil: seuilReflexion, motif: "attente" };
+      }
+      return { etat: suivant, declenche: false, arme: true, seuil: seuilReflexion, motif: "deja-coupe" };
+    }
+    if (m > seuilReflexion) {
+      suivant.dessusMs += dt;
+      if (suivant.dessusMs >= BARGE_IN_MIN_MS) {
+        suivant.declenche = true;
+        return { etat: suivant, declenche: true, arme: true, seuil: seuilReflexion, motif: "voix-detectee" };
+      }
+      return { etat: suivant, declenche: false, arme: true, seuil: seuilReflexion, motif: "voix-en-cours" };
+    }
+    suivant.dessusMs = 0;
+    return { etat: suivant, declenche: false, arme: true, seuil: seuilReflexion, motif: "attente" };
   }
   const arme = bargeInArmed(echoAnnule, suivant.residuel);
   const seuil = vocalEchoThreshold(suivant.residuel);
@@ -345,7 +386,10 @@ export function rmsOf(echantillons) {
  *
  * Et un quatrieme depuis le lot 4a : `onSpeechStart(rapport)` — une voix vient
  * de depasser le seuil de la garde PENDANT que Pilot lit a voix haute. Il ne
- * part qu'une fois par lecture, et seulement si la garde est armee.
+ * part qu'une fois par lecture, et seulement si la garde est armee. Depuis le
+ * lot 4b, il part aussi quand la voix prend la parole pendant que Pilot
+ * REFLECHIT (meme signal, meme forme de rapport : l'appelant decide quoi
+ * arreter).
  *
  * @param {{
  *   onLevel?: (niveau: number) => void,
@@ -399,6 +443,10 @@ export function createVocalMic(options = {}) {
   // de l'etat de la lecture, jamais devine ici). `echoAnnule` : ce que le
   // peripherique dit de son annulation d'echo (true / false / null = inconnu).
   let parlant = false;
+  // ── LOT 4b ──
+  // `reflechi` : l'Assistant TRAITE maintenant, sans rien dire (pose par
+  // l'appelant a partir de l'etat de reflexion de l'onglet, jamais devine ici).
+  let reflechi = false;
   let echoAnnule = null;
   let garde = emptySpeechGate();
   let dernierTemps = 0;
@@ -459,6 +507,7 @@ export function createVocalMic(options = {}) {
     // La garde du lot 4a repart d'une mesure neuve : aucun residu d'une session
     // precedente ne survit a une nouvelle capture.
     parlant = false;
+    reflechi = false;
     garde = emptySpeechGate();
     dernierTemps = 0;
     if (etait) surEcoute(false);
@@ -489,13 +538,14 @@ export function createVocalMic(options = {}) {
   /**
    * LOT 4a : un pas de la garde, sur le niveau que l'ecran vient d'afficher (le
    * meme chiffre, pas une seconde mesure). Le signal ne part qu'une fois : la
-   * garde se verrouille jusqu'au debut de la lecture suivante.
+   * garde se verrouille jusqu'au debut de la lecture suivante — ou jusqu'a ce
+   * que la voix retombe pendant une reflexion (lot 4b).
    */
   function mesurerParole() {
     const instant = maintenant();
     const dtMs = dernierTemps ? Math.max(0, instant - dernierTemps) : 0;
     dernierTemps = instant;
-    const pas = stepSpeechGate(garde, niveau, { parlant, dtMs, echoAnnule });
+    const pas = stepSpeechGate(garde, niveau, { parlant, reflechi, dtMs, echoAnnule });
     garde = pas.etat;
     if (!pas.declenche) return;
     try {
@@ -657,11 +707,30 @@ export function createVocalMic(options = {}) {
   }
 
   /**
+   * LOT 4b : « Pilot reflechit » (vrai) ou ne reflechit plus (faux). Meme
+   * discipline que `setSpeaking` : l'etat est repose par l'appelant, jamais
+   * devine ici. A la FIN de la reflexion, la mesure de continuite repart de
+   * zero (aucune voix d'un tour ne s'additionne a celle du suivant), mais un
+   * verrou de coupure DEJA pose le reste jusqu'a ce que la voix retombe :
+   * jamais deux coupures pour une meme prise de parole.
+   * @param {boolean} actif
+   */
+  function setThinking(actif) {
+    const etat = actif === true;
+    if (etat === reflechi) return;
+    reflechi = etat;
+    if (!etat) {
+      garde = { ...emptySpeechGate(), declenche: garde.declenche };
+      dernierTemps = 0;
+    }
+  }
+
+  /**
    * Les CHIFFRES de la garde, tels qu'ils sont mesures sur ce micro : de quoi
    * verifier au vrai peripherique qu'aucune coupure ne peut partir toute seule
    * (residu, seuil, arme ou non).
    * @returns {{echoCancellation: boolean|null, residuel: number, seuil: number,
-   *   arme: boolean, calibre: boolean, motif: string}}
+   *   arme: boolean, calibre: boolean, motif: string, pendant: string}}
    */
   function bargeInReport() {
     const seuil = vocalEchoThreshold(garde.residuel);
@@ -672,7 +741,11 @@ export function createVocalMic(options = {}) {
       if (!calibre) motif = "calibrage";
       else if (!arme) motif = echoAnnule === false ? "echo-non-annule" : "residuel-eleve";
       else motif = garde.declenche ? "voix-detectee" : "a-l-ecoute";
+    } else if (reflechi) {
+      // LOT 4b : pas de calibrage a attendre, l'echo n'a pas d'objet ici.
+      motif = garde.declenche ? "voix-detectee" : "a-l-ecoute";
     }
+    const pendant = parlant ? "lecture" : reflechi ? "reflexion" : "";
     return {
       echoCancellation: echoAnnule,
       residuel: Math.round(garde.residuel * 1000) / 1000,
@@ -680,6 +753,7 @@ export function createVocalMic(options = {}) {
       arme,
       calibre,
       motif,
+      pendant,
     };
   }
 
@@ -687,6 +761,7 @@ export function createVocalMic(options = {}) {
     demander,
     fermer,
     setSpeaking,
+    setThinking,
     bargeInReport,
     estActif: () => actif,
   };

@@ -469,7 +469,14 @@ describe("9. coordination avec la lecture et l'envoi (§3.3)", () => {
     // Hors mode Vocal : rien ne change pour les autres ecrans.
     expect(corps).toMatch(/if \(!vocalOverlay\) return;/);
     // Et pas de reprise automatique : couper ne relance aucune lecture.
-    expect(corps).toMatch(/if \(!vocalSpeaking\) return;/);
+    // LOT 4b : la garde « Pilot ne parle pas -> aucune coupure de lecture » est
+    // desormais portee par la decision UNIQUE `vocalInterruptTarget` (parole >
+    // reflexion > rien), qui dit exactement la meme chose pour la lecture. Un
+    // seul endroit a lire, deux etats servis (voir
+    // vocal-couper-la-reflexion.test.js).
+    expect(corps).toMatch(
+      /vocalInterruptTarget\(\{ speaking: vocalSpeaking, reflecting: reflectingActive \}\)/,
+    );
     expect(corps).not.toMatch(/agent-read-btn|\.click\(\)/);
   });
 

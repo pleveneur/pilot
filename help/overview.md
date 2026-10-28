@@ -461,6 +461,15 @@ En mode **Vocal** :
   pas concluante, **il ne coupe pas** et lit jusqu'au bout ; de même, si vous
   parlez dans les tout premiers instants d'une phrase, pendant cette mesure, il
   ne s'arrête pas. Le **casque** est la situation où cela marche le mieux.
+- **Parler pendant qu'il travaille l'arrête aussi** : si vous prenez la parole
+  pendant que Pilot **réfléchit** (l'agent travaille), il **s'arrête tout de
+  suite** — exactement comme si vous appuyiez sur le bouton **Arrêter** de la
+  conversation. Ce qu'il avait déjà écrit reste affiché, rien n'est jeté, et la
+  zone de saisie reprend la main pour que vous disiez ce que vous voulez à la
+  place. Une phrase suffit à l'arrêter **une seule fois** : continuer de parler
+  ne relance aucun arrêt, et un bruit court (une toux, une chaise) ne l'arrête
+  pas. Hors du mode Vocal, rien ne change. Ce n'est pas encore fait : reprendre
+  votre phrase pour relancer l'agent à votre place — il faut le redemander.
 - La réponse se **lit à voix haute** (voir « Écouter une réponse à voix
   haute ») : comme l'écran est nu, c'est le moyen d'entendre la réponse.
   Reprendre l'écoute après la réponse (mode conversation continue)

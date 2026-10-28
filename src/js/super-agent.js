@@ -485,6 +485,22 @@ export function vocalStateClass(etats = {}) {
 }
 
 /**
+ * LOT 4b : QUE faut-il interrompre quand l'utilisateur prend la parole ? PURE.
+ * Meme priorite que l'etat affiche (`vocalScreenState`) : si Pilot PARLE, c'est
+ * la lecture qui s'arrete (lot 4a, inchange) ; sinon, s'il REFLECHIT, c'est le
+ * travail en cours qui s'arrete (lot 4b). Aucun autre cas : au repos, parler ne
+ * coupe rien.
+ * @param {{speaking?: boolean, reflecting?: boolean}} [etats]
+ * @returns {"lecture"|"reflexion"|""}
+ */
+export function vocalInterruptTarget(etats = {}) {
+  const e = etats || {};
+  if (e.speaking === true) return "lecture";
+  if (e.reflecting === true) return "reflexion";
+  return "";
+}
+
+/**
  * L'UNIQUE ligne d'etat de l'ecran Vocal (§2.3) : une seule phrase, jamais
  * coloree par l'etat (la couleur vit dans l'objet). Le texte est lu tel quel
  * dans le rapport.
@@ -3324,6 +3340,9 @@ export async function createSuperAgent(container) {
     // LOT 2 : l'ecran Vocal suit la MEME source d'etat (aucune nouvelle source
     // de verite) — l'objet passe en « reflexion » des que l'Assistant traite.
     applyVocalState();
+    // LOT 4b : la garde du micro suit le MEME etat — une prise de parole
+    // pendant la reflexion coupe le travail de la conversation.
+    vocalSyncMicThinking();
     // Bouton « Analyser et ranger mes données » : désactivé pendant que
     // l'Assistant travaille (MÊME signal que la teinte de réflexion, pas une
     // nouvelle source de vérité). Deux conséquences voulues : l'utilisateur
@@ -4045,25 +4064,42 @@ export async function createSuperAgent(container) {
   }
 
   /**
-   * LOT 4a : L'UTILISATEUR PARLE PAR-DESSUS PILOT -> Pilot se tait, tout de
-   * suite et proprement (pas de phrase hachee, pas de reprise : une phrase est
-   * toujours arretee entre deux morceaux, jamais au milieu d'un souffle).
+   * LOT 4b : « Pilot reflechit » arme la MEME garde du micro, dans sa phase de
+   * reflexion (aucun son de Pilot a distinguer). Le signal est celui que
+   * l'ecran affiche DEJA (`reflectingActive`, alimente par agent_start /
+   * agent_end) : aucune seconde source de verite, aucun reglage.
+   */
+  function vocalSyncMicThinking() {
+    if (!vocalMic) return;
+    if (typeof vocalMic.setThinking !== "function") return;
+    vocalMic.setThinking(reflectingActive === true);
+  }
+
+  /**
+   * LOT 4a + 4b : L'UTILISATEUR PREND LA PAROLE.
    *
-   * Trois regles tenues ici :
-   *   1. L'ARRET emprunte la SEULE voie existante (`stopReading`, read-aloud.js) :
-   *      aucun second lecteur, aucun second mecanisme.
-   *   2. La DECISION d'arreter n'est pas prise ici : c'est la garde du micro
-   *      (vocal-mic.js) qui la prend, et elle ne se declenche que si
-   *      l'annulation d'echo est averee ET si le niveau depasse le residu d'echo
-   *      qu'elle vient de mesurer. Une voix qui n'est que l'echo de Pilot ne peut
-   *      donc pas le faire taire (voir `bargeInReport`).
+   * Deux cas, un SEUL signal, une SEULE fonction :
+   *   - Pilot LIT sa reponse -> Pilot se tait (lot 4a, inchange) ;
+   *   - Pilot REFLECHIT -> le travail en cours est arrete et la parole est prise
+   *     en compte tout de suite (lot 4b).
+   *
+   * Regles tenues ici :
+   *   1. L'ARRET emprunte les SEULES voies existantes : `stopReading`
+   *      (read-aloud.js) pour la lecture, et le chemin d'arrete de la
+   *      conversation (`stopSuperAgentTurn`, celui du bouton Stop) pour la
+   *      reflexion. Aucun second mecanisme, aucun IPC appele d'ici.
+   *   2. La DECISION de couper n'est pas prise ici : c'est la garde du micro
+   *      (vocal-mic.js) qui la prend, sur une voix CONTINUE, une seule fois par
+   *      prise de parole. Une voix qui n'est que l'echo de Pilot ne peut pas le
+   *      faire taire (voir `bargeInReport`).
    *   3. HORS mode Vocal, cette fonction ne fait rien : les autres ecrans lisent
-   *      leurs reponses jusqu'au bout, comme avant.
+   *      leurs reponses et laissent travailler l'assistant, comme avant.
    * @param {{residuel?: number, seuil?: number}} [rapport] chiffres de la mesure
    */
   function vocalBargeIn(rapport) {
     if (!vocalOverlay) return;
-    if (!vocalSpeaking) return;
+    const cible = vocalInterruptTarget({ speaking: vocalSpeaking, reflecting: reflectingActive });
+    if (!cible) return;
     // Trace chiffree de la mesure : elle ne s'affiche pas, elle sert a verifier
     // au vrai micro qu'aucune coupure ne part toute seule (residuel << seuil).
     try {
@@ -4072,13 +4108,20 @@ export async function createSuperAgent(container) {
           "[vocal] prise de parole : residu=" +
             (rapport ? rapport.residuel : "?") +
             " seuil=" +
-            (rapport ? rapport.seuil : "?")
+            (rapport ? rapport.seuil : "?") +
+            " pendant=" +
+            cible
         );
       }
     } catch (_) {
       /* une console absente ne doit pas empecher de se taire */
     }
-    stopReading();
+    if (cible === "lecture") stopReading();
+    // LOT 4b : le travail de la conversation s'arrete par le chemin PARTAGE du
+    // bouton Stop (aucun IPC ici). L'appel n'est pas attendu : la mesure du
+    // micro continue, et les effets de fin de tour arrivent par l'evenement de
+    // fin existant (agent_end), comme pour un clic.
+    else void stopSuperAgentTurn();
     // L'objet repasse en « ecoute » (le micro capte deja, l'etat suit) et la
     // saisie reprend la main : le curseur y retourne pour dicter ou corriger
     // tout de suite. Aucune modale ouverte ne se fait voler le curseur.
@@ -4135,6 +4178,8 @@ export async function createSuperAgent(container) {
     // Si Pilot lit DEJA au moment ou le micro s'ouvre, la garde part armee :
     // l'etat de la lecture est repose, jamais devine.
     vocalSyncMicSpeaking();
+    // LOT 4b : meme chose pour une reflexion DEJA en cours a l'ouverture.
+    vocalSyncMicThinking();
     vocalOverlay.addEventListener("pointerdown", onVocalFirstGesture);
     // La touche est ecoutee sur le document (et non sur l'ecran) : le mode Vocal
     // est le seul ecran visible a ce moment-la, et un focus qui n'est encore
@@ -4151,6 +4196,7 @@ export async function createSuperAgent(container) {
         if (vocalMic) {
           vocalMic.demander().then(() => {
             vocalSyncMicSpeaking();
+            vocalSyncMicThinking();
           });
         }
       });
@@ -4321,6 +4367,28 @@ export async function createSuperAgent(container) {
   window.addEventListener(SCREEN_MODE_APPLY_EVENT, onScreenModeApply);
 
   // ── Actions ──
+  /**
+   * L'ARRET MANUEL de la conversation : LE SEUL chemin. Il etait le corps du
+   * bouton Stop ; il est extrait pour que la prise de parole en mode Vocal
+   * (lot 4b) l'emprunte TEL QUEL, sans en creer un second.
+   *
+   * Ne rien ajouter ici sans le faire beneficier aux DEUX appelants : c'est
+   * l'interet de l'extraction (le bouton Stop et la voix doivent arreter
+   * exactement de la meme facon).
+   */
+  async function stopSuperAgentTurn() {
+    // Arrêt manuel de l'assistant : le flux peut s'interrompre sans jamais
+    // signaler son repos. On remet le lecteur de son différé à zéro pour que
+    // la surface « superagent » restée active ne retarde plus de 12 s le son
+    // de la prochaine mission.
+    resetDeferredSound();
+    // R3-EXCEPTION-MANUEL : arrêt demandé EXPLICITEMENT par un geste de
+    // l'utilisateur (bouton Stop, ou prise de parole en mode Vocal) — ce n'est
+    // pas un arrêt automatique, donc aucune trace d'arrêt automatique n'est
+    // écrite ici (exception assumée, déclarée par le test des sites d'arrêt).
+    await invoke("abort_super_agent").catch(() => {});
+  }
+
   toolbar.addEventListener("click", async (e) => {
     const btn = e.target.closest("[data-action]");
     if (!btn) return;
@@ -4329,16 +4397,7 @@ export async function createSuperAgent(container) {
     // UNIQUE des trois modes, seule entree du mode) : le raccourci Ctrl+Shift+A
     // appelle directement enterImmersive et ne depend d'aucun bouton.
     if (action === "abort") {
-      // Arrêt manuel de l'assistant : le flux peut s'interrompre sans jamais
-      // signaler son repos. On remet le lecteur de son différé à zéro pour que
-      // la surface « superagent » restée active ne retarde plus de 12 s le son
-      // de la prochaine mission.
-      resetDeferredSound();
-      // R3-EXCEPTION-MANUEL : arrêt demandé EXPLICITEMENT par un clic de
-      // l'utilisateur (bouton Stop) — ce n'est pas un arrêt automatique, donc
-      // aucune trace d'arrêt automatique n'est écrite ici (exception assumée,
-      // déclarée par le test des sites d'arrêt).
-      await invoke("abort_super_agent").catch(() => {});
+      await stopSuperAgentTurn();
     } else if (action === "new-session") {
       await invoke("new_super_agent_session").catch(() => {});
       messagesEl.innerHTML = "";
