@@ -3553,18 +3553,20 @@ rejouer.
 <!-- /HELP:loop-detection-writes -->
 
 ### Mode « Assistant seul » (A19, maquette ASS_Only_V4)
-- **Une seule entree** : le bouton **UNIQUE des trois modes** de la rangée
-  d'onglets (il porte le mode courant et annonce le suivant), ou le
+- **Une seule entree** : le bouton **UNIQUE des trois modes** — c'est le **logo
+  Pilot** du bandeau du haut, en haut à gauche (ni mot, ni pastille : son
+  infobulle nomme le mode courant et annonce le suivant) —, ou le
   **raccourci Ctrl+Shift+A** (Cmd+Shift+A sur macOS, onglet 🧭 ouvert). La barre
   d'outils de l'onglet 🧭 **n'a plus** de bouton ⛶ : il faisait double emploi.
   Le mode masque tout (sidebar, explorateur, éditeur, onglets, terminal) et
   seule la discussion de l'Assistant reste visible.
 - **Barre du haut** (maquette V4) : à gauche le titre « **Pilot** » ; à droite le
   **résumé des agents**, l'entrée « **Travail** » et **UN SEUL bouton ⚙** qui
-  ouvre les Options de l'Assistant (onglet « Assistant »). Le bouton des modes y
-  est **déplacé** lui aussi, juste après le titre.
-- **Aucun bouton de retour** dans cette barre : on en sort par le **bouton des
-  trois modes** (présent dans la barre) ou par **Ctrl+Shift+A**. **Échap** ne
+  ouvre les Options de l'Assistant (onglet « Assistant »). **Aucun bouton de mode
+  dans cette barre** : le logo-bouton entre dans l'overlay et se pose **au même
+  endroit** que dans « Détaillé » (en haut à gauche), par une seule règle CSS.
+- **Aucun bouton de retour** dans cette barre : on en sort par le **logo** (le
+  bouton des trois modes, en haut à gauche) ou par **Ctrl+Shift+A**. **Échap** ne
   sort pas de ce mode (elle n'en est jamais sortie ; rien n'a été ajouté).
 - **Résumé des agents (point poignée)** : dans cette barre, juste à gauche
   du bouton ⚙, la liste des agents est **repliée par défaut en un petit point
@@ -3614,7 +3616,7 @@ rejouer.
   copie), **même libellé**, **même valeur**, alimentée par le **même calcul**.
   Le message d'accueil affiche le **nom réel
   de l'assistant** (config de l'onglet 🧭), avec repli « Pilot Assistant ».
-- **Sortir du mode** : le **bouton des trois modes** (dans la barre) ou
+- **Sortir du mode** : le **logo** (le bouton des trois modes, en haut à gauche) ou
   **Ctrl+Shift+A**. L'état de la conversation est **préservé** (les éléments du
   chat sont déplacés, jamais recréés). Le **dernier mode choisi est mémorisé**
   et restauré à la réouverture de l'onglet.

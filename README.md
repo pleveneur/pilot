@@ -106,10 +106,13 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - Un clic lance la commande dans le dossier choisi dans un **onglet terminal** (titre = nom de la commande) ; la liste des commandes se ferme et vous pouvez continuer à travailler. Relancer la même commande bascule sur l'onglet déjà ouvert ; fermer l'onglet arrête le process.
 
 ### Trois modes d'écran : Détaillé · Assistant seul · Vocal
-- Un **seul bouton**, à gauche de la rangée d'onglets, fait passer d'un mode à
-  l'autre : **Détaillé** → **Assistant seul** → **Vocal** → **Détaillé** … Son
-  libellé et sa pastille montrent le mode **courant** ; l'infobulle annonce le
-  **suivant**. Le mode choisi est **mémorisé** d'une ouverture à l'autre.
+- **Le logo Pilot, en haut à gauche du bandeau, est le bouton** : un clic fait
+  passer d'un mode à l'autre — **Détaillé** → **Assistant seul** → **Vocal** →
+  **Détaillé** … Il ne bouge pas d'un mode à l'autre et il est **muet** (ni mot,
+  ni pastille) : c'est son **infobulle** qui dit le mode **courant** et annonce
+  le **suivant**. Un second clic réflexe (moins de 400 ms après le premier) est
+  ignoré : il ne fait jamais sauter un mode. Le mode choisi est **mémorisé**
+  d'une ouverture à l'autre.
 - **Détaillé** est l'écran habituel : explorateur, onglets, agent, tout est là.
 - **Assistant seul** ne garde que la conversation de l'Assistant (🧭), en plein
   écran.

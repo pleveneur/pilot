@@ -31,19 +31,27 @@ et fermable.
 
 ## 2. Le bouton, et la mémoire du mode
 
-- **Où il vit** : `#screen-mode-button`, dans la rangée d'onglets (`#tab-row`),
-  **entre** l'entrée « Travail » et les trois boutons de fenêtre. Sa place est
-  réservée dans le flux : aucun onglet ne passe dessous.
+- **Où il vit** : en **haut à gauche**, c'est le **logo Pilot** (`#mode-logo`,
+  autour de l'image `#btn-project-logo`, dans le bandeau du nom de projet). Il
+  n'y a **aucun** bouton de mode dans la rangée d'onglets, et aucune place n'y est
+  réservée.
 - **Un seul nœud dans tout le document** : en mode « Assistant seul » puis en mode
-  « Vocal », le **même** bouton est **déplacé** dans la barre du plein écran, puis
-  **restitué exactement** à sa place (parent + voisin suivant) à la sortie. Ce ne
-  sont pas des copies : il en existe une seule, et aucun second bouton n'a été
-  ajouté ailleurs.
-- **Ce qu'il dit** : le **libellé** est le mode **courant** (« Détaillé »,
-  « Assistant seul », « Vocal »), l'**infobulle** (`title` **et** `aria-label`)
-  annonce le mode **suivant** (« Mode d'écran : Vocal. Passer à « Détaillé ». »),
-  et une **pastille** reprend la teinte du mode courant. Un état se lit donc deux
-  fois : par le mot, et par la couleur.
+  « Vocal », le **même** logo entre dans l'overlay et y prend **la même place**
+  que dans « Détaillé » — une seule règle CSS à deux sélecteurs
+  (`body.superagent-immersive-active #mode-logo` et
+  `body.pilot-vocal-active #mode-logo`, 13 px / 8 px) —, puis il est **restitué
+  exactement** à sa place (parent + voisin suivant) à la sortie. Ce ne sont pas
+  des copies : il en existe un seul, et aucun second bouton n'a été ajouté
+  ailleurs.
+- **Ce qu'il dit** : **rien de visible** — ni mot, ni icône, ni **pastille** : le
+  logo reste le logo. Seule l'**infobulle** (`title` **et** `aria-label`) parle :
+  elle nomme le mode **courant** puis annonce le **suivant** (« Mode d'écran :
+  Vocal. Passer à « Détaillé ». »). Le mode où l'on est se lit donc à l'écran,
+  qui change du tout au tout.
+- **Ce qu'il fait** : un clic fait avancer d'**un** mode dans le cycle. Une
+  **garde de 400 ms** (`MODE_CLICK_GUARD_MS`) ignore un second clic trop
+  rapproché : le double-clic réflexe qui agrandissait la fenêtre à cet endroit ne
+  franchit donc jamais deux modes.
 - **Mémoire** : **une seule clé** de stockage local, `pilot_screen_mode`, avec trois
   valeurs `detailed` / `assistant` / `vocal`. Elle est écrite à **chaque** bascule.
 - **Migration** : l'ancien réglage **binaire** `pilot_superagent_immersive` (présent
@@ -58,7 +66,7 @@ et fermable.
   ce bouton, ou le raccourci **Ctrl+Shift+A** (`Cmd+Shift+A` sur macOS, onglet 🧭
   ouvert). Il n'y a **plus** de bouton ⛶ dans la barre d'outils de l'onglet 🧭, et
   la barre du plein écran n'a **plus** de flèche « retour ». On en sort par le
-  **même bouton de mode** (il affiche le mode courant et annonce le suivant),
+  **même bouton** (le logo : son infobulle annonce le mode suivant),
   par **Ctrl+Shift+A**, ou en fermant l'onglet 🧭. **Échap** ne sort **pas** du
   mode « Assistant seul » (elle n'en est jamais sortie ; rien n'a été ajouté) :
   elle ne sert qu'à quitter l'écran **Vocal**, et à fermer une modale ouverte.
@@ -92,13 +100,14 @@ conversation est rendue **invisible tant que l'écran Vocal est actif**
 (`body.pilot-vocal-active .agent-chat-messages { visibility: hidden }` —
 `visibility` et jamais `display: none`, pour ne pas perdre la position de
 défilement à la sortie) ; **aucun conteneur de conversation n'est déplacé** dans
-l'écran (seuls la barre de saisie et le bouton des modes le sont). Le retour de
-la conversation sur cet écran est interdit par un test dédié
+l'écran (seuls la barre de saisie et le logo, qui est le bouton des modes, le
+sont). Le retour de la conversation sur cet écran est interdit par un test dédié
 (`src/js/ecran-vocal-nu.test.js`).
 
 1. **Barre de 44 px**, juste **sous** la bande des trois boutons de fenêtre
-   (`margin-top: var(--window-controls-height)`) : elle ne porte que le bouton des
-   trois modes, à gauche. Rien au centre, rien à droite.
+   (`margin-top: var(--window-controls-height)`) : elle ne porte **rien** — c'est
+   une bande de respiration. Le logo, qui est le bouton des trois modes, se pose
+   **au-dessus** d'elle, à la même place que dans les autres modes.
 2. **Au centre**, un bloc vertical : un **disque de 168 px** (anneau plein de 2 px
    + remplissage lumineux de 18 % au centre, 0 % aux bords : aucune image), puis
    **24 px** plus bas un **trait de niveau de 200 × 3 px**, puis **24 px** plus bas
@@ -265,7 +274,7 @@ serait le moyen le plus sûr de faire bégayer Pilot.
 
 | Voie | Effet |
 |---|---|
-| **Le même bouton de mode** (il affiche « Vocal » ; un clic passe à « Détaillé ») | retour à l'écran normal |
+| **Le même bouton** (le logo : en Vocal son infobulle annonce « Détaillé », un clic y passe) | retour à l'écran normal |
 | **Échap** | idem — sauf si une modale est ouverte : la touche lui appartient alors, on ne quitte pas le mode sous elle |
 | **Fermer l'onglet 🧭 Assistant** | idem (la lecture est arrêtée et le mode quitté) |
 
@@ -274,9 +283,10 @@ Vocal au lieu d'empiler un second plein écran.
 
 **Jamais deux pleins écrans superposés** : entrer en Vocal sort d'abord de
 « Assistant seul », et entrer en « Assistant seul » sort d'abord du Vocal — la
-garde est posée aux deux endroits qui créent un overlay. **Symétrie exacte** : tout
-nœud déplacé à l'entrée (le bouton des modes, la barre de saisie) est restitué à sa
-place et dans le bon ordre, avec son texte d'invite et sa hauteur d'origine.
+garde est posée aux deux endroits qui créent un overlay. **Symétrie exacte** :
+tout nœud déplacé à l'entrée (le logo, qui est le bouton des modes, la barre de
+saisie) est restitué à sa place et dans le bon ordre, avec son texte d'invite et
+sa hauteur d'origine.
 
 ## 9. Ce qui n'est pas fait (et n'est pas simulé)
 
@@ -299,7 +309,7 @@ place et dans le bon ordre, avec son texte d'invite et sa hauteur d'origine.
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
-| `index.html` · `src/css/style.css` | le bouton unique (`.screen-mode-*`), l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
+| `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 
 Verrous : `trois-modes-ecran.test.js` (lot 1), `ecran-vocal-lot2.test.js` (écran,
 états, trois sorties, symétrie), `ecran-vocal-lot3.test.js` (micro, arrêt réel,
