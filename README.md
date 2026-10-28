@@ -132,10 +132,11 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   micro n'entend pas ses propres haut-parleurs (annulation d'écho de l'ordinateur,
   mesure du son résiduel au début de chaque lecture, seuil posé au-dessus). Si
   cette vérification n'est pas concluante — hauts-parleurs puissants, micro qui
-  reprend la voix de Pilot —, **il ne coupe pas** et lit sa réponse jusqu'au
-  bout, comme avant : un silence vaut mieux qu'une réponse qui bégaie. Le
-  **casque** est la situation où cela marche le mieux. Hors du mode Vocal, rien
-  ne change : les réponses se lisent jusqu'au bout.
+  reprend la voix de Pilot —, le seuil est relevé **au double du son qu'il
+  s'envoie** et il faut alors **parler plus longtemps** (une seconde d'affilée) :
+  **une voix franche et continue finit toujours par le faire taire**, jamais
+  l'inverse. Le **casque** est la situation où cela marche le mieux. Hors du mode
+  Vocal, rien ne change : les réponses se lisent jusqu'au bout.
 - La **zone de saisie** reste visible en bas et grandit quand vous écrivez
   (jusqu'à 120 px) ; elle garde son micro de dictée 🎙️.
 - **On en sort par les trois mêmes chemins** : le **même bouton** (mode suivant),

@@ -30,21 +30,30 @@ Bouton **« 🔊 Écouter » / « ⏹ Arrêter »** sous chaque réponse de l'ag
      1. **Annulation d'écho demandée puis relue** : les contraintes de capture
         demandent `echoCancellation` / `noiseSuppression` / `autoGainControl`,
         et `echoCancellationOf` lit ce que le périphérique **dit avoir appliqué**
-        (`getSettings()`). Une réponse `false` **interdit** la détection ; une
-        absence de réponse vaut **inconnue**, jamais « vrai par défaut ».
+        (`getSettings()`). Une réponse `false` **interdit** la détection normale ;
+        une absence de réponse vaut **inconnue**, jamais « vrai par défaut ». La
+        preuve est **relue à chaque début de lecture**, sur la piste déjà
+        ouverte : elle ne gèle plus la décision de toute la session.
      2. **Seuil posé au-dessus du résidu mesuré** : au début de chaque lecture,
         `BARGE_IN_CALIBRATION_MS` (600 ms) mesure le niveau maximal (le résidu
         d'écho) sans jamais couper ; ensuite le seuil vaut
         `max(BARGE_IN_MIN_LEVEL = 0,05 ; résidu × 1,8)`. Le résidu ne remonte que
         sur les moments **calmes** : une voix ne devient jamais la référence qui
         l'empêcherait de couper.
-     3. **Détection désarmée si l'écho n'est pas maîtrisé** : résidu >
-        `BARGE_IN_RESIDUAL_MAX` (0,03 avec annulation averée, 0,01 quand le
-        périphérique ne dit rien) ⇒ **aucune coupure** : Pilot lit jusqu'au bout,
-        comme avant. Un silence vaut mieux qu'une réponse qui bégaie.
+     3. **Garantie de secours — le cas « impossible à couper » n'existe plus** :
+        si la détection normale est désarmée (résidu > `BARGE_IN_RESIDUAL_MAX` :
+        0,03 avec annulation averée, 0,01 quand le périphérique ne dit rien, ou
+        preuve déclarée absente), la lecture n'est **plus** condamnée à aller au
+        bout : une voix qui dépasse **le double** du résidu mesuré
+        (`fallbackThreshold`) **tenue `BARGE_IN_FALLBACK_MS` (1000 ms)** coupe.
+        Le résidu est gelé au début de la lecture, quand seul le son de Pilot est
+        présent : ce son ne franchit pas son propre double, une voix superposée
+        si. Le secours est plus prudent que la voie normale (2× au lieu de 1,8×,
+        cinq fois plus long) et ne retire **aucune** protection anti-écho.
      Une coupure exige `BARGE_IN_MIN_MS` (200 ms) de voix **continue** au-dessus
-     du seuil, et ne part **qu'une fois** par lecture. Les chiffres réellement
-     mesurés sont rendus par `bargeInReport()` et écrits une fois par coupure
+     du seuil (ou `BARGE_IN_FALLBACK_MS` dans le régime de secours), et ne part
+     **qu'une fois** par lecture. Les chiffres réellement mesurés sont rendus
+     par `bargeInReport()` et écrits une fois par coupure
      (console : `[vocal] prise de parole : residu=… seuil=…`).
 2. **Une seule lecture à la fois** : lancer une autre réponse arrête la
    précédente (`stopReading` avant toute nouvelle prise de parole).
@@ -483,7 +492,15 @@ résidu d'écho **sans aucune coupure**, une voix continue qui coupe **une seule
 fois** après 200 ms, un claquement court qui ne coupe pas, la fin de lecture qui
 remet la garde à zéro, l'`echoCancellation` **demandée** puis **relue**, la
 **preuve par neutralisation** (même niveau, même lecture : annulation averée ⇒
-coupure, annulation déclarée absente ⇒ aucune coupure), le repli sur le micro
+coupure en 200 ms, annulation déclarée absente ⇒ coupure **seulement** par la
+garantie de secours, donc après 1000 ms), la **garantie de secours** elle-même
+(échec d'origine reproduit : écho douteux + voix franche ⇒ la lecture est coupée ;
+contre-épreuve : le son de Pilot seul, dix fois plus fort qu'au début, ne coupe
+rien pendant 30 s ; **limite dite** : un saut instantané de plus du double tenu
+une seconde coupe — le prix, chiffré par les deux constantes du secours), la
+**relecture de la preuve** d'annulation d'écho au début de chaque lecture (le
+périphérique change d'avis en cours de session : le comportement de la lecture
+suit, sans seconde capture), le repli sur le micro
 simple quand une contrainte est refusée (un refus de l'utilisateur n'est jamais
 retenté), le branchement unique `onSpeechStart` → `vocalBargeIn` → `stopReading`,
 l'absence de tout lecteur supplémentaire et de toute reprise automatique, et le

@@ -36,6 +36,7 @@ import {
   BARGE_IN_MIN_MS,
   BARGE_IN_MIN_LEVEL,
   BARGE_IN_CALIBRATION_MS,
+  BARGE_IN_FALLBACK_MS,
 } from "./vocal-mic.js";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -324,13 +325,19 @@ describe("3. la garde : UNE coupure par prise de parole, jamais sur un bruit cou
       echoAnnule: true,
     });
     expect(pendantCalibrage.declenchements).toEqual([]);
-    // Et un echo non maitrise desarme la coupure pendant la lecture (lot 4a),
-    // alors que la MEME voix, en reflexion seule, coupe : c'est bien l'etat qui
-    // choisit les regles, jamais un chemin parallele.
+    // Et un echo non maitrise ne laisse plus la lecture sans coupure : la MEME
+    // voix coupe par la GARANTIE DE SECOURS du mode lecture, mais BIEN plus tard
+    // que la voie normale (calibrage, puis `BARGE_IN_FALLBACK_MS` de voix tenue
+    // au-dessus du son deja present) alors qu'en reflexion seule elle coupe en
+    // `BARGE_IN_MIN_MS`. C'est bien l'etat qui choisit les regles, jamais un
+    // chemin parallele.
     const calme = jouer(0.08, 1000, { parlant: true, reflechi: true, echoAnnule: true }).etat;
     const lecture = jouer(0.6, 2000, { etat: calme, parlant: true, reflechi: true, echoAnnule: true });
-    expect(lecture.declenchements).toEqual([]);
-    expect(jouer(0.6, 2000).declenchements).toHaveLength(1);
+    expect(lecture.declenchements).toHaveLength(1);
+    expect(lecture.declenchements[0]).toBeGreaterThanOrEqual(BARGE_IN_FALLBACK_MS);
+    const reflexion = jouer(0.6, 2000);
+    expect(reflexion.declenchements).toHaveLength(1);
+    expect(reflexion.declenchements[0]).toBeLessThan(BARGE_IN_CALIBRATION_MS);
   });
 
   it("le mode « reflexion » ne pose AUCUN seuil nouveau (lecture du source)", () => {

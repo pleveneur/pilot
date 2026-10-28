@@ -252,6 +252,22 @@ signal, une seule garde, **deux** cibles choisies par la priorité des états (�
   l'empêcherait de couper.
 - **Il faut une voix continue** au-dessus du seuil pendant **200 ms** : des
   claquements, une toux brève ou un bruit de chaise ne suffisent pas.
+- **Le cas « impossible à couper » n'existe plus (garantie de secours).** Quand
+  la garde n'est **pas armée** (annulation d'écho non prouvée, ou résidu
+  au-dessus de `BARGE_IN_RESIDUAL_MAX`), le seuil normal est **interdit** — couper
+  avec lui ferait se taire Pilot sur son propre son. Mais le silence n'est plus
+  la conséquence : une voix qui dépasse **le double du résidu mesuré**
+  (`fallbackThreshold`, `BARGE_IN_FALLBACK_FACTOR` = 2) et **s'y tient
+  `BARGE_IN_FALLBACK_MS` = 1000 ms** coupe la lecture. Pourquoi cela ne part pas
+  sur Pilot : le résidu est mesuré **au début de la lecture**, quand seul le son
+  de Pilot est présent ; ce même son ne franchit pas son propre double, alors
+  qu'une voix superposée l'élève nettement. Le secours est **plus prudent** que
+  la voie normale (marge 2 au lieu de 1,8 ; une seconde au lieu de 200 ms) et il
+  ne supprime **aucune** protection anti-écho.
+- **La preuve d'annulation d'écho est relue à chaque début de lecture**, sur la
+  piste **déjà ouverte** (`setSpeaking` → `echoCancellationOf`), et non plus une
+  seule fois à l'ouverture du micro : une valeur `false` lue une fois ne gèle
+  plus la décision de toute la session. Aucun second accès au micro.
 - **Une seule coupure par lecture.** Aucune reprise automatique n'est programmée.
 - **Ce que fait la coupure** : `stopReading()` — la **seule** voie d'arrêt de
   lecture du projet, donc l'arrêt tombe **entre deux phrases**, jamais au milieu
@@ -452,25 +468,39 @@ Le défaut corrigé : dans l'écran Vocal, Pilot répondait comme dans un chat �
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 
 **Ce sont des protections, pas des pannes.** Le choix est explicite : *un silence
-vaut mieux qu'une réponse qui bégaie ou qui se coupe toute seule.* Les quatre cas
+vaut mieux qu'une réponse qui bégaie ou qui se coupe toute seule.* Les cas
 ci-dessous sont **voulus** et se produisent sans que rien ne soit cassé.
 
 | Ce que vous vivez | Pourquoi (c'est voulu) | Quoi faire |
 |---|---|---|
-| **Rien ne se coupe quand vous parlez** | La machine ne **prouve** pas qu'elle annule l'écho : le navigateur ne répond pas « oui » (champ absent) ou répond « non » à l'annulation d'écho. Sans cette preuve, la détection reste **désarmée** et Pilot lit jusqu'au bout. | Casque (l'écho disparaît), ou accepter la lecture complète. Le motif est lisible sans coupure : `bargeInReport()` (`echoCancellation`, `residu`, `seuil`, `arme`, `calibre`, `motif`). |
-| **Rien ne se coupe si vous parlez tout de suite** | Les **600 premières millisecondes** d'une lecture servent à mesurer le son de Pilot lui-même : couper pendant cette mesure reviendrait à juger avec un seuil qui n'existe pas encore. | Parler après le tout début d'une phrase. |
-| **Rien ne se coupe avec des haut-parleurs forts** | Le **résidu d'écho mesuré** dépasse la limite (0,03 quand l'annulation d'écho est prouvée, 0,01 quand le navigateur ne dit rien) : la détection se désarme d'elle-même. | Baisser le volume, rapprocher le micro, ou mettre un casque — puis relire la mesure. |
-| **Il faut vraiment insister** | Une voix **brève ou hachée** (moins de 200 ms continues au-dessus du seuil) n'est pas une prise de parole : c'est un bruit — que Pilot **lise** ou qu'il **réfléchisse**. | Parler d'une traite, une phrase entière. |
+| **Il faut insister plus longtemps que d'habitude** | Quand l'écho n'est pas maîtrisé (navigateur qui ne **prouve** pas l'annulation d'écho, ou résidu d'écho au-dessus de la limite), le seuil habituel — 200 ms de voix — est **interdit** : il ne reste que la **garantie de secours**, qui demande une voix au-dessus du **double** du son que Pilot s'envoie **tenue une seconde entière**. | Parler d'une traite pendant au moins une seconde, sans s'arrêter. **Rien ne rend plus la coupure impossible** : c'est la règle tenue par cette garantie. |
+| **Rien ne se coupe dans la première seconde** | Les **600 premières millisecondes** d'une lecture servent à mesurer le son de Pilot lui-même : couper pendant cette mesure reviendrait à juger avec un seuil qui n'existe pas encore. | Parler après le tout début d'une phrase. |
+| **Rien ne se coupe si vous parlez tout de suite** | Votre voix tombe alors **dans** la mesure : elle est comptée comme du son de Pilot, et la référence du secours monte avec elle — plus rien ne la dépasse pendant cette lecture-là. | Laisser passer le tout début de la phrase, puis parler. La lecture suivante repart d'une mesure propre. |
+| **Rien ne se coupe avec des haut-parleurs très forts** | Le **résidu d'écho mesuré** est si élevé que le secours exige une voix au-dessus du **double** de ce son : si vos haut-parleurs couvrent votre voix, aucun seuil ne peut la distinguer. | Baisser le volume, rapprocher le micro, ou mettre un casque — puis relire la mesure. |
+| **Il faut vraiment insister** | Une voix **brève ou hachée** (moins de 200 ms continues au-dessus du seuil, ou une seconde dans le régime de secours) n'est pas une prise de parole : c'est un bruit — que Pilot **lise** ou qu'il **réfléchisse**. | Parler d'une traite, une phrase entière. |
 
-Ces trois premières protections ne concernent que la **lecture** : pendant une
-réflexion, Pilot n'émet aucun son, il n'y a donc ni calibrage ni désarmement d'écho
-à appliquer (§6.2).
+Ces protections ne concernent que la **lecture** : pendant une réflexion, Pilot
+n'émet aucun son, il n'y a donc ni calibrage ni désarmement d'écho à appliquer
+(§6.2).
 
-Conséquence assumée : sur un poste où le navigateur ne rapporte pas l'annulation
-d'écho, **la coupure de la lecture ne marchera pas** — et Pilot **lit jusqu'au
-bout**, exactement
-comme avant le lot 4a. Aucun réglage n'a été ajouté pour forcer la détection : ce
-serait le moyen le plus sûr de faire bégayer Pilot.
+**Ce qui reste impossible, dit franchement** : il n'y a **qu'une seule entrée
+micro**, et pilot ne peut pas séparer votre voix du son de Pilot autrement qu'en
+comparant des niveaux. Deux cas restent donc hors de portée, et ils sont
+mesurables :
+
+1. **Vous parlez dans les 600 ms qui suivent le début de la phrase** : votre voix
+   entre dans la mesure et devient une partie de la référence — la lecture n'est
+   pas coupée cette fois-là.
+2. **Vos haut-parleurs sont si forts que votre voix ne dépasse pas le double du
+   son qu'ils envoient au micro** : aucun seuil ne peut la distinguer.
+
+Le prix de la garantie de secours, assumé et chiffré : le son de Pilot qui
+**bondit d'un coup à plus du double** de son niveau habituel et **s'y tient une
+seconde sans le moindre creux** est indiscernable d'une voix — Pilot se coupe
+alors lui-même, une fois. En pratique, la voie normale déjà en service depuis le
+lot 4a est **plus** susceptible de partir (marge 1,8 fois, 200 ms) et ne produit
+pas ce défaut chez vous : le secours, plus prudent (2 fois, 1000 ms), reste sous
+ce risque.
 
 ## 8. Sortir du mode Vocal — trois voies, aucune surprise
 
@@ -574,7 +604,11 @@ module, et les cas de sécurité (panne, refus, erreur, confirmation) sont
 **Non prouvable par un test, à vérifier chez vous** : le niveau d'écho **réel** de
 votre pièce (haut-parleurs, volume, distance, pilote audio) — et la capacité de
 votre poste à tenir **deux captures** en même temps (mesure de niveau + dictée).
-Pilot ne suppose jamais l'écho maîtrisé : quand il ne peut pas le prouver, **il ne
-coupe pas**. La **mesure ouvre toujours la première** : si elle est refusée, la
-dictée ne s'arme pas et l'écran le dit ; si c'est la dictée qui est refusée, le
-trait continue de suivre votre voix et le clavier reste utilisable.
+Quand il ne peut pas prouver que l'écho est maîtrisé, Pilot ne renonce plus à la
+coupure : il passe à la **garantie de secours** (double du résidu mesuré, tenu
+une seconde), qui est aussi prouvée sur images audio simulées — écho déclaré
+absent ou trop fort ⇒ une voix franche **coupe** ; son de Pilot seul, même fort et
+pendant trente secondes ⇒ **aucune** coupure. La **mesure ouvre toujours la
+première** : si elle est refusée, la dictée ne s'arme pas et l'écran le dit ; si
+c'est la dictée qui est refusée, le trait continue de suivre votre voix et le
+clavier reste utilisable.

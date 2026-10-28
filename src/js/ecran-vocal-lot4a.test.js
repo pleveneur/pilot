@@ -7,9 +7,11 @@
 //        a. l'annulation d'echo est DEMANDEE puis RELUE sur la piste obtenue ;
 //        b. le residu d'echo est MESURE au debut de chaque lecture, et le seuil
 //           est pose AU-DESSUS de ce residu ;
-//        c. tant que l'echo n'est pas maitrise, la detection n'est PAS armee :
-//           Pilot lit jusqu'au bout, comme avant (un silence vaut mieux qu'une
-//           coupure qui part toute seule).
+//        c. tant que l'echo n'est pas maitrise, les seuils habituels ne sont
+//           pas armes — mais une voix franche finit TOUJOURS par couper : c'est
+//           la GARANTIE DE SECOURS (section 5), qui juge la voix sur le son
+//           DEJA entendu dans la lecture, jamais sur la seule fenetre de
+//           calibrage (qui peut etre muette ou polluee).
 //   2. Une vraie prise de parole, elle, coupe : il faut `BARGE_IN_MIN_MS` de voix
 //      CONTINUE au-dessus du seuil, et UNE seule coupure par lecture.
 //   3. L'arret emprunte la SEULE voie existante (`stopReading`, read-aloud.js) ;
@@ -39,6 +41,8 @@ import {
   BARGE_IN_CALIBRATION_MS,
   BARGE_IN_MIN_LEVEL,
   BARGE_IN_MIN_MS,
+  BARGE_IN_FALLBACK_MS,
+  fallbackThreshold,
   BARGE_IN_RESIDUAL_MAX,
   BARGE_IN_RESIDUAL_UNPROVEN_MAX,
 } from "./vocal-mic.js";
@@ -79,7 +83,7 @@ function jouerLecture(niveau, dureeMs, options = {}) {
  * depend du temps reel).
  */
 function fauxMicro({ niveau = 0.01, echoCancellation = true, contraintesRefusees = false } = {}) {
-  const journal = { demandes: 0, contraintes: [], stops: 0, paroles: [], rapports: [] };
+  const journal = { demandes: 0, contraintes: [], stops: 0, paroles: [], rapports: [], echoCancellation };
   const piste = {
     kind: "audio",
     readyState: "live",
@@ -92,7 +96,8 @@ function fauxMicro({ niveau = 0.01, echoCancellation = true, contraintesRefusees
       this.listeners[nom].push(f);
     },
     getSettings() {
-      return echoCancellation === null ? {} : { echoCancellation };
+      const applique = journal.echoCancellation;
+      return applique === null ? {} : { echoCancellation: applique };
     },
   };
   const flux = { getTracks: () => [piste] };
@@ -265,26 +270,31 @@ describe("2. l'annulation d'echo : DEMANDEE, puis RELUE sur la piste obtenue", (
     expect(bargeInArmed(null, BARGE_IN_RESIDUAL_UNPROVEN_MAX + 0.001)).toBe(false);
   });
 
-  it("PREUVE par neutralisation : l'annulation d'echo est bien la garde qui tient", () => {
+  it("PREUVE par neutralisation : l'annulation d'echo reste la garde qui tient", () => {
     // Meme lecture (1 s de calme a 0,012, puis l'utilisateur parle a 0,5 pendant
     // 2 s) : la SEULE difference est ce que le peripherique DIT de son
     // annulation d'echo.
     const calme = jouerLecture(0.012, 1000, { echoAnnule: true }).etat;
     const averee = jouerLecture(0.5, 2000, { etat: calme, echoAnnule: true });
     const declareeAbsente = jouerLecture(0.5, 2000, { etat: calme, echoAnnule: false });
+    // Annulation averee : la voix coupe dans le regime normal (`BARGE_IN_MIN_MS`).
     expect(averee.declenchements).toHaveLength(1);
-    // Sans annulation d'echo, AUCUNE coupure : c'est exactement le scenario
-    // « hauts-parleurs sans annulation » qui ferait boucler Pilot.
-    expect(declareeAbsente.declenchements).toEqual([]);
+    expect(averee.declenchements[0]).toBeLessThan(BARGE_IN_MIN_MS + 40);
+    // Sans annulation d'echo, le regime normal est INTERDIT : la coupure, si elle
+    // vient, ne peut venir que de la garantie de secours, donc bien plus tard.
+    expect(declareeAbsente.declenchements).toHaveLength(1);
+    expect(declareeAbsente.declenchements[0]).toBeGreaterThanOrEqual(BARGE_IN_FALLBACK_MS);
   });
 
-  it("un echo deja trop fort pendant la lecture desarme la detection (jamais de coupure)", () => {
+  it("un echo deja trop fort pendant la lecture interdit le regime normal", () => {
     // Residu 0,08 : haut-parleurs sans annulation d'echo effective.
     const { declenchements } = jouerLecture(0.08, 5000, { echoAnnule: true });
     expect(declenchements).toEqual([]);
-    // Puis l'utilisateur parle fort : on ne coupe pas quand meme, car l'echo
-    // n'est pas maitrise (le seuil ne peut plus distinguer voix et echo).
-    expect(jouerLecture(0.6, 2000, { echoAnnule: true }).declenchements).toEqual([]);
+    expect(bargeInArmed(true, 0.08)).toBe(false);
+    // Et une voix forte, dans la MEME lecture, ne coupe pas a `BARGE_IN_MIN_MS` :
+    // le regime normal est bien interdit, seul le secours peut parler.
+    const voix = jouerLecture(0.6, BARGE_IN_MIN_MS * 2, { etat: { ...emptySpeechGate(), calibreMs: 1000, residuel: 0.08, refSecours: 0.08 }, echoAnnule: true });
+    expect(voix.declenchements).toEqual([]);
   });
 });
 
@@ -349,7 +359,7 @@ describe("3. le moteur : la garde ne s'arme que PENDANT la lecture", () => {
     moteur.fermer();
   });
 
-  it("un peripherique qui declare ne pas annuler l'echo ne coupe jamais", async () => {
+  it("le son de Pilot, present des la PREMIERE image, ne se coupe jamais lui-meme (meme sans preuve d'echo)", async () => {
     const faux = fauxMicro({ niveau: 0.4, echoCancellation: false });
     const moteur = createVocalMic(faux.options);
     await moteur.demander();
@@ -359,6 +369,17 @@ describe("3. le moteur : la garde ne s'arme que PENDANT la lecture", () => {
     const rapport = moteur.bargeInReport();
     expect(rapport.arme).toBe(false);
     expect(rapport.motif).toBe("echo-non-annule");
+    // Le son deja present (0,4) est la reference du secours : il ne peut pas
+    // franchir son propre double. C'est la preuve que le secours ne se declenche
+    // pas sur le son de Pilot, meme tres fort.
+    expect(rapport.refSecours).toBeCloseTo(0.4, 2);
+    expect(rapport.seuilSecours).toBeGreaterThan(rapport.refSecours);
+    // Une voix qui AJOUTE au son de Pilot, elle, finit par couper : ce n'est plus
+    // le meme son, c'est une elevation tenue.
+    faux.journal.niveau = 0.95;
+    faux.jouer(120); // ~1,92 s
+    expect(faux.journal.paroles).toHaveLength(1);
+    expect(faux.journal.paroles[0].seuil).toBeGreaterThan(0.4);
     moteur.fermer();
   });
 
@@ -450,6 +471,10 @@ describe("4. l'ecran : couper passe par la SEULE voie existante (stopReading)", 
     expect(corps).toMatch(/console\.info/);
     expect(corps).toMatch(/residu=/);
     expect(corps).toMatch(/seuil=/);
+    // Le motif distingue la voie normale (`voix-detectee`, 200 ms) de la
+    // garantie de secours (`voix-secours`, 1000 ms) : sans lui, impossible de
+    // savoir au vrai micro laquelle a coupe.
+    expect(corps).toMatch(/motif=/);
   });
 
   it("hors du mode Vocal, la coupure ne fait rien : les autres ecrans lisent jusqu'au bout", () => {
@@ -469,5 +494,121 @@ describe("4. l'ecran : couper passe par la SEULE voie existante (stopReading)", 
     expect(README).toMatch(/coupure|parler/i);
     expect(README).not.toMatch(/Ce qui \*\*reste à venir\*\* : la coupure de Pilot en parlant/);
     expect(README).toMatch(/trait de niveau/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GARANTIE DE SECOURS — le cas « impossible a couper » ne doit plus exister.
+//
+// Defaut constate : la preuve d'annulation d'echo etait lue UNE SEULE FOIS, a
+// l'ouverture du micro. Quand elle valait `false` (ou quand le residu mesure
+// depassait `BARGE_IN_RESIDUAL_MAX`), `bargeInArmed` interdisait la coupure
+// pour TOUTE la session : une voix franche et continue ne coupait jamais, sans
+// erreur et sans trace. Deux corrections, dans le meme module :
+//   a. la preuve est RELUE a chaque debut de lecture, sur la piste deja
+//      ouverte (aucune seconde capture) ;
+//   b. une garantie de secours juge la voix sur le SON DEJA ENTENDU dans la
+//      residu mesure au debut de la lecture, GELE pour cette lecture : une voix
+//      qui depasse ce niveau de `BARGE_IN_FALLBACK_FACTOR` fois en le tenant
+//      `BARGE_IN_FALLBACK_MS` coupe, meme garde desarmee.
+describe("5. la GARANTIE DE SECOURS : une voix franche finit TOUJOURS par couper", () => {
+  it("echo douteux (preuve declaree absente) + voix franche continue : la lecture est coupee", () => {
+    // Echo de Pilot a 0,06 des la premiere image ; le peripherique declare ne
+    // pas annuler l'echo : `bargeInArmed` est faux, le regime normal est interdit.
+    const calme = jouerLecture(0.06, 2000, { echoAnnule: false });
+    expect(calme.declenchements).toEqual([]);
+    expect(bargeInArmed(false, calme.etat.residuel)).toBe(false);
+    // L'utilisateur parle franchement par-dessus : la lecture est coupee.
+    const voix = jouerLecture(0.4, 3000, { etat: calme.etat, echoAnnule: false });
+    expect(voix.declenchements).toHaveLength(1);
+    // Plus tard que la voie normale (200 ms) : la voix doit depasser nettement
+    // le son deja present ET le tenir bien plus longtemps qu'un claquement.
+    expect(voix.declenchements[0]).toBeGreaterThanOrEqual(BARGE_IN_FALLBACK_MS);
+    expect(voix.declenchements[0]).toBeLessThan(BARGE_IN_FALLBACK_MS + 40);
+    // Une seule coupure par lecture, meme si la voix continue.
+    const apres = jouerLecture(0.4, 3000, { etat: voix.etat, echoAnnule: false });
+    expect(apres.declenchements).toEqual([]);
+  });
+
+  it("contre-epreuve : le son de Pilot SEUL ne coupe jamais, dans les memes conditions", () => {
+    // Meme peripherique (preuve declaree absente, garde desarmee), meme duree
+    // de 30 s : le niveau ne depasse jamais son propre double, donc rien ne part.
+    expect(jouerLecture(0.06, 30000, { echoAnnule: false }).declenchements).toEqual([]);
+    // Et un echo FORT non plus, alors qu'il est tres au-dessus du plancher de
+    // bruit : c'est le son deja present, pas une voix.
+    expect(jouerLecture(0.4, 30000, { echoAnnule: false }).declenchements).toEqual([]);
+  });
+
+  it("une hausse MODEREE du son de Pilot (< au double) ne coupe pas", () => {
+    // Pilot enchaine une phrase plus forte : tant que le niveau reste sous le
+    // double de la reference gelee, ce n'est pas une voix superposee.
+    let etat = jouerLecture(0.04, 2000, { echoAnnule: false }).etat;
+    for (const palier of [0.05, 0.06, 0.07, 0.079]) {
+      const pas = jouerLecture(palier, 3000, { etat, echoAnnule: false });
+      expect(pas.declenchements).toEqual([]);
+      etat = pas.etat;
+    }
+    expect(fallbackThreshold(0.04)).toBeCloseTo(0.08, 6);
+  });
+
+  it("LIMITE DITE : un saut instantane de plus du double tenu une seconde coupe (risque de fausse coupure)", () => {
+    // Ce test ne verifie pas un oubli : il CHIFFRE la limite du critere retenu.
+    // Le son de Pilot qui bondit d'un coup a plus du double de son niveau
+    // habituel et s'y maintient une seconde sans le moindre creux est
+    // indiscernable d'une voix. Le risque est borne par les deux constantes du
+    // secours (facteur 2, duree 1000 ms) et documente dans la spec.
+    const debut = jouerLecture(0.02, 3000, { echoAnnule: false }).etat;
+    const saut = jouerLecture(0.1, 1500, { etat: debut, echoAnnule: false });
+    expect(saut.declenchements).toHaveLength(1);
+  });
+
+  it("le seuil de secours est le double du residu mesure, jamais sous le plancher", () => {
+    expect(fallbackThreshold(0)).toBe(BARGE_IN_MIN_LEVEL);
+    expect(fallbackThreshold(Number.NaN)).toBe(BARGE_IN_MIN_LEVEL);
+    // Sous le plancher : c'est le plancher qui decide.
+    expect(fallbackThreshold(0.02)).toBeCloseTo(BARGE_IN_MIN_LEVEL, 6);
+    // Au-dessus : deux fois le residu, donc jamais franchi par le son de Pilot.
+    expect(fallbackThreshold(0.06)).toBeCloseTo(0.12, 6);
+    expect(fallbackThreshold(0.4)).toBeCloseTo(0.8, 6);
+    expect(fallbackThreshold(0.4)).toBeGreaterThan(0.4);
+    // Plus prudent que la voie normale : marge plus large a residu egal.
+    expect(fallbackThreshold(0.1)).toBeGreaterThan(vocalEchoThreshold(0.1));
+  });
+
+  it("la preuve d'annulation d'echo est RELUE au debut de CHAQUE lecture", async () => {
+    const faux = fauxMicro({ niveau: 0.012, echoCancellation: false });
+    const moteur = createVocalMic(faux.options);
+    await moteur.demander();
+    expect(moteur.bargeInReport().echoCancellation).toBe(false);
+    moteur.setSpeaking(true);
+    faux.jouer(120); // ~2 s de lecture dans le calme
+    expect(moteur.bargeInReport().echoCancellation).toBe(false);
+    // Meme voix forte : garde desarmee, rien ne part a `BARGE_IN_MIN_MS`.
+    faux.journal.niveau = 0.5;
+    faux.jouer(20); // ~320 ms
+    expect(faux.journal.paroles).toHaveLength(0);
+    moteur.setSpeaking(false);
+    // Fin de la voix : le niveau retombe (deuxieme lecture dans le calme).
+    faux.journal.niveau = 0.012;
+    faux.jouer(40);
+    // Le peripherique change d'avis pendant la session : la preuve doit etre
+    // RELUE, sinon la coupure resterait interdite jusqu'a la sortie du mode.
+    faux.journal.echoCancellation = true;
+    moteur.setSpeaking(true);
+    expect(moteur.bargeInReport().echoCancellation).toBe(true);
+    faux.jouer(120);
+    faux.journal.niveau = 0.5;
+    faux.jouer(20);
+    expect(faux.journal.paroles).toHaveLength(1);
+    moteur.fermer();
+  });
+
+  it("la relecture se fait sur la piste DEJA ouverte : aucune seconde capture", () => {
+    const corps = corpsFonction(MIC, "function setSpeaking(");
+    // Même appel que la capture (`getSettings` via `echoCancellationOf`).
+    expect(corps).toMatch(/echoAnnule = echoCancellationOf\(flux\)/);
+    // Et aucun nouvel appel de capture dans le module.
+    expect((MIC.match(/md\.getUserMedia\(/g) || []).length).toBe(1);
+    expect(corps).not.toMatch(/getUserMedia|new AudioContext/);
   });
 });

@@ -488,7 +488,9 @@ En mode **Vocal** :
   Pilot **ne se coupe jamais lui-même** : il vérifie que votre micro n'entend
   pas ses propres haut-parleurs (annulation d'écho, mesure du son résiduel au
   début de chaque lecture, seuil posé au-dessus) et, si cette vérification n'est
-  pas concluante, **il ne coupe pas** et lit jusqu'au bout ; de même, si vous
+  pas concluante, il relève le seuil **au double du son qu'il s'envoie** : il
+  faut alors parler **plus longtemps** (une seconde d'affilée), mais **une voix
+  franche et continue finit toujours par le faire taire**. En revanche, si vous
   parlez dans les tout premiers instants d'une phrase, pendant cette mesure, il
   ne s'arrête pas. Le **casque** est la situation où cela marche le mieux.
 - **Parler pendant qu'il travaille l'arrête aussi** : si vous prenez la parole

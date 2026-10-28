@@ -4679,6 +4679,8 @@ export async function createSuperAgent(container) {
             (rapport ? rapport.residuel : "?") +
             " seuil=" +
             (rapport ? rapport.seuil : "?") +
+            " motif=" +
+            (rapport ? rapport.motif : "?") +
             " pendant=" +
             cible
         );

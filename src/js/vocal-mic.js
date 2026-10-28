@@ -30,10 +30,23 @@
 //      observe pendant `BARGE_IN_CALIBRATION_MS`) et le seuil de detection est
 //      pose AU-DESSUS de ce residu mesure ;
 //   3. si l'annulation d'echo n'est pas averee, ou si le residu depasse
-//      `BARGE_IN_RESIDUAL_MAX`, la detection n'est PAS armee : Pilot lit sa
-//      reponse jusqu'au bout, comme avant. Un silence vaut mieux qu'une
-//      coupure qui se declenche toute seule.
+//      `BARGE_IN_RESIDUAL_MAX`, les seuils habituels ne sont PAS armes (Pilot
+//      s'entendrait lui-meme). Un silence vaut mieux qu'une coupure qui se
+//      declenche toute seule — mais un silence TOTAL ne vaut rien : c'est la
+//      GARANTIE DE SECOURS ci-dessous qui prend le relais.
+// La preuve d'annulation d'echo (point 1) est RELUE a chaque debut de lecture
+// sur la piste deja ouverte : figee a l'ouverture du micro, elle interdisait la
+// coupure pour toute la session des qu'elle valait `false`.
 // Les chiffres REELLEMENT mesures sont rendus par `bargeInReport()`.
+//
+// ── GARANTIE DE SECOURS : LA VOIX FRANCHE FINIT TOUJOURS PAR COUPER ──────────
+// Le cas « impossible a couper » est ferme sans toucher a un seul seuil : quand
+// la garde n'est pas armee, une voix est jugee sur le RESIDU MESURE, GELE en
+// fin de calibrage (le son que Pilot s'envoie a lui-meme), et doit le depasser
+// de `BARGE_IN_FALLBACK_FACTOR` fois en le tenant `BARGE_IN_FALLBACK_MS`. Le son de Pilot ne franchit jamais
+// son propre double ; une voix superposee, si. Le secours est plus prudent que
+// la voie normale (marge plus large, voix tenue cinq fois plus longtemps). Une
+// seule coupure par lecture, et la decision reste entierement ici.
 //
 // ── LOT 4b : PRENDRE LA PAROLE PENDANT QUE PILOT REFLECHIT ───────────────────
 // Meme garde, meme signal (`onSpeechStart`), meme decision d'arreter cote
@@ -190,6 +203,22 @@ export const BARGE_IN_RESIDUAL_UNPROVEN_MAX = 0.01;
 export const BARGE_IN_MIN_MS = 200;
 /** Pas de temps maximal pris en compte pour une image (anti-saut d'horloge). */
 export const BARGE_IN_MAX_STEP_MS = 50;
+// ── GARANTIE DE SECOURS (la voix franche finit TOUJOURS par couper) ────────
+//
+// La garde anti-echo peut etre muette : quand le peripherique declare ne pas
+// annuler l'echo, ou quand le residu mesure est trop fort, `bargeInArmed`
+// interdit la coupure. C'est necessaire (Pilot ne doit pas se couper lui-meme)
+// mais insuffisant : une VRAIE voix n'etait alors jamais entendue, donc le cas
+// « impossible a couper » existait. Le secours ci-dessous le ferme, sans
+// toucher aux seuils existants et sans seconde capture : la reference n'est
+// plus la fenetre de calibrage (qui peut etre muette ou polluee) mais **le son
+// deja entendu dans CETTE lecture**, et une voix doit le depasser nettement et
+// le tenir bien plus longtemps qu'un claquement.
+
+/** Marge exigee au-dessus du son DEJA present (le plus fort entendu dans la lecture). */
+export const BARGE_IN_FALLBACK_FACTOR = 2;
+/** Duree de voix CONTINUE au-dessus du seuil de secours (5 fois `BARGE_IN_MIN_MS`). */
+export const BARGE_IN_FALLBACK_MS = 1000;
 
 /** Un echec de capture du a une CONTRAINTE (et non a un refus) ? PURE. */
 export function isConstraintRejection(nom) {
@@ -260,9 +289,43 @@ export function bargeInArmed(echoAnnule, residuel) {
   return r <= BARGE_IN_RESIDUAL_UNPROVEN_MAX;
 }
 
+/**
+ * Seuil de la GARANTIE DE SECOURS, pose au-dessus du RESIDU MESURE. PURE.
+ *
+ * Pourquoi ce critere, et pourquoi il ne part pas sur le son de Pilot : le
+ * residu mesure est le niveau du son que Pilot s'envoie a lui-meme, et il est
+ * deja la AVANT que l'utilisateur puisse reagir (il ne monte que sur les
+ * moments calmes, jamais sur une voix candidate). Exiger DEUX FOIS ce niveau
+ * interdit a ce meme son de franchir son propre seuil, quel que soit son
+ * volume, meme quand la preuve d'annulation d'echo manque. Une voix ajoutee au
+ * son de Pilot, elle, est une ELEVATION nette : c'est elle — tenue
+ * `BARGE_IN_FALLBACK_MS`, cinq fois plus longtemps qu'une coupure normale, et
+ * avec une marge plus large que la voie normale (`BARGE_IN_RESIDUAL_FACTOR` =
+ * 1,8) — qui est retenue. Le secours est donc plus PRUDENT que la voie
+ * normale, et il ne remplace pas la garde anti-echo : il prend le relais quand
+ * elle est desarmee.
+ * @param {number} residuel residu d'echo mesure dans cette lecture
+ * @returns {number}
+ */
+export function fallbackThreshold(residuel) {
+  const r = Number.isFinite(residuel) ? Math.max(0, Math.min(1, residuel)) : 0;
+  return Math.max(BARGE_IN_MIN_LEVEL, r * BARGE_IN_FALLBACK_FACTOR);
+}
+
 /** Etat initial (et remis a zero) de la garde. PURE. */
 export function emptySpeechGate() {
-  return { dessusMs: 0, calibreMs: 0, residuel: 0, declenche: false };
+  return {
+    dessusMs: 0,
+    calibreMs: 0,
+    residuel: 0,
+    declenche: false,
+    // Reference de la garantie de secours : le residu GELE a la fin du
+    // calibrage (le son que Pilot s'envoie au debut de la lecture), et la duree
+    // de voix tenue AU-DESSUS de son seuil. Le residu, lui, continue de suivre
+    // l'echo pour dire si la garde est armee ; cette reference-la ne bouge plus.
+    refSecours: 0,
+    dessusSosMs: 0,
+  };
 }
 
 /**
@@ -273,6 +336,11 @@ export function emptySpeechGate() {
  *   - « calibrage » : on ne coupe jamais, on MESURE le residu (maximum vu) ;
  *   - ensuite une voix doit depasser le seuil SANS INTERRUPTION pendant
  *     `BARGE_IN_MIN_MS` pour que la garde se declenche ;
+ *   - GARANTIE DE SECOURS : si la garde n'est PAS armee (echo douteux, preuve
+ *     d'annulation absente ou residu trop fort), une voix qui depasse DEUX FOIS
+ *     le residu mesure (`fallbackThreshold`) et le tient `BARGE_IN_FALLBACK_MS`
+ *     coupe quand meme. Sans cela, un echo douteux rendait toute coupure
+ *     impossible ;
  *   - elle ne se declenche qu'UNE fois par lecture (`declenche`), et l'etat est
  *     remis a zero des que la lecture s'arrete : le residu d'une lecture ne
  *     vaut pas pour la suivante.
@@ -283,7 +351,8 @@ export function emptySpeechGate() {
  * verrou `declenche` se REOUVRE quand la voix retombe sous le seuil : une
  * coupure par prise de parole, jamais deux pour la meme phrase.
  *
- * @param {{dessusMs?: number, calibreMs?: number, residuel?: number, declenche?: boolean}} etat
+ * @param {{dessusMs?: number, calibreMs?: number, residuel?: number, declenche?: boolean,
+ *   refSecours?: number, dessusSosMs?: number}} etat
  * @param {number} mesure niveau lisse courant (0..1)
  * @param {{parlant?: boolean, reflechi?: boolean, dtMs?: number, echoAnnule?: boolean|null}} [contexte]
  * @returns {{etat: object, declenche: boolean, arme: boolean, seuil: number, motif: string}}
@@ -299,6 +368,8 @@ export function stepSpeechGate(etat, mesure, contexte = {}) {
     calibreMs: Number.isFinite(e.calibreMs) ? Math.max(0, e.calibreMs) : 0,
     residuel: Number.isFinite(e.residuel) ? Math.max(0, Math.min(1, e.residuel)) : 0,
     declenche: e.declenche === true,
+    refSecours: Number.isFinite(e.refSecours) ? Math.max(0, Math.min(1, e.refSecours)) : 0,
+    dessusSosMs: Number.isFinite(e.dessusSosMs) ? Math.max(0, e.dessusSosMs) : 0,
   };
   // Hors lecture ET hors reflexion : la garde dort, et rien de ce qu'elle a
   // mesure ne survit.
@@ -338,17 +409,37 @@ export function stepSpeechGate(etat, mesure, contexte = {}) {
   if (suivant.calibreMs < BARGE_IN_CALIBRATION_MS) {
     suivant.calibreMs += dt;
     suivant.residuel = Math.max(suivant.residuel, m);
+    // La mesure du debut de lecture fixe AUSSI la reference du secours : c'est
+    // le seul moment ou le son entendu est celui de Pilot (l'utilisateur ne
+    // peut pas encore avoir parle). Ensuite elle ne bouge plus : une reference
+    // qui suivrait la voix ne pourrait jamais etre depassee par elle.
+    suivant.refSecours = Math.max(suivant.refSecours, m);
     return { etat: suivant, declenche: false, arme, seuil: vocalEchoThreshold(suivant.residuel), motif: "calibrage" };
   }
   if (!arme) {
-    // Echo non maitrise : on ne coupe pas, et on le DIT (motif lisible dans
-    // `bargeInReport`). Le calibrage continue de suivre le residu.
+    // Echo non maitrise : les seuils habituels sont interdits (Pilot s'entendrait
+    // lui-meme). C'est ici que joue la GARANTIE DE SECOURS : la voix est jugee
+    // sur la reference GELEE du debut de lecture (le son que Pilot s'envoie),
+    // pas sur le seul fait que la preuve d'annulation d'echo manque. Sans elle,
+    // un echo douteux rendait toute coupure impossible.
+    const seuilSecours = fallbackThreshold(suivant.refSecours);
+    if (m > seuilSecours) {
+      suivant.dessusSosMs += dt;
+      if (suivant.dessusSosMs >= BARGE_IN_FALLBACK_MS) {
+        suivant.declenche = true;
+        return { etat: suivant, declenche: true, arme: false, seuil: seuilSecours, motif: "voix-secours" };
+      }
+      return { etat: suivant, declenche: false, arme: false, seuil: seuilSecours, motif: "secours-en-cours" };
+    }
+    // Le residu ne monte que sur les moments CALMES (`seuil` = marge normale
+    // au-dessus de lui) : c'est ce qui dit si l'echo reste maitrise. Il ne sert
+    // jamais au secours (reference gelee ci-dessus).
     if (m <= seuil) suivant.residuel = Math.max(suivant.residuel, m);
     return {
       etat: suivant,
       declenche: false,
       arme: false,
-      seuil,
+      seuil: seuilSecours,
       motif: echoAnnule === false ? "echo-non-annule" : "residuel-eleve",
     };
   }
@@ -557,7 +648,7 @@ export function createVocalMic(options = {}) {
     garde = pas.etat;
     if (!pas.declenche) return;
     try {
-      surParole({ residuel: garde.residuel, seuil: pas.seuil });
+      surParole({ residuel: garde.residuel, seuil: pas.seuil, motif: pas.motif });
     } catch (_) {
       /* l'appelant ne doit pas casser la mesure */
     }
@@ -703,10 +794,17 @@ export function createVocalMic(options = {}) {
    * l'ecran a partir de l'etat de la lecture : le micro ne devine jamais qui
    * parle. La garde ne s'arme que sur un debut de lecture, et se remet a zero
    * des la fin — le residu d'une lecture ne vaut pas pour la suivante.
+   *
+   * La PREUVE d'annulation d'echo est RELUE ici, a chaque annonce de lecture,
+   * sur la piste DEJA ouverte (meme appel `getSettings()`, aucune seconde
+   * capture). Lue une seule fois a l'ouverture du micro, elle se figeait pour
+   * toute la session : une valeur `false` interdisait alors la coupure jusqu'a
+   * la sortie du mode, sans aucune trace. La relire ne change aucun seuil.
    * @param {boolean} actif
    */
   function setSpeaking(actif) {
     const etat = actif === true;
+    if (etat && flux) echoAnnule = echoCancellationOf(flux);
     if (etat === parlant) return;
     parlant = etat;
     if (!etat) {
@@ -738,18 +836,31 @@ export function createVocalMic(options = {}) {
    * Les CHIFFRES de la garde, tels qu'ils sont mesures sur ce micro : de quoi
    * verifier au vrai peripherique qu'aucune coupure ne peut partir toute seule
    * (residu, seuil, arme ou non).
+   *
+   * Quand la garde n'est pas armee, `seuil` est celui de la GARANTIE DE SECOURS
+   * (au-dessus du son deja present) : c'est le chiffre qui compte alors, et
+   * c'est lui qu'il faut comparer au residu releve.
    * @returns {{echoCancellation: boolean|null, residuel: number, seuil: number,
-   *   arme: boolean, calibre: boolean, motif: string, pendant: string}}
+   *   arme: boolean, calibre: boolean, motif: string, pendant: string,
+   *   seuilSecours: number}}
    */
   function bargeInReport() {
-    const seuil = vocalEchoThreshold(garde.residuel);
     const arme = bargeInArmed(echoAnnule, garde.residuel);
+    const seuilSecours = fallbackThreshold(garde.refSecours);
+    const seuil = arme || !parlant ? vocalEchoThreshold(garde.residuel) : seuilSecours;
     const calibre = garde.calibreMs >= BARGE_IN_CALIBRATION_MS;
     let motif = "hors-lecture";
     if (parlant) {
       if (!calibre) motif = "calibrage";
-      else if (!arme) motif = echoAnnule === false ? "echo-non-annule" : "residuel-eleve";
-      else motif = garde.declenche ? "voix-detectee" : "a-l-ecoute";
+      else if (!arme) {
+        motif = garde.declenche
+          ? "voix-secours"
+          : garde.dessusSosMs > 0
+            ? "secours-en-cours"
+            : echoAnnule === false
+              ? "echo-non-annule"
+              : "residuel-eleve";
+      } else motif = garde.declenche ? "voix-detectee" : "a-l-ecoute";
     } else if (reflechi) {
       // LOT 4b : pas de calibrage a attendre, l'echo n'a pas d'objet ici.
       motif = garde.declenche ? "voix-detectee" : "a-l-ecoute";
@@ -763,6 +874,8 @@ export function createVocalMic(options = {}) {
       calibre,
       motif,
       pendant,
+      seuilSecours: Math.round(seuilSecours * 1000) / 1000,
+      refSecours: Math.round(garde.refSecours * 1000) / 1000,
     };
   }
 
