@@ -117,6 +117,8 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   dit l'état (**repos**, **écoute**, **réflexion**, **parole**), un **trait de
   niveau** juste dessous et **une seule ligne de texte** (« Je vous écoute. »,
   « Je réfléchis. », « Je réponds. »). Rien de la conversation n'y est affiché.
+  Ouvrir le micro ne suffit pas à passer en **écoute** : c'est **votre voix** qui
+  l'allume, et le retour au **repos** se fait tout seul quand vous vous taisez.
 - **La réponse s'y lit à voix haute** (même voix et même bouton « 🔊 Écouter »
   que dans les autres écrans). **Écrire ou valider pendant la lecture l'arrête**
   et envoie votre message.

@@ -505,6 +505,46 @@ export function vocalStatusText(state) {
 }
 
 /**
+ * LOT 3 (correctif « l'ecran ne bougeait plus ») : le micro CAPTE-t-il vraiment ?
+ * Le niveau seul ne suffisait pas : la longueur du trait le suivait, mais l'ETAT
+ * affiche restait fige sur « ecoute » des l'ouverture du flux (le moteur micro
+ * ne signale que l'ouverture et l'arret, jamais le niveau). Deux seuils, donc
+ * une HYSTERESIS : on ENTRE en ecoute au-dessus du seuil haut, on en SORT sous
+ * le seuil bas — la retombee du lissage etant lente (descente 0,12 dans
+ * `smoothLevel`), un seuil unique ferait clignoter l'ecran autour de la valeur.
+ * Valeurs RMS, meme unite que `rmsOf` et la longueur du trait : 0,06 pour
+ * entrer (une voix reelle, pas le souffle), 0,03 pour sortir (sous le plancher
+ * de la garde anti-auto-coupure `BARGE_IN_MIN_LEVEL = 0,05`, pour ne pas
+ * s'entendre soi-meme). PURE.
+ */
+export const VOCAL_VOICE_ON = 0.06;
+export const VOCAL_VOICE_OFF = 0.03;
+
+/**
+ * @param {number} niveau niveau LISSE livre par le moteur micro (0..1)
+ * @param {boolean} etait le micro captait-il au pas precedent (hysteresis)
+ * @returns {boolean} true si le micro capte vraiment
+ */
+export function vocalCapte(niveau, etait) {
+  const n = Number.isFinite(niveau) ? Math.max(0, Math.min(1, niveau)) : 0;
+  return etait === true ? n >= VOCAL_VOICE_OFF : n >= VOCAL_VOICE_ON;
+}
+
+/**
+ * UN pas de la decision de l'ecran Vocal, sur une image de niveau. PURE.
+ * Sort les DEUX valeurs que l'ecran tient : le drapeau de capture (memoire de
+ * l'hysteresis) et l'etat « ecoute » qui en decoule — jamais l'un sans l'autre,
+ * sinon l'etat pourrait s'allumer micro ferme.
+ * @param {{niveau?: number, capte?: boolean, microOuvert?: boolean}} [etats]
+ * @returns {{capte: boolean, ecoute: boolean}}
+ */
+export function vocalVoiceStep(etats = {}) {
+  const e = etats || {};
+  const capte = vocalCapte(e.niveau, e.capte);
+  return { capte, ecoute: e.microOuvert === true && capte === true };
+}
+
+/**
  * Reduction de mouvement (§4.3) : l'ecran Vocal lit le MEME drapeau que les
  * animations d'ouverture (modal-anim.js) — `prefers-reduced-motion` PLUS le
  * parametre utilisateur `_pilotModalAnimations` (défaut : respecter la
@@ -3245,7 +3285,12 @@ export async function createSuperAgent(container) {
   //    represente pas toute seule : seul le bouton « Autoriser le micro » la
   //    relance (jamais une demande a l'entree du mode).
   let vocalMic = null;
+  // Micro OUVERT (contrat de `onListening` : le flux est capte par le moteur).
   let vocalMicListening = false;
+  // Micro qui CAPTE VRAIMENT : ce drapeau-la vient du NIVEAU mesure (deux
+  // seuils, `vocalCapte`), et il est le seul a pouvoir allumer l'etat
+  // « ecoute ». Un micro ouvert dans le silence laisse donc l'ecran au repos.
+  let vocalMicCapte = false;
   let vocalMicFerme = "";
   let vocalMicDemande = false;
   // Aucune autre source n'alimente cette teinte : l'anneau du logo hero du mode
@@ -3860,6 +3905,20 @@ export async function createSuperAgent(container) {
    */
   function vocalSetLevel(niveau) {
     if (!vocalOverlay) return;
+    // Correctif « l'ecran ne bougeait plus » : le niveau ne servait QU'A la
+    // longueur du trait, l'etat restait fige sur « ecoute » des l'ouverture du
+    // micro. C'est ici que le niveau decide de l'etat — un pas de detection,
+    // et l'etat n'est reapplique QUE quand la decision change (jamais a chaque
+    // image : aucun clignotement, aucun travail inutile).
+    const pas = vocalVoiceStep({
+      niveau,
+      capte: vocalMicCapte,
+      microOuvert: vocalMicListening,
+    });
+    if (pas.capte !== vocalMicCapte) {
+      vocalMicCapte = pas.capte;
+      applyVocalState();
+    }
     const plan = planLevel({ niveau, reduit: vocalReducedMotion() });
     if (!plan.ecrire) return;
     vocalOverlay.style.setProperty("--vocal-level", plan.largeur + "%");
@@ -3878,7 +3937,11 @@ export async function createSuperAgent(container) {
   function vocalSetListening(actif) {
     const etait = vocalMicListening;
     vocalMicListening = actif === true;
-    if (!vocalMicListening) vocalClearLevel();
+    if (!vocalMicListening) {
+      // Micro ferme : il ne capte plus rien, la detection repart du silence.
+      vocalMicCapte = false;
+      vocalClearLevel();
+    }
     if (etait !== vocalMicListening) applyVocalState();
   }
 
@@ -3889,6 +3952,7 @@ export async function createSuperAgent(container) {
    */
   function vocalMicFailure(message) {
     vocalMicListening = false;
+    vocalMicCapte = false;
     vocalMicFerme = String(message || MIC_FERME);
     vocalClearLevel();
     applyVocalState();
@@ -3948,7 +4012,9 @@ export async function createSuperAgent(container) {
     const etats = {
       speaking: vocalSpeaking,
       reflecting: reflectingActive,
-      listening: vocalMicListening,
+      // « Ecoute » exige les DEUX : le micro ouvert ET une voix reellement
+      // mesuree (deux seuils). Micro ouvert dans le silence = repos.
+      listening: vocalMicListening && vocalMicCapte,
     };
     const state = vocalScreenState(etats);
     vocalOverlay.classList.remove(
@@ -4057,6 +4123,7 @@ export async function createSuperAgent(container) {
     // gestes ; le moteur (vocal-mic.js) reste inerte jusque-la.
     vocalMicDemande = false;
     vocalMicListening = false;
+    vocalMicCapte = false;
     vocalMicFerme = "";
     vocalMic = createVocalMic({
       onLevel: vocalSetLevel,
@@ -4118,6 +4185,7 @@ export async function createSuperAgent(container) {
       vocalMic = null;
     }
     vocalMicListening = false;
+    vocalMicCapte = false;
     vocalMicFerme = "";
     vocalMicDemande = false;
     document.removeEventListener("keydown", onVocalFirstGesture);

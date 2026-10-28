@@ -443,6 +443,13 @@ En mode **Vocal** :
 
 - **Le trait suit votre voix** : il s'allonge quand vous parlez et retombe
   doucement au silence, sans à-coups.
+- **L'écran distingue le silence de la parole** : quand vous vous taisez, il est
+  au **repos** (couleur du thème, « Je vous écoute. ») ; dès que votre voix est
+  réellement entendue, il passe en **écoute** (vert, « Je vous écoute… ») et y
+  reste tant que vous parlez ; quand vous vous arrêtez, il revient au repos tout
+  seul. Ouvrir le micro ne suffit donc pas à l'allumer : c'est votre voix qui le
+  fait, et il ne clignote pas entre les deux (deux seuils, un pour entrer, un
+  plus bas pour sortir).
 - **Pilot demande le micro à votre premier geste** dans cet écran (un clic, une
   touche) — jamais à l'ouverture du mode, et jamais dans les autres modes.
 - **Si vous refusez**, si aucun micro n'est branché, s'il est occupé ou s'il

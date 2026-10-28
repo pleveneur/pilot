@@ -100,10 +100,24 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
 | État | Quand | Teinte (jeton `--vocal-*`) | Mouvement | Ligne d'état |
 |---|---|---|---|---|
 | **Repos** | personne ne parle, l'agent ne réfléchit pas, rien n'est lu | accent du thème (`--vocal-rest`) | respiration lente de 4 s | « Je vous écoute. » |
-| **Écoute** | le micro **capte vraiment** | vert (`--vocal-listen`) | aucun mouvement propre : **le trait suit la voix** | « Je vous écoute… » |
+| **Écoute** | le micro **capte vraiment** : le niveau mesuré dépasse le seuil **haut** (0,06 RMS) | vert (`--vocal-listen`) | aucun mouvement propre : **le trait suit la voix** | « Je vous écoute… » |
 | **Réflexion** | l'agent réfléchit | violet de l'assistant (`--vocal-think`) | arc de 60° qui tourne en 3 s | « Je réfléchis… » |
 | **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | halo de 1,6 s + enveloppe du trait | « Je réponds. » |
 
+- **Comment l'écoute est réellement détectée** : ouvrir le micro ne suffit **pas**.
+  Le moteur micro ne signale que l'**ouverture** et l'**arrêt** du flux ; il livre
+  à part le **niveau mesuré**. L'état « écoute » exige donc **deux** choses : le
+  micro ouvert **et** une voix réellement présente. La décision est **pure**
+  (`vocalCapte`, `vocalVoiceStep` dans `super-agent.js`) et tient sur **deux
+  seuils** — une **hystérésis** : on **entre** en écoute au-dessus de **0,06**
+  (RMS du niveau lissé), on **revient au repos** seulement sous **0,03**. Entre
+  les deux, rien ne change : un seuil unique, avec la retombée lente du lissage,
+  ferait clignoter l'écran autour de la valeur. Conséquences directes : micro
+  ouvert dans le silence = **repos** (accent du thème, « Je vous écoute. »,
+  respiration) ; une voix = **écoute** (vert, « Je vous écoute… ») ; la voix
+  s'arrête, le lissage retombe, le **repos revient** (~0,3 s). Le niveau ne peut
+  **jamais** allumer l'état micro fermé (refus, panne, sortie du mode : la
+  détection repart du silence).
 - **Le texte ne porte jamais la couleur** de l'état (toujours `--text-primary`) :
   la couleur vit dans l'objet. C'est ce qui rend l'écran lisible dans les dix
   palettes du projet.
@@ -137,7 +151,9 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
   jamais en boucle).
 - **Le niveau affiché** est le volume mesuré, **lissé** (montée rapide, retombée
   lente) et projeté sur la longueur du trait (8 % au silence, 100 % au fort). Le
-  trait ne saute donc pas d'une image à l'autre.
+  trait ne saute donc pas d'une image à l'autre. **Le même niveau décide de
+  l'état affiché** (voir §4) : le trait qui s'allonge et le passage en « écoute »
+  viennent d'une seule et même mesure, jamais de deux chemins séparés.
 
 ## 6. Parler par-dessus Pilot : comment cela marche
 

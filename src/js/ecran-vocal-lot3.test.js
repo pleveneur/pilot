@@ -21,7 +21,7 @@
 //
 // Les commentaires sont en ASCII ; les chaines qui viennent de l'interface
 // (messages affiches, selecteurs CSS) sont copiees telles quelles.
-import { describe, it, expect } from "vitest";
+import { vi, describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -40,6 +40,54 @@ import {
   LEVEL_MIN_PCT,
   LEVEL_MAX_PCT,
 } from "./vocal-mic.js";
+
+// `super-agent.js` porte les fonctions PURES de l'ecran Vocal ; il touche aussi
+// `window` au chargement (preview.js) et importe des modules Tauri : on fournit
+// le strict minimum et les memes doublures que `ecran-vocal-lot2.test.js` AVANT
+// l'import dynamique. Aucun code de production n'est double par un mock.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+vi.mock("markdown-it", () => ({
+  default: vi.fn(() => ({ use() { return this; }, render: () => "" })),
+}));
+vi.mock("./icons.js", () => ({ refreshIcons: vi.fn() }));
+vi.mock("./backend-info.js", () => ({ agentDisplayLabel: vi.fn(), backendKind: vi.fn() }));
+vi.mock("./agent-pi.js", () => ({ appendDelegatedMessage: vi.fn(), purgeAgentTabView: vi.fn() }));
+vi.mock("./loop-detection.js", () => ({
+  detectRepeatedBlock: vi.fn(), detectRepeatedWord: vi.fn(),
+  detectRepeatedToolCalls: vi.fn(), detectSemanticLoop: vi.fn(),
+  buildToolLoopFingerprint: vi.fn(),
+}));
+vi.mock("./desktop-notify.js", () => ({ notifySuperAgentDone: vi.fn(), playAssistantSound: vi.fn() }));
+vi.mock("./agents.js", () => ({
+  loadAgentRegistry: vi.fn(), upsertAgent: vi.fn(), normalizeAgent: vi.fn(),
+  validateAgentId: vi.fn(), classifyAgent: vi.fn(),
+}));
+vi.mock("./agents-bus.js", () => ({
+  runAgentsForAssistant: vi.fn(), runAgentsForAssistantAsync: vi.fn(), setBusNotifyCallback: vi.fn(),
+}));
+vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
+vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
+vi.mock("./super-agent-schedule.js", () => ({
+  shouldScheduleTick: vi.fn(),
+  parseScheduleEvery: vi.fn(),
+  formatReminderNotificationLabel: vi.fn(),
+  planDueReminderInjections: vi.fn(() => ({ toInject: [], mode: "none", held: [], waitingForOwner: 0 })),
+  buildReminderInjectionMessage: vi.fn(),
+  formatReminderGroupNotificationLabel: vi.fn(),
+  formatReminderHoldNotice: vi.fn(),
+  createReminderHoldGuard: vi.fn(() => ({ reset() {}, shouldNotify: () => false })),
+}));
+if (!globalThis.window) {
+  globalThis.window = {
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() { return true; },
+  };
+}
+
+const { VOCAL_VOICE_ON, VOCAL_VOICE_OFF, vocalCapte, vocalVoiceStep, vocalScreenState, vocalStatusText } =
+  await import("./super-agent.js");
 
 const ICI = dirname(fileURLToPath(import.meta.url));
 const lire = (rel) =>
@@ -300,7 +348,16 @@ describe("3. une panne de micro ne bloque JAMAIS le mode", () => {
     });
     await moteur.demander();
     faux.jouer(1);
-    expect(vus.ecoutes).toEqual([true]);
+    // ASSERTION D'ORIGINE RETIREE : `expect(vus.ecoutes).toEqual([true])`
+    // inscrivait le DEFAUT comme comportement attendu (elle constatait qu'avec
+    // une voix a 0,3 le moteur n'emet rien de plus que le `true` d'ouverture).
+    // Ce n'est pas au moteur micro de decider de l'etat « ecoute » : il signale
+    // l'OUVERTURE du flux (`onListening`, contrat inchange, `vocal-mic.js` non
+    // modifie) et livre le NIVEAU (`onLevel`). La decision vit dans l'ecran, sur
+    // ce niveau (deux seuils) — verifiee par le test « silence -> voix ->
+    // silence » plus bas. Ce qui doit etre vrai ici : la voix est bien MESUREE.
+    expect(vus.niveaux).toHaveLength(1);
+    expect(vus.niveaux[0]).toBeGreaterThan(VOCAL_VOICE_ON);
     // Le systeme signale la fin de piste (materiel debranche).
     (faux.piste.listeners.ended || []).forEach((f) => f());
     expect(vus.pannes).toEqual([MIC_OCCUPE]);
@@ -322,11 +379,88 @@ describe("3. une panne de micro ne bloque JAMAIS le mode", () => {
     expect(etat).not.toMatch(/disabled/);
   });
 
-  it("l'etat « ecoute » n'est vrai que si le micro capte", () => {
+  it("l'etat « ecoute » n'est vrai que si le micro CAPTE VRAIMENT (niveau reel)", () => {
     const corps = corpsFonction(SUPER, "function vocalSetListening");
     expect(corps).toMatch(/vocalMicListening = actif === true/);
     // Un arret du micro efface la longueur posee (le trait retombe au silence).
     expect(corps).toMatch(/vocalClearLevel\(\)/);
+    // LE POINT QUI MANQUAIT (le defaut vivait exactement ici) : `onListening`
+    // ne dit que « le flux est ouvert ». L'etat affiche exige EN PLUS une voix
+    // reellement mesuree, et c'est le NIVEAU qui le decide.
+    const etat = corpsFonction(SUPER, "function applyVocalState");
+    expect(etat).toMatch(/listening:\s*vocalMicListening\s*&&\s*vocalMicCapte/);
+    const niveau = corpsFonction(SUPER, "function vocalSetLevel");
+    expect(niveau).toMatch(/vocalVoiceStep\(/);
+    expect(niveau).toMatch(/applyVocalState\(\)/);
+    // Le moteur micro reste la SEULE source du niveau : aucun seuil ecrit ici.
+    expect(SUPER).not.toMatch(/getUserMedia|AudioContext|AnalyserNode/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("3bis. le NIVEAU decide de l'etat : silence -> voix -> silence", () => {
+  // Le defaut corrige : le drapeau de l'etat n'etait ecrit qu'a l'ouverture et a
+  // l'arret du micro, jamais depuis le niveau. Ces tests-ci exigent la regle
+  // reelle, pas la lettre du cablage.
+
+  it("deux seuils (hysteresis) : on entre haut, on sort bas", () => {
+    // Silence : jamais « ecoute ».
+    expect(vocalCapte(0, false)).toBe(false);
+    expect(vocalCapte(0.001, false)).toBe(false);
+    expect(vocalCapte(0.001, true)).toBe(false);
+    // Voix : on entre au-dessus du seuil HAUT seulement.
+    expect(vocalCapte(0.04, false)).toBe(false);
+    expect(vocalCapte(VOCAL_VOICE_ON, false)).toBe(true);
+    expect(vocalCapte(0.4, false)).toBe(true);
+    // Hysteresis : entre les deux seuils, on ne retombe pas (pas de clignotement).
+    expect(vocalCapte(0.04, true)).toBe(true);
+    expect(vocalCapte(VOCAL_VOICE_OFF, true)).toBe(true);
+    expect(vocalCapte(0.01, true)).toBe(false);
+    // Bornes et valeurs aberrantes : aucun etat invente.
+    expect(VOCAL_VOICE_OFF).toBeLessThan(VOCAL_VOICE_ON);
+    expect(vocalCapte(5, false)).toBe(true);
+    expect(vocalCapte(-1, true)).toBe(false);
+    expect(vocalCapte(Number.NaN, false)).toBe(false);
+  });
+
+  it("micro ouvert + silence = repos ; micro ouvert + voix = ecoute", () => {
+    expect(vocalVoiceStep({ niveau: 0, capte: false, microOuvert: true })).toEqual({
+      capte: false,
+      ecoute: false,
+    });
+    expect(vocalVoiceStep({ niveau: 0.3, capte: false, microOuvert: true })).toEqual({
+      capte: true,
+      ecoute: true,
+    });
+    // Micro FERME : le niveau ne peut jamais allumer l'etat.
+    expect(vocalVoiceStep({ niveau: 0.9, capte: false, microOuvert: false }).ecoute).toBe(false);
+    // Les deux etats de la conversation sont bien distincts a l'oeil.
+    expect(vocalStatusText("idle")).not.toBe(vocalStatusText("listening"));
+  });
+
+  it("une suite d'images reelles fait passer a « ecoute » PUIS revenir au « repos »", () => {
+    // Chaine complete (moins le DOM) : mesures brutes -> lissage du moteur ->
+    // decision de l'ecran -> etat affiche. Les mesures sont des RMS.
+    const etats = [];
+    let niveau = 0;
+    let capte = false;
+    const pas = (mesure) => {
+      niveau = smoothLevel(niveau, mesure);
+      const decision = vocalVoiceStep({ niveau, capte, microOuvert: true });
+      capte = decision.capte;
+      etats.push(vocalScreenState({ listening: decision.ecoute }));
+    };
+    for (let k = 0; k < 3; k += 1) pas(0);
+    expect(etats).toEqual(["idle", "idle", "idle"]);
+    for (let k = 0; k < 3; k += 1) pas(0.4);
+    expect(etats[etats.length - 1]).toBe("listening");
+    // La voix s'arrete : le lissage retombe lentement, puis le repos revient.
+    for (let k = 0; k < 90; k += 1) pas(0);
+    expect(niveau).toBeLessThan(VOCAL_VOICE_OFF);
+    expect(etats[etats.length - 1]).toBe("idle");
+    // UNE bascule dans chaque sens : le trait ne clignote pas (hysteresis).
+    const bascules = etats.filter((e, i) => i > 0 && e !== etats[i - 1]);
+    expect(bascules).toEqual(["listening", "idle"]);
   });
 });
 
