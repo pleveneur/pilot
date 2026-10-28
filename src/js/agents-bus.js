@@ -91,6 +91,7 @@ import {
   isAnyAgentWorking,
   isProjectWorking,
   classifyExclusivitySession,
+  RECENT_ACTIVITY_WINDOW_MS,
 } from "./exclusivity-queue.js";
 // Identité de projet (mission P3, défaut D3) : SOURCE UNIQUE. Le bus comparait
 // le projet en chaîne BRUTE (verrou de run, files d'exclusivité) : deux
@@ -693,6 +694,13 @@ function newRunCtx(key, project) {
     // temps du watchdog ne s'armait pas et le verrou pouvait ne jamais être
     // libéré).
     startedAt: Date.now(),
+    // CORRECTIF « chien de garde / session neuve » (2026-10-28) : instant de
+    // démarrage RÉEL de la session de chaque agent, horodaté par le bus au spawn
+    // (`markSessionStarted`). Une session neuve n'émet aucun signal pendant ses
+    // premières secondes : sans ce repère, le chien de garde la déclarait
+    // « fantôme » et tuait la mission (journal 2026-10-28 14:22:53 → 14:23:17).
+    // agentId → epoch ms. Remis à zéro à chaque run (comme `sessionUid`).
+    sessionStartedAtByAgent: {},
     // Identifiant de run (posé par beginRun). endRun(project, generation) refuse
     // de libérer si la génération ne correspond pas.
     generation: 0,
@@ -1037,6 +1045,23 @@ async function releaseStuckRunLockForKey(key, opts = {}) {
     // silencieux, commit en cours), la run était libérée en ÉCHEC au milieu du
     // travail. Même règle que la porte `orphanQueue` (sonde projet-large).
     ghosts = !working && !toolRunning && !(await projectHasWorkingSession(key));
+    // GRÂCE DE DÉMARRAGE (correctif « chien de garde / session neuve »,
+    // 2026-10-28) : une session NEUVE n'a encore rien à prouver. Elle n'émet
+    // aucun signal pendant ses premières secondes, et les trois sondes ci-dessus
+    // sont donc muettes : la porte concluait « session fantôme » et tuait la
+    // mission 24 s après son démarrage (journal 2026-10-28 14:22:53 → 14:23:17,
+    // 75/76/77/78). La garde est INTRINSÈQUE : elle ne dépend pas du plancher
+    // `requireIdleMs` de l'appelant (les appels sans plancher libéraient
+    // immédiatement). Au-delà de la fenêtre, la porte reprend exactement son
+    // comportement d'avant — un vrai fantôme reste coupé.
+    if (ghosts && startGraceOpen(ctx) && !(await anyDeclaredAgentSessionDead(key))) {
+      console.warn(
+        "[agents-bus] watchdog : agents déclarés actifs mais silencieux — SESSION NEUVE (démarrée il y a moins de la fenêtre de grâce), run CONSERVÉE (",
+        key,
+        ").",
+      );
+      ghosts = false;
+    }
   }
 
   // 3 bis (issue #87) : DEMANDE EN FILE SANS PORTEUR. Groupe parallèle avec du
@@ -1514,6 +1539,97 @@ async function probeActivitySessions() {
   return (res && res.sessions) || [];
 }
 
+/**
+ * Horodate le démarrage RÉEL de la session d'un agent (correctif « chien de
+ * garde / session neuve »). Appelé par le bus juste après le spawn qu'il vient
+ * de demander : c'est le seul instant où l'on SAIT qu'une session neuve existe
+ * sans avoir encore émis le moindre signal. Idempotent, tolérant aux anciens
+ * contextes (champ absent).
+ * @param {object|null} ctx - contexte de run
+ * @param {string} agentId
+ * @param {number} [at] - epoch ms (défaut : maintenant)
+ * @returns {number} instant retenu
+ */
+export function markSessionStarted(ctx, agentId, at = Date.now()) {
+  if (!ctx || !agentId) return 0;
+  if (!ctx.sessionStartedAtByAgent || typeof ctx.sessionStartedAtByAgent !== "object") ctx.sessionStartedAtByAgent = {};
+  const stamp = Number(at) > 0 ? Number(at) : Date.now();
+  ctx.sessionStartedAtByAgent[agentId] = stamp;
+  return stamp;
+}
+
+/**
+ * Pure (testable) : instant de démarrage le PLUS RÉCENT connu par le bus parmi
+ * les sessions d'une run (0 si aucun repère). Sert de référence à la grâce de
+ * démarrage : un redémarrage de session à contexte vierge en cours de run
+ * rafraîchit le repère, donc la protection.
+ * @param {object|null} ctx
+ * @returns {number} epoch ms, ou 0
+ */
+export function latestSessionStartAt(ctx) {
+  const map = ctx && ctx.sessionStartedAtByAgent;
+  if (!map || typeof map !== "object") return 0;
+  let latest = 0;
+  for (const agentId of Object.keys(map)) {
+    const at = Number(map[agentId]) || 0;
+    if (at > latest) latest = at;
+  }
+  return latest;
+}
+
+/**
+ * Pure (testable) : la GRÂCE DE DÉMARRAGE est-elle encore ouverte pour cette
+ * run ? (correctif « chien de garde / session neuve », 2026-10-28).
+ *
+ * Tant qu'une session de la run a démarré il y a MOINS que
+ * `RECENT_ACTIVITY_WINDOW_MS`, la porte `ghosts` ne peut pas conclure « plus
+ * aucun agent ne travaille » : une session neuve n'a rien à prouver encore.
+ * Cette garde est INTRINSÈQUE (indépendante du plancher `requireIdleMs` demandé
+ * par l'appelant) : c'est ce qui manquait, un appelant sans plancher libérait la
+ * run 24 s après son démarrage.
+ * Sans repère (run d'une version antérieure, session externe) → false : le
+ * comportement historique est conservé, aucune protection inventée.
+ * @param {object|null} ctx
+ * @param {number} [now]
+ * @param {number} [windowMs] - fenêtre de grâce (défaut 2 min)
+ * @returns {boolean}
+ */
+export function startGraceOpen(ctx, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS) {
+  const startedAt = latestSessionStartAt(ctx);
+  if (!startedAt) return false;
+  return now - startedAt < windowMs;
+}
+
+/**
+ * Recopie sur les sessions de la sonde l'instant de démarrage CONNU du bus.
+ *
+ * La sonde Rust (`agent_activity_probe` / `activity_probe_entry`) ne publie
+ * AUCUNE date de démarrage de session : sans cette annotation, une session neuve
+ * et une session ancienne muette restaient indiscernables côté front. Aucune
+ * valeur déjà portée par la sonde n'est écrasée.
+ * @param {Array<object>} sessions
+ * @returns {Array<object>}
+ */
+export function annotateSessionStartTimes(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const starts = [];
+  for (const key of Object.keys(busState.runs)) {
+    const ctx = busState.runs[key];
+    const map = ctx && ctx.sessionStartedAtByAgent;
+    if (!map || typeof map !== "object") continue;
+    for (const agentId of Object.keys(map)) {
+      const at = Number(map[agentId]) || 0;
+      if (at > 0) starts.push({ project: ctx.project || projectOfRunKey(key), agent: agentId, at });
+    }
+  }
+  if (starts.length === 0) return list;
+  return list.map((s) => {
+    if (!s || s.sessionStartedAt) return s;
+    const hit = starts.find((x) => x.agent === s.agent && sameProject(x.project, s.project));
+    return hit ? { ...s, sessionStartedAt: hit.at } : s;
+  });
+}
+
 // Sonde « une run est-elle VRAIMENT en activité ? » : retourne true si au moins
 // un agent actif de la run du projet est réellement au travail — busy = true,
 // ou dernière activité plus récente que la fenêtre de grâce (2 min,
@@ -1532,10 +1648,38 @@ async function anyActiveAgentWorking(project) {
   const ctx = busState.runs[key];
   if (!ctx) return false;
   try {
-    const sessions = await probeActivitySessions();
+    const sessions = annotateSessionStartTimes(await probeActivitySessions());
     return isAnyAgentWorking(sessions, Array.from(ctx.activeAgents), (id) => ctx.agentProject[id] || null, Date.now());
   } catch (e) {
     return true;
+  }
+}
+
+/**
+ * Une session d'un agent DÉCLARÉ de la run est-elle PROUVÉE MORTE ?
+ *
+ * Nuance indispensable de la grâce de démarrage : une session neuve qui n'a
+ * encore rien prouvé est protégée, mais une session MORTE n'est pas une session
+ * muette — c'est un vrai fantôme. Sans cette distinction, un agent qui mourait
+ * dans ses deux premières minutes gardait le verrou du projet jusqu'à la fin de
+ * la fenêtre de grâce sans aucune raison.
+ * Sonde indisponible → false (fail-open : on ne coupe pas sur incertitude, la
+ * grâce s'applique).
+ * @param {string} project - projet ou clé de run
+ * @returns {Promise<boolean>}
+ */
+async function anyDeclaredAgentSessionDead(project) {
+  const key = resolveRunKey(project);
+  const ctx = busState.runs[key];
+  if (!ctx || ctx.activeAgents.size === 0) return false;
+  try {
+    const sessions = annotateSessionStartTimes(await probeActivitySessions());
+    const declared = Array.from(ctx.activeAgents);
+    return sessions.some(
+      (s) => s && declared.includes(s.agent) && sameProject(s.project, ctx.project) && s.alive !== true,
+    );
+  } catch (_) {
+    return false;
   }
 }
 
@@ -1548,7 +1692,7 @@ async function anyActiveAgentWorking(project) {
 // → le verrou est CONSERVÉ (jamais de libération sur une sonde indisponible).
 async function projectHasWorkingSession(project) {
   try {
-    const sessions = await probeActivitySessions();
+    const sessions = annotateSessionStartTimes(await probeActivitySessions());
     // `project` peut être une CLÉ DE RUN (`projet#read:N`) : on compare à la
     // session par son PROJET RÉEL, sinon la comparaison était toujours fausse et
     // une lecture légitime et active pouvait être libérée de force.
@@ -3910,6 +4054,11 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
       // session (jamais celle d'une relance ultérieure du même couple).
       ctx.sessionUid[agent.id] = typeof spawnUid === "number" ? spawnUid : null;
     }
+    // CORRECTIF « chien de garde / session neuve » : la session vient d'être
+    // créée PAR LE BUS, à cet instant — c'est le seul repère fiable de son
+    // démarrage (la sonde Rust ne publie aucune date de session). Il protège la
+    // run de la porte `ghosts` pendant la fenêtre de grâce.
+    markSessionStarted(ctx, agent.id);
     spawned = true;
 
     // Anti-boucle (run_agents) : si `options.purge` est vrai, on purge la

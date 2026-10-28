@@ -155,6 +155,52 @@ export function isBusyStale(session, now = Date.now(), staleWindowMs = STALE_BUS
 }
 
 /**
+ * Pure (testable) : instant de démarrage CONNU d'une session (epoch ms).
+ *
+ * Le bus d'agents horodate lui-même le spawn de la session qu'il crée
+ * (`sessionStartedAtByAgent`, agents-bus.js) : c'est le SEUL repère qui distingue
+ * une session NEUVE d'une session ancienne restée muette. Accepte un nombre
+ * (epoch ms) ou une chaîne ISO. Retourne 0 si le repère est absent ou illisible :
+ * aucune protection n'est inventée pour une session inconnue.
+ * @param {{sessionStartedAt?:number|string}|null} session
+ * @returns {number} epoch ms, ou 0
+ */
+export function sessionStartAt(session) {
+  if (!session) return 0;
+  const raw = session.sessionStartedAt;
+  if (typeof raw === "number") return Number.isFinite(raw) && raw > 0 ? raw : 0;
+  if (typeof raw === "string" && raw.trim()) {
+    const ts = Date.parse(raw);
+    return Number.isFinite(ts) ? ts : 0;
+  }
+  return 0;
+}
+
+/**
+ * Pure (testable) : la session a-t-elle démarré il y a MOINS que la fenêtre de
+ * grâce ?
+ *
+ * Correctif « chien de garde / session neuve » (2026-10-28) : une session qui
+ * vient d'être créée n'a encore émis AUCUN signal — ni `busy`, ni
+ * `lastActivity`, ni `toolInProgress` — et était donc jugée « ne travaille pas »
+ * 24 s après son démarrage : la porte `ghosts` libérait la run et tuait la
+ * mission (journal `.pilot/agent-stops.log` 2026-10-28 14:22:53 → 14:23:17).
+ *
+ * Sans repère de démarrage connu (session d'une autre fenêtre Pilot, session
+ * externe, sonde qui ne porte pas l'horodatage) → false : le comportement
+ * historique est conservé à l'identique.
+ * @param {{sessionStartedAt?:number|string}|null} session
+ * @param {number} [now] - timestamp de référence (ms)
+ * @param {number} [windowMs] - fenêtre de grâce (défaut 2 min)
+ * @returns {boolean}
+ */
+export function isSessionRecentlyStarted(session, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS) {
+  const startedAt = sessionStartAt(session);
+  if (!startedAt) return false;
+  return now - startedAt < windowMs;
+}
+
+/**
  * Pure (testable) : indique si UNE session d'agent représente un travail
  * RÉELLEMENT en cours. Un agent travaille réellement si :
  *  - busy === true (agent_start reçu, aucun agent_settled depuis) ET non
@@ -174,6 +220,9 @@ export function isBusyStale(session, now = Date.now(), staleWindowMs = STALE_BUS
  *    Rust). Seule la MORT de la session (`alive !== true`) lève ce verrou ; le
  *    filet « processus mort » (`has_dead_agent_process`) reste le juge des cas
  *    réellement figés, OU
+ *  - la session a DÉMARRÉ il y a moins de `windowMs` (session NEUVE, cf.
+ *    `isSessionRecentlyStarted` : aucune preuve n'existe encore, et l'absence de
+ *    preuve sur une session de quelques secondes n'est pas un fantôme), OU
  *  - sa dernière activité (lastActivity ISO) date de moins de `windowMs`.
  * Une session « vivante mais inactive » (parkée après agent_settled, oubliée)
  * ne compte PAS : un processus vivant ≠ travail en cours.
@@ -183,7 +232,7 @@ export function isBusyStale(session, now = Date.now(), staleWindowMs = STALE_BUS
  * verrou ; il ne faut pas créer l'inverse, un verrou oublié). Pour busy-stale,
  * le fail-open est inversé : busy SANS lastActivity exploitable → true (on ne
  * peut pas prouver la staleness, donc pas de faux verrou libéré).
- * @param {{alive?:boolean, busy?:boolean, toolInProgress?:boolean, lastActivity?:string}|null} session
+ * @param {{alive?:boolean, busy?:boolean, toolInProgress?:boolean, lastActivity?:string, sessionStartedAt?:number|string}|null} session
  * @param {number} [now] - timestamp de référence (ms)
  * @param {number} [windowMs] - fenêtre de grâce (défaut 2 min)
  * @param {number} [staleWindowMs] - fenêtre busy-stale (défaut 25 min)
@@ -197,6 +246,13 @@ export function isSessionWorking(session, now = Date.now(), windowMs = RECENT_AC
   // session au repos : verrou de run libéré et tour mis en échec au milieu du
   // travail. La mort de la session reste éliminatoire (garde `alive` ci-dessus).
   if (session.toolInProgress === true) return true;
+  // CORRECTION « session neuve » (2026-10-28) : une session RÉCEMMENT DÉMARRÉE
+  // est en cours de travail, même sans aucun signal. Pendant ses premières
+  // secondes elle n'a rien émis (agent_start pas encore propagé, aucune
+  // lastActivity) : elle tombait dans le `return false` final et le chien de
+  // garde coupait la mission 24 s après son démarrage. Le repère vient du bus,
+  // seul à savoir qu'il vient de créer la session.
+  if (isSessionRecentlyStarted(session, now, windowMs)) return true;
   if (session.busy === true) {
     // busy-stale : un busy VIEUX de plus de la fenêtre n'est plus un travail.
     // Fail-open : sans lastActivity exploitable, on ne peut pas prouver la
