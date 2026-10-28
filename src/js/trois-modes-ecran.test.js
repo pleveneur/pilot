@@ -186,7 +186,7 @@ describe("2. une seule cle de memoire, et la migration de l'ancien reglage (§1.
 
 describe("3. un seul bouton, un seul noeud dans tout le document (§1.1)", () => {
   it("le bouton est dans index.html, entre « Travail » et les boutons systeme", () => {
-    expect(SCREEN_MODE_BUTTON_ID).toBe("screen-mode-button");
+    expect(SCREEN_MODE_BUTTON_ID).toBe("mode-logo");
     const occurrences = html.match(new RegExp('id="' + SCREEN_MODE_BUTTON_ID + '"', "g")) || [];
     expect(occurrences, "un seul noeud : aucune copie dans le document").toHaveLength(1);
     const travail = html.indexOf('id="agent-activity"');

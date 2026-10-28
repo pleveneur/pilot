@@ -15,12 +15,13 @@
 // Ce module ne dessine AUCUN ecran : l'entree et la sortie du plein ecran
 // restent la propriete de super-agent.js (`enterImmersive` / `exitImmersive`,
 // `enterVocal` / `exitVocal`). Il publie `pilot-screen-mode-apply` et il tient
-// le bouton (libelle du mode COURANT, infobulle du mode SUIVANT, pastille de la
-// teinte du mode courant). Aucun second mecanisme, aucun ecran de reglage.
+// le bouton (infobulle du mode SUIVANT et trace `data-screen-mode` du mode
+// COURANT). Le bouton est le LOGO Pilot (`#mode-logo`, dans le bandeau du haut
+// de la colonne de gauche) : aucune pastille, aucun mot, aucun second bouton.
+// Aucun second mecanisme, aucun ecran de reglage.
 //
-// Reference : RAPPORT-trois-modes-ecran-vocal.md §1, §2 et §5 (« Lot 1 », « Lot 2 »).
-
-import { setIcon } from "./icons.js";
+// Reference : CONCEPTION-logo-bouton-des-trois-modes.md (lots 1 a 3), et
+// RAPPORT-trois-modes-ecran-vocal.md §1, §2 et §5 (« Lot 1 », « Lot 2 »).
 
 /** Cle UNIQUE du mode d'ecran (localStorage). */
 export const SCREEN_MODE_KEY = "pilot_screen_mode";
@@ -28,8 +29,27 @@ export const SCREEN_MODE_KEY = "pilot_screen_mode";
 /** Ancien reglage BINAIRE (overlay present / absent), repris par la migration. */
 export const LEGACY_IMMERSIVE_KEY = "pilot_superagent_immersive";
 
-/** Identifiant du bouton UNIQUE (il n'existe qu'un seul noeud dans le document). */
-export const SCREEN_MODE_BUTTON_ID = "screen-mode-button";
+/** Identifiant du bouton UNIQUE des trois modes : c'est le LOGO du bandeau
+ *  (`#mode-logo`, autour de `#btn-project-logo`). Le nom de la constante ne
+ *  change pas : la constante dit le ROLE (un <button>), pas le dessin. */
+export const SCREEN_MODE_BUTTON_ID = "mode-logo";
+
+/** Delai pendant lequel un second clic sur le logo est ignore. Sous le seuil
+ *  systeme de reconnaissance du double-clic (500 ms) : les deux clics d'un
+ *  double-clic reflexe tombent dans la garde, deux clics volontaires non. Ce
+ *  reflexe existait a cet endroit exact : le double-clic y agrandissait la
+ *  fenetre (window-controls.js) avant que le logo ne devienne le bouton. */
+export const MODE_CLICK_GUARD_MS = 400;
+
+/** Decision PURE : ce clic doit-il etre ignore ? Des valeurs non numeriques
+ *  (aucun clic precedent, `-Infinity` excepte) ne bloquent jamais. */
+export function shouldIgnoreModeClick(now, dernier) {
+  if (typeof now !== "number" || typeof dernier !== "number") return false;
+  return now - dernier < MODE_CLICK_GUARD_MS;
+}
+
+/** Horodatage du dernier clic PRIS EN COMPTE (la garde ne le deplace pas). */
+let dernierClicMode = -Infinity;
 
 /** Evenement qui demande l'application d'un mode (ecoute par super-agent.js). */
 export const SCREEN_MODE_APPLY_EVENT = "pilot-screen-mode-apply";
@@ -171,13 +191,13 @@ export function getScreenMode() {
 }
 
 /**
- * Met le bouton en accord avec le mode : libelle du mode COURANT, infobulle du
- * mode SUIVANT, icone Lucide et pastille de la teinte du mode courant.
- * Sans effet si le bouton n'est pas dans le document.
+ * Met le bouton en accord avec le mode : infobulle du mode SUIVANT et trace
+ * `data-screen-mode` du mode COURANT. Sans effet si le bouton n'est pas dans le
+ * document. Le bouton etant le LOGO, il ne porte ni mot ni icone ni pastille :
+ * le mode courant se lit a l'ecran, l'infobulle annonce le suivant.
  */
 export function renderScreenModeButton(mode) {
   const id = normalizeScreenMode(mode);
-  const info = screenModeInfo(id);
   const titre = screenModeTitle(id);
   const btn =
     typeof document !== "undefined" ? document.getElementById(SCREEN_MODE_BUTTON_ID) : null;
@@ -185,10 +205,6 @@ export function renderScreenModeButton(mode) {
   btn.dataset.screenMode = id;
   btn.title = titre;
   btn.setAttribute("aria-label", titre);
-  const label = btn.querySelector(".screen-mode-label");
-  if (label) label.textContent = info.label;
-  const icone = btn.querySelector(".screen-mode-icon");
-  if (icone) setIcon(icone, info.icon);
   return btn;
 }
 
@@ -242,6 +258,9 @@ export function noteImmersiveExited() {
 /**
  * Cablage du bouton unique (idempotent) + application de la migration. A
  * appeler une fois au demarrage, avant le masquage de l'ecran de chargement.
+ * GARDE ANTI-DOUBLE-CLIC (lot 3) : un second clic a moins de 400 ms est
+ * ignore — le double-clic reflexe de cet endroit (qui agrandissait la fenetre)
+ * ne franchit donc qu'UN mode, jamais deux.
  * @returns {"detailed"|"assistant"|"vocal"} le mode memorise du poste.
  */
 export function initScreenMode() {
@@ -250,6 +269,9 @@ export function initScreenMode() {
   if (btn && btn.dataset.screenModeWired !== "1") {
     btn.dataset.screenModeWired = "1";
     btn.addEventListener("click", () => {
+      const maintenant = Date.now();
+      if (shouldIgnoreModeClick(maintenant, dernierClicMode)) return;
+      dernierClicMode = maintenant;
       applyScreenMode(nextScreenMode(getScreenMode()));
     });
   }

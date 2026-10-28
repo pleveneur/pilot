@@ -323,7 +323,7 @@ describe("6. l'ecran ne montre RIEN de la conversation", () => {
   });
 
   it("le bouton des modes est DEPLACE, jamais duplique", () => {
-    expect(HTML.match(/id="screen-mode-button"/g) || []).toHaveLength(1);
+    expect(HTML.match(/id="mode-logo"/g) || []).toHaveLength(1);
     expect((SUPER.match(/SCREEN_MODE_BUTTON_ID/g) || []).length).toBeLessThan(12);
   });
 

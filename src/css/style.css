@@ -2018,77 +2018,78 @@ body.theme-light.theme-tokyo-day {
 
 #tab-bar::-webkit-scrollbar { height: 4px; }
 
-/* --- Bouton UNIQUE des trois modes d'ecran (lot 1) ---
-   Un seul noeud DOM, partage par les trois modes : il vit ici, dans la rangee
-   d'onglets, entre l'entree « Travail » et les trois boutons systeme, et il est
-   DEPLACE dans la barre du mode assistant seul, puis restitue exactement a la
-   sortie (src/js/super-agent.js). Aucun second bouton.
-   Reference : RAPPORT-trois-modes-ecran-vocal.md §1.2.
-   Largeur FIXE de 88 px en mode Detaille : la rangee d'onglets ne « saute » pas
-   a chaque bascule. Dans les deux plein ecran la largeur redevient AUTO
-   (icone + mot) : une seule regle plus bas, dans la section du mode immersif.
-   Aucune couleur en dur : la pastille suit les jetons du theme. */
-#screen-mode-button {
+/* --- Le LOGO Pilot EST le bouton UNIQUE des trois modes ---
+   Un seul noeud DOM dans tout le document (`#mode-logo`, autour de
+   `#btn-project-logo`, dans le bandeau du haut de la colonne de gauche) :
+   il n'est jamais recree, il est DEPLACE dans l'overlay du plein ecran, puis
+   restitue dans le bandeau a la sortie (src/js/super-agent.js).
+   Reference : CONCEPTION-logo-bouton-des-trois-modes.md (annexe A).
+
+   La boite fait 28 x 28 px ; le DESSIN ne bouge pas d'un pixel (24 px, meme
+   fichier, meme -3 px sur l'image, regle #btn-project-logo plus haut). Trois
+   nombres sont CALCULES, pas choisis :
+     margin-left: -3px   -> la boite commence a 13 px, la ou commencait l'image ;
+     margin-right: -4px  -> la boite rend au nom du projet sa place exacte
+                            (28 - 3 - 4 = 21 px, la largeur de l'image seule) ;
+     padding: 2px 1px 2px 3px -> le contenu fait 24 x 24, soit l'image : elle
+                            n'est donc jamais decalee par un centrage.
+   `box-sizing: border-box` est global. Aucune bordure (elle decalerait la mise
+   en page au survol) : le filet est un box-shadow interne. */
+#mode-logo {
   flex: 0 0 auto;
-  align-self: center;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  padding: 2px 1px 2px 3px;
+  margin-left: -3px;
+  margin-right: -4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  height: 28px;
-  width: 88px;
-  padding: 0 6px;
-  margin: 0 6px 0 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  font-family: var(--font-ui);
-  font-size: var(--font-sm);
-  font-weight: 600;
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition: background var(--transition-fast);
 }
 
-/* Survol : c'est une commande d'ecran, pas une action principale (fond
-   --surface-2, texte --text-primary). */
-#screen-mode-button:hover {
+/* Survol et appui : les jetons deja utilises par les boutons voisins. Le filet
+   interne rend le survol visible dans les palettes claires, ou --surface-2 et
+   --bg-app sont tres proches. */
+#mode-logo:hover {
   background: var(--surface-2);
-  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+#mode-logo:active {
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--border-hover);
 }
 
-/* Focus CLAVIER seulement : l'anneau n'apparait pas au clic souris. */
-#screen-mode-button:focus { outline: none; }
-#screen-mode-button:focus-visible {
+/* Focus CLAVIER seulement (meme regle que les boutons de fenetre). Offset
+   POSITIF : la boite est collee au bord haut dans les deux pleins ecrans, un
+   anneau en retrait serait rogne. */
+#mode-logo:focus { outline: none; }
+#mode-logo:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 
-#screen-mode-button .screen-mode-icon {
-  display: inline-flex;
-  align-items: center;
-}
+/* Aucun etat desactive : aucun code ne pose `disabled`. */
 
-/* Pastille de 6 px : teinte du mode COURANT, collee a gauche du mot. Avec le
-   mot lui-meme, cela fait les DEUX reperes voulus ; aucun bandeau, aucun
-   badge en plus (la rangee garde ses 36 px). */
-#screen-mode-button .screen-mode-dot {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-text);
+/* Place EXACTE dans les deux pleins ecrans (lots 1 a 3). La bande libre du haut
+   s'arrete a 36 px (depart de la barre du mode = --window-controls-height) : la
+   boite de 28 px se colle donc a 36 - 28 = 8 px, sans mordre le filet de la
+   barre. x = 13 px : le meme bord que dans « Detaille » (inset 16 px du bandeau
+   moins les 3 px de l'image). Le logo sort du flux de la barre : ni les 58 px de
+   « Assistant seul » ni les 44 px du « Vocal » ne bougent. */
+body.superagent-immersive-active #mode-logo,
+body.pilot-vocal-active #mode-logo {
+  position: absolute;
+  top: 8px;
+  left: 13px;
+  margin: 0;
+  z-index: 2;
 }
-#screen-mode-button[data-screen-mode="assistant"] .screen-mode-dot {
-  background: var(--superagent-accent);
-}
-/* Le jeton --vocal-listen est cree au lot 2 (spec §4.1) : d'ici la, la pastille
-   prend la couleur du mode « Detaille », sans inventer de teinte. */
-#screen-mode-button[data-screen-mode="vocal"] .screen-mode-dot {
-  background: var(--vocal-listen, var(--accent-text));
-}
-
-#screen-mode-button .screen-mode-label { white-space: nowrap; }
 
 /* --- Suivi du travail (entree « Travail », a droite de la rangee d'onglets) ---
    Reflete l'activite de TOUS les agents (assistant + codeurs) : la pastille
@@ -11158,15 +11159,12 @@ body.pilot-loading *::after {
   color: var(--text-primary);
   white-space: nowrap;
 }
-/* Bouton des trois modes DEPLACE dans la barre du mode assistant seul : il
-   passe en largeur AUTO (icone + mot), juste apres le titre. Meme noeud, memes
-   etats que dans la rangee d'onglets ; seule la largeur change, donc le libelle
-   « Assistant seul » n'est pas tronque. */
-body.superagent-immersive-active #screen-mode-button {
-  width: auto;
-  padding: 0 8px;
-  margin: 0;
-}
+/* LOT 2 : le bouton des trois modes n'est plus dans cette barre. C'est le LOGO
+   du bandeau, entre dans l'OVERLAY (`#mode-logo`) : sa place y est donnee par la
+   regle unique `body.superagent-immersive-active #mode-logo` (top 8 px,
+   left 13 px), plus haut dans ce fichier. La barre garde sa hauteur de 58 px,
+   son filet et son ordre (titre, agents, Travail, ⚙). */
+
 /* Résumé des agents : poussé à droite dans la barre du haut, juste avant le
    bouton ⚙ (margin-left: auto reporté ici). Replié par défaut en un petit
    point unique (.sa-immersive-dot) ; un clic déploie la liste, un second
@@ -11587,14 +11585,10 @@ body.pilot-vocal-active .agent-chat-messages {
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-1);
 }
-/* Le bouton des trois modes, DEPLACE ici : largeur AUTO (icone + mot) au lieu
-   des 88 px de la rangee d'onglets, pour que « Assistant seul » ne soit jamais
-   tronque. Meme noeud, memes etats, aucune copie. */
-body.pilot-vocal-active #screen-mode-button {
-  width: auto;
-  padding: 0 8px;
-  margin: 0;
-}
+/* LOT 2 : la barre ne porte plus RIEN. Le LOGO des trois modes entre dans
+   l'overlay et se pose au coin haut-gauche par la regle unique
+   `body.pilot-vocal-active #mode-logo` (top 8 px, left 13 px). La barre garde
+   ses 44 px et son filet : elle devient une bande de respiration. */
 
 /* --- §2.2 Le centre : l'objet lumineux --- */
 /* Esprit « interface Cornelius » : pas de cadre, pas de carte, pas de

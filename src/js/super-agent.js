@@ -3800,26 +3800,26 @@ export async function createSuperAgent(container) {
     // bouton, aucun second panneau, aucun ecouteur de clic duplique : le clic
     // garde le comportement d'agent-activity.js.
     const activity = document.getElementById("agent-activity");
-    const agentsHost = immersiveOverlay.querySelector('[data-imm="agents"]');
     const rightAnchor = immersiveOverlay.querySelector('[data-imm="settings"]');
     if (activity && rightAnchor && rightAnchor.parentNode) {
       immersiveActivityHome = { parent: activity.parentNode, next: activity.nextSibling };
       rightAnchor.parentNode.insertBefore(activity, rightAnchor);
     }
-    // LOT 1 (trois modes d'ecran) : le bouton UNIQUE des modes est DEPLACE ici,
-    // juste apres le titre « Pilot » — donc AVANT le groupe de DROITE (resume
-    // des agents, « Travail », ⚙). Ordre final de la barre : titre, MODE,
-    // agents, Travail, ⚙. Un seul noeud dans tout le document : la rangee
-    // d'onglets ne le perd pas, il y revient a la sortie.
+    // LOT 2 (CONCEPTION-logo-bouton-des-trois-modes.md) : le bouton UNIQUE des
+    // modes est desormais le LOGO du bandeau (`#mode-logo`). Il ne monte plus
+    // dans la barre du mode : il entre dans l'OVERLAY, hors du flux, et il y
+    // prend la MEME place qu'en mode « Detaille » par la seule regle CSS
+    // `body.superagent-immersive-active #mode-logo` (top 8 px, left 13 px).
+    // La barre garde donc son ordre et sa hauteur : titre, agents, Travail, ⚙.
+    // Un seul noeud dans tout le document : il est DEPLACE, jamais recopie, et
+    // il revient dans le bandeau a la sortie (voir exitImmersive).
     const screenModeButton = document.getElementById(SCREEN_MODE_BUTTON_ID);
-    if (screenModeButton && agentsHost && agentsHost.parentNode) {
+    if (screenModeButton) {
       immersiveModeButtonHome = {
         parent: screenModeButton.parentNode,
         next: screenModeButton.nextSibling,
       };
-      // Ancre FIXE : le premier element du groupe de droite. L'entree
-      // « Travail » n'est plus l'ancre, puisqu'elle a rejoint ce groupe.
-      agentsHost.parentNode.insertBefore(screenModeButton, agentsHost);
+      immersiveOverlay.appendChild(screenModeButton);
     }
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
@@ -3862,14 +3862,10 @@ export async function createSuperAgent(container) {
     // Suivi du travail : restitution EXACTE dans la rangee d'onglets (meme
     // parent, meme voisin), AVANT le retrait de l'overlay — sinon le noeud
     // serait detruit avec lui et le mode normal perdrait son compteur.
-    //
-    // ORDRE DE RESTITUTION (lot 1) : le bouton des MODES d'abord, l'entree
-    // « Travail » ensuite. A l'entree, la place d'origine de « Travail » etait
-    // le bouton des modes ; comme celui-ci est lui aussi dans l'overlay, son
-    // voisin est momentanement introuvable et « Travail » serait ajoute en fin
-    // de rangee (apres les boutons systeme). En restaurant le bouton d'abord,
-    // le voisin de « Travail » redevient valide : l'ordre d'origine
-    // (« Travail » -> MODE -> boutons systeme) est rendu a l'identique.
+    // Ordre de restitution (lot 2) : le LOGO d'abord (il est dans l'overlay,
+    // il serait detruit avec lui), puis l'entree « Travail ». Sa place
+    // d'origine est le bandeau du haut (#project-selector), donc aucun ordre
+    // n'a plus besoin d'etre impose dans la rangee d'onglets.
     const modeHome = immersiveModeButtonHome;
     const modeButton = document.getElementById(SCREEN_MODE_BUTTON_ID);
     if (modeButton && modeHome && modeHome.parent) {
@@ -4005,10 +4001,10 @@ export async function createSuperAgent(container) {
     // aucun nouveau reglage. Le CSS coupe alors les animations et fige la
     // longueur du trait par etat.
     if (vocalReducedMotion()) ov.classList.add("vocal-reduced");
-    // Structure (de haut en bas) : la barre de 44 px (qui recoit le bouton des
-    // modes), l'objet lumineux + son trait + l'UNIQUE ligne d'etat, puis la
-    // zone de saisie discrete. Aucun cadre, aucune carte, aucune bordure
-    // autour de l'objet.
+    // Structure (de haut en bas) : la barre de 44 px (VIDE : elle ne recoit
+    // plus le bouton des modes, qui entre dans l'overlay — lot 2), l'objet
+    // lumineux + son trait + l'UNIQUE ligne d'etat, puis la zone de saisie
+    // discrete. Aucun cadre, aucune carte, aucune bordure autour de l'objet.
     ov.innerHTML = `
       <div class="vocal-top"></div>
       <div class="vocal-stage">
@@ -4149,13 +4145,15 @@ export async function createSuperAgent(container) {
       vocalInputHome = { parent: inputBar.parentNode, next: inputBar.nextSibling };
       zone.appendChild(inputBar);
     }
-    // Bouton UNIQUE des modes : DEPLACE dans la barre haute (une seule barre de
-    // 44 px, le bouton a gauche). Aucune copie, aucun second bouton.
-    const barre = vocalOverlay.querySelector(".vocal-top");
+    // LOT 2 : le LOGO des trois modes entre dans l'OVERLAY, hors du flux : il
+    // se pose au meme endroit que dans les deux autres modes par la seule
+    // regle CSS `body.pilot-vocal-active #mode-logo`. La barre de 44 px ne
+    // porte plus rien : elle garde sa hauteur et son filet et devient une
+    // bande de respiration. Aucune copie, aucun second bouton.
     const modeButton = document.getElementById(SCREEN_MODE_BUTTON_ID);
-    if (modeButton && barre) {
+    if (modeButton) {
       vocalModeButtonHome = { parent: modeButton.parentNode, next: modeButton.nextSibling };
-      barre.appendChild(modeButton);
+      vocalOverlay.appendChild(modeButton);
     }
     document.body.appendChild(vocalOverlay);
     document.body.classList.add(VOCAL_ACTIVE_CLASS);

@@ -249,7 +249,7 @@ describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee sys
     // le bouton UNIQUE des modes entre dans cette barre juste apres le titre —
     // titre, MODE, agents, Travail, ⚙ — c'est-a-dire AVANT le groupe de droite.
     expect(
-      (html.match(/id="screen-mode-button"/g) || []).length,
+      (html.match(/id="mode-logo"/g) || []).length,
       "un seul et meme noeud pour les trois ecrans (jamais recopie)",
     ).toBe(1);
     const insertionMode = sliceSource(

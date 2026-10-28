@@ -44,7 +44,16 @@
          reprend sa place d'origine. C'est le SEUL endroit de l'application qui
          nomme le moteur en service. -->
     <div id="project-selector">
-      <img id="btn-project-logo" src="/logo_pilot_vector.svg" alt="Logo" />
+      <!-- Le LOGO Pilot EST le bouton UNIQUE des trois modes d'ecran (lots 1 a 3,
+           CONCEPTION-logo-bouton-des-trois-modes.md). UN SEUL noeud dans tout le
+           document (`#mode-logo`) : il n'est jamais recree, il est DEPLACE dans
+           l'overlay du plein ecran puis restitue ici (src/js/super-agent.js).
+           L'image #btn-project-logo ne change ni d'id, ni de src, ni de CSS :
+           elle devient le CONTENU du bouton. L'infobulle dit le mode COURANT et
+           annonce le SUIVANT ; aucune pastille, aucun mot, aucun chevron.
+           L'etat ecrit ici est celui du mode « Detaille » ; il est reecrit au
+           demarrage par src/js/screen-mode.js (mode memorise + migration). -->
+      <button type="button" id="mode-logo" data-screen-mode="detailed" title="Mode d'écran : Détaillé. Passer à « Assistant seul »." aria-label="Mode d'écran : Détaillé. Passer à « Assistant seul »."><img id="btn-project-logo" src="/logo_pilot_vector.svg" alt="Logo" /></button>
       <div id="project-identity">
         <span id="btn-project-name">Pilot</span>
         <span id="project-engine" class="project-engine"></span>
@@ -248,9 +257,10 @@
          docs/proposition-bande-contexte-allegee.md §4). Une seule rangee de
          36 px, dans le flux : elle commence EN HAUT de la fenetre (la bande de
          fenetre de 32 px a disparu) puis vient le contenu. Elle porte, de
-         gauche a droite : la barre d'onglets, l'entree « Travail », le bouton
-         des trois modes d'ecran (#screen-mode-button, lot 1) et, tout a
-         DROITE, les trois boutons systeme (#window-controls). Chaque bloc est
+         gauche a droite : la barre d'onglets, l'entree « Travail » et, tout a
+         DROITE, les trois boutons systeme (#window-controls). Le bouton des
+         trois modes d'ecran n'est plus ici : c'est le LOGO du bandeau, en haut
+         a gauche (#mode-logo, lots 1 a 3). Chaque bloc est
          dans un conteneur SEPARE : ni l'entree ni les boutons ne peuvent aller
          dans `#tab-bar` (tabs.js suppose que ses enfants sont « les onglets +
          le bouton d'ajout d'agent »), et la colonne de gauche est masquee en
@@ -326,18 +336,11 @@
       </div>
         <div id="agent-activity-card" class="hidden"></div>
       </div>
-      <!-- Bouton UNIQUE des trois modes d'ecran (lot 1,
-           RAPPORT-trois-modes-ecran-vocal.md §1). UN SEUL noeud dans tout le
-           document : il vit ici, entre l'entree « Travail » et les trois
-           boutons systeme, et il est DEPLACE dans la barre du mode assistant
-           seul, puis restitue EXACTEMENT a sa place a la sortie
-           (src/js/super-agent.js : enterImmersive / exitImmersive). Aucun
-           second bouton, aucun ecran de reglage.
-           Le libelle dit le mode COURANT, l'infobulle annonce le SUIVANT.
-           L'etat ecrit ici est celui du mode « Detaille » ; il est reecrit au
-           demarrage par src/js/screen-mode.js (mode memorise + migration).
-           Ordre du DOM : barre d'onglets -> « Travail » -> MODE -> boutons. -->
-      <button type="button" id="screen-mode-button" data-screen-mode="detailed" title="Mode d'écran : Détaillé. Passer à « Assistant seul »." aria-label="Mode d'écran : Détaillé. Passer à « Assistant seul »."><span class="screen-mode-icon"><i data-lucide="panels-top-left" class="icon-sm"></i></span><span class="screen-mode-dot" aria-hidden="true"></span><span class="screen-mode-label">Détaillé</span></button>
+      <!-- Le bouton UNIQUE des trois modes n'est PLUS ici (lots 1 a 3,
+           CONCEPTION-logo-bouton-des-trois-modes.md) : c'est le LOGO Pilot, en
+           haut a gauche de cette meme rangee (`#mode-logo`, dans
+           #project-selector). La rangee garde uniquement « Travail » et les
+           trois boutons systeme : plus aucune commande de mode entre eux. -->
       <!-- Boutons de fenetre : groupe fixe en haut a DROITE, AU BOUT de la
            rangee d'onglets (decision du proprietaire, Q1 : plus de bande de
            32 px). Dernier enfant de #tab-row : leur place est RESERVEE dans le
