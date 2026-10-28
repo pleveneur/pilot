@@ -465,12 +465,25 @@ En mode **Vocal** :
   seul. Ouvrir le micro ne suffit donc pas à l'allumer : c'est votre voix qui le
   fait, et il ne clignote pas entre les deux (deux seuils, un pour entrer, un
   plus bas pour sortir).
-- **Pilot demande le micro à votre premier geste** dans cet écran (un clic, une
-  touche) — jamais à l'ouverture du mode, et jamais dans les autres modes.
+- **Le micro et la dictée restent ouverts pendant tout le mode** — c'est ce qui
+  vous permet de parler sans rien toucher — **sauf pendant que Pilot lit sa
+  réponse et pendant qu'il travaille** : il ne se transcrirait pas lui-même.
+  Les deux sont **refermés aux trois sorties** du mode (bouton, Échap,
+  fermeture de l'onglet) : le témoin du système s'éteint, Pilot ne vous écoute
+  pas en dehors de l'écran. Un repli de voix compte comme **Pilot qui parle**.
+- **Pilot demande le micro de mesure dès l'entrée** dans cet écran — jamais
+  dans les autres modes — **avant** d'ouvrir la dictée : la mesure passe la
+  première, la dictée ensuite. Ainsi une panne ne se déguise jamais : si le
+  micro de mesure ne s'ouvre pas, l'écran le dit et la dictée ne s'arme pas ;
+  si c'est la dictée qui échoue, le trait continue de suivre votre voix.
 - **Si vous refusez**, si aucun micro n'est branché, s'il est occupé ou s'il
   tombe en panne : l'écran le **dit en une phrase** et propose **« Autoriser le
   micro »**. Le mode reste **entièrement utilisable** (écrire, envoyer, écouter)
   — rien n'est bloqué, et Pilot ne redemande pas tout seul.
+- **Sur un projet marqué sensible** (🔒), la dictée reste **bloquée** : l'écran
+  attend de savoir si le projet est marqué avant d'ouvrir la dictée, et il
+  repose la question à chaque changement de projet. La transcription (qui passe
+  par le réseau) ne s'ouvre jamais sur un projet 🔒.
 - **En quittant le mode, le micro est coupé** (le témoin du système s'éteint) :
   Pilot ne vous écoute pas en dehors de cet écran.
 - **Parler par-dessus Pilot le fait taire** : pendant qu'il lit, prendre la
@@ -492,9 +505,11 @@ En mode **Vocal** :
   pas. Hors du mode Vocal, rien ne change. Ce n'est pas encore fait : reprendre
   votre phrase pour relancer l'agent à votre place — il faut le redemander.
 - La réponse se **lit à voix haute** (voir « Écouter une réponse à voix
-  haute ») : comme l'écran est nu, c'est le moyen d'entendre la réponse.
-  Reprendre l'écoute après la réponse (mode conversation continue)
-  n'est pas encore disponible.
+  haute ») : comme l'écran est nu, c'est le moyen d'entendre la réponse. Au
+  repos, **parler suffit** : la dictée s'ouvre toute seule, la demande part,
+  et l'écoute reprend après la réponse (conversation continue). Si la dictée ne
+  transcrit rien trois fois de suite, Pilot cesse de rouvrir le micro tout
+  seul : **un clic sur 🎙️** la rétablit.
 
 ---
 

@@ -173,30 +173,57 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
 
 ## 5. Le micro : quand il s'ouvre, quand il se ferme
 
-- **Rien n'est ouvert à l'entrée du mode.** La permission est demandée au **premier
-  geste** dans l'écran (un clic, une touche) — jamais à l'ouverture du mode, jamais
-  dans les autres modes.
+**Deux captures différentes** vivent dans cet écran, et elles ne s'ouvrent pas au
+même moment — c'est la distinction qui manquait :
+
+- **L'ORDRE est une décision du propriétaire : la MESURE ouvre EN PREMIER.**
+  Le micro de MESURE (le trait de niveau, l'état « écoute », la prise de parole)
+  est demandé **à l'entrée dans le mode**, avant tout armement de la dictée —
+  jamais au premier geste, jamais dans les autres modes. La dictée vient
+  **après** elle, et **seulement si elle est réellement ouverte**.
+- **La DICTÉE** (§6bis) n'est donc ouverte qu'**une fois la mesure ouverte**,
+  puis pendant **tout le mode**, sauf pendant que Pilot parle et pendant qu'il
+  travaille : elle s'arme au repos 350 ms après l'entrée, parce que « parler
+  suffit » (aucun bouton à toucher). C'est **son** service de reconnaissance qui
+  tient le micro ouvert, mais il ne peut plus passer devant la mesure.
+- **Pourquoi cet ordre** : avec la dictée en premier, un pilote audio qui
+  refusait la **seconde** capture faisait échouer la **mesure** — le trait se
+  figeait et l'écran annonçait une panne de micro alors que la dictée
+  fonctionnait (panne fantôme permanente). Mesure d'abord, et chaque panne
+  s'affiche pour ce qu'elle est : une panne de mesure, ou une panne de dictée.
+  Deux clients sur le même périphérique ne se dégradent plus l'un l'autre
+  (l'annulation d'écho de la mesure reste intacte).
+- **Si la mesure n'a pas pu s'ouvrir, la dictée ne s'arme pas.** L'écran dit la
+  panne du micro avec **la phrase existante** (« Le micro est fermé. »,
+  « Le micro est occupé par une autre application. »…) et propose « Autoriser le
+  micro ». Une seule phrase, un seul bouton — rien de nouveau.
+- **Projet sensible** : tant que la réponse « ce projet est-il marqué 🔒 ? »
+  n'est pas arrivée, **aucune dictée cloud ne s'ouvre** (l'écran attend quelques
+  millisecondes au lieu de parier sur « projet libre »). La réponse est relue à
+  l'entrée du mode **et** à chaque changement de projet
+  (`pilot-project-sensitivity`) : la transcription cloud ne s'ouvre jamais sur
+  un projet 🔒.
+- **Aux trois sorties du mode, les deux captures sont réellement rendues** : les
+  pistes sont arrêtées (`stop()`), le contexte audio est fermé, la boucle de
+  mesure est annulée et la dictée est fermée. Le témoin du système s'éteint :
+  Pilot ne vous écoute pas en dehors de cet écran. Un retour dans le mode
+  redemande les deux captures (une demande par entrée, jamais en boucle).
 - **Un refus n'est jamais redemandé tout seul** : l'écran le **dit en une phrase**
   et propose « Autoriser le micro ». Le mode reste **entièrement utilisable**
   (écrire, envoyer, écouter). Les messages sont : « Le micro est fermé. » ·
   « Aucun micro n'est branché. » · « Le micro est occupé par une autre
   application. » · « Le micro n'a pas répondu. »
-- **À la sortie du mode, le micro est réellement rendu** : les pistes sont
-  arrêtées (`stop()`), le contexte audio est fermé, la boucle de mesure est
-  annulée. Le témoin du système s'éteint : Pilot ne vous écoute pas en dehors de
-  cet écran. Un retour dans le mode redemande la capture (une demande par entrée,
-  jamais en boucle).
 - **Le niveau affiché** est le volume mesuré, **lissé** (montée rapide, retombée
   lente) et projeté sur la longueur du trait (8 % au silence, 100 % au fort). Le
   trait ne saute donc pas d'une image à l'autre. **Le même niveau décide de
   l'état affiché** (voir §4) : le trait qui s'allonge et le passage en « écoute »
   viennent d'une seule et même mesure, jamais de deux chemins séparés.
 - **Une seconde capture, et c'est voulu** (§6bis) : la **dictée** ouvre sa propre
-  capture (service de reconnaissance du navigateur) en même temps que la mesure
-  de niveau. La sortie du mode ferme **les deux**. Si une plateforme refuse la
-  seconde capture, l'écran le **dit** (« Le micro est occupé par une autre
-  application : écrivez votre demande. ») et le clavier reste utilisable :
-  le micro de mesure, lui, n'est jamais touché.
+  capture (service de reconnaissance du navigateur) **après** la mesure de
+  niveau. La sortie du mode ferme **les deux**. Si une plateforme refuse la
+  capture de dictée, l'écran le **dit** (« La dictée n'a pas fonctionné :
+  écrivez votre demande. ») et le clavier reste utilisable : le micro de mesure,
+  lui, n'est jamais touché, et le trait continue de suivre votre voix.
 
 ## 6. Parler par-dessus Pilot : lire **et** travailler
 
@@ -208,7 +235,14 @@ signal, une seule garde, **deux** cibles choisies par la priorité des états (�
 
 - **Un seul signal « Pilot parle »** : l'état de la lecture à voix haute
   (`pilot-read-aloud-state`, émis par `read-aloud.js`). L'écran ne devine jamais la
-  parole et ne crée **aucun second lecteur**.
+  parole et ne crée **aucun second lecteur**. « Pilot parle » vaut pour la lecture
+  normale **et pour ses deux replis de voix** (`local-fallback` quand la voix
+  locale choisie manque, `system-fallback` quand aucune voix du système ne
+  correspond) : dans les deux cas le son sort des haut-parleurs, donc la dictée
+  doit être désarmée et la coupure armée comme pendant une lecture ordinaire. La
+  décision est **une seule fonction pure**, `isReadAloudSpeaking(state)`, et elle
+  sert les quatre chemins (armement de la dictée, garde du micro, coupure, sortie
+  du mode) — aucune comparaison de chaîne ailleurs.
 - **À chaque début de lecture**, une **mesure de 600 ms** (calibrage) : Pilot ne
   coupe pas, il écoute **son propre son** sortir des haut-parleurs et retient le
   niveau maximal observé (le **résidu d'écho**).
@@ -268,22 +302,49 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
   et la fin d'écoute passe par le **chemin d'envoi existant**
   (`applyVoiceEnd` → `send`) — donc **un seul envoi**, jamais deux.
 - **Elle se désarme pendant que Pilot parle** (on ne se transcrit pas soi-même)
-  et **pendant qu'il travaille** (le tour en cours prime).
+  et **pendant qu'il travaille** (le tour en cours prime). « Pilot parle »
+  comprend les **replis de voix** (§6.1) : une réponse lue avec la voix du
+  système ne laisse pas le micro se rouvrir.
 - **Elle se réarme quand la lecture d'une réponse est finie**, avec une marge de
   silence plus longue (600 ms) : c'est la **conversation continue** du mode —
   répondre puis reparler, sans rien toucher.
+- **Un plafond arrête les sessions vides** : si le moteur de reconnaissance rend
+  la main **sans rien transcrire trois fois en moins de 30 secondes**, la dictée
+  **cesse de s'armer toute seule** — sinon le micro serait rouvert en boucle
+  pour rien. Le plafond est une **fonction pure** (`noteEmptyVocalSession`),
+  il ne compte que les fins **normales et vides** (jamais une erreur, jamais un
+  arrêt manuel, jamais une reprise en main) et **seulement dans cet écran**.
+  Il **ne se lève pas avec le temps** : un **geste** le rétablit — un clic sur
+  🎙️, ou une nouvelle entrée dans le mode. La ligne d'état l'annonce
+  (« La dictée n'a pas fonctionné : écrivez votre demande. », phrase existante).
 - **Un geste explicite prime toujours** : un clic sur 🎙️ pour arrêter la dictée
   la laisse fermée (elle ne se rouvre pas 350 ms plus tard).
 - **Les trois sorties du mode la ferment** : aucun périphérique ne reste ouvert
   derrière l'écran.
 - **Un projet sensible ne dicte jamais** (dictée cloud) : le drapeau est relu à
-  l'entrée du mode, comme dans l'onglet agent π.
+  l'entrée du mode **et à chaque changement de projet**, comme dans l'onglet
+  agent π. Tant que la réponse n'est pas arrivée, **la dictée ne s'arme pas**
+  (règle `sensibilite-inconnue`) : on attend quelques millisecondes au lieu de
+  parier sur « projet libre ».
+- **La MESURE passe avant la DICTÉE** (§5) : aucune dictée ne s'arme tant que le
+  micro de mesure n'est pas **réellement ouvert** (`mesure-fermee`). Une panne de
+  mesure se lit donc comme une panne de mesure (phrase du micro + « Autoriser le
+  micro »), jamais comme une dictée qui marche avec un trait figé.
 - **Une panne de dictée se voit dans l'unique ligne d'état**, en une phrase qui
   dit quoi faire (« … : écrivez votre demande. ») : micro refusé, micro occupé,
   réseau absent, dictée indisponible sur ce poste. Jamais dans la zone masquée,
   jamais en boucle (le geste 🎙️ ou « Autoriser le micro » lève l'erreur).
-- **Rien de nouveau à l'écran** : ni bouton, ni réglage, ni message au repos — les
-  phrases du repos, de l'écoute, de la réflexion et de la parole sont inchangées.
+- **« Dictée indisponible » est réellement dit.** Quand le poste n'a pas de
+  reconnaissance vocale (`transcription === false`), la décision le sait déjà ;
+  la ligne du repos affiche donc « La dictée n'est pas disponible sur ce poste :
+  écrivez votre demande. » au lieu de promettre « Je vous écoute. ». La phrase est
+  choisie par la décision pure, à l'unique endroit qui écrit cette ligne
+  (`vocalStatusLine`, appelée par `applyVocalState`).
+- **Rien de nouveau à l'écran** : ni bouton, ni réglage. Les phrases du repos, de
+  l'écoute, de la réflexion et de la parole sont inchangées ; au repos seulement,
+  la ligne peut porter **en plus** le message que la décision prévoit (micro
+  fermé, dictée indisponible, plafond des sessions vides) — jamais pendant la
+  parole ni pendant la réflexion, qui gardent la priorité.
 - **Une seule mise en œuvre** : les décisions sont **pures**
   (`src/js/vocal-conversation.js`), l'application se fait à **un seul endroit**
   (la fin de `applyVocalState`), et le démarrage passe par **une seule voie**
@@ -349,7 +410,7 @@ sa hauteur d'origine.
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
-| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole / le travail / hors du mode / sur projet sensible / après un arrêt manuel, et **l'unique phrase** à afficher pour chaque panne de dictée |
+| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel, **plafond des sessions vides** (`noteEmptyVocalSession`), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
@@ -362,7 +423,10 @@ seule coupure, négatifs bruit court / silence / écho, écran inchangé),
 `vocal-parler-declenche-une-demande.test.js` + décisions pures couvertes par
 `vocal-conversation.js` (conversation parlée : armer au repos, désarmer pendant
 la lecture et le travail, réarmer après la lecture, fermeture aux trois sorties,
-un seul envoi, erreurs dans la ligne d'état).
+un seul envoi, erreurs dans la ligne d'état),
+`vocal-correctifs-revue.test.js` (repli de voix = « Pilot parle », phrase
+« dictée indisponible » affichée, plafond des sessions vides et levée par un
+geste).
 
 ## 11. Ce qui est prouvé, et ce qui dépend de votre matériel
 
@@ -379,11 +443,16 @@ Est également prouvé pour la **conversation parlée** : la dictée s'arme au r
 et **pas** pendant la parole / le travail / hors du mode / sur un projet sensible,
 elle se réarme après la lecture, elle est **fermée** aux trois sorties, elle ne
 s'ouvre **qu'une fois** (une session, une minuterie), et aucun second moteur de
-transcription ni second envoi n'existe dans le code.
+transcription ni second envoi n'existe dans le code. Sont prouvés en plus le
+**repli de voix** (un repli compte comme « Pilot parle » : pas d'armement pendant
+la lecture, coupure de nouveau armée), la phrase **« dictée indisponible »**
+affichée par la décision et le **plafond des sessions vides** (trois fins
+sans texte en moins de 30 s suspendent l'armement, un geste le rétablit).
 
 **Non prouvable par un test, à vérifier chez vous** : le niveau d'écho **réel** de
 votre pièce (haut-parleurs, volume, distance, pilote audio) — et la capacité de
 votre poste à tenir **deux captures** en même temps (mesure de niveau + dictée).
 Pilot ne suppose jamais l'écho maîtrisé : quand il ne peut pas le prouver, **il ne
-coupe pas**. Et si la seconde capture est refusée, l'écran le **dit** et le clavier
-reste utilisable.
+coupe pas**. La **mesure ouvre toujours la première** : si elle est refusée, la
+dictée ne s'arme pas et l'écran le dit ; si c'est la dictée qui est refusée, le
+trait continue de suivre votre voix et le clavier reste utilisable.

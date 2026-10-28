@@ -143,21 +143,38 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   superposent jamais : passer en « Assistant seul » ou en « Vocal » sort d'abord
   de l'autre.
 - Le **trait de niveau suit votre voix** : il s'allonge quand vous parlez et
-  retombe doucement au silence, sans sautillement. Pilot **demande le micro à
-  votre premier geste** dans cet écran (un clic, une touche) — jamais à
-  l'ouverture du mode, et le micro n'est **pas** ouvert dans les autres écrans.
-  Si vous refusez, si aucun micro n'est branché ou s'il est occupé, l'écran le
-  **dit en une phrase** et propose **« Autoriser le micro »** : le mode Vocal
-  reste entièrement utilisable (écrire, envoyer, écouter). En quittant le mode,
-  **le micro est coupé** (le témoin du système s'éteint).
+  retombe doucement au silence, sans sautillement.
+- **Le micro et la dictée restent ouverts pendant tout le mode** — c'est ce qui
+  vous permet de parler sans rien toucher — **sauf pendant que Pilot lit sa
+  réponse et pendant qu'il travaille** : il ne se transcrirait pas lui-même, et
+  le tour en cours prime. Les deux sont **refermés aux trois sorties** du mode
+  (bouton, Échap, fermeture de l'onglet) : le témoin du système s'éteint, Pilot
+  ne vous écoute pas en dehors de l'écran. Un repli de voix (voix choisie
+  indisponible, voix du système en remplacement) compte comme **Pilot qui
+  parle** : la dictée reste fermée et vous pouvez quand même l'interrompre.
+- **Pilot demande le micro de mesure dès l'entrée** dans cet écran — jamais dans
+  les autres écrans — **avant** d'ouvrir la dictée : la mesure passe la première,
+  la dictée ensuite. Ainsi une panne ne se déguise jamais en autre chose : si le
+  micro de mesure ne s'ouvre pas, l'écran le dit et la dictée ne s'arme pas ; si
+  c'est la dictée qui échoue, le trait continue de suivre votre voix. Si vous
+  refusez, si aucun micro n'est branché ou s'il est occupé, l'écran le **dit en
+  une phrase** et propose **« Autoriser le micro »** : le mode Vocal reste
+  entièrement utilisable (écrire, envoyer, écouter). Sur un projet marqué
+  **sensible** (🔒), la dictée reste bloquée : Pilot attend de savoir si le
+  projet est marqué avant de l'ouvrir, et repose la question à chaque changement
+  de projet.
 - **Parler suffit** : au repos, Pilot **dicte tout seul**. Vous parlez, le texte
   s'écrit, et **la demande part sans que vous touchiez à rien** — puis il répond,
   lit sa réponse, et **se remet à l'écoute** : la conversation continue à la voix.
   Pendant qu'il parle ou qu'il travaille, il **n'écoute pas** (il ne se
   transcrirait pas lui-même). Un appui sur 🎙️ arrête la dictée, et elle ne se
   rouvre pas contre votre volonté. Si Pilot ne peut pas dicter (micro refusé ou
-  occupé, pas de réseau, projet **sensible**), la ligne d'état **le dit** et vous
-  continuez au clavier.
+  occupé, pas de réseau, dictée indisponible sur ce poste, projet **sensible**),
+  la ligne d'état **le dit** et vous continuez au clavier.
+- **Si la dictée ne transcrit rien trois fois de suite** (en moins de 30
+  secondes), Pilot **cesse de rouvrir le micro tout seul** au lieu de boucler :
+  la ligne d'état vous invite à écrire, et **un clic sur 🎙️** (ou un retour dans
+  le mode) rétablit la dictée automatique.
 - Ce qui **reste à venir** : la relance de l'agent avec ce que vous venez de dire
   (aujourd'hui, une coupure ou une réponse laisse la main à la parole, mais
   l'agent n'est jamais relancé tout seul).

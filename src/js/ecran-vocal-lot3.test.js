@@ -5,8 +5,9 @@
 //   1. Le lissage et la longueur du trait sont PURS et MESURES : montee rapide,
 //      descente lente (aucun sautillement), 8 % au silence, jamais une valeur
 //      inventee.
-//   2. La permission part au PREMIER GESTE, jamais a l'entree du mode, et un
-//      refus ne se represente pas tout seul.
+//   2. La MESURE du niveau s'ouvre a l'ENTREE du mode (correctif « mesure en
+//      premier » : la dictee vient apres elle), une seule fois, et un refus ne
+//      se represente pas tout seul (le bouton « Autoriser le micro » relance) ;
 //   3. Une panne (refus, absence, occupation, peripherique retire) donne un
 //      message CLAIR et laisse le mode entierement utilisable : aucun blocage.
 //   4. Le flux est REELLEMENT arrete a la sortie du mode : pistes `stop()`,
@@ -250,11 +251,16 @@ describe("1. le niveau est MESURE puis lisse (aucun sautillement)", () => {
 });
 
 // ---------------------------------------------------------------------------
-describe("2. permission : au PREMIER GESTE, jamais a l'entree", () => {
-  it("sans geste, on ne demande rien", () => {
+describe("2. permission : la MESURE s'ouvre a l'ENTREE, une seule fois", () => {
+  it("sans entree ni geste, on ne demande rien", () => {
     expect(shouldAskVocalMic({ geste: false })).toBe(false);
     expect(shouldAskVocalMic({})).toBe(false);
     expect(shouldAskVocalMic()).toBe(false);
+    expect(shouldAskVocalMic({ entree: false, geste: false })).toBe(false);
+  });
+
+  it("a l'entree du mode, on demande (une fois)", () => {
+    expect(shouldAskVocalMic({ entree: true, dejaDemande: false })).toBe(true);
   });
 
   it("au premier geste, on demande une fois", () => {
@@ -262,38 +268,38 @@ describe("2. permission : au PREMIER GESTE, jamais a l'entree", () => {
   });
 
   it("un refus ne se represente pas tout seul", () => {
+    expect(shouldAskVocalMic({ entree: true, dejaDemande: true })).toBe(false);
     expect(shouldAskVocalMic({ geste: true, dejaDemande: true })).toBe(false);
   });
 
   it("un micro deja actif n'est pas redemande", () => {
+    expect(shouldAskVocalMic({ entree: true, dejaDemande: false, microActif: true })).toBe(false);
     expect(shouldAskVocalMic({ geste: true, dejaDemande: false, microActif: true })).toBe(false);
   });
 
-  it("l'ecran arme l'ecoute des gestes et ne demande RIEN a l'entree", () => {
+  it("l'ecran demande la mesure a l'ENTREE, et ne la demande qu'une fois", () => {
     const entree = corpsFonction(SUPER, "function enterVocal");
-    // Les deux gestes armes...
-    expect(entree).toMatch(/addEventListener\("pointerdown", onVocalFirstGesture\)/);
-    expect(entree).toMatch(/document\.addEventListener\("keydown", onVocalFirstGesture\)/);
-    // ... et AUCUNE demande declenchee par l'entree elle-meme : la seule
-    // apparition de `demander()` est dans le gestionnaire de clic du bouton de
-    // depannage (geste explicite), verifie juste apres.
-    const demandes = (entree.match(/vocalMic\.demander\(\)/g) || []).length;
-    expect(demandes).toBe(1);
-    expect(entree).toMatch(/addEventListener\("click"[\s\S]{0,300}vocalMic\.demander\(\)/);
-    const geste = corpsFonction(SUPER, "function onVocalFirstGesture");
-    expect(geste).toMatch(/shouldAskVocalMic\(/);
-    expect(geste).toMatch(/vocalMic\.demander\(\)/);
+    // Une seule demande a l'entree...
+    expect(entree).toMatch(/requestVocalMeasure\("entree"\)/);
+    expect((entree.match(/requestVocalMeasure\("entree"\)/g) || [])).toHaveLength(1);
+    // ... et AUCUNE demande ecrite a la main dans l'entree : il n'existe qu'UNE
+    // voie (`requestVocalMeasure`), qui porte `shouldAskVocalMic`.
+    expect(entree).not.toContain("vocalMic.demander()");
+    const demande = corpsFonction(SUPER, "function requestVocalMeasure(origine)");
+    expect(demande).toMatch(/shouldAskVocalMic\(/);
+    expect(demande).toContain("vocalMic.demander()");
+    // Plus aucun ecouteur de geste pour le micro : le clic et la touche ne
+    // declenchent plus une seconde voie pour la meme demande.
+    expect(entree).not.toMatch(/onVocalFirstGesture/);
+    expect(SUPER).not.toMatch(/onVocalFirstGesture/);
   });
 
-  it("la touche ecoutee sur le document est retiree a la sortie (aucune fuite)", () => {
-    const sortie = corpsFonction(SUPER, "function exitVocal");
-    expect(sortie).toMatch(/document\.removeEventListener\("keydown", onVocalFirstGesture\)/);
-  });
-
-  it("le bouton de depannage relance la demande sur un geste explicite", () => {
+  it("le bouton de depannage relance la MEME demande, sur un geste explicite", () => {
     const entree = corpsFonction(SUPER, "function enterVocal");
     expect(entree).toMatch(/vocal-mic-fix/);
-    expect(entree).toMatch(/vocalMic\.demander\(\)/);
+    expect(entree).toMatch(/requestVocalMeasure\("geste"\)/);
+    // Le geste leve la garde « deja demandee » : un refus ne condamne pas l'ecran.
+    expect(entree).toMatch(/vocalMicDemande = false;[\s\S]{0,200}requestVocalMeasure\("geste"\)/);
   });
 });
 
@@ -371,8 +377,13 @@ describe("3. une panne de micro ne bloque JAMAIS le mode", () => {
     expect(corps).toMatch(/applyVocalState\(\)/);
     const etat = corpsFonction(SUPER, "function applyVocalState");
     // Le message clair occupe l'unique ligne d'etat, au repos seulement : la
-    // parole et la reflexion gardent la priorite.
-    expect(etat).toMatch(/state === "idle" && vocalMicFerme/);
+    // parole et la reflexion gardent la priorite. (Correctif de revue : la
+    // ligne n'est plus calculee en ligne dans applyVocalState mais par
+    // `vocalStatusLine`, seul ecrivain — meme priorite, meme regle.)
+    expect(etat).toMatch(/const texte = vocalStatusLine\(state\);/);
+    const ligne = corpsFonction(SUPER, "function vocalStatusLine");
+    expect(ligne).toMatch(/if \(state !== "idle"\) return vocalStatusText\(state\);/);
+    expect(ligne).toMatch(/if \(vocalMicFerme\) return vocalMicFerme;/);
     expect(etat).toMatch(/vocal-mic-fix/);
     // La saisie et l'envoi ne dependent d'aucun etat de micro : aucune
     // desactivation n'est posee ici.
@@ -540,14 +551,17 @@ describe("4. le flux est REELLEMENT arrete (pas seulement ignore)", () => {
     expect(faux.journal.stops).toHaveLength(1);
   });
 
-  it("la sortie de l'ecran ferme le micro, et l'entree le prepare sans l'ouvrir", () => {
+  it("la sortie de l'ecran ferme le micro, et l'entree l'ouvre par UNE demande", () => {
     const sortie = corpsFonction(SUPER, "function exitVocal");
     expect(sortie).toMatch(/vocalMic\.fermer\(\)/);
     expect(sortie).toMatch(/vocalMic = null/);
     expect(sortie).toMatch(/vocalMicListening = false/);
     const entree = corpsFonction(SUPER, "function enterVocal");
     expect(entree).toMatch(/createVocalMic\(/);
-    // Rien n'est ouvert a l'entree : `createVocalMic` ne demande rien.
+    // Correctif « mesure en premier » : l'ENTREE demande la mesure (la dictee
+    // vient apres elle). `createVocalMic` lui-meme ne demande toujours RIEN :
+    // c'est l'appelant qui decide du moment.
+    expect(entree).toMatch(/requestVocalMeasure\("entree"\)/);
     expect(MIC).toMatch(/export function createVocalMic/);
     const jusquaDemande = MIC.indexOf("async function demander");
     expect(jusquaDemande).toBeGreaterThan(-1);

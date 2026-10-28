@@ -418,7 +418,14 @@ describe("4. l'ecran : couper passe par la SEULE voie existante (stopReading)", 
 
   it("l'etat « Pilot parle » est la seule source qui arme la garde", () => {
     const corps = corpsFonction(SUPER, "const onVocalReadAloudState");
-    expect(corps).toMatch(/vocalSpeaking = etat === "speaking"/);
+    // Correctif de revue : la comparaison de chaine (`etat === "speaking"`) est
+    // remplacee par la SEULE decision « Pilot parle » du projet, qui couvre la
+    // lecture normale ET ses DEUX replis de voix (local-fallback /
+    // system-fallback). Pendant un repli, l'ancienne ecriture laissait la garde
+    // desarmee (on ne pouvait plus faire taire Pilot) et l'armement de la
+    // dictee croyait au silence. La liste des etats vit dans read-aloud.js.
+    expect(corps).toMatch(/vocalSpeaking = isReadAloudSpeaking\(etat\);/);
+    expect(corps).not.toMatch(/vocalSpeaking = etat === "speaking"/);
     expect(corps).toMatch(/vocalSyncMicSpeaking\(\)/);
     const sync = corpsFonction(SUPER, "function vocalSyncMicSpeaking");
     expect(sync).toMatch(/vocalMic\.setSpeaking\(vocalSpeaking\)/);

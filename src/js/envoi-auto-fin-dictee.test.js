@@ -552,7 +552,10 @@ describe("câblage de super-agent.js : même module, même ordre, un seul envoi"
   const src = lire("super-agent.js");
 
   it("importe le module partagé de décision", () => {
-    expect(src).toContain('import { applyVoiceEnd } from "./voice-auto-send.js";');
+    // Le module peut être importé avec d'autres symboles (super-agent.js importe
+    // aussi `VOICE_END_EMPTY`, qui sert au plafond des sessions vides) : c'est
+    // toujours LE MÊME module, et la décision n'est jamais recopiée.
+    expect(src).toMatch(/import \{[^}]*\bapplyVoiceEnd\b[^}]*\} from "\.\/voice-auto-send\.js";/);
   });
 
   it("la fin d'écoute délègue à applyVoiceEnd et lit le drapeau AVANT de refermer", () => {
@@ -611,7 +614,11 @@ describe("un seul module décide pour les DEUX barres de saisie", () => {
   it("agent-pi.js et super-agent.js importent le MÊME module, sans recopier la décision", () => {
     for (const fichier of ["agent-pi.js", "super-agent.js"]) {
       const src = lire(fichier);
-      expect(src, fichier).toContain('import { applyVoiceEnd } from "./voice-auto-send.js";');
+      // Import nommé du MÊME module (super-agent.js y prend aussi VOICE_END_EMPTY) :
+      // ce qui compte est le module, jamais la liste exacte des symboles.
+      expect(src, fichier).toMatch(
+        /import \{[^}]*\bapplyVoiceEnd\b[^}]*\} from "\.\/voice-auto-send\.js";/,
+      );
       // Aucune copie de la décision dans un appelant.
       expect(src, fichier).not.toContain("export function decideVoiceAutoSend");
     }

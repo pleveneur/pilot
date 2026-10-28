@@ -57,15 +57,24 @@ function corpsFonction(src, entete) {
 
 // ── 1. Les decisions pures ─────────────────────────────────────────────────
 describe("decision : quand la dictee s'arme et quand elle se desarme", () => {
+  // Correctif « mesure en premier » : l'armement automatique exige desormais
+  // DEUX faits etablis, en plus de l'etat de conversation — la MESURE du niveau
+  // est ouverte (`mesureOuverte`) et la sensibilite du projet est connue
+  // (`sensibiliteConnue`). Ces deux drapeaux sont donc passes aux tests qui
+  // attendent un ARMEMENT : sans eux, la decision refuse d'ouvrir, ce qui est
+  // exactement la regle 7b/7c (verifiee dans
+  // `vocal-mesure-en-premier.test.js`).
+  const PRET = { sensibiliteConnue: true, mesureOuverte: true };
+
   it("au repos, la dictee s'ARME toute seule (aucun bouton a toucher)", () => {
-    const d = decideVocalDictation({ modeOuvert: true });
+    const d = decideVocalDictation({ modeOuvert: true, ...PRET });
     expect(d.action).toBe(VOCAL_DICTATION_ARM);
     expect(d.raison).toBe("au-repos");
     expect(d.delai).toBe(VOCAL_ARM_DELAY_MS);
   });
 
   it("apres la lecture d'une reponse, elle se REARME avec une marge plus longue", () => {
-    const d = decideVocalDictation({ modeOuvert: true, apresLecture: true });
+    const d = decideVocalDictation({ modeOuvert: true, apresLecture: true, ...PRET });
     expect(d.action).toBe(VOCAL_DICTATION_ARM);
     expect(d.raison).toBe("apres-lecture");
     expect(d.delai).toBe(VOCAL_ARM_AFTER_READ_MS);
@@ -147,7 +156,8 @@ describe("plan : ce qu'il faut faire, sans rien faire", () => {
   });
 
   it("un armement DEJA programme n'est jamais reprogramme (pas de report sans fin)", () => {
-    const p = planVocalConversation({ modeOuvert: true }, { minuteur: true });
+    const pret = { modeOuvert: true, sensibiliteConnue: true, mesureOuverte: true };
+    const p = planVocalConversation(pret, { minuteur: true });
     expect(p.delai).toBe(0);
     expect(p.raison).toBe("deja-programme");
   });
@@ -157,7 +167,10 @@ describe("plan : ce qu'il faut faire, sans rien faire", () => {
     expect(p.couper).toBe(true);
     expect(p.delai).toBe(0);
     // Meme chose quand le geste de l'utilisateur a ouvert la session.
-    const geste = planVocalConversation({ modeOuvert: true, dicteeOuverte: true }, { minuteur: true });
+    const geste = planVocalConversation(
+      { modeOuvert: true, dicteeOuverte: true, sensibiliteConnue: true, mesureOuverte: true },
+      { minuteur: true },
+    );
     expect(geste.couper).toBe(true);
   });
 

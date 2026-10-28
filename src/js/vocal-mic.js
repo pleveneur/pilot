@@ -14,8 +14,10 @@
 //   - il n'ARRETE rien lui-meme : depuis le lot 4a il SIGNALE seulement qu'une
 //     voix vient de commencer par-dessus la lecture (`onSpeechStart`) ; l'arret
 //     de la lecture reste a l'appelant, par la voie qui existe deja ;
-//   - aucun ecran de reglage et aucune memoire : la demande part au premier
-//     geste dans le mode, jamais a l'entree.
+//   - aucun ecran de reglage et aucune memoire : la demande part a l'ENTREE du
+//     mode (la MESURE ouvre en premier, decision du proprietaire), et le geste
+//     de l'utilisateur n'est plus qu'un declencheur de REPRISE apres un echec.
+//     Un seul chemin de demande, ici : `demander()`.
 //
 // ── LOT 4a : QUE PILOT NE SE COUPE PAS LUI-MEME ──────────────────────────────
 // Le micro entend la voix de Pilot sortir des haut-parleurs. Une detection
@@ -135,15 +137,21 @@ export function planLevel(etats = {}) {
 
 /**
  * Faut-il demander le micro MAINTENANT ? PURE.
- * Trois refus : sans geste de l'utilisateur (jamais a l'entree du mode), si la
- * demande est deja partie (un refus ne se represente pas tout seul : seul le
- * bouton « Autoriser le micro » relance), et si le micro capte deja.
- * @param {{geste?: boolean, dejaDemande?: boolean, microActif?: boolean}} [etats]
+ *
+ * La demande part a l'ENTREE du mode (correctif « mesure en premier ») : la
+ * MESURE du niveau ouvre en premier, la dictee vient apres elle. Le GESTE n'est
+ * plus qu'un second declencheur de la MEME demande (le bouton « Autoriser le
+ * micro », apres un refus) — jamais une seconde demande.
+ *
+ * Trois refus : ni entree ni geste, demande deja partie (un refus ne se
+ * represente pas tout seul : seul le bouton relance), et micro deja ouvert.
+ * @param {{entree?: boolean, geste?: boolean, dejaDemande?: boolean,
+ *   microActif?: boolean}} [etats]
  * @returns {boolean}
  */
 export function shouldAskVocalMic(etats = {}) {
   const e = etats || {};
-  if (e.geste !== true) return false;
+  if (e.entree !== true && e.geste !== true) return false;
   if (e.dejaDemande === true) return false;
   if (e.microActif === true) return false;
   return true;
@@ -590,8 +598,9 @@ export function createVocalMic(options = {}) {
   }
 
   /**
-   * Demande le micro (geste de l'utilisateur requis par l'appelant). Resout
-   * `true` si le micro capte, `false` sinon — ne rejette jamais.
+   * Demande le micro. L'APPELANT decide QUAND (entree du mode, ou geste de
+   * reprise) : ce module ne connait ni le mode ni les gestes. Resout `true` si
+   * le micro capte, `false` sinon — ne rejette jamais.
    * @returns {Promise<boolean>}
    */
   async function demander() {

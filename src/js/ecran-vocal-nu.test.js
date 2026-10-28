@@ -120,9 +120,18 @@ describe("3. la ligne d'etat ne porte jamais la conversation", () => {
   const etat = corpsFonction(SUPER, "function applyVocalState()");
 
   it("elle ne recoit que les trois phrases de l'ecran (ou le micro ferme)", () => {
-    expect(etat).toMatch(
-      /state === "idle" && vocalMicFerme \? vocalMicFerme : vocalStatusText\(state\)/,
+    // Correctif de revue : la ligne est toujours ecrite a UN seul endroit (la fin
+    // de applyVocalState), mais la phrase est choisie par `vocalStatusLine`, qui
+    // garde exactement la meme priorite : etat anime > micro ferme > phrases de
+    // l'ecran. La ligne peut en plus dire « dictee indisponible » au repos, ce
+    // que la decision PURE prevoit deja (`sans-transcription`) : aucun texte de
+    // conversation n'entre ici pour autant.
+    expect(etat).toMatch(/const texte = vocalStatusLine\(state\);/);
+    const ligne = corpsFonction(SUPER, "function vocalStatusLine");
+    expect(ligne).toMatch(
+      /if \(state !== "idle"\) return vocalStatusText\(state\);\s*if \(vocalMicFerme\) return vocalMicFerme;/,
     );
+    expect(ligne).not.toMatch(/messagesEl|lastAssistantRawText|pendingText|agent-message|streaming/i);
   });
 
   it("aucun texte de message n'y est injecte", () => {

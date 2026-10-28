@@ -123,6 +123,38 @@ export const READ_ALOUD_HELP_HINT =
 /** Evenement emis a chaque changement d'etat de lecture (panneau des Parametres). */
 export const READ_ALOUD_STATE_EVENT = "pilot-read-aloud-state";
 
+/**
+ * Etats de lecture pendant lesquels PILOT PARLE vraiment — la voix sort des
+ * haut-parleurs, donc le micro peut l'entendre.
+ *
+ * Il y en a TROIS, et pas un : la lecture normale (`speaking`) et ses DEUX
+ * replis. `local-fallback` est emis quand la voix locale choisie n'est pas
+ * disponible et que le systeme prend le relais ; `system-fallback` quand aucune
+ * voix du systeme ne correspond a la langue demandee. Dans les deux cas Pilot
+ * parle : la duree, le texte et le son sont ceux d'une lecture ordinaire.
+ *
+ * Ce que cette liste corrige : l'ecran Vocal ne regardait que `speaking`
+ * exactement (`etat === "speaking"`). Pendant un repli, il croyait donc au
+ * silence : la dictee s'armait en pleine lecture (le micro transcrivait la voix
+ * de Pilot et la demande repartait toute seule) et la prise de parole ne faisait
+ * plus taire Pilot.
+ */
+export const READ_ALOUD_SPEAKING_STATES = ["speaking", "local-fallback", "system-fallback"];
+
+/**
+ * SEULE decision « Pilot parle » du projet, pour un etat de lecture donne.
+ *
+ * PURE : aucun effet, aucune lecture, aucun DOM — elle traduit seulement l'etat
+ * emis (`READ_ALOUD_STATE_EVENT`) en un booleen. Tout appelant qui a besoin de
+ * savoir si Pilot parle passe par elle (aucune comparaison de chaine ailleurs).
+ *
+ * @param {string} state etat de lecture (`e.detail.state` de l'evenement)
+ * @returns {boolean} vrai si Pilot est en train de parler, replis compris
+ */
+export function isReadAloudSpeaking(state) {
+  return READ_ALOUD_SPEAKING_STATES.indexOf(String(state == null ? "" : state)) !== -1;
+}
+
 /** Message court affiche quand la bulle ne contient rien a lire. */
 const EMPTY_MESSAGE_HINT =
   "Rien a lire : ce message ne contient aucune reponse finale (seulement du travail interne).";

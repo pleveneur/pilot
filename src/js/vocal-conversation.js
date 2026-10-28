@@ -27,9 +27,15 @@
 //   occupe            le moteur est occupé (backendBusy / isStreaming)
 //   dicteeOuverte     une session de dictée est déjà ouverte
 //   arretManuel       l'utilisateur a ARRÊTÉ la dictée lui-même (le geste prime)
+//   sessionsVides     TROP de fins d'écoute sans texte (plafond atteint : la
+//                     dictée ne s'arme plus jusqu'au prochain geste)
 //   erreur            message de la dernière erreur de dictée ("" = aucune)
 //   transcription     la dictée est disponible sur ce poste (false = non)
 //   apresLecture      la lecture vient de FINIR (on réarme avec un peu de marge)
+//   sensibiliteConnue la réponse « ce projet est-il sensible ? » est ARRIVÉE
+//                     (tant qu'elle n'est pas là, rien ne s'ouvre : on attend)
+//   mesureOuverte     la MESURE du niveau (longueur du trait, prise de parole)
+//                     est RÉELLEMENT ouverte — la dictée vient APRÈS elle
 //
 // Vocabulaire de la décision (`decideVocalDictation`) :
 //   action = VOCAL_DICTATION_ARM     la dictée doit être ouverte
@@ -44,9 +50,25 @@
 //   5. déjà ouverte      → on ne l'ouvre pas deux fois (idempotence)
 //   5b. arrêt manuel     → on ne la rouvre pas : un geste explicite prime sur
 //                          l'automatisme (le geste 🎙️ la rouvre pour de bon)
+//   5c. sessions vides   → on ne la rouvre plus toute seule : le moteur a rendu
+//                          la main sans rien transcrire trop de fois de suite
+//                          (le geste 🎙️ ou une nouvelle entrée rétablit)
 //   6. erreur en cours   → désarmée : on ne relaie pas un échec en boucle
 //   7. sans transcription→ désarmée, et la ligne d'état le dit (jamais muet)
+//   7b. sensibilité pas encore connue → désarmée : on ATTEND la réponse au lieu
+//                          de parier sur « projet libre ». La dictée cloud ne
+//                          s'ouvre jamais sur un projet dont on ignore l'état.
+//   7c. mesure du niveau pas ouverte → désarmée : la MESURE ouvre en premier,
+//                          la dictée vient après elle. Une panne de mesure se
+//                          voit donc comme une panne de mesure (phrase du micro,
+//                          bouton « Autoriser le micro »), jamais comme une
+//                          dictée qui marche avec un trait figé.
 //   8. au repos          → ARMÉE, après un court délai (voir ci-dessous)
+//
+// Les règles 5 à 7 passent AVANT 7b/7c : une dictée ouverte par un GESTE
+// explicite n'est pas refermée par une mesure fermée ou une réponse en
+// retard — seule une sécurité (projet sensible) ou un état de conversation
+// (parole, travail, erreur) la referme.
 
 /** Délai avant d'armer au repos : on laisse l'écran se poser (fondu de 0,3 s). */
 export const VOCAL_ARM_DELAY_MS = 350;
@@ -58,6 +80,24 @@ export const VOCAL_ARM_DELAY_MS = 350;
  * vit dans vocal-mic.js et n'est pas touchée) : c'est une marge de silence.
  */
 export const VOCAL_ARM_AFTER_READ_MS = 600;
+
+/**
+ * PLAFOND DES SESSIONS VIDES — nombre de fins d'écoute SANS TEXTE qui suspendent
+ * l'armement automatique de la dictée.
+ *
+ * Le cycle que ce plafond arrête : le moteur de reconnaissance rend la main sans
+ * rien transcrire (`no-speech`), la fin d'écoute réapplique l'état, la dictée se
+ * réarme 350 ms plus tard, et cela sans fin — le micro est rouvert en boucle et
+ * rien ne se passe à l'écran. Trois sessions vides dans une fenêtre courte ne
+ * sont plus un hasard : on cesse d'armer.
+ */
+export const VOCAL_EMPTY_SESSION_LIMIT = 3;
+
+/**
+ * Fenêtre de temps du plafond (ms) : au-delà, une fin d'écoute vide ancienne ne
+ * compte plus (un silence de plusieurs minutes n'est pas une boucle).
+ */
+export const VOCAL_EMPTY_SESSION_WINDOW_MS = 30000;
 
 export const VOCAL_DICTATION_ARM = "armer";
 export const VOCAL_DICTATION_DISARM = "desarmer";
@@ -102,6 +142,11 @@ export function vocalDictationMessage(code) {
     case "no-speech":
       return "";
     case "non-supporte":
+    // Meme phrase pour la RAISON que pour le code du moteur : le poste n'a pas
+    // de reconnaissance vocale (`sans-transcription`, lu par la ligne d'etat),
+    // ou le navigateur l'a refusee (`non-supporte`, lu sur l'erreur). Une panne,
+    // une phrase — jamais deux textes pour la meme chose.
+    case "sans-transcription":
       return VOCAL_MESSAGE_SANS_DICTEE;
     case "not-allowed":
     case "service-not-allowed":
@@ -151,6 +196,12 @@ export function decideVocalDictation(etats = {}) {
   if (e.arretManuel === true) {
     return { action: VOCAL_DICTATION_HOLD, raison: "arret-manuel", delai: 0 };
   }
+  // 5c. PLAFOND DES SESSIONS VIDES : le moteur a rendu la main sans rien
+  // transcrire trop de fois de suite. On ne rouvre plus le micro tout seul ;
+  // un geste de l'utilisateur (🎙️) ou une nouvelle entrée dans le mode rétablit.
+  if (e.sessionsVides === true) {
+    return { action: VOCAL_DICTATION_HOLD, raison: "sessions-vides", delai: 0 };
+  }
   // 6. Une erreur est en cours : aucune relance automatique (le geste 🎙️ la lève).
   if (typeof e.erreur === "string" && e.erreur !== "") {
     return { action: VOCAL_DICTATION_DISARM, raison: "erreur", delai: 0 };
@@ -159,6 +210,21 @@ export function decideVocalDictation(etats = {}) {
   if (e.transcription === false) {
     return { action: VOCAL_DICTATION_DISARM, raison: "sans-transcription", delai: 0 };
   }
+  // 7b. SENSIBILITÉ PAS ENCORE CONNUE : on attend la réponse (quelques
+  // millisecondes) au lieu d'ouvrir une dictée CLOUD sur un projet dont on
+  // ignore s'il est 🔒. La réponse arrivée, l'état est réappliqué et l'armement
+  // se fait normalement : rien n'est perdu, rien n'est demandé deux fois.
+  if (e.sensibiliteConnue !== true) {
+    return { action: VOCAL_DICTATION_DISARM, raison: "sensibilite-inconnue", delai: 0 };
+  }
+  // 7c. MESURE DU NIVEAU PAS OUVERTE : elle ouvre en PREMIER (décision du
+  // propriétaire), la dictée vient APRÈS elle. Tant qu'elle n'est pas ouverte,
+  // aucune dictée ne s'arme : l'écran ne peut pas promettre l'écoute quand il
+  // ne mesure rien, et une panne de mesure ne peut pas se déguiser en dictée
+  // qui fonctionne.
+  if (e.mesureOuverte !== true) {
+    return { action: VOCAL_DICTATION_DISARM, raison: "mesure-fermee", delai: 0 };
+  }
   // 8. Repos : on arme, avec la marge qui convient au moment.
   const apresLecture = e.apresLecture === true;
   return {
@@ -166,6 +232,32 @@ export function decideVocalDictation(etats = {}) {
     raison: apresLecture ? "apres-lecture" : "au-repos",
     delai: apresLecture ? VOCAL_ARM_AFTER_READ_MS : VOCAL_ARM_DELAY_MS,
   };
+}
+
+/**
+ * Enregistre une fin d'écoute VIDE et dit si le plafond est atteint.
+ *
+ * PURE : aucun état interne, aucune horloge lue ici (l'instant est un
+ * paramètre), aucun effet. L'appelant garde la liste rendue et la repose au
+ * prochain appel.
+ *
+ * Une fin d'écoute est VIDE quand le moteur de reconnaissance a rendu la main
+ * sans rien transcrire (`VOICE_END_EMPTY` de voice-auto-send.js) : une erreur,
+ * un arrêt manuel ou une reprise en main de l'utilisateur ne comptent pas.
+ *
+ * @param {number[]} [sessions] instants (ms) des fins d'écoute vides déjà vues
+ * @param {number} [maintenant] instant courant (ms)
+ * @returns {{sessions: number[], suspendu: boolean}} historique borné à la
+ *   fenêtre (`VOCAL_EMPTY_SESSION_WINDOW_MS`), et décision du plafond
+ */
+export function noteEmptyVocalSession(sessions = [], maintenant = 0) {
+  const now = Number.isFinite(maintenant) ? maintenant : 0;
+  const fenetre = VOCAL_EMPTY_SESSION_WINDOW_MS;
+  const gardees = (Array.isArray(sessions) ? sessions : []).filter(
+    (t) => Number.isFinite(t) && t <= now && now - t < fenetre,
+  );
+  gardees.push(now);
+  return { sessions: gardees, suspendu: gardees.length >= VOCAL_EMPTY_SESSION_LIMIT };
 }
 
 /**
