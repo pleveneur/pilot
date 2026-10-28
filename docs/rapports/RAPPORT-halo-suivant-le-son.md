@@ -259,11 +259,12 @@ ligne d'etat, les trois modes, la barre de saisie sont ceux de `400be3e`.
 
 ---
 
-## 7. Tests adaptes (nommes) et test ajoute
+## 7. Tests adaptes (nommes) et tests ajoutes
 
 Tests **ajoutes** :
 
-- `src/js/vocal-enveloppe-aigu.test.js` (31 tests) — aigu vs grave, silence -> 0,
+- `src/js/vocal-enveloppe-aigu.test.js` (**33** tests : 31 le 12/11, **+2 a la
+  cloture** pour le repli de la lueur, voir §10.3) — aigu vs grave, silence -> 0,
   monotonie, bornes de la bande selon le taux, lissage montee/retombee, extension
   bornee a 32 px, pas de pulsation au repos, non-duplication avec
   `.vocal-spectrum-live` (decision + ordre CSS), mouvement reduit fixe et
@@ -327,6 +328,9 @@ PASS (4087) FAIL (0)
 - **+31** pour `vocal-enveloppe-aigu.test.js` et **+1** pour un test scinde en
   deux (commit `87330ae`) = **4 066** ;
 - **+21** pour `vocal-enveloppe-rythme.test.js` (cette session) = **4 087**.
+- **+2** a la cloture (repli de la lueur, §10.3) = **4 089**, recompte sur
+  l'arbre final (§10.2 : sortie brute dans
+  `docs/rapports/sorties/vitest-halo-enveloppe-20261028-final.txt`).
 - Aucun test supprime sans remplacement ; **aucun fichier `.rs`** touche
   (`git diff --name-only | grep -c '\.rs'` -> **0**).
 
@@ -421,3 +425,120 @@ Restauration : hash **identique** (`9b8c6d4f...de2e`), `git diff` **identique**
   aucune API ne donne cette information.
 - **Le cas d'un texte lu tres long** : le metre suit `positionMs` sans borne
   duree cote code ; aucun test au-dela de quelques phrases.
+
+---
+
+## 10. Cloture et livraison (session de cloture)
+
+### 10.1 Ce que la consigne annoncait, ce que le disque montrait
+
+La consigne de cloture annoncait « le commit `87330ae` est en place, mais des
+modifications NON commitees subsistent sur le dessus : `vocal-enveloppe-aigu.js`
+(+374 lignes), `super-agent.js`, `read-aloud.js`, `style.css`,
+`spec_modes_ecran_vocal.md`, `help/overview.md`, `help/handbook.md`, le rapport,
+`AGENTS.md` ». **Ce n'etait plus le cas** : la tete etait `169486f`
+(`fix(vocal): l'enveloppe suit la VOIX de Pilot …`) et il **contenait deja** ces
+neuf fichiers (verifie par `git show --stat 169486f` : `10 files changed,
+1197 insertions(+), 119 deletions(-)`, plus le fichier de test
+`vocal-enveloppe-rythme.test.js`). `git status --porcelain` ne montrait **aucun
+fichier du chantier modifie** avant cette session : il n'y avait donc **rien a
+sauver**, seulement a **verifier** et a **livrer**.
+
+Ce qui restait vraiment ouvert : (a) aucun controle de **fraicheur** des tests
+sur l'arbre final, (b) le **repli de la lueur** n'etait verrouille qu'a moitie,
+(c) le rapport ne disait pas son etat de livraison, (d) les fichiers non suivis a
+la racine.
+
+### 10.2 Controle de fraicheur (sortie brute dans un fichier NEUF)
+
+```
+docs/rapports/sorties/vitest-halo-enveloppe-20261028-final.txt
+# Date : 2026-10-28T17:48:35+04:00
+# Tete git : 169486f (+ fichiers modifies non committes)
+$ npx vitest run
+PASS (4089) FAIL (0)
+```
+
+**4 089** tests verts, **0** echec, **recomptes** : 4 087 (etat committe) + 2
+tests ajoutes par cette session (§10.3). Chiffre **relu dans la sortie**, jamais
+recopie. Le meme fichier existe pour la session precedente (meme format), aucun
+chiffre n'est fige dans un test.
+
+### 10.3 Les quatre preuves demandees, une par une (`fichier:ligne`)
+
+| Exigence | Ou c'est verrouille |
+|---|---|
+| mesure du son : **bande haute** | `src/js/vocal-enveloppe-aigu.test.js:82` (bande > 4 kHz et plafond), `:93` (suit le taux, aucun indice en dur), `:113` (silence -> 0), `:120` (aigu riche -> fort), `:126` (**son grave -> rien** : l'enveloppe ne suit pas le volume) |
+| **rythme de la voix du systeme** | `src/js/vocal-enveloppe-rythme.test.js:96` (mots -> syllabes, ponctuation -> pauses), `:121` (derniere syllabe accentuee), `:149` (deux textes -> deux mouvements), `:159` (une pause est au repos), `:188` (aucun aleatoire), `:225` (arme **seulement** pour la voix du systeme) |
+| **remplacement des sources sans melange** | `vocal-enveloppe-rythme.test.js:200` (la mesure l'emporte, le rythme ne prend la place que sans mesure), `:208` (mouvement reduit ou contour peint : **personne**), `:214` (l'ecran verifie le proprietaire et **tait** l'autre source) + `vocal-enveloppe-aigu.test.js:240` (refus si contour peint) et `:254` (mouvement reduit : aucune valeur) |
+| **repli de la lueur** | voir §10.4 (2 tests ajoutes) + `src/js/vocal-enveloppe-aigu.test.js:247` (sans mesure disponible, rien n'est pose) |
+
+### 10.4 Le repli de la lueur : le trou trouve, et bouche (2 tests)
+
+Manquait ceci : rien ne verifiait que le repli **existe encore dans la feuille de
+style**. Les deux sources refusees, `super-agent.js` ne pose pas
+`.vocal-envelope-live` (`super-agent.js:4307` pose la classe, `:4374` la retire) :
+c'est la regle de base `.pilot-vocal.vocal-state-speaking .vocal-orb::before`
+(`src/css/style.css:11691`) qui reprend la main, avec l'animation
+`vocal-speak-glow` (`src/css/style.css:11930`, opacite plancher **0,80**). Si
+cette regle ou ses images disparaissaient, l'enveloppe serait **eteinte** dans le
+cas le plus courant (voix du systeme sans texte connu). Deux tests ajoutes :
+
+- `src/js/vocal-enveloppe-aigu.test.js:259` — « le REPLI de la lueur existe quand
+  aucune source ne parle » : la regle de base porte bien
+  `animation: vocal-speak-glow 1.6s ease-in-out infinite`, `opacity: 1`, et les
+  images ne descendent pas sous `0.8` ;
+- `src/js/vocal-enveloppe-aigu.test.js:273` — « la regle qui MESURE passe apres
+  celle du repli (elle gagne) » : l'ordre des deux regles est la condition pour
+  que la mesure remplace vraiment l'animation decorative.
+
+**Morsure** (une seule, restauree) : `animation: vocal-speak-glow …` remplace par
+`animation: none` dans la regle de base de `style.css:11691` ->
+
+```
+src/js/vocal-enveloppe-aigu.test.js (33 tests | 1 failed)
+× le REPLI de la lueur existe quand aucune source ne parle
+  AssertionError: expected '.pilot-vocal.vocal-state-speaking .vo…' to match /animation:\s*vocal-speak-glow…/
+```
+
+Restauration depuis une copie, puis verification d'integrite :
+`sha256sum src/css/style.css` **identique** avant et apres
+(`cbe12ae8…693e`, le meme que la reference des morsures de §9.2) ; test cible de
+nouveau vert (`PASS (33) FAIL (0)`).
+
+### 10.5 Aide integree : rejouee, arbre inchange
+
+`npm run build:handbook` -> `46 blocs`, `295 200 octets`, topic `modes-ecran`
+present. `git status --porcelain help/` : **aucune ligne** — le `handbook.md`
+committe etait deja **exactement** ce que produisent les blocs `<!-- HELP:* -->`
+de `help/overview.md` et `spec_modes_ecran_vocal.md` (meme nombre de blocs et
+meme taille que la session precedente). **Rien a committer** de ce cote.
+
+### 10.6 `AGENTS.md` : le diff vient de CE chantier, rien n'a ete ecrase
+
+Une seule ligne modifiee (entree `vocal-enveloppe-aigu.js` de l'arborescence,
+lignes 220-221), et elle appartient bien a ce chantier : le commit `169486f`
+l'a remplacee par la description « UN SEUL afficheur, DEUX sources qui se
+remplacent JAMAIS ensemble (`planSpeechEnvelopeSource` …) … `vocal-speak-glow`
+n'est plus que le repli quand AUCUNE source n'est disponible ». Aucune autre
+entree d'`AGENTS.md` n'a ete touchee, aucune entree d'une autre mission n'a ete
+ecrasee.
+
+### 10.7 Ce qui reste NON SUIVI (ni supprime, ni embarque dans ce commit)
+
+Non suivi **a la racine** (3 fichiers) : `VERIF-git-gds-inchange.md` (audit GDS en
+lecture seule du 25/10, **hors** de ce chantier — conserve tel quel),
+`vocal.md`, `vocal-defauts-visuels.md` (notes du proprietaire). Plus **67**
+fichiers non suivis sous `docs/` (rapports et conceptions d'autres missions :
+MCP, barre de fenetre, presentations, publications 0.4.x -> 0.6.2, Telegram,
+voix, etc.). Ils **ne sont pas** de ce chantier : les embarquer dans un commit
+`fix(vocal)` serait un fourre-tout. **Ils restent donc en place, intacts**, pour
+etre committes par la mission qui les a produits. Aucun n'a ete supprime, modifie
+ni renomme.
+
+### 10.8 Ce qui reste a verifier a l'oeil (inchange)
+
+Aucune ecoute ni observation d'ecran dans cette session (pas de haut-parleurs,
+pas de micro) : le rendu **reel** de l'enveloppe en mode Vocal, voix du systeme
+par defaut, reste **a regarder** dans l'application (§9.4). Tout le reste est
+prouve par les decisions pures et la suite complete.

@@ -24,7 +24,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { sliceSource } from "./source-slice.js";
+import { sliceSource, sliceFrom } from "./source-slice.js";
 import {
   ENVELOPE_RING_PX,
   ENVELOPE_MIN_PX,
@@ -254,6 +254,29 @@ describe("4. un seul afficheur par voix (jamais deux)", () => {
   it("en mouvement reduit, le code ne pose AUCUNE valeur", () => {
     const plan = planSpeechEnvelope({ energy: 1, reduit: true, disponible: true });
     expect(plan.live).toBe(false);
+  });
+
+  it("le REPLI de la lueur existe quand aucune source ne parle", () => {
+    // Ni mesure, ni rythme : `vocalApplyEnvelopeEnergy` ne pose pas
+    // `.vocal-envelope-live`, donc la regle de base de la parole reprend la main
+    // et c'est `vocal-speak-glow` qui fait respirer l'enveloppe. Si cette regle
+    // ou ses images disparaissaient, l'enveloppe serait ETEINTE dans ce cas-la.
+    const repli = bloc(CSS, ".pilot-vocal.vocal-state-speaking .vocal-orb::before");
+    expect(repli).toMatch(/animation:\s*vocal-speak-glow\s+1\.6s\s+ease-in-out\s+infinite/);
+    expect(repli).toMatch(/opacity:\s*1/);
+    // Le repli ne descend pas sous 0,80 d'opacite : la lueur du bord reste vue.
+    const images = sliceFrom(CSS, "@keyframes vocal-speak-glow", 160);
+    expect(images).toMatch(/opacity:\s*0\.8/);
+    expect(images).toMatch(/opacity:\s*1/);
+  });
+
+  it("la regle qui MESURE passe apres celle du repli (elle gagne)", () => {
+    const repli = CSS.indexOf("\n.pilot-vocal.vocal-state-speaking .vocal-orb::before {");
+    const mesure = CSS.indexOf(
+      "\n.pilot-vocal.vocal-envelope-live.vocal-state-speaking .vocal-orb::before {",
+    );
+    expect(repli).toBeGreaterThan(-1);
+    expect(mesure).toBeGreaterThan(repli);
   });
 
   it("le CSS : la regle du contour reste la DERNIERE de la famille", () => {

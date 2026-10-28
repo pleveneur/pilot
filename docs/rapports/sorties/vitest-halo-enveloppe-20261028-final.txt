@@ -1,0 +1,6 @@
+# Sortie brute — npx vitest run (suite complete, worktree final)
+# Date : 2026-10-28T17:48:35+04:00
+# Tete git : 169486f (+ fichiers modifies non committes)
+$ npx vitest run
+PASS (4089) FAIL (0)
+[fin de sortie, code 0]
