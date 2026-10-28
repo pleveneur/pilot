@@ -46,6 +46,13 @@
 //   action = VOCAL_DICTATION_DISARM  elle doit être fermée (si elle est ouverte)
 //   action = VOCAL_DICTATION_HOLD    ne rien faire : elle est déjà ouverte
 //
+// Vocabulaire de la décision du SILENCE (`decideVocalSilenceSend`) :
+//   action = VOCAL_SILENCE_WAIT    un mot vient d'arriver : attendre encore
+//                                  VOCAL_SILENCE_SEND_MS (2 s)
+//   action = VOCAL_SILENCE_CANCEL  annuler le minuteur (rien ne partira)
+//   action = VOCAL_SILENCE_CLOSE   échéance atteinte sans nouveau mot : refermer
+//                                  la dictée — l'envoi reste celui d'aujourd'hui
+//
 // L'ORDRE DES RÈGLES EST LA SPÉCIFICATION (il est testé tel quel) :
 //   1. projet sensible   → jamais de dictée (règle du local-first, inchangée)
 //   2. hors du mode      → aucune dictée n'est armée par cet écran
@@ -110,6 +117,29 @@ export const VOCAL_EMPTY_SESSION_WINDOW_MS = 30000;
 export const VOCAL_DICTATION_ARM = "armer";
 export const VOCAL_DICTATION_DISARM = "desarmer";
 export const VOCAL_DICTATION_HOLD = "rien";
+
+/**
+ * DÉLAI DE SILENCE APRÈS LE DERNIER MOT (ms) — décision du propriétaire :
+ * **deux secondes après le dernier mot récupéré, s'il n'y a pas de nouveau mot,
+ * la demande part.**
+ *
+ * Le défaut que cette valeur corrige : l'envoi n'avait lieu qu'à la FIN que
+ * déclare le moteur de reconnaissance du navigateur, et cette fin peut arriver
+ * plusieurs secondes après le dernier mot (le moteur attend son propre silence,
+ * parfois très long). L'écran ne décidait donc jamais lui-même que la phrase
+ * était terminée : on parlait, le texte s'écrivait, puis on attendait.
+ *
+ * Cette valeur n'est PAS un réglage : elle ne se règle ni ne s'affiche, et il
+ * n'existe aucun autre délai de ce genre dans l'écran.
+ */
+export const VOCAL_SILENCE_SEND_MS = 2000;
+
+/** Attendre encore : le minuteur est (re)programmé à `VOCAL_SILENCE_SEND_MS`. */
+export const VOCAL_SILENCE_WAIT = "attendre";
+/** Ne rien fermer, et annuler le minuteur en vol s'il y en a un. */
+export const VOCAL_SILENCE_CANCEL = "annuler";
+/** Échéance atteinte sans nouveau mot : refermer la dictée (l'envoi suit). */
+export const VOCAL_SILENCE_CLOSE = "fermer";
 
 // ── Messages de la ligne d'état (une phrase, jamais deux) ──────────────────
 // Ils remplacent les messages de la conversation, qui n'est pas affichée dans
@@ -316,4 +346,54 @@ export function planVocalConversation(etats = {}, memoire = {}) {
     return { raison: "deja-programme", desarmer: false, couper: false, delai: 0 };
   }
   return { raison: decision.raison, desarmer: false, couper: false, delai: decision.delai };
+}
+
+/**
+ * Décide ce que le SILENCE APRÈS LE DERNIER MOT doit faire.
+ *
+ * PURE : ne touche à rien, ne connaît ni le DOM, ni le micro, ni le minuteur.
+ * Appelée à DEUX moments, avec le MÊME état :
+ *   - `"mot"`      un texte vient d'être récupéré (provisoire **ou** définitif) :
+ *                  il REPOUSSE l'échéance — c'est ainsi qu'on ne coupe jamais
+ *                  quelqu'un qui parle encore ;
+ *   - `"echeance"` le délai est écoulé sans nouveau mot : on peut refermer.
+ *
+ * L'ORDRE DES RÈGLES EST LA SPÉCIFICATION (il est testé tel quel) :
+ *   1. hors du mode          → rien ne part (cet écran n'envoie aucune demande)
+ *   2. Pilot parle           → rien : il ne s'envoie pas une demande par-dessus
+ *   3. Pilot travaille       → rien : le tour en cours prime
+ *   4. dictée refermée       → rien (fin du moteur, erreur, arrêt : déjà traité)
+ *   5. reprise en main       → rien : l'utilisateur a tapé, sa saisie prime
+ *   6. aucun mot récupéré    → rien à envoyer (et rien n'a été écrit)
+ *   7. échéance + des mots   → FERMER la dictée ; l'envoi reste celui
+ *                              d'aujourd'hui (fin d'écoute → envoi automatique)
+ *   8. mot reçu              → attendre `VOCAL_SILENCE_SEND_MS` de plus
+ *
+ * @param {object} [etats] `modeOuvert`, `pilotParle`, `reflechit`, `occupe`,
+ *   `dicteeOuverte`, `repriseMain`, `motEntendu`
+ * @param {"mot"|"echeance"} [moment] d'où vient la question
+ * @returns {{action: string, raison: string, delai: number}}
+ */
+export function decideVocalSilenceSend(etats = {}, moment = "mot") {
+  const e = etats || {};
+  const annuler = (raison) => ({ action: VOCAL_SILENCE_CANCEL, raison, delai: 0 });
+  // 1. Hors du mode Vocal : cet écran n'envoie rien tout seul.
+  if (e.modeOuvert !== true) return annuler("hors-mode");
+  // 2. Pilot lit sa réponse : on ne s'envoie pas une demande par-dessus lui.
+  if (e.pilotParle === true) return annuler("pilot-parle");
+  // 3. Pilot travaille : le tour en cours prime sur l'écoute.
+  if (e.reflechit === true || e.occupe === true) return annuler("tour-en-cours");
+  // 4. La dictée est déjà refermée : il n'y a plus rien à fermer ni à envoyer.
+  if (e.dicteeOuverte !== true) return annuler("dictee-fermee");
+  // 5. Reprise en main : sa saisie prime, rien ne part sans sa validation.
+  if (e.repriseMain === true) return annuler("reprise-main");
+  // 6. Aucun mot récupéré : une dictée muette n'envoie rien.
+  if (e.motEntendu !== true) return annuler("sans-mot");
+  // 7. Échéance atteinte sans nouveau mot : la phrase est terminée, on referme.
+  if (moment === "echeance") {
+    return { action: VOCAL_SILENCE_CLOSE, raison: "silence", delai: 0 };
+  }
+  // 8. Un mot vient d'arriver : il repousse l'échéance (aucune coupure en pleine
+  // phrase). Le minuteur en vol est remplacé — il n'y en a jamais deux.
+  return { action: VOCAL_SILENCE_WAIT, raison: "mot-entendu", delai: VOCAL_SILENCE_SEND_MS };
 }

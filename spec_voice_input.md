@@ -280,6 +280,52 @@ refusée, l'écran le dit (`audio-capture`) et le clavier reste utilisable.
 
 ---
 
+## 5quater. Répondre deux secondes après le dernier mot (écran Vocal)
+
+> **Décision du propriétaire, appliquée telle quelle** : **deux secondes après le
+> dernier mot récupéré, s'il n'y a pas de nouveau mot, la demande part.**
+
+Le défaut corrigé : l'envoi n'avait lieu qu'à la **fin que déclare le moteur de
+reconnaissance** du navigateur. Cette fin arrive quand **lui** décide qu'on a fini
+de parler — parfois plusieurs secondes après le dernier mot. On parlait, le texte
+s'écrivait, puis on attendait sans savoir pourquoi.
+
+- **Le délai est décidé, il n'est plus subi** : `VOCAL_SILENCE_SEND_MS = 2000` et
+  la règle `décideVocalSilenceSend(etats, moment)` vivent dans la **source unique
+  des décisions de l'écran** (`src/js/vocal-conversation.js`, pures). Aucun
+  réglage, aucun bouton, aucun affichage : le délai ne se règle pas.
+- **Pilot par mots, pas à l'horloge** : chaque texte récupéré — **provisoire
+  comme définitif** — **repousse** l'échéance de deux secondes. Un texte
+  **identique** au précédent n'est pas un nouveau mot (sinon un moteur qui répète
+  son résultat intermédiaire repousserait sans fin).
+- **Un seul minuteur à la fois** : celui en vol est remplacé à chaque nouveau mot
+  et **annulé** dès que la dictée se referme, quand Pilot parle ou réfléchit, et
+  aux **trois sorties** du mode (`exitVocal`). Aucun second minuteur de ce genre.
+- **Un seul envoi, celui d'aujourd'hui** : à l'échéance, on **referme** la dictée
+  en demandant au moteur de s'arrêter ; sa fin d'écoute **normale** passe par
+  `applyVoiceEnd` → `send`, comme avant. Aucun second envoi, aucun second moteur,
+  aucune seconde détection de fin de parole.
+- **Jamais de coupure d'une parole** : rien ne part si du texte arrive encore, si
+  Pilot lit ou réfléchit, si la dictée s'est refermée, ou si l'utilisateur a
+  **repris la main** dans la zone (`voiceUserTookOver`). Une dictée **muette**
+  n'envoie rien. Les gardes existantes (projet sensible, micro de mesure, plafond
+  des fins vides, dictée unique) sont **inchangées**.
+- **Ordre des règles** (c'est la spec, il est testé tel quel) : hors mode → Pilot
+  parle → Pilot travaille → dictée refermée → reprise en main → aucun mot →
+  **échéance : refermer** (au moment du mot : attendre deux secondes).
+
+**Prouvé** (`src/js/vocal-repondre-deux-secondes.test.js`, 31 cas) : la valeur
+(2 000 ms, une seule fois dans le module), l'ordre des règles et toutes les
+gardes, le délai respecté et **repoussé** par chaque mot (horloges simulées : rien
+avant 1 999 ms, la demande à 2 000 ms du **dernier** mot), **un seul** minuteur,
+aucun envoi pendant la lecture / la réflexion / après une reprise en main, aucun
+envoi tardif après la fermeture du mode, et le câblage (une seule affectation de
+minuteur, réévaluation à l'échéance, `rec.stop()` réutilisé, un seul
+`applyVoiceEnd`, aucun paramètre ni affichage ajouté). **Non prouvé** : la latence
+réelle du moteur de votre poste (elle n'a plus d'importance pour l'envoi).
+
+---
+
 ## 6. Plan d'implémentation
 
 ### Web remote
@@ -386,7 +432,9 @@ texte à la voix.
 - **Dans l'écran Vocal, aucun bouton à toucher** : parler suffit. La dictée
   s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
   travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
-  ci-dessus. Un appui sur 🎙️ arrête la dictée et elle ne se rouvre pas contre
+  ci-dessus, **deux secondes après votre dernier mot** (chaque nouveau mot
+  repousse ces deux secondes, donc rien ne part tant que vous parlez). Un appui
+  sur 🎙️ arrête la dictée et elle ne se rouvre pas contre
   votre volonté. En quittant le mode Vocal, le micro est coupé. Sur un **projet
   sensible** (dictée cloud), l'écran Vocal ne dicte pas. Si la dictée ne peut pas
   démarrer (micro refusé, occupé, réseau absent), la phrase s'affiche **dans la

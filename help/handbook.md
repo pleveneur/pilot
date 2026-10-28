@@ -516,6 +516,13 @@ En mode **Vocal** :
   seul : **un clic sur 🎙️** la rétablit. Comptent comme « rien transcrit » les
   fins **vides** de la dictée, y compris celles où le moteur s'arrête **sans rien
   dire** — c'est ce qui empêche le micro de se rouvrir sans limite.
+- **La demande part deux secondes après votre dernier mot.** Pilot n'attend plus
+  que le moteur de reconnaissance veuille bien se taire : **deux secondes après
+  le dernier mot entendu**, s'il n'y en a pas de nouveau, la demande part. Tant
+  que vous parlez, rien ne part — **chaque nouveau mot repousse ces deux
+  secondes** —, et rien ne part non plus pendant que Pilot lit sa réponse ou
+  travaille, ni si vous avez repris la main pour écrire dans la zone. Ce délai
+  n'est pas réglable : il n'y a ni réglage, ni bouton, ni indicateur.
 
 ---
 
@@ -1225,7 +1232,9 @@ texte à la voix.
 - **Dans l'écran Vocal, aucun bouton à toucher** : parler suffit. La dictée
   s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
   travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
-  ci-dessus. Un appui sur 🎙️ arrête la dictée et elle ne se rouvre pas contre
+  ci-dessus, **deux secondes après votre dernier mot** (chaque nouveau mot
+  repousse ces deux secondes, donc rien ne part tant que vous parlez). Un appui
+  sur 🎙️ arrête la dictée et elle ne se rouvre pas contre
   votre volonté. En quittant le mode Vocal, le micro est coupé. Sur un **projet
   sensible** (dictée cloud), l'écran Vocal ne dicte pas. Si la dictée ne peut pas
   démarrer (micro refusé, occupé, réseau absent), la phrase s'affiche **dans la

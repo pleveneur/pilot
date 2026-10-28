@@ -55,9 +55,12 @@ import { applyVoiceEnd, isSilentEmptyVoiceEnd } from "./voice-auto-send.js";
 import {
   decideVocalDictation,
   planVocalConversation,
+  decideVocalSilenceSend,
   vocalDictationMessage,
   noteEmptyVocalSession,
   VOCAL_DICTATION_ARM,
+  VOCAL_SILENCE_CLOSE,
+  VOCAL_SILENCE_WAIT,
   VOCAL_MESSAGE_SANS_DICTEE,
   VOCAL_MESSAGE_DICTEE_ECHEC,
   VOCAL_MESSAGE_SENSIBILITE_INCONNUE,
@@ -3363,6 +3366,15 @@ export async function createSuperAgent(container) {
   let vocalDicteeSuspendue = false;
   // Armement programme (un seul a la fois) : jamais deux minuteries en vol.
   let vocalArmTimer = 0;
+  // `vocalSilenceTimer` : UN SEUL minuteur d'envoi sur silence (2 s apres le
+  // dernier mot recupere). Chaque nouveau texte recu le REPLACE, et il est
+  // annule des que la dictee se referme, quand Pilot parle ou reflechit, et aux
+  // trois sorties du mode. Aucun second minuteur de ce genre n'existe.
+  let vocalSilenceTimer = 0;
+  // `vocalMotRecu` : au moins un mot a ete recupere dans la dictee en cours
+  // (provisoire ou definitif). Sans lui, un silence ne fait rien partir : une
+  // dictee muette n'envoie rien. Remis a zero a chaque nouvelle session.
+  let vocalMotRecu = false;
   // Projet marque SENSIBLE (local-first) : la dictee cloud y est interdite,
   // comme dans l'onglet agent pi. Relu a l'entree du mode.
   let vocalProjectSensible = false;
@@ -3589,6 +3601,9 @@ export async function createSuperAgent(container) {
     // Empêche onresult/onend de réécrire le textarea après l'envoi.
     voiceActive = false;
     voiceStopVoulu = true;
+    // La dictée se referme : le minuteur d'envoi sur silence n'a plus lieu
+    // d'être (une demande ne part jamais d'une dictée fermée).
+    clearVocalSilenceTimer();
     if (voiceRec) { try { voiceRec.stop(); } catch (_) {} }
     if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
   }
@@ -3655,11 +3670,19 @@ export async function createSuperAgent(container) {
     rec.continuous = true;
     const preText = inputEl.value;
     let finalText = "";
+    // Dernier texte recupere : un resultat IDENTIQUE au precedent n'est pas un
+    // nouveau mot et ne repousse donc pas l'echeance du silence (sinon un
+    // moteur qui repete son resultat intermediaire repousserait sans fin).
+    let dernierTexte = "";
     // Chaque dictée repart d'une zone « non reprise en main » : le drapeau ne
     // survit jamais à la dictée précédente. Même règle pour l'arrêt demandé et
     // pour l'erreur affichée (les deux se rapportent à la session en cours).
     voiceUserTookOver = false;
     voiceStopVoulu = false;
+    // Aucune demande ne peut partir sur le silence d'une dictee qui n'a encore
+    // rien transcrit : on repart de zero pour CETTE session.
+    vocalMotRecu = false;
+    clearVocalSilenceTimer();
     let erreurAffichee = false;
     const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
     rec.onresult = (e) => {
@@ -3689,6 +3712,13 @@ export async function createSuperAgent(container) {
       const sep = preText && !preText.endsWith(" ") ? " " : "";
       inputEl.value = preText + sep + transcript;
       resizeInput();
+      // ENVOI SUR SILENCE : chaque TEXTE recupere (provisoire ou definitif)
+      // repousse l'echeance de deux secondes. Un texte identique au precedent
+      // n'est pas un nouveau mot : il ne la repousse pas.
+      if (transcript && transcript !== dernierTexte) {
+        dernierTexte = transcript;
+        vocalNoteWord();
+      }
     };
     rec.onerror = (ev) => {
       // Session refermée ICI : la fin d'écoute qui suit (onend) ne doit RIEN
@@ -3715,6 +3745,9 @@ export async function createSuperAgent(container) {
       // distingue une fin NORMALE d'une fin sur erreur / arrêt manuel, et c'est
       // aussi ce qui empêche un second envoi si `onend` arrive deux fois.
       const wasActive = voiceActive;
+      // La dictee est finie : le minuteur d'envoi sur silence est annule (aucune
+      // minuterie orpheline apres une fin d'ecoute, quelle qu'en soit la cause).
+      clearVocalSilenceTimer();
       // Arret DEMANDE par l'application (bouton 🎙️, envoi, sortie du mode) : lu
       // avant le traitement, la fin qui suit ne doit pas etre comptee.
       const arretDemande = voiceStopVoulu;
@@ -4340,6 +4373,101 @@ export async function createSuperAgent(container) {
     vocalArmTimer = 0;
   }
 
+  // ── ENVOI SUR SILENCE : deux secondes apres le dernier mot ────────────────
+  // Le defaut corrige : l'envoi n'avait lieu qu'a la FIN que declare le moteur
+  // de reconnaissance du navigateur, et cette fin peut arriver plusieurs
+  // secondes apres le dernier mot (il attend son propre silence). On parlait,
+  // le texte s'ecrivait, puis on attendait — longtemps.
+  //
+  // Regles tenues ici (aucune n'est decidee ici : la decision est PURE, dans
+  // `vocal-conversation.js`, `decideVocalSilenceSend`) :
+  //   1. chaque TEXTE recu (provisoire ou definitif) repousse l'echeance ;
+  //   2. UN SEUL minuteur a la fois, remplace a chaque nouveau mot et annule des
+  //      que la dictee se referme, quand Pilot parle ou reflechit, et aux trois
+  //      sorties du mode ;
+  //   3. a l'echeance, on REFERME la dictee par la voie qui existe deja (l'arret
+  //      du moteur) : sa fin d'ecoute normale passe par `applyVoiceEnd` -> `send`,
+  //      c'est-a-dire l'ENVOI D'AUJOURD'HUI. Aucun second envoi n'est cree ;
+  //   4. jamais de coupure d'une parole : si du texte arrive encore, rien ne
+  //      part ; si Pilot lit ou reflechit, rien ne part ; si l'utilisateur a
+  //      repris la main dans la zone, rien ne part.
+
+  function clearVocalSilenceTimer() {
+    if (!vocalSilenceTimer) return;
+    clearTimeout(vocalSilenceTimer);
+    vocalSilenceTimer = 0;
+  }
+
+  /** Etat lu par la decision du silence (memes faits que la conversation). */
+  function vocalSilenceState() {
+    const base = vocalConversationState();
+    return {
+      modeOuvert: base.modeOuvert,
+      pilotParle: base.pilotParle,
+      reflechit: base.reflechit,
+      occupe: base.occupe,
+      dicteeOuverte: base.dicteeOuverte,
+      // Reprise en main : l'utilisateur a tape dans la zone pendant l'ecoute.
+      repriseMain: voiceUserTookOver === true,
+      // Au moins un mot recupere dans CETTE dictee : sans lui, rien ne part.
+      motEntendu: vocalMotRecu === true,
+    };
+  }
+
+  /**
+   * Ferme la dictee pour que la demande PARTE — par la voie qui existe deja.
+   *
+   * On n'appelle PAS `stopVoiceInput()` : il referme la session avant l'arret du
+   * moteur, et sa fin d'ecoute ne serait plus une fin normale (rien ne partirait).
+   * On demande donc au moteur de s'arreter : la fin d'ecoute EXISTANTE
+   * (`rec.onend` -> `applyVoiceEnd` -> `send`) referme la session et envoie,
+   * exactement comme aujourd'hui. Aucun second chemin d'envoi.
+   */
+  function vocalCloseForSend() {
+    if (!voiceActive) return;
+    const rec = voiceRec;
+    if (!rec) {
+      stopVoiceInput();
+      return;
+    }
+    try {
+      rec.stop();
+    } catch (_) {
+      // Moteur deja arrete : on referme proprement (aucun peripherique ouvert).
+      stopVoiceInput();
+    }
+  }
+
+  /**
+   * Un TEXTE vient d'etre recupere (provisoire ou definitif) : il repousse
+   * l'echeance. Le minuteur en vol est remplace — il n'y en a jamais deux.
+   */
+  function vocalNoteWord() {
+    vocalMotRecu = true;
+    const decision = decideVocalSilenceSend(vocalSilenceState());
+    clearVocalSilenceTimer();
+    if (decision.action !== VOCAL_SILENCE_WAIT || !decision.delai) return;
+    vocalSilenceTimer = setTimeout(() => {
+      vocalSilenceTimer = 0;
+      // Decision REEVALUEE a l'echeance : l'etat a pu changer pendant l'attente
+      // (Pilot s'est mis a parler, l'utilisateur a repris la main, la dictee
+      // s'est refermee). Rien ne part alors.
+      if (decideVocalSilenceSend(vocalSilenceState(), "echeance").action !== VOCAL_SILENCE_CLOSE) return;
+      vocalCloseForSend();
+    }, decision.delai);
+  }
+
+  /**
+   * Applique la decision du silence quand l'etat de l'ecran change : le minuteur
+   * est ANNULE des que les gardes refusent (Pilot parle ou reflechit, dictee
+   * refermee, reprise en main). Quand les gardes autorisent l'attente, on ne
+   * reprogramme RIEN : seul un nouveau mot repousse l'echeance.
+   */
+  function vocalSyncSilenceSend() {
+    if (decideVocalSilenceSend(vocalSilenceState()).action === VOCAL_SILENCE_WAIT) return;
+    clearVocalSilenceTimer();
+  }
+
   /**
    * Une erreur de dictee doit se VOIR. Dans l'onglet, elle s'affiche dans la
    * conversation ; en mode Vocal, la conversation n'est pas affichee : elle
@@ -4485,6 +4613,9 @@ export async function createSuperAgent(container) {
   function vocalSyncConversation() {
     if (!vocalOverlay) {
       clearVocalArmTimer();
+      // Hors du mode, aucune demande ne part sur un silence : les trois sorties
+      // passent par ici (au moins par `exitVocal`) et par le meme nettoyage.
+      clearVocalSilenceTimer();
       return;
     }
     vocalApplyConversationPlan(
@@ -4493,6 +4624,11 @@ export async function createSuperAgent(container) {
         minuteur: !!vocalArmTimer,
       })
     );
+    // ENVOI SUR SILENCE : meme point d'application, meme instant. Le minuteur est
+    // annule des que les gardes refusent (Pilot parle ou reflechit, dictee
+    // refermee, reprise en main) ; il n'est jamais reprogramme ici — seul un
+    // nouveau mot repousse l'echeance.
+    vocalSyncSilenceSend();
   }
 
   /**
@@ -4662,6 +4798,9 @@ export async function createSuperAgent(container) {
     // reste ouvert derriere l'ecran) et annule tout armement programme. Meme
     // regle que le micro de mesure : on ne vous ecoute pas hors de cet ecran.
     clearVocalArmTimer();
+    // ENVOI SUR SILENCE : la sortie n'envoie rien de tardif — le minuteur part
+    // avec le mode, comme l'armement.
+    clearVocalSilenceTimer();
     if (voiceActive) stopVoiceInput();
     vocalApresLecture = false;
     vocalArretManuel = false;

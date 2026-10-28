@@ -164,7 +164,10 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   projet est marqué avant de l'ouvrir, et repose la question à chaque changement
   de projet.
 - **Parler suffit** : au repos, Pilot **dicte tout seul**. Vous parlez, le texte
-  s'écrit, et **la demande part sans que vous touchiez à rien** — puis il répond,
+  s'écrit, et **la demande part sans que vous touchiez à rien** — **deux secondes
+  après votre dernier mot** (Pilot n'attend plus que le moteur de reconnaissance
+  veuille bien se taire). Tant que vous parlez, rien ne part : chaque nouveau mot
+  repousse ces deux secondes. Puis il répond,
   lit sa réponse, et **se remet à l'écoute** : la conversation continue à la voix.
   Pendant qu'il parle ou qu'il travaille, il **n'écoute pas** (il ne se
   transcrirait pas lui-même). Un appui sur 🎙️ arrête la dictée, et elle ne se

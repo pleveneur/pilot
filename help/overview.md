@@ -508,6 +508,13 @@ En mode **Vocal** :
   seul : **un clic sur 🎙️** la rétablit. Comptent comme « rien transcrit » les
   fins **vides** de la dictée, y compris celles où le moteur s'arrête **sans rien
   dire** — c'est ce qui empêche le micro de se rouvrir sans limite.
+- **La demande part deux secondes après votre dernier mot.** Pilot n'attend plus
+  que le moteur de reconnaissance veuille bien se taire : **deux secondes après
+  le dernier mot entendu**, s'il n'y en a pas de nouveau, la demande part. Tant
+  que vous parlez, rien ne part — **chaque nouveau mot repousse ces deux
+  secondes** —, et rien ne part non plus pendant que Pilot lit sa réponse ou
+  travaille, ni si vous avez repris la main pour écrire dans la zone. Ce délai
+  n'est pas réglable : il n'y a ni réglage, ni bouton, ni indicateur.
 <!-- /HELP:modes-ecran -->
 
 <!-- HELP:lire-reponses -->

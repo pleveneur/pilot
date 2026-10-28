@@ -301,6 +301,8 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
   s'ouvre d'elle-même (après 350 ms) : on parle, le texte s'écrit dans la zone,
   et la fin d'écoute passe par le **chemin d'envoi existant**
   (`applyVoiceEnd` → `send`) — donc **un seul envoi**, jamais deux.
+- **La demande part deux secondes après le dernier mot** (§6bis.1) : Pilot ne
+  dépend plus de la fin que déclare — tardivement — le moteur de reconnaissance.
 - **Elle se désarme pendant que Pilot parle** (on ne se transcrit pas soi-même)
   et **pendant qu'il travaille** (le tour en cours prime). « Pilot parle »
   comprend les **replis de voix** (§6.1) : une réponse lue avec la voix du
@@ -364,6 +366,44 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
   (`startVoiceInput`, extraite de `toggleVoiceInput` : `new SR()` n'existe qu'une
   fois dans le code).
 
+### 6bis.1 Répondre deux secondes après le dernier mot
+
+**Décision du propriétaire, appliquée telle quelle** : *deux secondes après le
+dernier mot récupéré, s'il n'y a pas de nouveau mot, la demande part.*
+
+Le défaut corrigé : l'envoi n'avait lieu qu'à la **fin que déclare le moteur de
+reconnaissance** du navigateur, et cette fin peut arriver **plusieurs secondes
+après le dernier mot** (le moteur attend son propre silence). L'écran ne décidait
+donc jamais lui-même que la phrase était terminée : on parlait, le texte
+s'écrivait, puis on attendait.
+
+- **Le délai est décidé** : `VOCAL_SILENCE_SEND_MS` (2 000 ms) et la règle
+  **pure** `décideVocalSilenceSend(etats, moment)` sont ajoutées à la **source
+  unique des décisions** (`src/js/vocal-conversation.js`). Ni réglage, ni bouton,
+  ni affichage : le délai ne se règle pas et ne se voit pas.
+- **Pilot par mots, pas à l'horloge** : chaque texte récupéré — **provisoire
+  comme définitif** — **repousse** l'échéance. Un texte **identique** au précédent
+  n'est pas un nouveau mot : sinon un moteur qui répète son résultat intermédiaire
+  repousserait sans fin.
+- **Un seul minuteur à la fois** : remplacé à chaque nouveau mot, **annulé** dès
+  que la dictée se referme, quand Pilot **parle** ou **réfléchit**, et aux
+  **trois sorties** du mode. Aucun second minuteur de ce genre n'existe.
+- **Un seul envoi, celui d'aujourd'hui** : à l'échéance, on **referme** la dictée
+  en demandant au moteur de s'arrêter ; sa fin d'écoute **normale** passe par
+  `applyVoiceEnd` → `send`, comme avant. Aucun second envoi, aucun second moteur,
+  aucune seconde détection de fin de parole.
+- **Jamais de coupure d'une parole** : rien ne part si du texte arrive encore, si
+  Pilot **lit** ou **réfléchit**, si la dictée s'est refermée, ou si l'utilisateur
+  a **repris la main** dans la zone. Une dictée **muette** n'envoie rien. Les
+  gardes existantes (projet sensible, mesure d'abord, plafond des fins vides,
+  dictée unique) sont **inchangées**.
+- **Ordre des règles** (c'est la spec, testé tel quel) : hors mode → Pilot parle →
+  Pilot travaille → dictée refermée → reprise en main → aucun mot → **échéance :
+  refermer** (et, au moment du mot, attendre deux secondes).
+- **La phrase qui annonçait l'envoi « à la fin de la dictée » a été corrigée** là
+  où elle était devenue fausse : c'est le **dernier mot + deux secondes** qui
+décide, plus la fin du moteur.
+
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 
 **Ce sont des protections, pas des pannes.** Le choix est explicite : *un silence
@@ -423,7 +463,7 @@ sa hauteur d'origine.
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
-| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), et **l'unique phrase** à afficher pour chaque panne de dictée |
+| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` + `décideVocalSilenceSend`), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur, jamais une erreur affichée, un arrêt demandé ou une reprise en main) |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
@@ -440,7 +480,11 @@ la lecture et le travail, réarmer après la lecture, fermeture aux trois sortie
 un seul envoi, erreurs dans la ligne d'état),
 `vocal-correctifs-revue.test.js` (repli de voix = « Pilot parle », phrase
 « dictée indisponible » affichée, plafond des sessions vides et levée par un
-geste), `vocal-deux-gardes-finales.test.js` (deux défauts non bloquants de la
+geste), `vocal-repondre-deux-secondes.test.js` (délai de **deux secondes après le
+dernier mot** : valeur unique, ordre des règles, report à chaque mot, un seul
+minuteur, aucun envoi pendant la lecture / la réflexion / après une reprise en
+main, aucun envoi tardif après la sortie du mode, `rec.stop()` réutilisé),
+`vocal-deux-gardes-finales.test.js` (deux défauts non bloquants de la
 revue indépendante : **attente bornée** du statut du projet — délai dépassé ⇒
 phrase affichée **et** geste qui fonctionne, jamais « projet libre » supposé —
 et **plafond atteignable** : une fin silencieuse du moteur compte, 3 fins vides
@@ -461,7 +505,10 @@ Est également prouvé pour la **conversation parlée** : la dictée s'arme au r
 et **pas** pendant la parole / le travail / hors du mode / sur un projet sensible,
 elle se réarme après la lecture, elle est **fermée** aux trois sorties, elle ne
 s'ouvre **qu'une fois** (une session, une minuterie), et aucun second moteur de
-transcription ni second envoi n'existe dans le code. Sont prouvés en plus le
+transcription ni second envoi n'existe dans le code. Est prouvé en plus le
+délai de **deux secondes après le dernier mot** : respecté, repoussé par chaque
+nouveau mot, jamais écoulé pendant la lecture ou la réflexion, jamais honoré après
+une reprise en main ou après la sortie du mode. Sont prouvés de même le
 **repli de voix** (un repli compte comme « Pilot parle » : pas d'armement pendant
 la lecture, coupure de nouveau armée), la phrase **« dictée indisponible »**
 affichée par la décision et le **plafond des sessions vides** (trois fins
