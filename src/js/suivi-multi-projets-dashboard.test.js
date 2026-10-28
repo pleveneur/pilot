@@ -268,13 +268,17 @@ describe("sources de données — deux commandes croisées, Rust inchangé", () 
 // ── 5. Onglet Assistant : ce qui a disparu… et ce qui reste ────────────────
 
 describe("onglet Assistant — bouton, panneau, chargeur et crochet retirés", () => {
-  it("la barre d'outils perd le bouton de suivi et garde ses 8 autres boutons", () => {
+  it("la barre d'outils perd le bouton de suivi et le bouton du mode assistant seul", () => {
     const start = SUPER.indexOf("const toolbar = document.createElement");
     const end = SUPER.indexOf("wrapper.appendChild(toolbar)", start);
     const bar = SUPER.slice(start, end);
     expect(bar).not.toContain('data-action="tracking"');
+    // DECISION DU PROPRIETAIRE : le bouton ⛶ (data-action="immersive") faisait
+    // double emploi avec le bouton UNIQUE des trois modes, seule entree du mode
+    // desormais. Le raccourci Ctrl+Shift+A reste l'acces rapide (il appelle
+    // directement enterImmersive, sans passer par un bouton).
+    expect(bar).not.toContain('data-action="immersive"');
     for (const action of [
-      "immersive",
       "abort",
       "new-session",
       "initialize",

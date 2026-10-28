@@ -487,9 +487,11 @@ describe("(g) le mode assistant seul affiche le MEME compteur (aucune copie)", (
 
   it("le mode assistant seul DEPLACE le noeud du mode normal, puis le restitue", () => {
     const entree = corps("function enterImmersive() {", "\n  function exitImmersive() {");
-    // Il prend le noeud EXISTANT (getElementById) et l'insere dans sa barre.
+    // Il prend le noeud EXISTANT (getElementById) et l'insere dans sa barre,
+    // cote DROIT : juste avant le bouton ⚙ (decision du proprietaire :
+    // l'entree « Travail » reste visible en haut a droite du mode).
     expect(entree).toContain('document.getElementById("agent-activity")');
-    expect(entree).toMatch(/insertBefore\(activity, agentsHost\)/);
+    expect(entree).toMatch(/insertBefore\(activity, rightAnchor\)/);
     // Aucune peinture ni aucun calcul propres a ce mode.
     expect(entree).not.toContain("agentTaskCounterText");
     expect(entree).not.toContain("agent-activity-count");

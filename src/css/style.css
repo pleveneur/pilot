@@ -11135,9 +11135,10 @@ body.pilot-loading *::after {
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-1);
 }
-.sa-immersive-back {
-  flex-shrink: 0;
-}
+/* BOUTON RETOUR SUPPRIME (decision du proprietaire) : la barre n'a plus de
+   fleche « Revenir au mode standard ». Sortir se fait par le bouton UNIQUE des
+   trois modes, present dans cette meme barre, ou par Ctrl+Shift+A. La regle
+   `.sa-immersive-back` est donc retiree : plus aucun bouton ne la porte. */
 .sa-immersive-title {
   font-size: var(--font-lg);
   font-weight: var(--fw-semibold);

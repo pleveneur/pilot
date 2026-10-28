@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-27 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-28 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -3518,13 +3518,19 @@ rejouer.
 <!-- /HELP:loop-detection-writes -->
 
 ### Mode « Assistant seul » (A19, maquette ASS_Only_V4)
-- Le bouton **⛶ (maximize-2)** de la barre d'outils de l'onglet 🧭 — ou le
-  **raccourci Ctrl+Shift+A** (Cmd+Shift+A sur macOS, onglet 🧭 ouvert) — bascule
-  en mode **assistant seul** : tout est masqué (sidebar, explorateur, éditeur,
-  onglets, terminal) et seule la discussion de l'Assistant reste visible.
-- **Barre du haut** (maquette V4) : à gauche le bouton **← (retour)** + le titre
-  « **Pilot** » ; à droite **UN SEUL bouton ⚙** qui ouvre les Options
-  de l'Assistant (onglet « Assistant »).
+- **Une seule entree** : le bouton **UNIQUE des trois modes** de la rangée
+  d'onglets (il porte le mode courant et annonce le suivant), ou le
+  **raccourci Ctrl+Shift+A** (Cmd+Shift+A sur macOS, onglet 🧭 ouvert). La barre
+  d'outils de l'onglet 🧭 **n'a plus** de bouton ⛶ : il faisait double emploi.
+  Le mode masque tout (sidebar, explorateur, éditeur, onglets, terminal) et
+  seule la discussion de l'Assistant reste visible.
+- **Barre du haut** (maquette V4) : à gauche le titre « **Pilot** » ; à droite le
+  **résumé des agents**, l'entrée « **Travail** » et **UN SEUL bouton ⚙** qui
+  ouvre les Options de l'Assistant (onglet « Assistant »). Le bouton des modes y
+  est **déplacé** lui aussi, juste après le titre.
+- **Aucun bouton de retour** dans cette barre : on en sort par le **bouton des
+  trois modes** (présent dans la barre) ou par **Ctrl+Shift+A**. **Échap** ne
+  sort pas de ce mode (elle n'en est jamais sortie ; rien n'a été ajouté).
 - **Résumé des agents (point poignée)** : dans cette barre, juste à gauche
   du bouton ⚙, la liste des agents est **repliée par défaut en un petit point
   unique** : le point **respire** (pulsation douce) quand un agent ou l'
@@ -3568,15 +3574,15 @@ rejouer.
   la barre de saisie, et aucun bouton de **synthèse vocale** (🔊) n'y figure. Le
   **suivi du travail** y est en revanche **le même** que dans le mode normal :
   l'entrée « Travail » (point + mot + compteur « en cours / total » + son
-  panneau à trois onglets) est **déplacée** dans la barre du mode, à gauche du
-  résumé des agents — **même élément** (jamais une copie), **même libellé**,
-  **même valeur**, alimentée par le **même calcul**. Le message d'accueil
-  affiche le **nom réel
+  panneau à trois onglets) est **déplacée** dans la barre du mode, **côté
+  droit**, entre le résumé des agents et le ⚙ — **même élément** (jamais une
+  copie), **même libellé**, **même valeur**, alimentée par le **même calcul**.
+  Le message d'accueil affiche le **nom réel
   de l'assistant** (config de l'onglet 🧭), avec repli « Pilot Assistant ».
-- Le bouton **← (retour)** revient à l'interface complète. L'état de la
-  conversation est **préservé** lors des allers-retours (les éléments du chat
-  sont déplacés, jamais recréés). Le **dernier mode choisi est mémorisé** et
-  restauré à la réouverture de l'onglet.
+- **Sortir du mode** : le **bouton des trois modes** (dans la barre) ou
+  **Ctrl+Shift+A**. L'état de la conversation est **préservé** (les éléments du
+  chat sont déplacés, jamais recréés). Le **dernier mode choisi est mémorisé**
+  et restauré à la réouverture de l'onglet.
 - **Identique sur l'accès distant web** : en mode « 🧭 Assistant », le bouton
   **⛶** en haut de l'interface web ouvre le même mode immersif.
 <!-- HELP:super-agent-data-care -->

@@ -231,18 +231,23 @@ describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee sys
   });
 
   it("les deux boutons vises sont les DERNIERS de la barre", () => {
-    // Ordre de la maquette ASS_Only_V4 : retour, titre, point des agents, ⚙.
+    // Ordre de la barre : titre, point des agents, ⚙ — plus AUCUN bouton retour
+    // (decision du proprietaire : on sort par le bouton unique des trois modes
+    // ou par Ctrl+Shift+A). Le test perd donc `sa-immersive-back`, et gagne le
+    // controle que la fleche ne revient pas.
     const js = lire("src/js/super-agent.js");
     const barreJs = sliceSource(js, '<div class="sa-immersive-top">', "\n      </div>", 200);
-    const ordre = ["sa-immersive-back", "sa-immersive-title", "sa-immersive-agents", "sa-immersive-settings"]
+    const ordre = ["sa-immersive-title", "sa-immersive-agents", "sa-immersive-settings"]
       .map((classe) => barreJs.indexOf(classe));
-    expect(ordre.every((i) => i >= 0), "les quatre elements de la barre doivent etre presents").toBe(true);
+    expect(ordre.every((i) => i >= 0), "les trois elements de la barre doivent etre presents").toBe(true);
     expect([...ordre].sort((a, b) => a - b)).toEqual(ordre);
+    expect(barreJs, "aucun bouton de retour dans la barre du mode").not.toContain(
+      "sa-immersive-back",
+    );
+    expect(js, "aucun ecouteur de clic pour un bouton de retour").not.toContain('[data-imm="back"]');
     // LOT 1 « trois modes d'ecran » (RAPPORT-trois-modes-ecran-vocal.md §1.1) :
-    // le bouton UNIQUE des modes entre dans cette barre en 3e position — retour,
-    // titre, MODE, agents, ⚙ — c'est-a-dire AVANT le point des agents, donc
-    // juste apres le titre. Le test GAGNE ce controle, il n'en perd aucun :
-    // l'ordre des quatre elements d'origine reste verifie ci-dessus.
+    // le bouton UNIQUE des modes entre dans cette barre juste apres le titre —
+    // titre, MODE, agents, Travail, ⚙ — c'est-a-dire AVANT le groupe de droite.
     expect(
       (html.match(/id="screen-mode-button"/g) || []).length,
       "un seul et meme noeud pour les trois ecrans (jamais recopie)",
@@ -253,11 +258,10 @@ describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee sys
       "document.body.appendChild(immersiveOverlay);",
       100,
     );
-    expect(insertionMode).toContain("insertBefore(screenModeButton, ancre)");
-    // L'ancre est l'entree « Travail » quand elle a bien ete deplacee : le
-    // bouton passe donc AVANT elle, et le ⚙ reste le dernier enfant.
-    expect(insertionMode).toContain("activity && activity.parentNode === agentsHost.parentNode");
-    expect(insertionMode).not.toContain("settings");
+    // Ancre FIXE : le premier element du groupe de droite (le resume des
+    // agents). L'entree « Travail » a rejoint ce groupe, elle n'est plus
+    // l'ancre : le bouton des modes reste donc juste apres le titre.
+    expect(insertionMode).toContain("insertBefore(screenModeButton, agentsHost)");
     expect(insertionMode).not.toContain("appendChild(screenModeButton)");
     // La place d'origine du bouton est memorisee, donc restituee a la sortie.
     expect(js).toContain("immersiveModeButtonHome");
@@ -266,24 +270,25 @@ describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee sys
   it("le ⚙ reste le DERNIER bouton de la barre apres le deplacement de l'entree Travail", () => {
     // Le bord droit de la barre, c'est son dernier enfant place dans le flux :
     // seul le ⚙ touche donc le bord. Or l'entree « Travail » est DEPLACEE dans
-    // la barre a chaque entree en mode (super-agent.js, enterImmersive). Si
-    // elle etait posee APRES le ⚙, le bord droit serait le compteur et les
-    // deux boutons vises ne seraient plus alignes sur celui des boutons
-    // systeme — sans qu'aucun test ne rougisse. Cet ordre n'existe que dans le
-    // source (aucun DOM ici) : on lit donc l'insertion elle-meme.
+    // la barre a chaque entree en mode (super-agent.js, enterImmersive).
+    // DECISION DU PROPRIETAIRE : elle doit y rester VISIBLE, cote DROIT. Elle
+    // est donc inseree juste AVANT le ⚙ (apres le resume des agents, qui porte
+    // `margin-left: auto`) : elle rejoint le groupe de droite sans prendre le
+    // bord, et le ⚙ reste le dernier enfant.
     const js = lire("src/js/super-agent.js");
     const insertion = sliceSource(
       js,
-      "const agentsHost = immersiveOverlay.querySelector(",
+      "const activity = document.getElementById(\"agent-activity\");",
       "document.body.appendChild(immersiveOverlay);",
       100,
     );
-    expect(insertion).toContain("insertBefore(activity, agentsHost)");
+    expect(insertion).toContain("insertBefore(activity, rightAnchor)");
     // Jamais a la fin de la barre : ni `appendChild`, ni insertion apres le
-    // dernier enfant, ni insertion a cote du ⚙.
+    // dernier enfant.
     expect(insertion).not.toContain("appendChild(activity)");
     expect(insertion).not.toContain("insertBefore(activity, null)");
-    expect(insertion).not.toContain("settings");
+    // La colonne de droite est bien celle du ⚙ : c'est lui l'ancre.
+    expect(insertion).toContain('[data-imm="settings"]');
   });
 
   it("le dernier bouton ne porte aucune marge qui decollerait le bord droit", () => {

@@ -2920,7 +2920,6 @@ export async function createSuperAgent(container) {
   const toolbar = document.createElement("div");
   toolbar.className = "agent-chat-toolbar superagent-toolbar";
   toolbar.innerHTML = `
-    <button class="agent-btn" data-action="immersive" title="Mode assistant seul : tout masquer sauf la discussion (Ctrl+Shift+A)"><i data-lucide="maximize-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="abort" title="Arrêter"><i data-lucide="square" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="new-session" title="Nouvelle session"><i data-lucide="plus" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="initialize" title="Initialiser le suivi du projet actif"><i data-lucide="sparkles" class="icon-sm"></i></button>
@@ -3636,20 +3635,24 @@ export async function createSuperAgent(container) {
   function buildImmersiveOverlay() {
     const ov = document.createElement("div");
     ov.className = "superagent-immersive";
-    // Barre du haut conforme à la maquette ASS_Only_V4 : gauche = bouton
-    // retour (flèche) + titre « Pilot » ; droite = résumé des agents REPLIÉ
-    // par défaut en un petit point unique (respire quand un agent ou
-    // l'assistant travaille, via le store partagé agent-activity.js ; un clic
-    // déploie la liste informative, un second clic replie) + UN SEUL bouton ⚙
-    // qui ouvre les paramètres existants de l'assistant (modale Paramètres,
-    // onglet « Assistant »). Sous la barre : hero (logo Pilot rond dans un
+    // Barre du haut : gauche = titre « Pilot » ; droite = resume des agents
+    // REPLIE par defaut en un petit point unique (respire quand un agent ou
+    // l'assistant travaille, via le store partage agent-activity.js ; un clic
+    // deploie la liste informative, un second clic replie), l'entree
+    // « Travail » DEPLACEE ici (voir enterImmersive) et UN SEUL bouton ⚙
+    // qui ouvre les parametres existants de l'assistant (modale Parametres,
+    // onglet « Assistant »).
+    //
+    // AUCUN bouton de retour : la sortie du mode passe par le bouton UNIQUE
+    // des trois modes (present dans cette barre) ou par Ctrl+Shift+A. Echap ne
+    // sort pas de ce mode et ne l'a jamais fait : rien n'a ete ajoute.
+    // Sous la barre : hero (logo Pilot rond dans un
     // cercle + message d'accueil, comme la maquette). Les suggestions et le disclaimer
     // vivent dans la zone basse (.sa-suggestions / .sa-immersive-disclaimer)
     // — les éléments du chat (messagesEl, inputBar…) sont DÉPLACÉS dans
     // l'overlay, jamais dupliqués.
     ov.innerHTML = `
       <div class="sa-immersive-top">
-        <button class="agent-btn sa-immersive-back" data-imm="back" title="Revenir au mode standard"><i data-lucide="arrow-left" class="icon"></i></button>
         <span class="sa-immersive-title">Pilot</span>
         <div class="sa-immersive-agents" data-imm="agents"></div>
         <button class="agent-btn sa-immersive-settings" data-imm="settings" title="Options de l'assistant"><i data-lucide="settings" class="icon"></i></button>
@@ -3662,7 +3665,6 @@ export async function createSuperAgent(container) {
       <div class="sa-immersive-messages"></div>
       <div class="sa-immersive-input"></div>
     `;
-    ov.querySelector('[data-imm="back"]').addEventListener("click", exitImmersive);
     ov.querySelector('[data-imm="settings"]').addEventListener("click", () => {
       window.dispatchEvent(new CustomEvent("pilot-open-settings", { detail: { tab: "superagent" } }));
     });
@@ -3725,20 +3727,25 @@ export async function createSuperAgent(container) {
     if (immersiveDisclaimer) immInput.appendChild(immersiveDisclaimer);
     // Suivi du travail : l'entree « Travail » (point + mot + compteur
     // « en cours / total » + son panneau a trois onglets) est DEPLACEE dans la
-    // barre du mode, juste a gauche du resume des agents. C'est le MEME noeud
-    // DOM, peint par le MEME code (agent-activity.js) et alimente par la MEME
-    // source (publishSuperMissionsCount) : les deux modes ne peuvent pas
-    // afficher deux nombres differents, et il n'existe aucun second calcul.
+    // barre du mode, cote DROIT : entre le resume des agents et le bouton ⚙
+    // (le resume des agents porte `margin-left: auto`, tout ce qui le suit est
+    // donc pousse a droite). C'est le MEME noeud DOM, peint par le MEME code
+    // (agent-activity.js) et alimente par la MEME source
+    // (publishSuperMissionsCount) : les deux modes ne peuvent pas afficher deux
+    // nombres differents, et il n'existe aucun second calcul. Aucun second
+    // bouton, aucun second panneau, aucun ecouteur de clic duplique : le clic
+    // garde le comportement d'agent-activity.js.
     const activity = document.getElementById("agent-activity");
     const agentsHost = immersiveOverlay.querySelector('[data-imm="agents"]');
-    if (activity && agentsHost && agentsHost.parentNode) {
+    const rightAnchor = immersiveOverlay.querySelector('[data-imm="settings"]');
+    if (activity && rightAnchor && rightAnchor.parentNode) {
       immersiveActivityHome = { parent: activity.parentNode, next: activity.nextSibling };
-      agentsHost.parentNode.insertBefore(activity, agentsHost);
+      rightAnchor.parentNode.insertBefore(activity, rightAnchor);
     }
     // LOT 1 (trois modes d'ecran) : le bouton UNIQUE des modes est DEPLACE ici,
-    // juste apres le titre « Pilot » — donc AVANT l'entree « Travail », qui
-    // reste elle-meme avant le point des agents (ordre : retour, titre, MODE,
-    // Travail, agents, ⚙). Un seul noeud dans tout le document : la rangee
+    // juste apres le titre « Pilot » — donc AVANT le groupe de DROITE (resume
+    // des agents, « Travail », ⚙). Ordre final de la barre : titre, MODE,
+    // agents, Travail, ⚙. Un seul noeud dans tout le document : la rangee
     // d'onglets ne le perd pas, il y revient a la sortie.
     const screenModeButton = document.getElementById(SCREEN_MODE_BUTTON_ID);
     if (screenModeButton && agentsHost && agentsHost.parentNode) {
@@ -3746,9 +3753,9 @@ export async function createSuperAgent(container) {
         parent: screenModeButton.parentNode,
         next: screenModeButton.nextSibling,
       };
-      const ancre =
-        activity && activity.parentNode === agentsHost.parentNode ? activity : agentsHost;
-      agentsHost.parentNode.insertBefore(screenModeButton, ancre);
+      // Ancre FIXE : le premier element du groupe de droite. L'entree
+      // « Travail » n'est plus l'ancre, puisqu'elle a rejoint ce groupe.
+      agentsHost.parentNode.insertBefore(screenModeButton, agentsHost);
     }
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
@@ -4250,9 +4257,10 @@ export async function createSuperAgent(container) {
     const btn = e.target.closest("[data-action]");
     if (!btn) return;
     const action = btn.dataset.action;
-    if (action === "immersive") {
-      enterImmersive();
-    } else if (action === "abort") {
+    // Le mode « Assistant seul » n'a plus de bouton ici (doublon avec le bouton
+    // UNIQUE des trois modes, seule entree du mode) : le raccourci Ctrl+Shift+A
+    // appelle directement enterImmersive et ne depend d'aucun bouton.
+    if (action === "abort") {
       // Arrêt manuel de l'assistant : le flux peut s'interrompre sans jamais
       // signaler son repos. On remet le lecteur de son différé à zéro pour que
       // la surface « superagent » restée active ne retarde plus de 12 s le son

@@ -54,6 +54,14 @@ et fermable.
   fait **ouvrir l'onglet 🧭 Assistant** avant d'être rejoué — sans cela le bouton
   annoncerait un écran qui n'existe pas. Fermer puis rouvrir cet onglet restitue le
   mode mémorisé.
+- **Entrer et sortir** : le mode « Assistant seul » n'a **qu'une seule entrée** —
+  ce bouton, ou le raccourci **Ctrl+Shift+A** (`Cmd+Shift+A` sur macOS, onglet 🧭
+  ouvert). Il n'y a **plus** de bouton ⛶ dans la barre d'outils de l'onglet 🧭, et
+  la barre du plein écran n'a **plus** de flèche « retour ». On en sort par le
+  **même bouton de mode** (il affiche le mode courant et annonce le suivant),
+  par **Ctrl+Shift+A**, ou en fermant l'onglet 🧭. **Échap** ne sort **pas** du
+  mode « Assistant seul » (elle n'en est jamais sortie ; rien n'a été ajouté) :
+  elle ne sert qu'à quitter l'écran **Vocal**, et à fermer une modale ouverte.
 - **Aucun écran de réglage** n'a été créé pour cela : le choix du mode est un geste
   d'écran, pas une préférence à configurer.
 

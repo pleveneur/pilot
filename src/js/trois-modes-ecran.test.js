@@ -205,7 +205,11 @@ describe("3. un seul bouton, un seul noeud dans tout le document (§1.1)", () =>
     expect(superAgent).not.toMatch(/id\s*=\s*["']screen-mode-button["']/);
     expect(superAgent).toContain("getElementById(SCREEN_MODE_BUTTON_ID)");
     // Deplacement puis restitution : les deux sens existent.
-    expect(superAgent).toContain("insertBefore(screenModeButton, ancre)");
+    // Ancre du deplacement : le premier element du groupe de DROITE de la barre
+    // (le resume des agents). L'entree « Travail » n'est plus l'ancre : depuis
+    // la decision du proprietaire, elle a rejoint ce groupe de droite.
+    expect(superAgent).toContain("insertBefore(screenModeButton, agentsHost)");
+    expect(superAgent).not.toContain("insertBefore(screenModeButton, ancre)");
     expect(superAgent).toContain("immersiveModeButtonHome");
   });
 
