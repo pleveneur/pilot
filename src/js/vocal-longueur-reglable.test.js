@@ -6,8 +6,9 @@
 //      `detaillees`), chacun avec un libellé français, et un SEUL juge de ce
 //      qu'une valeur vaut (`normalizeVocalBrevityLevel`) : valeur inconnue,
 //      vide, nulle ou de casse différente ⇒ « courtes ».
-//   2. Le DÉFAUT est « courtes » et produit EXACTEMENT la consigne historique
-//      (mot pour mot) : sans réglage, le comportement ne change pas.
+//   2. Le DÉFAUT est « courtes » et demande DEUX phrases exactement (longueurs
+//      arrêtées par le propriétaire : très courte = UNE phrase, courtes = DEUX
+//      phrases, moyenne = QUATRE à SIX, détaillées = réponse développée).
 //   3. Les CINQ invariants sont vrais pour LES QUATRE niveaux (test paramétré) :
 //      (a) une demande de développement passe AVANT le niveau choisi ;
 //      (b) une panne / un refus / une erreur / une demande de confirmation sont
@@ -67,15 +68,15 @@ function corpsFonction(src, entete) {
 }
 
 /**
- * La consigne HISTORIQUE, recopiee ici MOT POUR MOT : c'est le comportement
- * qui ne doit pas changer d'un caractere quand rien n'est regle.
+ * La consigne du niveau PAR DEFAUT (« courtes » : DEUX phrases), recopiee ici
+ * MOT POUR MOT : c'est ce qui part quand aucun niveau n'est transmis.
  */
-const CONSIGNE_HISTORIQUE = [
+const CONSIGNE_DEFAUT = [
   "## Mode vocal — parler court",
   "Cette demande vient de l'écran Vocal de Pilot : la conversation n'y est pas affichée et ta réponse va être LUE À VOIX HAUTE.",
-  "Règle de conversation parlée : réponds en DEUX OU TROIS PHRASES AU PLUS, comme à l'oral. Pas de listes, pas de titres, pas de tableaux, pas de noms de fichiers, pas de code. Va droit à ce qui est utile à dire à voix haute : ce que tu as fait, ce que ça donne, ce qu'il faut décider.",
+  "Règle de conversation parlée : réponds en DEUX phrases, exactement deux, pas trois — comme à l'oral. Pas de listes, pas de titres, pas de tableaux, pas de noms de fichiers, pas de code. Va droit à ce qui est utile à dire à voix haute : ce que tu as fait, ce que ça donne, ce qu'il faut décider.",
   "Si l'utilisateur demande explicitement de développer (« détaille », « explique », « pourquoi », « comment »), alors développe : donne le détail demandé, en restant compréhensible à l'oreille (des phrases, jamais de tableau ni de code).",
-  "Exception qui passe AVANT la brièveté : une panne, un refus, une erreur (outil, micro, agent) ou une demande de confirmation se disent ENTIÈREMENT — tout ce qu'il faut pour comprendre et agir, même si c'est plus long que trois phrases. Ne cache jamais une information utile pour rester court.",
+  "Exception qui passe AVANT la brièveté : une panne, un refus, une erreur (outil, micro, agent) ou une demande de confirmation se disent ENTIÈREMENT — tout ce qu'il faut pour comprendre et agir, même si c'est plus long que deux phrases. Ne cache jamais une information utile pour rester court.",
 ].join("\n");
 
 /** Les quatre niveaux, un par cas du test parametre. */
@@ -104,24 +105,24 @@ describe("les quatre niveaux de longueur", () => {
   });
 });
 
-// ── 2. Le defaut : « courtes », consigne historique mot pour mot ──────────
-describe("le defaut ne change rien", () => {
+// ── 2. Le defaut : « courtes », soit DEUX phrases ────────────────────────
+describe("le defaut : « courtes » dit DEUX phrases", () => {
   it("le niveau par defaut est « courtes »", () => {
     expect(VOCAL_BREVITY_DEFAULT_LEVEL).toBe("courtes");
   });
 
-  it("la consigne par defaut est EXACTEMENT la consigne historique", () => {
-    expect(VOCAL_BREVITY_INSTRUCTION).toBe(CONSIGNE_HISTORIQUE);
-    expect(vocalBrevityInstruction(VOCAL_BREVITY_DEFAULT_LEVEL)).toBe(CONSIGNE_HISTORIQUE);
+  it("la consigne par defaut est EXACTEMENT la consigne « deux phrases »", () => {
+    expect(VOCAL_BREVITY_INSTRUCTION).toBe(CONSIGNE_DEFAUT);
+    expect(vocalBrevityInstruction(VOCAL_BREVITY_DEFAULT_LEVEL)).toBe(CONSIGNE_DEFAUT);
     // Sans niveau transmis (ou avec un niveau inconnu), c'est elle qui part.
-    expect(vocalBrevityInstruction()).toBe(CONSIGNE_HISTORIQUE);
-    expect(vocalBrevityInstruction("inconnu")).toBe(CONSIGNE_HISTORIQUE);
+    expect(vocalBrevityInstruction()).toBe(CONSIGNE_DEFAUT);
+    expect(vocalBrevityInstruction("inconnu")).toBe(CONSIGNE_DEFAUT);
     const demande = "Où en est le projet ?";
     expect(composeVocalPrompt(demande, { modeVocal: true })).toBe(
-      `${demande}\n\n${CONSIGNE_HISTORIQUE}`
+      `${demande}\n\n${CONSIGNE_DEFAUT}`
     );
     expect(composeVocalPrompt(demande, { modeVocal: true, niveau: "inconnu" })).toBe(
-      `${demande}\n\n${CONSIGNE_HISTORIQUE}`
+      `${demande}\n\n${CONSIGNE_DEFAUT}`
     );
   });
 
@@ -160,9 +161,11 @@ describe("le defaut ne change rien", () => {
 
 // ── 3. Le contenu de chaque niveau (le coeur) ─────────────────────────────
 describe("chaque niveau dit sa longueur, en clair", () => {
+  // Les nombres EXACTS arretes par le proprietaire, en toutes lettres dans la
+  // consigne (pour qu'un modele ne les lise pas de travers).
   const ATTENDU = {
-    "tres-courte": /UNE À DEUX PHRASES/,
-    courtes: /DEUX OU TROIS PHRASES AU PLUS/,
+    "tres-courte": /en UNE phrase, une seule, pas deux/,
+    courtes: /en DEUX phrases, exactement deux, pas trois/,
     moyenne: /QUATRE À SIX PHRASES/,
     detaillees: /COMPLÈTE ET DÉVELOPPÉE/,
   };
@@ -172,6 +175,26 @@ describe("chaque niveau dit sa longueur, en clair", () => {
       expect(vocalBrevityInstruction(niveau)).toMatch(ATTENDU[niveau]);
     });
   }
+
+  it("la longueur de chaque niveau est le nombre EXACT retenu", () => {
+    const tresCourte = vocalBrevityInstruction("tres-courte");
+    expect(tresCourte).toMatch(/UNE phrase/);
+    expect(tresCourte).toMatch(/pas deux/);
+    // Aucune autre fourchette ne subsiste pour ce niveau.
+    expect(tresCourte).not.toMatch(/UNE À DEUX/);
+
+    const courtes = vocalBrevityInstruction("courtes");
+    expect(courtes).toMatch(/DEUX phrases/);
+    expect(courtes).toMatch(/pas trois/);
+    expect(courtes).not.toMatch(/TROIS PHRASES/);
+    expect(courtes).not.toMatch(/AU PLUS/);
+
+    const moyenne = vocalBrevityInstruction("moyenne");
+    expect(moyenne).toMatch(/QUATRE À SIX PHRASES/);
+
+    // « detaillees » ne fixe aucun nombre : c'est le niveau sans plafond.
+    expect(vocalBrevityInstruction("detaillees")).not.toMatch(/PHRASES/);
+  });
 
   it("« moyenne » ajoute le pourquoi quand il aide", () => {
     expect(vocalBrevityInstruction("moyenne")).toMatch(/donne le pourquoi quand il aide/);
@@ -219,9 +242,9 @@ describe("ce qui ne change jamais, quel que soit le niveau", () => {
       expect(consigne).toMatch(/compréhensible à l'oreille/);
       // La PRIORITE est dite, en clair, dans chaque niveau.
       if (niveau === VOCAL_BREVITY_DEFAULT_LEVEL) {
-        // Le niveau par defaut garde sa formulation historique (mot pour mot) :
-        // c'est « alors développe » qui tranche, juste apres la regle de longueur.
-        expect(CONSIGNE_HISTORIQUE).toContain("alors développe");
+        // Le niveau par defaut garde sa formulation d'origine : c'est « alors
+        // développe » qui tranche, juste apres la regle de longueur.
+        expect(CONSIGNE_DEFAUT).toContain("alors développe");
       } else {
         expect(consigne).toMatch(/passe AVANT le niveau de longueur choisi/);
       }
@@ -384,7 +407,7 @@ describe("Parametres → onglet Assistant → section « Mode Vocal »", () => {
     expect(section).toContain('aria-describedby="vocal-brevity-note"');
     expect(section).toContain('id="vocal-brevity-note"');
     expect(section).toMatch(/role="note"/);
-    expect(section).toMatch(/deux ou trois phrases/);
+    expect(section).toMatch(/deux phrases/);
   });
 
   it("aucun libelle recopie en dur : les quatre entrees viennent du module pur", () => {

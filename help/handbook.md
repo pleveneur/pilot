@@ -534,18 +534,18 @@ En mode **Vocal** :
   suite** : une demande déjà en train de partir n'est pas modifiée, c'est la
   suivante qui suit la nouvelle valeur.
 - **Pilot parle court dans ce mode.** Comme la voix est le seul chemin, la
-  réponse est celle d'une **conversation** : **deux ou trois phrases au plus**,
-  sans liste, sans titre, sans nom de fichier, sans code — juste ce qui est
-  utile à entendre. **Demandez le détail** (« détaille », « explique »,
-  « pourquoi », « comment ») et Pilot développe, toujours de façon compréhensible
-  à l'oreille. En revanche, une **panne**, un **refus**, une **erreur** ou une
-  **demande de confirmation** sont toujours dits **en entier**, même si c'est
-  plus long : la brièveté ne cache jamais une information utile. Les autres
-  écrans gardent leurs réponses habituelles.
+  réponse est celle d'une **conversation** : **deux phrases**, sans liste, sans
+  titre, sans nom de fichier, sans code — juste ce qui est utile à entendre.
+  **Demandez le détail** (« détaille », « explique », « pourquoi », « comment »)
+  et Pilot développe, toujours de façon compréhensible à l'oreille. En revanche,
+  une **panne**, un **refus**, une **erreur** ou une **demande de confirmation**
+  sont toujours dits **en entier**, même si c'est plus long : la brièveté ne cache
+  jamais une information utile. Les autres écrans gardent leurs réponses
+  habituelles.
 - **Cette longueur se règle**, à un seul endroit : ⚙️ **Options → onglet
   « Assistant » → section « Mode Vocal »**, sous le réglage du délai, avec quatre
-  choix — **Très courte** (une à deux phrases), **Courtes** (deux ou trois
-  phrases, le choix de départ), **Moyenne** (quatre à six phrases, avec le
+  choix — **Très courte** (une phrase), **Courtes** (deux phrases, le choix de
+  départ), **Moyenne** (quatre à six phrases, avec le
   pourquoi quand il aide) et **Détaillées** (une réponse complète, mais toujours
   dite à l'oreille : des phrases, jamais de tableau, jamais de code, jamais un
   nom de fichier lu à voix haute). Le choix s'applique **tout de suite à la

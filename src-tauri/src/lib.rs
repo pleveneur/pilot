@@ -1010,8 +1010,7 @@ fn default_stale_busy_grace_minutes() -> u32 { 25 }
 fn default_assistant_sound_volume() -> u32 { 100 }
 /// Mode Vocal : délai d'envoi après le dernier mot (2 s, valeur historique).
 fn default_vocal_silence_send_ms() -> u32 { 2000 }
-/// Mode Vocal : longueur des réponses orales (« courtes » = comportement
-/// historique, deux ou trois phrases).
+/// Mode Vocal : longueur des réponses orales (« courtes » = deux phrases).
 fn default_vocal_brevity_level() -> String { "courtes".to_string() }
 fn default_super_agent_name() -> String { "Assistant".to_string() }
 fn default_context_budget() -> u32 { 8000 }

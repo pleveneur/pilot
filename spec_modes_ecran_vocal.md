@@ -480,8 +480,9 @@ Le défaut corrigé : dans l'écran Vocal, Pilot répondait comme dans un chat �
   `src/js/vocal-brevity.js` (`VOCAL_BREVITY_INSTRUCTION`,
   `composeVocalPrompt(texte, { modeVocal })`). Aucun second chemin de prompt
   n'a été créé.
-- **Ce que la consigne demande, en clair** : répondre en **deux ou trois phrases
-  au plus**, comme à l'oral — **pas de listes, pas de titres, pas de tableaux,
+- **Ce que la consigne demande, en clair** : répondre en **deux phrases
+  exactement** (le défaut actuel, voir § 6bis.3 pour les quatre niveaux),
+  comme à l'oral — **pas de listes, pas de titres, pas de tableaux,
   pas de noms de fichiers, pas de code** — et aller droit à ce qui est **utile à
   dire à voix haute**. Si l'utilisateur demande explicitement de développer
   (« détaille », « explique », « pourquoi », « comment »), Pilot développe : le
@@ -489,9 +490,9 @@ Le défaut corrigé : dans l'écran Vocal, Pilot répondait comme dans un chat �
   ni de code).
 - **Les cas de sécurité sont exclus explicitement** : une **panne**, un **refus**,
   une **erreur** (outil, micro, agent) et une **demande de confirmation** restent
-  dits **entièrement**, même si c'est plus long que trois phrases. La consigne
-  place cette exception **avant** la brièveté : jamais une information utile
-  cachée pour rester court.
+  dits **entièrement**, même si c'est plus long que le nombre de phrases du
+  niveau choisi. La consigne place cette exception **avant** la brièveté : jamais
+  une information utile cachée pour rester court.
 - **Aucune troncature, jamais** : la brièveté vient de la **consigne**. Rien n'est
   coupé après coup (aucune limite de caractères, aucune `slice`), et la demande de
   l'utilisateur reste **mot pour mot** en tête du message envoyé : une réponse
@@ -509,24 +510,30 @@ Le défaut corrigé : dans l'écran Vocal, Pilot répondait comme dans un chat �
 
 ### 6bis.3 La longueur des réponses orales se règle (quatre niveaux)
 
-**Décision du propriétaire** : la longueur, figée à « deux ou trois phrases »,
-se règle désormais. **Quatre niveaux**, une clé stable par niveau, **un seul
-juge** de ce qu'une valeur vaut.
+**Décision du propriétaire** : la longueur, longtemps figée, se règle
+**Quatre niveaux**, une clé stable par niveau, **un seul juge** de ce qu'une
+valeur vaut. **Les longueurs exactes ont été arrêtées par le propriétaire** et
+remplacent les fourchettes précédentes : **une phrase**, **deux phrases**,
+**quatre à six phrases**, réponse développée.
 
 | Clé (`vocal_brevity_level`) | Libellé à l'écran | Ce que Pilot dit |
 |---|---|---|
-| `tres-courte` | Très courte | une à deux phrases, l'essentiel seulement |
-| **`courtes`** (défaut) | Courtes | **deux ou trois phrases** — la consigne historique, **mot pour mot** |
-| `moyenne` | Moyenne | quatre à six phrases, avec le pourquoi quand il aide |
+| `tres-courte` | Très courte | **une phrase**, une seule, pas deux — l'essentiel seulement |
+| **`courtes`** (défaut) | Courtes | **deux phrases**, exactement deux, pas trois |
+| `moyenne` | Moyenne | **quatre à six phrases**, avec le pourquoi quand il aide |
 | `detaillees` | Détaillées | réponse complète et développée, mais toujours dite à l'oreille : des phrases, jamais de tableau, jamais de code, jamais un nom de fichier lu à voix haute |
+
+Les nombres sont écrits **en toutes lettres et répétés** dans la consigne
+(« en UNE phrase, une seule, pas deux » ; « en DEUX phrases, exactement deux,
+pas trois ») pour qu'un modèle ne puisse pas les lire de travers.
 
 - **Source unique** : `src/js/vocal-brevity.js`. `VOCAL_BREVITY_LEVELS` (les
   quatre clés), `VOCAL_BREVITY_DEFAULT_LEVEL = "courtes"`,
   `normalizeVocalBrevityLevel()` (**seul** juge : valeur inconnue, vide, `null`,
   casse différente ⇒ défaut), `vocalBrevityLabel()` (**seul** libellé),
   `vocalBrevityInstruction(niveau)` (la consigne d'un niveau).
-  `VOCAL_BREVITY_INSTRUCTION` reste la consigne du niveau **par défaut** : c'est
-  exactement celle d'avant le réglage.
+  `VOCAL_BREVITY_INSTRUCTION` est la consigne du niveau **par défaut**
+  (« courtes » : deux phrases exactement).
 - **La consigne est construite à l'envoi**, par le seul `composeVocalPrompt(text,
   { modeVocal, niveau })` (appelé une seule fois, dans `send()` de
   `src/js/super-agent.js`). Le niveau est donc lu **au moment de composer** : un

@@ -9,8 +9,9 @@
 // DEPUIS QUE LA LONGUEUR SE REGLE (Parametres -> onglet « Assistant » -> section
 // « Mode Vocal »), la consigne n'est plus FIGEE : elle est CONSTRUITE pour l'un
 // des QUATRE niveaux ci-dessous.
-// Le niveau par defaut est « courtes » et reproduit MOT POUR MOT la consigne
-// historique : sans reglage, rien ne change dans le comportement.
+// Le niveau par defaut est « courtes », soit DEUX phrases exactement (longueurs
+// arretees par le proprietaire le 2026-10-27 : la reponse par defaut est plus
+// stricte qu'avant — deux phrases, pas trois).
 //
 // CE QUI VIT ICI, ET RIEN QU'ICI :
 //   - `VOCAL_BREVITY_LEVELS` / `VOCAL_BREVITY_DEFAULT_LEVEL` : les quatre cles
@@ -19,8 +20,8 @@
 //     (inconnue, vide, nulle, casse differente -> niveau par defaut) ;
 //   - `vocalBrevityLabel(value)` : SEUL libelle francais d'un niveau ;
 //   - `vocalBrevityInstruction(niveau)` : la consigne exacte d'un niveau ;
-//   - `VOCAL_BREVITY_INSTRUCTION` : la consigne du niveau par defaut (identique
-//     a la consigne historique, mot pour mot) ;
+//   - `VOCAL_BREVITY_INSTRUCTION` : la consigne du niveau par defaut (« courtes »,
+//     DEUX phrases) ;
 //   - `composeVocalPrompt(texte, { modeVocal, niveau })` : le SEUL assemblage
 //     « demande + consigne ». Hors du mode Vocal, le texte est rendu INCHANGE :
 //     le chat ecrit et l'onglet Assistant gardent leurs reponses actuelles.
@@ -50,8 +51,8 @@
 export const VOCAL_BREVITY_LEVELS = ["tres-courte", "courtes", "moyenne", "detaillees"];
 
 /**
- * Niveau par defaut : « courtes », c'est-a-dire le comportement HISTORIQUE
- * (deux ou trois phrases). Une configuration absente ou illisible y retombe.
+ * Niveau par defaut : « courtes », c'est-a-dire DEUX phrases exactement. Une
+ * configuration absente ou illisible y retombe.
  */
 export const VOCAL_BREVITY_DEFAULT_LEVEL = "courtes";
 
@@ -71,13 +72,15 @@ const EN_TETE = [
 
 /**
  * La REGLE DE LONGUEUR de chaque niveau (ce que le niveau demande, en clair).
- * « courtes » est la phrase historique, recopiee mot pour mot.
+ *
+ * Les nombres sont ecrits EN TOUTES LETTRES et repetes (« en UNE phrase, pas
+ * deux ») pour qu'un modele ne puisse pas les lire de travers.
  */
 const REGLES = {
   "tres-courte":
-    "Règle de conversation parlée : réponds en UNE À DEUX PHRASES, l'essentiel seulement, comme à l'oral. Pas de listes, pas de titres, pas de tableaux, pas de noms de fichiers, pas de code. Va droit à ce qui est utile à dire à voix haute : ce que tu as fait, ce que ça donne, ce qu'il faut décider.",
+    "Règle de conversation parlée : réponds en UNE phrase, une seule, pas deux — l'essentiel seulement, comme à l'oral. Pas de listes, pas de titres, pas de tableaux, pas de noms de fichiers, pas de code. Va droit à ce qui est utile à dire à voix haute : ce que tu as fait, ce que ça donne, ce qu'il faut décider.",
   courtes:
-    "Règle de conversation parlée : réponds en DEUX OU TROIS PHRASES AU PLUS, comme à l'oral. Pas de listes, pas de titres, pas de tableaux, pas de noms de fichiers, pas de code. Va droit à ce qui est utile à dire à voix haute : ce que tu as fait, ce que ça donne, ce qu'il faut décider.",
+    "Règle de conversation parlée : réponds en DEUX phrases, exactement deux, pas trois — comme à l'oral. Pas de listes, pas de titres, pas de tableaux, pas de noms de fichiers, pas de code. Va droit à ce qui est utile à dire à voix haute : ce que tu as fait, ce que ça donne, ce qu'il faut décider.",
   moyenne:
     "Règle de conversation parlée : réponds en QUATRE À SIX PHRASES, comme à l'oral, et donne le pourquoi quand il aide à comprendre. Pas de listes, pas de titres, pas de tableaux, pas de noms de fichiers, pas de code. Va droit à ce qui est utile à dire à voix haute : ce que tu as fait, ce que ça donne, ce qu'il faut décider, et pourquoi.",
   detaillees:
@@ -94,9 +97,9 @@ const DEVELOPPEMENT =
 /** La clause d'exception (securite dite en entier) de chaque niveau. */
 const EXCEPTIONS = {
   "tres-courte":
-    "Exception qui passe AVANT la brièveté : une panne, un refus, une erreur (outil, micro, agent) ou une demande de confirmation se disent ENTIÈREMENT — tout ce qu'il faut pour comprendre et agir, même si c'est plus long qu'une ou deux phrases. Ne cache jamais une information utile pour rester court.",
+    "Exception qui passe AVANT la brièveté : une panne, un refus, une erreur (outil, micro, agent) ou une demande de confirmation se disent ENTIÈREMENT — tout ce qu'il faut pour comprendre et agir, même si c'est plus long qu'une phrase. Ne cache jamais une information utile pour rester court.",
   courtes:
-    "Exception qui passe AVANT la brièveté : une panne, un refus, une erreur (outil, micro, agent) ou une demande de confirmation se disent ENTIÈREMENT — tout ce qu'il faut pour comprendre et agir, même si c'est plus long que trois phrases. Ne cache jamais une information utile pour rester court.",
+    "Exception qui passe AVANT la brièveté : une panne, un refus, une erreur (outil, micro, agent) ou une demande de confirmation se disent ENTIÈREMENT — tout ce qu'il faut pour comprendre et agir, même si c'est plus long que deux phrases. Ne cache jamais une information utile pour rester court.",
   moyenne:
     "Exception qui passe AVANT la brièveté : une panne, un refus, une erreur (outil, micro, agent) ou une demande de confirmation se disent ENTIÈREMENT — tout ce qu'il faut pour comprendre et agir, même si c'est plus long que six phrases. Ne cache jamais une information utile pour rester court.",
   detaillees:
@@ -130,9 +133,9 @@ export function vocalBrevityLabel(value) {
  * La consigne de conversation parlée d'UN niveau, ajoutée au message envoyé à
  * l'agent pour une demande faite depuis l'écran Vocal.
  *
- * Le niveau « courtes » rend EXACTEMENT la consigne historique, mot pour mot :
- * sans réglage, le comportement ne change pas. Aucune troncature n'est faite
- * ici : la longueur vient de la consigne, jamais d'une coupe du texte.
+ * Le niveau « courtes » (defaut) demande DEUX phrases exactement. Aucune
+ * troncature n'est faite ici : la longueur vient de la consigne, jamais d'une
+ * coupe du texte.
  *
  * @param {string} [niveau] clé de niveau (normalisée ; défaut « courtes »)
  * @returns {string} la consigne complète, prête à être ajoutée à la demande
@@ -141,7 +144,7 @@ export function vocalBrevityInstruction(niveau) {
   const cle = normalizeVocalBrevityLevel(niveau);
   // Le développement demandé par l'utilisateur passe AVANT le niveau : la
   // priorité est dite en clair pour les niveaux réglés (le niveau par défaut,
-  // lui, garde sa formulation historique, qui dit déjà « alors développe »).
+  // lui, garde la formulation d'origine, qui dit déjà « alors développe »).
   const developpement =
     cle === VOCAL_BREVITY_DEFAULT_LEVEL
       ? DEVELOPPEMENT
@@ -150,8 +153,8 @@ export function vocalBrevityInstruction(niveau) {
 }
 
 /**
- * La consigne du niveau PAR DÉFAUT — exactement celle d'avant le réglage.
- * Conservée comme constante pour que rien d'existant ne change.
+ * La consigne du niveau PAR DÉFAUT (« courtes » : DEUX phrases). Conservée
+ * comme constante : c'est elle qui part quand aucun niveau n'est transmis.
  */
 export const VOCAL_BREVITY_INSTRUCTION = vocalBrevityInstruction(VOCAL_BREVITY_DEFAULT_LEVEL);
 

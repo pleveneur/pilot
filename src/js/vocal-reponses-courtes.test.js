@@ -2,9 +2,10 @@
 //
 // CE QUE CE FICHIER VERROUILLE (et pourquoi) :
 //   1. Le mode Vocal ajoute UNE consigne a la demande envoyee a l'agent :
-//      repondre en deux ou trois phrases au plus, pas de listes, pas de titres,
-//      pas de noms de fichiers, pas de code, aller droit a l'utile a dire a voix
-//      haute — et developper si l'utilisateur le demande explicitement
+//      repondre en DEUX phrases exactement (defaut « courtes », longueur arretee
+//      par le proprietaire), pas de listes, pas de titres, pas de noms de
+//      fichiers, pas de code, aller droit a l'utile a dire a voix haute — et
+//      developper si l'utilisateur le demande explicitement
 //      (« detaille », « explique », « pourquoi », « comment »).
 //   2. La consigne est ajoutee a UN SEUL endroit (le point de composition de la
 //      demande de l'ecran Vocal, `send()` de super-agent.js) et nulle part
@@ -19,7 +20,7 @@
 //      regle depuis le 2026-10-27 (quatre niveaux, « courtes » par defaut) —
 //      voir `vocal-longueur-reglable.test.js`. Ce fichier verifie seulement que
 //      le module de consigne reste PUR (ni DOM, ni configuration, ni etat) et
-//      que le defaut reproduit la consigne historique MOT POUR MOT.
+//      que le defaut demande DEUX phrases exactement.
 //
 // Les commentaires sont en ASCII ; les chaines qui viennent du code sont
 // copiees telles quelles. Les fins de ligne sont normalisees (quality-gate 3.4).
@@ -61,8 +62,12 @@ function modulesApp() {
 
 // ── 1. La consigne : ce qu'elle demande, mot pour mot ─────────────────────
 describe("la consigne de conversation parlee", () => {
-  it("demande deux ou trois phrases au plus", () => {
-    expect(VOCAL_BREVITY_INSTRUCTION).toMatch(/DEUX OU TROIS PHRASES AU PLUS/);
+  it("demande DEUX phrases, le nombre exact retenu", () => {
+    expect(VOCAL_BREVITY_INSTRUCTION).toMatch(/DEUX phrases/);
+    expect(VOCAL_BREVITY_INSTRUCTION).toMatch(/exactement deux, pas trois/);
+    // Aucune ancienne fourchette ne subsiste dans le defaut.
+    expect(VOCAL_BREVITY_INSTRUCTION).not.toMatch(/TROIS PHRASES/);
+    expect(VOCAL_BREVITY_INSTRUCTION).not.toMatch(/AU PLUS/);
   });
 
   it("interdit listes, titres, tableaux, noms de fichiers et code", () => {
@@ -156,9 +161,9 @@ describe("cablage : la consigne n'est ajoutee qu'au point de composition vocal",
     expect(SUPER).not.toContain("export function composeVocalPrompt");
     expect(SUPER).not.toContain("export const VOCAL_BREVITY_INSTRUCTION");
     // Le texte de la consigne n'est ecrit que dans son module.
-    expect(SUPER).not.toContain("DEUX OU TROIS PHRASES AU PLUS");
-    expect(AGENT_PI).not.toContain("DEUX OU TROIS PHRASES AU PLUS");
-    expect(RUST).not.toContain("DEUX OU TROIS PHRASES AU PLUS");
+    expect(SUPER).not.toContain("DEUX phrases, exactement deux");
+    expect(AGENT_PI).not.toContain("DEUX phrases, exactement deux");
+    expect(RUST).not.toContain("DEUX phrases, exactement deux");
     expect(RUST).not.toContain("Mode vocal — parler court");
   });
 
@@ -228,7 +233,7 @@ describe("documentation : la spec et l'aide disent la regle", () => {
   });
 
   it("l'aide embarquee le dit en langage utilisateur (source puis handbook)", () => {
-    expect(HELP).toMatch(/deux ou trois phrases/i);
-    expect(HANDBOOK).toMatch(/deux ou trois phrases/i);
+    expect(HELP).toMatch(/deux phrases/i);
+    expect(HANDBOOK).toMatch(/deux phrases/i);
   });
 });

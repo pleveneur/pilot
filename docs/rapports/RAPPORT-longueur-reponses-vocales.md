@@ -56,10 +56,10 @@ c'est ce que la demande corrige, **sans changer le comportement par défaut**.
 
 **Le contenu des quatre niveaux** (le cœur du travail) :
 
-| Clé | Règle de longueur |
+| Clé | Règle de longueur (longueurs **exactes** retenues — voir § 5 bis) |
 |---|---|
-| `tres-courte` | UNE À DEUX PHRASES, l'essentiel seulement |
-| `courtes` | DEUX OU TROIS PHRASES AU PLUS — **phrase historique, mot pour mot** |
+| `tres-courte` | **UNE phrase**, une seule, pas deux — l'essentiel seulement |
+| `courtes` (défaut) | **DEUX phrases**, exactement deux, pas trois |
 | `moyenne` | QUATRE À SIX PHRASES, avec le pourquoi quand il aide |
 | `detaillees` | réponse COMPLÈTE ET DÉVELOPPÉE, mais toujours **dite à l'oreille** : des phrases, jamais de tableau, jamais de code, jamais un nom de fichier lu à voix haute |
 
@@ -67,7 +67,7 @@ c'est ce que la demande corrige, **sans changer le comportement par défaut**.
 
 | Invariant | Où il est dit |
 |---|---|
-| (a) une demande de développer passe **avant** le niveau | clause de développement, identique dans les quatre consignes ; les niveaux réglés ajoutent la phrase « Cette demande de développement passe AVANT le niveau de longueur choisi. » (le niveau par défaut garde sa formulation historique, où « alors développe » tranche) |
+| (a) une demande de développer passe **avant** le niveau | clause de développement, identique dans les quatre consignes ; les niveaux réglés ajoutent la phrase « Cette demande de développement passe AVANT le niveau de longueur choisi. » (le niveau par défaut garde sa formulation d'origine, où « alors développe » tranche) |
 | (b) panne / refus / erreur / confirmation dits **entièrement** | clause d'exception « Exception qui passe AVANT la brièveté … se disent ENTIÈREMENT », avec la référence de longueur du niveau |
 | (c) **aucune troncature** | le module ne contient **aucune** primitive de coupe (`slice`, `substring`, `substr`), aucun plafond de caractères ; testé sur le source et sur 4 000 répétitions d'un mot |
 | (d) hors mode Vocal, texte **inchangé** | `composeVocalPrompt` rend le texte tel quel quand `modeVocal !== true` |
@@ -184,6 +184,54 @@ le module). **Son intention et tous ses autres cas sont conservés.**
 Vérifiés sans modification par les fichiers voisins : `vocal-delai-envoi-reglable`
 (le curseur du délai est intact), et toute la suite JS + Rust (compteurs réels
 ci-dessous).
+
+---
+
+## 5 bis. Correction — les longueurs exactes, arrêtées par le propriétaire
+
+Après la première livraison, le propriétaire a **fixé les longueurs** et elles
+remplacent les fourchettes initiales. Rien d'autre n'a bougé : mêmes clés, même
+réglage, même interface, même délai d'envoi, même micro, même coupure, même
+cercle, mêmes tests de branchement.
+
+| Clé | Longueur AVANT | Longueur RETENUE (mot pour mot du propriétaire) |
+|---|---|---|
+| `tres-courte` | une à deux phrases | **UNE phrase** (une seule, pas deux) |
+| `courtes` (défaut) | deux ou trois phrases au plus | **DEUX phrases** (exactement deux, pas trois) |
+| `moyenne` | quatre à six phrases | **quatre à six phrases** (inchangé) |
+| `detaillees` | réponse complète et développée | **inchangé** : complète et développée, toujours dite à l'oreille — des phrases, jamais de tableau, jamais de code, jamais un nom de fichier lu à voix haute |
+
+- **Les nombres sont écrits en clair et répétés** dans la consigne, pour qu'un
+  modèle ne les lise pas de travers : « réponds en **UNE phrase, une seule, pas
+  deux** » et « réponds en **DEUX phrases, exactement deux, pas trois** ».
+  La clause d'exception suit le même nombre (« … même si c'est plus long
+  **qu'une phrase** » / « … **que deux phrases** »).
+- **Le défaut change de comportement, et c'est assumé** : « courtes » passe de
+  « deux ou trois phrases au plus » à **exactement deux phrases**. C'est une
+  décision explicite du propriétaire, pas un effet de bord.
+- **Les cinq invariants n'ont pas bougé** : développement demandé **avant** le
+  niveau ; panne / refus / erreur / confirmation dits **entièrement**, même en
+  « très courte » ; **aucune troncature** (le nombre de phrases vient de la
+  consigne, jamais d'une coupe : ni `slice`, ni limite de caractères) ; **hors
+  mode Vocal le texte est inchangé** ; une **demande vide** ne reçoit aucune
+  consigne. Ils restent vérifiés **pour les quatre niveaux** (test paramétré).
+- **Tests** : `vocal-longueur-reglable.test.js` vérifie désormais les nombres
+  **exacts** (UNE phrase / pas deux ; DEUX phrases / pas trois ; QUATRE À SIX ;
+  « détaillées » sans aucun nombre) et l'absence des anciennes fourchettes ;
+  `vocal-reponses-courtes.test.js` vérifie le défaut « deux phrases exactement »
+  et l'aide embarquée.
+- **Documentation corrigée partout où la longueur est écrite** :
+  `spec_modes_ecran_vocal.md` (§ 6bis.2 et tableau du § 6bis.3),
+  `help/overview.md` (bloc `HELP:modes-ecran`, les deux passages), puis
+  `npm run build:handbook` (**46 blocs** régénérés). `spec_read_aloud.md` n'est
+  **pas** concernée : elle ne cite que les quatre libellés, aucune longueur.
+  La phrase de la modale des Paramètres (`index.html`, note et infobulle) dit
+  maintenant « deux phrases » — **texte seul**, aucune structure d'interface
+  touchée.
+- **Fichier de conception non touché** :
+  `docs/architecture-conversation-vocale-interruptible.md` parle d'une **idée**
+  (lire une version courte puis le détail) ; ce n'est pas la consigne du mode
+  Vocal, donc rien à corriger là.
 
 ---
 
