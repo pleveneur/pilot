@@ -436,6 +436,28 @@ describe("6. ce qui ne devait pas changer", () => {
     expect(MIC).not.toMatch(/localStorage|get_config|save_config/);
   });
 
+  it("la coupure vocale n'ajoute aucun reglage ni stockage dans l'ecran", () => {
+    // FERMETURE DE LA FICHE DU 02/10. Le correctif attendu etait un REARMEMENT,
+    // pas un nouveau reglage : l'ecran ne doit rien memoriser (ni config, ni
+    // stockage) pour « ne pas se couper soi-meme ». Un `localStorage` ecrit ici
+    // ferait survivre une decision d'une session a l'autre — et un
+    // `save_config` ferait apparaitre un reglage que personne n'a demande.
+    const etat = corps(
+      "const onVocalReadAloudState = (e) => {",
+      "\n  window.addEventListener(READ_ALOUD_STATE_EVENT",
+      100,
+    );
+    const sync = corps("function vocalSyncMicSpeaking() {", "\n  }", 40);
+    for (const [nom, fragment] of [
+      ["onVocalReadAloudState", etat],
+      ["vocalSyncMicSpeaking", sync],
+    ]) {
+      expect(fragment, `${nom} : aucun reglage, aucun stockage`).not.toMatch(
+        /get_config|save_config|localStorage/,
+      );
+    }
+  });
+
   it("l'arret de LECTURE reste un arret d'ecoute (lot 4a intact)", () => {
     const coupure = corps("function vocalBargeIn(rapport) {", "\n  function enterVocal() {");
     // La lecture s'arrete par la voie existante, sans arreter de travail.

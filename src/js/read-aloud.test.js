@@ -236,13 +236,38 @@ class FakeUtterance {
   }
 }
 
-/** Fausse fenetre porteuse de la synthese vocale. */
-function makeWin(synth) {
-  return {
+/**
+ * Fausse fenetre porteuse de la synthese vocale.
+ *
+ * `events` (OPTIONNEL) : journal des evenements emis par la fenetre
+ * (`dispatchEvent`). Sans tableau, la fenetre n'expose pas `dispatchEvent` et
+ * l'emission d'etat est ignoree — exactement comme avant : les appels existants
+ * `makeWin(synth)` ne changent pas de comportement.
+ */
+function makeWin(synth, events) {
+  const win = {
     speechSynthesis: synth,
     SpeechSynthesisUtterance: FakeUtterance,
     document: { documentElement: { lang: "fr" } },
   };
+  if (Array.isArray(events)) {
+    win.dispatchEvent = (event) => {
+      events.push(event);
+      return true;
+    };
+    win.CustomEvent = class CustomEvent {
+      constructor(type, init) {
+        this.type = type;
+        this.detail = (init && init.detail) || {};
+      }
+    };
+  }
+  return win;
+}
+
+/** Etats emis par la lecture (detail.state des evenements de la fenetre). */
+function etatsEmis(events) {
+  return events.map((e) => (e && e.detail ? e.detail.state : ""));
 }
 
 /** Classe tous les elements sous `el` par nom de classe (inspection d'arbre). */
@@ -450,6 +475,35 @@ describe("createSpeaker — une lecture, des morceaux, un arret net", () => {
     expect(speaker.speaking()).toBe(false);
     finishLast(synth);
     expect(synth.spoken.length).toBe(count);
+  });
+
+  it("une lecture finie puis un arret manuel emettent « ended » puis « stopped »", async () => {
+    // FERMETURE DE LA FICHE DU 02/10. L'ecran Vocal tient son etat « Pilot
+    // parle » de CES SEULS evenements (`READ_ALOUD_STATE_EVENT`, source unique
+    // dans read-aloud.js). Si `ended` ou `stopped` disparaissait, l'ecran
+    // garderait `vocalSpeaking = true`, `setSpeaking(true)` sortirait sans
+    // remise a zero (vocal-mic.js) et la DEUXIEME lecture serait « deja
+    // coupee », en silence — exactement le symptome de la fiche. Aucun test ne
+    // voyait cette regression avant celui-ci.
+    const synth = makeSynth();
+    const events = [];
+    const speaker = createSpeaker(makeWin(synth, events), { lang: "fr-FR" });
+    await speaker.speak("Premier morceau. Second morceau.");
+    playUntilEnd(synth);
+    const etats = etatsEmis(events);
+    expect(etats).toContain("speaking");
+    expect(etats).toContain("ended");
+    // La lecture se TERMINE sur « ended » : l'ecran ne reste pas sur « parle ».
+    expect(etats[etats.length - 1]).toBe("ended");
+
+    // Arret MANUEL, sur un autre locuteur : « stopped » est emis aussi (c'est
+    // le meme chemin d'etat, donc la meme remise a zero cote ecran).
+    const synthArret = makeSynth();
+    const eventsArret = [];
+    const autre = createSpeaker(makeWin(synthArret, eventsArret), { lang: "fr-FR" });
+    await autre.speak("Un. Deux. Trois.");
+    autre.stop();
+    expect(etatsEmis(eventsArret)).toContain("stopped");
   });
 
   it("attend le chargement des voix (sinon la premiere lecture serait muette)", async () => {

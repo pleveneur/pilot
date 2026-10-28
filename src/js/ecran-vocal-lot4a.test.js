@@ -480,6 +480,22 @@ describe("4. l'ecran : couper passe par la SEULE voie existante (stopReading)", 
     expect(sync).toMatch(/vocalMic\.setSpeaking\(vocalSpeaking\)/);
   });
 
+  it("le rearmement n'est pas conditionne par l'etat courant", () => {
+    // FERMETURE DE LA FICHE DU 02/10. La garde du micro etait armee UNIQUEMENT
+    // quand l'etat changeait : une deuxieme lecture qui repart du meme etat
+    // (« speaking » -> « speaking », ou apres une lecture dont l'etat de fin
+    // n'a pas ete vu) la laissait desarmee EN SILENCE. `vocalSyncMicSpeaking()`
+    // est donc appele A CHAQUE evenement d'etat, avant la comparaison, et la
+    // remise a zero (`setSpeaking(false)`) part avec lui.
+    const corps = corpsFonction(SUPER, "const onVocalReadAloudState");
+    expect(corps).toMatch(
+      /vocalSyncMicSpeaking\(\);\s*\n\s*if \(parlait !== vocalSpeaking\) applyVocalState\(\);/,
+    );
+    // La FORME CONDITIONNELLE — le defaut — est interdite : elle remettrait la
+    // garde dans la dependance a un changement d'etat.
+    expect(corps).not.toMatch(/if \([^)]*vocalSpeaking[^)]*\)\s*vocalSyncMicSpeaking/);
+  });
+
   it("la coupure arrete la lecture et remet la saisie en main", () => {
     const corps = corpsFonction(SUPER, "function vocalBargeIn");
     expect(corps).toMatch(/stopReading\(\)/);
@@ -522,6 +538,22 @@ describe("4. l'ecran : couper passe par la SEULE voie existante (stopReading)", 
     expect(README).toMatch(/coupure|parler/i);
     expect(README).not.toMatch(/Ce qui \*\*reste à venir\*\* : la coupure de Pilot en parlant/);
     expect(README).toMatch(/trait de niveau/i);
+  });
+
+  it("la documentation dit le rearmement a CHAQUE lecture et au DEBUT DU SON", () => {
+    // Point R9 du verdict de la fiche du 02/10 (faible enjeu, mais il ferme la
+    // boucle) : le rearmement n'est pas un evenement isole, il vaut pour TOUTES
+    // les lectures, et la fenetre de mesure s'ouvre sur le SON, pas sur
+    // l'annonce. Deux phrases de la spec et de l'aide integree le disent ; les
+    // perdre ferait passer le correctif pour un reglage ponctuel.
+    const docs = [
+      ["spec_modes_ecran_vocal.md", lire("spec_modes_ecran_vocal.md")],
+      ["help/overview.md", lire("help/overview.md")],
+    ];
+    for (const [nom, texte] of docs) {
+      expect(texte, `${nom} : « a chaque lecture »`).toMatch(/à chaque lecture/i);
+      expect(texte, `${nom} : « debut du son »`).toMatch(/début du son/i);
+    }
   });
 });
 
