@@ -755,6 +755,25 @@ export async function refreshLocalVoiceDownloadState(options = {}) {
 }
 
 /**
+ * L'UNIQUE espion du son que Pilot joue lui-même (mode Vocal).
+ *
+ * `local-voice.js` ne sait pas ce qu'on en fait : il tend l'élément audio qu'il
+ * vient de créer, au moment même où il le crée, et rien d'autre. Le mode Vocal
+ * s'en sert pour mesurer l'enveloppe de parole sur le son réel (voir
+ * `vocal-enveloppe-aigu.js`) ; hors du mode Vocal, personne n'écoute et cette
+ * fonction ne coûte rien.
+ */
+let audioTap = null;
+
+/**
+ * Branche (ou débranche) l'espion du son local. `null` rétablit le silence.
+ * @param {((element: object) => void)|null} fn
+ */
+export function setLocalVoiceAudioTap(fn) {
+  audioTap = typeof fn === "function" ? fn : null;
+}
+
+/**
  * Joue une URL audio et attend la fin. Résout toujours quelque chose :
  * `"ended"` (morceau terminé), `"stopped"` (arrêt demandé), `"error"` (la
  * fenêtre refuse ou ne peut pas jouer le son).
@@ -785,6 +804,18 @@ function playUrl(AudioCtor, url, registerFinish, onSoundStart) {
     if (!audio) {
       finish("error");
       return;
+    }
+    // ── LE SON RÉEL, TENDU À QUI VOUDRA LE MESURER ───────────────────────────
+    // Un seul espion, au moment de la CRÉATION de l'élément (donc de son seul
+    // flux audio) : le mode Vocal y monte son analyseur. Aucun autre chemin ne
+    // donne accès au son de Pilot.
+    if (audioTap) {
+      const tap = audioTap;
+      safeCall(() => {
+        const suite = tap(audio);
+        // Un espion asynchrone ne doit jamais faire échouer une lecture.
+        if (suite && typeof suite.catch === "function") suite.catch(() => {});
+      });
     }
     audio.onended = () => finish("ended");
     audio.onerror = () => finish("error");

@@ -21,7 +21,7 @@ Un **seul** bouton fait le tour : **Détaillé** → **Assistant seul** → **Vo
 |---|---|---|
 | **Détaillé** | l'écran habituel : colonne de gauche (280 px), rangée d'onglets, éditeur, chat | travailler sur les fichiers |
 | **Assistant seul** | uniquement la conversation de l'assistant 🧭, en plein écran | suivre et piloter les projets sans le bruit de l'éditeur |
-| **Vocal** | un objet lumineux, un trait de niveau, **une** ligne de texte, la zone de saisie en bas | parler à Pilot et l'écouter |
+| **Vocal** | un objet lumineux, **une** ligne de texte, la zone de saisie en bas | parler à Pilot et l'écouter |
 
 Un mode d'écran **ne change rien au projet** : ni fichier, ni onglet, ni agent. Il
 choisit seulement **ce qui est affiché**. Dans les deux modes plein écran, la
@@ -82,7 +82,7 @@ et à la sortie (pas de zoom : on change d'écran, on ne déplie pas un panneau)
 Aucun cadre, aucune carte, aucune bordure.
 
 **Un écran nu** — décision du propriétaire, 2026-10-28, ferme : on n'y voit que
-l'objet, le trait de niveau, la ligne d'état et la barre de saisie. **Aucun
+l'objet, la ligne d'état et la barre de saisie. **Aucun
 échange de la conversation ne s'y affiche** : ni bulle, ni texte, ni « les deux
 ou trois derniers échanges » en petit sous l'objet, ni par un réglage. La
 conversation n'est pas perdue pour autant : elle reste **entière dans l'onglet de
@@ -112,8 +112,10 @@ sont). Le retour de la conversation sur cet écran est interdit par un test déd
 2. **Au centre**, un bloc vertical : un **disque de 168 px** (anneau plein de 2 px
    + remplissage lumineux de 18 % au centre, 0 % aux bords : aucune image), qui
    contient un **halo intérieur** (`.vocal-halo`, la voix de l'utilisateur, §4),
-   puis **24 px** plus bas un **trait de niveau de 200 × 3 px**, puis **24 px** plus bas
-   **l'unique ligne d'état**. Le bloc suit la fenêtre sans calcul.
+   puis **32 px** plus bas **l'unique ligne d'état**. Le bloc suit la fenêtre sans
+   calcul. Ces **32 px** sont exactement la place de l'**enveloppe de parole**,
+   qui déborde de 32 px au-delà de l'anneau (le trait de niveau, qui occupait une
+   rangée entre les deux, est **retiré** depuis le 12/11 — §4).
 3. **La zone de saisie**, en bas, **toujours visible** et discrète : c'est la barre
    de saisie de l'onglet Assistant, **déplacée** (même nœud, même envoi, même
    dictée 🎙️), 720 px au plus, centrée, 16 px de marge basse, sans filet ni fond
@@ -138,9 +140,9 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
 | État | Quand | Teinte (jeton `--vocal-*`) | Mouvement | Ligne d'état |
 |---|---|---|---|---|
 | **Repos** | personne ne parle, l'agent ne réfléchit pas, rien n'est lu | accent du thème (`--vocal-rest`) | respiration lente de 4 s | « Je vous écoute. » |
-| **Écoute** | le micro **capte vraiment** : le niveau mesuré dépasse le seuil **haut** (0,06 RMS) | vert (`--vocal-listen`) | aucun mouvement propre : **le halo intérieur et le trait suivent la voix** | « Je vous écoute… » |
+| **Écoute** | le micro **capte vraiment** : le niveau mesuré dépasse le seuil **haut** (0,06 RMS) | vert (`--vocal-listen`) | aucun mouvement propre : **le halo intérieur suit la voix** | « Je vous écoute… » |
 | **Réflexion** | l'agent réfléchit | violet de l'assistant (`--vocal-think`) | arc de 60° qui tourne en 3 s | « Je réfléchis… » |
-| **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | lueur extérieure **au bord** du disque (pic à **34 %** d'alpha sur la couronne, 1,6 s `vocal-speak-glow`) + enveloppe du trait | « Je réponds. » |
+| **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | lueur extérieure **au bord** du disque (pic à **34 %** d'alpha sur la couronne) qui **suit le son** quand il est mesurable (§4) | « Je réponds. » |
 
 **Deux lueurs, deux voix — et deux mots différents.** L'écran n'a qu'un seul
 niveau à montrer par voix, et chaque voix a **sa** couleur :
@@ -148,8 +150,8 @@ niveau à montrer par voix, et chaque voix a **sa** couleur :
 | Ce qu'on voit | Où | Quelle voix | Teinte |
 |---|---|---|---|
 | le **halo intérieur** (`.vocal-halo`) | dans le disque, jusqu'à 82 px de rayon | **la vôtre** (mesurée) | `--vocal-listen` |
-| le **trait de niveau** (`.vocal-level-bar`) | sous le disque, 200 × 3 px | **la vôtre** (la même mesure) | `--vocal-listen` |
-| le **contour** du disque et son **enveloppe** | l'anneau, puis la **couronne extérieure** (84 → 100 px de rayon) | **celle de Pilot** (lue) | `--vocal-state` |
+| l'**enveloppe de parole** (`.vocal-orb::before`) | la **couronne extérieure** (84 → 116 px de rayon, soit **32 px** de débord) | **celle de Pilot** (lue) | `--vocal-speak` |
+| le **contour** du disque | l'anneau | **celle de Pilot** (lue) | `--vocal-state` |
 
 Le mot « halo » ne désigne **que** le halo intérieur, celui de votre voix ;
 l'enveloppe de Pilot s'appelle « l'enveloppe de parole » (ancien nom de
@@ -173,48 +175,73 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
 - **Le texte ne porte jamais la couleur** de l'état (toujours `--text-primary`) :
   la couleur vit dans l'objet. C'est ce qui rend l'écran lisible dans les dix
   palettes du projet.
-- **En « écoute », aucun niveau n'est inventé** : la longueur du trait vient du
-  niveau **réellement mesuré**. Sans mesure (micro fermé, refusé, en panne), le
-  trait retombe au silence (8 %), il ne simule rien.
+- **En « écoute », aucun niveau n'est inventé** : le remplissage du halo intérieur
+  vient du niveau **réellement mesuré**. Sans mesure (micro fermé, refusé, en
+  panne), il retombe au silence (rayon 0), il ne simule rien. **Le trait de niveau
+  de 200 × 3 px, lui, a été RETIRÉ le 12/11** : la décision du 28/10 (« la petite
+  barre reste ») est renversée par le propriétaire. La mesure, elle, reste
+  entière — elle allume l'état « écoute » et remplit le halo intérieur. Rien
+  d'autre n'a bougé dans `vocal-mic.js` (aucune ligne touchée).
 - **Le halo intérieur** (lot B, `CONCEPTION-cercle-equaliseur.md` §6) remplit le
-  **disque** de la même mesure : son rayon vaut **racine(niveau) × 82 px** (même
-  échelle perceptuelle que le trait), donc **0 au silence** — aucun rond résiduel.
-  Il n'existe **qu'en écoute** : deux gardes tombent ensemble (opacité et valeur
-  0), si bien que l'écho que le micro entend parfois de Pilot **n'est jamais
-  dessiné**. Sa couleur est **toujours** `--vocal-listen`, jamais l'état : une
-  couleur par voix, les deux ne se confondent pas. Le trait de niveau, lui,
-  **reste** (décision du propriétaire, 28/10) : il est conservé à sa place et
-  suit la même mesure, en double affichage assumé de la voix de l'utilisateur.
-- **En « parole », le trait ne mesure rien** : la voix de la synthèse n'est pas
-  capturable par le navigateur, il suit donc une **enveloppe fixe** de 1,6 s,
+  **disque** de la même mesure : son rayon vaut **racine(niveau) × 82 px**, donc
+  **0 au silence** — aucun rond résiduel. Il n'existe **qu'en écoute** : deux
+  gardes tombent ensemble (opacité et valeur 0), si bien que l'écho que le micro
+  entend parfois de Pilot **n'est jamais dessiné**. Sa couleur est **toujours**
+  `--vocal-listen`, jamais l'état : une couleur par voix, les deux ne se
+  confondent pas. C'est désormais le **seul** afficheur de votre voix.
+- **L'enveloppe de parole suit le SON quand il est mesurable** (12/11,
+  `src/js/vocal-enveloppe-aigu.js`) : un **analyseur** est monté sur l'élément
+  audio que Pilot joue lui-même, et c'est l'énergie de la **bande haute**
+  (au-dessus de **4 kHz**, jusqu'au plafond d'analyse du projet) qui décide de
+  l'extension et de l'intensité. Le choix est **pur et testé** : bande → énergie
+  0..1 (silence → **0**, aigu riche → **proche de 1**, son grave → **0**), puis
+  lissage du projet (montée **0,5**, retombée **0,12**), puis projection :
+  **18 px** au repos → **32 px** à pleine voix, opacité **0,80 → 1**. L'extension
+  ne peut donc **pas** dépasser 32 px, et le silence **ramène au repos** au lieu
+  de faire pulser une lumière toute seule. **Ce qui n'est pas mesurable est dit
+  franchement** : la voix du **système** (`speechSynthesis`) ne livre aucun flux
+  audio au navigateur — aucune API ne le permet — donc dans ce cas l'animation
+  `vocal-speak-glow` (1,6 s) reste le **repli assumé**, et le code ne prétend rien
+  mesurer (aucune classe posée, aucune valeur inventée). La voix **locale**
+  (Piper, le cas par défaut) est le cas **réellement couvert**.
+- **En « parole », rien n'est inventé** : quand le son n'est pas mesurable
+  (voix du système), l'enveloppe suit son enveloppe **fixe** de 1,6 s,
   volontairement lente et bornée (jamais synchrone avec les mots). Seule
-  l'écoute mesure votre voix.
+  l'enveloppe de la voix locale **mesure** quelque chose ; l'écoute mesure
+  toujours la vôtre.
 - **La lueur de parole est visible au bord, pas cachée au centre**
-  (`docs/rapports/RAPPORT-halo-parole.md`). L'enveloppe de parole
-  (`.vocal-orb::before`, boîte de 200 × 200 px) porte un dégradé **inversé** :
-  transparent au centre, puis **8 %** au bord du disque (84 % du rayon), **20 %**
-  à 92 % et **34 %** au bord de la boîte (100 %). Le pic est donc **sur la
-  couronne extérieure**, la seule partie qui **déborde** du disque opaque ; la
-  lumière ne se perd plus sous le disque. Mesuré : contraste **2,28 : 1** en
-  thème sombre et **1,60 : 1** en thème clair (avant : 1,044 : 1 et 1,041 : 1,
-  sous le seuil de perception). L'animation `vocal-speak-glow` garde sa durée et
-  son échelle, mais son opacité ne descend plus sous **0,80** : la lueur respire
-  sans jamais s'éteindre.
+  (`docs/rapports/RAPPORT-halo-parole.md`, puis
+  `docs/rapports/RAPPORT-halo-suivant-le-son.md`). L'enveloppe de parole
+  (`.vocal-orb::before`, boîte de **232 × 232 px**, `inset: -32px`) porte un
+  dégradé **inversé** : transparent au centre, puis **8 %** au bord du disque
+  (84 % du rayon), **20 %** à 92 % et **34 %** au bord de la boîte (100 %). Le
+  pic est donc **sur la couronne extérieure**, la seule partie qui **déborde** du
+  disque opaque ; la lumière ne se perd plus sous le disque. Mesuré : contraste
+  **2,28 : 1** en thème sombre et **1,60 : 1** en thème clair (avant : 1,044 : 1
+  et 1,041 : 1, sous le seuil de perception). **La couronne mesure 32 px** de
+  large (84 → 116 px de rayon) depuis le 12/11 : le débordement a doublé pour que
+  la respiration se voie, et l'écart de 32 px avec la ligne d'état l'empêche de
+  passer dessous. En repli animé, `vocal-speak-glow` garde sa durée et son
+  échelle, mais son opacité ne descend plus sous **0,80** : la lueur respire sans
+  jamais s'éteindre.
 - **L'enveloppe est le REPLI du contour, jamais un doublon**
   (`CONCEPTION-cercle-equaliseur.md` §7.3) : dès que le contour spectral est
   peint (voix locale installée, classe `.vocal-spectrum-live` posée sur
   l'overlay), l'enveloppe est **éteinte** (opacité 0, sans animation ni
-  transition). La décision de code est unique (`spectrumPlan`, `porteur`) et
-  verrouillée par test.
+  transition) — et le **code** non plus ne la mesure pas (`planSpeechEnvelope`
+  refuse alors d'écrire : `contourPeint`). La décision de code est unique
+  (`spectrumPlan`, `porteur` côté contour ; `planSpeechEnvelope`, `live` côté
+  enveloppe) et verrouillée par test.
 - **Mouvement réduit** : le même drapeau que les animations d'ouverture
   (`prefers-reduced-motion` **et** le réglage « Animer l'ouverture des modales »).
-  Quand il est actif, plus aucune animation, plus aucune transition, et le trait est
-  **figé** à 8 / 45 / 20 / 70 % selon l'état, comme le **halo intérieur** (figé à
-  0,55 en écoute, éteint dans les trois autres états) : il reste **lisible**, ce
-  n'est jamais une animation muette. La **lueur de parole** obéit à la même
-  règle : ni clignotement ni disparition — elle est **fixe mais visible**, avec
-  le **même alpha de 34 % au bord** (aucune animation sur cet élément). **Aucun
-  nouveau réglage** n'a été créé pour cet écran.
+  Quand il est actif, plus aucune animation, plus aucune transition, et le
+  **halo intérieur** est **figé** à 0,55 en écoute (éteint dans les trois autres
+  états) : il reste **lisible**, ce n'est jamais une animation muette. Le code ne
+  pose **aucune** valeur dans ce cas (`planLevel` comme `planSpeechEnvelope`
+  refusent d'écrire). La **lueur de parole** obéit à la même règle : ni
+  clignotement ni disparition — elle est **fixe mais visible**, à sa **taille
+  pleine** (les 32 px de la boîte) et **opacité 1**, sans animation ni
+  transformation. **Aucun nouveau réglage** n'a été créé pour cet écran.
 
 ## 5. Le micro : quand il s'ouvre, quand il se ferme
 
@@ -222,7 +249,7 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
 même moment — c'est la distinction qui manquait :
 
 - **L'ORDRE est une décision du propriétaire : la MESURE ouvre EN PREMIER.**
-  Le micro de MESURE (le trait de niveau, l'état « écoute », la prise de parole)
+  Le micro de MESURE (l'état « écoute », le halo intérieur, la prise de parole)
   est demandé **à l'entrée dans le mode**, avant tout armement de la dictée —
   jamais au premier geste, jamais dans les autres modes. La dictée vient
   **après** elle, et **seulement si elle est réellement ouverte**.
@@ -232,7 +259,7 @@ même moment — c'est la distinction qui manquait :
   suffit » (aucun bouton à toucher). C'est **son** service de reconnaissance qui
   tient le micro ouvert, mais il ne peut plus passer devant la mesure.
 - **Pourquoi cet ordre** : avec la dictée en premier, un pilote audio qui
-  refusait la **seconde** capture faisait échouer la **mesure** — le trait se
+  refusait la **seconde** capture faisait échouer la **mesure** — le halo se
   figeait et l'écran annonçait une panne de micro alors que la dictée
   fonctionnait (panne fantôme permanente). Mesure d'abord, et chaque panne
   s'affiche pour ce qu'elle est : une panne de mesure, ou une panne de dictée.
@@ -259,16 +286,16 @@ même moment — c'est la distinction qui manquait :
   « Aucun micro n'est branché. » · « Le micro est occupé par une autre
   application. » · « Le micro n'a pas répondu. »
 - **Le niveau affiché** est le volume mesuré, **lissé** (montée rapide, retombée
-  lente) et projeté sur la longueur du trait (8 % au silence, 100 % au fort). Le
-  trait ne saute donc pas d'une image à l'autre. **Le même niveau décide de
-  l'état affiché** (voir §4) : le trait qui s'allonge et le passage en « écoute »
+  lente) et projeté sur le rayon du halo intérieur (0 au silence, 82 px au fort).
+  Le halo ne saute donc pas d'une image à l'autre. **Le même niveau décide de
+  l'état affiché** (voir §4) : le halo qui s'ouvre et le passage en « écoute »
   viennent d'une seule et même mesure, jamais de deux chemins séparés.
 - **Une seconde capture, et c'est voulu** (§6bis) : la **dictée** ouvre sa propre
   capture (service de reconnaissance du navigateur) **après** la mesure de
   niveau. La sortie du mode ferme **les deux**. Si une plateforme refuse la
   capture de dictée, l'écran le **dit** (« La dictée n'a pas fonctionné :
   écrivez votre demande. ») et le clavier reste utilisable : le micro de mesure,
-  lui, n'est jamais touché, et le trait continue de suivre votre voix.
+  lui, n'est jamais touché, et le halo continue de suivre votre voix.
 
 ## 6. Parler par-dessus Pilot : lire **et** travailler
 
@@ -428,7 +455,7 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
 - **La MESURE passe avant la DICTÉE** (§5) : aucune dictée ne s'arme tant que le
   micro de mesure n'est pas **réellement ouvert** (`mesure-fermee`). Une panne de
   mesure se lit donc comme une panne de mesure (phrase du micro + « Autoriser le
-  micro »), jamais comme une dictée qui marche avec un trait figé.
+  micro »), jamais comme une dictée qui marche avec un halo figé.
 - **Une panne de dictée se voit dans l'unique ligne d'état**, en une phrase qui
   dit quoi faire (« … : écrivez votre demande. ») : micro refusé, micro occupé,
   réseau absent, dictée indisponible sur ce poste. Jamais dans la zone masquée,
@@ -763,5 +790,5 @@ une seconde), qui est aussi prouvée sur images audio simulées — écho décla
 absent ou trop fort ⇒ une voix franche **coupe** ; son de Pilot seul, même fort et
 pendant trente secondes ⇒ **aucune** coupure. La **mesure ouvre toujours la
 première** : si elle est refusée, la dictée ne s'arme pas et l'écran le dit ; si
-c'est la dictée qui est refusée, le trait continue de suivre votre voix et le
+c'est la dictée qui est refusée, le halo continue de suivre votre voix et le
 clavier reste utilisable.

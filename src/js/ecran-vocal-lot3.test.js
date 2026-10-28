@@ -614,15 +614,17 @@ describe("5. un seul mecanisme : la capture vit dans vocal-mic.js", () => {
     // lot 4a il SIGNALE (`onSpeechStart`), l'arret reste chez l'appelant.
     expect(MIC).not.toMatch(/stopReading|speechSynthesis|SpeechSynthesisUtterance/);
     expect(MIC).toMatch(/onSpeechStart/);
-    // Et l'ecran ne fait que poser une longueur.
+    // Et l'ecran ne fait que poser le niveau LA OU il se voit : le halo
+    // interieur. Depuis le 12/11 le trait n'existe plus, la mesure si.
     const niveau = corpsFonction(SUPER, "function vocalSetLevel");
-    expect(niveau).toMatch(/--vocal-level/);
+    expect(niveau).toMatch(/--vocal-heard/);
+    expect(niveau).not.toMatch(/--vocal-level/);
     expect(niveau).not.toMatch(/stopReading|speechSynthesis/);
   });
 });
 
 // ---------------------------------------------------------------------------
-describe("6. mouvement reduit : la longueur reste figee par etat", () => {
+describe("6. mouvement reduit : la mesure ne pose rien", () => {
   it("aucune valeur n'est posee quand le mouvement est reduit", () => {
     expect(planLevel({ niveau: 0.5, reduit: true }).ecrire).toBe(false);
     expect(planLevel({ niveau: 0.5, reduit: true }).largeur).toBe(0);
@@ -640,10 +642,13 @@ describe("6. mouvement reduit : la longueur reste figee par etat", () => {
     expect(corps).toMatch(/planLevel\(/);
   });
 
-  it("le CSS fige toujours l'ecoute a 45 % en mouvement reduit", () => {
+  it("le niveau mesure ne dessine plus de trait, meme fige", () => {
+    // Les quatre largeurs figees (8 / 45 / 20 / 70 %) sont parties avec le
+    // trait. Ce qui reste fige et lisible, c'est le halo interieur (0,55).
+    expect(CSS).not.toMatch(/vocal-level-bar/);
     expect(
-      sliceSource(CSS, ".pilot-vocal.vocal-reduced.vocal-state-listening .vocal-level-bar", "}", 2),
-    ).toMatch(/width:\s*45%/);
+      sliceSource(CSS, ".pilot-vocal.vocal-reduced.vocal-state-listening .vocal-halo", "}", 2),
+    ).toMatch(/--vocal-halo:\s*0\.55/);
   });
 
   it("LOT B : en mouvement reduit, le halo non plus n'est pas pose par le code", () => {

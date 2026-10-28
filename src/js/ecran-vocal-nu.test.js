@@ -1,9 +1,10 @@
 // Tests — ECRAN NU du mode Vocal (decision du proprietaire, 2026-10-28)
 //
 // CE QUE CE FICHIER VERROUILLE (et pourquoi) :
-//   1. L'ecran Vocal ne dessine QUE l'objet, son trait, l'unique ligne d'etat,
-//      le bouton de depannage du micro et la barre de saisie : aucun conteneur
-//      de messages, aucune bulle, aucun texte de la conversation.
+//   1. L'ecran Vocal ne dessine QUE l'objet, l'unique ligne d'etat, le bouton
+//      de depannage du micro et la barre de saisie : aucun conteneur de
+//      messages, aucune bulle, aucun texte de la conversation (le trait de
+//      niveau est parti le 12/11, et son absence est exigee ici).
 //   2. Rien de la conversation n'ENTRE dans cet ecran a l'entree du mode : les
 //      seuls noeuds deplaces sont la barre de saisie (meme noeud, meme envoi) et
 //      le LOGO-bouton des trois modes (lots 1 a 3 : il n'entre plus dans la
@@ -18,9 +19,9 @@
 //   5. La conversation n'est JAMAIS peinte pendant le mode (regle CSS dediee,
 //      independante de la couleur de fond de l'overlay), sans casser les
 //      mesures de defilement (`visibility`, jamais `display: none`).
-//   6. Ce que l'ecran nu DOIT garder (objet 168 px, trait 200 x 3 px, saisie
-//      720 px, trois sorties du mode, mouvement reduit) : aucun nettoyage futur
-//      ne doit les emporter en meme temps que la conversation.
+//   6. Ce que l'ecran nu DOIT garder (objet 168 px, saisie 720 px, trois
+//      sorties du mode, mouvement reduit) : aucun nettoyage futur ne doit les
+//      emporter en meme temps que la conversation.
 //
 // Les commentaires sont en ASCII ; les chaines qui viennent de l'interface sont
 // copiees telles quelles.
@@ -56,13 +57,12 @@ function bloc(css, selecteur) {
 describe("1. ce que l'ecran Vocal dessine, et rien d'autre", () => {
   const build = corpsFonction(SUPER, "function buildVocalOverlay()");
 
-  it("l'ecran nu : l'objet, le trait, la ligne d'etat, la saisie", () => {
+  it("l'ecran nu : l'objet, la ligne d'etat, la saisie", () => {
     for (const noeud of [
       "vocal-top",
       "vocal-stage",
       "vocal-orb",
       "vocal-halo",
-      "vocal-level",
       "vocal-status",
       "vocal-mic-fix",
       "vocal-input",
@@ -71,6 +71,9 @@ describe("1. ce que l'ecran Vocal dessine, et rien d'autre", () => {
         new RegExp(`class="[^"]*${noeud}`),
       );
     }
+    // Le trait de niveau (200 x 3 px) a ete RETIRE le 12/11 : l'ecran nu est
+    // plus nu encore, et ce fichier l'exige au lieu de l'ignorer.
+    expect(build, "le trait de niveau ne doit plus exister").not.toMatch(/vocal-level/);
   });
 
   it("aucun conteneur de conversation dans le balisage de l'ecran", () => {
@@ -186,10 +189,13 @@ describe("5. la conversation n'est jamais peinte pendant le mode Vocal", () => {
 
 // ---------------------------------------------------------------------------
 describe("6. ce que l'ecran nu doit garder", () => {
-  it("l'objet, le trait et la saisie gardent leurs mesures", () => {
+  it("l'objet et la saisie gardent leurs mesures, le trait n'existe plus", () => {
     expect(bloc(CSS, ".vocal-orb {")).toMatch(/width:\s*168px/);
-    expect(bloc(CSS, ".vocal-level {")).toMatch(/width:\s*200px/);
     expect(bloc(CSS, ".vocal-input {")).toMatch(/width:\s*min\(720px/);
+    // Un trait qui reviendrait par une regle CSS serait aussi genant qu'un
+    // trait dans le balisage : les deux sont refuses ici.
+    expect(CSS).not.toMatch(/\.vocal-level\b/);
+    expect(CSS).not.toMatch(/vocal-level-bar/);
   });
 
   it("les trois sorties du mode et le mouvement reduit restent branches", () => {

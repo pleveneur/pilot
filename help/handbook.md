@@ -451,25 +451,29 @@ ce qui est affiché.
 - **Assistant seul** : uniquement la conversation de l'assistant 🧭, en plein
   écran.
 - **Vocal** : un **écran nu** — un objet lumineux dont la couleur dit l'état
-  (**repos**, **écoute**, **réflexion**, **parole**), un trait de niveau juste
-  dessous et **une seule ligne de texte**. **Rien de la conversation n'y est
+  (**repos**, **écoute**, **réflexion**, **parole**) et **une seule ligne de
+  texte**. **Rien de la conversation n'y est
   affiché** (aucun message, pas même en petit) : la conversation reste entière
   dans l'onglet de l'agent, où vous la retrouvez en quittant le mode.
 
 En mode **Vocal** :
 
-- **Le trait suit votre voix** : il s'allonge quand vous parlez et retombe
-  doucement au silence, sans à-coups.
-- **Et l'intérieur du cercle s'allume avec elle** : une lueur verte (la couleur
-  de l'écoute) remplit le disque au rythme du son que Pilot entend, puis
-  s'éteint dès que vous vous taisez. C'est la **même** mesure que le trait —
-  elle ne s'allume jamais quand vous ne parlez pas, et jamais avec la couleur
-  de Pilot. Le contour du cercle, lui, reste la voix de Pilot.
-- **Quand Pilot lit sa réponse**, une lueur ambre se lève **au bord** du cercle,
-  comme un liseré qui respire lentement : c'est la voix de Pilot, **à
-  l'extérieur** du disque (la vôtre s'allume **dedans**, en vert). Si vous avez
-  réduit les animations, elle reste **allumée et fixe** — elle ne clignote pas
-  et ne disparaît pas.
+- **L'intérieur du cercle s'allume avec votre voix** : une lueur verte (la
+  couleur de l'écoute) remplit le disque au rythme du son que Pilot entend, puis
+  s'éteint dès que vous vous taisez. Elle ne s'allume jamais quand vous ne
+  parlez pas, et jamais avec la couleur de Pilot. Le contour du cercle, lui,
+  reste la voix de Pilot.
+- **Quand Pilot lit sa réponse**, une lueur ambre se lève **au bord** du cercle :
+  c'est la voix de Pilot, **à l'extérieur** du disque (la vôtre s'allume
+  **dedans**, en vert). Ce liseré **suit le son** de sa voix : il s'étend quand
+  ses mots portent, se resserre dans les pauses. Il s'étend loin — environ
+  **32 px** au-delà du cercle — sans jamais toucher la ligne de texte.
+  **Une précision honnête** : ce suivi marche avec les **voix installées sur
+  votre ordinateur** (les voix françaises locales). Avec la **voix du système**,
+  l'ordinateur ne laisse pas l'application écouter ce qu'elle dit : la lueur
+  respire alors lentement, au lieu de suivre les mots.
+- **Si vous avez réduit les animations**, cette lueur reste **allumée et fixe**,
+  à sa taille pleine — elle ne clignote pas et ne disparaît pas.
 - **L'écran distingue le silence de la parole** : quand vous vous taisez, il est
   au **repos** (couleur du thème, « Je vous écoute. ») ; dès que votre voix est
   réellement entendue, il passe en **écoute** (vert, « Je vous écoute… ») et y
@@ -487,7 +491,7 @@ En mode **Vocal** :
   dans les autres modes — **avant** d'ouvrir la dictée : la mesure passe la
   première, la dictée ensuite. Ainsi une panne ne se déguise jamais : si le
   micro de mesure ne s'ouvre pas, l'écran le dit et la dictée ne s'arme pas ;
-  si c'est la dictée qui échoue, le trait continue de suivre votre voix.
+  si c'est la dictée qui échoue, le halo continue de suivre votre voix.
 - **Si vous refusez**, si aucun micro n'est branché, s'il est occupé ou s'il
   tombe en panne : l'écran le **dit en une phrase** et propose **« Autoriser le
   micro »**. Le mode reste **entièrement utilisable** (écrire, envoyer, écouter)

@@ -55,6 +55,15 @@ import { applyVoiceEnd, isSilentEmptyVoiceEnd } from "./voice-auto-send.js";
 // `normalizeVocalBrevityLevel` est le SEUL juge de ce qu'une valeur de niveau
 // vaut : l'ecran ne decide donc jamais lui-meme ce qu'est un niveau.
 import { composeVocalPrompt, normalizeVocalBrevityLevel } from "./vocal-brevity.js";
+// L'ENVELOPPE DE PAROLE SUIT LE SON REEL (demande du proprietaire) : la mesure
+// de l'aigu de la voix de Pilot et sa projection (extension + intensite) vivent
+// dans ce module, avec un seul analyseur monte sur le SEUL son que Pilot joue
+// lui-meme (voix locale). Ici on ne fait que deux choses : lui donner le son
+// quand le mode est ouvert, et poser deux variables de style. Aucune API audio
+// n'entre donc dans ce fichier (ecran-vocal-lot2/lot3.test.js le verifient),
+// et la voix du SYSTEME — qui ne rend aucun flux a la page — garde l'animation
+// existante comme repli assume (voir docs/rapports/RAPPORT-halo-suivant-le-son.md).
+import { createSpeechEnvelopeMeter, planSpeechEnvelope } from "./vocal-enveloppe-aigu.js";
 // CONVERSATION PARLEE de l'ecran Vocal : QUAND la dictee s'arme toute seule (au
 // repos), quand elle se desarme (Pilot lit, Pilot travaille, on sort du mode) et
 // ce que dit la ligne d'etat quand elle ne peut pas s'armer. Les DECISIONS sont
@@ -3395,6 +3404,14 @@ export async function createSuperAgent(container) {
   // `pilot-read-aloud-state`, emis par read-aloud.js) : SEULE source de l'etat
   // « Pilot parle ». Aucun second lecteur n'est cree.
   let vocalSpeaking = false;
+  // ── L'ENVELOPPE DE PAROLE MESUREE (voix locale) ──
+  // Le metre (analyseur monte sur le son que Pilot joue vraiment) vit dans
+  // vocal-enveloppe-aigu.js. Il n'existe QUE pendant le mode Vocal : cree a
+  // l'entree, debranche a la sortie. Aucun etat intermediaire n'est tenu ici :
+  // la seule trace d'une mesure REELLE est la classe `.vocal-envelope-live`
+  // posee par `vocalApplyEnvelopeEnergy` (et retiree des qu'il n'y a plus rien
+  // a mesurer), pour qu'il n'existe jamais deux verites sur ce point.
+  let vocalEnvelopeMeter = null;
   // ── LOT 3 : le micro REEL de l'ecran Vocal ──
   // La mecanique (flux, analyseur, lissage, arret des pistes) vit dans
   // vocal-mic.js. Ici, trois etats seulement :
@@ -4200,21 +4217,61 @@ export async function createSuperAgent(container) {
     }
     const plan = planLevel({ niveau, reduit: vocalReducedMotion() });
     if (!plan.ecrire) return;
-    vocalOverlay.style.setProperty("--vocal-level", plan.largeur + "%");
     // LOT B : le halo d'ecoute, projete du MEME niveau deja lisse (0..1). Une
     // seule mesure, deux afficheurs : aucun second capteur, aucun second
-    // lissage. Le CSS s'en sert comme rayon en pourcentage du disque.
+    // lissage. Le CSS s'en sert comme rayon en pourcentage du disque. C'est
+    // desormais la SEULE chose visible que ce niveau dessine : le trait
+    // (200 x 3 px) a ete retire le 12/11, la mesure reste.
     vocalOverlay.style.setProperty("--vocal-heard", String(plan.halo));
   }
 
   /**
-   * Retire les valeurs posees : le trait retombe au silence (8 %) et le halo
-   * d'ecoute se replie (0) — aucun rond residuel quand le micro s'arrete.
+   * Retire les valeurs posees : le halo d'ecoute se replie (0) — aucun rond
+   * residuel quand le micro s'arrete. (Le trait de niveau n'existe plus ;
+   * `--vocal-level` n'a donc plus de lecteur CSS, la mesure reste disponible.)
    */
   function vocalClearLevel() {
     if (!vocalOverlay) return;
-    vocalOverlay.style.removeProperty("--vocal-level");
     vocalOverlay.style.removeProperty("--vocal-heard");
+  }
+
+  /**
+   * L'ENVELOPPE DE PAROLE recoit UNE mesure (0..1) du metre, a chaque image.
+   *
+   * Ce fichier ne decide rien : `planSpeechEnvelope` (vocal-enveloppe-aigu.js)
+   * dit si cette voix peut etre portee par l'enveloppe (jamais quand le contour
+   * spectral peint deja, jamais en mouvement reduit, jamais sans mesure) et
+   * donne l'extension et l'intensite. On pose alors UNE classe et DEUX
+   * variables de style — aucun noeud cree, aucune animation ajoutee.
+   */
+  function vocalApplyEnvelopeEnergy(energie) {
+    if (!vocalOverlay) return;
+    const plan = planSpeechEnvelope({
+      energy: energie,
+      reduit: vocalReducedMotion(),
+      // Le contour spectral est l'autre afficheur de la MEME voix (§7.3) :
+      // s'il peint, l'enveloppe s'efface (jamais deux affichages).
+      contourPeint: vocalOverlay.classList.contains("vocal-spectrum-live"),
+      disponible: true,
+    });
+    if (!plan.live) {
+      vocalClearEnvelope();
+      return;
+    }
+    vocalOverlay.classList.add("vocal-envelope-live");
+    vocalOverlay.style.setProperty("--vocal-envelope-scale", String(plan.scale));
+    vocalOverlay.style.setProperty("--vocal-envelope-alpha", String(plan.alpha));
+  }
+
+  /**
+   * Plus aucune mesure : l'enveloppe revient a ce qu'elle etait (l'animation
+   * existante en etat « parole », rien du tout ailleurs).
+   */
+  function vocalClearEnvelope() {
+    if (!vocalOverlay) return;
+    vocalOverlay.classList.remove("vocal-envelope-live");
+    vocalOverlay.style.removeProperty("--vocal-envelope-scale");
+    vocalOverlay.style.removeProperty("--vocal-envelope-alpha");
   }
 
   /**
@@ -4294,13 +4351,14 @@ export async function createSuperAgent(container) {
     if (vocalReducedMotion()) ov.classList.add("vocal-reduced");
     // Structure (de haut en bas) : la barre de 44 px (VIDE : elle ne recoit
     // plus le bouton des modes, qui entre dans l'overlay — lot 2), l'objet
-    // lumineux + son trait + l'UNIQUE ligne d'etat, puis la zone de saisie
-    // discrete. Aucun cadre, aucune carte, aucune bordure autour de l'objet.
+    // lumineux, puis l'UNIQUE ligne d'etat, puis la zone de saisie discrete.
+    // Le trait de niveau (200 x 3 px) a ete retire le 12/11 (decision du
+    // proprietaire, qui revient sur l'avenant du 28/10) : la mesure du micro
+    // reste, elle ne se dessine plus. Aucun cadre, aucune carte.
     ov.innerHTML = `
       <div class="vocal-top"></div>
       <div class="vocal-stage">
         <div class="vocal-orb" aria-hidden="true"><span class="vocal-halo"></span></div>
-        <div class="vocal-level" aria-hidden="true"><span class="vocal-level-bar"></span></div>
         <div class="vocal-status" role="status" aria-live="polite">Je vous écoute.</div>
         <!-- LOT 3 (§2.5) : bouton de depannage, MASQUE tant que le micro capte.
              Il n'apparait que si le micro est ferme (refus, absence, panne) ;
@@ -4922,6 +4980,14 @@ export async function createSuperAgent(container) {
     vocalSessionsVides = [];
     vocalDicteeSuspendue = false;
     refreshVocalSensitivity();
+    // ── L'ENVELOPPE SUIT LE SON (voix locale) ────────────────────────────────
+    // Un seul metre, cree a l'ENTREE et detruit a la sortie : hors du mode
+    // Vocal, personne n'ecoute le son de Pilot (aucun cout, aucun analyseur).
+    vocalEnvelopeMeter = createSpeechEnvelopeMeter({
+      win: window,
+      onEnergy: vocalApplyEnvelopeEnergy,
+    });
+    vocalEnvelopeMeter.demarrer();
     // Le mode REELLEMENT affiche est ecrit par la SEULE source des modes
     // (`screen-mode.js`) : entrer ici, c'est etre en « Vocal », meme quand on
     // vient de « Assistant seul » (dont la sortie a ecrit « Detaille »).
@@ -4936,6 +5002,14 @@ export async function createSuperAgent(container) {
     // lancee ici continuerait dans « Detaille », qui ne doit rien changer a son
     // propre comportement. L'arret passe par la SEULE voie existante.
     if (vocalSpeaking) stopReading();
+    // L'ENVELOPPE : plus de mesure du tout derriere l'ecran (l'espion du son
+    // local est debranche, la boucle est annulee, l'analyseur est lache), et
+    // les valeurs posees disparaissent avec l'overlay retire plus bas.
+    if (vocalEnvelopeMeter) {
+      vocalEnvelopeMeter.arreter();
+      vocalEnvelopeMeter = null;
+    }
+    vocalClearEnvelope();
     // CONVERSATION PARLEE : la sortie FERME la dictee (aucun peripherique ne
     // reste ouvert derriere l'ecran) et annule tout armement programme. Meme
     // regle que le micro de mesure : on ne vous ecoute pas hors de cet ecran.
@@ -5057,6 +5131,10 @@ export async function createSuperAgent(container) {
     // normale ET ses deux replis de voix. Une comparaison de chaine ici
     // laisserait la dictee s'armer pendant un repli.
     vocalSpeaking = isReadAloudSpeaking(etat);
+    // L'ENVELOPPE : la fin de la lecture eteint la mesure (l'enveloppe revient
+    // a l'animation existante, ou s'efface avec l'etat). Un morceau de voix
+    // locale qui se tait pour de bon ne laisse donc pas une lueur figee.
+    if (parlait && !vocalSpeaking) vocalClearEnvelope();
     // CONVERSATION PARLEE : la FIN de la lecture est le moment ou l'oreille se
     // rouvre (marge de silence plus longue, `VOCAL_ARM_AFTER_READ_MS`).
     if (parlait && !vocalSpeaking) vocalApresLecture = true;

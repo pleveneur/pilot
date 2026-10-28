@@ -14,7 +14,13 @@
 //      rend `porteur: "enveloppe"` que si le contour ne dessine rien.
 //   4. Mouvement reduit : la lueur ne clignote pas et ne disparait pas — elle est
 //      FIXE mais VISIBLE (meme alpha au bord, aucune animation sur cet element).
-//   5. La petite barre sous le cercle est CONSERVEE (decision du proprietaire).
+//   5. La petite barre sous le cercle a ETE RETIREE (decision du proprietaire du
+//      12/11, qui revient sur l'avenant du 28/10). Le fichier exige donc son
+//      ABSENCE — noeud, regle et pourcentage : la mesure du micro reste, elle
+//      ne se dessine plus.
+//   6. L'enveloppe suit le SON REEL quand il est mesurable (voix locale) :
+//      extension bornee a 32 px au-dela de l'anneau, intensite de 0,8 a 1,
+//      aucune pulsation au repos. Un seul afficheur par voix.
 //
 // Les commentaires sont en ASCII ; les selecteurs CSS et les nombres lus sont
 // copies tels quels depuis la feuille de style.
@@ -176,13 +182,26 @@ describe("4. mouvement reduit : la lueur est FIXE mais VISIBLE", () => {
 });
 
 // ---------------------------------------------------------------------------
-describe("5. la petite barre sous le cercle est CONSERVEE", () => {
-  it("200 x 3 px, rayon 2 px : elle est toujours la", () => {
-    const zone = bloc(CSS, ".vocal-level {");
-    expect(zone).toMatch(/width:\s*200px/);
-    expect(zone).toMatch(/height:\s*3px/);
-    const barre = bloc(CSS, ".vocal-level-bar");
-    expect(barre).toMatch(/height:\s*3px/);
-    expect(barre).toMatch(/border-radius:\s*2px/);
+describe("5. la petite barre sous le cercle a ETE RETIREE (12/11)", () => {
+  it("aucune regle de trait ne subsiste : ni conteneur, ni barre", () => {
+    // La decision du 28/10 (« la petite barre reste ») est RENVERSEE : le
+    // proprietaire ne veut plus de trait sous le cercle. Un test qui se
+    // contenterait de ne plus regarder ne protegerait rien — celui-ci exige
+    // l'absence, sur les trois plans (CSS, DOM, pourcentage fige).
+    expect(CSS).not.toMatch(/\.vocal-level\b/);
+    expect(CSS).not.toMatch(/--vocal-level/);
+    expect(CSS).not.toMatch(/vocal-level-bar/);
+    const ecran = lire("src/js/super-agent.js");
+    expect(ecran).not.toMatch(/class="vocal-level/);
+    expect(ecran).not.toMatch(/vocal-level-bar/);
+    // Aucune valeur de trait n'est plus posee (les commentaires, eux, peuvent
+    // raconter l'histoire : c'est le code qui est verifie).
+    expect(ecran).not.toMatch(/setProperty\("--vocal-level"/);
+  });
+
+  it("la ligne d'etat est posee la ou le trait etait (32 px sous le disque)", () => {
+    // L'ecart de la pile n'est pas un detail : l'enveloppe occupe desormais ces
+    // 32 px, donc le texte ne peut pas se retrouver dessous.
+    expect(bloc(CSS, ".vocal-stage")).toMatch(/gap:\s*32px/);
   });
 });

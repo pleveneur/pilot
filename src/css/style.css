@@ -11628,9 +11628,11 @@ body.pilot-vocal-active .agent-chat-messages {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* 24 px entre le disque et son trait, puis entre le trait et la ligne
-     d'etat (§2.2 et §2.3). */
-  gap: 24px;
+  /* 32 px entre le disque et la ligne d'etat (§2.2 et §2.3) : c'est l'ecart
+     qui laisse a l'ENVELOPPE DE PAROLE la place qu'elle occupe desormais
+     (32 px au-dela de l'anneau), sans jamais deborder sur le texte. Le trait
+     de niveau a disparu : la pile est disque -> 32 px -> ligne d'etat. */
+  gap: 32px;
   padding: 16px;
 }
 /* Teinte de l'etat : UNE seule variables, posee par UNE seule classe d'etat
@@ -11657,23 +11659,22 @@ body.pilot-vocal-active .agent-chat-messages {
   );
   transition: border-color var(--transition-smooth), background var(--transition-smooth);
 }
-/* Enveloppe de PAROLE : une enveloppe douce qui ondule (1,6 s), bornee et jamais
-   synchrone avec les mots — la synthese vocale ne rend pas son signal, on ne
-   pretend donc pas mesurer la voix. Vocabulaire tranche (§6.0) : l'enveloppe de
-   PAROLE n'est pas « le halo » ; le halo, c'est la voix de l'UTILISATEUR (.vocal-halo).
-   HALO DE LA PAROLE (defaut 1 du diagnostic du 28/10) : le degrade est INVERSE.
-   La lumiere est au BORD de la boite (100 % de `closest-side` = 100 px), le
-   centre est transparent : la seule partie visible est celle qui DEBORDE du
-   disque (exterieur a 84 px). Arrets chiffres, du centre vers le bord :
-   0 % -> 0 %, 72 % -> 0 %, 84 % (bord du disque) -> 8 %, 92 % -> 20 %,
-   100 % (bord de la boite) -> 34 % (>= 30 % exige, contraste 2,28:1 en sombre
-   et 1,60:1 en clair, cf. docs/rapports/RAPPORT-halo-parole.md). En etat
-   « parole », `--vocal-state` vaut exactement `--vocal-speak` : c'est la teinte
-   de la voix de Pilot, et aucun jeton nouveau n'est cree. */
+/* L'ENVELOPPE DE PAROLE (Pilot) suit le SON REEL de sa voix depuis le
+   12/11 : sa geometrie est inchangee (degrade inverse, pic au bord), mais sa
+   BOITE passe de 200 x 200 px (inset -18) a 232 x 232 px (inset -32). Le
+   `closest-side` vaut donc 116 px : le bord de l'anneau (84 px) tombe a 72 %
+   du rayon, et la couronne lumineuse s'etend de 84 a 116 px, soit 32 px
+   au-dela du disque — sans jamais atteindre la ligne d'etat (32 px d'ecart).
+   Arrets chiffres, du centre vers le bord : 0 % -> 0 %, 72 % (bord du disque)
+   -> 0 %, 84 % -> 8 %, 92 % -> 20 %, 100 % (bord de la boite) -> 34 %
+   (>= 30 % exige, contraste 2,28:1 en sombre et 1,60:1 en clair, cf.
+   docs/rapports/RAPPORT-halo-parole.md). En etat « parole », `--vocal-state`
+   vaut exactement `--vocal-speak` : c'est la teinte de la voix de Pilot, et
+   aucun jeton nouveau n'est cree. */
 .vocal-orb::before {
   content: "";
   position: absolute;
-  inset: -18px;
+  inset: -32px;
   border-radius: 50%;
   background: radial-gradient(
     closest-side,
@@ -11690,6 +11691,25 @@ body.pilot-vocal-active .agent-chat-messages {
 .pilot-vocal.vocal-state-speaking .vocal-orb::before {
   opacity: 1;
   animation: vocal-speak-glow 1.6s ease-in-out infinite;
+}
+/* --- L'ENVELOPPE SUIT LE SON (voix locale reelle) ---
+   Quand le mode Vocal mesure VRAIMENT le son de Pilot, `super-agent.js` pose
+   la classe `.vocal-envelope-live` et deux variables lues ici : `scale` et
+   `alpha` (intensite, 0,8 a 1). `scale` est le facteur de la BOITE ENTIERE
+   (232 px de large, du centre a 116 px) : 0,8793 au repos (bord a 102 px, soit
+   18 px au-dela de l'anneau de 84 px) et 1 a pleine voix (bord a 116 px, soit
+   32 px). Reduire le tout autour du centre ne peut donc jamais ramener le bord
+   sous l'anneau — le repli ci-dessous est cette valeur de repos. L'animation decorative est alors ETEINTE : une seule mesure, un
+   seul affichage, et le silence ramene l'enveloppe au repos au lieu d'une
+   pulsation inventee. `transition: none` : le lissage est deja fait image par
+   image dans le code (une transition ajouterait un second lissage).
+   Sans mesure (voix du SYSTEME : aucun flux audio n'est accessible), la classe
+   n'est jamais posee et l'animation ci-dessus reste le repli. */
+.pilot-vocal.vocal-envelope-live.vocal-state-speaking .vocal-orb::before {
+  animation: none;
+  opacity: var(--vocal-envelope-alpha, 1);
+  transform: scale(var(--vocal-envelope-scale, 0.8793));
+  transition: none;
 }
 /* Arc de la REFLEXION : 60 degres qui tournent en 3 s autour de l'anneau. */
 .vocal-orb::after {
@@ -11765,40 +11785,12 @@ body.pilot-vocal-active .agent-chat-messages {
   --vocal-halo: 0;
 }
 
-/* Le trait du niveau : 200 x 3 px, rayon 2 px, a 24 px sous le disque (le `gap`
-   du bloc le pose). Sa LONGUEUR est la seule variation : 8 % au silence, elle
-   grandit en se centrant. Aucun fond de piste (un seul trait a l'ecran). */
-.vocal-level {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  width: 200px;
-  height: 3px;
-}
-.vocal-level-bar {
-  display: block;
-  width: 8%;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--vocal-state, var(--vocal-rest));
-  /* 80 ms en lineaire : plus court que la couleur, la voix doit se voir
-     « en direct » (§4.2). */
-  transition: width 80ms linear, background var(--transition-smooth);
-}
-/* LOT 3 : en ecoute, la longueur du trait vient du NIVEAU REELLEMENT MESURE
-   (`--vocal-level`, pose sur l'overlay par vocal-mic.js). Sans mesure — micro
-   ferme, refuse, en panne — la valeur est absente et le trait retombe au
-   silence (8 %) : aucune longueur inventee. */
-.pilot-vocal.vocal-state-listening .vocal-level-bar {
-  width: var(--vocal-level, 8%);
-}
-.pilot-vocal.vocal-state-thinking .vocal-level-bar {
-  animation: vocal-think-pulse 1.4s ease-in-out infinite;
-}
-.pilot-vocal.vocal-state-speaking .vocal-level-bar {
-  animation: vocal-speak-envelope 1.6s ease-in-out infinite;
-}
+/* Le trait de niveau (200 x 3 px) a ETE RETIRE le 12/11 : decision du
+   proprietaire, qui revient sur l'avenant du 28/10 (« la petite barre reste »).
+   Le niveau du micro continue d'etre mesure — il allume l'etat « ecoute » et
+   remplit le halo interieur (`.vocal-halo`) —, mais plus rien ne le dessine
+   sous le disque. Aucun noeud, aucune regle, aucun pourcentage : il n'en reste
+   rien. */
 
 /* --- §2.3 L'UNIQUE ligne d'etat ---
    Un seul texte, 15 px (--font-zone), graisse 500, centre. Couleur TOUJOURS
@@ -11874,14 +11866,14 @@ body.pilot-vocal-active .agent-chat-messages {
 /* --- §4.2/§4.3 Mouvement reduit : le MEME drapeau que les animations
    d'ouverture (prefers-reduced-motion + parametre modal_animations, pose par
    super-agent.js via la classe .vocal-reduced). Disque immobile — la couleur
-   et le mot portent l'etat —, longueur du trait FIXE par etat, transitions 0 s.
+   et le mot portent l'etat —, transitions 0 s. L'enveloppe de parole garde sa
+   taille pleine (32 px) et son intensite : FIXE mais VISIBLE, jamais eteinte.
    Aucun nouvel ecran de reglage n'est cree pour cela. */
 .pilot-vocal.vocal-reduced,
 .pilot-vocal.vocal-reduced .vocal-orb,
 .pilot-vocal.vocal-reduced .vocal-orb::before,
 .pilot-vocal.vocal-reduced .vocal-orb::after,
 .pilot-vocal.vocal-reduced .vocal-halo,
-.pilot-vocal.vocal-reduced .vocal-level-bar,
 .pilot-vocal.vocal-reduced .vocal-status {
   animation: none;
   transition: none;
@@ -11909,10 +11901,6 @@ body.pilot-vocal-active .agent-chat-messages {
   animation: none;
   transition: none;
 }
-.pilot-vocal.vocal-reduced.vocal-state-idle .vocal-level-bar { width: 8%; }
-.pilot-vocal.vocal-reduced.vocal-state-listening .vocal-level-bar { width: 45%; }
-.pilot-vocal.vocal-reduced.vocal-state-thinking .vocal-level-bar { width: 20%; }
-.pilot-vocal.vocal-reduced.vocal-state-speaking .vocal-level-bar { width: 70%; }
 /* LOT B : en mouvement reduit le halo ne s'anime pas, mais il reste LISIBLE —
    rayon fixe de 0,55 x 82 = 45,1 px en ecoute (jamais une animation muette),
    eteint dans les trois autres etats (§6.8). Une declaration directe sur
@@ -11940,15 +11928,6 @@ body.pilot-vocal-active .agent-chat-messages {
 @keyframes vocal-speak-glow {
   0%, 100% { transform: scale(0.94); opacity: 0.8; }
   50% { transform: scale(1.06); opacity: 1; }
-}
-@keyframes vocal-think-pulse {
-  0%, 100% { width: 8%; }
-  50% { width: 16%; }
-}
-@keyframes vocal-speak-envelope {
-  0%, 100% { width: 30%; }
-  35% { width: 62%; }
-  70% { width: 45%; }
 }
 /* ================================================================
    PRISE EN MAIN — NIVEAU 2 : l'équipe d'agents (spec_onboarding.md)

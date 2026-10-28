@@ -218,25 +218,30 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
     expect(corps).toMatch(/18%/);
   });
 
-  it("le trait du niveau fait 200 x 3 px, rayon 2 px", () => {
-    const zone = bloc(CSS, ".vocal-level {");
-    expect(zone).toMatch(/width:\s*200px/);
-    expect(zone).toMatch(/height:\s*3px/);
-    const barre = bloc(CSS, ".vocal-level-bar");
-    expect(barre).toMatch(/height:\s*3px/);
-    expect(barre).toMatch(/border-radius:\s*2px/);
+  it("le trait du niveau a DISPARU (12/11) : aucun noeud, aucune regle", () => {
+    // Renversement explicite de l'avenant du 28/10 (« la petite barre
+    // reste ») : le proprietaire ne veut plus de trait sous le cercle. Le
+    // niveau du micro continue d'etre mesure (il allume l'etat « ecoute » et
+    // remplit le halo interieur) mais plus rien ne le dessine.
+    expect(CSS).not.toMatch(/\.vocal-level\b/);
+    expect(CSS).not.toMatch(/vocal-level-bar/);
+    expect(CSS).not.toMatch(/--vocal-level/);
+    const corps = corpsFonction(SUPER, "function buildVocalOverlay");
+    expect(corps).not.toMatch(/vocal-level/);
   });
 
-  it("le trait est a 24 px du disque (le meme ecart pour toute la pile)", () => {
-    expect(bloc(CSS, ".vocal-stage")).toMatch(/gap:\s*24px/);
+  it("le disque et la ligne d'etat sont a 32 px (la place de l'enveloppe)", () => {
+    // 24 px avant le 12/11 ; 32 px parce que l'enveloppe de parole occupe
+    // desormais ces 32 px au-dela de l'anneau : le texte ne passe pas dessous.
+    expect(bloc(CSS, ".vocal-stage")).toMatch(/gap:\s*32px/);
   });
 
-  it("LOT 3 : en ecoute, le trait suit le niveau MESURE (repli 8 % au silence)", () => {
-    // La longueur vient de la variable posee par vocal-mic.js ; sans mesure
-    // (micro ferme, refuse, en panne) le repli est le silence.
-    expect(bloc(CSS, ".pilot-vocal.vocal-state-listening .vocal-level-bar")).toMatch(
-      /width:\s*var\(--vocal-level, 8%\)/,
-    );
+  it("LOT 3 : la mesure du micro reste, sans trait pour la dessiner", () => {
+    // Le niveau MESURE ne dessine plus qu'une chose : le halo interieur.
+    const niveau = corpsFonction(SUPER, "function vocalSetLevel");
+    expect(niveau).toMatch(/--vocal-heard/);
+    expect(niveau).toMatch(/planLevel\(/);
+    expect(niveau).not.toMatch(/--vocal-level/);
     // Un seul mecanisme : les API micro ne sont PAS dans super-agent.js.
     expect(SUPER).not.toMatch(/getUserMedia|AudioContext|mediaDevices/);
   });
@@ -244,7 +249,6 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
   it("aucune couleur en dur dans les etats : uniquement --vocal-state", () => {
     for (const sel of [
       ".vocal-orb {",
-      ".vocal-level-bar",
       ".vocal-orb::before {",
       ".vocal-orb::after {",
     ]) {
@@ -347,29 +351,28 @@ describe("5. reduction de mouvement : le MEME drapeau, aucun nouveau reglage (§
     expect(vocalReducedMotion(fauxWin(false, undefined))).toBe(false);
   });
 
-  it("le CSS fige alors le trait : 8 / 45 / 20 / 70 %, sans animation", () => {
-    const attendus = [
-      ["idle", "8%"],
-      ["listening", "45%"],
-      ["thinking", "20%"],
-      ["speaking", "70%"],
-    ];
-    for (const [etat, largeur] of attendus) {
-      expect(
-        bloc(CSS, `.pilot-vocal.vocal-reduced.vocal-state-${etat} .vocal-level-bar`),
-      ).toMatch(new RegExp(`width:\\s*${largeur}`));
+  it("le CSS ne fige plus aucun trait : la decision est partie avec lui", () => {
+    // Les quatre largeurs figees (8 / 45 / 20 / 70 %) etaient celles du trait.
+    // Plus de trait, plus de largeur : le halo, lui, garde sa valeur figee
+    // lisible (0,55 en ecoute, verifiee par le test du lot B).
+    for (const etat of ["idle", "listening", "thinking", "speaking"]) {
+      expect(CSS).not.toMatch(
+        new RegExp(`\\.pilot-vocal\\.vocal-reduced\\.vocal-state-${etat} \\.vocal-level-bar`),
+      );
     }
+    expect(CSS).toMatch(/--vocal-halo:\s*0\.55/);
     expect(CSS).toMatch(/\.pilot-vocal\.vocal-reduced[\s\S]{0,400}animation:\s*none/);
   });
 });
 
 // ---------------------------------------------------------------------------
 describe("6. l'ecran ne montre RIEN de la conversation", () => {
-  it("le contenu de l'ecran est l'objet, le trait, la ligne d'etat et la saisie", () => {
+  it("le contenu de l'ecran est l'objet, la ligne d'etat et la saisie", () => {
     const corps = corpsFonction(SUPER, "function buildVocalOverlay");
     expect(corps).toMatch(/vocal-orb/);
-    expect(corps).toMatch(/vocal-level/);
     expect(corps).toMatch(/vocal-status/);
+    // Le trait a disparu le 12/11 : l'ecran nu n'a plus que l'objet et le mot.
+    expect(corps).not.toMatch(/vocal-level/);
     // Jamais l'historique de la conversation : aucun conteneur de messages.
     expect(corps).not.toMatch(/message/i);
   });
