@@ -243,9 +243,21 @@ signal, une seule garde, **deux** cibles choisies par la priorité des états (�
   décision est **une seule fonction pure**, `isReadAloudSpeaking(state)`, et elle
   sert les quatre chemins (armement de la dictée, garde du micro, coupure, sortie
   du mode) — aucune comparaison de chaîne ailleurs.
-- **À chaque début de lecture**, une **mesure de 600 ms** (calibrage) : Pilot ne
-  coupe pas, il écoute **son propre son** sortir des haut-parleurs et retient le
-  niveau maximal observé (le **résidu d'écho**).
+- **À chaque début de lecture**, une fenêtre d'ouverture de **600 ms** pendant
+  laquelle Pilot **ne coupe jamais** : elle lui laisse le temps de commencer à
+  parler. La **mesure** du son de Pilot (le **résidu d'écho**) ne se prend que sur
+  l'**attaque du son**, les **200 ms** premières millisecondes de cette fenêtre
+  (la constante existante `BARGE_IN_MIN_MS`) ; le reste de la fenêtre n'émet plus
+  aucune mesure. Pourquoi : une **première** lecture démarre sur un moteur de
+  voix **froid** (le son arrive après la fenêtre), une **deuxième** sur un moteur
+  **chaud** (le son démarre tout de suite) — mesurer la fenêtre entière y ferait
+  entrer **votre** voix, qui deviendrait la référence et que plus rien ne
+  dépasserait. C'est exactement le défaut corrigé (1ʳᵉ lecture coupable, 2ᵉ
+  jamais) : `RAPPORT-correction-coupure-deuxieme-lecture.md`.
+- **Une voix franche et continue coupe à CHAQUE lecture**, indéfiniment : la
+  deuxième, la troisième, la dixième comme la première. Aucune mesure ne survit
+  d'une lecture à l'autre, et aucun verrou de coupure ne peut être hérité d'une
+  réflexion interrompue.
 - **Le seuil** vaut ensuite `max(0,05 ; résidu × 1,8)` : il est toujours posé
   **au-dessus** de ce que Pilot s'entend faire. Le résidu ne remonte que sur les
   moments **calmes** — une voix ne peut pas devenir elle-même la référence qui
@@ -259,8 +271,8 @@ signal, une seule garde, **deux** cibles choisies par la priorité des états (�
   la conséquence : une voix qui dépasse **le double du résidu mesuré**
   (`fallbackThreshold`, `BARGE_IN_FALLBACK_FACTOR` = 2) et **s'y tient
   `BARGE_IN_FALLBACK_MS` = 1000 ms** coupe la lecture. Pourquoi cela ne part pas
-  sur Pilot : le résidu est mesuré **au début de la lecture**, quand seul le son
-  de Pilot est présent ; ce même son ne franchit pas son propre double, alors
+  sur Pilot : le résidu est mesuré sur l'**attaque du son**, quand seul le son de
+  Pilot est présent ; ce même son ne franchit pas son propre double, alors
   qu'une voix superposée l'élève nettement. Le secours est **plus prudent** que
   la voie normale (marge 2 au lieu de 1,8 ; une seconde au lieu de 200 ms) et il
   ne supprime **aucune** protection anti-écho.
@@ -503,8 +515,8 @@ ci-dessous sont **voulus** et se produisent sans que rien ne soit cassé.
 | Ce que vous vivez | Pourquoi (c'est voulu) | Quoi faire |
 |---|---|---|
 | **Il faut insister plus longtemps que d'habitude** | Quand l'écho n'est pas maîtrisé (navigateur qui ne **prouve** pas l'annulation d'écho, ou résidu d'écho au-dessus de la limite), le seuil habituel — 200 ms de voix — est **interdit** : il ne reste que la **garantie de secours**, qui demande une voix au-dessus du **double** du son que Pilot s'envoie **tenue une seconde entière**. | Parler d'une traite pendant au moins une seconde, sans s'arrêter. **Rien ne rend plus la coupure impossible** : c'est la règle tenue par cette garantie. |
-| **Rien ne se coupe dans la première seconde** | Les **600 premières millisecondes** d'une lecture servent à mesurer le son de Pilot lui-même : couper pendant cette mesure reviendrait à juger avec un seuil qui n'existe pas encore. | Parler après le tout début d'une phrase. |
-| **Rien ne se coupe si vous parlez tout de suite** | Votre voix tombe alors **dans** la mesure : elle est comptée comme du son de Pilot, et la référence du secours monte avec elle — plus rien ne la dépasse pendant cette lecture-là. | Laisser passer le tout début de la phrase, puis parler. La lecture suivante repart d'une mesure propre. |
+| **Rien ne se coupe dans la première seconde** | Les **600 premières millisecondes** d'une lecture servent à laisser Pilot commencer à parler : couper pendant cette ouverture reviendrait à juger avec un seuil pas encore établi. La mesure du son de Pilot, elle, ne prend que les **200 premières** millisecondes. | Parler après le tout début d'une phrase. |
+| **Rien ne se coupe si vous parlez dans les 200 premiers millisecondes** | Votre voix tombe alors **dans** la mesure d'attaque : elle est comptée comme du son de Pilot, et la référence du secours monte avec elle — plus rien ne la dépasse pendant cette lecture-là. Au-delà de ces 200 ms, la mesure est terminée : votre voix ne peut plus la polluer. | Laisser passer le tout début de la phrase, puis parler. La lecture suivante repart d'une mesure propre. |
 | **Rien ne se coupe avec des haut-parleurs très forts** | Le **résidu d'écho mesuré** est si élevé que le secours exige une voix au-dessus du **double** de ce son : si vos haut-parleurs couvrent votre voix, aucun seuil ne peut la distinguer. | Baisser le volume, rapprocher le micro, ou mettre un casque — puis relire la mesure. |
 | **Il faut vraiment insister** | Une voix **brève ou hachée** (moins de 200 ms continues au-dessus du seuil, ou une seconde dans le régime de secours) n'est pas une prise de parole : c'est un bruit — que Pilot **lise** ou qu'il **réfléchisse**. | Parler d'une traite, une phrase entière. |
 
@@ -517,9 +529,10 @@ micro**, et pilot ne peut pas séparer votre voix du son de Pilot autrement qu'e
 comparant des niveaux. Deux cas restent donc hors de portée, et ils sont
 mesurables :
 
-1. **Vous parlez dans les 600 ms qui suivent le début de la phrase** : votre voix
-   entre dans la mesure et devient une partie de la référence — la lecture n'est
-   pas coupée cette fois-là.
+1. **Vous parlez dans les 200 ms qui suivent le début de la phrase** : votre
+   voix entre dans la mesure d'attaque et devient une partie de la référence —
+   la lecture n'est pas coupée cette fois-là. La lecture **suivante** repart
+   d'une mesure propre : c'est une limite d'une lecture, pas d'une session.
 2. **Vos haut-parleurs sont si forts que votre voix ne dépasse pas le double du
    son qu'ils envoient au micro** : aucun seuil ne peut la distinguer.
 

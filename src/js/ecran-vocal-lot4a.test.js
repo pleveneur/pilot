@@ -46,6 +46,7 @@ import {
   BARGE_IN_RESIDUAL_MAX,
   BARGE_IN_RESIDUAL_UNPROVEN_MAX,
 } from "./vocal-mic.js";
+import { sliceSource } from "./source-slice.js";
 
 const ICI = dirname(fileURLToPath(import.meta.url));
 const lire = (rel) => readFileSync(join(ICI, "..", "..", rel), "utf8").replace(/\r\n/g, "\n");
@@ -75,6 +76,33 @@ function jouerLecture(niveau, dureeMs, options = {}) {
     if (pasGarde.declenche) declenchements.push(t + pas);
   }
   return { etat, declenchements, seuil };
+}
+
+/**
+ * Une SEQUENCE de niveaux pour UNE lecture (tableau de `{niveau, dureeMs}`), en
+ * images de 16 ms. Le temps `t` cumule sur toute la sequence : il permet de
+ * comparer la latence de coupure entre deux lectures. PURE.
+ */
+function jouerSequence(etat, plan, options = {}) {
+  const pas = 16;
+  const contexte = {
+    parlant: options.parlant !== false,
+    reflechi: options.reflechi === true,
+    dtMs: pas,
+    echoAnnule: options.echoAnnule === undefined ? true : options.echoAnnule,
+  };
+  let courant = etat || emptySpeechGate();
+  const declenchements = [];
+  let t = 0;
+  for (const etape of plan) {
+    for (let ecoule = 0; ecoule < etape.dureeMs; ecoule += pas) {
+      const p = stepSpeechGate(courant, etape.niveau, contexte);
+      courant = p.etat;
+      t += pas;
+      if (p.declenche) declenchements.push({ t, motif: p.motif, seuil: p.seuil });
+    }
+  }
+  return { etat: courant, declenchements };
 }
 
 /**
@@ -610,5 +638,218 @@ describe("5. la GARANTIE DE SECOURS : une voix franche finit TOUJOURS par couper
     // Et aucun nouvel appel de capture dans le module.
     expect((MIC.match(/md\.getUserMedia\(/g) || []).length).toBe(1);
     expect(corps).not.toMatch(/getUserMedia|new AudioContext/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LA LECTURE SUIVANTE EST COUPABLE, INDEFINIMENT.
+//
+// Defaut constate au vrai micro (RAPPORT-diagnostic-coupure-deuxieme-lecture.md) :
+// la 1re lecture d'une session se coupait, la 2e plus jamais. Rien ne survivait
+// de la garde entre deux lectures : c'est le MOMENT de la mesure qui etait faux.
+// La fenetre de 600 ms s'ouvre sur `notify("speaking")`, donc AVANT les attentes
+// qui precedent le premier son :
+//   - 1re lecture, moteur de voix FROID : la fenetre est du silence -> residu
+//     faible -> garde armee -> la voix coupe en 200 ms ;
+//   - 2e lecture, moteur CHAUD : le son de Pilot demarre dans la fenetre, et la
+//     voix de l'utilisateur par-dessus -> residu enorme -> garde desarmee ET
+//     reference du secours = cette voix -> aucune voix ne peut depasser son
+//     propre double -> plus jamais coupable.
+// Correction : la reference (residu ET refSecours) ne se prend plus que sur
+// L'ATTAQUE du son (les `BARGE_IN_MIN_MS` deja existantes) ; le reste de la
+// fenetre continue d'empecher toute coupure mais n'emet plus aucune mesure.
+// Aucune constante de decision ne change de valeur.
+describe("6. la 2e lecture est coupable comme la 1re (moment de la mesure)", () => {
+  it("DEUX lectures d'affilee : la SECONDE doit etre coupable (moteur chaud), et la 3e aussi", () => {
+    // LECTURE 1 - moteur FROID : la fenetre est du silence (le son n'arrive
+    // qu'apres elle), puis l'utilisateur parle.
+    const froide = jouerSequence(emptySpeechGate(), [
+      { niveau: 0.01, dureeMs: 1500 },
+      { niveau: 0.35, dureeMs: 1000 },
+    ]);
+    expect(froide.declenchements, "1re lecture (froide)").toHaveLength(1);
+    expect(froide.declenchements[0].motif).toBe("voix-detectee");
+    // Voie normale : la voix coupe `BARGE_IN_MIN_MS` apres son debut (1500 ms).
+    expect(froide.declenchements[0].t).toBeGreaterThanOrEqual(1500 + BARGE_IN_MIN_MS);
+    expect(froide.declenchements[0].t).toBeLessThan(1500 + BARGE_IN_MIN_MS + 40);
+
+    // LECTURE 2 - moteur CHAUD : le son de Pilot demarre a la PREMIERE image et
+    // l'utilisateur reagit a 350 ms, donc DANS la fenetre. C'est le cas qui ne
+    // se coupait plus : la voix devenait sa propre reference.
+    const chaude = jouerSequence(emptySpeechGate(), [
+      { niveau: 0.04, dureeMs: 350 },
+      { niveau: 0.35, dureeMs: 2000 },
+    ]);
+    expect(chaude.declenchements, "2e lecture (chaude)").toHaveLength(1);
+    // La reference est bien le SON DE PILOT (0,04), pas la voix (0,35).
+    expect(chaude.etat.refSecours).toBeCloseTo(0.04, 2);
+    expect(chaude.etat.refSecours).toBeLessThan(0.1);
+    expect(fallbackThreshold(chaude.etat.refSecours)).toBeLessThan(0.1);
+    // Echo mesure au-dessus de la tolerance : la coupure vient de la garantie de
+    // secours, donc plus tard que la voie normale (limite dite dans le rapport).
+    expect(chaude.declenchements[0].motif).toBe("voix-secours");
+    expect(chaude.declenchements[0].t).toBeLessThanOrEqual(BARGE_IN_CALIBRATION_MS + BARGE_IN_FALLBACK_MS + 40);
+
+    // LECTURE 3 - identique a la 2 : le droit de couper ne se consomme pas.
+    const troisieme = jouerSequence(emptySpeechGate(), [
+      { niveau: 0.04, dureeMs: 350 },
+      { niveau: 0.35, dureeMs: 2000 },
+    ]);
+    expect(troisieme.declenchements, "3e lecture").toHaveLength(1);
+    expect(troisieme.declenchements[0].t).toBe(chaude.declenchements[0].t);
+  });
+
+  it("CONTRE-EPREUVE : la meme 2e lecture SANS voix ne coupe jamais", () => {
+    // Meme moteur chaud, meme son de Pilot des la premiere image, dix secondes.
+    const seul = jouerSequence(emptySpeechGate(), [{ niveau: 0.04, dureeMs: 10000 }]);
+    expect(seul.declenchements).toEqual([]);
+    // Et la reference reste le son de Pilot, jamais autre chose.
+    expect(seul.etat.refSecours).toBeCloseTo(0.04, 2);
+  });
+
+  it("dix lectures d'affilee : la voix franche coupe a CHAQUE fois, meme latence", () => {
+    const latences = [];
+    for (let i = 0; i < 10; i += 1) {
+      // Fin de la lecture precedente : la garde repart de zero (setSpeaking(false)),
+      // et le moteur est deja CHAUD (le son demarre a la premiere image).
+      const lecture = jouerSequence(emptySpeechGate(), [
+        { niveau: 0.02, dureeMs: 800 },
+        { niveau: 0.4, dureeMs: 800 },
+      ]);
+      expect(lecture.declenchements, `lecture ${i + 1}`).toHaveLength(1);
+      expect(lecture.declenchements[0].motif).toBe("voix-detectee");
+      latences.push(lecture.declenchements[0].t);
+    }
+    // Toutes identiques : la coupure ne depend pas de ce qui s'est passe avant.
+    expect(new Set(latences).size).toBe(1);
+    expect(latences[0]).toBeGreaterThanOrEqual(800 + BARGE_IN_MIN_MS);
+    expect(latences[0]).toBeLessThan(800 + BARGE_IN_MIN_MS + 40);
+  });
+
+  it("le son de Pilot SEUL ne coupe jamais, meme fort et long", () => {
+    // Fort et constant des la premiere image : il est sa propre reference.
+    expect(jouerSequence(emptySpeechGate(), [{ niveau: 0.3, dureeMs: 15000 }]).declenchements).toEqual([]);
+    expect(
+      jouerSequence(emptySpeechGate(), [{ niveau: 0.3, dureeMs: 15000 }], { echoAnnule: false }).declenchements
+    ).toEqual([]);
+    // Et une montee MODEREE du son de Pilot (sous son propre double) non plus.
+    expect(
+      jouerSequence(emptySpeechGate(), [
+        { niveau: 0.04, dureeMs: 3000 },
+        { niveau: 0.07, dureeMs: 3000 },
+      ]).declenchements
+    ).toEqual([]);
+  });
+
+  it("une voix douce ou breve ne coupe pas, meme moteur chaud", () => {
+    // Sous le plancher de bruit : c'est un bruit de fond, pas une voix.
+    expect(
+      jouerSequence(emptySpeechGate(), [
+        { niveau: 0.02, dureeMs: 300 },
+        { niveau: 0.045, dureeMs: 3000 },
+      ]).declenchements
+    ).toEqual([]);
+    // Un claquement d'une image, meme tres fort : jamais une voix continue.
+    expect(
+      jouerSequence(emptySpeechGate(), [
+        { niveau: 0.02, dureeMs: 300 },
+        { niveau: 0.9, dureeMs: 16 },
+        { niveau: 0.02, dureeMs: 2000 },
+      ]).declenchements
+    ).toEqual([]);
+  });
+
+  it("une seule coupure par lecture, meme si la voix continue", () => {
+    const lecture = jouerSequence(emptySpeechGate(), [
+      { niveau: 0.02, dureeMs: 300 },
+      { niveau: 0.4, dureeMs: 5000 },
+    ]);
+    expect(lecture.declenchements).toHaveLength(1);
+  });
+
+  it("la reflexion reste interruptible apres une lecture", () => {
+    const lecture = jouerSequence(emptySpeechGate(), [
+      { niveau: 0.02, dureeMs: 300 },
+      { niveau: 0.4, dureeMs: 800 },
+    ]);
+    expect(lecture.declenchements).toHaveLength(1);
+    const reflexion = jouerSequence(
+      emptySpeechGate(),
+      [
+        { niveau: 0.01, dureeMs: 500 },
+        { niveau: 0.15, dureeMs: 600 },
+      ],
+      { parlant: false, reflechi: true }
+    );
+    expect(reflexion.declenchements).toHaveLength(1);
+    expect(reflexion.declenchements[0].motif).toBe("voix-detectee");
+  });
+
+  it("aucun seuil de decision n'a change de valeur", () => {
+    expect(BARGE_IN_CALIBRATION_MS).toBe(600);
+    expect(BARGE_IN_MIN_MS).toBe(200);
+    expect(BARGE_IN_MIN_LEVEL).toBe(0.05);
+    expect(BARGE_IN_RESIDUAL_MAX).toBe(0.03);
+    expect(BARGE_IN_RESIDUAL_UNPROVEN_MAX).toBe(0.01);
+    expect(BARGE_IN_FALLBACK_MS).toBe(1000);
+    // Les deux marges (1,8 et 2) et les seuils qui en decoulent.
+    expect(vocalEchoThreshold(0.05)).toBeCloseTo(0.09, 6);
+    expect(fallbackThreshold(0.1)).toBeCloseTo(0.2, 6);
+  });
+
+  it("la reference ne se prend QUE sur l'attaque (lecture du source)", () => {
+    // Fenetre de source : la fonction entiere (ses sorties anticipees ferment des
+    // blocs a deux espaces, donc on borne par la fonction suivante du module).
+    const corps = sliceSource(MIC, "function stepSpeechGate(", "export function rmsOf(");
+    // La condition qui limite la mesure a l'attaque, avec la constante EXISTANTE.
+    expect(corps).toMatch(/calibreMs - dt < BARGE_IN_MIN_MS/);
+    // Une seule ecriture de la reference du secours, sous cette condition.
+    expect((corps.match(/Math\.max\(suivant\.refSecours, m\)/g) || []).length).toBe(1);
+    // Aucune seconde capture, aucune constante ajoutee.
+    expect((MIC.match(/md\.getUserMedia\(/g) || []).length).toBe(1);
+    expect(MIC).not.toMatch(/BARGE_IN_ATTACK_MS/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LE VERROU D'UNE PRISE DE PAROLE NE SURVIT PAS A LA LECTURE SUIVANTE.
+//
+// Defaut n° 2 du diagnostic : `setThinking(false)` conservait `declenche`. Un
+// utilisateur qui parle pendant la reflexion (ce qui coupe le tour, voulu)
+// laissait donc la garde verrouillee, et la lecture qui suivait sortait en
+// `deja-coupe` : elle ne pouvait plus etre coupee du tout, quelle que soit la
+// reference. La garde est desormais remise a zero a CHAQUE changement d'etat,
+// comme aux autres remises a zero : une lecture est une prise de parole neuve.
+describe("7. le verrou d'une prise de parole ne survit pas a la lecture suivante", () => {
+  it("parler pendant la reflexion, puis la lecture : la lecture est coupable", async () => {
+    const faux = fauxMicro({ niveau: 0.012, echoCancellation: true });
+    const moteur = createVocalMic(faux.options);
+    await moteur.demander();
+    moteur.setThinking(true);
+    faux.journal.niveau = 0.15; // l'utilisateur prend la parole pendant la reflexion
+    faux.jouer(30);
+    expect(faux.journal.paroles).toHaveLength(1); // le verrou est pose
+    moteur.setThinking(false);
+    // La voix retombe et la mesure se stabilise AVANT la lecture (comme dans
+    // l'application : la lecture ne demarre jamais sur un niveau residuel).
+    faux.journal.niveau = 0.012;
+    faux.jouer(40);
+    moteur.setSpeaking(true); // la lecture commence
+    faux.jouer(60); // ~1 s de lecture dans le calme
+    faux.journal.niveau = 0.2; // l'utilisateur parle par-dessus
+    faux.jouer(40);
+    expect(faux.journal.paroles).toHaveLength(2); // la lecture est bien coupee
+    moteur.fermer();
+  });
+
+  it("les remises a zero sont aux memes endroits que les autres (lecture du source)", () => {
+    // Le verrou n'est plus recopie d'un etat a l'autre.
+    expect(MIC).not.toMatch(/declenche: garde\.declenche/);
+    // La garde repart de zero a la fin de la reflexion ET a chaque changement de
+    // lecture (debut comme fin) : une seule mesure, une seule reference.
+    expect(corpsFonction(MIC, "function setThinking(")).toMatch(/garde = emptySpeechGate\(\)/);
+    const parler = corpsFonction(MIC, "function setSpeaking(");
+    expect(parler).toMatch(/garde = emptySpeechGate\(\)/);
+    expect(parler).not.toMatch(/if \(!etat\) \{/);
   });
 });

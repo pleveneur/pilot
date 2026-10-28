@@ -498,7 +498,8 @@ En mode **Vocal** :
   début de chaque lecture, seuil posé au-dessus) et, si cette vérification n'est
   pas concluante, il relève le seuil **au double du son qu'il s'envoie** : il
   faut alors parler **plus longtemps** (une seconde d'affilée), mais **une voix
-  franche et continue finit toujours par le faire taire**. En revanche, si vous
+  franche et continue finit toujours par le faire taire** — **à chaque lecture**,
+  la deuxième comme la première. En revanche, si vous
   parlez dans les tout premiers instants d'une phrase, pendant cette mesure, il
   ne s'arrête pas. Le **casque** est la situation où cela marche le mieux.
 - **Parler pendant qu'il travaille l'arrête aussi** : si vous prenez la parole

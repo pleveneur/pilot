@@ -26,9 +26,9 @@
 //   1. l'ANNULATION D'ECHO est DEMANDEE au navigateur (contraintes ci-dessous)
 //      puis RELUE sur la piste reellement obtenue (`getSettings`) : le
 //      navigateur dit ce qu'il a applique, pas ce qu'on a souhaite ;
-//   2. le RESIDU D'ECHO est MESURE au debut de chaque lecture (niveau maximal
-//      observe pendant `BARGE_IN_CALIBRATION_MS`) et le seuil de detection est
-//      pose AU-DESSUS de ce residu mesure ;
+//   2. le RESIDU D'ECHO est MESURE au debut de chaque lecture, sur l'ATTAQUE
+//      du son (les `BARGE_IN_MIN_MS` premieres millisecondes de la fenetre) et
+//      le seuil de detection est pose AU-DESSUS de ce residu mesure ;
 //   3. si l'annulation d'echo n'est pas averee, ou si le residu depasse
 //      `BARGE_IN_RESIDUAL_MAX`, les seuils habituels ne sont PAS armes (Pilot
 //      s'entendrait lui-meme). Un silence vaut mieux qu'une coupure qui se
@@ -41,8 +41,9 @@
 //
 // ── GARANTIE DE SECOURS : LA VOIX FRANCHE FINIT TOUJOURS PAR COUPER ──────────
 // Le cas « impossible a couper » est ferme sans toucher a un seul seuil : quand
-// la garde n'est pas armee, une voix est jugee sur le RESIDU MESURE, GELE en
-// fin de calibrage (le son que Pilot s'envoie a lui-meme), et doit le depasser
+// la garde n'est pas armee, une voix est jugee sur le RESIDU MESURE sur
+// L'ATTAQUE du son et GELE pour cette lecture (le son que Pilot s'envoie a
+// lui-meme), et doit le depasser
 // de `BARGE_IN_FALLBACK_FACTOR` fois en le tenant `BARGE_IN_FALLBACK_MS`. Le son de Pilot ne franchit jamais
 // son propre double ; une voix superposee, si. Le secours est plus prudent que
 // la voie normale (marge plus large, voix tenue cinq fois plus longtemps). Une
@@ -189,7 +190,7 @@ export const MIC_CONSTRAINTS = {
 // Toutes les durees sont en millisecondes ; tous les niveaux sont des RMS
 // (0..1), la meme unite que `rmsOf` et que la longueur du trait.
 
-/** Duree de MESURE du residu d'echo, au debut de chaque lecture. */
+/** Duree de la fenetre d'ouverture de la lecture, pendant laquelle on ne coupe jamais. */
 export const BARGE_IN_CALIBRATION_MS = 600;
 /** Plancher absolu du seuil : sous ce niveau, personne ne parle (bruit de fond). */
 export const BARGE_IN_MIN_LEVEL = 0.05;
@@ -319,9 +320,9 @@ export function emptySpeechGate() {
     calibreMs: 0,
     residuel: 0,
     declenche: false,
-    // Reference de la garantie de secours : le residu GELE a la fin du
-    // calibrage (le son que Pilot s'envoie au debut de la lecture), et la duree
-    // de voix tenue AU-DESSUS de son seuil. Le residu, lui, continue de suivre
+    // Reference de la garantie de secours : le residu GELE sur l'ATTAQUE du
+    // son, au debut de la lecture (le son que Pilot s'envoie), et la duree de
+    // voix tenue AU-DESSUS de son seuil. Le residu, lui, continue de suivre
     // l'echo pour dire si la garde est armee ; cette reference-la ne bouge plus.
     refSecours: 0,
     dessusSosMs: 0,
@@ -333,7 +334,10 @@ export function emptySpeechGate() {
  * garde se verifie sans micro et sans fenetre.
  *
  * Deroulement d'une lecture :
- *   - « calibrage » : on ne coupe jamais, on MESURE le residu (maximum vu) ;
+ *   - « calibrage » : on ne coupe jamais, et on MESURE le son de Pilot sur
+ *     l'ATTAQUE (les `BARGE_IN_MIN_MS` premieres millisecondes de la fenetre) —
+ *     le reste de la fenetre ne mesure plus rien, pour que la voix de
+ *     l'utilisateur ne devienne pas la reference qui l'empeche de couper ;
  *   - ensuite une voix doit depasser le seuil SANS INTERRUPTION pendant
  *     `BARGE_IN_MIN_MS` pour que la garde se declenche ;
  *   - GARANTIE DE SECOURS : si la garde n'est PAS armee (echo douteux, preuve
@@ -342,8 +346,8 @@ export function emptySpeechGate() {
  *     coupe quand meme. Sans cela, un echo douteux rendait toute coupure
  *     impossible ;
  *   - elle ne se declenche qu'UNE fois par lecture (`declenche`), et l'etat est
- *     remis a zero des que la lecture s'arrete : le residu d'une lecture ne
- *     vaut pas pour la suivante.
+ *     remis a zero a CHAQUE changement de lecture (debut comme fin) : ni le
+ *     residu ni un verrou d'une lecture ne valent pour la suivante.
  *
  * Deroulement d'une REFLEXION (`reflechi`, lot 4b) : meme garde, sans
  * calibrage — Pilot est muet, il n'y a pas d'echo a mesurer. Seules comptent la
@@ -408,12 +412,23 @@ export function stepSpeechGate(etat, mesure, contexte = {}) {
   }
   if (suivant.calibreMs < BARGE_IN_CALIBRATION_MS) {
     suivant.calibreMs += dt;
-    suivant.residuel = Math.max(suivant.residuel, m);
-    // La mesure du debut de lecture fixe AUSSI la reference du secours : c'est
-    // le seul moment ou le son entendu est celui de Pilot (l'utilisateur ne
-    // peut pas encore avoir parle). Ensuite elle ne bouge plus : une reference
-    // qui suivrait la voix ne pourrait jamais etre depassee par elle.
-    suivant.refSecours = Math.max(suivant.refSecours, m);
+    // ── LA REFERENCE SE PREND SUR L'ATTAQUE DU SON ────────────────────────
+    // Seules les `BARGE_IN_MIN_MS` premieres millisecondes de la fenetre
+    // mesurent : c'est la seule portion ou le son entendu ne peut pas encore
+    // etre une reaction de l'utilisateur (il vient d'entendre Pilot
+    // commencer). Le reste de la fenetre continue d'empecher toute coupure,
+    // mais ne peut plus FAIRE MONTER la reference ni le residu : sinon la voix
+    // qui doit couper devient la reference qui l'en empeche. Ce defaut etait
+    // invisible a la 1re lecture (moteur de voix froid : la fenetre etait du
+    // silence) et systematique ensuite (moteur chaud : le son de Pilot demarre
+    // dans la fenetre, la voix de l'utilisateur par-dessus). Deplacer le
+    // MOMENT de la mesure ne change aucune valeur de seuil.
+    if (suivant.calibreMs - dt < BARGE_IN_MIN_MS) {
+      suivant.residuel = Math.max(suivant.residuel, m);
+      // La reference du secours se gele ici, sur l'attaque : une reference qui
+      // suivrait la voix ne pourrait jamais etre depassee par elle.
+      suivant.refSecours = Math.max(suivant.refSecours, m);
+    }
     return { etat: suivant, declenche: false, arme, seuil: vocalEchoThreshold(suivant.residuel), motif: "calibrage" };
   }
   if (!arme) {
@@ -800,6 +815,13 @@ export function createVocalMic(options = {}) {
    * capture). Lue une seule fois a l'ouverture du micro, elle se figeait pour
    * toute la session : une valeur `false` interdisait alors la coupure jusqu'a
    * la sortie du mode, sans aucune trace. La relire ne change aucun seuil.
+   *
+   * La garde est remise a ZERO a CHAQUE changement de `parlant` (debut comme
+   * fin de lecture) : chaque lecture est une prise de parole NEUVE, avec sa
+   * propre mesure et sa propre decision. Remise a zero seulement a la fin, elle
+   * laissait un verrou pose pendant la REFLEXION (`declenche`) survivre a la
+   * lecture suivante, qui sortait alors en `deja-coupe` et ne pouvait plus etre
+   * coupee du tout.
    * @param {boolean} actif
    */
   function setSpeaking(actif) {
@@ -807,19 +829,19 @@ export function createVocalMic(options = {}) {
     if (etat && flux) echoAnnule = echoCancellationOf(flux);
     if (etat === parlant) return;
     parlant = etat;
-    if (!etat) {
-      garde = emptySpeechGate();
-      dernierTemps = 0;
-    }
+    garde = emptySpeechGate();
+    dernierTemps = 0;
   }
 
   /**
    * LOT 4b : « Pilot reflechit » (vrai) ou ne reflechit plus (faux). Meme
    * discipline que `setSpeaking` : l'etat est repose par l'appelant, jamais
-   * devine ici. A la FIN de la reflexion, la mesure de continuite repart de
-   * zero (aucune voix d'un tour ne s'additionne a celle du suivant), mais un
-   * verrou de coupure DEJA pose le reste jusqu'a ce que la voix retombe :
-   * jamais deux coupures pour une meme prise de parole.
+   * devine ici. A la FIN de la reflexion, la garde repart de ZERO, comme aux
+   * autres remises a zero : la mesure de continuite ne s'additionne pas d'un
+   * tour a l'autre, et le verrou de coupure d'une prise de parole pendant la
+   * reflexion ne survit pas a la lecture qui suit (il l'aurait avalee entiere).
+   * Une prise de parole pendant la reflexion est deja bornee a UNE coupure par
+   * la garde elle-meme, qui se rearme des que la voix retombe.
    * @param {boolean} actif
    */
   function setThinking(actif) {
@@ -827,7 +849,7 @@ export function createVocalMic(options = {}) {
     if (etat === reflechi) return;
     reflechi = etat;
     if (!etat) {
-      garde = { ...emptySpeechGate(), declenche: garde.declenche };
+      garde = emptySpeechGate();
       dernierTemps = 0;
     }
   }

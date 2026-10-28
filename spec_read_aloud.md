@@ -34,26 +34,39 @@ Bouton **« 🔊 Écouter » / « ⏹ Arrêter »** sous chaque réponse de l'ag
         une absence de réponse vaut **inconnue**, jamais « vrai par défaut ». La
         preuve est **relue à chaque début de lecture**, sur la piste déjà
         ouverte : elle ne gèle plus la décision de toute la session.
-     2. **Seuil posé au-dessus du résidu mesuré** : au début de chaque lecture,
-        `BARGE_IN_CALIBRATION_MS` (600 ms) mesure le niveau maximal (le résidu
-        d'écho) sans jamais couper ; ensuite le seuil vaut
-        `max(BARGE_IN_MIN_LEVEL = 0,05 ; résidu × 1,8)`. Le résidu ne remonte que
-        sur les moments **calmes** : une voix ne devient jamais la référence qui
-        l'empêcherait de couper.
+     2. **Seuil posé au-dessus du résidu mesuré — sur l'ATTAQUE du son** : la
+        référence d'une lecture se prend sur les **`BARGE_IN_MIN_MS` (200 ms)
+        premières millisecondes** de son, et **seulement** sur elles
+        (`calibreMs - dt < BARGE_IN_MIN_MS` dans `stepSpeechGate`) ; le reste de
+        la fenêtre d'ouverture (`BARGE_IN_CALIBRATION_MS` = 600 ms) continue
+        d'**interdire de couper** mais n'émet **plus aucune mesure**. Le seuil
+        vaut ensuite `max(BARGE_IN_MIN_LEVEL = 0,05 ; résidu × 1,8)`. Pourquoi
+        l'attaque et pas la fenêtre : le moteur de voix d'une **première** lecture
+        est froid (le son arrive après la fenêtre → résidu ≈ silence), alors
+        qu'une **deuxième** lecture démarre le son tout de suite — mesurer les
+        600 ms entières y ferait entrer la voix de l'utilisateur, qui deviendrait
+        sa propre référence et **plus rien ne la couperait** (défaut constaté,
+        `RAPPORT-diagnostic-coupure-deuxieme-lecture.md`). Le résidu ne remonte
+        que sur les moments **calmes** : une voix ne devient jamais la référence
+        qui l'empêcherait de couper.
      3. **Garantie de secours — le cas « impossible à couper » n'existe plus** :
         si la détection normale est désarmée (résidu > `BARGE_IN_RESIDUAL_MAX` :
         0,03 avec annulation averée, 0,01 quand le périphérique ne dit rien, ou
         preuve déclarée absente), la lecture n'est **plus** condamnée à aller au
         bout : une voix qui dépasse **le double** du résidu mesuré
         (`fallbackThreshold`) **tenue `BARGE_IN_FALLBACK_MS` (1000 ms)** coupe.
-        Le résidu est gelé au début de la lecture, quand seul le son de Pilot est
+        Le résidu est gelé sur l'attaque du son, quand seul le son de Pilot est
         présent : ce son ne franchit pas son propre double, une voix superposée
         si. Le secours est plus prudent que la voie normale (2× au lieu de 1,8×,
         cinq fois plus long) et ne retire **aucune** protection anti-écho.
      Une coupure exige `BARGE_IN_MIN_MS` (200 ms) de voix **continue** au-dessus
      du seuil (ou `BARGE_IN_FALLBACK_MS` dans le régime de secours), et ne part
-     **qu'une fois** par lecture. Les chiffres réellement mesurés sont rendus
-     par `bargeInReport()` et écrits une fois par coupure
+     **qu'une fois** par lecture. **Une voix franche et continue coupe donc
+     chaque lecture, indéfiniment** — la 2ᵉ, la 3ᵉ, la 10ᵉ comme la première :
+     aucune mesure ne survit d'une lecture à l'autre (`setSpeaking` remet la garde
+     à zéro **aux deux** transitions, `setThinking` à la fin d'une réflexion, donc
+     aucun verrou `declenche` ne peut avaler une lecture). Les chiffres réellement
+     mesurés sont rendus par `bargeInReport()` et écrits une fois par coupure
      (console : `[vocal] prise de parole : residu=… seuil=…`).
 2. **Une seule lecture à la fois** : lancer une autre réponse arrête la
    précédente (`stopReading` avant toute nouvelle prise de parole).
