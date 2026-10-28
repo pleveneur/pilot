@@ -1,0 +1,28 @@
+# Résultats de tests — personnage actif de l'Assistant (Présences)
+
+Date : 2026-10-28 15:03 UTC  ·  réexécution complète, AUCUN chiffre recopié à la main
+
+## Frontend (Vitest, suite complète)
+```
+PASS (4160) FAIL (0)
+```
+
+## Frontend — fichier de test dédié (`src/js/assistant-persona.test.js`)
+```
+PASS (13) FAIL (0)
+```
+Les 13 cas couvrent : dossier du contrat + lecture côté Rust seule, nom présent,
+nom absent, nom vide/blanc/de contrôle, contenu illisible et nom trop long,
+portrait présent, portrait absent, image inutilisable, relecture (commande
+appelée + changement à chaud), panne du socle et réponse illisible, branchements
+(nom d'onglet, portrait à la place de 🧭, nom échappé, relecture à l'ouverture et
+au retour de focus, écouteur retiré à la fermeture).
+
+## Rust (tests unitaires de src-tauri/src/persona.rs)
+```
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+warning: the following packages contain code that will be rejected by a future version of Rust: sqlx-postgres v0.8.0
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src\lib.rs (target\debug\deps\pilot-1a35e3cea54eb404.exe)
+cargo test: 8 passed, 800 filtered out (1 suite, 0.02s)
+```

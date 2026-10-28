@@ -1791,6 +1791,24 @@ apprend et répond.
   reçoit un prompt système par défaut qui rappelle son rôle (suivi de plusieurs
   projets par client, lecture seule).
 
+<!-- HELP:super-agent-personnage -->
+### Le personnage actif (nom et portrait)
+- Quand un **personnage est activé** dans Présences, l'Assistant **prend son
+  nom** et affiche **son portrait** à la place de l'icône 🧭 : dans le titre de
+  l'onglet 🧭 et, en mode « Assistant seul », dans l'accueil (« Bonjour, je
+  suis … ») et dans le cercle.
+- **Aucun personnage actif** (aucun fichier déposé) : rien ne change —
+  l'Assistant garde le nom réglé dans **Options ⚙️ → Assistant** et son icône
+  habituelle. Ce n'est **pas une panne** : aucun message, aucune erreur.
+- **Changer de personnage ne demande aucun redémarrage** : l'Assistant relit le
+  personnage **à l'ouverture de son onglet** et **quand la fenêtre reprend le
+  focus**.
+- Pilot **ne fait que lire** ces informations : il ne crée ni ne modifie jamais
+  le dossier du personnage, et il n'écrit rien dedans.
+- Le nom réglé dans les paramètres reste le **repli** : il réapparaît dès qu'il
+  n'y a plus de personnage actif.
+<!-- /HELP:super-agent-personnage -->
+
 ### Si l'assistant affiche « Connexion au super-agent perdue »
 - Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).
   Les **causes les plus fréquentes** : le chemin de l'agent (Options → Agent)

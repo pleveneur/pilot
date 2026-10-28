@@ -42,6 +42,24 @@ apprend et répond.
   reçoit un prompt système par défaut qui rappelle son rôle (suivi de plusieurs
   projets par client, lecture seule).
 
+<!-- HELP:super-agent-personnage -->
+### Le personnage actif (nom et portrait)
+- Quand un **personnage est activé** dans Présences, l'Assistant **prend son
+  nom** et affiche **son portrait** à la place de l'icône 🧭 : dans le titre de
+  l'onglet 🧭 et, en mode « Assistant seul », dans l'accueil (« Bonjour, je
+  suis … ») et dans le cercle.
+- **Aucun personnage actif** (aucun fichier déposé) : rien ne change —
+  l'Assistant garde le nom réglé dans **Options ⚙️ → Assistant** et son icône
+  habituelle. Ce n'est **pas une panne** : aucun message, aucune erreur.
+- **Changer de personnage ne demande aucun redémarrage** : l'Assistant relit le
+  personnage **à l'ouverture de son onglet** et **quand la fenêtre reprend le
+  focus**.
+- Pilot **ne fait que lire** ces informations : il ne crée ni ne modifie jamais
+  le dossier du personnage, et il n'écrit rien dedans.
+- Le nom réglé dans les paramètres reste le **repli** : il réapparaît dès qu'il
+  n'y a plus de personnage actif.
+<!-- /HELP:super-agent-personnage -->
+
 ### Si l'assistant affiche « Connexion au super-agent perdue »
 - Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).
   Les **causes les plus fréquentes** : le chemin de l'agent (Options → Agent)
@@ -2039,6 +2057,52 @@ rejouer.
 <!-- /HELP:super-agent-data-care -->
 
 <!-- /HELP:super-agent -->
+
+---
+
+## Technique — nom et portrait du personnage actif (Présences)
+
+Le projet **Présences** dépose, quand un personnage est activé, deux fichiers
+que Pilot **lit seulement** :
+
+| Élément | Chemin |
+|---|---|
+| nom affiché | `<dossier de données de Pilot>/.pilot/portrait/nom.txt` |
+| image affichée | `<dossier de données de Pilot>/.pilot/portrait/portrait.png` |
+
+- **Fichier absent = aucun personnage actif** → nom réglé (⚙️ → Assistant →
+  Nom, sinon « Assistant ») et icône 🧭. L'absence n'est pas une panne :
+  aucune erreur, aucun message, aucune trace console.
+- **Lecture côté Rust** (décision) : commande Tauri **`read_assistant_persona`**
+  (`src-tauri/src/persona.rs`) renvoyant `{ name, portrait }`. C'est le seul
+  côté qui connaît `app_data_dir()` ; aucun chemin n'est écrit à la main
+  (`PathBuf::join`), donc Windows / macOS / Linux sans branche. L'image voyage
+  en `data:image/png;base64,…` (convention d'affichage d'image déjà utilisée
+  par le WebView). Repli décidé côté Rust : dossier absent, fichier vide, nom
+  illisible (non UTF-8), image qui n'est pas un PNG ou dépasse **8 Mio** →
+  `null` pour l'élément concerné.
+- **Bornes** : nom = première ligne utile, espaces rognés, caractères de
+  contrôle retirés, **60 caractères** maximum.
+- **Écran** (source unique `src/js/assistant-persona.js`, aucune persistance,
+  aucun réglage nouveau) : `personaDisplayName(character, configured)` est la
+  **seule** règle de priorité (personnage → nom réglé → nom habituel) ;
+  `personaPortraitSrc` n'accepte qu'un `data:image/…;base64,` borné, tout le
+  reste vaut « icône habituelle » ; `refreshAssistantPersona(deps)` appelle la
+  commande Rust et est **fail-open** (panne ou réponse d'une autre forme →
+  aucun personnage actif).
+- **Branchements** : `superAgentDisplayLabel()` (`src/js/super-agent.js`) rend
+  le nom retenu ; `applyAssistantPersonaUi()` le pousse au titre de l'onglet
+  (`tabs.updateSuperAgentLabel`) et, si le plein écran est ouvert, au titre
+  « Bonjour, je suis … » et à l'image du cercle. `_renderTabButton()`
+  (`src/js/tabs.js`) affiche `<img class="tab-avatar">` à la place de `🧭 `
+  quand le portrait existe, et **échappe** le nom (il vient d'un fichier).
+- **Relecture** : à l'**ouverture de l'onglet** et à chaque **retour de focus**
+  de la fenêtre (écouteur `focus` retiré à la fermeture de l'onglet). Changer
+  de personnage ne demande donc aucun redémarrage.
+- **Aucune écriture** : Pilot ne crée ni le dossier, ni les fichiers, ne les
+  nettoie jamais. Le dossier appartient à Présences.
+- Couverture : `src/js/assistant-persona.test.js` (13 tests) + tests unitaires
+  Rust de `src-tauri/src/persona.rs` (8 tests, dossiers **temporaires**).
 
 ---
 

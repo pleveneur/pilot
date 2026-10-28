@@ -87,6 +87,10 @@ mod pi_update;
 mod project_agents;
 mod db;
 mod mcp_config;
+// Nom et portrait du PERSONNAGE ACTIF de l'Assistant : Présences dépose
+// `nom.txt` + `portrait.png` dans `<app_data_dir>/.pilot/portrait/` ; Pilot ne
+// fait que LIRE (voir persona.rs, commande `read_assistant_persona`).
+mod persona;
 mod agent;
 mod agent_service;
 // Écriture fiable des extensions embarquées (tâche 361) : ne réécrit rien si
@@ -3714,6 +3718,7 @@ pub fn run() {
             tts_local::tts_local_status,
             tts_local::tts_local_synthesize,
             tts_local::tts_local_log,
+            persona::read_assistant_persona,
             tts_local_download::tts_local_download,
             tts_local_download::tts_local_cancel_download,
             tts_local_download::tts_local_download_state,

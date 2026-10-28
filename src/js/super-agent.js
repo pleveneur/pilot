@@ -130,6 +130,17 @@ import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from 
 import { runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE, RUN_LAUNCH_MIN_STUCK_IDLE_MS, listExclusivityWaitingDemands } from "./agents-bus.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
+// PERSONNAGE ACTIF (Présences) : le nom affiché de l'Assistant et son portrait
+// viennent de `<app_data_dir>/.pilot/portrait/` (lu côté Rust, jamais écrit par
+// Pilot). Fichier absent = nom et icône habituels, sans bruit. Source unique :
+// assistant-persona.js — aucun second mécanisme de nom n'est créé ici.
+import {
+  DEFAULT_ASSISTANT_NAME,
+  getAssistantPersonaName,
+  getAssistantPortrait,
+  personaDisplayName,
+  refreshAssistantPersona,
+} from "./assistant-persona.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections, buildReminderInjection, buildReminderInjectionMessage, formatReminderGroupNotificationLabel, formatReminderHoldNotice, createReminderHoldGuard } from "./super-agent-schedule.js";
 // MÉNAGE DES RAPPELS : décision UNIQUE (pures) des rappels devenus inutiles —
 // mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
@@ -1972,9 +1983,63 @@ export function getSuperAgentConfigSync() {
   return configCache;
 }
 
-/** Nom affichable de l'assistant (titre d'onglet). */
+/** Nom affichable de l'assistant (titre d'onglet).
+ *
+ * Priorité : PERSONNAGE ACTIF (Présences, `nom.txt`) → nom réglé (⚙️ →
+ * Assistant → Nom) → nom habituel. Le personnage se relit à l'ouverture de
+ * l'onglet et quand la fenêtre reprend le focus : changer de personnage ne
+ * demande aucun redémarrage. */
 export function superAgentDisplayLabel() {
-  return configCache.name || "Assistant";
+  return personaDisplayName(getAssistantPersonaName(), configCache.name);
+}
+
+/**
+ * Applique le personnage actif à l'interface : nom de l'onglet 🧭 et, si le
+ * plein écran de l'Assistant est ouvert, son titre « Bonjour, je suis … » et
+ * l'image de son cercle (portrait, sinon le logo Pilot).
+ *
+ * Purement présentationnel : ne lit rien du disque (la lecture est faite par
+ * `refreshAssistantPersona`), n'écrit rien, ne lève jamais. Appelée à
+ * l'ouverture de l'onglet et à chaque retour de focus de la fenêtre.
+ */
+export function applyAssistantPersonaUi() {
+  const label = superAgentDisplayLabel();
+  try {
+    const tabs = window._pilotTabs;
+    if (tabs && typeof tabs.updateSuperAgentLabel === "function") {
+      tabs.updateSuperAgentLabel(label);
+    }
+  } catch (_) {
+    /* re-rendu d'onglet impossible : l'affichage reste celui d'avant */
+  }
+  try {
+    const ov = typeof document !== "undefined" ? document.querySelector(".superagent-immersive") : null;
+    if (!ov) return label;
+    const title = ov.querySelector(".sa-immersive-hero-title");
+    if (title) title.textContent = `Bonjour, je suis ${label || DEFAULT_ASSISTANT_NAME}`;
+    const mark = ov.querySelector(".sa-immersive-hero-mark img");
+    if (mark) {
+      // Portrait du personnage actif, sinon le logo Pilot habituel.
+      mark.src = getAssistantPortrait() || "/logo_pilot_vector.svg";
+    }
+  } catch (_) {
+    /* overlay absent ou en cours de démontage : rien à faire */
+  }
+  return label;
+}
+
+/**
+ * Relit le personnage actif PUIS l'applique à l'interface. Fail-open de bout en
+ * bout (une lecture impossible = nom et icône habituels, aucun message).
+ * @returns {Promise<string>} nom réellement affiché
+ */
+export async function refreshAssistantPersonaAndApply() {
+  try {
+    await refreshAssistantPersona();
+  } catch (_) {
+    /* refreshAssistantPersona ne lève pas ; garde-fou si son contrat changeait */
+  }
+  return applyAssistantPersonaUi();
 }
 
 /**
@@ -3039,6 +3104,17 @@ async function checkSuperAgentTools(bannerEl) {
 
 export async function createSuperAgent(container) {
   await refreshSuperAgentConfig();
+  // PERSONNAGE ACTIF (Présences) : relecture à l'OUVERTURE de l'onglet. Le
+  // dossier n'est que LU (Rust). Fichier absent → nom et icône habituels.
+  // Fail-open : une lecture impossible ne retarde ni n'empêche l'ouverture.
+  await refreshAssistantPersonaAndApply();
+  // Retour de FOCUS de la fenêtre : relecture du personnage → changer de
+  // personnage dans Présences ne demande AUCUN redémarrage de Pilot. L'écouteur
+  // est retiré à la fermeture de l'onglet (voir `unlisten`).
+  const onPersonaFocus = () => {
+    refreshAssistantPersonaAndApply().catch(() => {});
+  };
+  window.addEventListener("focus", onPersonaFocus);
   // Issue #71 : refléter immédiatement le nom personnalisé de l'assistant au
   // chargement de l'onglet (pas seulement après un changement de config).
   const initTabs = window._pilotTabs;
@@ -4138,6 +4214,10 @@ export async function createSuperAgent(container) {
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
     refreshIcons(immersiveOverlay);
+    // PERSONNAGE ACTIF (Présences) : l'accueil porte IMMÉDIATEMENT le nom et le
+    // portrait retenus (aucune attente du prochain retour de focus). Aucun
+    // personnage → nom habituel et logo Pilot, inchangés.
+    applyAssistantPersonaUi();
     localStorage.setItem(IMMERSIVE_KEY, "1");
     // Mode REELLEMENT affiche : la cle de memoire suit (sans ecraser un mode
     // demande par le bouton — « Vocal » emprunte cet ecran au lot 1).
@@ -5747,6 +5827,7 @@ export async function createSuperAgent(container) {
       try { unlistenAutoStop(); } catch (_) {}
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
+      window.removeEventListener("focus", onPersonaFocus);
       window.removeEventListener("pilot-config-changed", onTelegramPrefsChanged);
       document.removeEventListener("keydown", onImmersiveKeydown);
       document.removeEventListener("keydown", onVocalKeydown);

@@ -2655,6 +2655,18 @@ body.pilot-vocal-active #mode-logo {
 }
 
 .tab .tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+/* Onglet 🧭 : PORTRAIT du personnage actif (Présences) à la place de l'icône
+   habituelle. Même gabarit qu'une icône de texte pour que la hauteur de
+   l'onglet ne bouge pas ; rond, jamais déformé. */
+.tab .tab-name .tab-avatar {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  object-fit: cover;
+  vertical-align: -2px;
+  margin-right: 5px;
+  display: inline-block;
+}
 .tab .tab-dirty { color: var(--accent); font-weight: bold; }
 .tab .tab-close {
   margin-left: 4px;

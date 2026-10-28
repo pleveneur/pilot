@@ -23,6 +23,9 @@ import { EditorView } from "@codemirror/view";
 import { getFileList } from "./file-list.js";
 import { createAgents } from "./agents-ui.js";
 import { createSuperAgent, superAgentDisplayLabel } from "./super-agent.js";
+// Personnage actif (nom + portrait déposés par Présences) : l'onglet 🧭 montre
+// le portrait à la place de son icône habituelle quand il existe.
+import { getAssistantPortrait } from "./assistant-persona.js";
 import { createSuperKanban } from "./super-agent-kanban-view.js";
 import { openGitDiffModal } from "./diff-view.js";
 import { scheduleSave } from "./session-persistence.js";
@@ -3028,11 +3031,22 @@ export class TabsManager {
     btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}${tab.mode === "dashboard" ? " tab-dashboard" : ""}`;
     btn.dataset.tabId = tab.id;
 
-    const icon = tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : (tab.projectCommandId ? "▶ " : "🖥️ ")) : tab.mode === "agent" ? "π " : tab.mode === "superagent" ? "🧭 " : tab.mode === "history" ? "📜 " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";
+    // Personnage actif (Présences) : quand `portrait.png` existe, l'onglet 🧭
+    // porte le PORTRAIT à la place de son icône habituelle ; sinon rien ne
+    // change. Le nom, lui, est déjà dans `tab.name` (superAgentDisplayLabel()).
+    // Aucun état nouveau ici : le portrait vient de assistant-persona.js.
+    const superPortrait = tab.mode === "superagent" ? getAssistantPortrait() : "";
+    const icon = superPortrait ? "" : tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : (tab.projectCommandId ? "▶ " : "🖥️ ")) : tab.mode === "agent" ? "π " : tab.mode === "superagent" ? "🧭 " : tab.mode === "history" ? "📜 " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";
+    // Le nom du personnage vient d'un FICHIER (non maîtrisé) : il est échappé
+    // avant d'entrer dans le HTML du bouton d'onglet.
+    const nomAffiche = tab.mode === "superagent" ? esc(tab.name) : tab.name;
+    const iconHtml = superPortrait
+      ? `<img class="tab-avatar" src="${superPortrait}" alt="">`
+      : icon;
     const suffix = tab.isScratchpad ? " (Brouillon)" : tab.mode === "preview" ? " (aperçu)" : tab.mode === "pdf" ? " (PDF)" : tab.mode === "image" ? " (image)" : tab.mode === "csv" ? " (CSV)" : tab.mode === "agent" ? " (RPC)" : tab.mode === "superagent" ? "" : tab.mode === "history" ? " (Sessions)" : tab.mode === "prompt-builder" ? " (Prompt)" : "";
 
     btn.innerHTML = `
-      <span class="tab-name">${icon}${tab.name}${suffix}</span>
+      <span class="tab-name">${iconHtml}${nomAffiche}${suffix}</span>
       ${tab.dirty ? '<span class="tab-dirty">●</span>' : ""}
       <span class="tab-close" data-close="${tab.id}">×</span>
     `;
