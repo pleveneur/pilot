@@ -1892,6 +1892,32 @@ body.theme-light.theme-tokyo-day {
   transform: rotate(180deg);
 }
 
+/* DECLENCHEUR EFFACE TANT QUE SON MENU EST OUVERT (decision du proprietaire,
+   `docs/rapports/RAPPORT-bouton-outils.md`) : la ligne « Outils » ne doit plus
+   se voir des que le menu « Autres outils » est affiche.
+   - La CLE de l'etat est la classe `open`, que `sidebar.js` pose ET retire sur
+     `#btn-more-screens` en meme temps que l'etat reel du menu (classe `hidden`
+     du panneau) : aucun second etat, aucune copie, aucun JS nouveau.
+   - `opacity: 0` et NON `visibility: hidden` ni `display: none` : le bouton
+     garde sa place de 32 px, donc AUCUN saut de mise en page et AUCUN decalage
+     du menu (le panneau est ancre sur `bottom: calc(100% + 4px)` du haut de
+     `.pj-more-wrap`, qui conserve sa hauteur). Un `display: none` ferait
+     tomber la hauteur de `.pj-more-wrap` de 32 px : le bloc se reduirait et le
+     menu descendrait avec lui. Un `visibility: hidden` ferait perdre le focus
+     au clavier (l'element devient non focalisable) : la navigation Tab dans le
+     menu casserait.
+   - Le bouton reste donc FOCALISABLE et dans l'ordre de tabulation : `Tab`
+     passe du declencheur a la premiere ligne du menu, `Echap` referme et rend
+     le focus au declencheur (qui redevient visible a cet instant).
+   - `pointer-events: none` : la ligne invisible n'est pas une cible de clic
+     fantome ; un clic a cet endroit ferme le menu comme un clic exterieur.
+   Aucune couleur, aucune duree, aucun mouvement : la ligne s'efface et revient
+   d'un coup, sans animation d'ouverture nouvelle. */
+#btn-more-screens.open {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .pj-more-menu {
   position: absolute;
   bottom: calc(100% + 4px);

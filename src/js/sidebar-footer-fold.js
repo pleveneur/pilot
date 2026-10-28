@@ -13,7 +13,7 @@
 //     deploye tout de suite, SANS animation (l'anneau de focus doit etre peint
 //     immediatement, sinon il est rogne) ;
 //   - REPLI : seulement si les TROIS conditions sont reunies — la souris n'est plus
-//     dessus, le focus n'est plus dedans, le menu « Autres ecrans » est ferme — et
+//     dessus, le focus n'est plus dedans, le menu « Autres outils » est ferme — et
 //     apres GRACE_MS (300 ms) de sursis. Sortir de l'une des trois conditions
 //     annule le sursis en cours ;
 //   - ECHAP : le menu a la PRIORITE (aucun double emploi) ; menu ferme et focus
@@ -63,7 +63,7 @@ const SELECTEUR_CADRE = "#project-footer";
 /** Selecteur du panneau qui porte les sept lignes. */
 const SELECTEUR_PANNEAU = ".pj-panel";
 
-/** Selecteur du panneau du menu « Autres ecrans ». */
+/** Selecteur du panneau du menu « Autres outils ». */
 const SELECTEUR_MENU = "#pj-more-menu";
 
 /**

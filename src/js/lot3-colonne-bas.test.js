@@ -8,8 +8,8 @@
  *   - les TROIS sous-onglets « Projet / Vues / Assistant » disparaissent ;
  *   - les QUATORZE lignes deviennent des lignes de 32 px, toujours visibles,
  *     dans l'ordre fige : Brouillon · Options · Assistant · Dossier du projet ·
- *     Terminal · Commandes du projet · Action (le declencheur du menu, dont le mot
- *     affiche est « Action » depuis la decision du 2026-10-26) ;
+ *     Terminal · Commandes du projet · Outils (le declencheur du menu, dont le mot
+ *     affiche est « Outils », au pluriel, depuis `RAPPORT-bouton-outils.md`) ;
  *   - « Brouillon » (`btn-scratchpad`) et « Options » (`btn-settings`) sont les
  *     DEUX PORTES GLOBALES qui etaient en HAUT de la colonne : memes libelles,
  *     memes infobulles, memes icones, memes identifiants, meme ordre. Elles ne
@@ -17,14 +17,14 @@
  *     projet ouvert et n'affiche alors que ces deux lignes (reponse A de la
  *     question 3 du rapport) ;
  *   - « Lancer l'agent » a QUITTE le bloc : il est la PREMIERE ligne du menu
- *     « Action »/« Autres écrans », groupe « Mon projet » (§ 2.3 du rapport), avec
+ *     « Outils »/« Autres outils », groupe « Mon projet » (§ 2.3 du rapport), avec
  *     `pj-more-item` + `role="menuitem"`. Plus AUCUNE ligne du bloc n'est mise
  *     en evidence (`pj-row-main` supprimee, regles CSS comprises) : les SEPT
  *     lignes sont a 12 px / 400 ;
  *   - « Dossier du projet » est le bouton `btn-explorer` remonte du menu (Q2),
  *     meme identifiant, meme effet (dossier projet dans l'explorateur) ;
  *   - « Commandes du projet » (`btn-commands`) remonte aussi du menu ;
- *   - « Action » (menu « Autres ecrans ») ouvre un menu VERS LE HAUT (le bloc est
+ *   - « Outils » (menu « Autres outils ») ouvre un menu VERS LE HAUT (le bloc est
  *     en bas de colonne), groupes nommes, DIX entrees, fermeture a Echap / clic
  *     exterieur / selection, entoure du MEME filet bleu que le cadre du bloc.
  *
@@ -135,7 +135,7 @@ const LIGNES = [
   "btn-more-screens",
 ];
 
-/** Les DIX entrees du menu déclenché par « Action » : « Lancer l'agent » en tete. */
+/** Les DIX entrees du menu déclenché par « Outils » : « Lancer l'agent » en tete. */
 const MENU = [
   "btn-terminal-cmd",
   "btn-prompt-builder",
@@ -292,12 +292,16 @@ describe("LOT 3 (c) — sept lignes de 32 px, 278 px de haut, plafond 60 %", () 
     expect(pied).toContain(">Dossier du projet</span>");
     expect(pied).toContain(">Terminal</span>");
     expect(pied).toContain(">Commandes du projet</span>");
-    // Decision du proprietaire du 2026-10-26 (seance d'essai) : le mot AFFICHE
-    // sur la ligne non deployee est « Action », au SINGULIER (ni « Actions », ni
-    // « Autres ecrans »). Le menu deploye, lui, ne change pas.
-    expect(pied).toContain(">Action</span>");
-    expect(pied, "la ligne visible reprend « Autres ecrans »").not.toContain(
-      ">Autres écrans</span>",
+    // Decision du proprietaire (`docs/rapports/RAPPORT-bouton-outils.md`) : le
+    // mot AFFICHE sur la ligne non deployee est « Outils », au PLURIEL (ni
+    // « Action », ni « Actions », ni « Autres outils »). Le menu deploye, lui,
+    // s'appelle desormais « Autres outils ».
+    expect(pied).toContain(">Outils</span>");
+    expect(pied, "l'ancien libelle « Action » est revenu").not.toContain(
+      ">Action</span>",
+    );
+    expect(pied, "la ligne visible reprend « Autres outils »").not.toContain(
+      ">Autres outils</span>",
     );
     // L'ancien libelle du bouton remonte ne doit plus s'afficher.
     expect(pied).not.toContain(">Ouvrir le dossier</span>");

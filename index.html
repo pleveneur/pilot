@@ -114,7 +114,7 @@
          fige :
 
              Brouillon · Options · Assistant · Dossier du projet · Terminal ·
-             Commandes du projet · Autres écrans ▾
+             Commandes du projet · Autres outils ▾
 
          « Brouillon » et « Options » sont les DEUX PORTES GLOBALES qui etaient en
          HAUT de la colonne (`RAPPORT-design-colonne-entrees.md` § 2.2 et § 4) :
@@ -124,10 +124,10 @@
          OUVERT (reponse A de la question 3 du rapport) — rien ne disparait de
          l'ecran.
          AUCUNE ligne n'est plus mise en evidence : « Lancer l'agent » a quitte le
-         bloc pour la PREMIERE ligne du menu « Autres ecrans » (`§ 2.3` du
+         bloc pour la PREMIERE ligne du menu « Autres outils » (`§ 2.3` du
          rapport : groupe « Mon projet », au contact du declencheur). Le bloc
          devient une liste reguliere de sept lignes de 12 px / 400.
-         « Autres ecrans » ouvre un menu VERS LE HAUT qui accueille les ecrans
+         « Autres outils » ouvre un menu VERS LE HAUT qui accueille les ecrans
          consultes occasionnellement (DIX entrees, groupes inchanges).
          Les IDENTIFIANTS et les FONCTIONS des quatorze entrees sont ceux d'avant :
          aucun ecran ne devient inaccessible et le cablage (`main.js`,
@@ -175,9 +175,9 @@
              2026-10-25). C'est le bouton `btn-commands` d'avant — meme
              identifiant, meme gestionnaire (`project-commands.js`). -->
         <button id="btn-commands" class="project-only hidden" title="Commandes du projet (lancer une commande parametree)"><i data-lucide="square-terminal" class="icon"></i><span class="pj-btn-label">Commandes du projet</span></button>
-        <!-- 7. « Action ▾ » : le declencheur du menu (titre d'accessibilite du
-             menu : « Autres ecrans »), toujours la derniere ligne du bloc. -->
-        <!-- ===== MENU « Autres écrans » (lot 3 de la presentation) =====
+        <!-- 7. « Outils ▾ » : le declencheur du menu (titre d'accessibilite du
+             menu : « Autres outils »), toujours la derniere ligne du bloc. -->
+        <!-- ===== MENU « Autres outils » (lot 3 de la presentation) =====
              Le document de conception (`docs/proposition-presentation-ui.md` §3.3)
              le veut ouvert VERS LE HAUT : le bloc est en bas de colonne, un menu
              qui descendrait sortirait de la fenetre.
@@ -193,21 +193,28 @@
              `btn-commands` restent, eux, remontes dans le bloc du bas).
              Il est ici, DANS la colonne de 280 px : sa largeur est celle du cadre,
              ses couleurs viennent des jetons de theme (sombre ET clair). -->
-        <!-- LE MOT VISIBLE DE LA LIGNE NON DEPLOYEE EST « Action » (decision du
-             proprietaire du 2026-10-26, en seance d'essai) : au SINGULIER, sans
-             « s », et sans confusion avec « Commandes du projet ». Seul le mot
-             AFFICHE change ; le menu deploye garde son contenu, son titre, son
-             ordre et son identifiant (`#pj-more-menu`, `#btn-more-screens`).
+        <!-- LE MOT VISIBLE DE LA LIGNE NON DEPLOYEE EST « Outils » (decision du
+             proprietaire, `docs/rapports/RAPPORT-bouton-outils.md`) : au
+             PLURIEL, sans confusion avec « Commandes du projet ». Le mot
+             AFFICHE change, ainsi que le titre d'accessibilite du MENU, qui
+             devient « Autres outils » ; le menu deploye garde son contenu, son
+             ordre et ses identifiants (`#pj-more-menu`, `#btn-more-screens`).
              L'ancien libelle « Autres ecrans » ne disparait pas du sens : il
-             reste le titre d'accessibilite du MENU.
+             devient le titre d'accessibilite du MENU (« Autres outils »).
              INFOBULLE ENRICHIE (decision Q2 du proprietaire du 2026-10-26, § 3.2
              point 4 de `RAPPORT-conception-repli-menus-bas.md`) : replie, le bloc
              ne laisse voir QUE cette ligne. L'infobulle NOMME les six autres
              lignes, pour qu'aucune fonction ne soit cachee sans etre nommee.
+             DISPARITION DU DECLENCHEUR MENU OUVERT (meme decision) : pendant que
+             le menu est affiche, cette ligne ne peint plus rien. La classe
+             `open`, deja posee sur le bouton par `sidebar.js`, est la SEULE cle
+             de cet etat (regle `#btn-more-screens.open` de `style.css`) ; la
+             place de la ligne reste RESERVEE, sinon le bloc et le menu sautent
+             de 32 px a l'ouverture du menu.
              Ni bouton, ni reglage, ni noeud nouveau. -->
         <div id="pj-more-wrap" class="pj-more-wrap">
-          <button id="btn-more-screens" class="project-only hidden" type="button" title="Action — le bloc s'ouvre au survol : Brouillon, Options, Assistant, Dossier du projet, Terminal, Commandes du projet" aria-label="Action — autres écrans du projet" aria-haspopup="menu" aria-expanded="false" aria-controls="pj-more-menu"><i data-lucide="more-horizontal" class="icon"></i><span class="pj-btn-label">Action</span><span class="pj-more-chevron"><i data-lucide="chevron-down" class="icon-sm"></i></span></button>
-          <div id="pj-more-menu" class="pj-more-menu hidden" role="menu" aria-label="Autres écrans">
+          <button id="btn-more-screens" class="project-only hidden" type="button" title="Outils — le bloc s'ouvre au survol : Brouillon, Options, Assistant, Dossier du projet, Terminal, Commandes du projet" aria-label="Outils — autres outils du projet" aria-haspopup="menu" aria-expanded="false" aria-controls="pj-more-menu"><i data-lucide="more-horizontal" class="icon"></i><span class="pj-btn-label">Outils</span><span class="pj-more-chevron"><i data-lucide="chevron-down" class="icon-sm"></i></span></button>
+          <div id="pj-more-menu" class="pj-more-menu hidden" role="menu" aria-label="Autres outils">
             <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-projet">
               <div class="pj-more-group-label" id="pj-more-groupe-projet">Mon projet</div>
               <button id="btn-terminal-cmd" class="project-only hidden pj-more-item" role="menuitem" title="Lancer l'agent : ouvrir la conversation de l'agent"><i data-lucide="bot" class="icon-sm"></i><span class="pj-btn-label">Lancer l'agent</span></button>
@@ -1715,7 +1722,7 @@
       <section id="onboarding-discover" class="onboarding-screen hidden">
         <h3 class="onboarding-screen-title">Trois repères pour commencer</h3>
         <ol class="onboarding-list">
-          <li><strong>« Lancer l'agent »</strong> ouvre la conversation de l'agent du projet : c'est la première ligne du menu <strong>« Action »</strong>, au bas de la colonne de gauche.</li>
+          <li><strong>« Lancer l'agent »</strong> ouvre la conversation de l'agent du projet : c'est la première ligne du menu <strong>« Outils »</strong>, au bas de la colonne de gauche.</li>
           <li><strong>🧭 Assistant</strong> suit vos projets et vos tâches ; il ne modifie aucun fichier.</li>
           <li><strong>⚙️ Options</strong> rassemble tous les réglages ; la documentation se demande à l'Assistant.</li>
         </ol>

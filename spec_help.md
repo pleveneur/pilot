@@ -301,9 +301,11 @@ accepte, lui, un historique — il servait à l'écran Aide, désormais retiré.
   inchangés (`btn-scratchpad`, `btn-settings`). Le bloc du bas compte **sept lignes**
   (aucune mise en évidence) et **« Lancer l'agent » y a laissé sa place** : il est la
   première entrée du menu ouvert par la dernière ligne, dont le libellé **affiché**
-  est **« Action ▾ »** (le menu lui-même garde son nom interne « Autres écrans »,
-  dix entrées). L'état de référence est décrit dans `spec_pilot.md` § C (et, pour
-  l'utilisateur, dans `help/overview.md`).
+  est **« Outils ▾ »** (le menu lui-même s'appelle **« Autres outils »**,
+  dix entrées) ; **tant que ce menu est ouvert, la ligne « Outils » elle-même
+  s'efface** (`opacity: 0`, sa place reste réservée : aucun saut) et revient
+  telle quelle à la fermeture. L'état de référence est décrit dans `spec_pilot.md`
+  § C (et, pour l'utilisateur, dans `help/overview.md`).
   Aucune porte de remplacement n'a été ajoutée en haut (aucune place réservée).
 - Quand la documentation ne dit rien, la réponse le dit explicitement ; si elle
   est trop longue, la coupure est annoncée.

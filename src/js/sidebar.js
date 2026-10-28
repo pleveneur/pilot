@@ -243,7 +243,7 @@ class Sidebar {
     // Séparateur sidebar draggable + persistance
     this._initSidebarResize();
 
-    // LOT 3 de la presentation : le menu « Autres ecrans » du bas de la colonne
+    // LOT 3 de la presentation : le menu « Autres outils » du bas de la colonne
     // (les trois sous-onglets Projet / Vues / Assistant ont disparu : les quatre
     // lignes du bloc sont toujours visibles et le menu porte le reste).
     this._initProjectFooterMenu();
@@ -1634,14 +1634,15 @@ class Sidebar {
   }
 
   /**
-   * LOT 3 de la presentation : le MENU « Autres ecrans » du bas de la colonne
+   * LOT 3 de la presentation : le MENU « Autres outils » du bas de la colonne
    * (docs/proposition-presentation-ui.md §3.3 et lot 3 du §6).
    *
    * Le declencheur `#btn-more-screens` ouvre VERS LE HAUT le panneau
    * `#pj-more-menu`, qui accueille les ecrans consultes occasionnellement.
    * Regles tenues ici, et nulle part ailleurs :
    *   - etat ouvert = la seule classe `hidden` du panneau ; `aria-expanded` et
-   *     la classe `open` (chevron retourne) n'en sont que le reflet ;
+   *     la classe `open` (chevron retourne, declencheur efface) n'en sont que
+   *     le reflet ;
    *   - fermeture a Echap (focus rendu au declencheur), au clic exterieur et
    *     apres le choix d'une ligne ;
    *   - aucune ligne n'est interceptee : chacune garde SON gestionnaire
@@ -1654,6 +1655,12 @@ class Sidebar {
     if (!btn || !menu) return;
 
     const estOuvert = () => !menu.classList.contains("hidden");
+    // `setOuvert` est le SEUL endroit qui ecrit l'etat du menu : il pose et
+    // retire la classe `open` du declencheur, que `style.css`
+    // (`#btn-more-screens.open`) utilise pour EFFACER la ligne « Outils » tant
+    // que le menu est affiche. Aucun second etat, aucun JS de plus : le bouton
+    // revient de lui-meme a chaque fermeture (Echap, clic exterieur, ligne
+    // choisie), puisque la classe tombe avec l'etat.
     const setOuvert = (ouvert) => {
       menu.classList.toggle("hidden", !ouvert);
       btn.classList.toggle("open", ouvert);
@@ -1699,7 +1706,7 @@ class Sidebar {
 
   // LOT 3 de la presentation : la methode `_initProjectTabs` (bascule des trois
   // sous-onglets Projet / Vues / Assistant) est supprimee avec les sous-onglets.
-  // Les lignes du bloc du bas sont toujours visibles et le menu « Autres ecrans »
+  // Les lignes du bloc du bas sont toujours visibles et le menu « Autres outils »
   // porte le reste (cf. `_initProjectFooterMenu` ci-dessus). Le bloc compte
   // SEPT lignes : les DEUX portes globales « Brouillon » et « Options »
   // (`RAPPORT-design-colonne-entrees.md` § 2.2) ne portent ni `project-only` ni
