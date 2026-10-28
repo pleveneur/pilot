@@ -540,9 +540,20 @@ En mode **Vocal** :
   « pourquoi », « comment ») et Pilot développe, toujours de façon compréhensible
   à l'oreille. En revanche, une **panne**, un **refus**, une **erreur** ou une
   **demande de confirmation** sont toujours dits **en entier**, même si c'est
-  plus long : la brièveté ne cache jamais une information utile. Rien à régler,
-  rien à activer — c'est le comportement normal de ce mode, et les autres écrans
-  gardent leurs réponses habituelles.
+  plus long : la brièveté ne cache jamais une information utile. Les autres
+  écrans gardent leurs réponses habituelles.
+- **Cette longueur se règle**, à un seul endroit : ⚙️ **Options → onglet
+  « Assistant » → section « Mode Vocal »**, sous le réglage du délai, avec quatre
+  choix — **Très courte** (une à deux phrases), **Courtes** (deux ou trois
+  phrases, le choix de départ), **Moyenne** (quatre à six phrases, avec le
+  pourquoi quand il aide) et **Détaillées** (une réponse complète, mais toujours
+  dite à l'oreille : des phrases, jamais de tableau, jamais de code, jamais un
+  nom de fichier lu à voix haute). Le choix s'applique **tout de suite à la
+  demande suivante** : une demande déjà en train de partir n'est pas modifiée.
+  Demander de développer (« détaille », « explique », « pourquoi », « comment »)
+  passe **avant** le niveau choisi, et une panne, un refus, une erreur ou une
+  demande de confirmation sont toujours dits **en entier**, quel que soit le
+  niveau.
 
 ---
 
@@ -575,8 +586,10 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   onglet des Options, ni dans une fenêtre par message).
 - **Juste en dessous, la section « Mode Vocal »** porte le **Délai d'envoi** de
   l'écran vocal (de 1 à 5 secondes, **2 secondes** par défaut) : le temps
-  d'attente après votre dernier mot avant que la demande parte toute seule.
-  Aucun autre réglage ne le concerne, et il n'existe nulle part ailleurs.
+  d'attente après votre dernier mot avant que la demande parte toute seule —
+  puis la **Longueur des réponses à l'oral** (**Très courte**, **Courtes** par
+  défaut, **Moyenne**, **Détaillées**), c'est-à-dire ce que la lecture a à lire.
+  Aucun autre réglage ne les concerne, et ils n'existent nulle part ailleurs.
 - **Vous écoutez chaque voix avant de choisir** : sous la liste, chaque voix
   proposée a son bouton **« ▶ Écouter »**, qui lit une **phrase d'exemple courte**
   en français. Le même bouton devient **« ⏹ Arrêter »** pendant la lecture, et

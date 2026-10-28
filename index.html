@@ -1408,6 +1408,17 @@
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
               <span id="vocal-silence-send-note" role="note">En mode Vocal, votre demande part toute seule apr&egrave;s ce d&eacute;lai sans nouveau mot&nbsp;; chaque mot que vous dites repousse l'&eacute;ch&eacute;ance. Le r&eacute;glage prend effet imm&eacute;diatement&nbsp;: une demande d&eacute;j&agrave; en train de partir n'est pas modifi&eacute;e, c'est la suivante qui suit la nouvelle valeur.</span>
             </div>
+            <!-- LONGUEUR des r&eacute;ponses &agrave; l'oral : quatre niveaux, &laquo;&nbsp;Courtes&nbsp;&raquo; par
+                 d&eacute;faut (deux ou trois phrases, comportement historique). Les
+                 options sont remplies par settings.js depuis le module pur
+                 `vocal-brevity.js` (aucun libell&eacute; recopi&eacute; ici). -->
+            <div class="setting-row">
+              <label for="setting-vocal-brevity-level" title="Longueur des r&eacute;ponses que Pilot prononce en mode Vocal. &laquo;&nbsp;Courtes&nbsp;&raquo; (deux ou trois phrases) est le r&eacute;glage de d&eacute;part. Plus court rend la conversation plus vive, plus long donne le d&eacute;tail. Une demande comme &laquo;&nbsp;d&eacute;taille&nbsp;&raquo; ou &laquo;&nbsp;pourquoi&nbsp;&raquo; est toujours honor&eacute;e, quel que soit le niveau.">Longueur des r&eacute;ponses &agrave; l'oral&nbsp;:</label>
+              <select id="setting-vocal-brevity-level" aria-describedby="vocal-brevity-note"></select>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="vocal-brevity-note" role="note">En mode Vocal, Pilot r&eacute;pond en deux ou trois phrases (&laquo;&nbsp;Courtes&nbsp;&raquo;). Choisissez plus court pour une conversation tr&egrave;s vive, ou plus long pour entendre le d&eacute;tail. Demander de d&eacute;velopper (&laquo;&nbsp;d&eacute;taille&nbsp;&raquo;, &laquo;&nbsp;explique&nbsp;&raquo;, &laquo;&nbsp;pourquoi&nbsp;&raquo;) passe avant le niveau choisi, et une panne, un refus, une erreur ou une demande de confirmation sont toujours dits en entier.</span>
+            </div>
           </div>
           <div class="settings-section">
             <h3 class="settings-section-title"><i data-lucide="building-2" class="icon-sm"></i> Clients</h3>

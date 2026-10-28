@@ -15,7 +15,11 @@
 //   4. Les cas de SECURITE (panne, refus, erreur de micro, demande de
 //      confirmation) sont exclus EXPLICITEMENT dans la consigne : ils restent
 //      entierement dits.
-//   5. Aucun reglage, aucun bouton, aucune phrase d'interface ajoutes.
+//   5. Aucun autre reglage, aucun bouton : la LONGUEUR des reponses, elle, se
+//      regle depuis le 2026-10-27 (quatre niveaux, « courtes » par defaut) —
+//      voir `vocal-longueur-reglable.test.js`. Ce fichier verifie seulement que
+//      le module de consigne reste PUR (ni DOM, ni configuration, ni etat) et
+//      que le defaut reproduit la consigne historique MOT POUR MOT.
 //
 // Les commentaires sont en ASCII ; les chaines qui viennent du code sont
 // copiees telles quelles. Les fins de ligne sont normalisees (quality-gate 3.4).
@@ -146,7 +150,9 @@ describe("composeVocalPrompt : la consigne seulement pour l'ecran Vocal", () => 
 // ── 3. Le cablage : un seul point d'application ──────────────────────────
 describe("cablage : la consigne n'est ajoutee qu'au point de composition vocal", () => {
   it("la consigne et son assemblage sont IMPORTES, jamais recopies", () => {
-    expect(SUPER).toContain('import { composeVocalPrompt } from "./vocal-brevity.js";');
+    expect(SUPER).toContain(
+      'import { composeVocalPrompt, normalizeVocalBrevityLevel } from "./vocal-brevity.js";'
+    );
     expect(SUPER).not.toContain("export function composeVocalPrompt");
     expect(SUPER).not.toContain("export const VOCAL_BREVITY_INSTRUCTION");
     // Le texte de la consigne n'est ecrit que dans son module.
@@ -168,7 +174,7 @@ describe("cablage : la consigne n'est ajoutee qu'au point de composition vocal",
   it("`send()` marque la provenance (ecran Vocal) et envoie le message compose", () => {
     const send = corpsSend();
     expect(send).toContain(
-      "const messageAgent = composeVocalPrompt(text, { modeVocal: vocalOverlay !== null });"
+      "const messageAgent = composeVocalPrompt(text, {\n      modeVocal: vocalOverlay !== null,\n      niveau: vocalLongueurNiveau,\n    });"
     );
     // Le message ENVOYE a l'agent est le message compose...
     expect(send).toContain('await invoke("send_super_agent_prompt", { message: messageAgent });');
@@ -199,13 +205,16 @@ describe("cablage : la consigne n'est ajoutee qu'au point de composition vocal",
     }
   });
 
-  it("aucun reglage, aucun bouton, aucune phrase d'interface ajoutes", () => {
+  it("le module de consigne reste PUR : ni DOM, ni configuration, ni etat", () => {
     expect(MODULE).not.toContain("localStorage");
     expect(MODULE).not.toContain("document.");
     expect(MODULE).not.toContain("read_aloud_");
     // Le module est PUR : ni DOM, ni invoke, ni etat.
     expect(MODULE).not.toContain("invoke(");
     expect(MODULE).not.toContain("window.");
+    // Le reglage est lu par l'ecran (super-agent.js) et ecrit par les Parametres
+    // (settings.js) : la cle de configuration n'est pas dans le module pur.
+    expect(MODULE).not.toContain("vocal_brevity_level");
   });
 });
 

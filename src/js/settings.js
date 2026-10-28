@@ -61,6 +61,14 @@ import {
   normalizeVocalSilenceSendMs,
   vocalSilenceSendLabel,
 } from "./vocal-conversation.js";
+// Mode Vocal : la LONGUEUR des réponses orales. Les quatre niveaux, leurs
+// libellés et la normalisation viennent de la SOURCE UNIQUE (`vocal-brevity.js`,
+// pures) : aucun libellé ni aucune clé n'est recopié ici.
+import {
+  VOCAL_BREVITY_LEVELS,
+  normalizeVocalBrevityLevel,
+  vocalBrevityLabel,
+} from "./vocal-brevity.js";
 // Voix française LOCALE (Piper, hors ligne) : le statut du moteur et le libellé
 // de son choix viennent d'un seul module — aucune valeur recopiée ici.
 import {
@@ -653,6 +661,31 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   }
 
   /**
+   * Affiche la LONGUEUR réglée des réponses orales (section « Mode Vocal »).
+   *
+   * Les quatre entrées sont construites à partir de la SOURCE UNIQUE
+   * (`VOCAL_BREVITY_LEVELS` + `vocalBrevityLabel`) : aucun libellé n'est écrit
+   * en dur ici, et la valeur retenue passe toujours par
+   * `normalizeVocalBrevityLevel` (valeur inconnue ou absente ⇒ « courtes »).
+   * @param {string} [value] niveau mémorisé (défaut : la configuration)
+   */
+  function refreshVocalBrevityLevel(value) {
+    if (!selectVocalBrevityLevel) return;
+    if (selectVocalBrevityLevel.options.length !== VOCAL_BREVITY_LEVELS.length) {
+      selectVocalBrevityLevel.innerHTML = "";
+      for (const niveau of VOCAL_BREVITY_LEVELS) {
+        const option = document.createElement("option");
+        option.value = niveau;
+        option.textContent = vocalBrevityLabel(niveau);
+        selectVocalBrevityLevel.appendChild(option);
+      }
+    }
+    const brut = value == null ? currentConfig && currentConfig.vocal_brevity_level : value;
+    const niveau = normalizeVocalBrevityLevel(brut);
+    selectVocalBrevityLevel.value = niveau;
+  }
+
+  /**
    * Remplit le CHOIX DE LA VOIX (section « Lecture des réponses » de l'onglet
    * Assistant) : « automatique » d'abord, puis la voix française LOCALE, puis
    * chaque voix installée.
@@ -1065,6 +1098,9 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   // memorise dans la configuration (`vocal_silence_send_ms`).
   const inputVocalSilenceSend = document.getElementById("setting-vocal-silence-send");
   const vocalSilenceSendLabelEl = document.getElementById("vocal-silence-send-label");
+  // Longueur des reponses a l'oral (meme section, meme champ de configuration
+  // voisin : `vocal_brevity_level`). Les quatre libelles viennent du module pur.
+  const selectVocalBrevityLevel = document.getElementById("setting-vocal-brevity-level");
   // Dernier etat de lecture connu : la ligne d'etat de la section « Lecture des
   // reponses » le reprend a chaque ouverture de la modale.
   let lastReadAloudState = "";
@@ -1924,6 +1960,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   // est BORNEE et alignee par la source unique (`normalizeVocalSilenceSendMs`) :
   // le curseur ne peut donc jamais afficher autre chose que ce qui s'appliquera.
   refreshVocalSilenceSend(currentConfig && currentConfig.vocal_silence_send_ms);
+  // Meme section : la LONGUEUR des reponses a l'oral (valeur inconnue ou
+  // absente ⇒ « courtes », le comportement historique).
+  refreshVocalBrevityLevel(currentConfig && currentConfig.vocal_brevity_level);
   // État du DERNIER téléchargement de modèle : relu, jamais relancé (aucun geste
   // ici — un téléchargement ne part que d'un clic ou d'un choix de voix).
   refreshLocalVoiceDownloadState().then((state) => {
@@ -2933,6 +2972,12 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         vocal_silence_send_ms: inputVocalSilenceSend
           ? normalizeVocalSilenceSendMs(parseInt(inputVocalSilenceSend.value, 10))
           : normalizeVocalSilenceSendMs(0),
+        // Mode Vocal : LONGUEUR des reponses a l'oral. La valeur est passee par
+        // la source unique : une valeur inconnue ne peut donc jamais etre ecrite
+        // dans la configuration (elle retombe sur « courtes »).
+        vocal_brevity_level: normalizeVocalBrevityLevel(
+          selectVocalBrevityLevel ? selectVocalBrevityLevel.value : null
+        ),
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
         super_agent_coordinator: chkSuperAgentCoordinator ? chkSuperAgentCoordinator.checked === true : false,
         super_agent_user_friendly: chkSuperAgentUserFriendly ? chkSuperAgentUserFriendly.checked === true : false,

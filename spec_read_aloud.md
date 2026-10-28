@@ -122,9 +122,14 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
 - **Juste en dessous**, la section voisine `#settings-section-vocal-delay`
   (« Mode Vocal ») porte le **délai d'envoi** de l'écran vocal
   (`#setting-vocal-silence-send`, champ de configuration
-  `vocal_silence_send_ms`, 1 à 5 s par pas de 0,5 s, **2 s par défaut**), décrit
-  dans `spec_modes_ecran_vocal.md` § 6bis.1. Il est **voisin, pas mélangé** : la
-  section de la voix ne contient aucun élément du mode Vocal, et réciproquement.
+  `vocal_silence_send_ms`, 1 à 5 s par pas de 0,5 s, **2 s par défaut**), et —
+  sous ce curseur — la **longueur des réponses à l'oral**
+  (`#setting-vocal-brevity-level`, champ `vocal_brevity_level` : **Très courte**,
+  **Courtes** par défaut, **Moyenne**, **Détaillées**) : c'est cette longueur
+  qui décide de ce que la lecture a à lire en mode Vocal. Ils sont **voisins,
+  pas mélangés** : la section de la voix ne contient aucun élément du mode
+  Vocal, et réciproquement. Détail des quatre niveaux :
+  `spec_modes_ecran_vocal.md` § 6bis.3.
 - Le libellé du champ est relié (`<label for>`), le champ décrit sa note et sa
   ligne d'état (`aria-describedby`), la ligne d'état est annoncée.
 - Le sélecteur est rempli **à l'ouverture de la modale** et **à l'ouverture de

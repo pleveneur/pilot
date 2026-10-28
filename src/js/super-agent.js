@@ -51,7 +51,9 @@ import { applyVoiceEnd, isSilentEmptyVoiceEnd } from "./voice-auto-send.js";
 // composer le message envoye a l'agent, au point unique de l'envoi. Hors du mode
 // Vocal, la demande part INCHANGEE : le chat ecrit et l'onglet Assistant gardent
 // leurs reponses actuelles.
-import { composeVocalPrompt } from "./vocal-brevity.js";
+// `normalizeVocalBrevityLevel` est le SEUL juge de ce qu'une valeur de niveau
+// vaut : l'ecran ne decide donc jamais lui-meme ce qu'est un niveau.
+import { composeVocalPrompt, normalizeVocalBrevityLevel } from "./vocal-brevity.js";
 // CONVERSATION PARLEE de l'ecran Vocal : QUAND la dictee s'arme toute seule (au
 // repos), quand elle se desarme (Pilot lit, Pilot travaille, on sort du mode) et
 // ce que dit la ligne d'etat quand elle ne peut pas s'armer. Les DECISIONS sont
@@ -2972,6 +2974,9 @@ export async function createSuperAgent(container) {
     // Le delai d'envoi sur silence du mode Vocal se relit A CHAUD (aucun
     // redemarrage) ; il ne touche pas au minuteur en vol.
     refreshVocalSilenceSendMs();
+    // La LONGUEUR des reponses orales se relit au meme endroit (aucun second
+    // ecouteur) : le reglage prend effet a la demande suivante.
+    refreshVocalLongueurNiveau();
     refreshSuperAgentConfig().then(() => {
       // Réglage global de l'onglet « Tâches » : activation/désactivation à chaud,
       // sans redémarrer (le panneau du suivi du travail suit immédiatement).
@@ -2992,6 +2997,9 @@ export async function createSuperAgent(container) {
   // Premiere lecture du delai regle (mode Vocal) : sans elle, l'onglet ouvert
   // avant tout changement de reglage utiliserait le defaut. Fail-open.
   refreshVocalSilenceSendMs();
+  // Meme premiere lecture pour la LONGUEUR des reponses orales : sans elle,
+  // l'onglet ouvert avant tout changement de reglage utiliserait le defaut.
+  refreshVocalLongueurNiveau();
 
   const wrapper = document.createElement("div");
   wrapper.className = "agent-chat-container superagent-wrapper";
@@ -3395,6 +3403,12 @@ export async function createSuperAgent(container) {
   // jamais recopiee ici. Un changement de reglage ne touche JAMAIS un minuteur
   // deja lance : la nouvelle valeur s'applique au prochain armement.
   let vocalSilenceSendMs = 0;
+  // `vocalLongueurNiveau` : la DERNIERE valeur connue du reglage de la LONGUEUR
+  // des reponses orales (`vocal_brevity_level`, meme section « Mode Vocal »).
+  // Elle est lue au moment de COMPOSER le message envoye a l'agent : un
+  // changement de reglage s'applique donc a la demande SUIVANTE, jamais a une
+  // demande deja partie. `null`/illisible = le module pur tranche (« courtes »).
+  let vocalLongueurNiveau = null;
   // `vocalMotRecu` : au moins un mot a ete recupere dans la dictee en cours
   // (provisoire ou definitif). Sans lui, un silence ne fait rien partir : une
   // dictee muette n'envoie rien. Remis a zero a chaque nouvelle session.
@@ -4464,6 +4478,24 @@ export async function createSuperAgent(container) {
   }
 
   /**
+   * Relit la LONGUEUR reglee des reponses orales (au montage de l'onglet et a
+   * chaque changement de reglage : aucun redemarrage necessaire).
+   *
+   * FAIL-OPEN : configuration illisible ou valeur inconnue ⇒ niveau par defaut
+   * (« courtes »), c'est-a-dire le comportement historique. Le module pur
+   * (`normalizeVocalBrevityLevel`) est le seul juge de ce qu'une valeur vaut ;
+   * aucun niveau n'est recopie ici.
+   */
+  async function refreshVocalLongueurNiveau() {
+    try {
+      const cfg = await invoke("get_config");
+      vocalLongueurNiveau = normalizeVocalBrevityLevel(cfg && cfg.vocal_brevity_level);
+    } catch (_) {
+      vocalLongueurNiveau = normalizeVocalBrevityLevel(null);
+    }
+  }
+
+  /**
    * Ferme la dictee pour que la demande PARTE — par la voie qui existe deja.
    *
    * On n'appelle PAS `stopVoiceInput()` : il referme la session avant l'arret du
@@ -5145,7 +5177,10 @@ export async function createSuperAgent(container) {
     // celui d'avant (aucune consigne, aucun autre ecran modifie), et AUCUNE
     // coupe n'est faite sur la suite de la reponse : la brievete vient de la
     // consigne, jamais d'une troncature.
-    const messageAgent = composeVocalPrompt(text, { modeVocal: vocalOverlay !== null });
+    const messageAgent = composeVocalPrompt(text, {
+      modeVocal: vocalOverlay !== null,
+      niveau: vocalLongueurNiveau,
+    });
     inputEl.value = "";
     inputEl.style.height = "auto";
     // L'ENGAGEMENT du propriétaire (défaut 1 de la relecture) n'est PAS posé ici :

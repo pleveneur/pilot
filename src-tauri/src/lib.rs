@@ -709,6 +709,16 @@ struct AppConfig {
     // configuration ne change jamais le comportement.
     #[serde(default = "default_vocal_silence_send_ms")]
     vocal_silence_send_ms: u32,
+    // Mode Vocal (écran vocal) : LONGUEUR des réponses orales. Réglée au même
+    // endroit que le délai (Paramètres → onglet « Assistant » → section
+    // « Mode Vocal ») : « tres-courte », « courtes », « moyenne » ou
+    // « detaillees ». Défaut « courtes » = le comportement historique (deux ou
+    // trois phrases), donc un fichier de configuration ancien ne change rien.
+    // La valeur est normalisée par la source unique (`vocal-brevity.js`,
+    // `normalizeVocalBrevityLevel`) : une valeur inconnue ne change jamais le
+    // comportement.
+    #[serde(default = "default_vocal_brevity_level")]
+    vocal_brevity_level: String,
     // Évolution 3 : assistant « réponses courtes » — quand activé, l'assistant
     // informe et décide sans détailler tout ce qui se fait, sauf demande
     // explicite. Défaut off. Injecté dans le prompt système.
@@ -1000,6 +1010,9 @@ fn default_stale_busy_grace_minutes() -> u32 { 25 }
 fn default_assistant_sound_volume() -> u32 { 100 }
 /// Mode Vocal : délai d'envoi après le dernier mot (2 s, valeur historique).
 fn default_vocal_silence_send_ms() -> u32 { 2000 }
+/// Mode Vocal : longueur des réponses orales (« courtes » = comportement
+/// historique, deux ou trois phrases).
+fn default_vocal_brevity_level() -> String { "courtes".to_string() }
 fn default_super_agent_name() -> String { "Assistant".to_string() }
 fn default_context_budget() -> u32 { 8000 }
 fn default_rag_endpoint() -> String { "http://127.0.0.1:11434".to_string() }
@@ -1231,6 +1244,7 @@ impl Default for AppConfig {
             assistant_sound_volume: default_assistant_sound_volume(),
             read_aloud_voice: String::new(),
             vocal_silence_send_ms: default_vocal_silence_send_ms(),
+            vocal_brevity_level: default_vocal_brevity_level(),
             super_agent_concise: false,
             super_agent_adaptive_personality: false,
             super_agent_personality: String::new(),

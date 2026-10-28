@@ -502,9 +502,57 @@ Le défaut corrigé : dans l'écran Vocal, Pilot répondait comme dans un chat �
   gardent exactement leurs réponses actuelles, et le prompt système de
   l'assistant (`super_agent.rs`) ne contient pas cette consigne. La provenance est
   l'écran Vocal **réel** (`vocalOverlay !== null`), pas un drapeau parallèle.
-- **Rien à l'écran, rien à régler** : ni réglage, ni bouton, ni phrase d'interface.
+- **Rien à l'écran, rien à régler** *(avant le réglage de longueur, § 6bis.3)* : ni
+  bouton, ni phrase d'interface dans l'écran Vocal lui-même.
   La bulle de la demande et l'historique gardent le texte de l'utilisateur tel
   qu'il l'a dit ; seul le message **envoyé** à l'agent porte la consigne.
+
+### 6bis.3 La longueur des réponses orales se règle (quatre niveaux)
+
+**Décision du propriétaire** : la longueur, figée à « deux ou trois phrases »,
+se règle désormais. **Quatre niveaux**, une clé stable par niveau, **un seul
+juge** de ce qu'une valeur vaut.
+
+| Clé (`vocal_brevity_level`) | Libellé à l'écran | Ce que Pilot dit |
+|---|---|---|
+| `tres-courte` | Très courte | une à deux phrases, l'essentiel seulement |
+| **`courtes`** (défaut) | Courtes | **deux ou trois phrases** — la consigne historique, **mot pour mot** |
+| `moyenne` | Moyenne | quatre à six phrases, avec le pourquoi quand il aide |
+| `detaillees` | Détaillées | réponse complète et développée, mais toujours dite à l'oreille : des phrases, jamais de tableau, jamais de code, jamais un nom de fichier lu à voix haute |
+
+- **Source unique** : `src/js/vocal-brevity.js`. `VOCAL_BREVITY_LEVELS` (les
+  quatre clés), `VOCAL_BREVITY_DEFAULT_LEVEL = "courtes"`,
+  `normalizeVocalBrevityLevel()` (**seul** juge : valeur inconnue, vide, `null`,
+  casse différente ⇒ défaut), `vocalBrevityLabel()` (**seul** libellé),
+  `vocalBrevityInstruction(niveau)` (la consigne d'un niveau).
+  `VOCAL_BREVITY_INSTRUCTION` reste la consigne du niveau **par défaut** : c'est
+  exactement celle d'avant le réglage.
+- **La consigne est construite à l'envoi**, par le seul `composeVocalPrompt(text,
+  { modeVocal, niveau })` (appelé une seule fois, dans `send()` de
+  `src/js/super-agent.js`). Le niveau est donc lu **au moment de composer** : un
+  réglage change s'applique à la **demande suivante**, jamais à une demande déjà
+  partie.
+- **Ce qui ne change jamais, quel que soit le niveau** : (a) une demande
+  explicite de développer (« détaille », « explique », « pourquoi », « comment »)
+  passe **avant** le niveau choisi ; (b) une **panne**, un **refus**, une
+  **erreur** (outil, micro, agent) ou une **demande de confirmation** se disent
+  **entièrement**, même en « très courte » ; (c) **aucune troncature** : la
+  brièveté vient de la consigne, jamais d'une coupe (aucune `slice`, aucune
+  limite de caractères) ; (d) **hors du mode Vocal**, le texte est **inchangé** ;
+  (e) une **demande vide** ne reçoit **aucune consigne**.
+- **Réglage, à UN SEUL endroit** : Paramètres → onglet **« Assistant »** →
+  section **« Mode Vocal »**, **sous le curseur du délai d'envoi**
+  (`#setting-vocal-brevity-level`, un seul choix, quatre libellés venus du module
+  pur, plus une phrase d'explication). Champ de configuration Rust
+  `vocal_brevity_level` (chaîne, `#[serde(default = "default_vocal_brevity_level")]`
+  = `"courtes"` ⇒ **aucune migration**). Le front relit la valeur **fail-open**
+  (absente ou illisible ⇒ « courtes ») **au montage** de l'onglet et dans le
+  gestionnaire `pilot-config-changed` **déjà existant** (aucun second écouteur),
+  et l'enregistrement est **immédiat**.
+- **Verrou** : `src/js/vocal-longueur-reglable.test.js` (les quatre niveaux, le
+  défaut mot pour mot, le repli sur valeur inconnue, les cinq invariants pour les
+  quatre niveaux, le branchement, l'interface, la documentation), complété par
+  `src/js/vocal-reponses-courtes.test.js` (même module, aucune copie ailleurs).
 
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 
@@ -582,7 +630,7 @@ sa hauteur d'origine.
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
 | `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur, jamais une erreur affichée, un arrêt demandé ou une reprise en main) |
-| `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : la consigne exacte (`VOCAL_BREVITY_INSTRUCTION`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature, aucun réglage |
+| `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : les **quatre niveaux** de longueur (`VOCAL_BREVITY_LEVELS`, `normalizeVocalBrevityLevel`, `vocalBrevityLabel`), la consigne d'un niveau (`vocalBrevityInstruction`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
