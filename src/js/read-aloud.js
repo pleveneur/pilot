@@ -120,8 +120,29 @@ export const READ_ALOUD_HELP_HINT =
   "Le bouton \u00ab\u00a0\u00c9couter\u00a0\u00bb lit la seule reponse finale de la conversation, jamais le travail interne. " +
   "Rien n'est lu automatiquement, et une seule lecture tourne a la fois.";
 
-/** Evenement emis a chaque changement d'etat de lecture (panneau des Parametres). */
+/** Evenement emis a chaque changement d'etat de lecture (panneau des Parametres).
+ *
+ * Son `detail` porte :
+ *   - `state` : l'etat de lecture (SEULE source de « Pilot parle ») ;
+ *   - `text`  : le texte REELLEMENT lu (nettoye et decoupe par
+ *     `speech-text.js`), present sur les etats ou Pilot parle ;
+ *   - `engine`: le MOTEUR qui lit — `READ_ALOUD_ENGINE_LOCAL` (Piper, son
+ *     mesurable) ou `READ_ALOUD_ENGINE_SYSTEM` (voix du systeme, aucun flux
+ *     audio accessible).
+ *
+ * `text` et `engine` sont la pour les AFFICHEURS de la parole (l'enveloppe de
+ * l'ecran Vocal, `vocal-enveloppe-aigu.js`) : quand la voix n'est pas
+ * mesurable, le seul signal honnete qui reste est le texte lu et le temps de
+ * lecture. Ils ne decident RIEN de la lecture : ce sont des faits, pas une
+ * consigne.
+ */
 export const READ_ALOUD_STATE_EVENT = "pilot-read-aloud-state";
+
+/** Moteur vocal LOCAL (Piper) : Pilot joue lui-meme un son, donc mesurable. */
+export const READ_ALOUD_ENGINE_LOCAL = "local";
+
+/** Moteur vocal du SYSTEME (`speechSynthesis`) : aucun flux audio pour la page. */
+export const READ_ALOUD_ENGINE_SYSTEM = "systeme";
 
 /**
  * Evenement emis QUAND LE SON COMMENCE — au premier echantillon audible d'une
@@ -782,12 +803,20 @@ export function createSpeaker(win, options = {}) {
   const self = { token: null, speaking: () => false, speak, stop: stopReading };
 
   /** Previens le panneau des Parametres de l'etat de lecture (regle 6/7). */
-  const broadcastState = (state) => {
+  const broadcastState = (state, infos) => {
     safeCall(() => {
       if (!w || typeof w.dispatchEvent !== "function") return;
       const Ev = w.CustomEvent || globalThis.CustomEvent;
       if (typeof Ev !== "function") return;
-      w.dispatchEvent(new Ev(READ_ALOUD_STATE_EVENT, { detail: { state } }));
+      const detail = { state };
+      // Faits joints a l'etat (jamais une consigne) : le TEXTE reellement lu et
+      // le MOTEUR qui lit. Les afficheurs de la parole s'en servent quand le son
+      // n'est pas mesurable (voix du systeme) ; personne ne decide rien avec.
+      if (infos && typeof infos === "object") {
+        if (infos.text) detail.text = String(infos.text);
+        if (infos.engine) detail.engine = String(infos.engine);
+      }
+      w.dispatchEvent(new Ev(READ_ALOUD_STATE_EVENT, { detail }));
     });
   };
 
@@ -815,9 +844,9 @@ export function createSpeaker(win, options = {}) {
    *   l'afficher pres du bouton d'ecoute. Absente quand elle n'apprend rien.
    */
   async function speak(text, handlers = {}) {
-    const notify = (state, cause) => {
+    const notify = (state, cause, infos) => {
       safeCall(() => handlers.onstate && handlers.onstate(state, cause));
-      broadcastState(state);
+      broadcastState(state, infos);
     };
     if (!synth || !Utterance) {
       notify("unavailable");
@@ -830,6 +859,15 @@ export function createSpeaker(win, options = {}) {
       notify("empty");
       return false;
     }
+    // TEXTE REELLEMENT LU (nettoye puis decoupe) : c'est lui que la voix dit, et
+    // donc lui qui donne le rythme quand le son n'est pas mesurable.
+    const spokenText = chunks.join(" ");
+    // Voix choisie dans LE reglage unique (Parametres → Assistant → Lecture des
+    // reponses). Soit une voix du systeme, soit la voix francaise LOCALE. Elle
+    // est lue ICI, avant l'annonce, pour que l'annonce dise le moteur qui va
+    // parler (fait joint a l'etat, voir `READ_ALOUD_STATE_EVENT`).
+    const choice = options.voiceName == null ? getPreferredVoiceName() : options.voiceName;
+    const moteur = isLocalVoiceChoice(choice) ? READ_ALOUD_ENGINE_LOCAL : READ_ALOUD_ENGINE_SYSTEM;
     stopReading(); // une seule lecture a la fois
     const token = { id: ++playbackSeq, stopped: false };
     // Arrets complementaires : la lecture locale doit pouvoir couper son audio
@@ -851,7 +889,7 @@ export function createSpeaker(win, options = {}) {
 
     // Etat affiche tout de suite (le chargement des voix peut prendre un
     // instant) : le bouton passe a « Arreter » sans attendre.
-    notify("speaking");
+    notify("speaking", undefined, { text: spokenText, engine: moteur });
 
     // ── « LE SON COMMENCE » (defaut miroir de la coupure de parole) ─────────
     // L'annonce ci-dessus part AVANT le premier son. Ce signal-ci part a
@@ -866,10 +904,6 @@ export function createSpeaker(win, options = {}) {
       sonAnnonce = true;
       broadcastSound();
     };
-
-    // Voix choisie dans LE reglage unique (Parametres → Assistant → Lecture des
-    // reponses). Soit une voix du systeme, soit la voix francaise LOCALE.
-    const choice = options.voiceName == null ? getPreferredVoiceName() : options.voiceName;
 
     // ── Voix FRANCAISE LOCALE (Piper) : hors ligne, sans cle, sans GPU ──────
     // Meme texte nettoye, meme decoupage que la voix du systeme : seul le moteur
@@ -922,7 +956,10 @@ export function createSpeaker(win, options = {}) {
       // Dit clairement a l'utilisateur que la lecture ne se fait pas avec la
       // voix demandee : d'abord LA OU IL ECOUTE (la rangee du bouton, voir
       // `readAloudFallbackNotice`), et dans l'etat des Parametres.
-      notify("local-fallback", fallbackCause);
+      notify("local-fallback", fallbackCause, {
+        text: spokenText,
+        engine: READ_ALOUD_ENGINE_SYSTEM,
+      });
     }
 
     // Voix du systeme : on attend leur chargement (sinon la premiere lecture
@@ -947,7 +984,12 @@ export function createSpeaker(win, options = {}) {
     // a cote du bouton d'ecoute. Aucune exception quand la voix est la : le cas
     // normal reste muet. Le reglage de l'utilisateur n'est pas reecrit.
     const systemFallbackCause = systemVoiceMissingCause(voices, choice);
-    if (systemFallbackCause) notify("system-fallback", systemFallbackCause);
+    if (systemFallbackCause) {
+      notify("system-fallback", systemFallbackCause, {
+        text: spokenText,
+        engine: READ_ALOUD_ENGINE_SYSTEM,
+      });
+    }
 
     const speakIndex = (index) => {
       if (token.stopped || currentPlayback !== playback) return;

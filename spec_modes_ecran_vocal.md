@@ -142,7 +142,7 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
 | **Repos** | personne ne parle, l'agent ne réfléchit pas, rien n'est lu | accent du thème (`--vocal-rest`) | respiration lente de 4 s | « Je vous écoute. » |
 | **Écoute** | le micro **capte vraiment** : le niveau mesuré dépasse le seuil **haut** (0,06 RMS) | vert (`--vocal-listen`) | aucun mouvement propre : **le halo intérieur suit la voix** | « Je vous écoute… » |
 | **Réflexion** | l'agent réfléchit | violet de l'assistant (`--vocal-think`) | arc de 60° qui tourne en 3 s | « Je réfléchis… » |
-| **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | lueur extérieure **au bord** du disque (pic à **34 %** d'alpha sur la couronne) qui **suit le son** quand il est mesurable (§4) | « Je réponds. » |
+| **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | lueur extérieure **au bord** du disque (pic à **34 %** d'alpha sur la couronne) qui **suit la voix de Pilot** : le son mesuré quand il l'est, le rythme de la phrase lue sinon (§4) | « Je réponds. » |
 
 **Deux lueurs, deux voix — et deux mots différents.** L'écran n'a qu'un seul
 niveau à montrer par voix, et chaque voix a **sa** couleur :
@@ -189,7 +189,7 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   entend parfois de Pilot **n'est jamais dessiné**. Sa couleur est **toujours**
   `--vocal-listen`, jamais l'état : une couleur par voix, les deux ne se
   confondent pas. C'est désormais le **seul** afficheur de votre voix.
-- **L'enveloppe de parole suit le SON quand il est mesurable** (12/11,
+- **L'enveloppe de parole suit la VOIX de Pilot, l'aigu en tête** (12/11,
   `src/js/vocal-enveloppe-aigu.js`) : un **analyseur** est monté sur l'élément
   audio que Pilot joue lui-même, et c'est l'énergie de la **bande haute**
   (au-dessus de **4 kHz**, jusqu'au plafond d'analyse du projet) qui décide de
@@ -198,17 +198,35 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   lissage du projet (montée **0,5**, retombée **0,12**), puis projection :
   **18 px** au repos → **32 px** à pleine voix, opacité **0,80 → 1**. L'extension
   ne peut donc **pas** dépasser 32 px, et le silence **ramène au repos** au lieu
-  de faire pulser une lumière toute seule. **Ce qui n'est pas mesurable est dit
-  franchement** : la voix du **système** (`speechSynthesis`) ne livre aucun flux
-  audio au navigateur — aucune API ne le permet — donc dans ce cas l'animation
-  `vocal-speak-glow` (1,6 s) reste le **repli assumé**, et le code ne prétend rien
-  mesurer (aucune classe posée, aucune valeur inventée). La voix **locale**
-  (Piper, le cas par défaut) est le cas **réellement couvert**.
-- **En « parole », rien n'est inventé** : quand le son n'est pas mesurable
-  (voix du système), l'enveloppe suit son enveloppe **fixe** de 1,6 s,
-  volontairement lente et bornée (jamais synchrone avec les mots). Seule
-  l'enveloppe de la voix locale **mesure** quelque chose ; l'écoute mesure
-  toujours la vôtre.
+  de faire pulser une lumière toute seule.
+- **Deux sources, jamais les deux à la fois** : la décision est **pure et
+  testée** (`planSpeechEnvelopeSource`) et son ordre **est** la règle. En
+  **mouvement réduit** ou quand le **contour spectral** peint déjà cette voix,
+  **personne n'écrit** ; sinon la **mesure du son** l'emporte quand elle existe ;
+  sinon le **rythme de la phrase lue** prend la place.
+  - **Voix locale (Piper)** : Pilot joue lui-même le son, donc la mesure est
+    **réelle** — un seul `AnalyserNode` sur son élément audio.
+  - **Voix du système (`speechSynthesis`), qui reste la voix par DÉFAUT** : le
+    navigateur ne livre **aucun flux audio** à la page et aucune API ne le
+    permet. Le code **ne fait pas semblant** de mesurer. Ce que Pilot connaît,
+    lui, c'est le **texte qu'il lit** : il est découpé en **unités de rythme**
+    (mots → syllabes, la **dernière accentuée**), la **ponctuation** ouvre des
+    **pauses** (courte **220 ms** pour `,` `;` `:` et le tiret ; longue
+    **420 ms** pour `.` `!` `?` `…` ; paragraphe **560 ms**), et une **position
+    de lecture** avance avec le **temps de parole effectif** (début et fin de
+    lecture réels). Position → intensité **0..1** : une **pause** vaut **0**
+    (l'enveloppe est au repos pendant qu'on reprend souffle), une syllabe
+    **accentuée** vaut **1**, une syllabe ordinaire **0,55** au sommet, avec un
+    plancher de **0,2** à l'intérieur d'une syllabe ; puis le **même lissage**
+    que le son (montée **0,5** / retombée **0,12**). **Aucun aléatoire** : le
+    même texte donne toujours le même mouvement, et **deux phrases de longueurs
+    différentes ne bougent pas pareil**.
+- **En « parole », rien n'est inventé** : la mesure vient du **son** quand il est
+  mesurable, du **texte et du temps de lecture** sinon — jamais d'une pulsation
+  aveugle. L'animation `vocal-speak-glow` (1,6 s) ne reste que le **repli** du
+  cas où **aucune** des deux sources n'est disponible : dès que l'une écrit
+  (classe `.vocal-envelope-live`), elle est éteinte. L'écoute, elle, mesure
+  toujours **votre** voix.
 - **La lueur de parole est visible au bord, pas cachée au centre**
   (`docs/rapports/RAPPORT-halo-parole.md`, puis
   `docs/rapports/RAPPORT-halo-suivant-le-son.md`). L'enveloppe de parole

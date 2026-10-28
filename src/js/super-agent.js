@@ -25,6 +25,7 @@ import {
   attachReadAloud,
   READ_ALOUD_STATE_EVENT,
   READ_ALOUD_SOUND_EVENT,
+  READ_ALOUD_ENGINE_SYSTEM,
   stopReading,
   isReadAloudSpeaking,
 } from "./read-aloud.js";
@@ -55,15 +56,23 @@ import { applyVoiceEnd, isSilentEmptyVoiceEnd } from "./voice-auto-send.js";
 // `normalizeVocalBrevityLevel` est le SEUL juge de ce qu'une valeur de niveau
 // vaut : l'ecran ne decide donc jamais lui-meme ce qu'est un niveau.
 import { composeVocalPrompt, normalizeVocalBrevityLevel } from "./vocal-brevity.js";
-// L'ENVELOPPE DE PAROLE SUIT LE SON REEL (demande du proprietaire) : la mesure
-// de l'aigu de la voix de Pilot et sa projection (extension + intensite) vivent
-// dans ce module, avec un seul analyseur monte sur le SEUL son que Pilot joue
-// lui-meme (voix locale). Ici on ne fait que deux choses : lui donner le son
-// quand le mode est ouvert, et poser deux variables de style. Aucune API audio
-// n'entre donc dans ce fichier (ecran-vocal-lot2/lot3.test.js le verifient),
-// et la voix du SYSTEME — qui ne rend aucun flux a la page — garde l'animation
-// existante comme repli assume (voir docs/rapports/RAPPORT-halo-suivant-le-son.md).
-import { createSpeechEnvelopeMeter, planSpeechEnvelope } from "./vocal-enveloppe-aigu.js";
+// L'ENVELOPPE DE PAROLE SUIT LA VOIX DE PILOT, QUEL QUE SOIT LE MOTEUR : la
+// mesure de l'aigu (voix locale) ET le rythme de la phrase lue (voix du
+// systeme, non mesurable) vivent dans ce module, avec UN seul afficheur. Ici on
+// ne fait que trois choses : lui donner le son quand le mode est ouvert, lui
+// donner le TEXTE lu quand le moteur est le systeme, et poser deux variables de
+// style. Aucune API audio n'entre donc dans ce fichier
+// (ecran-vocal-lot2/lot3.test.js le verifient), et les deux sources se
+// remplacent — jamais les deux a la fois. Voir
+// docs/rapports/RAPPORT-halo-suivant-le-son.md.
+import {
+  createSpeechEnvelopeMeter,
+  createSpeechRhythmMeter,
+  planSpeechEnvelope,
+  planSpeechEnvelopeSource,
+  ENVELOPE_SOURCE_SOUND,
+  ENVELOPE_SOURCE_RHYTHM,
+} from "./vocal-enveloppe-aigu.js";
 // CONVERSATION PARLEE de l'ecran Vocal : QUAND la dictee s'arme toute seule (au
 // repos), quand elle se desarme (Pilot lit, Pilot travaille, on sort du mode) et
 // ce que dit la ligne d'etat quand elle ne peut pas s'armer. Les DECISIONS sont
@@ -3408,10 +3417,23 @@ export async function createSuperAgent(container) {
   // Le metre (analyseur monte sur le son que Pilot joue vraiment) vit dans
   // vocal-enveloppe-aigu.js. Il n'existe QUE pendant le mode Vocal : cree a
   // l'entree, debranche a la sortie. Aucun etat intermediaire n'est tenu ici :
-  // la seule trace d'une mesure REELLE est la classe `.vocal-envelope-live`
-  // posee par `vocalApplyEnvelopeEnergy` (et retiree des qu'il n'y a plus rien
-  // a mesurer), pour qu'il n'existe jamais deux verites sur ce point.
+  // la seule trace qu'une source pilote l'enveloppe est la classe
+  // `.vocal-envelope-live` posee par `vocalApplyEnvelopeEnergy` (et retiree des
+  // qu'il n'y a plus rien a mesurer), pour qu'il n'existe jamais deux verites
+  // sur ce point. La MEME classe sert au rythme (voix du systeme) : un seul
+  // afficheur pour les deux sources, jamais deux.
   let vocalEnvelopeMeter = null;
+  // ── L'ENVELOPPE DE PAROLE PILOTEE PAR LE RYTHME (voix du systeme) ──
+  // La voix par defaut est celle du SYSTEME, et `speechSynthesis` ne rend aucun
+  // flux audio : aucune frequence n'est mesurable. Ce metre-la ne mesure donc
+  // rien : il decoupe le TEXTE lu en mots et syllabes, avance une position de
+  // lecture avec le temps de parole effectif (debut / fin de lecture) et en
+  // tire une intensite (vocal-enveloppe-aigu.js). Une seule des deux sources
+  // tourne a la fois : c'est `planSpeechEnvelopeSource` qui tranche.
+  let vocalRhythmMeter = null;
+  // Texte de la lecture en cours (source « rythme ») : sert a ne pas relancer
+  // le metre a chaque changement d'etat du meme texte.
+  let vocalRhythmText = "";
   // ── LOT 3 : le micro REEL de l'ecran Vocal ──
   // La mecanique (flux, analyseur, lissage, arret des pistes) vit dans
   // vocal-mic.js. Ici, trois etats seulement :
@@ -4244,14 +4266,38 @@ export async function createSuperAgent(container) {
    * donne l'extension et l'intensite. On pose alors UNE classe et DEUX
    * variables de style — aucun noeud cree, aucune animation ajoutee.
    */
-  function vocalApplyEnvelopeEnergy(energie) {
+  function vocalApplyEnvelopeEnergy(energie, source) {
     if (!vocalOverlay) return;
+    const reduit = vocalReducedMotion();
+    // Le contour spectral est l'autre afficheur de la MEME voix (§7.3) :
+    // s'il peint, l'enveloppe s'efface (jamais deux affichages).
+    const contourPeint = vocalOverlay.classList.contains("vocal-spectrum-live");
+    // UNE SEULE SOURCE A LA FOIS (decision pure) : la mesure du son l'emporte
+    // toujours, le rythme ne prend la place que si rien n'est mesurable, et en
+    // mouvement reduit aucune des deux n'ecrit (le CSS tient l'enveloppe FIXE
+    // mais VISIBLE).
+    const proprietaire = planSpeechEnvelopeSource({
+      reduit,
+      contourPeint,
+      mesure: source === ENVELOPE_SOURCE_SOUND,
+      rythme: source === ENVELOPE_SOURCE_RHYTHM,
+    });
+    if (!proprietaire) {
+      // Personne n'a le droit de peindre : le rythme s'arrete, rien n'est pose.
+      vocalStopRhythmMeter();
+      vocalClearEnvelope();
+      return;
+    }
+    if (proprietaire !== source) {
+      // L'AUTRE source a la parole : la mesure reelle fait taire le rythme, qui
+      // ne revient pas de cette lecture. On n'ecrit rien ici.
+      if (source === ENVELOPE_SOURCE_RHYTHM) vocalStopRhythmMeter();
+      return;
+    }
     const plan = planSpeechEnvelope({
       energy: energie,
-      reduit: vocalReducedMotion(),
-      // Le contour spectral est l'autre afficheur de la MEME voix (§7.3) :
-      // s'il peint, l'enveloppe s'efface (jamais deux affichages).
-      contourPeint: vocalOverlay.classList.contains("vocal-spectrum-live"),
+      reduit,
+      contourPeint,
       disponible: true,
     });
     if (!plan.live) {
@@ -4261,6 +4307,62 @@ export async function createSuperAgent(container) {
     vocalOverlay.classList.add("vocal-envelope-live");
     vocalOverlay.style.setProperty("--vocal-envelope-scale", String(plan.scale));
     vocalOverlay.style.setProperty("--vocal-envelope-alpha", String(plan.alpha));
+  }
+
+  /**
+   * Arrete la source « rythme » (voix du systeme) : plus aucune image, et le
+   * repos est publie une derniere fois. Sans effet quand elle ne tourne pas.
+   */
+  function vocalStopRhythmMeter() {
+    if (!vocalRhythmMeter) return;
+    const metre = vocalRhythmMeter;
+    // D'abord oublier le metre : sa derniere image (0) ne doit pas le relancer.
+    vocalRhythmMeter = null;
+    vocalRhythmText = "";
+    metre.arreter();
+  }
+
+  /**
+   * Arme la source « rythme » avec le TEXTE reellement lu. Aucune mesure : le
+   * mouvement vient entierement du texte et du temps de lecture.
+   * @param {string} texte
+   */
+  function vocalStartRhythmMeter(texte) {
+    if (!vocalOverlay) return;
+    const lu = String(texte == null ? "" : texte);
+    if (!lu.trim()) return;
+    // Mouvement reduit : aucune valeur n'est posee (l'enveloppe reste fixe mais
+    // visible par le CSS) — inutile de faire tourner une horloge.
+    if (vocalReducedMotion()) {
+      vocalStopRhythmMeter();
+      return;
+    }
+    // Meme texte deja en cours : on ne relance pas (aucun a-coup au milieu).
+    if (vocalRhythmMeter && vocalRhythmText === lu) return;
+    vocalStopRhythmMeter();
+    const metre = createSpeechRhythmMeter({
+      win: window,
+      onEnergy: (energie) => vocalApplyEnvelopeEnergy(energie, ENVELOPE_SOURCE_RHYTHM),
+    });
+    if (!metre.demarrer(lu)) return;
+    vocalRhythmMeter = metre;
+    vocalRhythmText = lu;
+  }
+
+  /**
+   * Quelle source porte la parole de Pilot pour CETTE lecture ? Le moteur est
+   * dit par `read-aloud.js` (`detail.engine`, un fait) : voix du systeme ->
+   * rythme du texte lu ; voix locale -> le son est mesurable, donc rien a
+   * simuler (le metre du son prend le relais, jamais les deux ensemble).
+   * @param {{engine?: string, text?: string}} [detail]
+   */
+  function vocalSyncEnvelopeSource(detail) {
+    const infos = detail || {};
+    if (infos.engine === READ_ALOUD_ENGINE_SYSTEM) {
+      vocalStartRhythmMeter(infos.text);
+      return;
+    }
+    vocalStopRhythmMeter();
   }
 
   /**
@@ -4985,9 +5087,11 @@ export async function createSuperAgent(container) {
     // Vocal, personne n'ecoute le son de Pilot (aucun cout, aucun analyseur).
     vocalEnvelopeMeter = createSpeechEnvelopeMeter({
       win: window,
-      onEnergy: vocalApplyEnvelopeEnergy,
+      onEnergy: (energie) => vocalApplyEnvelopeEnergy(energie, ENVELOPE_SOURCE_SOUND),
     });
     vocalEnvelopeMeter.demarrer();
+    // La source « rythme » (voix du systeme) part au premier etat de lecture :
+    // aucune lecture ne tourne a l'entree du mode, donc rien a armer ici.
     // Le mode REELLEMENT affiche est ecrit par la SEULE source des modes
     // (`screen-mode.js`) : entrer ici, c'est etre en « Vocal », meme quand on
     // vient de « Assistant seul » (dont la sortie a ecrit « Detaille »).
@@ -5009,6 +5113,9 @@ export async function createSuperAgent(container) {
       vocalEnvelopeMeter.arreter();
       vocalEnvelopeMeter = null;
     }
+    // La source « rythme » (voix du systeme) s'arrete avec le mode : aucune
+    // horloge ne continue derriere l'ecran.
+    vocalStopRhythmMeter();
     vocalClearEnvelope();
     // CONVERSATION PARLEE : la sortie FERME la dictee (aucun peripherique ne
     // reste ouvert derriere l'ecran) et annule tout armement programme. Meme
@@ -5125,12 +5232,18 @@ export async function createSuperAgent(container) {
   // de cet etat (emis par read-aloud.js a chaque changement) ; l'ecran Vocal ne
   // devine jamais la parole et ne cree aucun second lecteur.
   const onVocalReadAloudState = (e) => {
-    const etat = e && e.detail ? e.detail.state : "";
+    const detail = e && e.detail ? e.detail : {};
+    const etat = detail.state;
     const parlait = vocalSpeaking;
     // SEULE decision « Pilot parle » (read-aloud.js) : elle couvre la lecture
     // normale ET ses deux replis de voix. Une comparaison de chaine ici
     // laisserait la dictee s'armer pendant un repli.
     vocalSpeaking = isReadAloudSpeaking(etat);
+    // L'ENVELOPPE, SOURCE DE LA MESURE : voix du systeme (aucun flux audio) ->
+    // rythme de la phrase lue ; voix locale -> le son est mesurable et c'est
+    // lui qui parle (le rythme s'arrete). Une seule source a la fois.
+    if (vocalSpeaking) vocalSyncEnvelopeSource(detail);
+    else vocalStopRhythmMeter();
     // L'ENVELOPPE : la fin de la lecture eteint la mesure (l'enveloppe revient
     // a l'animation existante, ou s'efface avec l'etat). Un morceau de voix
     // locale qui se tait pour de bon ne laisse donc pas une lueur figee.

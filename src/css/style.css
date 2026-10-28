@@ -11692,10 +11692,12 @@ body.pilot-vocal-active .agent-chat-messages {
   opacity: 1;
   animation: vocal-speak-glow 1.6s ease-in-out infinite;
 }
-/* --- L'ENVELOPPE SUIT LE SON (voix locale reelle) ---
-   Quand le mode Vocal mesure VRAIMENT le son de Pilot, `super-agent.js` pose
-   la classe `.vocal-envelope-live` et deux variables lues ici : `scale` et
-   `alpha` (intensite, 0,8 a 1). `scale` est le facteur de la BOITE ENTIERE
+/* --- L'ENVELOPPE SUIT LA VOIX DE PILOT (deux sources, un seul afficheur) ---
+   Quand une source pilote l'enveloppe — la MESURE du son (voix locale) ou le
+   RYTHME du texte lu (voix du systeme, qui ne livre aucun flux audio) —
+   `super-agent.js` pose la classe `.vocal-envelope-live` et deux variables lues
+   ici : `scale` et `alpha` (intensite, 0,8 a 1). `scale` est le facteur de la
+   BOITE ENTIERE
    (232 px de large, du centre a 116 px) : 0,8793 au repos (bord a 102 px, soit
    18 px au-dela de l'anneau de 84 px) et 1 a pleine voix (bord a 116 px, soit
    32 px). Reduire le tout autour du centre ne peut donc jamais ramener le bord
@@ -11703,8 +11705,8 @@ body.pilot-vocal-active .agent-chat-messages {
    seul affichage, et le silence ramene l'enveloppe au repos au lieu d'une
    pulsation inventee. `transition: none` : le lissage est deja fait image par
    image dans le code (une transition ajouterait un second lissage).
-   Sans mesure (voix du SYSTEME : aucun flux audio n'est accessible), la classe
-   n'est jamais posee et l'animation ci-dessus reste le repli. */
+   Sans source (ni mesure, ni texte a lire), la classe n'est jamais posee et
+   l'animation ci-dessus reste le repli. */
 .pilot-vocal.vocal-envelope-live.vocal-state-speaking .vocal-orb::before {
   animation: none;
   opacity: var(--vocal-envelope-alpha, 1);

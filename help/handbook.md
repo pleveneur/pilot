@@ -465,13 +465,18 @@ En mode **Vocal** :
   reste la voix de Pilot.
 - **Quand Pilot lit sa réponse**, une lueur ambre se lève **au bord** du cercle :
   c'est la voix de Pilot, **à l'extérieur** du disque (la vôtre s'allume
-  **dedans**, en vert). Ce liseré **suit le son** de sa voix : il s'étend quand
-  ses mots portent, se resserre dans les pauses. Il s'étend loin — environ
-  **32 px** au-delà du cercle — sans jamais toucher la ligne de texte.
-  **Une précision honnête** : ce suivi marche avec les **voix installées sur
-  votre ordinateur** (les voix françaises locales). Avec la **voix du système**,
-  l'ordinateur ne laisse pas l'application écouter ce qu'elle dit : la lueur
-  respire alors lentement, au lieu de suivre les mots.
+  **dedans**, en vert). Ce liseré **suit sa voix** : il s'étend quand ses mots
+  portent, se resserre dans les pauses. Il s'étend loin — environ **32 px**
+  au-delà du cercle — sans jamais toucher la ligne de texte.
+  **Comment il suit, selon la voix** : avec les **voix installées sur votre
+  ordinateur** (les voix françaises locales), Pilot joue lui-même le son et
+  l'écoute vraiment : la lueur suit le **timbre aigu** de ce qu'il dit. Avec la
+  **voix du système** — celle qui est là par défaut — l'ordinateur ne laisse pas
+  l'application écouter ce qu'elle dit ; Pilot ne fait donc pas semblant : il
+  suit le **rythme de la phrase qu'il lit**, syllabe par syllabe, en s'arrêtant
+  dans les **pauses de la ponctuation**. Dans les deux cas, le silence laisse la
+  lueur au repos, et deux phrases de longueurs différentes ne bougent pas
+  pareil.
 - **Si vous avez réduit les animations**, cette lueur reste **allumée et fixe**,
   à sa taille pleine — elle ne clignote pas et ne disparaît pas.
 - **L'écran distingue le silence de la parole** : quand vous vous taisez, il est

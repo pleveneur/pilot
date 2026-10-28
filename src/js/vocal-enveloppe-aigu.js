@@ -22,14 +22,20 @@
 // aucun reglage, ne demande aucune permission. `super-agent.js` se contente de
 // poser deux variables de style.
 //
-// CE QUI N'EST PAS MESURABLE, ET QUI LE RESTE (dit dans le rapport et la spec) :
-// la voix du SYSTEME (`speechSynthesis`) ne rend AUCUN flux audio a la page ;
-// aucun analyseur ne peut la voir. Dans ce cas le metre ne s'attache a rien,
-// `planSpeechEnvelope` n'est jamais appele avec `disponible: true`, et
-// l'enveloppe garde son animation existante : c'est un repli assume, pas une
-// mesure inventee. Seule la voix LOCALE (Piper) joue un son que la page peut
-// ecouter — c'est le cas couvert pour de vrai (`createMediaElementSource` +
-// `AnalyserNode`, sur l'element audio de `local-voice.js`).
+// UN SEUL AFFICHEUR, DEUX SOURCES (decisions du proprietaire, 12/11 puis
+// 28/10 soir) : le meme halo, la meme enveloppe, la meme extension (~32 px).
+// Ce qui change d'un moteur vocal a l'autre, c'est la SOURCE de la mesure :
+//   - voix LOCALE (Piper) : Pilot joue lui-meme le son, la page l'ecoute
+//     (`createMediaElementSource` + `AnalyserNode`) — mesure REELLE de l'aigu ;
+//   - voix du SYSTEME (`speechSynthesis`) : le navigateur ne rend AUCUN flux
+//     audio a la page, aucune mesure de frequence n'est possible. Ce que Pilot
+//     connait, lui, c'est le TEXTE qu'il lit : l'enveloppe est alors pilotee par
+//     le RYTHME REEL de la phrase (mots, syllabes, pauses de ponctuation) —
+//     jamais par une pulsation aveugle, et jamais en pretendant mesurer.
+// Les deux sources REMPLACENT l'une l'autre, jamais les deux a la fois :
+// `planSpeechEnvelopeSource` est le seul juge de qui a la parole.
+// La voix du systeme reste la voix par defaut : le halo doit donc suivre pour
+// ELLE aussi, sinon il ne suivrait rien dans le cas le plus courant.
 
 import { setLocalVoiceAudioTap } from "./local-voice.js";
 
@@ -249,6 +255,249 @@ export function planSpeechEnvelope(etats = {}) {
     scale: halo.scale,
     alpha: halo.alpha,
   };
+}
+
+// ── QUELLE SOURCE PORTE LA PAROLE ? (une seule a la fois) ───────────────────
+
+/** Source « mesure reelle » : le son que Pilot joue (voix locale). */
+export const ENVELOPE_SOURCE_SOUND = "son";
+
+/** Source « rythme du texte lu » : la voix du systeme, non mesurable. */
+export const ENVELOPE_SOURCE_RHYTHM = "rythme";
+
+/**
+ * Qui a le droit de piloter l'enveloppe ? PURE. Rend **une** source, ou rien.
+ *
+ * L'ordre EST la regle, et il garantit qu'il n'y a jamais deux sources :
+ *   1. mouvement reduit -> rien (le CSS tient l'enveloppe FIXE mais VISIBLE) ;
+ *   2. contour spectral peint -> rien (il peint deja cette voix) ;
+ *   3. mesure reelle disponible -> `son` (elle l'emporte, elle est la verite) ;
+ *   4. sinon, si le texte lu est connu -> `rythme` ;
+ *   5. sinon rien (l'animation existante reste le repli).
+ *
+ * @param {{reduit?: boolean, contourPeint?: boolean, mesure?: boolean,
+ *          rythme?: boolean}} [etats]
+ * @returns {string} `ENVELOPE_SOURCE_SOUND`, `ENVELOPE_SOURCE_RHYTHM` ou ""
+ */
+export function planSpeechEnvelopeSource(etats = {}) {
+  const e = etats || {};
+  if (e.reduit === true) return "";
+  if (e.contourPeint === true) return "";
+  if (e.mesure === true) return ENVELOPE_SOURCE_SOUND;
+  if (e.rythme === true) return ENVELOPE_SOURCE_RHYTHM;
+  return "";
+}
+
+// ── LA VOIX DU SYSTEME : LE RYTHME DE LA PHRASE LUE ─────────────────────────
+//
+// POURQUOI CE BLOC EXISTE : la voix par defaut reste celle du SYSTEME. Or
+// `speechSynthesis` ne rend aucun flux audio a la page : aucune frequence n'est
+// mesurable, et il ne faut pas faire semblant. Ce que Pilot connait, lui, c'est
+// le TEXTE qu'il est en train de lire. On le decoupe donc en unites de rythme
+// (mots -> syllabes, ponctuation -> pauses) et une POSITION DE LECTURE avance
+// avec le temps de parole effectif (les signaux de debut / fin de lecture que
+// l'enveloppe utilise deja). A chaque instant, position + unites donnent une
+// intensite 0..1 : plus forte sur une syllabe accentuee, AU REPOS dans les
+// pauses. Aucun aleatoire : tout est determine par le texte et le temps.
+
+/** Duree de base d'une syllabe lue, en millisecondes (voix francaise). */
+export const RHYTHM_SYLLABLE_MS = 190;
+
+/** Duree d'une syllabe ACCENTUEE (derniere du mot) : un peu plus tenue. */
+export const RHYTHM_FINAL_LENGTH = 1.18;
+
+/** Respiration entre deux mots (ms) : un creux, jamais le silence complet. */
+export const RHYTHM_WORD_GAP_MS = 40;
+
+/** Pause courte : virgule, point-virgule, deux-points, tiret (ms). */
+export const RHYTHM_PAUSE_SHORT_MS = 220;
+
+/** Pause longue : point, point d'interrogation, point d'exclamation (ms). */
+export const RHYTHM_PAUSE_LONG_MS = 420;
+
+/** Pause de paragraphe : ligne vide (ms). */
+export const RHYTHM_PAUSE_PARAGRAPH_MS = 560;
+
+/** Intensite d'une syllabe NON accentuee (creux de mot, jamais 0). */
+export const RHYTHM_ACCENT_PLAIN = 0.55;
+
+/** Intensite d'une syllabe ACCENTUEE (derniere syllabe du mot). */
+export const RHYTHM_ACCENT_FINAL = 1;
+
+/**
+ * Plancher d'intensite DANS une syllabe : l'enveloppe ne s'eteint pas entre
+ * deux syllabes (elle respire), seules les PAUSES la ramenent au repos.
+ */
+export const RHYTHM_FLOOR = 0.2;
+
+/** Les voyelles qui comptent une syllabe (francais, accents compris). */
+// Groupes de voyelles du francais, accents compris. « y » compte comme une
+// voyelle (style, y). AUCUNE CONSONNE ICI : une seule lettre de trop, comme
+// « r », fusionnerait des syllabes (voi-tu-re deviendrait voi-ture) et
+// donnerait un rythme faux — c'est exactement le defaut corrige ici.
+const VOYELLES = "aàâäeéèêëiîïoôöuùûüyÿœæ";
+
+/**
+ * Nombre de syllabes d'un mot, par groupes de voyelles. PURE, heuristique
+ * assumee (la lettre « y » entre deux voyelles compte pour une de plus) : ce
+ * qui compte ici n'est pas la phonetique exacte mais un rythme STABLE et
+ * reproductible, identique d'une lecture a l'autre pour le meme texte.
+ * @param {string} mot
+ * @returns {number} au moins 1 (un mot sans voyelle est une syllabe)
+ */
+export function countSpeechSyllables(mot) {
+  const texte = String(mot == null ? "" : mot).toLowerCase();
+  let groupes = 0;
+  let dansVoyelle = false;
+  for (let i = 0; i < texte.length; i += 1) {
+    if (VOYELLES.indexOf(texte[i]) !== -1) {
+      if (!dansVoyelle) groupes += 1;
+      dansVoyelle = true;
+    } else {
+      dansVoyelle = false;
+    }
+  }
+  return groupes || 1;
+}
+
+/**
+ * Decoupe un texte lu en UNITES DE RYTHME. PURE : aucun DOM, aucun temps, aucun
+ * aleatoire — le meme texte donne toujours exactement les memes unites.
+ *
+ * Une unite est une syllabe (`type: "syllabe"`, avec son `accent` : la derniere
+ * syllabe du mot est accentuée) ou une pause (`type: "pause"`, `accent: 0`).
+ * Les unites sont contigues : `at` (ms, depuis le debut de la lecture) et
+ * `duration` (ms) s'enchainent sans trou, si bien qu'une position de lecture
+ * tombe toujours dans une unite — sauf APRES la fin du texte, qui est du
+ * silence et vaut le repos.
+ *
+ * Pauses : virgule / point-virgule / deux-points -> courte (220 ms) ; point,
+ * point d'interrogation, point d'exclamation -> longue (420 ms) ; ligne vide ->
+ * paragraphe (560 ms). Deux ponctuations qui se suivent ne font PAS deux
+ * pauses : la plus longue l'emporte (aucun cumul artificiel).
+ *
+ * @param {string} texte texte REELLEMENT lu
+ * @returns {{units: Array<{type: string, at: number, duration: number,
+ *            accent: number}>, total: number}}
+ */
+export function speechRhythmUnits(texte) {
+  const source = String(texte == null ? "" : texte).replace(/\r\n?/g, "\n");
+  const units = [];
+  let at = 0;
+  let mot = "";
+  let sauts = 0;
+
+  /** Ajoute une pause (ou allonge la precedente : jamais de cumul). */
+  const pousserPause = (duree) => {
+    const d = arrondi(duree, 0);
+    if (!(d > 0)) return;
+    const dernier = units.length ? units[units.length - 1] : null;
+    if (dernier && dernier.type === "pause") {
+      if (d > dernier.duration) {
+        at += d - dernier.duration;
+        dernier.duration = d;
+      }
+      return;
+    }
+    units.push({ type: "pause", at, duration: d, accent: 0 });
+    at += d;
+  };
+
+  /** Ferme le mot en cours : ses syllabes, puis une respiration de mot. */
+  const pousserMot = () => {
+    const m = mot;
+    mot = "";
+    if (!m) return;
+    const total = countSpeechSyllables(m);
+    for (let i = 0; i < total; i += 1) {
+      const derniere = i === total - 1;
+      const duree = arrondi(RHYTHM_SYLLABLE_MS * (derniere ? RHYTHM_FINAL_LENGTH : 1), 0);
+      units.push({
+        type: "syllabe",
+        at,
+        duration: duree,
+        accent: derniere ? RHYTHM_ACCENT_FINAL : RHYTHM_ACCENT_PLAIN,
+      });
+      at += duree;
+    }
+    pousserPause(RHYTHM_WORD_GAP_MS);
+  };
+
+  for (let i = 0; i < source.length; i += 1) {
+    const c = source[i];
+    if (c === "\n") {
+      pousserMot();
+      sauts += 1;
+      // Une ligne vide (deux sauts ou plus) = pause de paragraphe.
+      if (source[i + 1] !== "\n") {
+        pousserPause(sauts >= 2 ? RHYTHM_PAUSE_PARAGRAPH_MS : RHYTHM_PAUSE_SHORT_MS);
+        sauts = 0;
+      }
+      continue;
+    }
+    sauts = 0;
+    if (c === "," || c === ";" || c === ":" || c === "\u2013" || c === "\u2014") {
+      pousserMot();
+      pousserPause(RHYTHM_PAUSE_SHORT_MS);
+      continue;
+    }
+    if (c === "." || c === "!" || c === "?" || c === "\u2026") {
+      pousserMot();
+      pousserPause(RHYTHM_PAUSE_LONG_MS);
+      continue;
+    }
+    if (c === " " || c === "\t") {
+      pousserMot();
+      continue;
+    }
+    if (c === "-" || c === "\u2019" || c === "'") {
+      // Trait d'union et apostrophe ne coupent pas le mot lu.
+      mot += c;
+      continue;
+    }
+    mot += c;
+  }
+  pousserMot();
+  // RIEN A LIRE = AUCUNE UNITE. Un texte fait uniquement d'espaces ou de sauts
+  // de ligne ne doit pas armer une lecture : sans une seule syllabe, les pauses
+  // ne sont pas du rythme, et le metre ne doit pas tourner pour ne rien dire.
+  if (!units.some((u) => u && u.type === "syllabe")) return { units: [], total: 0 };
+  return { units, total: at };
+}
+
+/**
+ * Intensite (0..1) de l'enveloppe a une POSITION DE LECTURE donnee. PURE.
+ *
+ * Trois proprietes, verifiees par test :
+ *   - une PAUSE de ponctuation -> **0** (l'enveloppe est au repos, elle ne
+ *     pulse pas pendant qu'on reprend souffle) ;
+ *   - SILENCE avant le debut ou apres la fin du texte -> **0** ;
+ *   - une syllabe -> une bosse lisse (sinus), plus forte si la syllabe est
+ *     accentuée : `accent` 1 pour la derniere syllabe du mot, 0,55 ailleurs.
+ *
+ * @param {Array<{type: string, at: number, duration: number, accent: number}>} units
+ * @param {number} positionMs temps de parole ecoule depuis le debut (ms)
+ * @returns {number} 0..1
+ */
+export function rhythmIntensity(units, positionMs) {
+  const t = Number.isFinite(positionMs) ? positionMs : -1;
+  if (!(t >= 0) || !Array.isArray(units) || !units.length) return 0;
+  const liste = units;
+  for (let i = 0; i < liste.length; i += 1) {
+    const u = liste[i] || {};
+    const debut = Number.isFinite(u.at) ? u.at : 0;
+    const duree = Number.isFinite(u.duration) && u.duration > 0 ? u.duration : 0;
+    if (t < debut) return 0;
+    if (t >= debut + duree) continue;
+    // Pause (ponctuation, fin de phrase) : repos complet.
+    if (u.type !== "syllabe" || !(duree > 0)) return 0;
+    const phase = (t - debut) / duree;
+    const forme = Math.sin(Math.PI * phase);
+    const accent = clamp01(u.accent);
+    return clamp01((RHYTHM_FLOOR + (1 - RHYTHM_FLOOR) * forme) * accent);
+  }
+  // Au-dela de la derniere unite : plus rien a lire, donc repos.
+  return 0;
 }
 
 // ── Le branchement : UN analyseur sur le SEUL son que Pilot joue lui-meme ───
@@ -486,5 +735,114 @@ export function createSpeechEnvelopeMeter(options = {}) {
     attacher,
     actif: () => actif,
     mesure: () => energy,
+  };
+}
+
+// ── LE METRE DU RYTHME (voix du systeme, non mesurable) ────────────────────
+//
+// Meme contrat que le metre du son — `demarrer` / `arreter` / `actif` /
+// `mesure`, une valeur 0..1 publiee a chaque image et une derniere fois 0 a
+// l'arret — pour que l'afficheur n'ait qu'un branchement a connaitre. Il ne
+// mesure AUCUN son (il n'y en a pas) : il avance une position de lecture avec
+// le temps de parole effectif et lit l'intensite du texte dans `rhythmIntensity`.
+// Aucun aleatoire, aucune API audio, aucun DOM : uniquement une horloge.
+
+/**
+ * Cree le metre du RYTHME de la phrase lue (voix du systeme).
+ *
+ * @param {{win?: object, onEnergy?: (energie: number) => void}} [options]
+ *   `onEnergy` recoit l'intensite LISSEE (0..1) a chaque image, et une derniere
+ *   fois 0 a l'arret
+ * @returns {{demarrer: (texte: string) => boolean, arreter: () => void,
+ *            actif: () => boolean, mesure: () => number,
+ *            position: () => number}}
+ */
+export function createSpeechRhythmMeter(options = {}) {
+  const win = options.win || (typeof globalThis !== "undefined" ? globalThis.window : null);
+  const onEnergy = typeof options.onEnergy === "function" ? options.onEnergy : null;
+
+  let units = [];
+  let debut = 0;
+  let energie = 0;
+  let actif = false;
+  let minuteur = 0;
+
+  /** Horloge monotone de la fenetre (`performance.now` quand elle existe). */
+  function maintenant() {
+    const perf = win && win.performance;
+    const t = perf && typeof perf.now === "function" ? perf.now() : Date.now();
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  function annuler() {
+    if (!minuteur) return;
+    const cancel = win && win.cancelAnimationFrame;
+    try {
+      if (typeof cancel === "function") cancel.call(win, minuteur);
+      else if (win && win.clearTimeout) win.clearTimeout.call(win, minuteur);
+    } catch (_) {
+      /* un minuteur deja mort ne bloque rien */
+    }
+    minuteur = 0;
+  }
+
+  function planifier() {
+    if (!actif || minuteur) return;
+    const raf = win && win.requestAnimationFrame;
+    try {
+      if (typeof raf === "function") {
+        minuteur = raf.call(win, image);
+        return;
+      }
+      if (win && win.setTimeout) {
+        minuteur = win.setTimeout.call(win, image, 1000 / ENVELOPE_FPS);
+      }
+    } catch (_) {
+      minuteur = 0;
+    }
+  }
+
+  /** Une image : position de lecture -> intensite, lissee comme le son. */
+  function image() {
+    minuteur = 0;
+    if (!actif) return;
+    energie = smoothEnvelopeEnergy(energie, rhythmIntensity(units, maintenant() - debut));
+    if (onEnergy) onEnergy(energie);
+    planifier();
+  }
+
+  /**
+   * Demarre le rythme d'un texte. Rend `false` quand il n'y a rien a lire : le
+   * metre ne tourne alors pas du tout (aucune image, aucune valeur publiee).
+   * @param {string} texte texte REELLEMENT lu
+   * @returns {boolean}
+   */
+  function demarrer(texte) {
+    const plan = speechRhythmUnits(texte);
+    units = plan.units;
+    if (!units.length) return false;
+    debut = maintenant();
+    energie = 0;
+    actif = true;
+    planifier();
+    return true;
+  }
+
+  /** Arrete la boucle et publie le repos (aucune image apres l'arret). */
+  function arreter() {
+    if (!actif) return;
+    annuler();
+    actif = false;
+    units = [];
+    energie = 0;
+    if (onEnergy) onEnergy(0);
+  }
+
+  return {
+    demarrer,
+    arreter,
+    actif: () => actif,
+    mesure: () => energie,
+    position: () => (actif ? maintenant() - debut : 0),
   };
 }
