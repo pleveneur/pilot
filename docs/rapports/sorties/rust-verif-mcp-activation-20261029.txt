@@ -1,0 +1,11 @@
+# Extrait — cargo test (Rust, lib desktop), 2e passe de VERIFICATION
+# Commande : cargo test --manifest-path src-tauri/Cargo.toml --lib
+# Date : 2026-10-29 · tete git : b805966 (lot deja commite)
+# Lancee en TACHE DE FOND, sortie redirigee dans ce fichier (aucune attente au premier plan).
+# Seules les lignes de synthese sont conservees ; le journal complet (un 'test ... ok' par test)
+# se reproduit a l'identique avec la commande ci-dessus.
+$ cargo test --manifest-path src-tauri/Cargo.toml --lib
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.70s
+     Running unittests src\lib.rs (target\debug\deps\pilot-1a35e3cea54eb404.exe)
+test result: ok. 799 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 12.53s
+[fin d'extrait, code de sortie 0]

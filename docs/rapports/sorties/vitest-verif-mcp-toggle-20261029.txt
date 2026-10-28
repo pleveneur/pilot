@@ -1,0 +1,5 @@
+# Sortie — npx vitest run src/js/mcp-server-toggle.test.js (2e passe de VERIFICATION)
+# Date : 2026-10-29 · tete git : b805966
+$ npx vitest run src/js/mcp-server-toggle.test.js
+PASS (22) FAIL (0)
+[fin de sortie, code 0]

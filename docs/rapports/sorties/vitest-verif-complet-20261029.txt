@@ -1,0 +1,12 @@
+# Extrait — npx vitest run (suite COMPLETE), 2e passe de VERIFICATION
+# Date : 2026-10-29 · tete git : b805966
+# Lancee en TACHE DE FOND ; codes couleur ANSI retires ; seules les lignes de
+# synthese sont conservees (le detail par test se reproduit avec la commande
+# ci-dessus). Les lignes de pile d'appels ont ete retirees de cet extrait.
+$ npx vitest run
+PASS (0 failed) — suite complete
+ Test Files  221 passed (221)
+      Tests  4111 passed (4111)
+   Start at  18:04:57
+   Duration  12.55s (transform 6.90s, setup 0ms, collect 84.95s, tests 14.77s, environment 61ms, prepare 28.04s)
+[fin d'extrait, code de sortie 0]

@@ -192,3 +192,56 @@ site non protégé.
 3. Si le besoin apparaît : un `mcp_state` enrichi d'un champ `effective`
    (serveur réellement retenu par la session courante), pour que l'Assistant
    distingue « activé » de « branché maintenant ».
+
+## 9. Re-vérification indépendante (2ᵉ passe, méthode différente)
+
+La 1ʳᵉ passe a été coupée par le chien de garde pendant une compilation Rust
+silencieuse. Le lot était néanmoins **déjà commité** (`b805966`). Cette 2ᵉ passe
+ne réécrit donc rien : elle **re-vérifie sur le disque** ce qui est commité, avec
+une méthode qui ne peut pas paraître inactive — **compilation et suites lancées
+en tâche de fond, sortie redirigée dans un fichier**, relu ensuite.
+
+```bash
+# Rust — tâche de fond, sortie dans un fichier (aucune attente au premier plan)
+cargo test --manifest-path src-tauri/Cargo.toml --lib \
+  > docs/rapports/sorties/rust-verif-mcp-activation-20261029.txt 2>&1 &
+# JS — fichier de résultat NEUF, par fichier puis suite complète
+npx vitest run src/js/mcp-server-toggle.test.js \
+  > docs/rapports/sorties/vitest-verif-mcp-toggle-20261029.txt 2>&1
+npx vitest run > docs/rapports/sorties/vitest-verif-complet-20261029.txt 2>&1 &
+```
+
+Résultats **recomptés** (aucun chiffre figé, lu dans les fichiers ci-dessus) :
+
+| Suite | Sortie | Verdict |
+|---|---|---|
+| `cargo test --lib` (desktop) | `799 passed; 0 failed; 1 ignored` | compilation **réussie**, aucun échec |
+| `vitest run src/js/mcp-server-toggle.test.js` | `PASS (22) FAIL (0)` | les 22 tests du lot passent |
+| `vitest run` (suite complète) | `221 fichiers / 4111 tests passed`, 0 échec | aucune régression |
+
+Contrôles de cohérence refaits à la main sur le disque (pas seulement sur la
+sortie des tests) :
+
+- extension : `mcp_enable_server` (`pilot-assistant-actions.ts` l. 353),
+  `mcp_disable_server` (l. 380), les deux émettent bien
+  `ctx.ui.input(MCP_SERVER_TOGGLE_SENTINEL + …)` (l. 371 et 398) ;
+- assistant : branche `title.startsWith(MCP_SERVER_TOGGLE_SENTINEL)`
+  (`super-agent.js` l. 7728) → `applyMcpServerToggle` (l. 7742) →
+  `appendSystemMessage` (l. 7754) ;
+- Rust : `apply_server_enable_changes` (validation de TOUS les identifiants
+  avant écriture), commande `mcp_set_servers_enabled` (`mcp_config.rs`),
+  enregistrée dans `lib.rs` l. 4004 ; `mod assistant_server_toggle_tests`
+  (`mcp_config.rs` l. 2672, 7 tests) ;
+- extension bien embarquée : `include_str!("../extensions/pilot-assistant-actions.ts")`
+  (`agent_service.rs` l. 3183 et 3401) ;
+- doc : bloc `<!-- HELP:super-agent-mcp -->` (`spec_super_agent.md` l. 2860)
+  contient la phrase utilisateur sur `mcp_enable_server` / `mcp_disable_server`,
+  et `help/handbook.md` (l. 3830) la reprend — handbook donc à jour.
+
+Les trois fichiers de sortie nommés ci-dessus sont des **extraits** : ils gardent
+l'en-tête (commande, date, tête git) et les lignes de synthèse ; les journaux
+bruts (un `test … ok` par test, ~200 Ko) sont **reproductibles à l'identique**
+avec les deux commandes ci-dessus, et les y stocker n'aurait rien prouvé de plus.
+
+Conclusion : **rien à corriger**. La présente passe n'ajoute que cette section et
+les trois fichiers de sortie ci-dessus.
