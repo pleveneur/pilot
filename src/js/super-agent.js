@@ -229,6 +229,18 @@ import {
   telegramNotifyConfirmation,
   telegramNotifyStateAnswer,
 } from "./telegram-notify-setting.js";
+// MCP PILOTÉ PAR L'ASSISTANT — ACTIVER / DÉSACTIVER UN SERVEUR NOMMÉ (outils
+// `mcp_enable_server` / `mcp_disable_server`) : l'Assistant n'a plus à renvoyer
+// l'utilisateur dans les Paramètres. La DÉCISION (identifiant connu,
+// exclusivité « un seul serveur branché par session », texte de réponse) vit
+// dans `mcp-server-toggle.js` ; l'ÉCRITURE est la commande Rust
+// `mcp_set_servers_enabled`, qui ne change QUE le champ `enabled` des serveurs
+// nommés. Aucun autre réglage MCP n'est lu ni écrit ici.
+import {
+  applyMcpServerToggle,
+  mcpToggleAnswer,
+  mcpToggleSystemMessage,
+} from "./mcp-server-toggle.js";
 // Refonte des messages Telegram : le NOM COURT du projet vient de l'UNIQUE
 // fonction du projet (`projectShortName`) — jamais un chemin, jamais un nom
 // recopié à la main. « Assistant » seulement si aucun projet n'est ouvert.
@@ -6187,6 +6199,21 @@ function accumulateSuperLoopToolResponse(messagesEl, method, payload) {
       // MCP piloté (brique C) : empreinte stable pour mcp_state (l'état MCP ne
       // change que rarement — une répétition est une boucle).
       fingerprint = buildToolLoopFingerprint("mcp_state", {});
+    } else if (title.startsWith("PILOT_ASSISTANT_MCP_SERVER::")) {
+      // Activer / désactiver un serveur MCP nommé : deux demandes IDENTIQUES
+      // dans le même tour sont un motif de boucle — la seconde ne changerait
+      // plus rien (la réponse dit alors « DÉJÀ activé / DÉJÀ désactivé »).
+      let mcpToggleReq = {};
+      try {
+        mcpToggleReq =
+          JSON.parse(title.slice("PILOT_ASSISTANT_MCP_SERVER::".length)) || {};
+      } catch (_) {
+        mcpToggleReq = {};
+      }
+      fingerprint = buildToolLoopFingerprint("mcp_toggle_server", {
+        server: String(mcpToggleReq.server || ""),
+        enabled: mcpToggleReq.enabled === true,
+      });
     } else {
       fingerprint = "input::" + title;
     }
@@ -6732,6 +6759,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const RUN_ASSISTANT_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_ASSISTANT_AGENTS::";
     const SESSIONS_SENTINEL = "PILOT_ASSISTANT_SESSIONS::";
     const MCP_STATE_SENTINEL = "PILOT_ASSISTANT_MCP_STATE::";
+    // MCP : activer / désactiver un serveur NOMMÉ (mcp_enable_server /
+    // mcp_disable_server). Même voie que mcp_state : un `input` dont le titre
+    // porte le sentinel + un JSON { server, enabled }.
+    const MCP_SERVER_TOGGLE_SENTINEL = "PILOT_ASSISTANT_MCP_SERVER::";
     const MEMORY_SAVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_SAVE::";
     const MEMORY_REMOVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_REMOVE::";
     const MEMORY_RESTORE_SENTINEL = "PILOT_ASSISTANT_MEMORY_RESTORE::";
@@ -7692,6 +7723,37 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       } catch (e) {
         await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
       }
+      return;
+    }
+    if (title.startsWith(MCP_SERVER_TOGGLE_SENTINEL)) {
+      // Outils mcp_enable_server / mcp_disable_server : l'Assistant ACTIVE ou
+      // DÉSACTIVE un serveur MCP NOMMÉ depuis la conversation, sans passer par
+      // les Paramètres. Aucune exception ne remonte : un identifiant inconnu
+      // produit un message clair, et rien n'est modifié.
+      let request = {};
+      try {
+        request =
+          JSON.parse(title.slice(MCP_SERVER_TOGGLE_SENTINEL.length)) || {};
+      } catch (_) {
+        request = {};
+      }
+      let plan;
+      try {
+        plan = await applyMcpServerToggle(
+          { server: request.server, enabled: request.enabled === true },
+          { invokeFn: (cmd, args) => invoke(cmd, args) },
+        );
+      } catch (e) {
+        plan = {
+          ok: false,
+          message: `Activation MCP impossible (${String(e)}). Rien n'a été modifié.`,
+        };
+      }
+      // Effet visible dans la conversation (jamais un changement silencieux).
+      if (plan && plan.ok === true) {
+        appendSystemMessage(messagesEl, mcpToggleSystemMessage(plan));
+      }
+      await respondSuperAgent(id, mcpToggleAnswer(plan), false);
       return;
     }
     if (title.startsWith(MCP_STATE_SENTINEL)) {

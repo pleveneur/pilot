@@ -2871,6 +2871,17 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
 - **Confirmation** : si `confirm` est activé (défaut), l'Assistant **demande à
   l'utilisateur** (`ask_confirm`) avant de lancer un agent sur un serveur MCP.
   Si désactivé, il choisit et lance seul.
+- **Activer / désactiver un serveur depuis la conversation** : demandez-le
+  simplement à l'Assistant (« active Presence », « désactive test »). Il
+  utilise `mcp_enable_server` / `mcp_disable_server`, **sans vous renvoyer dans
+  les Paramètres**, et applique le changement aussitôt. Comme Pilot ne branche
+  **qu'un serveur à la fois**, en activer un **coupe les autres** — et
+  l'Assistant vous **dit lesquels** (aucun changement silencieux). Désactiver
+  n'active personne d'office. Rien d'autre n'est touché : ni le client MCP, ni la
+  confirmation requise, ni le contenu des serveurs, ni les clés du coffre, et
+  aucun serveur n'est supprimé. Le changement vaut à la **prochaine session
+  d'agent** : une conversation déjà en cours garde son serveur. Un nom de
+  serveur inconnu donne un message clair, sans rien modifier.
 - L'agent standard du projet garde son comportement historique (1er serveur
   activé au démarrage, local ou distant).
 - **Serveur distant** : dans **Options → Serveurs MCP**, choisissez le type
@@ -2894,6 +2905,43 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
   différents. Si un serveur annonce **deux fois le même outil**, seul le premier
   est proposé à l'agent (et c'est signalé), jamais un remplacement silencieux.
 <!-- /HELP:super-agent-mcp -->
+
+### Technique — activer / désactiver un serveur MCP depuis la conversation
+
+Chaîne (le motif des autres actions de l'Assistant, aucune voie nouvelle) :
+`mcp_enable_server` / `mcp_disable_server` (`pilot-assistant-actions.ts`, un
+`input` préfixé `PILOT_ASSISTANT_MCP_SERVER::` + `{ server, enabled }`) →
+interception dans `super-agent.js` → module de décision
+`src/js/mcp-server-toggle.js` → commandes Rust `mcp_get_state` (lecture) et
+`mcp_set_servers_enabled` (écriture, `mcp_config.rs`).
+
+- **Décision** : `planMcpServerToggle` (pure) est le SEUL endroit qui applique
+  la règle d'exclusivité — activer un serveur produit les changements
+  `[{ id, enabled: true }]` **plus** `[{ id: autres, enabled: false }]`, et
+  `disabledOthers` nomme les serveurs coupés (nommés aussi dans la réponse et
+  dans le message système de la conversation). Désactiver n'active personne.
+- **Portée de l'écriture** : `apply_server_enable_changes` (pure) valide TOUS
+  les identifiants **avant** d'écrire, refuse un identifiant inconnu (`Err`
+  nommant l'identifiant et les serveurs connus, configuration **inchangée**),
+  et ne modifie **que** le champ `enabled` — aucun serveur créé, renommé ni
+  supprimé, aucun autre champ (commande, arguments, environnement, adresse,
+  `secret_ref`, `screen`) touché. La commande n'appelle que `read_mcp_config` /
+  `write_mcp_config` : ni `mcp_enabled`, ni `mcp_agent_confirm`, ni
+  `mcp_secret_strict`, ni le contrôle de l'écran ne peuvent changer par ce
+  chemin.
+- **Effet différé dit** : le serveur d'une session est choisi au spawn
+  (`select_session_server`), donc chaque réponse rappelle que le changement vaut
+  à la **prochaine session d'agent**.
+- **Confirmation** : c'est l'Assistant qui demande (`ask_confirm`) avant
+  d'appeler l'outil ; l'outil applique ensuite (règle écrite dans la description
+  des deux outils et dans leur `promptGuidelines`).
+- **Aucune exception** : état illisible, écriture refusée ou en échec → message
+  clair en une ligne, configuration laissée en l'état.
+- **Couverture** : `src/js/mcp-server-toggle.test.js` (22 tests : activation,
+  désactivation, identifiant inconnu, activation exclusive qui coupe les autres,
+  aucun autre réglage touché, chaîne outil → sentinel → assistant → Rust) et
+  `assistant_server_toggle_tests` (`mcp_config.rs`) pour la portée de l'écriture
+  côté Rust. Rapport : `docs/rapports/RAPPORT-mcp-activation-par-l-assistant.md`.
 
 <!-- HELP:super-agent-checklist -->
 ### Checklist de livraison d'une tâche
@@ -3029,7 +3077,7 @@ plutôt que de les laisser peser sur l'assistant de suivi.
   `~/.pilot/assistant/`), `pilot-choices.ts` (questions),
   `pilot-assistant-actions.ts` (open_project / delegate_to_coder /
   purge_agent_conversation / create_agent / run_agents (option `mcp_server`) /
-  run_assistant_agents / mcp_state),
+  run_assistant_agents / mcp_state / mcp_enable_server / mcp_disable_server),
   `pilot-assistant-db.ts` (db_query / db_execute sur la base de suivi),
   `pilot-assistant-prompt.ts` (update_my_prompt) et
   `pilot-assistant-sessions.ts` (list_agent_sessions),

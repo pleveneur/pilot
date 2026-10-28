@@ -3825,6 +3825,17 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
 - **Confirmation** : si `confirm` est activé (défaut), l'Assistant **demande à
   l'utilisateur** (`ask_confirm`) avant de lancer un agent sur un serveur MCP.
   Si désactivé, il choisit et lance seul.
+- **Activer / désactiver un serveur depuis la conversation** : demandez-le
+  simplement à l'Assistant (« active Presence », « désactive test »). Il
+  utilise `mcp_enable_server` / `mcp_disable_server`, **sans vous renvoyer dans
+  les Paramètres**, et applique le changement aussitôt. Comme Pilot ne branche
+  **qu'un serveur à la fois**, en activer un **coupe les autres** — et
+  l'Assistant vous **dit lesquels** (aucun changement silencieux). Désactiver
+  n'active personne d'office. Rien d'autre n'est touché : ni le client MCP, ni la
+  confirmation requise, ni le contenu des serveurs, ni les clés du coffre, et
+  aucun serveur n'est supprimé. Le changement vaut à la **prochaine session
+  d'agent** : une conversation déjà en cours garde son serveur. Un nom de
+  serveur inconnu donne un message clair, sans rien modifier.
 - L'agent standard du projet garde son comportement historique (1er serveur
   activé au démarrage, local ou distant).
 - **Serveur distant** : dans **Options → Serveurs MCP**, choisissez le type

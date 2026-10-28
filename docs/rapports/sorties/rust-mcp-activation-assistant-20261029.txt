@@ -1,0 +1,15 @@
+# Sortie brute — cargo test (Rust, lib desktop)
+# Date : 2026-10-28T18:00:43+04:00
+# Tete git : 069b6c3 (+ fichiers modifies non committes)
+$ cargo test --manifest-path src-tauri/Cargo.toml --lib mcp_config
+   Compiling pilot v0.6.2 (G:\IA_PL\pilot\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.11s
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src\lib.rs (target\debug\deps\pilot-1a35e3cea54eb404.exe)
+cargo test: 41 passed, 759 filtered out (1 suite, 0.56s)
+$ cargo test --manifest-path src-tauri/Cargo.toml --lib assistant_server_toggle_tests
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src\lib.rs (target\debug\deps\pilot-1a35e3cea54eb404.exe)
+cargo test: 7 passed, 793 filtered out (1 suite, 0.00s)
+[fin de sortie]

@@ -216,6 +216,104 @@ pub fn select_session_server<'a>(
     cfg.servers.iter().find(|s| s.enabled)
 }
 
+/// Changement d'état demandé pour UN serveur MCP : uniquement son état ACTIVÉ.
+/// Aucun autre champ d'un serveur (commande, arguments, environnement, adresse,
+/// référence de coffre, nom, transport, contrôle de l'écran), aucun autre
+/// réglage MCP (`mcp_enabled`, `mcp_agent_confirm`, `mcp_secret_strict`) ne
+/// voyage dans cette structure : c'est la garantie de portée de l'écriture.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpServerEnableChange {
+    pub id: String,
+    pub enabled: bool,
+}
+
+/// Retrouve l'index d'un serveur par son identifiant : correspondance EXACTE
+/// après rognage des espaces, puis à la casse près (l'identifiant est un choix
+/// de l'utilisateur, pas une valeur sensible). Fonction pure.
+fn server_index_by_id(cfg: &McpConfig, id: &str) -> Option<usize> {
+    let wanted = id.trim();
+    if wanted.is_empty() {
+        return None;
+    }
+    cfg.servers
+        .iter()
+        .position(|s| s.id.trim() == wanted)
+        .or_else(|| {
+            cfg.servers
+                .iter()
+                .position(|s| s.id.trim().eq_ignore_ascii_case(wanted))
+        })
+}
+
+/// Applique des changements d'état `enabled` à la configuration des serveurs
+/// MCP, en n'écrivant QUE ce champ. Fonction PURE (aucune I/O), testable.
+///
+/// Garanties :
+/// - **Validation COMPLÈTE avant la moindre écriture** : un identifiant INCONNU
+///   fait échouer l'appel entier (`Err`), avec un message clair qui nomme
+///   l'identifiant refusé et les serveurs connus — la configuration reste alors
+///   INCHANGÉE (aucune écriture partielle) ;
+/// - aucun serveur n'est créé, renommé ni supprimé ; aucun autre champ n'est
+///   touché (seul `enabled` change) ;
+/// - renvoie les identifiants réellement modifiés (liste vide = aucun
+///   changement, l'appelant n'a donc rien à écrire).
+///
+/// La règle d'EXCLUSIVITÉ (« activer un serveur coupe les autres ») est décidée
+/// par l'appelant (`src/js/mcp-server-toggle.js`), qui est le seul à connaître
+/// l'état complet et le texte à rendre au modèle : cette fonction applique
+/// littéralement les changements demandés.
+pub fn apply_server_enable_changes(
+    cfg: &mut McpConfig,
+    changes: &[McpServerEnableChange],
+) -> Result<Vec<String>, String> {
+    // 1) Validation de TOUS les identifiants avant toute écriture.
+    let mut targets: Vec<(usize, bool)> = Vec::with_capacity(changes.len());
+    let mut unknown: Vec<String> = Vec::new();
+    for change in changes {
+        match server_index_by_id(cfg, &change.id) {
+            Some(index) => targets.push((index, change.enabled)),
+            None => unknown.push(change.id.trim().to_string()),
+        }
+    }
+    if !unknown.is_empty() {
+        let known = if cfg.servers.is_empty() {
+            "aucun serveur configuré".to_string()
+        } else {
+            cfg.servers
+                .iter()
+                .map(|s| {
+                    let id = s.id.trim();
+                    if id.is_empty() {
+                        "(sans identifiant)".to_string()
+                    } else {
+                        id.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        return Err(format!(
+            "Serveur MCP inconnu : « {} ». Aucun serveur MCP de ce nom n'est configuré : rien n'a été modifié. Serveurs connus : {}.",
+            unknown.join(", "),
+            known
+        ));
+    }
+    // 2) Application : SEUL le champ `enabled` est écrit, aucune entrée créée ni
+    //    supprimée, l'ordre des serveurs est conservé.
+    let mut applied: Vec<String> = Vec::new();
+    for (index, enabled) in targets {
+        let server = &mut cfg.servers[index];
+        if server.enabled != enabled {
+            server.enabled = enabled;
+            let id = server.id.trim().to_string();
+            if !applied.contains(&id) {
+                applied.push(id);
+            }
+        }
+    }
+    Ok(applied)
+}
+
 /// Normalise une référence de coffre : accepte `"<id>"` ou `"vault:<id>"`.
 pub fn vault_ref_id(reference: &str) -> &str {
     let r = reference.trim();
@@ -533,8 +631,37 @@ pub fn mcp_get_state(app: AppHandle) -> Result<serde_json::Value, String> {
     Ok(mcp_state_json(enabled, confirm, &servers))
 }
 
-// ── Test de connexion (local stdio et distant HTTP) ──
+/// Active/désactive l'état `enabled` de serveurs MCP NOMMÉS, à la demande de
+/// l'Assistant (outils `mcp_enable_server` / `mcp_disable_server`).
+///
+/// Écriture NARROW : seul `<app_data_dir>/mcp.json` est réécrit, et dans chaque
+/// entrée SEUL `enabled` change (cf. `apply_server_enable_changes`). Aucun autre
+/// réglage MCP (`mcp_enabled`, `mcp_agent_confirm`, `mcp_secret_strict`,
+/// contrôle de l'écran) et aucun contenu de serveur (commande, arguments,
+/// environnement, adresse, référence de coffre) n'est lu ni écrit ici. Un
+/// identifiant inconnu est refusé avec un message clair, sans rien écrire.
+#[tauri::command]
+pub fn mcp_set_servers_enabled(
+    app: AppHandle,
+    changes: Vec<McpServerEnableChange>,
+) -> Result<serde_json::Value, String> {
+    let mut cfg = read_mcp_config(&app)?;
+    let applied = apply_server_enable_changes(&mut cfg, &changes)?;
+    if !applied.is_empty() {
+        write_mcp_config(&app, &cfg)?;
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "applied": applied,
+        "servers": cfg.servers.iter().map(|s| serde_json::json!({
+            "id": s.id,
+            "name": s.name,
+            "enabled": s.enabled,
+        })).collect::<Vec<_>>(),
+    }))
+}
 
+// ── Test de connexion (local stdio et distant HTTP) ──
 /// Résout la clé éventuelle du serveur depuis le coffre (chaîne E2) ET renvoie
 /// le code d'état (`secretStatus`). La valeur ne sort jamais d'ici : elle ne
 /// sert qu'à remplir l'en-tête d'authentification du test distant, n'est JAMAIS
@@ -2529,5 +2656,166 @@ mod tests {
         );
         assert!(!out.message.contains(FICTIONAL_KEY), "message: {}", out.message);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+// ── MCP piloté par l'Assistant : activer / désactiver un serveur NOMMÉ ──
+//
+// L'Assistant (onglet 🧭) peut désormais activer ou désactiver un serveur MCP
+// nommé depuis la conversation (outils `mcp_enable_server` /
+// `mcp_disable_server`, commande `mcp_set_servers_enabled`). Ces tests
+// verrouillent la PORTÉE de cette écriture : seul le champ `enabled` des
+// serveurs nommés change, un identifiant inconnu est refusé sans rien écrire,
+// et aucun serveur n'est créé ni supprimé.
+
+#[cfg(test)]
+mod assistant_server_toggle_tests {
+    use super::*;
+
+    /// Serveur complet : tous les champs renseignés, pour prouver qu'aucun
+    /// d'eux (hors `enabled`) n'est modifié par l'écriture.
+    fn serveur(id: &str, enabled: bool) -> McpServer {
+        let mut env = BTreeMap::new();
+        env.insert("TOKEN".to_string(), "valeur-fictive".to_string());
+        McpServer {
+            id: id.to_string(),
+            name: format!("Nom {}", id),
+            transport: "stdio".to_string(),
+            enabled,
+            command: "node".to_string(),
+            args: vec!["serveur.js".to_string(), "--mode".to_string()],
+            env,
+            url: String::new(),
+            secret_ref: Some("vault:ref-fictive".to_string()),
+            screen: false,
+        }
+    }
+
+    fn config_deux_serveurs() -> McpConfig {
+        McpConfig {
+            servers: vec![serveur("mcp-1", true), serveur("test", false)],
+        }
+    }
+
+    fn changement(id: &str, enabled: bool) -> McpServerEnableChange {
+        McpServerEnableChange {
+            id: id.to_string(),
+            enabled,
+        }
+    }
+
+    /// 1) Activer un serveur : il devient activé, et AUCUN autre champ d'aucun
+    /// serveur ne bouge (comparaison structure complète, pas seulement `enabled`).
+    #[test]
+    fn activation_ne_change_que_le_champ_active() {
+        let mut cfg = config_deux_serveurs();
+        let avant = cfg.clone();
+        let applied = apply_server_enable_changes(&mut cfg, &[changement("test", true)]).unwrap();
+        assert_eq!(applied, vec!["test".to_string()]);
+        // Le serveur visé : identique à l'original, sauf `enabled`.
+        assert_eq!(cfg.servers[1], McpServer { enabled: true, ..avant.servers[1].clone() });
+        // Les autres serveurs sont intacts, à l'octet près.
+        assert_eq!(cfg.servers[0], avant.servers[0]);
+        // Aucun serveur créé ni supprimé, ordre conservé.
+        assert_eq!(cfg.servers.len(), avant.servers.len());
+        assert_eq!(
+            cfg.servers.iter().map(|s| s.id.clone()).collect::<Vec<_>>(),
+            vec!["mcp-1".to_string(), "test".to_string()]
+        );
+    }
+
+    /// 2) Désactiver un serveur : seul son état change, aucun autre serveur
+    /// n'est activé d'office à sa place.
+    #[test]
+    fn desactivation_n_active_aucun_autre_serveur() {
+        let mut cfg = config_deux_serveurs();
+        let avant = cfg.clone();
+        let applied = apply_server_enable_changes(&mut cfg, &[changement("mcp-1", false)]).unwrap();
+        assert_eq!(applied, vec!["mcp-1".to_string()]);
+        assert!(!cfg.servers[0].enabled);
+        assert!(!cfg.servers[1].enabled, "aucun serveur activé d'office");
+        assert_eq!(cfg.servers[0], McpServer { enabled: false, ..avant.servers[0].clone() });
+        assert_eq!(cfg.servers[1], avant.servers[1]);
+    }
+
+    /// 3) Identifiant INCONNU : refus clair, message qui nomme l'identifiant
+    /// demandé ET les serveurs connus, configuration INCHANGÉE (aucune écriture
+    /// partielle, même quand un autre changement de la liste était valide).
+    #[test]
+    fn identifiant_inconnu_refuse_sans_rien_ecrire() {
+        let mut cfg = config_deux_serveurs();
+        let avant = cfg.clone();
+        let err = apply_server_enable_changes(
+            &mut cfg,
+            &[changement("test", true), changement("inconnu", false)],
+        )
+        .unwrap_err();
+        assert!(err.contains("inconnu"), "message: {}", err);
+        assert!(err.contains("mcp-1"), "message: {}", err);
+        assert!(err.contains("test"), "message: {}", err);
+        assert!(err.contains("rien n'a été modifié"), "message: {}", err);
+        assert_eq!(cfg, avant, "la configuration doit rester intacte");
+    }
+
+    /// 4) L'état déjà demandé n'écrit rien (aucun identifiant appliqué).
+    #[test]
+    fn etat_deja_demande_n_ecrit_rien() {
+        let mut cfg = config_deux_serveurs();
+        let avant = cfg.clone();
+        let applied = apply_server_enable_changes(
+            &mut cfg,
+            &[changement("mcp-1", true), changement("test", false)],
+        )
+        .unwrap();
+        assert!(applied.is_empty());
+        assert_eq!(cfg, avant);
+    }
+
+    /// 5) L'identifiant est reconnu à la casse et aux espaces près, et
+    /// l'identifiant CANONIQUE (celui du fichier) est celui qui est renvoyé.
+    #[test]
+    fn identifiant_reconnu_a_la_casse_pres() {
+        let mut cfg = config_deux_serveurs();
+        let applied = apply_server_enable_changes(&mut cfg, &[changement(" TEST ", true)]).unwrap();
+        assert_eq!(applied, vec!["test".to_string()]);
+        assert!(cfg.servers[1].enabled);
+    }
+
+    /// 6) Activation EXCLUSIVE telle que la demande l'assistant (le module JS
+    /// `mcp-server-toggle.js` construit la liste) : après application, UN SEUL
+    /// serveur est activé, et la liste appliquée nomme le serveur coupé.
+    #[test]
+    fn activation_exclusive_ne_laisse_qu_un_serveur_active() {
+        let mut cfg = config_deux_serveurs();
+        let applied = apply_server_enable_changes(
+            &mut cfg,
+            &[changement("test", true), changement("mcp-1", false)],
+        )
+        .unwrap();
+        assert_eq!(applied, vec!["test".to_string(), "mcp-1".to_string()]);
+        assert_eq!(
+            cfg.servers.iter().filter(|s| s.enabled).map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["test"]
+        );
+    }
+
+    /// 7) Aucune clé de coffre ni valeur d'environnement ne sort de l'écriture :
+    /// la réponse de la commande ne contient que id, nom et état.
+    #[test]
+    fn reponse_de_commande_ne_contient_aucun_contenu_de_serveur() {
+        let mut cfg = config_deux_serveurs();
+        apply_server_enable_changes(&mut cfg, &[changement("test", true)]).unwrap();
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("valeur-fictive"), "témoin : la config porte bien l'environnement");
+        let expose = serde_json::json!(cfg
+            .servers
+            .iter()
+            .map(|s| serde_json::json!({ "id": s.id, "name": s.name, "enabled": s.enabled }))
+            .collect::<Vec<_>>()
+        )
+        .to_string();
+        assert!(!expose.contains("valeur-fictive"));
+        assert!(!expose.contains("ref-fictive"));
+        assert!(!expose.contains("serveur.js"));
     }
 }

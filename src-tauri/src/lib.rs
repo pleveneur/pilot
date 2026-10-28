@@ -3998,6 +3998,10 @@ pub fn run() {
             mcp_config::mcp_set_secret_strict,
             mcp_config::mcp_set_screen_guard,
             mcp_config::mcp_get_state,
+            // MCP piloté par l'Assistant : activer / désactiver un serveur NOMMÉ
+            // (outils mcp_enable_server / mcp_disable_server) — n'écrit QUE le
+            // champ `enabled` des serveurs nommés de mcp.json.
+            mcp_config::mcp_set_servers_enabled,
             mcp_config::mcp_test_connection,
             // ── Coffre fort de mots de passe (issue #52) ──
             vault::vault_status,
