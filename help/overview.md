@@ -419,10 +419,23 @@ chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
 <!-- HELP:modes-ecran -->
 ## Trois modes d'écran : Détaillé · Assistant seul · Vocal
 
-Un **seul bouton** fait le tour des trois modes : **Détaillé** → **Assistant
-seul** → **Vocal** → **Détaillé** … Le mode courant est rappelé par son libellé
-et une pastille ; l'infobulle annonce le **mode suivant**. Aucun de ces modes ne
-change le contenu de votre projet : ils ne font que choisir ce qui est affiché.
+**Le logo Pilot, en haut à gauche du bandeau, est le bouton des trois modes.**
+Un clic fait le tour : **Détaillé** → **Assistant seul** → **Vocal** →
+**Détaillé** … Le logo ne porte **ni mot ni pastille** : c'est son **infobulle**
+(au survol) qui dit le mode où vous êtes et annonce le **mode suivant**. Un
+double-clic réflexe ne change qu'un seul mode : le second clic est ignoré
+pendant un peu moins d'une demi-seconde. Dans les deux écrans plein écran, le
+logo reste **au même endroit**, en haut à gauche, et il reprend sa place exacte
+en revenant à l'écran habituel.
+
+Trois autres façons de changer de mode :
+
+- **`Ctrl+Shift+A`** entre dans un plein écran, ou en sort, depuis n'importe où ;
+- **`Échap`** sort du mode Vocal ;
+- **fermer l'onglet 🧭** ramène à l'écran habituel.
+
+Aucun de ces modes ne change le contenu de votre projet : ils ne font que choisir
+ce qui est affiché.
 
 - **Détaillé** : l'écran habituel (explorateur, onglets, éditeur, agent).
 - **Assistant seul** : uniquement la conversation de l'assistant 🧭, en plein

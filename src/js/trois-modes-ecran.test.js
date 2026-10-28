@@ -5,9 +5,12 @@
 //   - TROIS modes, dans cet ordre de cycle : Detaille -> Assistant seul -> Vocal ;
 //   - UNE SEULE cle de memoire du poste (`pilot_screen_mode`) et la migration de
 //     l'ancien reglage BINAIRE (`pilot_superagent_immersive`), valeur conservee ;
-//   - UN SEUL bouton, un seul noeud dans tout le document, place entre l'entree
-//     « Travail » et les trois boutons systeme (aucune creation, aucune copie) ;
-//   - les libelles, les infobulles et les icones EXACTS du rapport ;
+//   - UN SEUL bouton, un seul noeud dans tout le document : depuis les lots 1 a 3
+//     du document de conception du logo-bouton, c'est le LOGO de Pilot, place
+//     dans le bandeau du nom de projet (#project-selector), avant ce nom
+//     (aucune creation, aucune copie, aucun second bouton dedie) ;
+//   - les infobulles EXACTES du rapport (le bouton ne porte plus de libelle
+//     visible ni de pastille : il n'affiche que le logo) ;
 //   - « Vocal » demande un PLEIN ECRAN comme « Assistant seul » ; depuis le
 //     lot 2 il a son propre ecran (verrouille par ecran-vocal-lot2.test.js),
 //     ce fichier ne verrouille que le bouton et la cle de memoire.
@@ -56,6 +59,21 @@ function fauxStockage(initial = {}) {
     },
     donnees,
   };
+}
+
+/**
+ * La regle COMMUNE aux deux pleins ecrans : un seul bloc CSS pour deux
+ * selecteurs, donc une seule place. `bloc()` ne sait pas lire une liste ; cette
+ * fonction exige la liste EXACTE, ce qui verrouille les deux selecteurs a la
+ * fois.
+ */
+function blocPleinsEcrans() {
+  return sliceSource(
+    css,
+    "body.superagent-immersive-active #mode-logo,\nbody.pilot-vocal-active #mode-logo {",
+    "\n}",
+    120,
+  );
 }
 
 /** Bloc CSS d'un selecteur (jusqu'a l'accolade fermante en debut de ligne). */
@@ -185,47 +203,69 @@ describe("2. une seule cle de memoire, et la migration de l'ancien reglage (§1.
 });
 
 describe("3. un seul bouton, un seul noeud dans tout le document (§1.1)", () => {
-  it("le bouton est dans index.html, entre « Travail » et les boutons systeme", () => {
+  it("le bouton est le LOGO, dans le bandeau du projet, avant le nom du projet", () => {
+    // Adaptation L4 (document de conception §4.3) : l'ancien bouton dedie
+    // `#screen-mode-button` vivait entre l'entree « Travail » et les boutons
+    // systeme. Sa place a change — c'est le logo, dans le bandeau du haut — mais
+    // l'INTENTION reste la meme : un seul noeud, a une place unique et verifiee,
+    // et pas dans la rangee d'onglets.
     expect(SCREEN_MODE_BUTTON_ID).toBe("mode-logo");
     const occurrences = html.match(new RegExp('id="' + SCREEN_MODE_BUTTON_ID + '"', "g")) || [];
     expect(occurrences, "un seul noeud : aucune copie dans le document").toHaveLength(1);
-    const travail = html.indexOf('id="agent-activity"');
+    const bandeau = html.indexOf('id="project-selector"');
     const mode = html.indexOf('id="' + SCREEN_MODE_BUTTON_ID + '"');
-    const boutons = html.indexOf('id="window-controls"');
-    expect(mode).toBeGreaterThan(travail);
-    expect(boutons).toBeGreaterThan(mode);
-    // Et dans la rangee d'onglets, pas ailleurs.
+    const nom = html.indexOf('id="btn-project-name"');
+    expect(bandeau, "bandeau du nom de projet introuvable").toBeGreaterThanOrEqual(0);
+    expect(mode, "le logo-bouton est dans le bandeau").toBeGreaterThan(bandeau);
+    expect(nom, "le nom du projet suit le logo").toBeGreaterThan(mode);
+    // Et PAS dans la rangee d'onglets : l'ancien emplacement ne revient pas.
     const rangee = html.indexOf('id="tab-row"');
     const contenu = html.indexOf('id="main-content"');
-    expect(mode).toBeGreaterThan(rangee);
-    expect(mode).toBeLessThan(contenu);
+    expect(rangee).toBeGreaterThanOrEqual(0);
+    expect(contenu).toBeGreaterThan(rangee);
+    expect(html.slice(rangee, contenu)).not.toContain('id="' + SCREEN_MODE_BUTTON_ID + '"');
+    // Plus aucun bouton dedie : ni dans le document, ni dans le code.
+    expect(html).not.toContain('id="screen-mode-button"');
+    expect(superAgent).not.toContain("screen-mode-button");
   });
 
   it("le bouton n'est jamais cree par du code : il est DEPLACE", () => {
     expect(superAgent).not.toMatch(/id\s*=\s*["']screen-mode-button["']/);
+    expect(superAgent).not.toMatch(/id\s*=\s*["']mode-logo["']/);
     expect(superAgent).toContain("getElementById(SCREEN_MODE_BUTTON_ID)");
-    // Deplacement puis restitution : les deux sens existent.
-    // Ancre du deplacement : le premier element du groupe de DROITE de la barre
-    // (le resume des agents). L'entree « Travail » n'est plus l'ancre : depuis
-    // la decision du proprietaire, elle a rejoint ce groupe de droite.
-    expect(superAgent).toContain("insertBefore(screenModeButton, agentsHost)");
-    expect(superAgent).not.toContain("insertBefore(screenModeButton, ancre)");
+    // Deplacement puis restitution : les deux sens existent, et le noeud entre
+    // dans l'OVERLAY (il n'est plus insere dans la barre, qui ne le porte plus).
+    expect(superAgent).toContain("immersiveOverlay.appendChild(screenModeButton)");
+    expect(superAgent, "l'ancienne ancre de la barre est revenue").not.toContain(
+      "insertBefore(screenModeButton, agentsHost)",
+    );
     expect(superAgent).toContain("immersiveModeButtonHome");
+    expect(superAgent).toContain("vocalModeButtonHome");
   });
 
-  it("le bouton porte le libelle du mode courant et l'infobulle du suivant", () => {
+  it("le logo porte la trace du mode et l'infobulle du mode suivant", () => {
     // Etat au repos du document = mode « Detaille » (reecrit au demarrage).
-    const balise = sliceSource(html, 'id="screen-mode-button"', "</button>", 200);
+    const balise = sliceSource(html, 'id="mode-logo"', "</button>", 200);
     expect(balise).toContain('data-screen-mode="detailed"');
+    // L'infobulle continue de dire le mode COURANT puis le mode SUIVANT : c'est
+    // la seule chose qui reste visible pour l'utilisateur (le bouton est muet).
     expect(balise).toContain("Mode d'écran : Détaillé");
-    expect(balise).toContain(">Détaillé</span>");
-    expect(balise).toContain('class="screen-mode-dot"');
+    expect(balise).toContain("aria-label=");
+    // Le dessin du logo est inchange et reste DANS le bouton.
+    expect(balise).toContain('id="btn-project-logo"');
+    expect(balise).toContain("logo_pilot_vector.svg");
+    // Ni mot, ni pastille : les deux ont disparu (decision Q2 = A).
+    expect(balise, "un libelle de mode est revenu").not.toContain(">Détaillé</span>");
+    expect(balise).not.toContain("screen-mode-dot");
+    expect(balise).not.toContain("screen-mode-label");
   });
 
-  it("a la sortie du plein ecran, MODE est restitue AVANT « Travail » (§1.1)", () => {
-    // Piege mesure : la place d'origine de « Travail » etant le bouton des
-    // modes, et celui-ci etant lui aussi dans l'overlay, restituer « Travail »
-    // en premier le rejetait en fin de rangee (apres les boutons systeme).
+  it("a la sortie du plein ecran, CHAQUE noeud est restitue chez son parent memorise", () => {
+    // Adaptation L4 (document de conception §4.3) : l'ordre MODE avant
+    // « Travail » n'a plus d'objet — le logo ne retourne pas dans la rangee
+    // d'onglets mais dans le BANDEAU, chez le parent memorise a l'entree. Ce qui
+    // reste a verifier, et qui est verifie : les deux noeuds deplaces rentrent
+    // chez eux, AVANT le retrait de l'overlay (sinon ils disparaitraient avec).
     const sortie = sliceSource(
       superAgent,
       "function exitImmersive() {",
@@ -234,13 +274,15 @@ describe("3. un seul bouton, un seul noeud dans tout le document (§1.1)", () =>
     );
     const iMode = sortie.indexOf("modeHome.parent.insertBefore(modeButton, next)");
     const iTravail = sortie.indexOf("home.parent.insertBefore(activity, next)");
-    expect(iMode, "le bouton des modes doit etre restitue").toBeGreaterThanOrEqual(0);
+    expect(iMode, "le logo doit etre restitue").toBeGreaterThanOrEqual(0);
     expect(iTravail, "l'entree « Travail » doit etre restituee").toBeGreaterThanOrEqual(0);
-    expect(iMode, "MODE avant « Travail » : la place d'origine redevient valide").toBeLessThan(
-      iTravail,
+    const sortieOverlay = sortie.indexOf("immersiveOverlay.remove()");
+    expect(sortieOverlay, "le retrait de l'overlay doit suivre les restitutions").toBeGreaterThan(
+      iMode,
     );
-    // Les deux restitutions se font AVANT le retrait de l'overlay.
-    expect(sortie.indexOf("immersiveOverlay.remove()")).toBeGreaterThan(iTravail);
+    expect(sortieOverlay).toBeGreaterThan(iTravail);
+    // Le parent memorise est celui du BANDEAU : jamais la rangee d'onglets.
+    expect(sortie).not.toContain("tabRow.insertBefore(modeButton");
   });
 
   it("le bouton est cable au demarrage et le mode rejoue avant le masquage", () => {
@@ -269,28 +311,51 @@ describe("3. un seul bouton, un seul noeud dans tout le document (§1.1)", () =>
   });
 });
 
-describe("4. apparence du bouton : largeur fixe puis auto (§1.2)", () => {
-  it("28 px de haut, 88 px de large, rayon et jeton de texte du projet", () => {
-    const bouton = bloc("#screen-mode-button");
+describe("4. apparence du logo-bouton : un carre de 28 px, muet (§1.2)", () => {
+  it("28 x 28 px, marges calculees, rayon du projet, curseur main", () => {
+    // Adaptation L4 (§4.3) : le bouton n'est plus un mot de 88 px mais le carre
+    // qui entoure le dessin du logo (28 px, marges negatrices qui rendent au nom
+    // du projet sa place exacte). Ce qui doit continuer a etre verifie : une
+    // taille UNIQUE et ferme, les jetons du projet, et un curseur de bouton.
+    const bouton = bloc("#mode-logo");
     expect(bouton).toMatch(/height:\s*28px/);
-    expect(bouton).toMatch(/width:\s*88px/);
+    expect(bouton).toMatch(/width:\s*28px/);
+    expect(bouton).toMatch(/margin-left:\s*-3px/);
+    expect(bouton).toMatch(/margin-right:\s*-4px/);
     expect(bouton).toMatch(/border-radius:\s*var\(--radius-sm\)/);
-    expect(bouton).toMatch(/font-size:\s*var\(--font-sm\)/);
-    expect(bouton).toMatch(/color:\s*var\(--text-secondary\)/);
+    expect(bouton).toMatch(/cursor:\s*pointer/);
+    // Le logo ne parle plus : plus de largeur de 88 px, plus de jeton de texte.
+    expect(bouton).not.toMatch(/width:\s*88px/);
+    expect(bouton).not.toMatch(/font-size:/);
+    expect(bouton).not.toMatch(/color:\s*var\(--text-secondary\)/);
+    // En mode « Detaille », la place est celle du FLUX : aucune regle absolue.
+    expect(bouton).not.toMatch(/position:/);
   });
 
-  it("dans le plein ecran, la largeur redevient AUTO (icone + mot)", () => {
-    const immersif = bloc("body.superagent-immersive-active #screen-mode-button");
-    expect(immersif).toMatch(/width:\s*auto/);
-    expect(immersif).not.toMatch(/width:\s*\d+px/);
+  it("dans les DEUX pleins ecrans, la meme place absolue (13, 8)", () => {
+    // Adaptation L4 (§4.3) : l'ancien test verifiait « largeur auto dans le plein
+    // ecran ». Le logo, lui, garde sa taille partout ; ce qui doit etre verifie
+    // est qu'il ne bouge PAS d'un plein ecran a l'autre : une seule regle, deux
+    // selecteurs, une seule place.
+    const pleins = blocPleinsEcrans();
+    expect(pleins).toMatch(/position:\s*absolute/);
+    expect(pleins).toMatch(/top:\s*8px/);
+    expect(pleins).toMatch(/left:\s*13px/);
+    expect(pleins).toMatch(/margin:\s*0/);
+    expect(pleins).toMatch(/z-index:\s*2/);
+    // Aucune largeur imposee : le carre de 28 px ne change pas de taille.
+    expect(pleins).not.toMatch(/width:/);
   });
 
-  it("la pastille prend la teinte du mode courant, sans couleur inventee", () => {
-    expect(css).toMatch(
-      /#screen-mode-button\[data-screen-mode="assistant"\] \.screen-mode-dot\s*\{[^}]*var\(--superagent-accent\)/,
-    );
-    expect(css).toMatch(
-      /#screen-mode-button\[data-screen-mode="vocal"\] \.screen-mode-dot\s*\{[^}]*var\(--vocal-listen/,
-    );
+  it("la pastille et le mot du mode ont disparu partout", () => {
+    // Adaptation L4 (§4.3) : l'ancien test verifiait la TEINTE de la pastille.
+    // La pastille n'existe plus (decision Q2 = A) : ce qui doit continuer a etre
+    // verifie, c'est son absence complete — CSS, rendu, balisage.
+    expect(css).not.toContain(".screen-mode-dot");
+    expect(css).not.toContain("#screen-mode-button");
+    expect(css).not.toContain(".screen-mode-label");
+    expect(superAgent).not.toContain("screen-mode-dot");
+    expect(superAgent).not.toContain("screen-mode-label");
+    expect(html).not.toContain("screen-mode-dot");
   });
 });

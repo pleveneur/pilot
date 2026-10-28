@@ -370,10 +370,20 @@ describe("7. jamais deux pleins ecrans superposes (§3.2)", () => {
 
 // ---------------------------------------------------------------------------
 describe("8. les trois sorties, et la restitution symetrique des noeuds", () => {
-  it("1. le meme bouton de mode : la pastille « Vocal » est celle du lot 1", () => {
-    expect(CSS).toMatch(
-      /#screen-mode-button\[data-screen-mode="vocal"\] \.screen-mode-dot\s*\{[^}]*var\(--vocal-listen/,
-    );
+  it("1. le meme bouton de mode : le logo se pose a la meme place que dans l'autre plein ecran", () => {
+    // Adaptation L4 : le bouton dedie et sa pastille « Vocal » ont disparu avec
+    // les lots 1 a 3 du document de conception du logo-bouton (decision Q2 = A).
+    // L'intention d'origine — « le mode Vocal a bien SON bouton de sortie, et
+    // il ne saute pas d'un ecran a l'autre » — est conservee autrement : la
+    // meme regle CSS porte les DEUX pleins ecrans, donc la meme place.
+    const corps = bloc(CSS, "body.pilot-vocal-active #mode-logo");
+    expect(corps).toMatch(/position:\s*absolute/);
+    expect(corps).toMatch(/top:\s*8px/);
+    expect(corps).toMatch(/left:\s*13px/);
+    expect(CSS).toMatch(/body\.superagent-immersive-active #mode-logo,\nbody\.pilot-vocal-active #mode-logo \{/);
+    // Plus aucune pastille de mode dans la feuille de style.
+    expect(CSS).not.toContain(".screen-mode-dot");
+    expect(CSS).not.toContain("#screen-mode-button");
   });
 
   it("2. Echap : un ecouteur dedie, qui cede la touche a une modale ouverte", () => {
@@ -407,12 +417,18 @@ describe("8. les trois sorties, et la restitution symetrique des noeuds", () => 
     expect(bloc(CSS, ".vocal-input {")).toMatch(/width:\s*min\(720px/);
   });
 
-  it("le bouton des modes repasse en largeur AUTO dans la barre de 44 px", () => {
-    const corps = bloc(CSS, "body.pilot-vocal-active #screen-mode-button");
-    expect(corps).toMatch(/width:\s*auto/);
+  it("la barre de 44 px ne porte plus de bouton : c'est une bande de respiration", () => {
+    // Adaptation L4 : l'ancien test verifiait la largeur AUTO du bouton dans
+    // cette barre. La barre ne porte plus RIEN (le logo va dans l'overlay) ; ce
+    // qui doit continuer a etre verifie, c'est sa geometrie — et son vide.
     const barre = bloc(CSS, ".vocal-top {");
     expect(barre).toMatch(/height:\s*44px/);
     expect(barre).toMatch(/margin-top:\s*var\(--window-controls-height\)/);
+    // Aucune regle de bouton pour cette barre ne revient.
+    expect(CSS).not.toContain("body.pilot-vocal-active #screen-mode-button");
+    // Le balisage de la barre est VIDE : aucun noeud n'y est pose.
+    const build = corpsFonction(SUPER, "function buildVocalOverlay");
+    expect(build).toContain('<div class="vocal-top"></div>');
   });
 });
 

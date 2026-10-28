@@ -6,8 +6,9 @@
 //      de messages, aucune bulle, aucun texte de la conversation.
 //   2. Rien de la conversation n'ENTRE dans cet ecran a l'entree du mode : les
 //      seuls noeuds deplaces sont la barre de saisie (meme noeud, meme envoi) et
-//      le bouton unique des trois modes. La conversation reste entiere dans
-//      l'onglet de l'agent, ou on la retrouve en quittant le mode.
+//      le LOGO-bouton des trois modes (lots 1 a 3 : il n'entre plus dans la
+//      barre de 44 px, il entre dans l'overlay). La conversation reste entiere
+//      dans l'onglet de l'agent, ou on la retrouve en quittant le mode.
 //   3. La ligne d'etat ne porte jamais un message : seulement les trois phrases
 //      de l'ecran (ou le message clair du micro ferme).
 //   4. La LECTURE A VOIX HAUTE ne depend de rien de ce qui est affiche : elle
@@ -84,9 +85,15 @@ describe("1. ce que l'ecran Vocal dessine, et rien d'autre", () => {
 describe("2. rien de la conversation n'entre dans l'ecran a l'entree du mode", () => {
   const enter = corpsFonction(SUPER, "function enterVocal()");
 
-  it("les seuls noeuds deplaces sont la barre de saisie et le bouton des modes", () => {
+  it("les seuls noeuds deplaces sont la barre de saisie et le logo des modes", () => {
     expect(enter).toMatch(/zone\.appendChild\(inputBar\)/);
-    expect(enter).toMatch(/barre\.appendChild\(modeButton\)/);
+    // Adaptation L4 : le bouton des modes entre dans l'OVERLAY (la barre de
+    // 44 px ne le recoit plus). L'intention d'origine est conservee : un seul
+    // bouton de sortie deplacé, le meme noeud, jamais recree.
+    expect(enter).toMatch(/vocalOverlay\.appendChild\(modeButton\)/);
+    expect(enter, "le bouton est de nouveau pose dans la barre de 44 px").not.toMatch(
+      /barre\.appendChild\(modeButton\)/,
+    );
   });
 
   it("la conversation, la barre d'outils et les bandeaux restent dans l'onglet", () => {

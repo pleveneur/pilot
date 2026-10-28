@@ -230,7 +230,7 @@ describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee sys
     expect(airGaucheBarre).toBe(18);
   });
 
-  it("les deux boutons vises sont les DERNIERS de la barre", () => {
+  it("les deux boutons vises sont les DERNIERS de la barre (aucun bouton de mode n'y revient)", () => {
     // Ordre de la barre : titre, point des agents, ⚙ — plus AUCUN bouton retour
     // (decision du proprietaire : on sort par le bouton unique des trois modes
     // ou par Ctrl+Shift+A). Le test perd donc `sa-immersive-back`, et gagne le
@@ -245,9 +245,12 @@ describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee sys
       "sa-immersive-back",
     );
     expect(js, "aucun ecouteur de clic pour un bouton de retour").not.toContain('[data-imm="back"]');
-    // LOT 1 « trois modes d'ecran » (RAPPORT-trois-modes-ecran-vocal.md §1.1) :
-    // le bouton UNIQUE des modes entre dans cette barre juste apres le titre —
-    // titre, MODE, agents, Travail, ⚙ — c'est-a-dire AVANT le groupe de droite.
+    // LOGO-BOUTON DES TROIS MODES (document de conception, lots 1 a 3 ; ce
+    // fichier est adapte au lot L4) : le bouton unique des modes n'entre PLUS
+    // dans cette barre — c'est le logo de Pilot, qui reste dans le bandeau du
+    // projet et qui est DEPLACE dans l'overlay. L'intention d'origine tient
+    // toujours : un seul et meme noeud, jamais recopie, jamais cree, memorise
+    // pour etre restitue a la sortie.
     expect(
       (html.match(/id="mode-logo"/g) || []).length,
       "un seul et meme noeud pour les trois ecrans (jamais recopie)",
@@ -258,11 +261,17 @@ describe("mode « Assistant seul » — les deux boutons sont SOUS la rangee sys
       "document.body.appendChild(immersiveOverlay);",
       100,
     );
-    // Ancre FIXE : le premier element du groupe de droite (le resume des
-    // agents). L'entree « Travail » a rejoint ce groupe, elle n'est plus
-    // l'ancre : le bouton des modes reste donc juste apres le titre.
-    expect(insertionMode).toContain("insertBefore(screenModeButton, agentsHost)");
-    expect(insertionMode).not.toContain("appendChild(screenModeButton)");
+    // Il entre dans l'OVERLAY, et non dans la barre.
+    expect(insertionMode).toContain("immersiveOverlay.appendChild(screenModeButton)");
+    expect(insertionMode, "l'ancienne ancre de la barre est revenue").not.toContain(
+      "insertBefore(screenModeButton, agentsHost)",
+    );
+    // La barre elle-meme ne porte aucun bouton de mode : ni dans son balisage,
+    // ni par un deplacement qui la viserait.
+    expect(barreJs, "un bouton de mode est reapparu dans la barre").not.toContain("mode-logo");
+    expect(js, "le bouton est de nouveau pose dans la barre du mode").not.toContain(
+      'immersiveTop.appendChild(screenModeButton)',
+    );
     // La place d'origine du bouton est memorisee, donc restituee a la sortie.
     expect(js).toContain("immersiveModeButtonHome");
   });
