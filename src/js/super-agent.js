@@ -45,6 +45,13 @@ import {
 // transcrit : c'est ce que compte le plafond des sessions vides, et la nature de
 // la fin est tranchee LA (`isSilentEmptyVoiceEnd`), jamais recopiee ici.
 import { applyVoiceEnd, isSilentEmptyVoiceEnd } from "./voice-auto-send.js";
+// MODE VOCAL : PILOT PARLE COURT (reponse breve, developpee seulement si on le
+// demande). La consigne de conversation parlee et son SEUL assemblage
+// (`composeVocalPrompt`) vivent dans vocal-brevity.js ; ce fichier ne fait que
+// composer le message envoye a l'agent, au point unique de l'envoi. Hors du mode
+// Vocal, la demande part INCHANGEE : le chat ecrit et l'onglet Assistant gardent
+// leurs reponses actuelles.
+import { composeVocalPrompt } from "./vocal-brevity.js";
 // CONVERSATION PARLEE de l'ecran Vocal : QUAND la dictee s'arme toute seule (au
 // repos), quand elle se desarme (Pilot lit, Pilot travaille, on sort du mode) et
 // ce que dit la ligne d'etat quand elle ne peut pas s'armer. Les DECISIONS sont
@@ -5085,6 +5092,16 @@ export async function createSuperAgent(container) {
       return;
     }
     if (voiceActive) stopVoiceInput();
+    // COMPOSITION DE LA DEMANDE — POINT UNIQUE : quand la demande vient de
+    // l'ecran Vocal, la consigne de brievete (parler court, developper si on le
+    // demande, securite dite en entier) est ajoutee ICI, et nulle part ailleurs
+    // (`composeVocalPrompt`, vocal-brevity.js). La bulle et l'historique gardent
+    // le texte de l'utilisateur tel qu'il l'a dit : seul le message ENVOYE a
+    // l'agent porte la consigne. Hors du mode Vocal, ce message est identique a
+    // celui d'avant (aucune consigne, aucun autre ecran modifie), et AUCUNE
+    // coupe n'est faite sur la suite de la reponse : la brievete vient de la
+    // consigne, jamais d'une troncature.
+    const messageAgent = composeVocalPrompt(text, { modeVocal: vocalOverlay !== null });
     inputEl.value = "";
     inputEl.style.height = "auto";
     // L'ENGAGEMENT du propriétaire (défaut 1 de la relecture) n'est PAS posé ici :
@@ -5118,7 +5135,7 @@ export async function createSuperAgent(container) {
     statusEl.textContent = "Réfléchit…";
     setReflecting(true);
     try {
-      await invoke("send_super_agent_prompt", { message: text });
+      await invoke("send_super_agent_prompt", { message: messageAgent });
       // La réponse arrive en streaming via le canal rpc-event-superagent
       // (handleSuperAgentEvent). On ne fait rien ici : on attend agent_end.
     } catch (err) {

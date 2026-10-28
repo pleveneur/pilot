@@ -515,6 +515,16 @@ En mode **Vocal** :
   secondes** —, et rien ne part non plus pendant que Pilot lit sa réponse ou
   travaille, ni si vous avez repris la main pour écrire dans la zone. Ce délai
   n'est pas réglable : il n'y a ni réglage, ni bouton, ni indicateur.
+- **Pilot parle court dans ce mode.** Comme la voix est le seul chemin, la
+  réponse est celle d'une **conversation** : **deux ou trois phrases au plus**,
+  sans liste, sans titre, sans nom de fichier, sans code — juste ce qui est
+  utile à entendre. **Demandez le détail** (« détaille », « explique »,
+  « pourquoi », « comment ») et Pilot développe, toujours de façon compréhensible
+  à l'oreille. En revanche, une **panne**, un **refus**, une **erreur** ou une
+  **demande de confirmation** sont toujours dits **en entier**, même si c'est
+  plus long : la brièveté ne cache jamais une information utile. Rien à régler,
+  rien à activer — c'est le comportement normal de ce mode, et les autres écrans
+  gardent leurs réponses habituelles.
 <!-- /HELP:modes-ecran -->
 
 <!-- HELP:lire-reponses -->

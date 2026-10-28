@@ -404,6 +404,51 @@ s'écrivait, puis on attendait.
   où elle était devenue fausse : c'est le **dernier mot + deux secondes** qui
 décide, plus la fin du moteur.
 
+### 6bis.2 Pilot parle court : une réponse de conversation, pas de chat écrit
+
+**Décision du propriétaire, appliquée telle quelle** : *« le texte que l'assistant
+prononce dans ce mode vocal, il faudrait que ce soit plus court pour une
+conversation plus fluide, et qu'on entre dans les détails si l'utilisateur le
+demande dans la conversation ».*
+
+Le défaut corrigé : dans l'écran Vocal, Pilot répondait comme dans un chat écrit
+(réponses longues, listes, titres, noms de fichiers, code). La voix est ici le
+**seul canal** : ces réponses sont pénibles à écouter et lentes.
+
+- **Une consigne ajoutée à la demande, à UN SEUL endroit** : le point de
+  composition de la demande envoyée à l'agent est `send()`
+  (`src/js/super-agent.js`), traversé par **toutes** les demandes de cet écran
+  (clavier comme dictée, puisque la barre de saisie est le même nœud déplacé).
+  La consigne et son assemblage vivent dans une **source unique** :
+  `src/js/vocal-brevity.js` (`VOCAL_BREVITY_INSTRUCTION`,
+  `composeVocalPrompt(texte, { modeVocal })`). Aucun second chemin de prompt
+  n'a été créé.
+- **Ce que la consigne demande, en clair** : répondre en **deux ou trois phrases
+  au plus**, comme à l'oral — **pas de listes, pas de titres, pas de tableaux,
+  pas de noms de fichiers, pas de code** — et aller droit à ce qui est **utile à
+  dire à voix haute**. Si l'utilisateur demande explicitement de développer
+  (« détaille », « explique », « pourquoi », « comment »), Pilot développe : le
+  détail demandé, **compréhensible à l'oreille** (des phrases, jamais un tableau
+  ni de code).
+- **Les cas de sécurité sont exclus explicitement** : une **panne**, un **refus**,
+  une **erreur** (outil, micro, agent) et une **demande de confirmation** restent
+  dits **entièrement**, même si c'est plus long que trois phrases. La consigne
+  place cette exception **avant** la brièveté : jamais une information utile
+  cachée pour rester court.
+- **Aucune troncature, jamais** : la brièveté vient de la **consigne**. Rien n'est
+  coupé après coup (aucune limite de caractères, aucune `slice`), et la demande de
+  l'utilisateur reste **mot pour mot** en tête du message envoyé : une réponse
+  tronquée au milieu d'une phrase sonnerait faux et cacherait une information
+  utile.
+- **Les autres écrans ne changent pas** : hors du mode Vocal, `composeVocalPrompt`
+  rend le texte **inchangé** — le chat écrit (onglet π) et l'onglet 🧭 Assistant
+  gardent exactement leurs réponses actuelles, et le prompt système de
+  l'assistant (`super_agent.rs`) ne contient pas cette consigne. La provenance est
+  l'écran Vocal **réel** (`vocalOverlay !== null`), pas un drapeau parallèle.
+- **Rien à l'écran, rien à régler** : ni réglage, ni bouton, ni phrase d'interface.
+  La bulle de la demande et l'historique gardent le texte de l'utilisateur tel
+  qu'il l'a dit ; seul le message **envoyé** à l'agent porte la consigne.
+
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 
 **Ce sont des protections, pas des pannes.** Le choix est explicite : *un silence
@@ -465,6 +510,7 @@ sa hauteur d'origine.
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
 | `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` + `décideVocalSilenceSend`), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur, jamais une erreur affichée, un arrêt demandé ou une reprise en main) |
+| `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : la consigne exacte (`VOCAL_BREVITY_INSTRUCTION`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature, aucun réglage |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
@@ -488,7 +534,11 @@ main, aucun envoi tardif après la sortie du mode, `rec.stop()` réutilisé),
 revue indépendante : **attente bornée** du statut du projet — délai dépassé ⇒
 phrase affichée **et** geste qui fonctionne, jamais « projet libre » supposé —
 et **plafond atteignable** : une fin silencieuse du moteur compte, 3 fins vides
-en 30 s ⇒ plus d'armement automatique).
+en 30 s ⇒ plus d'armement automatique),
+`vocal-reponses-courtes.test.js` (**réponse courte du mode Vocal** : contenu de la
+consigne, texte de l'utilisateur intact et non tronqué, consigne **absente** hors
+du mode Vocal — chat écrit et Assistant inchangés —, un seul appel dans toute
+l'application, cas de sécurité exclus explicitement, documentation à jour).
 
 ## 11. Ce qui est prouvé, et ce qui dépend de votre matériel
 
@@ -513,6 +563,13 @@ une reprise en main ou après la sortie du mode. Sont prouvés de même le
 la lecture, coupure de nouveau armée), la phrase **« dictée indisponible »**
 affichée par la décision et le **plafond des sessions vides** (trois fins
 sans texte en moins de 30 s suspendent l'armement, un geste le rétablit).
+
+Est aussi prouvé pour la **réponse courte du mode Vocal** : la consigne est
+ajoutée **uniquement** aux demandes qui partent de cet écran (le chat écrit et
+l'onglet Assistant rendent le texte **inchangé**), la demande de l'utilisateur
+reste **mot pour mot** en tête du message, **aucune troncature** n'existe dans le
+module, et les cas de sécurité (panne, refus, erreur, confirmation) sont
+**exclus explicitement** du régime court.
 
 **Non prouvable par un test, à vérifier chez vous** : le niveau d'écho **réel** de
 votre pièce (haut-parleurs, volume, distance, pilote audio) — et la capacité de
