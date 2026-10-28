@@ -8,7 +8,8 @@
  *   - les TROIS sous-onglets « Projet / Vues / Assistant » disparaissent ;
  *   - les QUATORZE lignes deviennent des lignes de 32 px, toujours visibles,
  *     dans l'ordre fige : Brouillon · Options · Assistant · Dossier du projet ·
- *     Terminal · Commandes du projet · Autres écrans ;
+ *     Terminal · Commandes du projet · Action (le declencheur du menu, dont le mot
+ *     affiche est « Action » depuis la decision du 2026-10-26) ;
  *   - « Brouillon » (`btn-scratchpad`) et « Options » (`btn-settings`) sont les
  *     DEUX PORTES GLOBALES qui etaient en HAUT de la colonne : memes libelles,
  *     memes infobulles, memes icones, memes identifiants, meme ordre. Elles ne
@@ -16,16 +17,16 @@
  *     projet ouvert et n'affiche alors que ces deux lignes (reponse A de la
  *     question 3 du rapport) ;
  *   - « Lancer l'agent » a QUITTE le bloc : il est la PREMIERE ligne du menu
- *     « Autres écrans », groupe « Mon projet » (§ 2.3 du rapport), avec
+ *     « Action »/« Autres écrans », groupe « Mon projet » (§ 2.3 du rapport), avec
  *     `pj-more-item` + `role="menuitem"`. Plus AUCUNE ligne du bloc n'est mise
  *     en evidence (`pj-row-main` supprimee, regles CSS comprises) : les SEPT
  *     lignes sont a 12 px / 400 ;
  *   - « Dossier du projet » est le bouton `btn-explorer` remonte du menu (Q2),
  *     meme identifiant, meme effet (dossier projet dans l'explorateur) ;
  *   - « Commandes du projet » (`btn-commands`) remonte aussi du menu ;
- *   - « Autres écrans » ouvre un menu VERS LE HAUT (le bloc est en bas de
- *     colonne), groupes nommes, DIX entrees, fermeture a Echap / clic
- *     exterieur / selection.
+ *   - « Action » (menu « Autres ecrans ») ouvre un menu VERS LE HAUT (le bloc est
+ *     en bas de colonne), groupes nommes, DIX entrees, fermeture a Echap / clic
+ *     exterieur / selection, entoure du MEME filet bleu que le cadre du bloc.
  *
  * Hauteur : 2 + 8 x 2 + 7 x 32 + 6 x 6 = 278 px, plafond `max-height: 60 %`
  * = 300 px a la fenetre minimale (500 px) : marge de 22 px, aucune ligne hors
@@ -134,7 +135,7 @@ const LIGNES = [
   "btn-more-screens",
 ];
 
-/** Les DIX entrees du menu « Autres écrans » : « Lancer l'agent » en tete. */
+/** Les DIX entrees du menu déclenché par « Action » : « Lancer l'agent » en tete. */
 const MENU = [
   "btn-terminal-cmd",
   "btn-prompt-builder",
@@ -291,7 +292,13 @@ describe("LOT 3 (c) — sept lignes de 32 px, 278 px de haut, plafond 60 %", () 
     expect(pied).toContain(">Dossier du projet</span>");
     expect(pied).toContain(">Terminal</span>");
     expect(pied).toContain(">Commandes du projet</span>");
-    expect(pied).toContain(">Autres écrans</span>");
+    // Decision du proprietaire du 2026-10-26 (seance d'essai) : le mot AFFICHE
+    // sur la ligne non deployee est « Action », au SINGULIER (ni « Actions », ni
+    // « Autres ecrans »). Le menu deploye, lui, ne change pas.
+    expect(pied).toContain(">Action</span>");
+    expect(pied, "la ligne visible reprend « Autres ecrans »").not.toContain(
+      ">Autres écrans</span>",
+    );
     // L'ancien libelle du bouton remonte ne doit plus s'afficher.
     expect(pied).not.toContain(">Ouvrir le dossier</span>");
   });
@@ -408,6 +415,24 @@ describe("LOT 3 (e) — le cadre accent reste, sans couleur en dur", () => {
     expect(d).toContain("border: 1px solid var(--accent)");
     expect(d).toContain("color-mix(in srgb, var(--accent) 16%");
     expect(d).toContain("border-radius: var(--radius-lg)");
+  });
+
+  it("le menu ouvert est entoure du MEME filet bleu que l'entree de la colonne", () => {
+    // Demande du proprietaire du 2026-10-26 (seance d'essai) : deploye, le menu
+    // doit etre entoure du meme bleu que l'entree qui le met en valeur. Le jeton
+    // est `--accent` (aucune teinte en dur) : c'est celui du cadre du bloc
+    // (`#project-footer`) et de la mise en evidence de l'entree active
+    // (`.tree-row.selected`). Un retour a `var(--border)`, ou une teinte ecrite
+    // en dur, fait rougir ce test.
+    const menuCss = declarations(bloc(css, ".pj-more-menu"));
+    expect(menuCss).toContain("border: 1px solid var(--accent)");
+    // Meme filet, meme epaisseur que le cadre du bloc : rien ne bouge a
+    // l'ouverture, et le bleu suit TOUTES les palettes.
+    const piedCss = declarations(bloc(css, "#project-footer"));
+    expect(piedCss).toContain("border: 1px solid var(--accent)");
+    expect(menuCss, "le filet du menu ne suit plus l'accent du theme").not.toContain(
+      "border: 1px solid var(--border)",
+    );
   });
 
   it("aucune couleur ecrite en dur dans le bloc, le menu et ses lignes", () => {

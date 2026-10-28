@@ -166,8 +166,8 @@
              2026-10-25). C'est le bouton `btn-commands` d'avant — meme
              identifiant, meme gestionnaire (`project-commands.js`). -->
         <button id="btn-commands" class="project-only hidden" title="Commandes du projet (lancer une commande parametree)"><i data-lucide="square-terminal" class="icon"></i><span class="pj-btn-label">Commandes du projet</span></button>
-        <!-- 7. « Autres ecrans ▾ » : le declencheur du menu, toujours la
-             derniere ligne du bloc. -->
+        <!-- 7. « Action ▾ » : le declencheur du menu (titre d'accessibilite du
+             menu : « Autres ecrans »), toujours la derniere ligne du bloc. -->
         <!-- ===== MENU « Autres écrans » (lot 3 de la presentation) =====
              Le document de conception (`docs/proposition-presentation-ui.md` §3.3)
              le veut ouvert VERS LE HAUT : le bloc est en bas de colonne, un menu
@@ -184,15 +184,20 @@
              `btn-commands` restent, eux, remontes dans le bloc du bas).
              Il est ici, DANS la colonne de 280 px : sa largeur est celle du cadre,
              ses couleurs viennent des jetons de theme (sombre ET clair). -->
-        <!-- INFOBULLE ENRICHIE (decision Q2 du proprietaire du 2026-10-26, § 3.2
+        <!-- LE MOT VISIBLE DE LA LIGNE NON DEPLOYEE EST « Action » (decision du
+             proprietaire du 2026-10-26, en seance d'essai) : au SINGULIER, sans
+             « s », et sans confusion avec « Commandes du projet ». Seul le mot
+             AFFICHE change ; le menu deploye garde son contenu, son titre, son
+             ordre et son identifiant (`#pj-more-menu`, `#btn-more-screens`).
+             L'ancien libelle « Autres ecrans » ne disparait pas du sens : il
+             reste le titre d'accessibilite du MENU.
+             INFOBULLE ENRICHIE (decision Q2 du proprietaire du 2026-10-26, § 3.2
              point 4 de `RAPPORT-conception-repli-menus-bas.md`) : replie, le bloc
-             ne laisse voir QUE cette ligne. Son libelle ne change pas ("Autres
-             ecrans", verrou du lot 3), et le seul ajout est cet attribut
-             `title` : il NOMME les six autres lignes, pour qu'aucune fonction ne
-             soit cachee sans etre nommee. Ni bouton, ni reglage, ni libelle
-             nouveau. -->
+             ne laisse voir QUE cette ligne. L'infobulle NOMME les six autres
+             lignes, pour qu'aucune fonction ne soit cachee sans etre nommee.
+             Ni bouton, ni reglage, ni noeud nouveau. -->
         <div id="pj-more-wrap" class="pj-more-wrap">
-          <button id="btn-more-screens" class="project-only hidden" type="button" title="Autres écrans — le bloc s'ouvre au survol : Brouillon, Options, Assistant, Dossier du projet, Terminal, Commandes du projet" aria-haspopup="menu" aria-expanded="false" aria-controls="pj-more-menu"><i data-lucide="more-horizontal" class="icon"></i><span class="pj-btn-label">Autres écrans</span><span class="pj-more-chevron"><i data-lucide="chevron-down" class="icon-sm"></i></span></button>
+          <button id="btn-more-screens" class="project-only hidden" type="button" title="Action — le bloc s'ouvre au survol : Brouillon, Options, Assistant, Dossier du projet, Terminal, Commandes du projet" aria-label="Action — autres écrans du projet" aria-haspopup="menu" aria-expanded="false" aria-controls="pj-more-menu"><i data-lucide="more-horizontal" class="icon"></i><span class="pj-btn-label">Action</span><span class="pj-more-chevron"><i data-lucide="chevron-down" class="icon-sm"></i></span></button>
           <div id="pj-more-menu" class="pj-more-menu hidden" role="menu" aria-label="Autres écrans">
             <div class="pj-more-group" role="group" aria-labelledby="pj-more-groupe-projet">
               <div class="pj-more-group-label" id="pj-more-groupe-projet">Mon projet</div>
@@ -1692,7 +1697,7 @@
       <section id="onboarding-discover" class="onboarding-screen hidden">
         <h3 class="onboarding-screen-title">Trois repères pour commencer</h3>
         <ol class="onboarding-list">
-          <li><strong>« Lancer l'agent »</strong> ouvre la conversation de l'agent du projet : c'est la première ligne du menu <strong>« Autres écrans »</strong>, au bas de la colonne de gauche.</li>
+          <li><strong>« Lancer l'agent »</strong> ouvre la conversation de l'agent du projet : c'est la première ligne du menu <strong>« Action »</strong>, au bas de la colonne de gauche.</li>
           <li><strong>🧭 Assistant</strong> suit vos projets et vos tâches ; il ne modifie aucun fichier.</li>
           <li><strong>⚙️ Options</strong> rassemble tous les réglages ; la documentation se demande à l'Assistant.</li>
         </ol>

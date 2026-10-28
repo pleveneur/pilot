@@ -797,6 +797,9 @@ describe("LOT 1 (j) — machine a etats : delais, ordre, clavier", () => {
 // « replie, la ligne garde le libelle « Autres ecrans » ; on ajoute seulement une
 // info-bulle enrichie. Aucun libelle nouveau. » Conception § 3.2 point 4 : le
 // `title` de la ligne d'ancrage nomme les SIX autres lignes du bloc.
+// PUIS decision du meme proprietaire, en seance d'essai : le MOT AFFICHE sur la
+// ligne non deployee devient « Action » (au singulier). Seul le mot change ;
+// l'infobulle enrichie est conservee telle quelle (son premier mot suit).
 describe("LOT 1 (l) — l'infobulle de la ligne visible nomme les six autres lignes (Q2)", () => {
   /** Les six lignes que la ligne d'ancrage doit nommer (hors elle-meme). */
   const SIX_LIGNES = [
@@ -808,7 +811,7 @@ describe("LOT 1 (l) — l'infobulle de la ligne visible nomme les six autres lig
     "Commandes du projet",
   ];
 
-  /** Balise ouvrante du declencheur « Autres ecrans ». */
+  /** Balise ouvrante du declencheur de la ligne « Action ». */
   const declencheur = () => {
     const m = html.match(/<button id="btn-more-screens"[^>]*>/);
     expect(m, "declencheur #btn-more-screens introuvable").not.toBeNull();
@@ -826,12 +829,22 @@ describe("LOT 1 (l) — l'infobulle de la ligne visible nomme les six autres lig
     }
     // L'infobulle dit COMMENT le bloc s'ouvre : c'est sa seule raison d'etre.
     expect(title).toContain("au survol");
+    // Elle commence par le mot AFFICHE de la ligne (« Action », au singulier),
+    // puisqu'elle est l'infobulle de cette ligne-la.
+    expect(title.startsWith("Action —")).toBe(true);
   });
 
-  it("le libelle affiche reste « Autres ecrans » (aucun libelle nouveau)", () => {
-    // Verrou du lot 3 conserve : le texte du bouton ne bouge pas d'un caractere.
+  it("le libelle affiche est « Action » (decision du proprietaire du 2026-10-26)", () => {
+    // La question Q2 disait « le libelle ne change pas » ; la seance d'essai du
+    // 2026-10-26 est revenue dessus, sur demande CONFIRMEE du proprietaire : la
+    // ligne non deployee porte le mot « Action », au SINGULIER. Ni « Actions »,
+    // ni « Autres ecrans » (le menu deploye, lui, ne change pas).
     const panneau = sliceSource(html, '<div class="pj-panel">', "</aside>", 200);
-    expect(panneau).toContain(">Autres écrans</span>");
+    expect(panneau).toContain(">Action</span>");
+    expect(panneau, "l'ancien libelle « Autres ecrans » est revenu").not.toContain(
+      ">Autres écrans</span>",
+    );
+    expect(panneau).not.toContain(">Actions</span>");
     expect(panneau).not.toContain("Menus du projet");
   });
 

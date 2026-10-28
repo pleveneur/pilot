@@ -28,20 +28,23 @@ fenêtre, sans passer par un terminal externe.
   nommées, **toutes de la même taille** (aucune n'est mise en évidence) et, dès qu'un
   projet est ouvert, toutes présentes — **Brouillon**, **Options**, **Assistant**, **Dossier du projet** (ouvre le
   dossier du projet dans l'explorateur du système), **Terminal**, **Commandes du
-  projet**, puis **Autres écrans ▾** : ce dernier ouvre vers le haut un menu groupé de
+  projet**, puis **Action ▾** : ce dernier ouvre vers le haut un menu groupé de
   **dix** entrées, dont **Lancer l'agent** en toute première ligne (groupe « Mon
   projet »), puis Prompt Builder, Tableau de bord, Graphe du projet, Historique des
   sessions, Revue de code, Équipe d'agents, Kanban, Discussion inter-projets et GDS du
   projet. **Lancer l'agent** se fait donc maintenant en **deux clics** (ouvrir le menu,
-  puis la ligne) : aucun raccourci clavier ne le double.
+  puis la ligne) : aucun raccourci clavier ne le double. La ligne s'appelle **Action**
+  (au singulier) : c'est la porte des **autres écrans** du projet, à ne pas confondre
+  avec **Commandes du projet**. Déployé, ce menu est entouré du **même filet bleu**
+  que le panneau : on voit qu'il en fait partie.
 - **Ce panneau est replié au repos et s'ouvre au premier geste** : au repos il
   n'occupe qu'**une ligne de haut** et seule sa **dernière** ligne reste visible —
-  **Autres écrans ▾** quand un projet est ouvert, **Options** sans projet. Le
+  **Action ▾** (le menu des autres écrans) quand un projet est ouvert, **Options** sans projet. Le
   **survol** le déploie en un dixième de seconde ; la **première touche Tab**
   l'ouvre immédiatement. Il se referme seul **un tiers de seconde** après que la
-  souris l'a quitté, et seulement si ni le clavier ni le menu « Autres écrans » ne
+  souris l'a quitté, et seulement si ni le clavier ni le menu **Action** ne
   le retiennent : se déplacer **à l'intérieur** du panneau déplié ne le referme
-  jamais, et son menu « Autres écrans » non plus (on peut y circuler au clavier,
+  jamais, et son menu **Action** non plus (on peut y circuler au clavier,
   `Échap` le referme tout seul). **Au doigt**, le premier appui déploie le panneau
   sans rien déclencher d'autre — un second appui agit, et le doigt levé ne le
   referme pas (sinon ce second appui n'aurait pas le temps d'arriver) ; toucher

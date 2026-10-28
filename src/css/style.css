@@ -1901,7 +1901,19 @@ body.theme-light.theme-tokyo-day {
   overflow-y: auto;
   padding: 4px 0;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  /* FILET BLEU DU MENU OUVERT (demande du proprietaire du 2026-10-26, en seance
+     d'essai) : deploye, le menu est entoure du MEME bleu que celui qui met en
+     valeur l'entree de la colonne. Le jeton est `--accent`, le SEUL accent du
+     projet, et non une teinte ecrite en dur : il est defini pour chaque palette
+     (deux themes x cinq sous-themes), et c'est deja lui qui peint le cadre du
+     bloc du bas (`#project-footer` : `border: 1px solid var(--accent)`) comme
+     la mise en evidence de l'entree active de la colonne
+     (`.tree-row.selected` : `color-mix(... var(--accent) ...)` + inset
+     `var(--accent)`). Aucun jeton nouveau, donc aucun second reglage : le
+     filet suit chaque palette. Etait `var(--border)` avant la demande ;
+     l'epaisseur reste 1 px, comme le cadre du bloc, pour qu'aucune ligne ne
+     bouge a l'ouverture. */
+  border: 1px solid var(--accent);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   /* Au-dessus de l'arborescence des fichiers, qu'il recouvre en s'ouvrant. */
