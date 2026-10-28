@@ -1,5 +1,54 @@
 # Rapport — « Pilot se coupe au début de la lecture » : la fenêtre s'ouvre sur le début du son
 
+> ## § 0 — Constat de reprise de mission (28/10, vérification disque AVANT toute écriture)
+>
+> La mission a été **relancée** alors que le correctif était **déjà en place,
+> testé, documenté et commité** (`44c7f65`, « fix(vocal): la fenetre de mesure
+> s'ouvre sur le debut du son, pas sur l'annonce »). Conformément à la consigne
+> (« si la correction est déjà en place et testée, ne la refais pas »), **rien
+> n'a été réécrit** : ce § 0 est le seul ajout, et il consigne l'état réel
+> relevé sur le disque.
+>
+> **Ce qui atteste que le correctif est complet :**
+>
+> | Exigence de la mission | État vérifié sur le disque |
+> |---|---|
+> | Fenêtre de mesure ouverte sur le **vrai début du son** | `vocal-mic.js:872` `setSoundStarted()` (`garde = emptySpeechGate(); dernierTemps = 0;`, une seule fois par lecture) |
+> | Signal émis par le lecteur au premier échantillon audible | `read-aloud.js:148` `READ_ALOUD_SOUND_EVENT`, émis par `annoncerSon()` (`read-aloud.js:803`) sur `utterance.onstart` / démarrage réel de la voix locale |
+> | Branchement complet | `super-agent.js:5043` (abonnement) → `vocalMic.setSoundStarted()` ; désabonnement `super-agent.js:5513` |
+> | **Une seule** piste retenue | option **(b)**, justifiée au § 2 (l'option (a) rendrait la détection circulaire et exigerait un seuil de plus) |
+> | Aucun seuil de décision déplacé | `ecran-vocal-lot4a.test.js` « aucun seuil de décision n'a changé de valeur » (600 / 200 / 0,05 / 0,03 / 0,01 / 1000, marges 1,8 et 2) : **vert sans retouche** |
+> | Les **trois** tests exigés existent | (i) `vocal-son-commence.test.js` § 1 « son demarre a 1500 ms » × echo `true`/`false`/`null` ⇒ **0 coupure** ; (ii) § 2 « son immediat puis voix de l'utilisateur » ⇒ **1 coupure**, motif `voix-detectee` ; (iii) § 3 « dix lectures d'affilee : dix coupures » + « un signal tardif ne rouvre PAS la fenetre » |
+> | Docs à jour | `spec_read_aloud.md:77-82` et `spec_modes_ecran_vocal.md:262-264` décrivent la fenêtre ouverte sur le début du son ; `npm run build:handbook` **ne produit aucun diff** (handbook déjà à jour) |
+> | Un seul commit | `44c7f65` |
+>
+> **Preuve rouge refaite à l'instant** (neutralisation de `setSoundStarted` : le
+> drapeau est posé mais la fenêtre n'est plus rouverte), puis restauration
+> (`git status` vide sur le fichier) :
+>
+> ```
+> # neutralisé          → PASS (11) FAIL (4)
+>   AssertionError: expected [ { …(3) } ] to have a length of +0 but got 1   (echo=true)
+>   AssertionError: expected [ { …(3) } ] to have a length of +0 but got 1   (echo=false)
+>   AssertionError: expected [ { …(3) } ] to have a length of +0 but got 1   (echo=null)
+>   AssertionError: expected 'function setSoundStarted() {\n    if …' to match /garde = emptySpeechGate\(\)/
+> # restauré           → PASS (15) FAIL (0)
+> ```
+>
+> *(traduction : sans le correctif, le son de Pilot tardif déclenche **une**
+> prise de parole — il se coupe lui-même.)*
+>
+> **Compteurs RECOMPTÉS ce jour** (aucun chiffre repris d'un contexte antérieur) :
+>
+> ```
+> npx vitest run src/js/vocal-son-commence.test.js                      → PASS (15) FAIL (0)
+> batterie vocale ciblée (10 fichiers)                                  → PASS (280) FAIL (0)
+> npx vitest run  (suite front complète)                                → PASS (3993) FAIL (0)
+> ```
+>
+> Conclusion : **rien à corriger**, aucun fichier de code touché par cette
+> reprise. Le corps ci-dessous est le rapport d'origine, conservé tel quel.
+
 **Mission** : corriger la réserve du rapport de vérification de la coupure à la
 deuxième lecture (verdict READY pour l'essai du propriétaire, avec une réserve
 chiffrée), **sans** changer aucun seuil de décision.
