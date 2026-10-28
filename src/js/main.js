@@ -14,7 +14,7 @@ import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus,
 // installée ICI, au seul endroit qui connaît à la fois le bus d'agents (runs en
 // cours) et l'activité RÉELLE des sessions (agent qui travaille sans run).
 import { isRunInProgress } from "./agents-bus.js";
-import { isProjectAgentBusy, initOwnerEngagementWatch, startTaskCounter } from "./super-agent.js";
+import { isProjectAgentBusy, initOwnerEngagementWatch, startTaskCounter, startSuperMissionsWatch } from "./super-agent.js";
 import { getAgentActivitySnapshot, subscribeAgentActivity, isAgentWorking, initAgentActivity } from "./agent-activity.js";
 // Bande de contexte supprimee (docs/proposition-bande-contexte-allegee.md) :
 // le fil « Projet > projet > onglet » n'existe plus. L'entree « Travail » vit
@@ -592,6 +592,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     startTaskCounter();
   } catch (e) {
     console.warn("Compteur « Travail » indisponible:", e);
+  }
+  // Volet « Tâches » du meme panneau : la surveillance des missions est posee
+  // ICI, avec l'application, et non dans la fabrique de l'onglet 🧭 Assistant.
+  // Sans cela la liste n'etait vivante que tant que cet onglet existait : jamais
+  // ouvert, le volet restait BLANC (le HTML ne porte aucun message par defaut) ;
+  // fermé, il gardait une photo perimee — alors que le compteur du bouton
+  // restait vrai. Le RENDU reste conditionne a la visibilite du volet : aucune
+  // peinture inutile, mais la donnee est toujours a jour. Idempotent : un second
+  // appel (ouverture de l'onglet 🧭) ne cree rien.
+  try {
+    startSuperMissionsWatch();
+  } catch (e) {
+    console.warn("Suivi des missions indisponible:", e);
   }
   // Exposé pour la vérification de mise à jour de Pi à l'ouverture de l'onglet
   // agent (issue #26) : appelé depuis tabs.js _openAgent après le health check.

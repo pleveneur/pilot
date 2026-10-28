@@ -347,9 +347,13 @@ let nextInfoSeq = 0;
 // Les éléments interactifs (confirm/select/choice) restent au centre.
 const SUPER_EVENTS_MAX = 150; // tampon mémoire (évite un panneau illisible)
 // Filet de rejeu du volet « Tâches » : le volet est alimenté par le store
-// d'activité tant qu'il est affiché (abonnement posé par loadSuperMissions).
-let superMissionsUnsub = null;      // désabonnement du store d'activité (volet ouvert) pour le détail
-let stopPanelTabWatch = null;       // désabonnement du suivi des onglets du panneau global
+// d'activité. L'abonnement est posé au DÉMARRAGE de Pilot (main.js) et vit
+// tant que l'application tourne : il ne dépend plus de l'existence de l'onglet
+// 🧭 Assistant (onglet jamais ouvert = volet blanc ; onglet fermé = photo
+// périmée). Le RENDU de la liste, lui, reste conditionné à la visibilité du
+// volet (renderSuperMissions) : aucun travail d'affichage inutile.
+let superMissionsUnsub = null;      // désabonnement du store d'activité (missions)
+let superMissionsPanelUnsub = null; // désabonnement du suivi des onglets du panneau global
 
 // ── Overlay plein écran des événements (tâche #160) ──
 // Quand le réglage `super_agent_events_overlay_enabled` est actif, chaque
@@ -2894,20 +2898,36 @@ function collectQueuedMissions() {
 }
 
 /**
- * Active la surveillance des missions tant que le volet est affiché (store
- * partagé : aucun polling propre, l'affichage suit le rafraîchissement existant).
+ * Active la surveillance des missions — IDEMPOTENTE et PERMANENTE : quel que
+ * soit le nombre d'appels (démarrage de Pilot via main.js, ouverture de l'onglet
+ * 🧭 Assistant), il n'existe qu'UN abonnement au store d'activité et qu'UN
+ * écouteur des changements d'onglet du panneau. Deux raisons :
+ *  1. le volet « Tâches » n'était vivant QUE tant que l'onglet 🧭 existait :
+ *     jamais ouvert → volet BLANC (le HTML ne porte aucun message par défaut) ;
+ *     fermé → photo périmée, alors que le compteur du bouton, lui, restait vrai ;
+ *  2. l'écouteur d'onglets repeint le volet au moment EXACT où il devient
+ *     visible (ouverture du panneau, bascule sur « Tâches »), sans dépendre de
+ *     la création de l'onglet 🧭.
+ * Store partagé : aucun polling propre, l'affichage suit le rafraîchissement
+ * existant (2 s + push). Aucune surveillance n'est coupée : `renderSuperMissions`
+ * ne peint que si le volet est à l'écran, donc rien n'est peint inutilement.
+ * @returns {boolean} true si un abonnement vient d'être posé.
  */
-function startSuperMissionsWatch() {
-  if (!superMissionsUnsub) superMissionsUnsub = subscribeAgentActivity(renderSuperMissions);
-  renderSuperMissions();
-}
-
-/** Coupe la surveillance des missions (volet fermé ou onglet Événements). */
-function stopSuperMissionsWatch() {
-  if (superMissionsUnsub) {
-    superMissionsUnsub();
-    superMissionsUnsub = null;
+export function startSuperMissionsWatch() {
+  let posed = false;
+  if (!superMissionsPanelUnsub) {
+    superMissionsPanelUnsub = onAgentPanelTabChange(onPanelTabChanged);
+    posed = true;
   }
+  if (!superMissionsUnsub) {
+    superMissionsUnsub = subscribeAgentActivity(renderSuperMissions);
+    posed = true;
+  }
+  // Premier rendu : la donnée est déjà là (store), donc à l'ouverture le volet
+  // est juste du premier coup — et, sans mission, il dit « Aucune mission en
+  // cours. » au lieu de rester blanc.
+  renderSuperMissions();
+  return posed;
 }
 
 /**
@@ -3139,11 +3159,11 @@ export async function createSuperAgent(container) {
   // (un seul endroit à l'écran pour suivre le travail). Ce module ne fait
   // qu'ALIMENTER ce panneau (événements poussés dans sa liste, missions
   // rechargées quand son onglet « Tâches » s'affiche).
-  if (stopPanelTabWatch) stopPanelTabWatch();
-  stopPanelTabWatch = onAgentPanelTabChange(onPanelTabChanged);
-  // Compteur du bouton « Travail » : il vit DES L'OUVERTURE de l'onglet, sans
-  // attendre que le volet « Taches » ait ete affiche (sinon le bouton resterait
-  // muet alors que des missions tournent).
+  // Compteur du bouton « Travail » ET surveillance du volet : elles vivent des
+  // le DEMARRAGE de Pilot (main.js), sans attendre l'ouverture de cet onglet ni
+  // celle du volet « Taches » (sinon le bouton restait muet et la liste vide ou
+  // figee alors que des missions tournent). Appel idempotent : il ne cree ni un
+  // second abonnement ni un second ecouteur.
   startSuperMissionsWatch();
   // Réglage global : onglet « Tâches » présent ou non.
   applySuperEventsTabsVisibility();
@@ -5501,21 +5521,16 @@ export async function createSuperAgent(container) {
       pendingBarEl = null;
       pendingInputEl = null;
       superMessagesEl = null;
-      // Suivi du travail (haut droite) : on retire nos abonnements (le panneau
-      // est GLOBAL, il survit à la fermeture de l'onglet Assistant ; seuls nos
-      // propres branchements sont libérés). Les événements déjà affichés restent
-      // dans le panneau — aucune donnée perdue.
-      if (stopPanelTabWatch) {
-        stopPanelTabWatch();
-        stopPanelTabWatch = null;
-      }
-      stopSuperMissionsWatch();
-      // ... MAIS le compteur du bouton « Travail » doit rester VRAI onglet
-      // ferme : des agents et des demandes en file continuent de vivre (les
-      // commandes manuelles d'un projet, par exemple). L'abonnement UNIQUE du
-      // compteur (startTaskCounter, deja pose au demarrage de Pilot et SANS
-      // rendu de liste) prend le relais : le compte ne se fige jamais, ne ment
-      // jamais et ne se dedouble pas (aucun second calcul).
+      // Suivi du travail (haut droite) : le panneau est GLOBAL, il survit à la
+      // fermeture de l'onglet Assistant. La surveillance des missions (liste du
+      // volet « Tâches ») et son ecouteur d'onglets sont desormais poses au
+      // DEMARRAGE de Pilot (main.js) et ne sont PLUS coupes ici : les couper
+      // laissait une photo perimee (mission demarree jamais affichee, mission
+      // finie restee « en cours ») alors que le compteur du bouton « Travail »
+      // restait vrai. Les evenements deja affiches restent dans le panneau —
+      // aucune donnee perdue.
+      // Le compteur est rappele par securite : idempotent, il ne cree rien s'il
+      // est deja pose (aucun second calcul, aucun second rendu de liste).
       startTaskCounter();
       // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
       // Anti-doublon Telegram (lot 3) : l'Assistant ne peut plus parler → les

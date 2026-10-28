@@ -540,11 +540,18 @@ uniquement un bloc d'instructions dans le prompt système.
 - **Source unique** : le **store d'activité partagé** de l'application
   (`agent-activity.js`, celui de l'indicateur d'activité des projets, du mode
   immersif et de l'onglet agent) — **aucune** commande Rust nouvelle, **aucun**
-  appel supplémentaire au moteur. Le volet **s'abonne** à ce store tant que
-  l'onglet « Tâches » est **affiché** (et se **désabonne** dès qu'on le quitte
-  ou que le panneau se ferme), donc il se **met à jour en direct** avec le
-  rafraîchissement léger
-  existant. La commutation d'onglet reste purement visuelle.
+  appel supplémentaire au moteur. La surveillance de ce volet est posée **au
+  démarrage de Pilot** (`startSuperMissionsWatch()`, appelée par `main.js`) et
+  vit **tant que l'application tourne** : elle ne dépend **ni** de l'existence de
+  l'onglet 🧭 Assistant **ni** de l'affichage du panneau. Elle est
+  **idempotente** (un seul abonnement au store, un seul écouteur des onglets du
+  panneau), donc la création de l'onglet 🧭 ne crée rien de plus. Seule la
+  **peinture** est conditionnée par `isAgentPanelPaneVisible("tasks")` : la
+  **donnée** est toujours à jour, le volet ne se repeint que lorsqu'il est à
+  l'écran — et il est donc **juste du premier coup** à l'ouverture, jamais blanc,
+  jamais une photo périmée. La commutation d'onglet reste purement visuelle.
+  Couverture : `src/js/taches-visibles-sans-onglet.test.js` (rapport :
+  `docs/rapports/RAPPORT-taches-invisibles.md`).
 - **Contenu** : pour chaque agent **retenu** → `{ agent, projet, mission }`.
   Filtre, mise en forme et rendu sont des **fonctions pures**
   (`buildRunningMissions`, `shortMission`, `splitMissions`,
@@ -652,6 +659,10 @@ uniquement un bloc d'instructions dans le prompt système.
   **jamais** un extrait de ses consignes internes.
 - Les **agents de projet** sont inchangés : leur phrase reste l'**objectif** de la
   tâche qui leur a été confiée.
+- La liste est **toujours à jour**, même si vous n'avez **jamais** ouvert
+  l'onglet 🧭 Assistant : elle suit le travail en direct et, quand rien ne
+  tourne, elle l'écrit noir sur blanc (« **Aucune mission en cours.** ») — jamais
+  un volet vide.
 <!-- /HELP:super-agent-panneau-taches -->
 - **Alimentation du RÉSUMÉ COURT (Rust)** : le résumé fourni voyage avec la
   commande de prompt sous un champ **propre à Pilot** (`pilotResume`), que
@@ -2030,10 +2041,23 @@ Décision propriétaire appliquée telle quelle : `RAPPORT-compteur-taches.md`
   UNIQUE `subscribeAgentActivity(publishSuperMissionsCount)`. Il est
   **idempotent** (`if (taskCounterUnsub) return false;`) : l'ouverture puis la
   fermeture de l'onglet 🧭 le rappellent sans jamais creer un second
-  abonnement. A l'ouverture du volet, `startSuperMissionsWatch()` ajoute le seul
-  **rendu de liste** ; `onPanelTabChanged` **n'arrete plus** la surveillance
-  (sinon le compteur gelait) : seul le rendu est conditionne par
-  `isAgentPanelPaneVisible("tasks")`.
+  abonnement.
+- **Le RENDU aussi** (correctif « une mission qui tourne n'apparait pas dans la
+  liste des taches », `docs/rapports/RAPPORT-taches-invisibles.md` et
+  `docs/rapports/RAPPORT-taches-invisibles-correction.md`) : auparavant le volet
+  « Taches » n'etait vivant QUE tant que l'onglet 🧭 existait (abonnement pose
+  dans la fabrique de l'onglet, coupe a sa fermeture) — onglet jamais ouvert :
+  volet **blanc** (le HTML ne porte aucun message par defaut), onglet ferme :
+  **photo perimee**, alors que le compteur, lui, restait vrai. Desormais
+  `startSuperMissionsWatch()` (exportee, appelee par `main.js` juste apres
+  `startTaskCounter()`, et par la fabrique de l'onglet 🧭) est **idempotente** :
+  elle pose UN abonnement au store (`superMissionsUnsub`) et UN ecouteur des
+  onglets du panneau (`superMissionsPanelUnsub`, `onAgentPanelTabChange`), puis
+  fait un premier rendu. **Aucune surveillance n'est coupee** — la fonction
+  `stopSuperMissionsWatch()` a ete supprimee, et la fermeture de l'onglet 🧭 ne
+  touche plus a ces abonnements. Seul le **rendu** reste conditionne par
+  `isAgentPanelPaneVisible("tasks")` : aucune peinture inutile, donnee toujours
+  a jour. Couverture : `src/js/taches-visibles-sans-onglet.test.js`.
   **Pourquoi ce demarrage** : auparavant l'abonnement n'etait pose que par la
   fabrique de l'onglet 🧭 (`createSuperAgentBlock`). Tant que cet onglet n'avait
   jamais ete ouvert, personne ne publiait le compte : le bouton restait muet en
