@@ -150,16 +150,35 @@ export function levelToWidth(niveau) {
 }
 
 /**
+ * Niveau (0..1) -> etendue du halo d'ecoute (0..1). PURE.
+ * Meme echelle de perception que le trait (racine carree), mais SANS plancher :
+ * au silence le halo n'existe pas (0), l'interieur du disque ne montre jamais un
+ * rond residuel (CONCEPTION-cercle-equaliseur.md §6.3). Le rayon vaut
+ * `halo x 82 px` (le CSS projette cette valeur sur le rayon du disque).
+ * @param {number} niveau
+ * @returns {number} 0..1, arrondi au millieme
+ */
+export function levelToHalo(niveau) {
+  const n = Number.isFinite(niveau) ? Math.max(0, Math.min(1, niveau)) : 0;
+  return Math.round(Math.sqrt(n) * 1000) / 1000;
+}
+
+/**
  * Ce qu'il faut ECRIRE a l'ecran pour un niveau donne. PURE.
- * Mouvement reduit (§4.3) : la longueur reste FIGEE par etat dans le CSS, aucune
- * valeur n'est posee — sinon une valeur en ligne ecraserait la regle figee.
+ * Mouvement reduit (§4.3) : la longueur et le halo restent FIGES par etat dans
+ * le CSS, aucune valeur n'est posee — sinon une valeur en ligne ecraserait la
+ * regle figee.
+ * Deux afficheurs pour UNE seule mesure (§7.1) : `largeur` pour le trait du
+ * niveau, conserve par decision du proprietaire (lot B), et `halo` pour
+ * l'interieur du cercle. Les deux viennent du meme niveau deja lisse, jamais
+ * d'un second capteur ni d'un second lissage.
  * @param {{niveau?: number, reduit?: boolean}} [etats]
- * @returns {{ecrire: boolean, largeur: number}}
+ * @returns {{ecrire: boolean, largeur: number, halo: number}}
  */
 export function planLevel(etats = {}) {
   const e = etats || {};
-  if (e.reduit === true) return { ecrire: false, largeur: 0 };
-  return { ecrire: true, largeur: levelToWidth(e.niveau) };
+  if (e.reduit === true) return { ecrire: false, largeur: 0, halo: 0 };
+  return { ecrire: true, largeur: levelToWidth(e.niveau), halo: levelToHalo(e.niveau) };
 }
 
 /**

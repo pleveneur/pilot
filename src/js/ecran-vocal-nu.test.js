@@ -61,6 +61,7 @@ describe("1. ce que l'ecran Vocal dessine, et rien d'autre", () => {
       "vocal-top",
       "vocal-stage",
       "vocal-orb",
+      "vocal-halo",
       "vocal-level",
       "vocal-status",
       "vocal-mic-fix",

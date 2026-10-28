@@ -4148,9 +4148,10 @@ export async function createSuperAgent(container) {
   // lit des l'ouverture de l'onglet. Ici ne restent que les fonctions.
 
   /**
-   * LOT 3 : longueur du trait = NIVEAU MESURE. En mouvement reduit, rien n'est
-   * pose : le CSS fige alors la longueur par etat (§4.3), et une valeur posee
-   * en ligne ecraserait cette regle figee.
+   * LOT 3 : longueur du trait = NIVEAU MESURE. LOT B : l'interieur du cercle
+   * (le halo d'ecoute) suit LE MEME niveau. En mouvement reduit, rien n'est
+   * pose : le CSS fige alors la longueur et le halo par etat (§4.3, §6.8), et
+   * une valeur posee en ligne ecraserait cette regle figee.
    */
   function vocalSetLevel(niveau) {
     if (!vocalOverlay) return;
@@ -4171,12 +4172,20 @@ export async function createSuperAgent(container) {
     const plan = planLevel({ niveau, reduit: vocalReducedMotion() });
     if (!plan.ecrire) return;
     vocalOverlay.style.setProperty("--vocal-level", plan.largeur + "%");
+    // LOT B : le halo d'ecoute, projete du MEME niveau deja lisse (0..1). Une
+    // seule mesure, deux afficheurs : aucun second capteur, aucun second
+    // lissage. Le CSS s'en sert comme rayon en pourcentage du disque.
+    vocalOverlay.style.setProperty("--vocal-heard", String(plan.halo));
   }
 
-  /** Retire la valeur posee : le trait retombe au silence (8 %). */
+  /**
+   * Retire les valeurs posees : le trait retombe au silence (8 %) et le halo
+   * d'ecoute se replie (0) — aucun rond residuel quand le micro s'arrete.
+   */
   function vocalClearLevel() {
     if (!vocalOverlay) return;
     vocalOverlay.style.removeProperty("--vocal-level");
+    vocalOverlay.style.removeProperty("--vocal-heard");
   }
 
   /**
@@ -4261,7 +4270,7 @@ export async function createSuperAgent(container) {
     ov.innerHTML = `
       <div class="vocal-top"></div>
       <div class="vocal-stage">
-        <div class="vocal-orb" aria-hidden="true"></div>
+        <div class="vocal-orb" aria-hidden="true"><span class="vocal-halo"></span></div>
         <div class="vocal-level" aria-hidden="true"><span class="vocal-level-bar"></span></div>
         <div class="vocal-status" role="status" aria-live="polite">Je vous écoute.</div>
         <!-- LOT 3 (§2.5) : bouton de depannage, MASQUE tant que le micro capte.

@@ -32,6 +32,7 @@ import {
   micFailureMessage,
   smoothLevel,
   levelToWidth,
+  levelToHalo,
   planLevel,
   shouldAskVocalMic,
   rmsOf,
@@ -239,6 +240,27 @@ describe("1. le niveau est MESURE puis lisse (aucun sautillement)", () => {
     // Une voix normale (0,1) deplace le trait bien au-dela du plancher : une
     // echelle lineaire l'aurait laissee a 17 %.
     expect(levelToWidth(0.1)).toBeGreaterThan(30);
+  });
+
+  it("LOT B : le halo suit la MEME mesure, sans plancher (0 au silence)", () => {
+    // Le trait garde un plancher (8 %) pour rester visible ; le halo, lui, ne
+    // montre RIEN au silence : aucun rond residuel dans le disque.
+    expect(levelToHalo(0)).toBe(0);
+    expect(levelToHalo(1)).toBe(1);
+    expect(levelToHalo(Number.NaN)).toBe(0);
+    expect(levelToHalo(-2)).toBe(0);
+    expect(levelToHalo(5)).toBe(1);
+    // 0,06 RMS = le seuil d'entree en ecoute : halo de 0,245 (le rayon reel
+    // vaut alors 0,245 x 82 = 20 px), visible sans envahir le disque.
+    expect(levelToHalo(0.06)).toBe(0.245);
+    let precedent = -1;
+    for (const n of [0, 0.01, 0.06, 0.25, 0.6, 1]) {
+      const h = levelToHalo(n);
+      expect(h).toBeGreaterThanOrEqual(precedent);
+      expect(h).toBeGreaterThanOrEqual(0);
+      expect(h).toBeLessThanOrEqual(1);
+      precedent = h;
+    }
   });
 
   it("le RMS est calcule sur les echantillons, jamais invente", () => {
@@ -622,6 +644,16 @@ describe("6. mouvement reduit : la longueur reste figee par etat", () => {
     expect(
       sliceSource(CSS, ".pilot-vocal.vocal-reduced.vocal-state-listening .vocal-level-bar", "}", 2),
     ).toMatch(/width:\s*45%/);
+  });
+
+  it("LOT B : en mouvement reduit, le halo non plus n'est pas pose par le code", () => {
+    expect(planLevel({ niveau: 0.5, reduit: true }).halo).toBe(0);
+    expect(planLevel({ niveau: 0.5, reduit: false }).halo).toBe(levelToHalo(0.5));
+    // Le CSS le fige a 0,55 (lisible, jamais une animation muette) : une valeur
+    // posee en ligne ecraserait cette regle.
+    expect(
+      sliceSource(CSS, ".pilot-vocal.vocal-reduced.vocal-state-listening .vocal-halo", "}", 2),
+    ).toMatch(/--vocal-halo:\s*0\.55/);
   });
 });
 

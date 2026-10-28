@@ -452,6 +452,11 @@ En mode **Vocal** :
 
 - **Le trait suit votre voix** : il s'allonge quand vous parlez et retombe
   doucement au silence, sans à-coups.
+- **Et l'intérieur du cercle s'allume avec elle** : une lueur verte (la couleur
+  de l'écoute) remplit le disque au rythme du son que Pilot entend, puis
+  s'éteint dès que vous vous taisez. C'est la **même** mesure que le trait —
+  elle ne s'allume jamais quand vous ne parlez pas, et jamais avec la couleur
+  de Pilot. Le contour du cercle, lui, reste la voix de Pilot.
 - **L'écran distingue le silence de la parole** : quand vous vous taisez, il est
   au **repos** (couleur du thème, « Je vous écoute. ») ; dès que votre voix est
   réellement entendue, il passe en **écoute** (vert, « Je vous écoute… ») et y

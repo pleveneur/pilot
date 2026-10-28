@@ -11657,9 +11657,11 @@ body.pilot-vocal-active .agent-chat-messages {
   );
   transition: border-color var(--transition-smooth), background var(--transition-smooth);
 }
-/* Halo de la PAROLE : une enveloppe douce qui ondule (1,6 s), bornee et jamais
+/* Enveloppe de PAROLE : une enveloppe douce qui ondule (1,6 s), bornee et jamais
    synchrone avec les mots — la synthese vocale ne rend pas son signal, on ne
-   pretend donc pas mesurer la voix. */
+   pretend donc pas mesurer la voix. Vocabulaire tranche (§6.0) : l'enveloppe de
+   PAROLE n'est pas « le halo » ; le halo, c'est la voix de l'UTILISATEUR (.vocal-halo).
+   Aucune valeur n'est touchee ici (lot « parole » separe). */
 .vocal-orb::before {
   content: "";
   position: absolute;
@@ -11676,7 +11678,7 @@ body.pilot-vocal-active .agent-chat-messages {
 }
 .pilot-vocal.vocal-state-speaking .vocal-orb::before {
   opacity: 1;
-  animation: vocal-halo 1.6s ease-in-out infinite;
+  animation: vocal-speak-glow 1.6s ease-in-out infinite;
 }
 /* Arc de la REFLEXION : 60 degres qui tournent en 3 s autour de l'anneau. */
 .vocal-orb::after {
@@ -11705,6 +11707,51 @@ body.pilot-vocal-active .agent-chat-messages {
    disque ne bouge pas, il suit le micro (lot 3). */
 .pilot-vocal.vocal-state-idle .vocal-orb {
   animation: vocal-breathe 4s ease-in-out infinite;
+}
+
+/* --- LOT B — LE HALO D'ECOUTE : la voix de l'UTILISATEUR, a l'interieur du
+   disque (CONCEPTION-cercle-equaliseur.md §6). Un seul element, ENFANT du
+   disque : `inset: 0` le pose dans la boite de padding (164 x 164 px, donc
+   82 px de rayon) et `border-radius: 50%` decoupe son propre fond, qui s'arrete
+   au plus tard a `closest-side` = 82 px. Il ne peut donc jamais deborder sur
+   l'anneau (82 -> 84 px) ni atteindre le contour de la voix de Pilot (83 px et
+   au-dela). Aucun `overflow: hidden` sur le disque : il decouperait aussi
+   l'enveloppe de parole et l'arc de reflexion. */
+.vocal-halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  /* Le SEUL chiffre qui vient du code : le niveau du micro, deja lisse et
+     projete par vocal-mic.js (`--vocal-heard`, 0..1, pose sur l'overlay par
+     vocalSetLevel). Absent = 0 : aucun rond residuel au repos. */
+  --vocal-halo: var(--vocal-heard, 0);
+  /* Trois arrets dans la MEME teinte que la voix de l'utilisateur : centre
+     lumineux (42 %), transition douce (22 % a 62 % du rayon), bord invisible
+     (0 % de la meme teinte — jamais le mot-cle `transparent` seul, qui laisse
+     un lisere gris). */
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--vocal-listen) 42%, transparent) 0%,
+    color-mix(in srgb, var(--vocal-listen) 22%, transparent)
+      calc(var(--vocal-halo) * 62%),
+    color-mix(in srgb, var(--vocal-listen) 0%, transparent)
+      calc(var(--vocal-halo) * 100%)
+  );
+  opacity: 0;
+  transition: opacity 160ms linear;
+}
+/* Un afficheur, une voix (§7.1) : le halo de la voix de l'utilisateur n'existe
+   QU'EN ECOUTE. Les deux gardes tombent ensemble — opacite (est-il a l'ecran ?)
+   et valeur 0 (le degrade est-il replie ?) : aucun etat intermediaire ne peut
+   laisser un rond residuel, donc l'echo que le micro entend parfois de Pilot
+   n'est jamais dessine. Teinte `--vocal-listen` en dur, jamais `--vocal-state`
+   (decision 5 : chaque lueur a SA couleur, une par voix). */
+.pilot-vocal.vocal-state-listening .vocal-halo {
+  opacity: 1;
+}
+.pilot-vocal:not(.vocal-state-listening) .vocal-halo {
+  --vocal-halo: 0;
 }
 
 /* Le trait du niveau : 200 x 3 px, rayon 2 px, a 24 px sous le disque (le `gap`
@@ -11822,6 +11869,7 @@ body.pilot-vocal-active .agent-chat-messages {
 .pilot-vocal.vocal-reduced .vocal-orb,
 .pilot-vocal.vocal-reduced .vocal-orb::before,
 .pilot-vocal.vocal-reduced .vocal-orb::after,
+.pilot-vocal.vocal-reduced .vocal-halo,
 .pilot-vocal.vocal-reduced .vocal-level-bar,
 .pilot-vocal.vocal-reduced .vocal-status {
   animation: none;
@@ -11835,6 +11883,14 @@ body.pilot-vocal-active .agent-chat-messages {
 .pilot-vocal.vocal-reduced.vocal-state-listening .vocal-level-bar { width: 45%; }
 .pilot-vocal.vocal-reduced.vocal-state-thinking .vocal-level-bar { width: 20%; }
 .pilot-vocal.vocal-reduced.vocal-state-speaking .vocal-level-bar { width: 70%; }
+/* LOT B : en mouvement reduit le halo ne s'anime pas, mais il reste LISIBLE —
+   rayon fixe de 0,55 x 82 = 45,1 px en ecoute (jamais une animation muette),
+   eteint dans les trois autres etats (§6.8). Une declaration directe sur
+   `.vocal-halo` gagne sur la valeur heritee de l'overlay ; `planLevel` ne pose
+   d'ailleurs rien en mouvement reduit, donc rien ne peut la contredire. */
+.pilot-vocal.vocal-reduced.vocal-state-listening .vocal-halo {
+  --vocal-halo: 0.55;
+}
 
 @keyframes vocal-fade-in {
   from { opacity: 0; }
@@ -11848,7 +11904,7 @@ body.pilot-vocal-active .agent-chat-messages {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
-@keyframes vocal-halo {
+@keyframes vocal-speak-glow {
   0%, 100% { transform: scale(0.94); opacity: 0.45; }
   50% { transform: scale(1.06); opacity: 0.85; }
 }

@@ -268,6 +268,62 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// LOT B — le halo d'ecoute : la voix de l'UTILISATEUR, a l'interieur du cercle
+// (CONCEPTION-cercle-equaliseur.md §6). Ce bloc verrouille quatre choses :
+//   - un seul element, dans la boite interieure du disque : il ne peut deborder
+//     ni sur l'anneau ni sur le contour de la voix de Pilot ;
+//   - sa couleur est celle de l'ECOUTE, jamais `--vocal-state` (decision 5 :
+//     une couleur par voix, les deux ne se confondent pas) ;
+//   - il n'existe qu'en ecoute : deux gardes qui tombent ensemble ;
+//   - en mouvement reduit il est fige mais LISIBLE, pas eteint.
+describe("4bis. le halo d'ecoute (lot B) : la voix de l'utilisateur", () => {
+  it("il est ENFANT du disque, pose dans sa boite interieure (82 px de rayon)", () => {
+    const corps = corpsFonction(SUPER, "function buildVocalOverlay");
+    expect(corps).toMatch(/class="vocal-orb"[^>]*><span class="vocal-halo"/);
+    const halo = bloc(CSS, ".vocal-halo {");
+    expect(halo).toMatch(/position:\s*absolute/);
+    expect(halo).toMatch(/inset:\s*0/);
+    expect(halo).toMatch(/border-radius:\s*50%/);
+    // Le degrade s'arrete au plus tard a `closest-side` : rien ne depasse.
+    expect(halo).toMatch(/radial-gradient\(\s*closest-side/);
+    // Aucun decoupage sur le disque : il couperait l'enveloppe et l'arc.
+    expect(bloc(CSS, ".vocal-orb {")).not.toMatch(/overflow/);
+  });
+
+  it("sa teinte est celle de la voix de l'utilisateur, jamais --vocal-state", () => {
+    const halo = bloc(CSS, ".vocal-halo {");
+    expect(halo).toMatch(/var\(--vocal-listen\)/);
+    expect(halo).not.toMatch(/--vocal-state/);
+    // Et surtout pas la teinte de Pilot : les deux voix restent distinctes.
+    expect(halo).not.toMatch(/--vocal-speak/);
+  });
+
+  it("le niveau vient de LA mesure deja lisse (repli 0 : aucun rond residuel)", () => {
+    expect(bloc(CSS, ".vocal-halo {")).toMatch(/--vocal-halo:\s*var\(--vocal-heard, 0\)/);
+    const niveau = corpsFonction(SUPER, "function vocalSetLevel");
+    expect(niveau).toMatch(/--vocal-heard/);
+    // Un seul chiffre pose par le code : la projection du niveau deja lisse,
+    // et rien d'autre (aucun second capteur, aucun second lissage).
+    expect(niveau).toMatch(/planLevel\(/);
+    expect(niveau).not.toMatch(/getUserMedia|AudioContext|mediaDevices/);
+  });
+
+  it("il n'existe qu'en ecoute : les deux gardes tombent ensemble", () => {
+    expect(bloc(CSS, ".pilot-vocal.vocal-state-listening .vocal-halo")).toMatch(/opacity:\s*1/);
+    expect(bloc(CSS, ".pilot-vocal:not(.vocal-state-listening) .vocal-halo")).toMatch(
+      /--vocal-halo:\s*0/,
+    );
+  });
+
+  it("en mouvement reduit il est fige a 0,55 (lisible) et neutralise", () => {
+    expect(bloc(CSS, ".pilot-vocal.vocal-reduced.vocal-state-listening .vocal-halo")).toMatch(
+      /--vocal-halo:\s*0\.55/,
+    );
+    expect(CSS).toMatch(/\.pilot-vocal\.vocal-reduced \.vocal-halo,/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe("5. reduction de mouvement : le MEME drapeau, aucun nouveau reglage (§4.3)", () => {
   const fauxWin = (reduce, flag) => ({
     matchMedia: () => ({ matches: reduce }),

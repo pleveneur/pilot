@@ -110,8 +110,9 @@ sont). Le retour de la conversation sur cet écran est interdit par un test déd
    une bande de respiration. Le logo, qui est le bouton des trois modes, se pose
    **au-dessus** d'elle, à la même place que dans les autres modes.
 2. **Au centre**, un bloc vertical : un **disque de 168 px** (anneau plein de 2 px
-   + remplissage lumineux de 18 % au centre, 0 % aux bords : aucune image), puis
-   **24 px** plus bas un **trait de niveau de 200 × 3 px**, puis **24 px** plus bas
+   + remplissage lumineux de 18 % au centre, 0 % aux bords : aucune image), qui
+   contient un **halo intérieur** (`.vocal-halo`, la voix de l'utilisateur, §4),
+   puis **24 px** plus bas un **trait de niveau de 200 × 3 px**, puis **24 px** plus bas
    **l'unique ligne d'état**. Le bloc suit la fenêtre sans calcul.
 3. **La zone de saisie**, en bas, **toujours visible** et discrète : c'est la barre
    de saisie de l'onglet Assistant, **déplacée** (même nœud, même envoi, même
@@ -137,9 +138,23 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
 | État | Quand | Teinte (jeton `--vocal-*`) | Mouvement | Ligne d'état |
 |---|---|---|---|---|
 | **Repos** | personne ne parle, l'agent ne réfléchit pas, rien n'est lu | accent du thème (`--vocal-rest`) | respiration lente de 4 s | « Je vous écoute. » |
-| **Écoute** | le micro **capte vraiment** : le niveau mesuré dépasse le seuil **haut** (0,06 RMS) | vert (`--vocal-listen`) | aucun mouvement propre : **le trait suit la voix** | « Je vous écoute… » |
+| **Écoute** | le micro **capte vraiment** : le niveau mesuré dépasse le seuil **haut** (0,06 RMS) | vert (`--vocal-listen`) | aucun mouvement propre : **le halo intérieur et le trait suivent la voix** | « Je vous écoute… » |
 | **Réflexion** | l'agent réfléchit | violet de l'assistant (`--vocal-think`) | arc de 60° qui tourne en 3 s | « Je réfléchis… » |
-| **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | halo de 1,6 s + enveloppe du trait | « Je réponds. » |
+| **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | lueur extérieure de 1,6 s (`vocal-speak-glow`) + enveloppe du trait | « Je réponds. » |
+
+**Deux lueurs, deux voix — et deux mots différents.** L'écran n'a qu'un seul
+niveau à montrer par voix, et chaque voix a **sa** couleur :
+
+| Ce qu'on voit | Où | Quelle voix | Teinte |
+|---|---|---|---|
+| le **halo intérieur** (`.vocal-halo`) | dans le disque, jusqu'à 82 px de rayon | **la vôtre** (mesurée) | `--vocal-listen` |
+| le **trait de niveau** (`.vocal-level-bar`) | sous le disque, 200 × 3 px | **la vôtre** (la même mesure) | `--vocal-listen` |
+| le **contour** du disque et son **enveloppe** | l'anneau, puis l'extérieur | **celle de Pilot** (lue) | `--vocal-state` |
+
+Le mot « halo » ne désigne **que** le halo intérieur, celui de votre voix ;
+l'enveloppe de Pilot s'appelle « l'enveloppe de parole » (ancien nom de
+l'animation : `vocal-speak-glow`). Les deux ne se confondent jamais à l'écran :
+le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
 
 - **Comment l'écoute est réellement détectée** : ouvrir le micro ne suffit **pas**.
   Le moteur micro ne signale que l'**ouverture** et l'**arrêt** du flux ; il livre
@@ -161,6 +176,15 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
 - **En « écoute », aucun niveau n'est inventé** : la longueur du trait vient du
   niveau **réellement mesuré**. Sans mesure (micro fermé, refusé, en panne), le
   trait retombe au silence (8 %), il ne simule rien.
+- **Le halo intérieur** (lot B, `CONCEPTION-cercle-equaliseur.md` §6) remplit le
+  **disque** de la même mesure : son rayon vaut **racine(niveau) × 82 px** (même
+  échelle perceptuelle que le trait), donc **0 au silence** — aucun rond résiduel.
+  Il n'existe **qu'en écoute** : deux gardes tombent ensemble (opacité et valeur
+  0), si bien que l'écho que le micro entend parfois de Pilot **n'est jamais
+  dessiné**. Sa couleur est **toujours** `--vocal-listen`, jamais l'état : une
+  couleur par voix, les deux ne se confondent pas. Le trait de niveau, lui,
+  **reste** (décision du propriétaire, 28/10) : il est conservé à sa place et
+  suit la même mesure, en double affichage assumé de la voix de l'utilisateur.
 - **En « parole », le trait ne mesure rien** : la voix de la synthèse n'est pas
   capturable par le navigateur, il suit donc une **enveloppe fixe** de 1,6 s,
   volontairement lente et bornée (jamais synchrone avec les mots). Seule
@@ -168,7 +192,9 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
 - **Mouvement réduit** : le même drapeau que les animations d'ouverture
   (`prefers-reduced-motion` **et** le réglage « Animer l'ouverture des modales »).
   Quand il est actif, plus aucune animation, plus aucune transition, et le trait est
-  **figé** à 8 / 45 / 20 / 70 % selon l'état. **Aucun nouveau réglage** n'a été créé
+  **figé** à 8 / 45 / 20 / 70 % selon l'état, comme le **halo intérieur** (figé à
+  0,55 en écoute, éteint dans les trois autres états) : il reste **lisible**, ce
+  n'est jamais une animation muette. **Aucun nouveau réglage** n'a été créé
   pour cet écran.
 
 ## 5. Le micro : quand il s'ouvre, quand il se ferme
