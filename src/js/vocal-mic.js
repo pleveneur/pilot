@@ -58,6 +58,19 @@
 // `BARGE_IN_MIN_MS`) et se rearne des que la voix retombe (une coupure par
 // prise de parole). Aucun seuil nouveau, aucun reglage nouveau.
 //
+// ── LE SON DE PILOT COMMENCE : LA FENETRE S'OUVRE LA, PAS SUR L'ANNONCE ────
+// L'annonce « Pilot parle » part AVANT le premier son : il faut choisir la voix
+// (jusqu'a 1500 ms) et, pour la voix locale, synthetiser le premier morceau par
+// un processus. Une fenetre ouverte sur l'annonce mesure donc parfois du
+// SILENCE : la reference tombe a 0, les seuils au plancher, et le son de Pilot —
+// constant — se coupe lui-meme (le defaut MIROIR du correctif `6883eab`).
+// `setSoundStarted()` est appele par l'ecran a partir du signal
+// `READ_ALOUD_SOUND_EVENT` (read-aloud.js : `utterance.onstart`, ou demarrage
+// reel de la lecture audio locale) : la fenetre repart de LA, avec sa mesure et
+// sa reference neuves. L'annonce garde sa fenetre provisoire (aucune coupure
+// pendant 600 ms) : si le signal manquait, le comportement reste celui d'avant.
+// Une seule ouverture par lecture, aucun seuil nouveau, aucune seconde capture.
+//
 // Toutes les dependances du navigateur sont INJECTABLES (`navigator`,
 // `AudioContext`, `requestAnimationFrame`) : le moteur se teste donc sans
 // fenetre, et une panne de l'un d'eux ne peut jamais lever d'exception vers
@@ -563,6 +576,9 @@ export function createVocalMic(options = {}) {
   let reflechi = false;
   let echoAnnule = null;
   let garde = emptySpeechGate();
+  // Vrai quand le SON de la lecture courante a reellement commence (voir
+  // `setSoundStarted`) : la fenetre de mesure a alors ete ouverte sur le son.
+  let sonCommence = false;
   let dernierTemps = 0;
 
   function arreterBoucle() {
@@ -622,6 +638,7 @@ export function createVocalMic(options = {}) {
     // precedente ne survit a une nouvelle capture.
     parlant = false;
     reflechi = false;
+    sonCommence = false;
     garde = emptySpeechGate();
     dernierTemps = 0;
     if (etait) surEcoute(false);
@@ -829,6 +846,33 @@ export function createVocalMic(options = {}) {
     if (etat && flux) echoAnnule = echoCancellationOf(flux);
     if (etat === parlant) return;
     parlant = etat;
+    sonCommence = false;
+    garde = emptySpeechGate();
+    dernierTemps = 0;
+  }
+
+  /**
+   * LE SON DE PILOT VIENT DE COMMENCER — la fenetre de mesure s'ouvre ICI.
+   *
+   * Appele par l'ecran sur le signal `READ_ALOUD_SOUND_EVENT` (read-aloud.js),
+   * c'est-a-dire a l'instant du premier echantillon audible : `onstart` de la
+   * synthese du systeme, demarrage reel de la lecture audio de la voix locale.
+   *
+   * Ce que cela corrige : la fenetre de 600 ms s'ouvrait sur l'ANNONCE de
+   * lecture, donc sur du silence quand la voix mettait du temps a demarrer
+   * (`ensureVoices` jusqu'a 1500 ms ; voix locale Piper : synthese par un
+   * processus). La reference du secours valait alors 0, les seuils tombaient au
+   * plancher, et le son de Pilot se coupait tout seul des qu'il devenait
+   * audible.
+   *
+   * Une seule ouverture par lecture : le signal peut partir a chaque debut de
+   * morceau, la fenetre ne se rouvre pas (ni la reference ni le verrou d'une
+   * coupure deja prononcee ne sont remis en jeu). Aucun seuil ne bouge ici.
+   */
+  function setSoundStarted() {
+    if (!parlant) return;
+    if (sonCommence) return;
+    sonCommence = true;
     garde = emptySpeechGate();
     dernierTemps = 0;
   }
@@ -898,6 +942,9 @@ export function createVocalMic(options = {}) {
       pendant,
       seuilSecours: Math.round(seuilSecours * 1000) / 1000,
       refSecours: Math.round(garde.refSecours * 1000) / 1000,
+      // La fenetre de cette lecture a-t-elle ete ouverte sur le DEBUT DU SON
+      // (`setSoundStarted`) plutot que sur l'annonce ? Chiffre utile a l'essai.
+      sonCommence,
     };
   }
 
@@ -905,6 +952,7 @@ export function createVocalMic(options = {}) {
     demander,
     fermer,
     setSpeaking,
+    setSoundStarted,
     setThinking,
     bargeInReport,
     estActif: () => actif,

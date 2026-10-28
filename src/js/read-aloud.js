@@ -124,6 +124,30 @@ export const READ_ALOUD_HELP_HINT =
 export const READ_ALOUD_STATE_EVENT = "pilot-read-aloud-state";
 
 /**
+ * Evenement emis QUAND LE SON COMMENCE — au premier echantillon audible d'une
+ * lecture, UNE fois par lecture.
+ *
+ * Pourquoi un evenement de plus : l'etat « Pilot parle »
+ * (`READ_ALOUD_STATE_EVENT`) part a l'ANNONCE, donc AVANT le premier son — il
+ * faut d'abord choisir la voix (`ensureVoices`, jusqu'a 1500 ms) et, pour la
+ * voix locale, synthetiser le premier morceau par un processus. La garde du
+ * micro (`vocal-mic.js`) mesurait son residu d'echo a partir de cette annonce :
+ * quand le son demarrait apres la fenetre, la reference mesuree etait du
+ * SILENCE, les seuils tombaient au plancher, et le son de Pilot — constant — se
+ * coupait lui-meme (defaut miroir du correctif `6883eab`).
+ *
+ * Ce signal-la dit la seule chose que l'annonce ne peut pas dire : le son sort
+ * MAINTENANT. Il est emis a l'instant ou la synthese commence a parler
+ * (`utterance.onstart`) ou ou la lecture audio de la voix locale demarre
+ * reellement (`playing` / resolution de `play()`). Aucun second lecteur, aucun
+ * second chemin de lecture : c'est le meme `speak`.
+ *
+ * `detail` est vide : l'evenement ne porte qu'un INSTANT, pas un etat (l'etat
+ * reste `READ_ALOUD_STATE_EVENT`, source unique de « Pilot parle »).
+ */
+export const READ_ALOUD_SOUND_EVENT = "pilot-read-aloud-sound";
+
+/**
  * Etats de lecture pendant lesquels PILOT PARLE vraiment — la voix sort des
  * haut-parleurs, donc le micro peut l'entendre.
  *
@@ -768,6 +792,19 @@ export function createSpeaker(win, options = {}) {
   };
 
   /**
+   * Previens que le SON vient de commencer (premier echantillon audible de la
+   * lecture). Un INSTANT, pas un etat : voir `READ_ALOUD_SOUND_EVENT`.
+   */
+  const broadcastSound = () => {
+    safeCall(() => {
+      if (!w || typeof w.dispatchEvent !== "function") return;
+      const Ev = w.CustomEvent || globalThis.CustomEvent;
+      if (typeof Ev !== "function") return;
+      w.dispatchEvent(new Ev(READ_ALOUD_SOUND_EVENT, { detail: {} }));
+    });
+  };
+
+  /**
    * Lit un texte (nettoye puis decoupe). Renvoie une promesse resolue a la fin
    * ou a l'arret.
    * @param {string} text
@@ -816,6 +853,20 @@ export function createSpeaker(win, options = {}) {
     // instant) : le bouton passe a « Arreter » sans attendre.
     notify("speaking");
 
+    // ── « LE SON COMMENCE » (defaut miroir de la coupure de parole) ─────────
+    // L'annonce ci-dessus part AVANT le premier son. Ce signal-ci part a
+    // l'instant ou le son sort vraiment, et UNE seule fois par lecture : c'est
+    // lui qui ouvre la fenetre de mesure de la garde du micro. Sans lui, cette
+    // fenetre s'ouvrait sur du silence quand la voix mettait du temps a
+    // demarrer (1re lecture a froid, voix locale qui synthetise), et Pilot se
+    // coupait sur son propre son.
+    let sonAnnonce = false;
+    const annoncerSon = () => {
+      if (sonAnnonce || token.stopped) return;
+      sonAnnonce = true;
+      broadcastSound();
+    };
+
     // Voix choisie dans LE reglage unique (Parametres → Assistant → Lecture des
     // reponses). Soit une voix du systeme, soit la voix francaise LOCALE.
     const choice = options.voiceName == null ? getPreferredVoiceName() : options.voiceName;
@@ -842,6 +893,9 @@ export function createSpeaker(win, options = {}) {
           invoke: options.invoke,
           isCancelled: () => token.stopped || currentPlayback !== playback,
           onStopRegister: (fn) => extraStops.push(fn),
+          // La voix locale synthetise par un processus : le son peut demarrer
+          // longtemps apres l'annonce. C'est ce demarrage-la qui compte.
+          onSoundStart: annoncerSon,
         });
         if (outcome.reason === "ended") {
           currentPlayback = null;
@@ -906,6 +960,9 @@ export function createSpeaker(win, options = {}) {
       const utterance = new Utterance(chunks[index]);
       utterance.lang = lang;
       if (voice) utterance.voice = voice;
+      // La synthese du systeme commence a parler : c'est LE premier son de la
+      // lecture (`annoncerSon` ne part qu'une fois par lecture).
+      utterance.onstart = () => annoncerSon();
       utterance.onend = () => speakIndex(index + 1);
       utterance.onerror = () => {
         if (!token.stopped) playback.stop();

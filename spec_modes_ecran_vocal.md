@@ -254,6 +254,17 @@ signal, une seule garde, **deux** cibles choisies par la priorité des états (�
   entrer **votre** voix, qui deviendrait la référence et que plus rien ne
   dépasserait. C'est exactement le défaut corrigé (1ʳᵉ lecture coupable, 2ᵉ
   jamais) : `RAPPORT-correction-coupure-deuxieme-lecture.md`.
+- **La fenêtre s'ouvre sur le DÉBUT DU SON, pas sur l'annonce.** L'état « Pilot
+  parle » part **avant** le premier son (choix de la voix : jusqu'à 1500 ms ; voix
+  locale : synthèse du premier morceau par un processus) : la fenêtre mesurait
+  alors parfois du **silence**, la référence valait 0, les seuils tombaient au
+  plancher et Pilot se coupait **lui-même**. Le lecteur émet donc
+  `READ_ALOUD_SOUND_EVENT`, **une fois par lecture**, au premier échantillon
+  **audible** (`utterance.onstart` ; pour la voix locale, démarrage réel de la
+  lecture audio), et `vocalMic.setSoundStarted()` rouvre la mesure **à cet
+  instant**. L'annonce garde sa fenêtre provisoire — un moteur qui n'annonce rien
+  retombe sur le comportement antérieur — et **aucun seuil ne change** :
+  `RAPPORT-coupure-attaque-du-son.md`.
 - **Une voix franche et continue coupe à CHAQUE lecture**, indéfiniment : la
   deuxième, la troisième, la dixième comme la première. Aucune mesure ne survit
   d'une lecture à l'autre, et aucun verrou de coupure ne peut être hérité d'une

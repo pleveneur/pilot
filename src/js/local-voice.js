@@ -762,9 +762,11 @@ export async function refreshLocalVoiceDownloadState(options = {}) {
  * @param {string} url
  * @param {(finish: Function) => void} [registerFinish] reçoit la fonction qui
  *   termine l'attente (utilisée par l'arrêt)
+ * @param {() => void} [onSoundStart] appelé UNE fois, quand le son a réellement
+ *   commencé (`playing`, ou résolution de `play()`)
  * @returns {Promise<"ended"|"stopped"|"error">}
  */
-function playUrl(AudioCtor, url, registerFinish) {
+function playUrl(AudioCtor, url, registerFinish, onSoundStart) {
   return new Promise((resolve) => {
     let settled = false;
     let audio = null;
@@ -786,11 +788,36 @@ function playUrl(AudioCtor, url, registerFinish) {
     }
     audio.onended = () => finish("ended");
     audio.onerror = () => finish("error");
+    // ── LE SON COMMENCE ICI ──────────────────────────────────────────────────
+    // Le son local sort de l'enceinte à cet instant, pas à l'appel de `speak`
+    // (le morceau a été synthétisé par un processus juste avant). Deux signaux,
+    // un seul annoncement : l'évènement `playing` quand la fenêtre le propose,
+    // et la résolution de `play()` (qui résout quand la lecture a démarré).
+    let debutAnnonce = false;
+    const annoncerDebut = () => {
+      if (debutAnnonce) return;
+      debutAnnonce = true;
+      if (typeof onSoundStart === "function") safeCall(onSoundStart);
+    };
+    if (typeof onSoundStart === "function") {
+      if (typeof audio.addEventListener === "function") {
+        safeCall(() => audio.addEventListener("playing", annoncerDebut));
+      } else {
+        safeCall(() => {
+          audio.onplaying = annoncerDebut;
+        });
+      }
+    }
     const played = safeCall(() => audio.play(), null);
-    // Certaines fenêtres renvoient une promesse : un refus (audio bloqué) est un
-    // échec net, jamais une attente sans fin.
-    if (played && typeof played.catch === "function") {
-      played.catch(() => finish("error"));
+    // Certaines fenêtres renvoient une promesse : sa RÉSOLUTION est le signal
+    // « le son a démarré » ; un refus (audio bloqué) est un échec net, jamais une
+    // attente sans fin. Un seul appel, pour rester sûr avec un objet seulement
+    // « thenable ».
+    if (played && typeof played.then === "function") {
+      played.then(
+        () => annoncerDebut(),
+        () => finish("error")
+      );
     }
   });
 }
@@ -804,9 +831,12 @@ function playUrl(AudioCtor, url, registerFinish) {
  *
  * @param {{win?: Window, chunks?: string[], isCancelled?: () => boolean,
  *          onStopRegister?: (fn: Function) => void,
+ *          onSoundStart?: () => void,
  *          synthesize?: (text: string) => Promise<string|null>,
  *          model?: string, invoke?: Function}} [options] `model` = voix locale
- *   choisie, transmise à la synthèse (absente = voix par défaut)
+ *   choisie, transmise à la synthèse (absente = voix par défaut) ;
+ *   `onSoundStart` est appelé quand le son d'un morceau a RÉELLEMENT commencé
+ *   (jamais à l'appel : le morceau a été synthétisé avant)
  * @returns {Promise<{played: boolean, reason: "ended"|"stopped"|"unavailable"|"error"|"empty"|"no-audio"}>}
  */
 export async function playLocalChunks(options = {}) {
@@ -840,9 +870,14 @@ export async function playLocalChunks(options = {}) {
     if (stopped || isCancelled()) return { played: false, reason: "stopped" };
     if (!url) return { played: false, reason: "unavailable" };
     pending = index + 1 < chunks.length ? synthesize(chunks[index + 1]) : Promise.resolve(null);
-    const outcome = await playUrl(AudioCtor, url, (finish) => {
-      finishCurrent = finish;
-    });
+    const outcome = await playUrl(
+      AudioCtor,
+      url,
+      (finish) => {
+        finishCurrent = finish;
+      },
+      options.onSoundStart
+    );
     finishCurrent = null;
     if (outcome === "stopped" || stopped || isCancelled()) {
       return { played: false, reason: "stopped" };

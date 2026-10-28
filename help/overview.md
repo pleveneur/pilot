@@ -488,8 +488,9 @@ En mode **Vocal** :
   parole **arrête la lecture net** (entre deux phrases, jamais au milieu d'un
   mot), l'objet repasse en **écoute** et la zone de saisie **reprend la main**.
   Pilot **ne se coupe jamais lui-même** : il vérifie que votre micro n'entend
-  pas ses propres haut-parleurs (annulation d'écho, mesure du son résiduel au
-  début de chaque lecture, seuil posé au-dessus) et, si cette vérification n'est
+  pas ses propres haut-parleurs (annulation d'écho, mesure du son résiduel **au
+  tout début du son**, quand il commence vraiment à parler — pas quand il annonce
+  qu'il va lire) et, si cette vérification n'est
   pas concluante, il relève le seuil **au double du son qu'il s'envoie** : il
   faut alors parler **plus longtemps** (une seconde d'affilée), mais **une voix
   franche et continue finit toujours par le faire taire** — **à chaque lecture**,

@@ -68,6 +68,24 @@ Bouton **« 🔊 Écouter » / « ⏹ Arrêter »** sous chaque réponse de l'ag
      aucun verrou `declenche` ne peut avaler une lecture). Les chiffres réellement
      mesurés sont rendus par `bargeInReport()` et écrits une fois par coupure
      (console : `[vocal] prise de parole : residu=… seuil=…`).
+     4. **La fenêtre s'ouvre sur le DÉBUT DU SON, pas sur l'annonce** (correctif
+        du défaut miroir de `6883eab`, `RAPPORT-coupure-attaque-du-son.md`) :
+        l'état « Pilot parle » part **avant** le premier son (choix de la voix :
+        jusqu'à **1500 ms** ; voix locale : synthèse du premier morceau par un
+        processus). Une fenêtre ouverte sur l'annonce mesurait donc parfois du
+        **silence** — référence 0, seuils au plancher (0,05), et Pilot se coupait
+        **lui-même**. Le lecteur émet donc **`READ_ALOUD_SOUND_EVENT`**
+        (`"pilot-read-aloud-sound"`), **une seule fois par lecture**, au premier
+        échantillon **audible** : `utterance.onstart` pour la voix du système,
+        démarrage réel de la lecture audio (`playing` / résolution de `play()`)
+        pour la voix locale ; l'écran Vocal le transmet à
+        `vocalMic.setSoundStarted()`, qui **rouvre la fenêtre de mesure** à cet
+        instant (une seule fois par lecture, jamais hors lecture). L'annonce garde
+        sa fenêtre provisoire : un moteur qui ne dit rien « sonne » retombe sur le
+        comportement antérieur — le correctif **ajoute** un ancrage, il n'en
+        retire aucun, et **aucun seuil ne change**. Tout nouveau chemin de lecture
+        doit émettre ce signal (verrouillé par
+        `vocal-son-commence.test.js`).
 2. **Une seule lecture à la fois** : lancer une autre réponse arrête la
    précédente (`stopReading` avant toute nouvelle prise de parole).
 3. **Texte nettoyé — un seul endroit** : `textForSpeech` (`src/js/speech-text.js`),

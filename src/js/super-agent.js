@@ -24,6 +24,7 @@ import { refreshIcons } from "./icons.js";
 import {
   attachReadAloud,
   READ_ALOUD_STATE_EVENT,
+  READ_ALOUD_SOUND_EVENT,
   stopReading,
   isReadAloudSpeaking,
 } from "./read-aloud.js";
@@ -5028,6 +5029,19 @@ export async function createSuperAgent(container) {
   };
   window.addEventListener(READ_ALOUD_STATE_EVENT, onVocalReadAloudState);
 
+  // ── LE SON COMMENCE (defaut miroir de la coupure de parole) ──────────────
+  // L'etat ci-dessus part a l'ANNONCE, donc avant le premier son ; la garde du
+  // micro mesurait donc parfois du silence et Pilot se coupait sur son propre
+  // son. `READ_ALOUD_SOUND_EVENT` dit l'instant du premier echantillon audible
+  // (read-aloud.js) : c'est LA que la fenetre de mesure s'ouvre. Aucun second
+  // mecanisme de lecture, aucun seuil : on deplace seulement le MOMENT.
+  const onVocalReadAloudSound = () => {
+    if (!vocalMic) return;
+    if (typeof vocalMic.setSoundStarted !== "function") return;
+    vocalMic.setSoundStarted();
+  };
+  window.addEventListener(READ_ALOUD_SOUND_EVENT, onVocalReadAloudSound);
+
   // Projet sensible : la reponse est RELUE a chaque changement de projet
   // (`pilot-project-sensitivity`, deja emis par la barre laterale) et pas
   // seulement a l'entree du mode. Tant qu'elle n'est pas revenue, la dictee ne
@@ -5496,6 +5510,7 @@ export async function createSuperAgent(container) {
       document.removeEventListener("keydown", onImmersiveKeydown);
       document.removeEventListener("keydown", onVocalKeydown);
       window.removeEventListener(READ_ALOUD_STATE_EVENT, onVocalReadAloudState);
+      window.removeEventListener(READ_ALOUD_SOUND_EVENT, onVocalReadAloudSound);
       document.removeEventListener("pilot-project-sensitivity", onVocalProjectSensitivity);
       window.removeEventListener("pilot-exit-assistant-only", onExitAssistantOnly);
       window.removeEventListener(SCREEN_MODE_APPLY_EVENT, onScreenModeApply);
