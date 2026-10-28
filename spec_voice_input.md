@@ -235,6 +235,51 @@ module, même ordre, chemin d'envoi existant `submitPrompt()`, celui d'Entrée /
 
 ---
 
+## 5ter. Écran Vocal : la dictée s'arme toute seule (§ de `spec_modes_ecran_vocal.md` §6bis)
+
+Le défaut corrigé : dans l'écran Vocal, le micro ne servait qu'à **mesurer** le
+niveau. Parler animait l'écran mais n'écrivait rien et n'envoyait rien ; la
+dictée n'existait que derrière un clic sur 🎙️, et ses erreurs s'affichaient dans
+la conversation — qui n'est **pas affichée** dans cet écran.
+
+**Rien de nouveau comme moteur** : c'est la **même** dictée (`startVoiceInput`,
+extraite de `toggleVoiceInput`) et le **même** envoi (`applyVoiceEnd` → `send`).
+
+- **Une seule voie de démarrage** : `startVoiceInput()` (idempotente,
+  `new SR()` n'existe qu'une fois dans `super-agent.js`), appelée par le bouton
+  🎙️ **et** par l'armement automatique.
+- **Une seule source de décision** : `src/js/vocal-conversation.js` (pures)
+  — `decideVocalDictation` (armer / désarmer / ne rien faire + raison + délai) et
+  `planVocalConversation` (effets : fermer, annuler l'armement, programmer).
+- **Un seul point d'application** : la fin de `applyVocalState()`
+  (`vocalSyncConversation()`), qui voit déjà l'état de l'écran.
+- **Ordre des règles** (c'est la spec) : projet sensible → hors mode → Pilot
+  parle → Pilot travaille → dictée déjà ouverte (idempotence) → arrêt manuel →
+  erreur en cours → sans transcription → **armement au repos** (350 ms ; 600 ms
+  après la lecture d'une réponse).
+- **Une seule session, une seule minuterie** : jamais deux armements programmés,
+  décision **réévaluée à l'échéance**.
+- **Trois sorties du mode** : `exitVocal()` ferme la dictée et annule l'armement
+  (les deux autres sorties passent par elle).
+- **La ligne d'état est le seul canal d'erreur** de l'écran :
+  `vocalDictationMessage(code)` rend **une phrase** (micro refusé, micro occupé,
+  réseau, projet sensible, dictée indisponible, échec) qui dit toujours d'écrire
+  la demande ; `aborted` et `no-speech` ne disent rien (ce ne sont pas des
+  pannes). Le texte reste dans la zone : si `send()` refuse, rien n'est perdu.
+- **Pendant une dictée, la voix ne coupe rien** : `vocalBargeIn` rend la main si
+  `voiceActive` (c'est la voix qu'on transcrit). Aucun seuil de `vocal-mic.js`
+  n'est modifié.
+
+**Prouvé** (`src/js/vocal-parler-declenche-une-demande.test.js`, 30 cas) : les
+décisions, les messages, le câblage (un seul point d'application, une seule voie,
+une seule minuterie, trois sorties qui ferment, réarmement après lecture, garde
+de coupure pendant la dictée, erreurs dans la ligne d'état, aucun second envoi,
+aucune API micro dans l'écran, projet sensible relu). **Non prouvé** : deux
+captures micro simultanées sur votre poste (mesure + dictée) — si la seconde est
+refusée, l'écran le dit (`audio-capture`) et le clavier reste utilisable.
+
+---
+
 ## 6. Plan d'implémentation
 
 ### Web remote
@@ -338,4 +383,12 @@ texte à la voix.
   validation — sur le bureau comme sur le web distant.
 - Arrêter la dictée en réappuyant sur 🎙️ n'envoie jamais le message : c'est vous
   qui décidez.
+- **Dans l'écran Vocal, aucun bouton à toucher** : parler suffit. La dictée
+  s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
+  travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
+  ci-dessus. Un appui sur 🎙️ arrête la dictée et elle ne se rouvre pas contre
+  votre volonté. En quittant le mode Vocal, le micro est coupé. Sur un **projet
+  sensible** (dictée cloud), l'écran Vocal ne dicte pas. Si la dictée ne peut pas
+  démarrer (micro refusé, occupé, réseau absent), la phrase s'affiche **dans la
+  ligne d'état de l'écran** et vous continuez au clavier.
 <!-- /HELP:dictee-vocale -->

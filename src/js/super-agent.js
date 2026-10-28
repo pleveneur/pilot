@@ -31,6 +31,19 @@ import {
 // meme que celui de l'onglet agent pi — aucune copie de logique ici, et le
 // `send` reste le chemin d'envoi existant du fichier (Entree / bouton Envoyer).
 import { applyVoiceEnd } from "./voice-auto-send.js";
+// CONVERSATION PARLEE de l'ecran Vocal : QUAND la dictee s'arme toute seule (au
+// repos), quand elle se desarme (Pilot lit, Pilot travaille, on sort du mode) et
+// ce que dit la ligne d'etat quand elle ne peut pas s'armer. Les DECISIONS sont
+// PURES et vivent dans ce module ; ce fichier ne fait que les appliquer, au seul
+// endroit qui connait deja l'etat de l'ecran (`applyVocalState`). Aucun second
+// moteur de transcription (la dictee reste celle de la barre de saisie), aucun
+// second envoi (la fin de dictee passe par `applyVoiceEnd` puis par `send`).
+import {
+  decideVocalDictation,
+  planVocalConversation,
+  vocalDictationMessage,
+  VOCAL_DICTATION_ARM,
+} from "./vocal-conversation.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage, purgeAgentTabView } from "./agent-pi.js";
 import {
@@ -3309,6 +3322,23 @@ export async function createSuperAgent(container) {
   let vocalMicCapte = false;
   let vocalMicFerme = "";
   let vocalMicDemande = false;
+  // ── CONVERSATION PARLEE (parler declenche une demande) ──
+  // `vocalDictationErreur` : derniere erreur de DICTEE ("" = aucune). Elle prend
+  // la meme ligne d'etat que les pannes de micro, parce que la conversation
+  // n'est pas affichee dans cet ecran : sans elle, un echec serait invisible.
+  let vocalDictationErreur = "";
+  // `vocalArretManuel` : l'utilisateur a ARRETE la dictee lui-meme (bouton 🎙️).
+  // Un geste explicite prime sur l'armement automatique, sinon la dictee se
+  // rouvrirait 350 ms plus tard contre sa volonte.
+  let vocalArretManuel = false;
+  // `vocalApresLecture` : la lecture d'une reponse vient de finir -> on rearment
+  // avec une marge de silence plus longue (VOCAL_ARM_AFTER_READ_MS).
+  let vocalApresLecture = false;
+  // Armement programme (un seul a la fois) : jamais deux minuteries en vol.
+  let vocalArmTimer = 0;
+  // Projet marque SENSIBLE (local-first) : la dictee cloud y est interdite,
+  // comme dans l'onglet agent pi. Relu a l'entree du mode.
+  let vocalProjectSensible = false;
   // Aucune autre source n'alimente cette teinte : l'anneau du logo hero du mode
   // assistant seul, le bandeau « occupe », le bouton « Analyser et ranger mes
   // donnees » et le travail des agents des projets gardent leur propre signal.
@@ -3537,7 +3567,30 @@ export async function createSuperAgent(container) {
   function toggleVoiceInput() {
     if (!voiceSupported) return;
     if (isStreaming) { appendSystemMessage(messagesEl, "⏳ L'assistant est en cours, patiente la fin pour dicter."); return; }
-    if (voiceActive) { stopVoiceInput(); return; }
+    if (voiceActive) { stopVoiceInput(); vocalArretManuel = true; applyVocalState(); return; }
+    // Projet sensible : la dictee cloud reste bloquee (regle inchangee), et le
+    // refus se VOIT (ligne d'etat en mode Vocal, conversation sinon).
+    if (vocalProjectSensible) { reportVoiceFailure(vocalDictationMessage("projet-sensible")); return; }
+    // Geste explicite : il leve un eventuel arret manuel precedent.
+    vocalArretManuel = false;
+    startVoiceInput();
+    applyVocalState();
+  }
+
+  /**
+   * SEULE VOIE de demarrage d'une dictee : le bouton 🎙️ et l'armement
+   * automatique de l'ecran Vocal passent tous les deux par ici (aucun second
+   * moteur de transcription). Ne DECIDE rien : les gardes (mode, tour en cours,
+   * projet sensible, arret manuel) sont posees par les appelants.
+   * Idempotente : une session deja ouverte n'est pas rouverte.
+   * @returns {boolean} vrai si une session est ouverte a la sortie
+   */
+  function startVoiceInput() {
+    if (!voiceSupported) return false;
+    // Une nouvelle session efface l'erreur precedente : la ligne d'etat revient
+    // au repos, et un echec qui persiste se reaffiche aussitot.
+    clearVocalDictationError();
+    if (voiceActive) return true;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
     rec.lang = VOICE_LANG;
@@ -3582,6 +3635,13 @@ export async function createSuperAgent(container) {
       // envoyer (erreur de reconnaissance, refus de permission, panne réseau).
       voiceActive = false; voiceRec = null;
       if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
+      if (vocalOverlay) {
+        // Mode Vocal : la conversation n'est pas affichee. L'erreur prend donc
+        // l'UNIQUE ligne d'etat, en une phrase — jamais une zone invisible.
+        // (`aborted` et `no-speech` ne disent rien : ce ne sont pas des pannes.)
+        reportVoiceFailure(vocalDictationMessage(ev.error));
+        return;
+      }
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
         appendSystemMessage(messagesEl, "🎙️ Micro indisponible (" + ev.error + "). Vérifie qu'un micro est branché et autorisé (Réglages Windows → Confidentialité → Micro → applications de bureau). Alternative : web remote (HTTPS) depuis un téléphone ou un autre PC.");
       } else if (ev.error !== "no-speech" && ev.error !== "aborted") {
@@ -3607,13 +3667,24 @@ export async function createSuperAgent(container) {
         send: () => { send(); },
       });
       if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
+      // CONVERSATION PARLEE : une fin d'ecoute (silence, arret du moteur, demande
+      // envoyee) reapplique l'etat de l'ecran, sinon la dictee resterait fermee
+      // jusqu'au prochain changement d'etat. En mode Vocal, elle se RARME donc
+      // toute seule des que le tour est fini ; hors du mode, applyVocalState ne
+      // fait rien. Aucun second envoi : celui-ci est deja passe par `send`.
+      applyVocalState();
     };
     try {
       rec.start();
       voiceRec = rec; voiceActive = true;
       if (micBtn) { micBtn.classList.add("rec"); micBtn.title = "Arrêter la dictée"; }
+      return true;
     } catch (err) {
-      appendSystemMessage(messagesEl, "🎙️ Impossible de démarrer la dictée : " + err.message);
+      reportVoiceFailure(
+        "🎙️ Impossible de démarrer la dictée : " + err.message,
+        vocalDictationMessage("demarrage")
+      );
+      return false;
     }
   }
 
@@ -4047,6 +4118,10 @@ export async function createSuperAgent(container) {
     if (ligne && ligne.textContent !== texte) ligne.textContent = texte;
     const fix = vocalOverlay.querySelector(".vocal-mic-fix");
     if (fix) fix.classList.toggle("hidden", !vocalMicFerme);
+    // CONVERSATION PARLEE : la dictee suit l'etat qui vient d'etre applique
+    // (armer au repos, desarmer pendant la parole et le travail). Point
+    // d'application UNIQUE, en fin de fonction : aucun autre appelant.
+    vocalSyncConversation();
   }
 
   /**
@@ -4069,6 +4144,148 @@ export async function createSuperAgent(container) {
     if (!vocalMic) return;
     if (typeof vocalMic.setThinking !== "function") return;
     vocalMic.setThinking(reflectingActive === true);
+  }
+
+  // ── CONVERSATION PARLEE : parler declenche une demande ────────────────────
+  // Le defaut corrige : le micro de cet ecran ne servait qu'a MESURER le niveau.
+  // Parler n'ecrivait rien et n'envoyait rien, et les erreurs de dictee
+  // s'affichaient dans la conversation — qui n'est PAS affichee ici.
+  //
+  // Regles tenues par ce bloc (aucune n'est decidee ici : les decisions sont
+  // PURES, dans `vocal-conversation.js`) :
+  //   1. la dictee s'ARME toute seule au repos (aucun bouton a toucher) ;
+  //   2. elle se DESARME pendant la lecture de Pilot et pendant son travail, et
+  //      se REARME quand la lecture est finie (marge plus longue) ;
+  //   3. elle est FERMEE aux trois sorties du mode ;
+  //   4. UNE seule session a la fois et UN seul envoi (le chemin existant) ;
+  //   5. une panne de dictee se VOIT dans l'unique ligne d'etat.
+
+  /** Efface l'erreur de dictee (etat pur : l'affichage suit au prochain apply). */
+  function clearVocalDictationError() {
+    if (!vocalDictationErreur) return;
+    vocalDictationErreur = "";
+    vocalMicFerme = "";
+  }
+
+  /**
+   * Le GESTE explicite (bouton de depannage du micro) leve les DEUX pannes qui
+   * partagent l'unique ligne d'etat : celle du micro de mesure et celle de la
+   * dictee. C'est le seul chemin de reprise — aucun bouton n'est ajoute.
+   */
+  function clearVocalFailure() {
+    vocalMicFerme = "";
+    vocalDictationErreur = "";
+  }
+
+  function clearVocalArmTimer() {
+    if (!vocalArmTimer) return;
+    clearTimeout(vocalArmTimer);
+    vocalArmTimer = 0;
+  }
+
+  /**
+   * Une erreur de dictee doit se VOIR. Dans l'onglet, elle s'affiche dans la
+   * conversation ; en mode Vocal, la conversation n'est pas affichee : elle
+   * prend l'UNIQUE ligne d'etat (`vocalMicFerme`, le canal deja utilise pour les
+   * pannes de micro). Aucun second affichage n'est cree, aucune zone invisible.
+   * @param {string} message texte pour la conversation de l'onglet
+   * @param {string} [ecranMessage] texte court pour la ligne d'etat du mode Vocal
+   */
+  function reportVoiceFailure(message, ecranMessage) {
+    const texte = String(message || "");
+    if (!texte) return;
+    if (vocalOverlay) {
+      vocalDictationErreur = String(ecranMessage || "") || texte;
+      vocalMicFerme = vocalDictationErreur;
+      applyVocalState();
+      return;
+    }
+    appendSystemMessage(messagesEl, texte);
+  }
+
+  /**
+   * Projet SENSIBLE (local-first) : la dictee cloud y est interdite. Le drapeau
+   * est relu a l'ENTREE du mode, comme la garde de l'onglet agent pi. Une erreur
+   * d'IPC laisse la dictee possible (fail-open : l'ecran reste utilisable).
+   */
+  function refreshVocalSensitivity() {
+    const chemin = (typeof window !== "undefined" && window._pilotProjectPath) || "";
+    if (!chemin) {
+      vocalProjectSensible = false;
+      return;
+    }
+    invoke("is_project_sensitive", { path: chemin })
+      .then((sensible) => {
+        vocalProjectSensible = sensible === true;
+      })
+      .catch(() => {
+        vocalProjectSensible = false;
+      })
+      .then(() => {
+        if (vocalOverlay) applyVocalState();
+      });
+  }
+
+  /** Etat de l'ecran, tel que la decision PURE l'attend (une seule lecture). */
+  function vocalConversationState() {
+    return {
+      modeOuvert: vocalOverlay !== null,
+      projetSensible: vocalProjectSensible === true,
+      pilotParle: vocalSpeaking === true,
+      reflechit: reflectingActive === true,
+      occupe: backendBusy === true || isStreaming === true,
+      dicteeOuverte: voiceActive === true,
+      arretManuel: vocalArretManuel === true,
+      erreur: vocalDictationErreur,
+      transcription: voiceSupported === true,
+      apresLecture: vocalApresLecture === true,
+    };
+  }
+
+  /** Ouvre la dictee : par la SEULE voie de demarrage, et une seule fois. */
+  function armVoiceInput() {
+    if (!vocalOverlay) return;
+    if (vocalProjectSensible === true) return;
+    if (voiceActive) return;
+    vocalApresLecture = false;
+    startVoiceInput();
+    applyVocalState();
+  }
+
+  /**
+   * Applique le plan : annuler l'armement programme, fermer la dictee ouverte,
+   * ou programmer l'armement. Jamais deux minuteries en vol (idempotence), et la
+   * decision est REEVALUEE a l'echeance : l'etat a pu changer pendant l'attente.
+   */
+  function vocalApplyConversationPlan(plan) {
+    if (plan.couper) clearVocalArmTimer();
+    if (plan.desarmer && voiceActive) stopVoiceInput();
+    if (plan.desarmer || plan.couper) vocalApresLecture = false;
+    if (!plan.delai || vocalArmTimer) return;
+    vocalArmTimer = setTimeout(() => {
+      vocalArmTimer = 0;
+      if (!vocalOverlay) return;
+      if (decideVocalDictation(vocalConversationState()).action !== VOCAL_DICTATION_ARM) return;
+      armVoiceInput();
+    }, plan.delai);
+  }
+
+  /**
+   * POINT D'APPLICATION UNIQUE, appele a la FIN de `applyVocalState` : c'est le
+   * seul endroit qui connait deja l'etat de l'ecran (parole, reflexion, ecoute).
+   * Aucun second appelant, aucune seconde source de verite.
+   */
+  function vocalSyncConversation() {
+    if (!vocalOverlay) {
+      clearVocalArmTimer();
+      return;
+    }
+    vocalApplyConversationPlan(
+      planVocalConversation(vocalConversationState(), {
+        dicteeOuverte: voiceActive === true,
+        minuteur: !!vocalArmTimer,
+      })
+    );
   }
 
   /**
@@ -4094,6 +4311,13 @@ export async function createSuperAgent(container) {
    */
   function vocalBargeIn(rapport) {
     if (!vocalOverlay) return;
+    // CONVERSATION PARLEE : pendant une dictee, c'est la MEME voix qui parle —
+    // celle que l'on est en train de transcrire. La prendre pour une prise de
+    // parole couperait Pilot sur les mots qu'on lui dicte (et, pendant une
+    // reflexion, arreterait le tour AVANT l'envoi de la demande dictee).
+    // Les seuils et les durees de vocal-mic.js ne bougent pas : c'est la garde
+    // qui manquait ici. Des qu'aucune dictee n'est ouverte, tout est inchange.
+    if (voiceActive) return;
     const cible = vocalInterruptTarget({ speaking: vocalSpeaking, reflecting: reflectingActive });
     if (!cible) return;
     // Trace chiffree de la mesure : elle ne s'affiche pas, elle sert a verifier
@@ -4188,7 +4412,7 @@ export async function createSuperAgent(container) {
       fixMic.addEventListener("click", () => {
         // Geste EXPLICITE : la demande repart. Un refus precedent ne condamne
         // pas l'ecran (par exemple apres avoir autorise le micro dans Windows).
-        vocalMicFerme = "";
+        clearVocalFailure();
         vocalMicDemande = true;
         applyVocalState();
         if (vocalMic) {
@@ -4206,6 +4430,9 @@ export async function createSuperAgent(container) {
       inputEl.placeholder = "Écrivez, ou parlez.";
       resizeInput();
     }
+    // Conversation parlee : la dictee s'arme ICI (au repos), sans qu'aucun
+    // bouton soit touche. L'etat « projet sensible » est relu a l'entree.
+    refreshVocalSensitivity();
     // Le mode REELLEMENT affiche est ecrit par la SEULE source des modes
     // (`screen-mode.js`) : entrer ici, c'est etre en « Vocal », meme quand on
     // vient de « Assistant seul » (dont la sortie a ecrit « Detaille »).
@@ -4220,6 +4447,14 @@ export async function createSuperAgent(container) {
     // lancee ici continuerait dans « Detaille », qui ne doit rien changer a son
     // propre comportement. L'arret passe par la SEULE voie existante.
     if (vocalSpeaking) stopReading();
+    // CONVERSATION PARLEE : la sortie FERME la dictee (aucun peripherique ne
+    // reste ouvert derriere l'ecran) et annule tout armement programme. Meme
+    // regle que le micro de mesure : on ne vous ecoute pas hors de cet ecran.
+    clearVocalArmTimer();
+    if (voiceActive) stopVoiceInput();
+    vocalApresLecture = false;
+    vocalArretManuel = false;
+    vocalDictationErreur = "";
     // LOT 3 : le micro est COUPE a la sortie — flux ARRETE (pistes `stop()`),
     // contexte audio ferme, boucle de mesure annulee. Pas seulement « ignore » :
     // aucun peripherique ne reste ouvert derriere l'ecran. Les deux ecouteurs de
@@ -4324,6 +4559,9 @@ export async function createSuperAgent(container) {
     const etat = e && e.detail ? e.detail.state : "";
     const parlait = vocalSpeaking;
     vocalSpeaking = etat === "speaking";
+    // CONVERSATION PARLEE : la FIN de la lecture est le moment ou l'oreille se
+    // rouvre (marge de silence plus longue, `VOCAL_ARM_AFTER_READ_MS`).
+    if (parlait && !vocalSpeaking) vocalApresLecture = true;
     // LOT 4a : la garde du micro ne s'arme QUE pendant la lecture, et se remet a
     // zero a la fin (le residu d'echo d'une lecture ne vaut pas pour la suivante).
     vocalSyncMicSpeaking();

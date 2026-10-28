@@ -1,7 +1,8 @@
 # Pilot — Les trois modes d'écran et l'écran Vocal (spec)
 
 > **Statut : ✅ livré** — lot 1 (`e3f147b`), lot 2 (`944bd0c`), lot 3 (`70fe93e`),
-> lot 4a (`174cc45`), lot 4b (couper la réflexion, voir ce fichier §6).
+> lot 4a (`174cc45`), lot 4b (couper la réflexion, voir ce fichier §6),
+> **conversation parlée** (§6bis : parler déclenche une demande, sans bouton).
 >
 > Ce document décrit **ce que Pilot fait réellement**, relu dans le code livré.
 > Les raisons de conception (mesures de contraste, choix de placement, découpage
@@ -190,6 +191,12 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
   trait ne saute donc pas d'une image à l'autre. **Le même niveau décide de
   l'état affiché** (voir §4) : le trait qui s'allonge et le passage en « écoute »
   viennent d'une seule et même mesure, jamais de deux chemins séparés.
+- **Une seconde capture, et c'est voulu** (§6bis) : la **dictée** ouvre sa propre
+  capture (service de reconnaissance du navigateur) en même temps que la mesure
+  de niveau. La sortie du mode ferme **les deux**. Si une plateforme refuse la
+  seconde capture, l'écran le **dit** (« Le micro est occupé par une autre
+  application : écrivez votre demande. ») et le clavier reste utilisable :
+  le micro de mesure, lui, n'est jamais touché.
 
 ## 6. Parler par-dessus Pilot : lire **et** travailler
 
@@ -246,6 +253,42 @@ signal, une seule garde, **deux** cibles choisies par la priorité des états (�
   laissent travailler l'assistant ; le micro n'y est pas ouvert, et la fonction de
   coupure sort immédiatement si l'écran Vocal n'est pas affiché.
 - **L'écran ne change pas** : ni bouton, ni réglage, ni ligne d'état nouveaux.
+- **Pendant une dictée, la voix ne coupe rien** (§6bis) : c'est la même voix qui
+  est en train d'être transcrite. `vocalBargeIn` rend donc la main tant qu'une
+  dictée est ouverte — **aucun seuil, aucune durée n'a bougé**.
+
+## 6bis. Parler suffit : la dictée s'arme toute seule
+
+Le défaut corrigé : le micro de cet écran ne faisait que **mesurer** le niveau.
+Parler animait l'écran, mais n'écrivait rien et n'envoyait rien ; et les erreurs
+de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
+
+- **Aucun bouton à toucher.** Au repos, la **dictée** de la barre de saisie
+  s'ouvre d'elle-même (après 350 ms) : on parle, le texte s'écrit dans la zone,
+  et la fin d'écoute passe par le **chemin d'envoi existant**
+  (`applyVoiceEnd` → `send`) — donc **un seul envoi**, jamais deux.
+- **Elle se désarme pendant que Pilot parle** (on ne se transcrit pas soi-même)
+  et **pendant qu'il travaille** (le tour en cours prime).
+- **Elle se réarme quand la lecture d'une réponse est finie**, avec une marge de
+  silence plus longue (600 ms) : c'est la **conversation continue** du mode —
+  répondre puis reparler, sans rien toucher.
+- **Un geste explicite prime toujours** : un clic sur 🎙️ pour arrêter la dictée
+  la laisse fermée (elle ne se rouvre pas 350 ms plus tard).
+- **Les trois sorties du mode la ferment** : aucun périphérique ne reste ouvert
+  derrière l'écran.
+- **Un projet sensible ne dicte jamais** (dictée cloud) : le drapeau est relu à
+  l'entrée du mode, comme dans l'onglet agent π.
+- **Une panne de dictée se voit dans l'unique ligne d'état**, en une phrase qui
+  dit quoi faire (« … : écrivez votre demande. ») : micro refusé, micro occupé,
+  réseau absent, dictée indisponible sur ce poste. Jamais dans la zone masquée,
+  jamais en boucle (le geste 🎙️ ou « Autoriser le micro » lève l'erreur).
+- **Rien de nouveau à l'écran** : ni bouton, ni réglage, ni message au repos — les
+  phrases du repos, de l'écoute, de la réflexion et de la parole sont inchangées.
+- **Une seule mise en œuvre** : les décisions sont **pures**
+  (`src/js/vocal-conversation.js`), l'application se fait à **un seul endroit**
+  (la fin de `applyVocalState`), et le démarrage passe par **une seule voie**
+  (`startVoiceInput`, extraite de `toggleVoiceInput` : `new SR()` n'existe qu'une
+  fois dans le code).
 
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 
@@ -290,13 +333,12 @@ sa hauteur d'origine.
 
 ## 9. Ce qui n'est pas fait (et n'est pas simulé)
 
-- **La conversation continue** : après une réponse, Pilot **ne reprend pas**
-  l'écoute tout seul (c'est la suite du lot 4, non commencée).
 - **La réorientation de l'agent** quand on le coupe : la coupure arrête la
   **lecture** ou le **travail en cours** (lot 4b), mais elle ne **relance pas**
-  l'agent avec ce qui vient d'être dit. Il faut redemander.
+  l'agent avec ce qui vient d'être dit. Il faut redemander (à la voix, c'est
+  désormais possible sans bouton — §6bis).
 - **La dictée vocale** reste celle du navigateur (le son peut sortir du poste) :
-  rien de local n'a été ajouté ici.
+  rien de local n'a été ajouté ici, et un projet sensible ne dicte pas.
 - **Deux éléments du rapport de conception ne sont pas livrés** : le bouton
   « Reprendre ici » (devenu inutile — la coupure rend déjà la main au clavier) et la
   ligne d'état « Je finis ce que je fais, puis je vous réponds. ».
@@ -306,7 +348,8 @@ sa hauteur d'origine.
 | Fichier | Rôle |
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
-| `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) |
+| `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
+| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole / le travail / hors du mode / sur projet sensible / après un arrêt manuel, et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
@@ -315,7 +358,11 @@ Verrous : `trois-modes-ecran.test.js` (lot 1), `ecran-vocal-lot2.test.js` (écra
 états, trois sorties, symétrie), `ecran-vocal-lot3.test.js` (micro, arrêt réel,
 messages), `ecran-vocal-lot4a.test.js` (garde anti-auto-coupure, chiffres),
 `vocal-couper-la-reflexion.test.js` (lot 4b : chemin d'arrêt **réutilisé**, une
-seule coupure, négatifs bruit court / silence / écho, écran inchangé).
+seule coupure, négatifs bruit court / silence / écho, écran inchangé),
+`vocal-parler-declenche-une-demande.test.js` + décisions pures couvertes par
+`vocal-conversation.js` (conversation parlée : armer au repos, désarmer pendant
+la lecture et le travail, réarmer après la lecture, fermeture aux trois sorties,
+un seul envoi, erreurs dans la ligne d'état).
 
 ## 11. Ce qui est prouvé, et ce qui dépend de votre matériel
 
@@ -328,6 +375,15 @@ Est aussi prouvé que la coupure pendant une réflexion ne part **qu'une fois**,
 part **pas** sur un bruit court ni sur un silence, et emprunte le **même** chemin
 d'arrêt que le bouton Stop (aucun second `invoke` d'arrêt dans le code).
 
+Est également prouvé pour la **conversation parlée** : la dictée s'arme au repos
+et **pas** pendant la parole / le travail / hors du mode / sur un projet sensible,
+elle se réarme après la lecture, elle est **fermée** aux trois sorties, elle ne
+s'ouvre **qu'une fois** (une session, une minuterie), et aucun second moteur de
+transcription ni second envoi n'existe dans le code.
+
 **Non prouvable par un test, à vérifier chez vous** : le niveau d'écho **réel** de
-votre pièce (haut-parleurs, volume, distance, pilote audio). Pilot ne le suppose
-jamais : quand il ne peut pas prouver que l'écho est maîtrisé, **il ne coupe pas**.
+votre pièce (haut-parleurs, volume, distance, pilote audio) — et la capacité de
+votre poste à tenir **deux captures** en même temps (mesure de niveau + dictée).
+Pilot ne suppose jamais l'écho maîtrisé : quand il ne peut pas le prouver, **il ne
+coupe pas**. Et si la seconde capture est refusée, l'écran le **dit** et le clavier
+reste utilisable.

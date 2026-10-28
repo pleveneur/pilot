@@ -1201,6 +1201,14 @@ texte à la voix.
   validation — sur le bureau comme sur le web distant.
 - Arrêter la dictée en réappuyant sur 🎙️ n'envoie jamais le message : c'est vous
   qui décidez.
+- **Dans l'écran Vocal, aucun bouton à toucher** : parler suffit. La dictée
+  s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
+  travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
+  ci-dessus. Un appui sur 🎙️ arrête la dictée et elle ne se rouvre pas contre
+  votre volonté. En quittant le mode Vocal, le micro est coupé. Sur un **projet
+  sensible** (dictée cloud), l'écran Vocal ne dicte pas. Si la dictée ne peut pas
+  démarrer (micro refusé, occupé, réseau absent), la phrase s'affiche **dans la
+  ligne d'état de l'écran** et vous continuez au clavier.
 
 ---
 

@@ -150,8 +150,17 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   **dit en une phrase** et propose **« Autoriser le micro »** : le mode Vocal
   reste entièrement utilisable (écrire, envoyer, écouter). En quittant le mode,
   **le micro est coupé** (le témoin du système s'éteint).
-- Ce qui **reste à venir** : la reprise de l'écoute après la réponse et le mode
-  conversation continue.
+- **Parler suffit** : au repos, Pilot **dicte tout seul**. Vous parlez, le texte
+  s'écrit, et **la demande part sans que vous touchiez à rien** — puis il répond,
+  lit sa réponse, et **se remet à l'écoute** : la conversation continue à la voix.
+  Pendant qu'il parle ou qu'il travaille, il **n'écoute pas** (il ne se
+  transcrirait pas lui-même). Un appui sur 🎙️ arrête la dictée, et elle ne se
+  rouvre pas contre votre volonté. Si Pilot ne peut pas dicter (micro refusé ou
+  occupé, pas de réseau, projet **sensible**), la ligne d'état **le dit** et vous
+  continuez au clavier.
+- Ce qui **reste à venir** : la relance de l'agent avec ce que vous venez de dire
+  (aujourd'hui, une coupure ou une réponse laisse la main à la parole, mais
+  l'agent n'est jamais relancé tout seul).
 
 ### Écouter une réponse de l'assistant (🔊)
 - Chaque réponse de l'agent (onglet **π**) et de l'Assistant (onglet **🧭**) porte un bouton
