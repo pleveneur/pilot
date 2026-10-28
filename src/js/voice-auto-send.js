@@ -94,6 +94,45 @@ export function applyVoiceEnd(input) {
 }
 
 /**
+ * Une fin d'écoute ALIMENTE-T-ELLE le plafond des sessions vides de l'écran
+ * Vocal ?
+ *
+ * PURE, aucune horloge, aucun état : l'appelant pose le chiffre. Elle vit ICI,
+ * à côté de `normalizedVoiceText` : le vide d'une dictée se constate à UN SEUL
+ * endroit, et aucune seconde détection de « pas de texte » n'existe ailleurs.
+ *
+ * Le défaut que cette fonction corrige : le plafond ne comptait que la fin
+ * NORMALE et vide (`VOICE_END_EMPTY`). Un moteur de reconnaissance qui rend la
+ * main **sans rien dire** (`no-speech`, `aborted` sans geste) referme la session
+ * avant `onend` : la fin arrivait en `VOICE_END_NO_SESSION` et n'était jamais
+ * comptée. Le micro pouvait donc se rouvrir sans limite, sans qu'aucune erreur
+ * ne s'affiche — le profil exact du défaut d'origine (un écran muet).
+ *
+ * Comptent donc : la fin normale et vide, ET la fin silencieuse du moteur (rien
+ * transcrit, aucune erreur affichée, aucun arrêt demandé). Ne comptent pas : une
+ * erreur affichée (elle a déjà sa phrase), un arrêt demandé (bouton 🎙️, envoi,
+ * sortie du mode) et une reprise en main de l'utilisateur.
+ *
+ * @param {{reason?: string, dictatedText?: string}} [fin] résultat d'`applyVoiceEnd`
+ * @param {{erreurAffichee?: boolean, arretDemande?: boolean}} [contexte]
+ * @returns {boolean} vrai si la fin alimente le plafond
+ */
+export function isSilentEmptyVoiceEnd(fin, contexte = {}) {
+  if (!fin) return false;
+  const c = contexte || {};
+  // Rien n'a été transcrit — constat fait une seule fois, ici.
+  if (normalizedVoiceText(fin.dictatedText) !== "") return false;
+  // L'utilisateur a repris la main : sa saisie prime, ce n'est pas une boucle.
+  if (fin.reason === VOICE_END_USER_TAKEOVER) return false;
+  // Une erreur AFFICHÉE a déjà sa phrase : ce n'est pas une fin silencieuse.
+  if (c.erreurAffichee === true) return false;
+  // Un arrêt DEMANDÉ (🎙️, envoi, sortie du mode) n'est jamais une boucle.
+  if (c.arretDemande === true) return false;
+  // Fin normale et vide, ou fin du moteur sans rien dire : les DEUX comptent.
+  return fin.reason === VOICE_END_EMPTY || fin.reason === VOICE_END_NO_SESSION;
+}
+
+/**
  * Décide la fin d'une session de dictée.
  *
  * @param {object} input

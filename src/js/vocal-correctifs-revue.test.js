@@ -244,13 +244,16 @@ describe("4. Plafond des sessions vides : 3 en 30 s, puis plus d'armement", () =
     expect(vocalDictationMessage("sessions-vides")).toBe(VOCAL_MESSAGE_DICTEE_ECHEC);
   });
 
-  it("le compteur ne compte QUE les fins vides normales, et seulement dans l'ecran", () => {
+  it("le compteur ne compte QUE les fins VIDES sans erreur, et seulement dans l'ecran", () => {
     const compte = corpsFonction(SUPER, "function vocalNoteEmptySession");
     // Hors du mode : rien n'est compte (l'onglet agent pi ne change pas).
     expect(compte).toMatch(/if \(!vocalOverlay\) return;/);
-    // Seule une fin NORMALE et VIDE compte : jamais une erreur, un arret manuel
-    // ou une reprise en main (c'est `applyVoiceEnd` qui tranche, pas ce code).
-    expect(compte).toMatch(/fin\.reason !== VOICE_END_EMPTY/);
+    // Compte : une fin qui n'a RIEN transcrit et qui n'a pas affiche d'erreur —
+    // la fin normale et vide (`VOICE_END_EMPTY`) ET la fin SILENCIEUSE du moteur
+    // (`VOICE_END_NO_SESSION` sur `no-speech`/`aborted`), qui echappait au
+    // plafond (correctif : une fin muette ne doit pas rouvrir le micro sans
+    // limite). La nature de la fin est tranchee dans le module partage, pas ici.
+    expect(compte).toMatch(/isSilentEmptyVoiceEnd\(fin, contexte\)/);
     expect(compte).toMatch(/noteEmptyVocalSession\(vocalSessionsVides, Date\.now\(\)\)/);
     // Le vide est constate a UN seul endroit (voice-auto-send.js) : aucune
     // seconde detection de « pas de texte » n'est ecrite ici.
@@ -259,9 +262,10 @@ describe("4. Plafond des sessions vides : 3 en 30 s, puis plus d'armement", () =
   });
 
   it("le verrou est pose par la fin d'ecoute et par rien d'autre", () => {
-    // `onend` lit le resultat d'`applyVoiceEnd` et le passe au compteur.
+    // `onend` lit le resultat d'`applyVoiceEnd` et le passe au compteur, avec le
+    // contexte de la session (erreur affichee ? arret demande ?).
     expect(SUPER).toMatch(/const fin = applyVoiceEnd\(\{/);
-    expect(SUPER).toMatch(/vocalNoteEmptySession\(fin\);/);
+    expect(SUPER).toMatch(/vocalNoteEmptySession\(fin, \{ erreurAffichee, arretDemande \}\);/);
     expect((SUPER_CODE.match(/vocalDicteeSuspendue = true/g) || []).length).toBe(1);
     // Il entre dans l'etat par le champ que la decision pure lit.
     expect(SUPER).toMatch(/sessionsVides: vocalDicteeSuspendue === true,/);

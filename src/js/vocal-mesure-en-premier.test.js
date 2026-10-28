@@ -224,7 +224,13 @@ describe("3. aucun armement tant que la sensibilite du projet n'est pas connue",
 
   it("le geste 🎙️ n'ouvre pas au hasard pendant l'attente", () => {
     const geste = corpsFonction(SUPER, "function toggleVoiceInput");
-    expect(geste).toMatch(/if \(!vocalSensibiliteConnue\) return;/);
+    // Pendant l'attente (reponse pas encore arrivee) : le geste n'ouvre pas au
+    // hasard. MAIS une fois l'attente BORNEE sans reponse, le projet est
+    // « non verifie » : le geste DOIT fonctionner (sinon le bouton rendait la
+    // main en silence — defaut corrige). D'ou la seconde moitie de la garde.
+    expect(geste).toMatch(
+      /if \(!vocalSensibiliteConnue && !vocalSensibiliteIndisponible\) return;/,
+    );
     // Le refus « projet sensible » existe toujours, avec sa phrase.
     expect(geste).toMatch(/vocalProjectSensible/);
   });

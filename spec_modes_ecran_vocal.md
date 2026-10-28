@@ -311,9 +311,14 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
 - **Un plafond arrête les sessions vides** : si le moteur de reconnaissance rend
   la main **sans rien transcrire trois fois en moins de 30 secondes**, la dictée
   **cesse de s'armer toute seule** — sinon le micro serait rouvert en boucle
-  pour rien. Le plafond est une **fonction pure** (`noteEmptyVocalSession`),
-  il ne compte que les fins **normales et vides** (jamais une erreur, jamais un
-  arrêt manuel, jamais une reprise en main) et **seulement dans cet écran**.
+  pour rien. Le plafond est une **fonction pure** (`noteEmptyVocalSession`), il
+  ne compte que les fins **vides** — la fin **normale et vide** comme la fin
+  **silencieuse du moteur** (`no-speech`, `aborted` sans geste, qui rendaient la
+  main sans rien dire et échappaient au plafond), jamais une erreur **affichée**,
+  jamais un arrêt **demandé** (🎙️, envoi, sortie du mode), jamais une reprise
+  en main — et **seulement dans cet écran**. Le constat du vide et la nature de
+  la fin sont tranchés à **un seul endroit** (`isSilentEmptyVoiceEnd` et
+  `VOICE_END_*`, dans `voice-auto-send.js`) : aucune seconde détection.
   Il **ne se lève pas avec le temps** : un **geste** le rétablit — un clic sur
   🎙️, ou une nouvelle entrée dans le mode. La ligne d'état l'annonce
   (« La dictée n'a pas fonctionné : écrivez votre demande. », phrase existante).
@@ -326,6 +331,14 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
   agent π. Tant que la réponse n'est pas arrivée, **la dictée ne s'arme pas**
   (règle `sensibilite-inconnue`) : on attend quelques millisecondes au lieu de
   parier sur « projet libre ».
+- **Cette attente est BORNÉE** (`withTimeout`, 800 ms : la garde déjà écrite
+  pour cette doctrine, aucune seconde). Au-delà, le projet est **non vérifié** :
+  la dictée **ne s'arme toujours pas toute seule** (on ne suppose **jamais**
+  « projet libre »), mais l'écran **le dit** sur l'unique ligne d'état
+  (« État du projet non vérifié : appuyez sur le micro pour dicter, ou écrivez
+  votre demande. ») et le **geste 🎙️ fonctionne** : l'utilisateur décide, une
+  fois averti. Une erreur d'IPC, elle, reste fail-open (projet tenu pour libre,
+  comme avant).
 - **La MESURE passe avant la DICTÉE** (§5) : aucune dictée ne s'arme tant que le
   micro de mesure n'est pas **réellement ouvert** (`mesure-fermee`). Une panne de
   mesure se lit donc comme une panne de mesure (phrase du micro + « Autoriser le
@@ -410,7 +423,8 @@ sa hauteur d'origine.
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
-| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel, **plafond des sessions vides** (`noteEmptyVocalSession`), et **l'unique phrase** à afficher pour chaque panne de dictée |
+| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), et **l'unique phrase** à afficher pour chaque panne de dictée |
+| `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur, jamais une erreur affichée, un arrêt demandé ou une reprise en main) |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
@@ -426,7 +440,11 @@ la lecture et le travail, réarmer après la lecture, fermeture aux trois sortie
 un seul envoi, erreurs dans la ligne d'état),
 `vocal-correctifs-revue.test.js` (repli de voix = « Pilot parle », phrase
 « dictée indisponible » affichée, plafond des sessions vides et levée par un
-geste).
+geste), `vocal-deux-gardes-finales.test.js` (deux défauts non bloquants de la
+revue indépendante : **attente bornée** du statut du projet — délai dépassé ⇒
+phrase affichée **et** geste qui fonctionne, jamais « projet libre » supposé —
+et **plafond atteignable** : une fin silencieuse du moteur compte, 3 fins vides
+en 30 s ⇒ plus d'armement automatique).
 
 ## 11. Ce qui est prouvé, et ce qui dépend de votre matériel
 

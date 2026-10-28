@@ -475,7 +475,11 @@ En mode **Vocal** :
 - **Sur un projet marqué sensible** (🔒), la dictée reste **bloquée** : l'écran
   attend de savoir si le projet est marqué avant d'ouvrir la dictée, et il
   repose la question à chaque changement de projet. La transcription (qui passe
-  par le réseau) ne s'ouvre jamais sur un projet 🔒.
+  par le réseau) ne s'ouvre jamais sur un projet 🔒. Cette attente est **courte
+  et bornée** : si la réponse tarde, l'écran vous le dit (« État du projet non
+  vérifié : appuyez sur le micro pour dicter, ou écrivez votre demande. ») et
+  **le bouton 🎙️ marche** — il ne vous laisse jamais devant un bouton sans
+  effet, mais il n'ouvre jamais la dictée tout seul dans ce cas.
 - **En quittant le mode, le micro est coupé** (le témoin du système s'éteint) :
   Pilot ne vous écoute pas en dehors de cet écran.
 - **Parler par-dessus Pilot le fait taire** : pendant qu'il lit, prendre la
@@ -501,7 +505,9 @@ En mode **Vocal** :
   repos, **parler suffit** : la dictée s'ouvre toute seule, la demande part,
   et l'écoute reprend après la réponse (conversation continue). Si la dictée ne
   transcrit rien trois fois de suite, Pilot cesse de rouvrir le micro tout
-  seul : **un clic sur 🎙️** la rétablit.
+  seul : **un clic sur 🎙️** la rétablit. Comptent comme « rien transcrit » les
+  fins **vides** de la dictée, y compris celles où le moteur s'arrête **sans rien
+  dire** — c'est ce qui empêche le micro de se rouvrir sans limite.
 <!-- /HELP:modes-ecran -->
 
 <!-- HELP:lire-reponses -->

@@ -42,8 +42,9 @@ import {
 // meme que celui de l'onglet agent pi — aucune copie de logique ici, et le
 // `send` reste le chemin d'envoi existant du fichier (Entree / bouton Envoyer).
 // `VOICE_END_EMPTY` est la SEULE facon de savoir qu'une fin d'ecoute n'a rien
-// transcrit : c'est ce que compte le plafond des sessions vides.
-import { applyVoiceEnd, VOICE_END_EMPTY } from "./voice-auto-send.js";
+// transcrit : c'est ce que compte le plafond des sessions vides, et la nature de
+// la fin est tranchee LA (`isSilentEmptyVoiceEnd`), jamais recopiee ici.
+import { applyVoiceEnd, isSilentEmptyVoiceEnd } from "./voice-auto-send.js";
 // CONVERSATION PARLEE de l'ecran Vocal : QUAND la dictee s'arme toute seule (au
 // repos), quand elle se desarme (Pilot lit, Pilot travaille, on sort du mode) et
 // ce que dit la ligne d'etat quand elle ne peut pas s'armer. Les DECISIONS sont
@@ -59,6 +60,7 @@ import {
   VOCAL_DICTATION_ARM,
   VOCAL_MESSAGE_SANS_DICTEE,
   VOCAL_MESSAGE_DICTEE_ECHEC,
+  VOCAL_MESSAGE_SENSIBILITE_INCONNUE,
 } from "./vocal-conversation.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage, purgeAgentTabView } from "./agent-pi.js";
@@ -3369,6 +3371,11 @@ export async function createSuperAgent(container) {
   // au lieu de parier sur « projet libre ». Une erreur d'IPC vaut reponse
   // connue, a `false` (fail-open : le mode reste utilisable).
   let vocalSensibiliteConnue = false;
+  // L'attente de cette reponse a-t-elle ete BORNEE sans resultat ? Le projet est
+  // alors NON VERIFIE : on ne parie pas sur « projet libre » (aucun armement
+  // automatique, un projet confidentiel ne part pas au service de transcription),
+  // mais l'ecran le DIT et le geste 🎙️ fonctionne — l'utilisateur decide.
+  let vocalSensibiliteIndisponible = false;
   // Aucune autre source n'alimente cette teinte : l'anneau du logo hero du mode
   // assistant seul, le bandeau « occupe », le bouton « Analyser et ranger mes
   // donnees » et le travail des agents des projets gardent leur propre signal.
@@ -3560,6 +3567,11 @@ export async function createSuperAgent(container) {
   const MIC_TITLE_IDLE = "Dictée vocale (transcription cloud)";
   let voiceActive = false;
   let voiceRec = null;
+  // Arret DEMANDE par l'application (bouton 🎙️, envoi, sortie du mode) : la fin
+  // d'ecoute qui suit n'est pas une fin subie, elle ne compte donc pas dans le
+  // plafond des sessions vides. Pose par `stopVoiceInput`, remis a zero a chaque
+  // nouvelle session.
+  let voiceStopVoulu = false;
   // Reprise en main : `true` quand l'UTILISATEUR a tapé, collé ou vidé la zone de
   // saisie PENDANT l'écoute. Les écritures du moteur de reconnaissance sont
   // programmatiques (`inputEl.value = …`) et n'émettent AUCUN évènement `input` :
@@ -3576,6 +3588,7 @@ export async function createSuperAgent(container) {
   function stopVoiceInput() {
     // Empêche onresult/onend de réécrire le textarea après l'envoi.
     voiceActive = false;
+    voiceStopVoulu = true;
     if (voiceRec) { try { voiceRec.stop(); } catch (_) {} }
     if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
   }
@@ -3605,7 +3618,11 @@ export async function createSuperAgent(container) {
     // mode) : on n'ouvre pas AU HASARD — la dictee cloud ne doit jamais partir
     // sur un projet 🔒 inconnu. Aucun message : l'armement automatique suit des
     // que la reponse est la (regle `sensibilite-inconnue`).
-    if (!vocalSensibiliteConnue) return;
+    // En revanche, si l'attente a ete BORNEE sans reponse (`indisponible`), le
+    // projet est NON VERIFIE : l'ecran l'a dit, et le GESTE fonctionne — c'est
+    // l'utilisateur qui decide, une fois averti (sinon le bouton rendrait la
+    // main en silence).
+    if (!vocalSensibiliteConnue && !vocalSensibiliteIndisponible) return;
     // Geste explicite : il leve un eventuel arret manuel precedent.
     vocalArretManuel = false;
     // Geste explicite : il retablit AUSSI l'armement automatique quand le
@@ -3639,8 +3656,11 @@ export async function createSuperAgent(container) {
     const preText = inputEl.value;
     let finalText = "";
     // Chaque dictée repart d'une zone « non reprise en main » : le drapeau ne
-    // survit jamais à la dictée précédente.
+    // survit jamais à la dictée précédente. Même règle pour l'arrêt demandé et
+    // pour l'erreur affichée (les deux se rapportent à la session en cours).
     voiceUserTookOver = false;
+    voiceStopVoulu = false;
+    let erreurAffichee = false;
     const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
     rec.onresult = (e) => {
       if (!voiceActive) return;
@@ -3678,7 +3698,9 @@ export async function createSuperAgent(container) {
       if (vocalOverlay) {
         // Mode Vocal : la conversation n'est pas affichee. L'erreur prend donc
         // l'UNIQUE ligne d'etat, en une phrase — jamais une zone invisible.
-        // (`aborted` et `no-speech` ne disent rien : ce ne sont pas des pannes.)
+        // (`aborted` et `no-speech` ne disent rien : ce ne sont pas des pannes,
+        // et une fin qui ne dit RIEN compte dans le plafond des sessions vides.)
+        erreurAffichee = vocalDictationMessage(ev.error) !== "";
         reportVoiceFailure(vocalDictationMessage(ev.error));
         return;
       }
@@ -3693,6 +3715,9 @@ export async function createSuperAgent(container) {
       // distingue une fin NORMALE d'une fin sur erreur / arrêt manuel, et c'est
       // aussi ce qui empêche un second envoi si `onend` arrive deux fois.
       const wasActive = voiceActive;
+      // Arret DEMANDE par l'application (bouton 🎙️, envoi, sortie du mode) : lu
+      // avant le traitement, la fin qui suit ne doit pas etre comptee.
+      const arretDemande = voiceStopVoulu;
       // Décision et ORDRE (refermer → écrire → envoyer) délégués au module PARTAGÉ
       // `applyVoiceEnd` — le même que l'onglet agent π. L'envoi emprunte le chemin
       // EXISTANT (Entrée / bouton Envoyer, fonction `send`) : aucun second
@@ -3707,11 +3732,11 @@ export async function createSuperAgent(container) {
         send: () => { send(); },
       });
       // PLAFOND DES SESSIONS VIDES (mode Vocal) : une fin d'ecoute qui ne
-      // transcrit RIEN est comptee ; au-dela de 3 en moins de 30 s, la dictee
-      // ne se rearmera plus toute seule (le geste 🎙️ ou une nouvelle entree
-      // dans le mode retablit). Le motif vient d'`applyVoiceEnd` : aucune
-      // seconde detection du vide.
-      vocalNoteEmptySession(fin);
+      // transcrit RIEN est comptee — y compris la fin SILENCIEUSE du moteur
+      // (`no-speech` / `aborted` sans message), qui echappait au plafond et
+      // laissait le micro se rouvrir sans limite face a un ecran muet. La nature
+      // de la fin vient du module pur (aucune seconde detection du vide).
+      vocalNoteEmptySession(fin, { erreurAffichee, arretDemande });
       if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
       // CONVERSATION PARLEE : une fin d'ecoute (silence, arret du moteur, demande
       // envoyee) reapplique l'etat de l'ecran, sinon la dictee resterait fermee
@@ -4183,6 +4208,10 @@ export async function createSuperAgent(container) {
     const raison = decideVocalDictation(vocalConversationState()).raison;
     if (raison === "sans-transcription") return VOCAL_MESSAGE_SANS_DICTEE;
     if (raison === "sessions-vides") return VOCAL_MESSAGE_DICTEE_ECHEC;
+    // Statut du projet NON VERIFIE (attente bornee, aucune reponse) : l'ecran ne
+    // promet pas l'ecoute et ne parie pas sur « projet libre ». Il dit quoi
+    // faire — et le bouton 🎙️ fonctionne, c'est l'utilisateur qui decide.
+    if (raison === "sensibilite-indisponible") return VOCAL_MESSAGE_SENSIBILITE_INCONNUE;
     return vocalStatusText(state);
   }
 
@@ -4274,18 +4303,22 @@ export async function createSuperAgent(container) {
    * Trois gardes, et aucune n'est decidee ici :
    *   - le MODE : hors de l'ecran Vocal, rien ne s'arme tout seul, donc rien
    *     n'est compte (l'onglet agent pi garde son comportement) ;
-   *   - la NATURE de la fin : seule une fin NORMALE et vide compte
-   *     (`VOICE_END_EMPTY`, deja calculee par `applyVoiceEnd` — jamais une
-   *     erreur, un arret manuel ou une reprise en main) ;
+   *   - la NATURE de la fin : une fin qui n'a RIEN transcrit et qui n'a pas
+   *     affiche d'erreur compte, qu'elle soit la fin normale et vide
+   *     (`VOICE_END_EMPTY`) ou la fin SILENCIEUSE du moteur (`no-speech`,
+   *     `aborted` sans geste), qui echappait au plafond. Le constat du vide et
+   *     la nature de la fin sont tranches par `applyVoiceEnd` / le module pur
+   *     (`isSilentEmptyVoiceEnd`) — jamais une seconde detection du vide ;
    *   - le CHIFFRE : `noteEmptyVocalSession` (pure, testee) garde la fenetre de
    *     30 s et dit si les 3 fins vides y sont.
    * Le verrou pose ne se leve pas avec le temps : le geste 🎙️ ou une nouvelle
    * entree dans le mode le leve (et remet l'historique a zero).
-   * @param {{reason?: string}} [fin] resultat de `applyVoiceEnd`
+   * @param {{reason?: string, dictatedText?: string}} [fin] resultat de `applyVoiceEnd`
+   * @param {{erreurAffichee?: boolean, arretDemande?: boolean}} [contexte]
    */
-  function vocalNoteEmptySession(fin) {
+  function vocalNoteEmptySession(fin, contexte) {
     if (!vocalOverlay) return;
-    if (!fin || fin.reason !== VOICE_END_EMPTY) return;
+    if (!isSilentEmptyVoiceEnd(fin, contexte)) return;
     const pas = noteEmptyVocalSession(vocalSessionsVides, Date.now());
     vocalSessionsVides = pas.sessions;
     if (pas.suspendu === true) vocalDicteeSuspendue = true;
@@ -4328,13 +4361,28 @@ export async function createSuperAgent(container) {
   }
 
   /**
+   * Delai MAXIMAL d'attente de la reponse « ce projet est-il sensible ? » (ms).
+   * Meme ordre que les autres gardes de cet ecran (les invokes sont locaux et
+   * repondent en quelques ms) : au-dela, on ne laisse ni l'ecran muet, ni le
+   * bouton micro sans effet (doctrine de `withTimeout`).
+   */
+  const VOCAL_SENSITIVITY_TIMEOUT_MS = 800;
+
+  /**
    * Projet SENSIBLE (local-first) : la dictee cloud y est interdite. Le drapeau
    * est relu a l'ENTREE du mode, comme la garde de l'onglet agent pi, et a
-   * chaque changement de projet (`pilot-project-sensitivity`). Tant que la
-   * reponse n'est pas arrivee, `vocalSensibiliteConnue` est faux : aucune dictee
-   * cloud ne s'ouvre (regle `sensibilite-inconnue`), on attend quelques
-   * millisecondes au lieu de parier sur « projet libre ». Une erreur d'IPC
-   * laisse la dictee possible (fail-open : l'ecran reste utilisable).
+   * chaque changement de projet (`pilot-project-sensitivity`).
+   *
+   * L'ATTENTE EST BORNEE (`withTimeout`, delai `VOCAL_SENSITIVITY_TIMEOUT_MS`) :
+   * - reponse arrivee → `vocalSensibiliteConnue` = vrai, l'armement automatique
+   *   reprend son cours ;
+   * - delai depasse → `vocalSensibiliteIndisponible` = vrai : le projet reste
+   *   NON VERIFIE (on ne devine JAMAIS « projet libre »), donc AUCUN armement
+   *   automatique — mais la ligne d'etat le dit (phrase du module) et le bouton
+   *   🎙️ fonctionne : l'utilisateur decide, une fois averti. Sans cette borne, le
+   *   bouton rendait la main en silence et l'ecran ne disait rien.
+   * Une erreur d'IPC vaut reponse connue, a `false` (fail-open : le mode reste
+   * utilisable), comme avant.
    */
   function refreshVocalSensitivity() {
     const chemin = (typeof window !== "undefined" && window._pilotProjectPath) || "";
@@ -4343,21 +4391,34 @@ export async function createSuperAgent(container) {
       // reponse est connue (il n'y a rien a demander).
       vocalProjectSensible = false;
       vocalSensibiliteConnue = true;
+      vocalSensibiliteIndisponible = false;
       if (vocalOverlay) applyVocalState();
       return;
     }
     vocalSensibiliteConnue = false;
-    invoke("is_project_sensitive", { path: chemin })
-      .then((sensible) => {
-        vocalProjectSensible = sensible === true;
-      })
-      .catch(() => {
-        vocalProjectSensible = false;
-      })
-      .then(() => {
+    vocalSensibiliteIndisponible = false;
+    // `withTimeout` existe pour cette doctrine exacte : un invoke ne doit jamais
+    // retarder l'ecran (ni le laisser sans explication). `null` = delai depasse.
+    withTimeout(
+      invoke("is_project_sensitive", { path: chemin })
+        .then((sensible) => ({ sensible: sensible === true }))
+        .catch(() => ({ sensible: false })),
+      VOCAL_SENSITIVITY_TIMEOUT_MS,
+      null
+    ).then((reponse) => {
+      if (reponse === null) {
+        // Delai depasse : projet NON VERIFIE. Pas d'armement automatique, mais
+        // l'ecran le dit (raison `sensibilite-indisponible`) et le geste marche.
+        // La question sera reposee a la prochaine entree / au prochain projet.
+        vocalSensibiliteConnue = false;
+        vocalSensibiliteIndisponible = true;
+      } else {
+        vocalProjectSensible = reponse.sensible === true;
         vocalSensibiliteConnue = true;
-        if (vocalOverlay) applyVocalState();
-      });
+        vocalSensibiliteIndisponible = false;
+      }
+      if (vocalOverlay) applyVocalState();
+    });
   }
 
   /** Etat de l'ecran, tel que la decision PURE l'attend (une seule lecture). */
@@ -4367,6 +4428,9 @@ export async function createSuperAgent(container) {
       projetSensible: vocalProjectSensible === true,
       // Reponse pas encore arrivee : on n'arme pas (regle 7b).
       sensibiliteConnue: vocalSensibiliteConnue === true,
+      // Attente BORNEE sans reponse : projet NON VERIFIE. Toujours pas d'armement
+      // automatique, mais la ligne d'etat le dit et le geste 🎙️ fonctionne.
+      sensibiliteIndisponible: vocalSensibiliteIndisponible === true,
       pilotParle: vocalSpeaking === true,
       reflechit: reflectingActive === true,
       occupe: backendBusy === true || isStreaming === true,
@@ -4617,6 +4681,7 @@ export async function createSuperAgent(container) {
     // entree la redemande (une valeur perimee pourrait bloquer une dictee
     // legitime, ou en ouvrir une sur un projet devenu 🔒 entre-temps).
     vocalSensibiliteConnue = false;
+    vocalSensibiliteIndisponible = false;
     // Symetrie exacte de enterVocal : le bouton des modes d'abord (il doit
     // sortir de l'overlay AVANT son retrait, sinon le noeud serait detruit),
     // puis la barre de saisie.

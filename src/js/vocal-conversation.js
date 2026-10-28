@@ -34,6 +34,10 @@
 //   apresLecture      la lecture vient de FINIR (on réarme avec un peu de marge)
 //   sensibiliteConnue la réponse « ce projet est-il sensible ? » est ARRIVÉE
 //                     (tant qu'elle n'est pas là, rien ne s'ouvre : on attend)
+//   sensibiliteIndisponible l'attente de cette réponse a été BORNÉE et rien n'est
+//                     arrivé à temps : le projet reste NON VÉRIFIÉ (jamais
+//                     « libre » par défaut). Aucun armement automatique, mais
+//                     l'écran le dit et le geste 🎙️ fonctionne.
 //   mesureOuverte     la MESURE du niveau (longueur du trait, prise de parole)
 //                     est RÉELLEMENT ouverte — la dictée vient APRÈS elle
 //
@@ -55,17 +59,21 @@
 //                          (le geste 🎙️ ou une nouvelle entrée rétablit)
 //   6. erreur en cours   → désarmée : on ne relaie pas un échec en boucle
 //   7. sans transcription→ désarmée, et la ligne d'état le dit (jamais muet)
-//   7b. sensibilité pas encore connue → désarmée : on ATTEND la réponse au lieu
+//   7b. statut du projet NON VÉRIFIÉ (l'attente bornée de la réponse a expiré)
+//                          → désarmée aussi : jamais de pari sur « projet
+//                          libre ». Mais la ligne d'état le DIT et le geste 🎙️
+//                          fonctionne : l'utilisateur décide, une fois averti.
+//   7c. sensibilité pas encore connue → désarmée : on ATTEND la réponse au lieu
 //                          de parier sur « projet libre ». La dictée cloud ne
 //                          s'ouvre jamais sur un projet dont on ignore l'état.
-//   7c. mesure du niveau pas ouverte → désarmée : la MESURE ouvre en premier,
+//   7d. mesure du niveau pas ouverte → désarmée : la MESURE ouvre en premier,
 //                          la dictée vient après elle. Une panne de mesure se
 //                          voit donc comme une panne de mesure (phrase du micro,
 //                          bouton « Autoriser le micro »), jamais comme une
 //                          dictée qui marche avec un trait figé.
 //   8. au repos          → ARMÉE, après un court délai (voir ci-dessous)
 //
-// Les règles 5 à 7 passent AVANT 7b/7c : une dictée ouverte par un GESTE
+// Les règles 5 à 7 passent AVANT 7b/7d : une dictée ouverte par un GESTE
 // explicite n'est pas refermée par une mesure fermée ou une réponse en
 // retard — seule une sécurité (projet sensible) ou un état de conversation
 // (parole, travail, erreur) la referme.
@@ -122,6 +130,15 @@ export const VOCAL_MESSAGE_RESEAU = "La dictée a besoin du réseau : écrivez v
 export const VOCAL_MESSAGE_SENSIBLE = "Projet sensible : la dictée est bloquée, écrivez votre demande.";
 /** Tout le reste : la dictée a échoué. */
 export const VOCAL_MESSAGE_DICTEE_ECHEC = "La dictée n'a pas fonctionné : écrivez votre demande.";
+/**
+ * Statut du projet NON VÉRIFIÉ : la réponse « ce projet est-il sensible ? »
+ * n'est pas arrivée à temps. On ne parie JAMAIS sur « projet libre » (envoyer
+ * l'audio d'un projet confidentiel au service de transcription serait pire que
+ * le silence) : aucun armement automatique. Mais l'écran le DIT, et le geste du
+ * bouton 🎙️ fonctionne — c'est l'utilisateur qui décide, une fois averti.
+ */
+export const VOCAL_MESSAGE_SENSIBILITE_INCONNUE =
+  "État du projet non vérifié : appuyez sur le micro pour dicter, ou écrivez votre demande.";
 
 /**
  * Traduit un code d'erreur de dictée (celui de la reconnaissance du navigateur — `not-allowed`,
@@ -210,14 +227,22 @@ export function decideVocalDictation(etats = {}) {
   if (e.transcription === false) {
     return { action: VOCAL_DICTATION_DISARM, raison: "sans-transcription", delai: 0 };
   }
-  // 7b. SENSIBILITÉ PAS ENCORE CONNUE : on attend la réponse (quelques
+  // 7b. STATUT DU PROJET NON VÉRIFIÉ (l'attente a été BORNÉE et le moteur n'a
+  // rien répondu dans le délai) : jamais d'armement automatique — on ne devine
+  // pas « projet libre » — mais la ligne d'état le dit et le geste 🎙️ décide.
+  // Placée AVANT 7c et APRÈS la règle 5 (« déjà ouverte ») : une dictée ouverte
+  // par un GESTE n'est jamais refermée par cette raison.
+  if (e.sensibiliteIndisponible === true) {
+    return { action: VOCAL_DICTATION_DISARM, raison: "sensibilite-indisponible", delai: 0 };
+  }
+  // 7c. SENSIBILITÉ PAS ENCORE CONNUE : on attend la réponse (quelques
   // millisecondes) au lieu d'ouvrir une dictée CLOUD sur un projet dont on
   // ignore s'il est 🔒. La réponse arrivée, l'état est réappliqué et l'armement
   // se fait normalement : rien n'est perdu, rien n'est demandé deux fois.
   if (e.sensibiliteConnue !== true) {
     return { action: VOCAL_DICTATION_DISARM, raison: "sensibilite-inconnue", delai: 0 };
   }
-  // 7c. MESURE DU NIVEAU PAS OUVERTE : elle ouvre en PREMIER (décision du
+  // 7d. MESURE DU NIVEAU PAS OUVERTE : elle ouvre en PREMIER (décision du
   // propriétaire), la dictée vient APRÈS elle. Tant qu'elle n'est pas ouverte,
   // aucune dictée ne s'arme : l'écran ne peut pas promettre l'écoute quand il
   // ne mesure rien, et une panne de mesure ne peut pas se déguiser en dictée
