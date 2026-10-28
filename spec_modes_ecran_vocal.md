@@ -6,7 +6,7 @@
 >
 > Ce document décrit **ce que Pilot fait réellement**, relu dans le code livré.
 > Les raisons de conception (mesures de contraste, choix de placement, découpage
-> en lots) restent dans `RAPPORT-trois-modes-ecran-vocal.md`, à la racine.
+> en lots) restent dans `docs/rapports/RAPPORT-trois-modes-ecran-vocal.md`.
 > La lecture à voix haute et la coupure de la parole sont détaillées dans
 > `spec_read_aloud.md` § 1 ; ici, on décrit **l'écran** et ce qu'il promet.
 

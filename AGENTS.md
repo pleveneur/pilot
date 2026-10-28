@@ -44,6 +44,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 4. **README.md** : orienté utilisateur uniquement. Pas de détails techniques ni d'arborescence complète.
 5. **Fichiers séparés** : chaque grande feature a son fichier dédié (ex: `spec_rpc.md`, `spec_pdf2md.md`). Les charger uniquement quand la tâche les concerne.
 6. **Aide intégrée (handbook)** : à chaque évolution impactant l'utilisateur, mettre à jour le bloc `<!-- HELP:* -->` de la spec concernée (ou `help/overview.md` pour les généralités), puis relancer `npm run build:handbook` (automatique via `beforeDevCommand`/`beforeBuildCommand`). Ne pas éditer `help/handbook.md` (généré).
+7. **Rapports et conceptions** : les rapports de mission (`RAPPORT-*.md`) vont dans `docs/rapports/` et les documents de conception (`CONCEPTION-*.md`) dans `docs/conceptions/` — deux dossiers versionnés, plats, sans renommage des fichiers. Rien de tout cela à la racine.
 
 ### Navigation rapide
 
