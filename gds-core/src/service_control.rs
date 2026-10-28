@@ -259,17 +259,17 @@ pub fn parse_status(text: &str) -> Vec<ProgramState> {
 /// Exécute `supervisorctl` et renvoie sa sortie brute, ou une erreur explicite
 /// (binaire absent, superviseur injoignable).
 fn run_ctl(env: &SupervisorEnv, args: &[String]) -> Result<std::process::Output, String> {
-    std::process::Command::new(&env.ctl_bin)
-        .args(args)
-        .output()
-        .map_err(|e| {
-            format!(
-                "superviseur interne injoignable ({} {} : {})",
-                env.ctl_bin,
-                env.config.to_string_lossy(),
-                e
-            )
-        })
+    let mut cmd = std::process::Command::new(&env.ctl_bin);
+    cmd.args(args);
+    crate::proc::hide_console(&mut cmd);
+    cmd.output().map_err(|e| {
+        format!(
+            "superviseur interne injoignable ({} {} : {})",
+            env.ctl_bin,
+            env.config.to_string_lossy(),
+            e
+        )
+    })
 }
 
 /// Interroge l'état des programmes du service. Renvoie la liste des états et,
@@ -311,6 +311,8 @@ pub fn schedule_action(env: &SupervisorEnv, action: ServiceAction) -> Result<(),
         use std::os::unix::process::CommandExt;
         use std::process::Stdio;
         let script = env.detached_script(action);
+        // FENETRE-CONSOLE-EXCEPTION : `#[cfg(unix)]` — le groupe de processus
+        // détaché vise le service Linux du conteneur, sans drapeau Windows.
         let mut cmd = std::process::Command::new("/bin/sh");
         cmd.arg("-c")
             .arg(&script)

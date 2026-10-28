@@ -208,6 +208,8 @@ fn adopt_parent_owner(bare: &std::path::Path) {
         let Some(parent) = bare.parent() else { return };
         let Ok(meta) = std::fs::metadata(parent) else { return };
         let owner = format!("{}:{}", meta.uid(), meta.gid());
+        // FENETRE-CONSOLE-EXCEPTION : `#[cfg(unix)]` — aucun drapeau de console
+        // Windows n'existe ici, et le serveur GDS est headless.
         let _ = std::process::Command::new("chown")
             .arg("-R")
             .arg(owner)

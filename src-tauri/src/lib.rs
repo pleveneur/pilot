@@ -20,14 +20,12 @@ pub(crate) use rpc::{
 };
 
 
-/// Constante Windows `CREATE_NO_WINDOW` (0x08000000). Appliquée à chaque
-/// `Command::new` silencieux pour éviter qu'une fenêtre console noire
-/// n'apparaisse/disparaisse fugacement à l'écran (ex: `git`, `pi`, `where`).
-#[cfg(windows)]
-pub(crate) const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
+/// **Point unique** de masquage de la fenêtre de console des lancements de
+/// processus du desk. Ré-export du socle (`gds_core::proc::hide_console`) :
+/// une seule définition du drapeau `CREATE_NO_WINDOW` existe dans le dépôt, et
+/// un lancement qui l'oublie est refusé par
+/// `src/js/fenetres-noires-lancements.test.js`.
+pub(crate) use gds_core::proc::hide_console;
 
 /// Dossiers systématiquement ignorés à la lecture de l'arborescence projet et
 /// par le file watcher. Ces dossiers (dépendances, build, VCS, caches) peuvent
@@ -1806,16 +1804,26 @@ fn open_terminal(state: State<AppState>, run_default: bool) -> Result<(), String
 
 #[cfg(target_os = "windows")]
 fn open_system_terminal(path: &str, command: Option<&str>) -> Result<(), String> {
+    // L'`cmd.exe` **intermédiaire** est masqué : c'est lui qui clignotait avant
+    // que `start` n'ouvre la vraie fenêtre du terminal. Le masquage ne touche
+    // que le porteur du `start`, jamais le terminal demandé (masquage
+    // transitif côté Windows, la fenêtre finale est créée par `start`).
     if let Some(cmd) = command {
-        std::process::Command::new("cmd.exe")
+        let mut launcher = std::process::Command::new("cmd.exe");
+        launcher
             .args(["/c", "start", "cmd.exe", "/k", cmd])
-            .current_dir(path)
+            .current_dir(path);
+        hide_console(&mut launcher);
+        launcher
             .spawn()
             .map_err(|e| format!("Erreur terminal: {}", e))?;
     } else {
-        std::process::Command::new("cmd.exe")
+        let mut launcher = std::process::Command::new("cmd.exe");
+        launcher
             .args(["/c", "start", "cmd.exe"])
-            .current_dir(path)
+            .current_dir(path);
+        hide_console(&mut launcher);
+        launcher
             .spawn()
             .map_err(|e| format!("Erreur terminal: {}", e))?;
     }
@@ -1824,6 +1832,8 @@ fn open_system_terminal(path: &str, command: Option<&str>) -> Result<(), String>
 
 #[cfg(target_os = "macos")]
 fn open_system_terminal(path: &str, command: Option<&str>) -> Result<(), String> {
+    // FENETRE-CONSOLE-EXCEPTION : macOS, application GUI (`osascript`/`open`) —
+    // la fenêtre du Terminal est celle que l'utilisateur demande.
     if let Some(cmd) = command {
         let safe_path = path.replace('\'', "'\\''");
         let script = format!(
@@ -1835,6 +1845,8 @@ fn open_system_terminal(path: &str, command: Option<&str>) -> Result<(), String>
             .spawn()
             .map_err(|e| format!("Erreur terminal: {}", e))?;
     } else {
+        // FENETRE-CONSOLE-EXCEPTION : macOS, `open` lance l'application GUI
+        // Terminal — fenêtre voulue par l'utilisateur.
         std::process::Command::new("open")
             .args(["-a", "Terminal", path])
             .spawn()
@@ -1845,12 +1857,16 @@ fn open_system_terminal(path: &str, command: Option<&str>) -> Result<(), String>
 
 #[cfg(target_os = "linux")]
 fn open_system_terminal(path: &str, command: Option<&str>) -> Result<(), String> {
+    // FENETRE-CONSOLE-EXCEPTION : Linux, aucun drapeau de console Windows ; le
+    // shell lancé finit dans l'émulateur de terminal choisi ci-dessous.
     if let Some(cmd) = command {
         std::process::Command::new("sh")
             .args(["-c", &format!("cd '{}' && {}; exec $SHELL", path, cmd)])
             .spawn()
             .map_err(|e| format!("Erreur terminal: {}", e))?;
     } else {
+        // FENETRE-CONSOLE-EXCEPTION : Linux, l'émulateur de terminal ouvre la
+        // fenêtre que l'utilisateur demande.
         let terminals: &[(&str, &[&str])] = &[
             ("gnome-terminal", &["--working-directory"]),
             ("konsole", &["--workdir"]),
@@ -2056,7 +2072,7 @@ fn play_assistant_sound(sound_type: String, volume: u32) -> Result<(), String> {
 
         // Évite qu'une fenêtre console noire n'apparaisse/disparaisse fugacement
         // à l'écran pendant la lecture du son (PlaySync() bloquant).
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        hide_console(&mut cmd);
 
         let _ = cmd.spawn();
         Ok(())
@@ -2867,6 +2883,8 @@ fn open_explorer(state: State<AppState>) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        // FENETRE-CONSOLE-EXCEPTION : `explorer` est une application GUI (aucune
+        // console) ; sa fenêtre est celle que l'utilisateur demande.
         std::process::Command::new("explorer")
             .arg(&path)
             .spawn()
@@ -2874,6 +2892,8 @@ fn open_explorer(state: State<AppState>) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
+        // FENETRE-CONSOLE-EXCEPTION : `open` lance le Finder (GUI) — fenêtre
+        // voulue par l'utilisateur, aucun drapeau de console Windows applicable.
         std::process::Command::new("open")
             .arg(&path)
             .spawn()
@@ -2881,6 +2901,8 @@ fn open_explorer(state: State<AppState>) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
+        // FENETRE-CONSOLE-EXCEPTION : `xdg-open` lance le gestionnaire de
+        // fichiers (GUI) — aucun drapeau de console Windows applicable.
         std::process::Command::new("xdg-open")
             .arg(&path)
             .spawn()

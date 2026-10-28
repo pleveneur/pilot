@@ -5044,18 +5044,18 @@ mod tests {
     fn processus_long() -> std::process::Child {
         #[cfg(windows)]
         {
-            use std::os::windows::process::CommandExt;
-            std::process::Command::new("cmd")
-                .args(["/C", "ping -n 30 127.0.0.1"])
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/C", "ping -n 30 127.0.0.1"])
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .spawn()
-                .expect("processus enfant de test")
+                .stderr(std::process::Stdio::null());
+            crate::hide_console(&mut cmd);
+            cmd.spawn().expect("processus enfant de test")
         }
         #[cfg(not(windows))]
         {
+            // FENETRE-CONSOLE-EXCEPTION : hors Windows, aucun drapeau de console
+            // Windows n'existe (processus de test lancé par `cargo test`).
             std::process::Command::new("sh")
                 .args(["-c", "sleep 30"])
                 .stdin(std::process::Stdio::piped())

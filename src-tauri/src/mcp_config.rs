@@ -42,13 +42,6 @@ use tauri::{AppHandle, Manager, State};
 /// Délai d'attente du test d'un serveur MCP distant (POST `initialize`).
 const REMOTE_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-/// Constante Windows pour CREATE_NO_WINDOW (0x08000000).
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
-
 /// Un serveur MCP configurable. Le transport reste une chaîne : `"stdio"` par
 /// défaut (mode local, un programme de cet ordinateur) ou `"http"`/`"https"`
 /// (mode distant, une adresse réseau).
@@ -841,10 +834,7 @@ fn test_stdio_connection(
     // elles, un serveur maison qui exige un réglage (jeton, chemin…) refuse de
     // démarrer, et l'utilisateur n'a aucun endroit où le saisir.
     cmd.envs(server.env.iter());
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::hide_console(&mut cmd);
 
     let mut child = cmd
         .spawn()

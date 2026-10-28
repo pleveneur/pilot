@@ -8,11 +8,38 @@
 use std::os::windows::process::CommandExt;
 
 /// Constante Windows `CREATE_NO_WINDOW` (0x08000000) : évite qu'une fenêtre de
-/// console s'ouvre à chaque sous-processus lancé par l'application. Valeur
-/// identique à celle de `src-tauri/src/lib.rs` (les deux crates sont compilés
-/// séparément, la constante n'est pas partageable telle quelle).
+/// console s'ouvre à chaque sous-processus lancé par l'application.
+///
+/// **Seule définition du drapeau dans tout le dépôt.** Elle n'est utilisée que
+/// par [`hide_console`], qui est le point unique de masquage : le desk
+/// (`src-tauri`) l'appelle via `gds_core::proc::hide_console` (ré-exporté par
+/// `crate::hide_console`), `gds-server` compile le même module. Aucun autre
+/// fichier ne doit écrire ce littéral (verrouillé par
+/// `src/js/fenetres-noires-lancements.test.js`).
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// **Point unique** de masquage de la fenêtre de console d'un lancement de
+/// processus : à appeler sur le `Command` avant `spawn`/`output`/`status`.
+///
+/// Sous Windows, Pilot est une application GUI (sous-système `windows`, sans
+/// console) : lancer un programme console sans ce drapeau ouvre réellement une
+/// fenêtre noire qui clignote. Le masquage est **transitif** : ce processus et
+/// toute sa descendance restent sans fenêtre.
+///
+/// Sur macOS et Linux, le drapeau n'existe pas et aucune fenêtre de console ne
+/// s'ouvre : la fonction ne fait rien (même signature, aucun `cfg` chez
+/// l'appelant).
+pub fn hide_console(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
 
 /// Lance `<exe> <args...>`, capture stdout, kill si `deadline` dépassé.
 pub fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Duration) -> String {
@@ -22,8 +49,7 @@ pub fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Duration)
     cmd.args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    hide_console(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return String::new(),
@@ -64,8 +90,7 @@ pub fn run_captured_full(
     cmd.args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    hide_console(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return (String::new(), String::new(), false),

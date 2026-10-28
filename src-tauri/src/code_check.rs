@@ -11,11 +11,6 @@ use tauri::State;
 
 use crate::AppState;
 
-#[cfg(windows)]
-use crate::CREATE_NO_WINDOW;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 // ── Vérification syntaxique (Mode Orchestration V2 — linting-in-the-loop) ──
 
 #[derive(Debug, Serialize)]
@@ -143,7 +138,7 @@ fn which(cmd: &str) -> Option<std::path::PathBuf> {
     let out = {
         let mut c = std::process::Command::new("where");
         c.arg(cmd);
-        c.creation_flags(CREATE_NO_WINDOW);
+        crate::hide_console(&mut c);
         c.output().ok()?
     };
     #[cfg(not(target_os = "windows"))]
@@ -159,8 +154,7 @@ fn which(cmd: &str) -> Option<std::path::PathBuf> {
 fn run_command(cmd: impl AsRef<std::ffi::OsStr>, args: &[impl AsRef<std::ffi::OsStr>], cwd: Option<&str>) -> Option<(bool, String)> {
     let mut command = std::process::Command::new(cmd);
     command.args(args);
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
+    crate::hide_console(&mut command);
     if let Some(c) = cwd {
         command.current_dir(c);
     }
@@ -368,8 +362,7 @@ fn run_command_timed(
     let mut command = Command::new(cmd);
     command.args(args).current_dir(cwd);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
+    crate::hide_console(&mut command);
 
     let start = Instant::now();
     let mut child = match command.spawn() {

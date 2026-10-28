@@ -281,11 +281,7 @@ fn run(
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(crate::CREATE_NO_WINDOW);
-    }
+    crate::hide_console(&mut cmd);
 
     let mut child = match cmd.spawn() {
         Ok(child) => child,

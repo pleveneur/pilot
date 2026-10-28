@@ -1499,10 +1499,15 @@ fn escalate_service_trust(config_path: &str, wanted: &str) -> Result<(), String>
         "$a = @('config','--file',$env:PILOT_TRUST_FILE,'--replace-all','safe.directory',$env:PILOT_TRUST_VALUE); ",
         "Start-Process -Verb RunAs -Wait -WindowStyle Hidden -FilePath git -ArgumentList $a"
     );
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", script])
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-Command", script])
         .env("PILOT_TRUST_FILE", config_path)
-        .env("PILOT_TRUST_VALUE", wanted)
+        .env("PILOT_TRUST_VALUE", wanted);
+    // Seule l'invitation UAC doit être visible : le `powershell` porteur, lui,
+    // ouvrait une fenêtre de console pendant toute l'attente (P1 du rapport
+    // `docs/rapports/RAPPORT-fenetres-noires.md`).
+    crate::hide_console(&mut cmd);
+    let out = cmd
         .output()
         .map_err(|e| format!("élévation impossible : {}", e))?;
     if !out.status.success() {
@@ -1536,9 +1541,13 @@ fn escalate_system_service_trust(wanted: &str) -> Result<(), String> {
         "Start-Process -Verb RunAs -Wait -WindowStyle Hidden -FilePath powershell ",
         "-ArgumentList @('-NoProfile','-EncodedCommand',$b)"
     );
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", script])
-        .env("PILOT_TRUST_VALUE", wanted)
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-Command", script])
+        .env("PILOT_TRUST_VALUE", wanted);
+    // Même correctif que `escalate_service_trust` : le `powershell` porteur de
+    // l'élévation ne doit pas clignoter (P1 du rapport fenêtres noires).
+    crate::hide_console(&mut cmd);
+    let out = cmd
         .output()
         .map_err(|e| format!("élévation impossible : {}", e))?;
     if !out.status.success() {

@@ -362,13 +362,12 @@ fn parse_csv_process_name(output: &str) -> Option<String> {
 /// application). Fail-open : toute erreur = `None`.
 #[cfg(windows)]
 fn observed_process_name(pid: u32) -> Option<String> {
-    use std::os::windows::process::CommandExt;
     let mut cmd = Command::new("tasklist");
     cmd.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    cmd.creation_flags(crate::CREATE_NO_WINDOW);
+    crate::hide_console(&mut cmd);
     let output = cmd.output().ok()?;
     parse_csv_process_name(&String::from_utf8_lossy(&output.stdout))
 }
@@ -436,6 +435,8 @@ fn observed_process_name(pid: u32) -> Option<String> {
 /// Un champ de `ps -p <pid>` (chaîne vide si le processus n'existe pas).
 #[cfg(all(unix, not(target_os = "linux")))]
 fn ps_field(pid: u32, field: &str) -> String {
+    // FENETRE-CONSOLE-EXCEPTION : macOS/BSD uniquement — aucun drapeau de console
+    // Windows n'existe sur ces systèmes.
     Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", field])
         .output()
@@ -488,7 +489,6 @@ fn wait_until_gone(pid: u32) -> bool {
 /// tout processus lancé par Pilot.
 #[cfg(windows)]
 pub(crate) fn kill_process(pid: u32, expected_name: &str) -> bool {
-    use std::os::windows::process::CommandExt;
     match observed_process_name(pid) {
         Some(name) if name_matches(&name, expected_name) => {}
         // Rien à arrêter : le pid appartient à une autre application (réutilisé)
@@ -500,7 +500,7 @@ pub(crate) fn kill_process(pid: u32, expected_name: &str) -> bool {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    cmd.creation_flags(crate::CREATE_NO_WINDOW);
+    crate::hide_console(&mut cmd);
     let _ = cmd.status();
     wait_until_gone(pid)
 }
@@ -511,6 +511,8 @@ pub(crate) fn kill_process(pid: u32, expected_name: &str) -> bool {
         Some(name) if name_matches(&name, expected_name) => {}
         _ => return true,
     }
+    // FENETRE-CONSOLE-EXCEPTION : hors Windows, aucun drapeau de console Windows
+    // n'existe (le kill n'ouvre aucune fenêtre).
     let _ = Command::new("kill")
         .args(["-9", &pid.to_string()])
         .status();
@@ -629,13 +631,14 @@ pub(crate) fn probe_api(host: &str, port: u16, timeout: Duration) -> bool {
 /// - `--no-taskbar` est **toujours** transmis : un lancement par Pilot demande
 ///   au visage de ne pas figurer dans la barre des tâches Windows (mode discret).
 ///   Un visage lancé à la main par la personne reste visible comme avant ;
-/// - sans fenêtre de console sous Windows (`CREATE_NO_WINDOW`) ;
+/// - sans fenêtre de console sous Windows (`crate::hide_console`) ;
 /// - stdio redirigé vers `null` (aucune sortie parasite) ;
 /// - l'enfant n'est jamais attendu : c'est Pilot qui le referme (`stop_owned`),
 ///   à sa fermeture comme au démarrage suivant.
 ///
 /// Multiplateforme : seule la neutralisation de la console est spécifique à
-/// Windows (`creation_flags`) ; macOS/Linux lancent l'exécutable normalement.
+/// Windows (helper unique `crate::hide_console`, sans effet ailleurs) ;
+/// macOS/Linux lancent l'exécutable normalement.
 pub(crate) fn spawn_detached(exe_path: &str, avatar: Option<&str>) -> std::io::Result<u32> {
     let mut cmd = Command::new(exe_path);
     // Modèle choisi : transmis tel quel. `Command` passe les arguments sans
@@ -650,11 +653,7 @@ pub(crate) fn spawn_detached(exe_path: &str, avatar: Option<&str>) -> std::io::R
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(crate::CREATE_NO_WINDOW);
-    }
+    crate::hide_console(&mut cmd);
 
     // Le `Child` est abandonné (jamais `wait`), mais son identifiant est tracé
     // (`pid_path`) : le visage lancé par Pilot est refermé par Pilot.

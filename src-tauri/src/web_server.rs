@@ -1362,6 +1362,9 @@ async fn command_run(
         cmd.args(args).current_dir(&run_cwd);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+        // Commande projet lancée depuis le web distant : sans masque, le `cmd /C`
+        // ouvre une fenêtre de console sur le poste (P2 du rapport fenêtres noires).
+        crate::hide_console(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| format!("Lancement: {}", e))?;
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();

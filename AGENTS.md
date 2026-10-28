@@ -77,6 +77,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Historique de sessions searchable (H9) | `spec_session_history.md` |
 | Feedback utilisateurs (remarques/évolutions) | `spec_feedback.md` |
 | Quality-gate interne | `spec_quality_gate.md` |
+| Lancements de processus (aucune fenêtre noire) | `spec_pilot.md` § 2 (point unique `gds_core::proc::hide_console`) + garde `src/js/fenetres-noires-lancements.test.js` + `docs/rapports/RAPPORT-fenetres-noires-correction.md` |
 | Gestion des modèles IA (providers + alias) | `spec_rpc.md` § Édition des modèles |
 | Gestion d'agents multi-rôles | `spec_gestion_agents.md` |
 | Agents du projet (multi-onglets configurés) | `spec_project_agents.md` |

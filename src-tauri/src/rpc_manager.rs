@@ -9,13 +9,6 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-/// Constante Windows pour CREATE_NO_WINDOW (0x08000000)
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
-
 /// État d'une session RPC Pi
 pub struct RpcSession {
     pub child: Child,
@@ -95,10 +88,7 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
             cmd.env(k, v);
         }
     }
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::hide_console(&mut cmd);
     let mut child = cmd
         .current_dir(cwd)
         .stdin(Stdio::piped())
@@ -519,11 +509,7 @@ pub fn convert_text_with_pi(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+    crate::hide_console(&mut cmd);
 
     let mut child = cmd
         .spawn()

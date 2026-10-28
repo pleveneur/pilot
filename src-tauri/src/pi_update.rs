@@ -11,9 +11,6 @@ use serde::Serialize;
 use std::time::Duration;
 use tauri::{AppHandle, State};
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 use crate::{kind_from_version_output, run_captured, AppState};
 
 /// Résultat de la vérification de mise à jour de Pi.
@@ -150,8 +147,7 @@ fn run_update_captured(exe: &str, base_args: &[String], deadline_dur: Duration) 
         .args(["update", "--self"])
         .stdout(Stdio::from(file))
         .stderr(Stdio::from(file2));
-    #[cfg(windows)]
-    cmd.creation_flags(crate::CREATE_NO_WINDOW);
+    crate::hide_console(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => {

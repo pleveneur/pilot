@@ -513,11 +513,7 @@ pub(crate) fn spawn_detached(
         }
     }
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(crate::CREATE_NO_WINDOW);
-    }
+    crate::hide_console(&mut cmd);
 
     // Le `Child` est abandonné (jamais `wait`), mais son identifiant est tracé
     // (`laya.pid`) : le service lancé par Pilot est refermé par Pilot.
@@ -1584,11 +1580,7 @@ http.createServer((req, res) => {
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(crate::CREATE_NO_WINDOW);
-            }
+            crate::hide_console(&mut cmd);
             cmd
         };
 

@@ -272,9 +272,12 @@ describe("hors ligne", () => {
     const rust = read("src-tauri/src/tts_local.rs");
     expect(rust).not.toMatch(/reqwest|hyper|ureq/);
     expect(rust).not.toMatch(/https?:\/\//);
-    // Il lance bien le moteur local, sans fenêtre noire sous Windows.
+    // Il lance bien le moteur local, sans fenêtre noire sous Windows : le
+    // masquage passe désormais par le point unique `hide_console` (le drapeau
+    // n'existe plus qu'une fois, dans gds-core/src/proc.rs — garde :
+    // fenetres-noires-lancements.test.js).
     expect(rust).toMatch(/Command::new/);
-    expect(rust).toMatch(/CREATE_NO_WINDOW/);
+    expect(rust).toMatch(/hide_console\(&mut cmd\)/);
   });
 });
 

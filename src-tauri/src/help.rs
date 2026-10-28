@@ -38,9 +38,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 /// Handbook embarqué à la compilation (généré par `scripts/build-handbook.js`
 /// depuis les blocs `<!-- HELP:* -->` de `help/overview.md` + des `spec_*.md`).
 /// Toujours synchro avec la version installée.
@@ -612,10 +609,7 @@ pub fn ask_pi_caged_timed(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+    crate::hide_console(&mut cmd);
 
     let mut child = cmd
         .spawn()

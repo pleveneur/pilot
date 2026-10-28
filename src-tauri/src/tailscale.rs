@@ -15,15 +15,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::{AppHandle, Manager};
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-/// Constante Windows `CREATE_NO_WINDOW` (0x08000000). Appliquée à chaque
-/// `Command::new` silencieux pour éviter qu'une fenêtre console noire
-/// n'apparaisse/disparaisse fugacement à l'écran (ex: `tailscale`, `where`).
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
-
 use crate::AppState;
 
 /// Infos Tailscale + état du proxy serve (lecture seule, ne modifie rien).
@@ -79,8 +70,7 @@ pub fn find_binary() -> Option<String> {
     // 1. PATH : `tailscale version` doit réussir.
     let mut probe = Command::new("tailscale");
     probe.arg("version");
-    #[cfg(windows)]
-    probe.creation_flags(CREATE_NO_WINDOW);
+    crate::hide_console(&mut probe);
     if probe
         .output()
         .map(|o| o.status.success())
@@ -112,8 +102,7 @@ pub fn find_binary() -> Option<String> {
             // Vérifier qu'il s'exécute (un fichier peut exister mais être cassé).
             let mut probe = Command::new(&c);
             probe.arg("version");
-            #[cfg(windows)]
-            probe.creation_flags(CREATE_NO_WINDOW);
+            crate::hide_console(&mut probe);
             if probe
                 .output()
                 .map(|o| o.status.success())
@@ -130,8 +119,7 @@ pub fn find_binary() -> Option<String> {
 fn run_tailscale(bin: &str, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new(bin);
     cmd.args(args);
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    crate::hide_console(&mut cmd);
     let output = cmd
         .output()
         .map_err(|e| format!("exécution '{}' échouée : {}", bin, e))?;

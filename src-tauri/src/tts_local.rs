@@ -36,11 +36,6 @@ use base64::Engine as _;
 use serde::Serialize;
 use tauri::Manager;
 
-#[cfg(windows)]
-use crate::CREATE_NO_WINDOW;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 /// Sous-dossier (dans le dossier de données de Pilot) qui contient le moteur et
 /// le modèle. **Seul endroit** où le chemin est défini : tout le reste s'en
 /// déduit, l'interface reçoit le chemin réel dans son état.
@@ -543,8 +538,7 @@ fn run_piper(root: &Path, engine_root: &Path, model_name: &str, text: &str, out:
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    crate::hide_console(&mut cmd);
 
     let mut child = cmd
         .spawn()
