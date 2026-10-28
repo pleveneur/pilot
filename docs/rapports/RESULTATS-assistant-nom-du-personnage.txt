@@ -26,3 +26,35 @@ note: to see what the problems were, use the option `--future-incompat-report`, 
      Running unittests src\lib.rs (target\debug\deps\pilot-1a35e3cea54eb404.exe)
 cargo test: 8 passed, 800 filtered out (1 suite, 0.02s)
 ```
+
+## Re-vérification ciblée NOM (mission « nom seulement »)
+Date : 2026-10-28 (2e passe) · chiffres recomptés, aucune valeur recopiée
+
+### Fichier de test NEUF du nom (comportement de bout en bout)
+```
+src/js/assistant-nom-du-personnage.test.js
+PASS (6) FAIL (0)
+```
+Cas : nom présent → nom affiché ; nom absent → nom habituel ; nom vide →
+nom habituel ; nom illisible / commande absente / IPC en panne → nom habituel,
+aucune exception, console silencieuse ; changement de personnage à chaud ;
+plein écran portant le même nom.
+
+### Frontend (suite complète, rejouée)
+```
+Test Files  225 passed (225)
+     Tests  4166 passed (4166)
+```
+(4160 avant cette mission + 6 cas ajoutés)
+
+### Fichier historique du personnage (nom + portrait, inchangé)
+```
+src/js/assistant-persona.test.js
+PASS (13) FAIL (0)
+```
+
+### Rust (src-tauri/src/persona.rs)
+```
+cargo test --manifest-path src-tauri/Cargo.toml --lib persona
+cargo test: 8 passed, 800 filtered out (1 suite, 0.03s)
+```

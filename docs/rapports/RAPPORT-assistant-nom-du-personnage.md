@@ -185,3 +185,85 @@ Résultats **recomptés** à la fin de la mission (détail brut :
 - Choix consigné (§3) : **commande Rust** plutôt que JS, et pourquoi.
 - Aucune publication, aucun tag, aucune opération git destructive ; le dépôt
   `G:\IA_PL\Presences` n'a pas été ouvert.
+
+---
+
+## 8. Mission réduite au NOM — re-vérification indépendante (2026-10-28)
+
+La demande relancée était : « mission réduite au NOM seulement, l'image viendra
+dans une mission séparée », avec le constat « aucune occurrence de *portrait*
+ni de *personnage* dans `src/js` ni `src-tauri/src` ». **Ce constat est périmé.**
+
+### 8.1 Ce que j'ai trouvé sur le disque (vérifié, pas supposé)
+
+- `git log -1` : `7fe7cc5 feat(assistant): nom et portrait du personnage actif
+  déposé par Présences` — le travail du §4 est **déjà livré et commité** ;
+  `git status` est propre sur `src/js/`, `src-tauri/src/`, `spec_super_agent.md`.
+- Le NOM est donc opérationnel, et l'image (hors périmètre de cette mission)
+  est livrée par le **même** commit.
+
+### 8.2 Le contrat du NOM, et où il est tenu (fichier:ligne)
+
+| Exigence | Où elle est tenue |
+|---|---|
+| fichier lu = `<app_data_dir>/.pilot/portrait/nom.txt` | `src-tauri/src/persona.rs:71` (`persona_dir`), `:79` (`PERSONA_NAME_FILE`), `:143` (`read_persona` lit `dir.join(PERSONA_NAME_FILE)`) — chemins en `PathBuf::join`, donc Windows/macOS/Linux sans branche |
+| fichier ABSENT = aucun personnage → nom habituel | `src-tauri/src/persona.rs:143-146` (`read` en échec → `None`) + `:196` (`Persona::default()`) ; côté écran `src/js/assistant-persona.js:120` (`personaDisplayName` : personnage → nom réglé → « Assistant ») |
+| vide ou illisible = repli, **jamais** d'exception | `src-tauri/src/persona.rs:86-107` (`normalize_name` : première ligne utile, contrôles retirés, 60 car., `None` si rien) ; `src/js/assistant-persona.js:66-95` (même règle côté JS) et `:161-169` (`refreshAssistantPersona` : `try/catch` → repli silencieux) |
+| nom affiché dans l'onglet | `src/js/super-agent.js:1993` (`superAgentDisplayLabel` → `personaDisplayName(...)`), poussé par `applyAssistantPersonaUi` (`:2005`, `tabs.updateSuperAgentLabel`) ; rendu du bouton `src/js/tabs.js:796` + `:3049` (nom échappé) |
+| relecture à l'OUVERTURE de l'onglet | `src/js/super-agent.js:3110` (`await refreshAssistantPersonaAndApply()` dans `createSuperAgent`) |
+| changer de personnage sans redémarrer Pilot | `src/js/super-agent.js:3114-3117` (relecture au retour de focus de la fenêtre) ; l'écouteur est **retiré** à la fermeture de l'onglet (`:5830`) — aucune fuite |
+| Pilot ne fait que LIRE (ne crée ni dossier ni fichier, ne nettoie rien) | `src-tauri/src/persona.rs` : aucun `create_dir_all` / `write` / `remove_*` (seuls `read`, `metadata`) ; verrouillé par `dossier_absent_ne_donne_aucun_personnage_et_ne_cree_rien` et, côté JS, par le test qui interdit `writeFile`/`createDir`/`fs.` dans `assistant-persona.js` |
+| « sans bruit dans la console » | aucune trace : `persona.rs` ne journalise pas, `assistant-persona.js:161-169` avale l'échec (`catch (_) {}`) |
+
+### 8.3 Décision tranchée (aucune question posée)
+
+1. **Ne rien réimplémenter** : le contrat du NOM est déjà tenu, mot pour mot.
+   Réécrire le module n'apporterait rien et risquerait une régression.
+2. **Ne PAS retirer le support de l'image** du code existant, même si cette
+   mission est « réduite au nom ». Le retirer casserait le commit `7fe7cc5`,
+   8 tests Rust et 3 tests JS, pour zéro bénéfice : la consigne « ne t'occupe
+   pas de l'image » s'adresse à **moi** (ne pas lire `portrait.png`, ne rien
+   livrer dessus), pas au code déjà livré. Je n'ai **pas** ouvert
+   `portrait.png`, et je n'ai ajouté aucune ligne liée à l'image.
+3. **Ce que j'ajoute réellement** : une vérification **comportementale** du nom,
+   qui manquait (les tests existants vérifiaient les fonctions pures et les
+   branchements par lecture de source, mais jamais le **chemin complet** :
+   lecture → état → nom de l'onglet → nom habituel quand le fichier manque).
+   Nouveau fichier : `src/js/assistant-nom-du-personnage.test.js`.
+   Aucun fichier de production n'est modifié par cette mission.
+
+### 8.4 Tests de cette mission (chiffres RECOMPTÉS, sorties brutes conservées)
+
+Nouveau fichier de test : `src/js/assistant-nom-du-personnage.test.js`
+(**6 cas**, comportement réel : la commande Rust est simulée, le `nom.txt` du
+disque n'est jamais touché, `.pilot/portrait` réel jamais lu ni écrit) :
+
+| Cas (contrat) | Ce qui est vérifié |
+|---|---|
+| `nom.txt` PRÉSENT | `read_assistant_persona` appelée → `Aurelia` poussé au bouton d'onglet, `superAgentDisplayLabel()` = `Aurelia` |
+| `nom.txt` ABSENT | nom habituel (`Assistant`) poussé, aucune exception |
+| `nom.txt` VIDE ou blanc | nom habituel, jamais un onglet sans nom |
+| nom ILLISIBLE / commande absente / IPC en panne | nom habituel, **`resolves`** (aucune exception), `console.error|warn|log` **jamais** appelés |
+| changement à chaud | deux relectures → `Aurelia` puis `Bertrand` ; fichier supprimé → retour au nom habituel (aucun redémarrage) |
+| plein écran « Assistant seul » | titre `Bonjour, je suis Aurelia` (même nom que l'onglet) |
+
+Exécutions (résultats rejoués pour cette mission) :
+
+| Vérification | Commande | Résultat recompté |
+|---|---|---|
+| Fichier du NOM | `npx vitest run src/js/assistant-nom-du-personnage.test.js` | **6 passés, 0 échec** |
+| Fichier historique du personnage | `npx vitest run src/js/assistant-persona.test.js` | **13 passés, 0 échec** |
+| Frontend, suite complète | `npx vitest run` | **225 fichiers, 4166 tests passés, 0 échec** (4160 avant + 6 nouveaux) |
+| Rust, module du personnage | `cargo test --manifest-path src-tauri/Cargo.toml --lib persona` | **8 passés, 0 échec** (800 filtrés) |
+
+Aucune compilation Rust au premier plan : lancée en arrière-plan, sortie
+redirigée vers un fichier, relue après (`Finished` + `8 passed`), aucun
+processus encore en vol à la fin.
+
+### 8.5 Ce que cette mission ne fait pas
+
+- Aucun fichier de production modifié (`src/js/assistant-persona.js`,
+  `src/js/super-agent.js`, `src/js/tabs.js`, `src-tauri/src/persona.rs` sont
+  **inchangés** : ils étaient déjà conformes).
+- Aucune lecture de `G:\IA_PL\Presences`, aucune écriture dans le vrai dossier
+  `.pilot/portrait`, aucun réglage nouveau, aucune publication, aucun tag.
