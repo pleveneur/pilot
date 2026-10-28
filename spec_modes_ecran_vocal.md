@@ -140,7 +140,7 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
 | **Repos** | personne ne parle, l'agent ne réfléchit pas, rien n'est lu | accent du thème (`--vocal-rest`) | respiration lente de 4 s | « Je vous écoute. » |
 | **Écoute** | le micro **capte vraiment** : le niveau mesuré dépasse le seuil **haut** (0,06 RMS) | vert (`--vocal-listen`) | aucun mouvement propre : **le halo intérieur et le trait suivent la voix** | « Je vous écoute… » |
 | **Réflexion** | l'agent réfléchit | violet de l'assistant (`--vocal-think`) | arc de 60° qui tourne en 3 s | « Je réfléchis… » |
-| **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | lueur extérieure de 1,6 s (`vocal-speak-glow`) + enveloppe du trait | « Je réponds. » |
+| **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | lueur extérieure **au bord** du disque (pic à **34 %** d'alpha sur la couronne, 1,6 s `vocal-speak-glow`) + enveloppe du trait | « Je réponds. » |
 
 **Deux lueurs, deux voix — et deux mots différents.** L'écran n'a qu'un seul
 niveau à montrer par voix, et chaque voix a **sa** couleur :
@@ -149,7 +149,7 @@ niveau à montrer par voix, et chaque voix a **sa** couleur :
 |---|---|---|---|
 | le **halo intérieur** (`.vocal-halo`) | dans le disque, jusqu'à 82 px de rayon | **la vôtre** (mesurée) | `--vocal-listen` |
 | le **trait de niveau** (`.vocal-level-bar`) | sous le disque, 200 × 3 px | **la vôtre** (la même mesure) | `--vocal-listen` |
-| le **contour** du disque et son **enveloppe** | l'anneau, puis l'extérieur | **celle de Pilot** (lue) | `--vocal-state` |
+| le **contour** du disque et son **enveloppe** | l'anneau, puis la **couronne extérieure** (84 → 100 px de rayon) | **celle de Pilot** (lue) | `--vocal-state` |
 
 Le mot « halo » ne désigne **que** le halo intérieur, celui de votre voix ;
 l'enveloppe de Pilot s'appelle « l'enveloppe de parole » (ancien nom de
@@ -189,13 +189,32 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   capturable par le navigateur, il suit donc une **enveloppe fixe** de 1,6 s,
   volontairement lente et bornée (jamais synchrone avec les mots). Seule
   l'écoute mesure votre voix.
+- **La lueur de parole est visible au bord, pas cachée au centre**
+  (`docs/rapports/RAPPORT-halo-parole.md`). L'enveloppe de parole
+  (`.vocal-orb::before`, boîte de 200 × 200 px) porte un dégradé **inversé** :
+  transparent au centre, puis **8 %** au bord du disque (84 % du rayon), **20 %**
+  à 92 % et **34 %** au bord de la boîte (100 %). Le pic est donc **sur la
+  couronne extérieure**, la seule partie qui **déborde** du disque opaque ; la
+  lumière ne se perd plus sous le disque. Mesuré : contraste **2,28 : 1** en
+  thème sombre et **1,60 : 1** en thème clair (avant : 1,044 : 1 et 1,041 : 1,
+  sous le seuil de perception). L'animation `vocal-speak-glow` garde sa durée et
+  son échelle, mais son opacité ne descend plus sous **0,80** : la lueur respire
+  sans jamais s'éteindre.
+- **L'enveloppe est le REPLI du contour, jamais un doublon**
+  (`CONCEPTION-cercle-equaliseur.md` §7.3) : dès que le contour spectral est
+  peint (voix locale installée, classe `.vocal-spectrum-live` posée sur
+  l'overlay), l'enveloppe est **éteinte** (opacité 0, sans animation ni
+  transition). La décision de code est unique (`spectrumPlan`, `porteur`) et
+  verrouillée par test.
 - **Mouvement réduit** : le même drapeau que les animations d'ouverture
   (`prefers-reduced-motion` **et** le réglage « Animer l'ouverture des modales »).
   Quand il est actif, plus aucune animation, plus aucune transition, et le trait est
   **figé** à 8 / 45 / 20 / 70 % selon l'état, comme le **halo intérieur** (figé à
   0,55 en écoute, éteint dans les trois autres états) : il reste **lisible**, ce
-  n'est jamais une animation muette. **Aucun nouveau réglage** n'a été créé
-  pour cet écran.
+  n'est jamais une animation muette. La **lueur de parole** obéit à la même
+  règle : ni clignotement ni disparition — elle est **fixe mais visible**, avec
+  le **même alpha de 34 % au bord** (aucune animation sur cet élément). **Aucun
+  nouveau réglage** n'a été créé pour cet écran.
 
 ## 5. Le micro : quand il s'ouvre, quand il se ferme
 

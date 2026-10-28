@@ -11661,7 +11661,15 @@ body.pilot-vocal-active .agent-chat-messages {
    synchrone avec les mots — la synthese vocale ne rend pas son signal, on ne
    pretend donc pas mesurer la voix. Vocabulaire tranche (§6.0) : l'enveloppe de
    PAROLE n'est pas « le halo » ; le halo, c'est la voix de l'UTILISATEUR (.vocal-halo).
-   Aucune valeur n'est touchee ici (lot « parole » separe). */
+   HALO DE LA PAROLE (defaut 1 du diagnostic du 28/10) : le degrade est INVERSE.
+   La lumiere est au BORD de la boite (100 % de `closest-side` = 100 px), le
+   centre est transparent : la seule partie visible est celle qui DEBORDE du
+   disque (exterieur a 84 px). Arrets chiffres, du centre vers le bord :
+   0 % -> 0 %, 72 % -> 0 %, 84 % (bord du disque) -> 8 %, 92 % -> 20 %,
+   100 % (bord de la boite) -> 34 % (>= 30 % exige, contraste 2,28:1 en sombre
+   et 1,60:1 en clair, cf. docs/rapports/RAPPORT-halo-parole.md). En etat
+   « parole », `--vocal-state` vaut exactement `--vocal-speak` : c'est la teinte
+   de la voix de Pilot, et aucun jeton nouveau n'est cree. */
 .vocal-orb::before {
   content: "";
   position: absolute;
@@ -11669,8 +11677,11 @@ body.pilot-vocal-active .agent-chat-messages {
   border-radius: 50%;
   background: radial-gradient(
     closest-side,
-    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 22%, transparent) 0%,
-    transparent 100%
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 0%, transparent) 0%,
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 0%, transparent) 72%,
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 8%, transparent) 84%,
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 20%, transparent) 92%,
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 34%, transparent) 100%
   );
   opacity: 0;
   transition: opacity var(--transition-smooth);
@@ -11875,9 +11886,28 @@ body.pilot-vocal-active .agent-chat-messages {
   animation: none;
   transition: none;
 }
-.pilot-vocal.vocal-reduced .vocal-orb::before,
+/* L'arc de REFLEXION reste eteint en mouvement reduit. L'enveloppe de PAROLE,
+   elle, n'est plus eteinte (defaut 1 du diagnostic) : elle devient FIXE mais
+   VISIBLE — meme degrade, donc meme alpha de 34 % au bord — par la regle
+   explicite ci-dessous. Un etat lisible, jamais un etat absent. */
 .pilot-vocal.vocal-reduced .vocal-orb::after {
   opacity: 0;
+}
+.pilot-vocal.vocal-reduced.vocal-state-speaking .vocal-orb::before {
+  opacity: 1;
+  animation: none;
+}
+/* Enveloppe = REPLI du contour (CONCEPTION-cercle-equaliseur.md §7.3) : des que
+   le peintre du contour spectral pose `.vocal-spectrum-live` sur l'overlay,
+   l'enveloppe s'ETEINT — jamais deux afficheurs pour la meme voix (§1,
+   decision 2). Quatre classes, et cette regle est la DERNIERE de la famille :
+   elle gagne sur la regle d'etat comme sur la regle de mouvement reduit, quelle
+   que soit la valeur des autres. `animation: none` (une animation invisible
+   coute) et `transition: none` (aucun doublon pendant les 0,3 s). */
+.pilot-vocal.vocal-spectrum-live.vocal-state-speaking .vocal-orb::before {
+  opacity: 0;
+  animation: none;
+  transition: none;
 }
 .pilot-vocal.vocal-reduced.vocal-state-idle .vocal-level-bar { width: 8%; }
 .pilot-vocal.vocal-reduced.vocal-state-listening .vocal-level-bar { width: 45%; }
@@ -11904,9 +11934,12 @@ body.pilot-vocal-active .agent-chat-messages {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+/* Enveloppe de parole : la respiration garde sa duree et son echelle, mais son
+   opacite ne descend plus sous 0,80 — la lueur du bord (34 %) reste visible a
+   chaque instant (0,272 d'alpha effectif au minimum). */
 @keyframes vocal-speak-glow {
-  0%, 100% { transform: scale(0.94); opacity: 0.45; }
-  50% { transform: scale(1.06); opacity: 0.85; }
+  0%, 100% { transform: scale(0.94); opacity: 0.8; }
+  50% { transform: scale(1.06); opacity: 1; }
 }
 @keyframes vocal-think-pulse {
   0%, 100% { width: 8%; }
