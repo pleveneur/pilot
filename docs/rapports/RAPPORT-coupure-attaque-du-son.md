@@ -48,6 +48,65 @@
 >
 > Conclusion : **rien à corriger**, aucun fichier de code touché par cette
 > reprise. Le corps ci-dessous est le rapport d'origine, conservé tel quel.
+>
+> ### Vérification indépendante rejouée (reprise n° 2, 28/10 16 h 01)
+>
+> Rien recopié d'un contexte antérieur : chaque point ci-dessous a été **relu
+> sur le disque** et **rejoué** à l'instant.
+>
+> 1. **Chaîne complète, sans second lecteur** — `read-aloud.js:148`
+>    (`READ_ALOUD_SOUND_EVENT`) → `read-aloud.js:803` (`broadcastSound`, gardé
+>    par `sonAnnonce` + `token.stopped`, donc **une fois par lecture**) ;
+>    branches `utterance.onstart` (`read-aloud.js:963`) et `onSoundStart` de la
+>    voix locale (`read-aloud.js:896` → `local-voice.js:800/802`, garde
+>    `debutAnnonce` par morceau) ; `vocal-mic.js:872` `setSoundStarted()`
+>    (gardes `!parlant` / `sonCommence`) ; écouteur `super-agent.js:5043`
+>    **retiré** au démontage `super-agent.js:5513`. Aucun `addEventListener`
+>    orphelin, aucun second mécanisme de lecture.
+> 2. **Aucun seuil déplacé** — le diff du correctif est **purement additif** sur
+>    `vocal-mic.js` (`48 insertions, 0 suppression`), donc les constantes n'ont
+>    pas pu bouger ; et `ecran-vocal-lot4a.test.js:789-800` (« aucun seuil de
+>    décision n'a changé de valeur » : 600 / 200 / 0,05 / 0,03 / 0,01 / 1000,
+>    marges 1,8 et 2) est **vert sans retouche d'une seule valeur**.
+> 3. **Preuve rouge/vert refaite à l'instant**, par neutralisation du **corps**
+>    de `setSoundStarted` (drapeau posé, fenêtre plus rouverte), puis
+>    restauration à l'identique (`git diff src/js/vocal-mic.js` **vide**) :
+>
+>    ```
+>    neutralisé  → PASS (11) FAIL (4)
+>      FAIL  son demarre a 1500 ms, echo=true   : expected [] to have length +0 but got 1
+>      FAIL  son demarre a 1500 ms, echo=false  : expected [] to have length +0 but got 1
+>      FAIL  son demarre a 1500 ms, echo=null   : expected [] to have length +0 but got 1
+>      FAIL  setSoundStarted ... to match /garde = emptySpeechGate\(\)/   (lecture du source)
+>    restauré    → PASS (15) FAIL (0)
+>    ```
+>
+>    Les **trois** échecs sont exactement la preuve exigée n° 1 : sans le
+>    correctif, un son qui démarre **1500 ms après l'annonce** provoque **une**
+>    prise de parole — Pilot se coupe sur son propre son. Le test mord.
+> 4. **Les trois preuves attendues, localisées** : (i) `vocal-son-commence.test.js:145-163`
+>    son à **1500 ms** ⇒ `paroles` **vide** + `refSecours ≈ 0,35` (la référence
+>    est le SON, pas le silence) ; (ii) `vocal-son-commence.test.js:186-202` son
+>    **immédiat** + voix franche ⇒ **1** coupure, motif `voix-detectee` (l'acquis
+>    de `6883eab` intact) ; (iii) `vocal-son-commence.test.js:207-226` **dix**
+>    lectures ⇒ **dix** coupures, plus `:228-249` un signal tardif ne rouvre pas
+>    la fenêtre et `:167-183` une vraie voix tardive coupe quand même.
+> 5. **Compteurs recomptés** (avant la suite complète, conformément à la
+>    consigne d'écrire le rapport d'abord) :
+>
+>    ```
+>    npx vitest run src/js/vocal-son-commence.test.js   → PASS (15) FAIL (0)
+>    batterie vocale ciblée (11 fichiers)               → PASS (313) FAIL (0)
+>    npx vitest run  (suite front complète)             → PASS (3993) FAIL (0)
+>    ```
+>
+> 6. **Docs** : `spec_read_aloud.md` et `spec_modes_ecran_vocal.md` décrivent
+>    déjà la fenêtre ouverte sur le début du son ; `help/overview.md` et
+>    `help/handbook.md` à jour — **aucune retouche de spec nécessaire**, donc
+>    pas de `build:handbook` (vérifié : il ne produirait aucun diff).
+>
+> 7. **Rien d'autre touché** : ni le halo de l'état « parole », ni le cercle
+>    (autre mission), ni les réglages, ni le micro (aucune nouvelle ouverture).
 
 **Mission** : corriger la réserve du rapport de vérification de la coupure à la
 deuxième lecture (verdict READY pour l'essai du propriétaire, avec une réserve
