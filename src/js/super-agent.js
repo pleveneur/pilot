@@ -117,7 +117,7 @@ import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel
 // mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
 // « Supprimer les rappels inutiles » de Paramètres → Assistant.
 import { classifyScheduleCleanup, cleanupApplyPayload } from "./super-agent-schedule-cleanup.js";
-import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility, splitMissions, setAgentPanelTaskCount, isAgentPanelPaneVisible } from "./agent-activity.js";
+import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, buildStartingMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility, splitMissions, setAgentPanelTaskCount, isAgentPanelPaneVisible } from "./agent-activity.js";
 // Compteur du bouton « Travail » : les commandes TAPEES A LA MAIN mises en file
 // sur un projet sont une famille d'attente a part entiere (elles n'etaient
 // comptees nulle part, donc le total affiche etait faux).
@@ -2855,17 +2855,32 @@ function missionProjectLabel(project) {
   return pathTailName(project) || project;
 }
 
-/** Missions EN ATTENTE, tous projets (files de délégation et de runs). */
 /**
- * Missions EN ATTENTE, tous projets. Quatre familles, toutes lues dans un etat
- * DEJA tenu par l'application (aucune structure nouvelle, aucun appel au
- * moteur) :
+ * Missions ACCEPTEES mais pas encore DEMARREES, tous projets (FAMILLE 5).
+ *
+ * Defaut corrige (docs/rapports/RAPPORT-taches-invisibles.md § 3 cas (c),
+ * correction : docs/rapports/RAPPORT-taches-demarrage-b1.md) : entre l'envoi
+ * d'une mission et son premier evenement de travail, l'etat publie reste
+ * « idle » pendant le spawn de la session et la sonde du backend (jusqu'a
+ * 2 x 5 s a froid, plus 2 s de poll). La mission n'etait donc dans AUCUN
+ * groupe : le volet restait vide alors qu'elle etait partie.
+ *
+ * La famille est deduite de la SUPERVISION DEJA RECUE (`buildStartingMissions`,
+ * `agent-activity.js`) : aucune file nouvelle, aucun appel au moteur. Elle
+ * n'apparait que dans son groupe « Demarrage » et disparait d'elle-meme des que
+ * l'agent passe `running` (elle est alors listee « En cours », jamais deux fois).
+ *
+ * Missions EN ATTENTE et missions en DEMARRAGE, tous projets. Familles lues
+ * dans un etat DEJA tenu par l'application (aucune structure nouvelle, aucun
+ * appel au moteur) :
  *  1. les delegations de l'assistant (`delegationStates`) ;
  *  2. les demandes de `run_agents` (`runAgentsQueueByProject`) ;
  *  3. les commandes TAPEES A LA MAIN mises en file sur un projet
  *     (`project-task-queue.js`) — oubliees jusqu'ici, donc total faux ;
  *  4. les agents qui attendent leur tour dans la file d'exclusivite du bus
- *     (`agents-bus.js`) — oublies aussi.
+ *     (`agents-bus.js`) — oublies aussi ;
+ *  5. les missions acceptees mais pas encore demarrees (voir ci-dessus),
+ *     seules a porter le drapeau `starting`.
  */
 function collectQueuedMissions() {
   const out = [];
@@ -2894,6 +2909,20 @@ function collectQueuedMissions() {
       resume: demand.resume || "",
       agent: demand.agent || "",
     });
+  }
+  // FAMILLE 5 : missions ACCEPTEES mais pas encore DEMARREES (groupe
+  // « Demarrage »). Deduites de la supervision deja recue — aucune file
+  // nouvelle. Dedoublonnage avec les familles 1 a 4 : si le meme projet porte
+  // deja la meme mission, l'entree de demarrage est ecartee (une seule ligne
+  // par mission dans tout le volet).
+  const alreadyListed = new Set(
+    out.map((m) => `${m.project}\u001f${m.mission || m.resume || ""}`)
+  );
+  for (const m of buildStartingMissions(getAgentActivitySnapshot().list)) {
+    const key = `${m.project}\u001f${m.mission || m.resume || ""}`;
+    if (alreadyListed.has(key)) continue;
+    alreadyListed.add(key);
+    out.push(m);
   }
   return out;
 }

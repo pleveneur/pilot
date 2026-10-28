@@ -105,9 +105,19 @@ function trackWorkingSince(map, key, working) {
  * @param {Map<string,number>} [workingSinceMap] — instants de début du travail en
  *   cours (facultatif : sans magasin, `workingSince` vaut null — aucune durée
  *   inventée, aucun effet de bord).
- * @returns {Array<{agentId,rawId,label,project,projectPath,state,busy,working,workingSince,lastActivity,lastActivityRelative,kind}>}
+ * @param {Map<string,{sig:string,since:number,started:boolean}>} [missionStartMap] —
+ *   mémoire du suivi des **démarrages** (par défaut la mémoire du module, comme
+ *   la supervision courante ; une mémoire explicite est acceptée pour les
+ *   tests). Une entrée ne porte le champ additif `starting` que lorsqu'il est
+ *   vrai : la forme historique est préservée dans tous les autres cas.
+ * @returns {Array<{agentId,rawId,label,project,projectPath,state,busy,working,workingSince,lastActivity,lastActivityRelative,kind,starting?}>}
  */
-export function flattenAgents(supervision, lastActivityMap, workingSinceMap) {
+export function flattenAgents(
+  supervision,
+  lastActivityMap,
+  workingSinceMap,
+  missionStartMap = missionStartTracking
+) {
   const projects = (supervision && supervision.projects) || [];
   const list = [];
   for (const proj of projects) {
@@ -171,7 +181,19 @@ export function flattenAgents(supervision, lastActivityMap, workingSinceMap) {
       // Début du travail EN COURS (intervalle daté) : mémorisé la première fois
       // qu'on voit l'agent travailler, effacé dès qu'il s'arrête.
       const startedAt = trackWorkingSince(workingSinceMap, agentId, working);
-      list.push({
+      // Famille « Demarrage » : mission ACCEPTEE mais pas encore DEMARREE. Le
+      // calcul est fait AVANT l'empilement (la memoire de suivi est keyee par
+      // `agentId`) et son resultat n'est pose que lorsqu'il est vrai : la forme
+      // historique des entrees est preservee pour tous les autres consommateurs
+      // (liste deroulante du cercle, onglet Agents, resume immersif).
+      const starting = trackMissionStarting(missionStartMap, {
+        agentId,
+        prompt: typeof a.prompt === "string" ? a.prompt : "",
+        resume: typeof a.resume === "string" ? a.resume : "",
+        state,
+        working,
+      });
+      const entry = {
         agentId,
         rawId,
         label,
@@ -214,7 +236,11 @@ export function flattenAgents(supervision, lastActivityMap, workingSinceMap) {
         lastActivityRelative:
           typeof a.lastActivityRelative === "string" ? a.lastActivityRelative : "",
         kind: isSuper ? "superagent" : (isAssistant ? "assistant" : "agent"),
-      });
+      };
+      // Champ ADDITIF « starting » : present SEULEMENT quand la mission est en
+      // demarrage (voir MISSION_START_MAX_MS et trackMissionStarting).
+      if (starting) entry.starting = true;
+      list.push(entry);
     }
   }
   // Purge des durées devenues orphelines (agent sorti de la liste, arrêté) :
@@ -277,6 +303,146 @@ export function isAgentWorking(agent) {
  */
 export function isWorkingWithoutTab(agent) {
   return isAgentWorking(agent) && agent.visible === false;
+}
+
+// ── Missions ACCEPTEES mais pas encore DEMARREES (groupe « Demarrage ») ──────
+// Defaut corrige (docs/rapports/RAPPORT-taches-invisibles.md § 3 cas (c),
+// correction : docs/rapports/RAPPORT-taches-demarrage-b1.md) : une mission
+// ACCEPTEE mais pas encore DEMARREE n'apparaissait dans AUCUN groupe. Le prompt
+// est pourtant enregistre par le coeur des l'envoi et publie (champs additifs
+// `prompt` / `resume` de la supervision), mais l'etat publie reste « idle » tant
+// que le moteur n'a pas inscrit la session dans son observateur d'anomalie
+// (spawn de la session + sonde du backend : jusqu'a 2 x 5 s a froid, plus 2 s de
+// poll). `isAgentWorking` est donc faux et `buildRunningMissions` ecartait la
+// ligne : la liste restait VIDE plusieurs secondes alors que la mission etait
+// partie.
+//
+// La famille est deduite de la SUPERVISION DEJA RECUE (store d'activite
+// partage) : aucun appel nouveau au moteur, aucune structure metier dupliquee.
+// Une mission est « en demarrage » quand la session PORTE une mission
+// (`prompt` / `resume`) et que l'agent ne travaille pas ENCORE.
+//
+// Deux garde-fous, tous deux couverts par `taches-demarrage.test.js` :
+//  1. DEDOUBLONNAGE : des que l'agent TRAVAILLE (ou a travaille) pour cette
+//     mission, elle quitte le groupe « Demarrage » — elle est alors listee dans
+//     « En cours » par `buildRunningMissions`. Jamais deux fois.
+//  2. BORNE HONNETE (`MISSION_START_MAX_MS`) : une entree qui ne devient jamais
+//     « running » n'y reste pas eternellement (lancement echoue = aucune ligne
+//     fantome), et elle ne disparait pas avant que l'utilisateur ait pu la voir.
+
+/**
+ * Borne de vie d'une entree de « Demarrage » (ms).
+ *
+ * Mesuree depuis le PREMIER passage du front sur cette mission (le poll suivant
+ * l'envoi : au plus 2 s apres, donc la fenetre vue par l'utilisateur reste
+ * >= 28 s).
+ *
+ * Pourquoi 30 s : la fenetre reelle du defaut est le spawn de la session plus
+ * la sonde du backend, soit JUSQU'A 2 x 5 s = 10 s a froid, plus 2 s de poll =
+ * 12 s au pire — la borne vaut 2,5 x ce pire cas. Une mission qui demarre
+ * reellement bascule bien avant ; un lancement qui n'aboutit JAMAIS ne laisse
+ * aucune ligne fantome au-dela de 30 s. Ce groupe est une information
+ * TRANSITOIRE, pas un historique : au-dela, l'inventaire des sessions reste
+ * consultable dans l'onglet « Agents ».
+ */
+export const MISSION_START_MAX_MS = 30_000;
+
+/** Libelle du groupe « Demarrage » (explicite, distinct des deux autres). */
+export const MISSION_START_GROUP_LABEL = "Démarrage";
+
+/**
+ * Memoire de suivi des demarrages : `agentId` -> `{ sig, since, started }`.
+ * `sig` = signature de la mission (resume fourni + prompt publie) ; `since` =
+ * premier instant ou le front l'a vue ; `started` = l'agent a travaille pour
+ * cette mission. Bornee par le nombre de couples (projet, agent) : aucune purge
+ * necessaire (une entree terminee vaut `started: true` et n'est plus jamais
+ * « en demarrage »).
+ */
+const missionStartTracking = new Map();
+
+/**
+ * Signature de la mission portee par une entree de la liste : resume FOURNI +
+ * prompt publie. Fonction PURE : deux missions differentes ont deux signatures
+ * differentes (un nouveau prompt change la signature, donc le suivi repart).
+ * @param {object} agent entree de liste (ou objet partiel).
+ * @returns {string}
+ */
+export function missionStartSignature(agent) {
+  if (!agent) return "";
+  const resume = typeof agent.resume === "string" ? agent.resume : "";
+  const prompt = typeof agent.prompt === "string" ? agent.prompt : "";
+  return `${resume}\u001f${prompt}`;
+}
+
+/**
+ * Decide si une entree de la liste est une mission ACCEPTEE mais pas encore
+ * DEMARREE, et met a jour la memoire de suivi. Fonction PURE vis-a-vis du DOM
+ * (magasin et horloge injectes, donc testable).
+ *
+ * Regles, dans cet ordre :
+ *  1. aucune mission portee par la session (ni resume ni prompt) -> rien ;
+ *  2. l'agent TRAVAILLE -> la mission est en cours : `started` est pose et
+ *     l'entree n'est JAMAIS « en demarrage » (dedoublonnage) ;
+ *  3. l'agent a DEJA travaille pour cette meme mission -> jamais « en
+ *     demarrage » (aucun retour en arriere apres la fin d'un tour) ;
+ *  4. la session n'est ni `idle` ni `running` (`paused` / `stopped`) -> rien :
+ *     elle n'a pas de mission qui part ;
+ *  5. la borne `MISSION_START_MAX_MS` est depassee -> rien (aucune ligne
+ *     fantome, et aucune disparition avant d'avoir pu etre vue).
+ * @param {Map<string,{sig:string,since:number,started:boolean}>} map magasin de suivi.
+ * @param {{agentId?:string, resume?:string, prompt?:string, state?:string, working?:boolean, busy?:boolean, toolInProgress?:boolean}} agent
+ * @param {number} [now] horloge (ms epoch) — injectee pour les tests.
+ * @returns {boolean} true si l'entree appartient au groupe « Demarrage ».
+ */
+export function trackMissionStarting(map, agent, now = Date.now()) {
+  if (!map || typeof map.get !== "function" || !agent || !agent.agentId) return false;
+  const sig = missionStartSignature(agent);
+  const hasMission = sig.replace(/\u001f/g, "").trim() !== "";
+  if (!hasMission) {
+    map.delete(agent.agentId);
+    return false;
+  }
+  const working = isAgentWorking(agent);
+  const prev = map.get(agent.agentId);
+  // Nouvelle mission (signature differente) : le suivi repart de cet instant.
+  const known = prev && prev.sig === sig ? prev : { sig, since: now, started: false };
+  if (working) known.started = true;
+  map.set(agent.agentId, known);
+  if (working) return false;
+  if (known.started) return false;
+  if (agent.state !== "idle" && agent.state !== "running") return false;
+  const age = now - known.since;
+  if (!Number.isFinite(age) || age < 0 || age > MISSION_START_MAX_MS) return false;
+  return true;
+}
+
+/**
+ * Missions ACCEPTEES mais pas encore DEMARREES, pretes a entrer dans le calcul
+ * UNIQUE des missions (`buildRunningMissions`, via `collectQueuedMissions`).
+ * Fonction PURE : elle ne fait que filtrer la liste issue du store partage.
+ *
+ * Les sources de la mission sont transmises BRUTES (`prompt` / `resume` /
+ * `kind`) : `buildRunningMissions` applique ainsi le MEME ordre de repli que
+ * pour une mission en cours — le groupe « Demarrage » ne peut pas afficher une
+ * autre phrase que « En cours » pour la meme mission.
+ * @param {Array} list liste aplatie (flattenAgents) — le drapeau `starting` y a
+ *   deja ete calcule (champ additif, present seulement quand il est vrai).
+ * @returns {Array<{agent:string, project:string, mission:string, resume:string, kind:string, starting:boolean}>}
+ */
+export function buildStartingMissions(list) {
+  const out = [];
+  for (const a of list || []) {
+    if (!a || a.starting !== true) continue;
+    out.push({
+      agent: a.label || "",
+      project: a.project || "Assistant",
+      mission: a.prompt || "",
+      resume: a.resume || "",
+      kind: a.kind || "",
+      starting: true,
+    });
+  }
+  return out;
 }
 
 /**
@@ -635,21 +801,34 @@ export function buildRunningMissions(list, queued) {
   }
   for (const q of queued || []) {
     if (!q) continue;
-    out.push({
+    const entry = {
       agent: q.agent || "",
       project: q.project || "Assistant",
-      mission: resolveMissionLabel(q.resume, q.mission),
+      // `kind` est transmis par la famille « Démarrage » (la mission de
+      // l'Assistant n'est jamais déduite de son prompt système) ; absent des
+      // familles de file historiques : comportement inchangé pour elles.
+      mission: resolveMissionLabel(q.resume, q.mission, q.kind),
       waiting: true,
-    });
+    };
+    // Drapeau additif : la mission est ACCEPTÉE mais pas encore DÉMARRÉE (elle
+    // reste du côté « pas encore en cours » — donc comptée dans le total du
+    // bouton — mais elle est rendue dans son groupe « Démarrage »).
+    if (q.starting === true) entry.starting = true;
+    out.push(entry);
   }
   return out;
 }
 
 /**
- * Répartit les missions en deux groupes ORDONNÉS : celles qui TOURNENT
- * (`waiting: false`) et celles qui ATTENDENT dans la file (`waiting: true`).
- * L'ordre d'origine — donc l'ordre de la file — est conservé. Fonction PURE.
- * @param {Array<{agent, project, mission, waiting}>} missions
+ * Répartit les missions en deux FAMILLES ORDONNÉES : celles qui TOURNENT déjà
+ * (`waiting: false`) et celles qui ne tournent PAS encore (`waiting: true`) —
+ * cette seconde famille contient la file d'attente ET les missions acceptées en
+ * cours de démarrage (`starting: true`, rendues dans leur propre groupe).
+ * L'ordre d'origine — donc l'ordre de la file — est conservé. C'est CETTE
+ * répartition qui alimente le bouton « Travail » (`running.length` en cours,
+ * `waiting.length` en attente) et le volet : le bouton ne peut pas la contredire.
+ * Fonction PURE.
+ * @param {Array<{agent, project, mission, waiting, starting?}>} missions
  * @returns {{running: Array, waiting: Array}}
  */
 export function splitMissions(missions) {
@@ -671,18 +850,25 @@ function missionWho(m) {
 }
 
 /**
- * Rendu HTML du volet « En cours » du panneau (bas à droite). Fonction PURE.
+ * Rendu HTML du volet des missions du panneau (bas à droite). Fonction PURE.
  *
- * Deux groupes EXPLICITES et NUMÉROTÉS — « En cours (n) » puis « En attente (n) » —
- * pour que l'on voie d'un coup d'œil ce qui tourne ET dans quel ordre la file
- * attend. Chaque ligne porte son RANG et, sur la ligne principale, l'identité
- * « <agent> — <projet> » ; **EN DESSOUS**, sur la ligne secondaire (sa place
- * historique, inchangée), le texte d'indication de la tâche : le résumé court
- * fourni avec la demande, sinon l'extrait de l'objectif. Cet ordre visuel
- * (agent et projet AU-DESSUS, résumé EN DESSOUS) est FIGÉ par un test : il ne
- * doit pas être inversé (décision du propriétaire, disposition d'origine).
- * Aucune mission → message explicite, jamais une liste vide trompeuse.
- * @param {Array<{agent, project, mission, waiting}>} missions — buildRunningMissions.
+ * TROIS groupes EXPLICITES et NUMÉROTÉS, dans cet ordre — « En cours (n) »,
+ * « Démarrage (n) » puis « En attente (n) » — pour que l'on voie d'un coup d'œil
+ * ce qui tourne, ce qui vient d'être accepté et n'a pas encore démarré, ET dans
+ * quel ordre la file attend. Chaque ligne porte son RANG et, sur la ligne
+ * principale, l'identité « <agent> — <projet> » ; **EN DESSOUS**, sur la ligne
+ * secondaire (sa place historique, inchangée), le texte d'indication de la
+ * tâche : le résumé court fourni avec la demande, sinon l'extrait de l'objectif.
+ * Cet ordre visuel (agent et projet AU-DESSUS, résumé EN DESSOUS) est FIGÉ par
+ * un test : il ne doit pas être inversé (décision du propriétaire, disposition
+ * d'origine). Aucune mission → message explicite, jamais une liste vide
+ * trompeuse.
+ *
+ * Le groupe « Démarrage » ne crée AUCUNE interface nouvelle : c'est le même
+ * titre de groupe et la même ligne que les deux autres, avec un statut et une
+ * couleur déjà existants (`tone-unqualified`). Aucun point qui respire et aucune
+ * durée : la mission ne travaille pas encore, donc elle n'a pas de preuve de vie.
+ * @param {Array<{agent, project, mission, waiting, starting?}>} missions — buildRunningMissions.
  * @returns {string} HTML du volet.
  */
 export function renderMissionsPanelHtml(missions) {
@@ -690,28 +876,38 @@ export function renderMissionsPanelHtml(missions) {
   if (!running.length && !waiting.length) {
     return '<div class="dash-muted">Aucune mission en cours.</div>';
   }
-  const group = (title, list, isWaiting) => {
+  // Les missions de démarrage restent du côté « pas encore en cours » de
+  // `splitMissions` (donc dans le TOTAL du bouton « Travail »), mais elles sont
+  // rendues dans leur PROPRE groupe : une seule ligne, jamais deux.
+  const starting = waiting.filter((m) => m.starting === true);
+  const queueOnly = waiting.filter((m) => m.starting !== true);
+  const group = (title, list, mode) => {
     if (!list.length) return "";
     const items = list
       .map((m, i) => {
         // Preuve de vie : une ligne « en cours » porte un point qui respire et la
         // durée écoulée (« depuis 3 min »). Rien de tout cela pour une mission
-        // seulement EN ATTENTE : seule une ligne qui travaille est datée.
-        const sinceLabel = isWaiting ? null : formatWorkingSinceShort(m.since);
-        const dot = isWaiting ? "" : '<span class="sa-missions-dot"></span>';
+        // seulement EN ATTENTE — ni pour une mission EN DÉMARRAGE, qui ne
+        // travaille pas encore : seule une ligne qui travaille est datée.
+        const sinceLabel = mode === "running" ? formatWorkingSinceShort(m.since) : null;
+        const dot = mode === "running" ? '<span class="sa-missions-dot"></span>' : "";
+        const status =
+          mode === "running" ? "en cours" : mode === "starting" ? "démarrage" : "en attente";
+        const tone =
+          mode === "running" ? "tone-progress" : mode === "starting" ? "tone-unqualified" : "tone-todo";
         return `
-        <div class="sa-task-item${isWaiting ? " waiting" : " running"}">
+        <div class="sa-task-item ${mode}">
           <div class="sa-task-head">
             ${dot}<span class="sa-task-title"><span class="sa-missions-rank">${i + 1}.</span>${esc(missionWho(m))}</span>
-            <span class="sa-task-status ${isWaiting ? "tone-todo" : "tone-progress"}">${isWaiting ? "en attente" : "en cours"}</span>${sinceLabel ? `<span class="sa-task-since">${esc(sinceLabel)}</span>` : ""}
+            <span class="sa-task-status ${tone}">${status}</span>${sinceLabel ? `<span class="sa-task-since">${esc(sinceLabel)}</span>` : ""}
           </div>
           <div class="sa-task-meta">${esc(m.mission)}</div>
         </div>`;
       })
       .join("");
-    return `<div class="sa-task-client sa-missions-group ${isWaiting ? "waiting" : "running"}">${esc(title)} (${list.length})</div>${items}`;
+    return `<div class="sa-task-client sa-missions-group ${mode}">${esc(title)} (${list.length})</div>${items}`;
   };
-  return `${group("En cours", running, false)}${group("En attente", waiting, true)}`;
+  return `${group("En cours", running, "running")}${group(MISSION_START_GROUP_LABEL, starting, "starting")}${group("En attente", queueOnly, "waiting")}`;
 }
 
 // ── Store partagé (supervision, plusieurs consommateurs) ──

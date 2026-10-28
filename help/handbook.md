@@ -2300,14 +2300,17 @@ uniquement un bloc d'instructions dans le prompt système.
     (faux négatif interdit) ;
   - agent **au repos** (`idle`, `paused`, `stopped`) → **masqué** (une absence de
     travail n'est pas une mission) ;
-  - **deux groupes EXPLICITES et NUMÉROTÉS** : « **En cours (n)** » puis
-    « **En attente (n)** » — on voit d'un coup d'œil ce qui travaille et **dans
-    quel ordre la file attend** (rang `1.`, `2.`, … dans l'ordre d'origine) ; un
-    groupe vide n'est pas affiché. Aucune mission → message explicite
-    « Aucune mission en cours » (jamais une liste vide trompeuse) ;
+  - **trois groupes EXPLICITES et NUMÉROTÉS, dans cet ordre** : « **En cours
+    (n)** », « **Démarrage (n)** » puis « **En attente (n)** » — on voit d'un coup
+    d'œil ce qui travaille, ce qui vient d'être **accepté sans avoir encore
+    démarré**, et **dans quel ordre la file attend** (rang `1.`, `2.`, … dans
+    l'ordre d'origine) ; un groupe vide n'est pas affiché. Aucune mission →
+    message explicite « Aucune mission en cours » (jamais une liste vide
+    trompeuse) ;
   - **affichage de chaque mission** (deux lignes, position **FIXÉE**) : **ligne 1
     = rang + l'identité « <agent> — <nom de projet> »** (nom de projet **court** :
-    le nom du dossier) avec le statut **« en cours »** / **« en attente »** ;
+    le nom du dossier) avec le statut **« en cours »** / **« démarrage »** /
+    **« en attente »** ;
     **ligne 2 = le texte d'indication de la tâche** — le **résumé court** fourni
     avec la demande, sinon l'extrait de l'objectif — **EN DESSOUS**, à sa place
     historique ;
@@ -2363,6 +2366,31 @@ uniquement un bloc d'instructions dans le prompt système.
   - **missions en attente** : les demandes mises en file (délégations
     inter-projets et files de `run_agents` / assistant) sont ajoutées dans le
     groupe « **En attente** » ; leur projet est affiché par son nom de dossier.
+  - **mission ACCEPTÉE mais pas encore DÉMARRÉE → groupe « Démarrage »**
+    (défaut corrigé, rapport `docs/rapports/RAPPORT-taches-demarrage-b1.md`) :
+    entre l'envoi d'une mission et son premier événement de travail, l'état publié
+    reste `idle` pendant le spawn de la session et la sonde du backend (jusqu'à
+    2 × 5 s à froid) plus 2 s de poll ; la mission n'était donc dans **aucun**
+    groupe et le volet restait **vide** alors qu'elle était partie. La famille est
+    déduite de la **supervision déjà reçue** (aucun appel, aucune file nouvelle,
+    une seule source de calcul : elle entre dans `collectQueuedMissions`, donc
+    dans le calcul UNIQUE du bouton et du volet — `buildStartingMissions`,
+    `trackMissionStarting`) :
+    1. une session qui **porte une mission** (`prompt` / `resume` publiés dès
+    l'envoi) et pour laquelle l'agent **ne travaille pas encore** est listée dans
+    « Démarrage » — elle reste du côté « pas encore en cours » de
+    `splitMissions`, donc **comptée dans le total** du bouton « Travail » et
+    jamais dans les tâches en cours (cohérence compteur ↔ liste) ;
+    2. **dédoublonnage strict** : dès que l'agent travaille (ou a travaillé) pour
+    cette mission, la mémoire de suivi la marque démarrée et elle passe dans « En
+    cours » — **jamais deux fois**, et **jamais de retour** en « Démarrage »
+    quand le tour se termine (aucun clignotement). Un nouvel envoi change la
+    signature (résumé + prompt) et repart donc en « Démarrage » ;
+    3. **borne honnête** : `MISSION_START_MAX_MS` = **30 s** à partir du premier
+    passage du front sur la mission (≤ 2 s après l'envoi, donc ≥ 28 s vus) —
+    2,5 × la pire fenêtre du défaut (12 s) : elle ne disparaît pas avant d'avoir
+    pu être vue, et un lancement qui n'aboutit **jamais** ne laisse **aucune
+    ligne fantôme**. Couverture : `src/js/taches-demarrage.test.js`.
 - **Alimentation du texte de mission (Rust)** : `AgentService` mémorise, **au
   passage obligé de l'envoi d'un prompt** (`send` / `send_sync` /
   `send_sync_timeout`, donc `rpc_manager`), le **dernier prompt réellement
@@ -2392,6 +2420,12 @@ uniquement un bloc d'instructions dans le prompt système.
 <!-- HELP:super-agent-panneau-taches -->
 - Le panneau du suivi (cercle en **haut à droite**, onglet « **Tâches** ») dit,
   sous chaque agent, **ce qu'il a à faire** en une phrase courte.
+- Trois groupes, dans cet ordre : « **En cours** » (l'agent travaille),
+  « **Démarrage** » (la mission vient d'être **acceptée** et n'a **pas encore**
+  commencé) et « **En attente** » (la file). Une mission qui démarre **quitte**
+  « Démarrage » pour « En cours » : elle n'apparaît **jamais deux fois**. Une
+  mission qui ne démarre **jamais** (lancement en échec) sort de la liste au bout
+  de **30 secondes** — aucune ligne fantôme ne s'installe.
 - Pour l'**Assistant**, cette phrase est la **demande** qu'il traite (celle que
   vous lui avez adressée, ou une remise de compte rendu) ; s'il n'y a rien de
   précis à dire, la ligne affiche « **travail en cours** ». Elle ne reprend
