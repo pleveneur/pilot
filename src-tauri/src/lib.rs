@@ -700,6 +700,15 @@ struct AppConfig {
     // l'interface (aucune erreur, aucune lecture muette).
     #[serde(default)]
     read_aloud_voice: String,
+    // Mode Vocal (écran vocal) : DÉLAI D'ENVOI après le dernier mot transcrit,
+    // en millisecondes. Réglé UNIQUEMENT dans Paramètres → onglet « Assistant »
+    // → section « Mode Vocal » (curseur de 1 à 5 s, pas de 0,5 s). Défaut 2000
+    // ms = deux secondes, valeur historique inchangée. La borne et le pas sont
+    // appliqués par la source unique des décisions (`vocal-conversation.js`,
+    // `normalizeVocalSilenceSendMs`) : une valeur aberrante dans le fichier de
+    // configuration ne change jamais le comportement.
+    #[serde(default = "default_vocal_silence_send_ms")]
+    vocal_silence_send_ms: u32,
     // Évolution 3 : assistant « réponses courtes » — quand activé, l'assistant
     // informe et décide sans détailler tout ce qui se fait, sauf demande
     // explicite. Défaut off. Injecté dans le prompt système.
@@ -989,6 +998,8 @@ fn default_anomaly_timeout_minutes() -> u32 { 30 }
 fn default_agent_auto_stop_minutes() -> u32 { 10 }
 fn default_stale_busy_grace_minutes() -> u32 { 25 }
 fn default_assistant_sound_volume() -> u32 { 100 }
+/// Mode Vocal : délai d'envoi après le dernier mot (2 s, valeur historique).
+fn default_vocal_silence_send_ms() -> u32 { 2000 }
 fn default_super_agent_name() -> String { "Assistant".to_string() }
 fn default_context_budget() -> u32 { 8000 }
 fn default_rag_endpoint() -> String { "http://127.0.0.1:11434".to_string() }
@@ -1219,6 +1230,7 @@ impl Default for AppConfig {
             assistant_sound_enabled: false,
             assistant_sound_volume: default_assistant_sound_volume(),
             read_aloud_voice: String::new(),
+            vocal_silence_send_ms: default_vocal_silence_send_ms(),
             super_agent_concise: false,
             super_agent_adaptive_personality: false,
             super_agent_personality: String::new(),

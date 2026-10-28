@@ -63,6 +63,7 @@ import {
   decideVocalDictation,
   planVocalConversation,
   decideVocalSilenceSend,
+  normalizeVocalSilenceSendMs,
   vocalDictationMessage,
   noteEmptyVocalSession,
   VOCAL_DICTATION_ARM,
@@ -2968,6 +2969,9 @@ export async function createSuperAgent(container) {
   // chaque recréation de l'onglet 🧭 accumule un listener → N appels par
   // changement de config et références à window._pilotTabs après teardown).
   const onConfigChanged = () => {
+    // Le delai d'envoi sur silence du mode Vocal se relit A CHAUD (aucun
+    // redemarrage) ; il ne touche pas au minuteur en vol.
+    refreshVocalSilenceSendMs();
     refreshSuperAgentConfig().then(() => {
       // Réglage global de l'onglet « Tâches » : activation/désactivation à chaud,
       // sans redémarrer (le panneau du suivi du travail suit immédiatement).
@@ -2985,6 +2989,9 @@ export async function createSuperAgent(container) {
     });
   };
   window.addEventListener("pilot-config-changed", onConfigChanged);
+  // Premiere lecture du delai regle (mode Vocal) : sans elle, l'onglet ouvert
+  // avant tout changement de reglage utiliserait le defaut. Fail-open.
+  refreshVocalSilenceSendMs();
 
   const wrapper = document.createElement("div");
   wrapper.className = "agent-chat-container superagent-wrapper";
@@ -3373,11 +3380,21 @@ export async function createSuperAgent(container) {
   let vocalDicteeSuspendue = false;
   // Armement programme (un seul a la fois) : jamais deux minuteries en vol.
   let vocalArmTimer = 0;
-  // `vocalSilenceTimer` : UN SEUL minuteur d'envoi sur silence (2 s apres le
-  // dernier mot recupere). Chaque nouveau texte recu le REPLACE, et il est
-  // annule des que la dictee se referme, quand Pilot parle ou reflechit, et aux
-  // trois sorties du mode. Aucun second minuteur de ce genre n'existe.
+  // `vocalSilenceTimer` : UN SEUL minuteur d'envoi sur silence (le delai REGLE
+  // apres le dernier mot recupere — 2 s par defaut). Chaque nouveau texte recu le
+  // REPLACE, et il est annule des que la dictee se referme, quand Pilot parle ou
+  // reflechit, et aux trois sorties du mode. Aucun second minuteur de ce genre
+  // n'existe.
   let vocalSilenceTimer = 0;
+  // `vocalSilenceSendMs` : la DERNIERE valeur connue du reglage du delai
+  // (`vocal_silence_send_ms`, Parametres -> onglet Assistant -> section
+  // « Mode Vocal »). Elle n'est JAMAIS lue a l'endroit de la decision : elle est
+  // transmise avec l'etat (`vocalSilenceState`), c'est-a-dire au moment ou le
+  // minuteur est arme. 0 = pas encore relue : la normalisation du module pur
+  // donne alors la valeur par defaut (2 s), donc la constante elle-meme n'est
+  // jamais recopiee ici. Un changement de reglage ne touche JAMAIS un minuteur
+  // deja lance : la nouvelle valeur s'applique au prochain armement.
+  let vocalSilenceSendMs = 0;
   // `vocalMotRecu` : au moins un mot a ete recupere dans la dictee en cours
   // (provisoire ou definitif). Sans lui, un silence ne fait rien partir : une
   // dictee muette n'envoie rien. Remis a zero a chaque nouvelle session.
@@ -3720,8 +3737,8 @@ export async function createSuperAgent(container) {
       inputEl.value = preText + sep + transcript;
       resizeInput();
       // ENVOI SUR SILENCE : chaque TEXTE recupere (provisoire ou definitif)
-      // repousse l'echeance de deux secondes. Un texte identique au precedent
-      // n'est pas un nouveau mot : il ne la repousse pas.
+      // repousse l'echeance du delai REGLE (2 s par defaut, 1 a 5 s). Un texte
+      // identique au precedent n'est pas un nouveau mot : il ne la repousse pas.
       if (transcript && transcript !== dernierTexte) {
         dernierTexte = transcript;
         vocalNoteWord();
@@ -4380,7 +4397,7 @@ export async function createSuperAgent(container) {
     vocalArmTimer = 0;
   }
 
-  // ── ENVOI SUR SILENCE : deux secondes apres le dernier mot ────────────────
+  // ── ENVOI SUR SILENCE : le delai regle apres le dernier mot ───────────────
   // Le defaut corrige : l'envoi n'avait lieu qu'a la FIN que declare le moteur
   // de reconnaissance du navigateur, et cette fin peut arriver plusieurs
   // secondes apres le dernier mot (il attend son propre silence). On parlait,
@@ -4418,7 +4435,32 @@ export async function createSuperAgent(container) {
       repriseMain: voiceUserTookOver === true,
       // Au moins un mot recupere dans CETTE dictee : sans lui, rien ne part.
       motEntendu: vocalMotRecu === true,
+      // LE DELAI REGLE (ms) : c'est le SEUL passage de la valeur vers la
+      // decision, donc le seul endroit ou le reglage est lu. Absent (0), la
+      // decision retombe sur la valeur par defaut (2 s).
+      delaiMs: vocalSilenceSendMs,
     };
+  }
+
+  /**
+   * Relit le delai regle dans la configuration (au montage de l'onglet et a
+   * chaque changement de reglage : aucun redemarrage necessaire).
+   *
+   * Ne touche JAMAIS au minuteur en vol : un changement pendant une dictee prend
+   * effet au prochain armement (le mot suivant, ou la dictee suivante), jamais
+   * sur une echeance deja programmee — on ne coupe pas une parole en changeant un
+   * reglage.
+   *
+   * FAIL-OPEN : configuration illisible ⇒ valeur par defaut (2 s). Le
+   * comportement historique reste donc garanti.
+   */
+  async function refreshVocalSilenceSendMs() {
+    try {
+      const cfg = await invoke("get_config");
+      vocalSilenceSendMs = normalizeVocalSilenceSendMs(cfg && cfg.vocal_silence_send_ms);
+    } catch (_) {
+      vocalSilenceSendMs = normalizeVocalSilenceSendMs(0);
+    }
   }
 
   /**

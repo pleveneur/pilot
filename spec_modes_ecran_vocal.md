@@ -382,10 +382,11 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
   (`startVoiceInput`, extraite de `toggleVoiceInput` : `new SR()` n'existe qu'une
   fois dans le code).
 
-### 6bis.1 Répondre deux secondes après le dernier mot
+### 6bis.1 Répondre après le dernier mot : deux secondes par défaut, réglable
 
 **Décision du propriétaire, appliquée telle quelle** : *deux secondes après le
-dernier mot récupéré, s'il n'y a pas de nouveau mot, la demande part.*
+dernier mot récupéré, s'il n'y a pas de nouveau mot, la demande part.* — puis :
+*rendre ce délai réglable, de une à cinq secondes, sans changer le défaut.*
 
 Le défaut corrigé : l'envoi n'avait lieu qu'à la **fin que déclare le moteur de
 reconnaissance** du navigateur, et cette fin peut arriver **plusieurs secondes
@@ -393,10 +394,36 @@ après le dernier mot** (le moteur attend son propre silence). L'écran ne déci
 donc jamais lui-même que la phrase était terminée : on parlait, le texte
 s'écrivait, puis on attendait.
 
-- **Le délai est décidé** : `VOCAL_SILENCE_SEND_MS` (2 000 ms) et la règle
-  **pure** `décideVocalSilenceSend(etats, moment)` sont ajoutées à la **source
-  unique des décisions** (`src/js/vocal-conversation.js`). Ni réglage, ni bouton,
-  ni affichage : le délai ne se règle pas et ne se voit pas.
+- **Le délai est décidé** : la règle **pure** `decideVocalSilenceSend(etats,
+  moment)` vit dans la **source unique des décisions**
+  (`src/js/vocal-conversation.js`). Elle ne lit **aucune constante** : le délai
+  lui **arrive avec l'état** (`etats.delaiMs`), fourni par le **seul** endroit qui
+  arme le minuteur (`vocalSilenceState()` dans `super-agent.js`). Une règle pure
+  se teste donc avec n'importe quel délai, sans configuration.
+- **Valeur par défaut inchangée : DEUX SECONDES.** `VOCAL_SILENCE_SEND_MS`
+  (2 000 ms) reste la valeur par défaut du réglage (et le repli quand la
+  configuration est illisible). Rien d'autre ne la recopie : l'écran Vocal ne
+  connaît que la valeur **relue**, jamais le nombre.
+- **Le réglage, à UN SEUL endroit** : ⚙️ Options → onglet **« Assistant »** →
+  section **« Mode Vocal »**, juste sous le réglage de la voix. Un **curseur de
+  1 à 5 s par pas de 0,5 s** (défaut **2 s**) et la valeur **en toutes lettres**
+  (« 1 seconde », « 2,5 secondes », « 5 secondes »). Mémorisé dans la
+  configuration (`vocal_silence_send_ms`, champ `u32` à défaut 2 000), appliqué
+  **sans redémarrage**. Aucun autre réglage ne concerne ce délai, et il n'est
+  affiché nulle part ailleurs (ni sur l'écran Vocal, ni dans une bulle).
+- **Bornes et pas décidés à UN SEUL endroit** : `normalizeVocalSilenceSendMs`
+  (module pur) — valeur absente, illisible ou ≤ 0 ⇒ **2 secondes** ; en dessous de
+  1 s ⇒ **1 s** ; au-dessus de 5 s ⇒ **5 s** ; toute valeur hors pas est **alignée
+  sur le pas**. L'interface **enregistre** ce que cette fonction rend : une
+  configuration aberrante ne change jamais le comportement. Le libellé vient
+  aussi de là (`vocalSilenceSendLabel`, virgule décimale, singulier à une
+  seconde).
+- **Un changement pendant une dictée s'applique au PROCHAIN armement**, jamais au
+  minuteur déjà lancé : la valeur est lue **au moment d'armer**, elle n'est pas
+  surveillée ensuite. On ne coupe donc **jamais** une parole en changeant un
+  réglage ; c'est le mot suivant (ou la dictée suivante) qui suit la nouvelle
+  valeur. La relecture ne touche pas au minuteur (aucun `clearTimeout`, aucun
+  `setTimeout` dans `refreshVocalSilenceSendMs`).
 - **Pilot par mots, pas à l'horloge** : chaque texte récupéré — **provisoire
   comme définitif** — **repousse** l'échéance. Un texte **identique** au précédent
   n'est pas un nouveau mot : sinon un moteur qui répète son résultat intermédiaire
@@ -415,10 +442,12 @@ s'écrivait, puis on attendait.
   dictée unique) sont **inchangées**.
 - **Ordre des règles** (c'est la spec, testé tel quel) : hors mode → Pilot parle →
   Pilot travaille → dictée refermée → reprise en main → aucun mot → **échéance :
-  refermer** (et, au moment du mot, attendre deux secondes).
+  refermer** (et, au moment du mot, attendre le délai réglé). Les gardes passent
+  **avant** le délai : aucune valeur de réglage ne peut faire partir une demande
+  qu'elles refusent.
 - **La phrase qui annonçait l'envoi « à la fin de la dictée » a été corrigée** là
-  où elle était devenue fausse : c'est le **dernier mot + deux secondes** qui
-décide, plus la fin du moteur.
+  où elle était devenue fausse : c'est le **dernier mot + le délai réglé**
+  (deux secondes par défaut) qui décide, plus la fin du moteur.
 
 ### 6bis.2 Pilot parle court : une réponse de conversation, pas de chat écrit
 
@@ -538,7 +567,7 @@ sa hauteur d'origine.
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
-| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` + `décideVocalSilenceSend`), et **l'unique phrase** à afficher pour chaque panne de dictée |
+| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur, jamais une erreur affichée, un arrêt demandé ou une reprise en main) |
 | `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : la consigne exacte (`VOCAL_BREVITY_INSTRUCTION`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature, aucun réglage |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |

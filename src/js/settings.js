@@ -54,6 +54,13 @@ import {
   VOICES_WAIT_MS,
   READ_ALOUD_STATE_EVENT,
 } from "./read-aloud.js";
+// Mode Vocal : la valeur par défaut du délai d'envoi, ses bornes, son pas et le
+// libellé lisible viennent de la SOURCE UNIQUE des décisions du mode Vocal
+// (`vocal-conversation.js`, pures) : aucun nombre n'est recopié ici.
+import {
+  normalizeVocalSilenceSendMs,
+  vocalSilenceSendLabel,
+} from "./vocal-conversation.js";
 // Voix française LOCALE (Piper, hors ligne) : le statut du moteur et le libellé
 // de son choix viennent d'un seul module — aucune valeur recopiée ici.
 import {
@@ -627,6 +634,25 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   }
 
   /**
+   * Affiche le delai d'envoi du mode Vocal (curseur + libelle lisible).
+   *
+   * Une seule valeur : celle du curseur, passee par `normalizeVocalSilenceSendMs`
+   * (borne 1–5 s, pas de 0,5 s, defaut 2 s). Le libelle est ecrit par l'unique
+   * formatage du produit (`vocalSilenceSendLabel`) : jamais un nombre nu.
+   * @param {number|string} [value] delai en ms (defaut : la configuration)
+   */
+  function refreshVocalSilenceSend(value) {
+    if (!inputVocalSilenceSend) return;
+    const brut =
+      value == null
+        ? currentConfig && currentConfig.vocal_silence_send_ms
+        : value;
+    const ms = normalizeVocalSilenceSendMs(brut);
+    inputVocalSilenceSend.value = String(ms);
+    if (vocalSilenceSendLabelEl) vocalSilenceSendLabelEl.textContent = vocalSilenceSendLabel(ms);
+  }
+
+  /**
    * Remplit le CHOIX DE LA VOIX (section « Lecture des réponses » de l'onglet
    * Assistant) : « automatique » d'abord, puis la voix française LOCALE, puis
    * chaque voix installée.
@@ -1034,6 +1060,11 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const btnReadAloudDownload = document.getElementById("btn-read-aloud-download");
   const btnReadAloudDownloadCancel = document.getElementById("btn-read-aloud-download-cancel");
   const btnReadAloudRecheck = document.getElementById("btn-read-aloud-recheck");
+  // ── Mode Vocal : delai d'envoi sur silence (1 a 5 s, 2 s par defaut) ──
+  // Meme endroit que le reglage de la voix (onglet Assistant), un seul champ,
+  // memorise dans la configuration (`vocal_silence_send_ms`).
+  const inputVocalSilenceSend = document.getElementById("setting-vocal-silence-send");
+  const vocalSilenceSendLabelEl = document.getElementById("vocal-silence-send-label");
   // Dernier etat de lecture connu : la ligne d'etat de la section « Lecture des
   // reponses » le reprend a chaque ouverture de la modale.
   let lastReadAloudState = "";
@@ -1889,6 +1920,10 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   if (assistantSoundVolumeLabel) assistantSoundVolumeLabel.textContent = `${inputAssistantSoundVolume ? inputAssistantSoundVolume.value : 100} %`;
   // Section « Lecture des reponses » : choix de la voix + etat + explication.
   refreshReadAloudVoice(currentConfig && currentConfig.read_aloud_voice);
+  // Section « Mode Vocal » : le delai d'envoi regle (2 s par defaut). La valeur
+  // est BORNEE et alignee par la source unique (`normalizeVocalSilenceSendMs`) :
+  // le curseur ne peut donc jamais afficher autre chose que ce qui s'appliquera.
+  refreshVocalSilenceSend(currentConfig && currentConfig.vocal_silence_send_ms);
   // État du DERNIER téléchargement de modèle : relu, jamais relancé (aucun geste
   // ici — un téléchargement ne part que d'un clic ou d'un choix de voix).
   refreshLocalVoiceDownloadState().then((state) => {
@@ -2082,6 +2117,16 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   if (inputAssistantSoundVolume) {
     inputAssistantSoundVolume.addEventListener("input", () => {
       if (assistantSoundVolumeLabel) assistantSoundVolumeLabel.textContent = `${inputAssistantSoundVolume.value} %`;
+    });
+  }
+  // ── Mode Vocal : delai d'envoi sur silence (onglet Assistant) ──
+  // Meme style de controle que le volume du son voisin : la valeur s'affiche en
+  // clair pendant le glissement. Elle est memorisee par l'enregistrement des
+  // Parametres (cle `vocal_silence_send_ms`) et appliquee sans redemarrage :
+  // l'onglet Assistant la relit sur `pilot-config-changed`.
+  if (inputVocalSilenceSend) {
+    inputVocalSilenceSend.addEventListener("input", () => {
+      refreshVocalSilenceSend(parseInt(inputVocalSilenceSend.value, 10));
     });
   }
   if (btnAssistantSoundTest) {
@@ -2882,6 +2927,12 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         // Lecture des reponses a voix haute : voix choisie dans l'onglet
         // Assistant. Vide = automatique (voix de la langue de l'interface).
         read_aloud_voice: selectReadAloudVoice ? selectReadAloudVoice.value : "",
+        // Mode Vocal : delai d'envoi sur silence (ms). Meme mecanisme que les
+        // reglages voisins : lu au curseur, borne par la source unique, jamais
+        // une valeur hors 1–5 s ecrite dans la configuration.
+        vocal_silence_send_ms: inputVocalSilenceSend
+          ? normalizeVocalSilenceSendMs(parseInt(inputVocalSilenceSend.value, 10))
+          : normalizeVocalSilenceSendMs(0),
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
         super_agent_coordinator: chkSuperAgentCoordinator ? chkSuperAgentCoordinator.checked === true : false,
         super_agent_user_friendly: chkSuperAgentUserFriendly ? chkSuperAgentUserFriendly.checked === true : false,

@@ -280,22 +280,38 @@ refusée, l'écran le dit (`audio-capture`) et le clavier reste utilisable.
 
 ---
 
-## 5quater. Répondre deux secondes après le dernier mot (écran Vocal)
+## 5quater. Répondre après le dernier mot (écran Vocal) : deux secondes par défaut, réglable
 
 > **Décision du propriétaire, appliquée telle quelle** : **deux secondes après le
-> dernier mot récupéré, s'il n'y a pas de nouveau mot, la demande part.**
+> dernier mot récupéré, s'il n'y a pas de nouveau mot, la demande part.** — puis :
+> **ce délai se règle, de une à cinq secondes, sans changer le défaut.**
 
 Le défaut corrigé : l'envoi n'avait lieu qu'à la **fin que déclare le moteur de
 reconnaissance** du navigateur. Cette fin arrive quand **lui** décide qu'on a fini
 de parler — parfois plusieurs secondes après le dernier mot. On parlait, le texte
 s'écrivait, puis on attendait sans savoir pourquoi.
 
-- **Le délai est décidé, il n'est plus subi** : `VOCAL_SILENCE_SEND_MS = 2000` et
-  la règle `décideVocalSilenceSend(etats, moment)` vivent dans la **source unique
-  des décisions de l'écran** (`src/js/vocal-conversation.js`, pures). Aucun
-  réglage, aucun bouton, aucun affichage : le délai ne se règle pas.
+- **Le délai est décidé, il n'est plus subi** : la règle
+  `decideVocalSilenceSend(etats, moment)` vit dans la **source unique des
+décisions de l'écran** (`src/js/vocal-conversation.js`, pures). Elle **ne lit
+  aucune constante** : le délai lui arrive avec l'état (`etats.delaiMs`), fourni
+  par le seul endroit qui arme le minuteur (`vocalSilenceState()` dans
+  `super-agent.js`).
+- **Défaut inchangé : deux secondes.** `VOCAL_SILENCE_SEND_MS = 2000` devient la
+  **valeur par défaut du réglage** (et le repli si la configuration est
+  illisible) ; elle n'est plus une constante figée.
+- **Le réglage, à UN SEUL endroit** : Options → onglet **« Assistant »** → section
+  **« Mode Vocal »**, juste sous le réglage de la voix : un **curseur de 1 à 5 s
+  par pas de 0,5 s** (défaut 2 s) et la valeur **en toutes lettres** (« 2,5
+  secondes »). Champ de configuration `vocal_silence_send_ms` (défaut 2 000),
+  appliqué **sans redémarrage**. Bornes et pas appliqués par une seule fonction
+  pure (`normalizeVocalSilenceSendMs`) : une valeur aberrante ne change jamais le
+  comportement.
+- **Un changement pendant une dictée s'applique au PROCHAIN armement**, jamais au
+  minuteur déjà lancé (la valeur est lue au moment d'armer, pas surveillée
+  ensuite) : on ne coupe jamais une parole en réglant un curseur.
 - **Pilot par mots, pas à l'horloge** : chaque texte récupéré — **provisoire
-  comme définitif** — **repousse** l'échéance de deux secondes. Un texte
+  comme définitif** — **repousse** l'échéance du **délai réglé**. Un texte
   **identique** au précédent n'est pas un nouveau mot (sinon un moteur qui répète
   son résultat intermédiaire repousserait sans fin).
 - **Un seul minuteur à la fois** : celui en vol est remplacé à chaque nouveau mot
@@ -312,17 +328,21 @@ s'écrivait, puis on attendait sans savoir pourquoi.
   des fins vides, dictée unique) sont **inchangées**.
 - **Ordre des règles** (c'est la spec, il est testé tel quel) : hors mode → Pilot
   parle → Pilot travaille → dictée refermée → reprise en main → aucun mot →
-  **échéance : refermer** (au moment du mot : attendre deux secondes).
+  **échéance : refermer** (au moment du mot : attendre le **délai réglé**, deux
+  secondes par défaut). Les gardes passent **avant** le délai.
 
-**Prouvé** (`src/js/vocal-repondre-deux-secondes.test.js`, 31 cas) : la valeur
-(2 000 ms, une seule fois dans le module), l'ordre des règles et toutes les
+**Prouvé** (`src/js/vocal-repondre-deux-secondes.test.js`, 31 cas, +
+`src/js/vocal-delai-envoi-reglable.test.js` pour le réglage) : la valeur par
+défaut (2 000 ms, une seule fois dans le module), l'ordre des règles et toutes les
 gardes, le délai respecté et **repoussé** par chaque mot (horloges simulées : rien
 avant 1 999 ms, la demande à 2 000 ms du **dernier** mot), **un seul** minuteur,
 aucun envoi pendant la lecture / la réflexion / après une reprise en main, aucun
-envoi tardif après la fermeture du mode, et le câblage (une seule affectation de
+envoi tardif après la fermeture du mode, le réglage (bornes 1–5 s, pas de 0,5 s,
+valeur aberrante ramenée, défaut inchangé), la **non-modification du minuteur en
+vol** lors d'un changement de réglage, et le câblage (une seule affectation de
 minuteur, réévaluation à l'échéance, `rec.stop()` réutilisé, un seul
-`applyVoiceEnd`, aucun paramètre ni affichage ajouté). **Non prouvé** : la latence
-réelle du moteur de votre poste (elle n'a plus d'importance pour l'envoi).
+`applyVoiceEnd`). **Non prouvé** : la latence réelle du moteur de votre poste
+(elle n'a plus d'importance pour l'envoi).
 
 ---
 
@@ -432,8 +452,10 @@ texte à la voix.
 - **Dans l'écran Vocal, aucun bouton à toucher** : parler suffit. La dictée
   s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
   travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
-  ci-dessus, **deux secondes après votre dernier mot** (chaque nouveau mot
-  repousse ces deux secondes, donc rien ne part tant que vous parlez). Un appui
+  ci-dessus, **après votre dernier mot** (chaque nouveau mot repousse l'échéance,
+  donc rien ne part tant que vous parlez). Ce **délai d'envoi** (deux secondes
+  par défaut) se règle dans ⚙️ Options → onglet **« Assistant »** → section
+  **« Mode Vocal »**, de **1 à 5 secondes**. Un appui
   sur 🎙️ arrête la dictée et elle ne se rouvre pas contre
   votre volonté. En quittant le mode Vocal, le micro est coupé. Sur un **projet
   sensible** (dictée cloud), l'écran Vocal ne dicte pas. Si la dictée ne peut pas

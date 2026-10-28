@@ -518,13 +518,18 @@ En mode **Vocal** :
   seul : **un clic sur 🎙️** la rétablit. Comptent comme « rien transcrit » les
   fins **vides** de la dictée, y compris celles où le moteur s'arrête **sans rien
   dire** — c'est ce qui empêche le micro de se rouvrir sans limite.
-- **La demande part deux secondes après votre dernier mot.** Pilot n'attend plus
-  que le moteur de reconnaissance veuille bien se taire : **deux secondes après
-  le dernier mot entendu**, s'il n'y en a pas de nouveau, la demande part. Tant
-  que vous parlez, rien ne part — **chaque nouveau mot repousse ces deux
-  secondes** —, et rien ne part non plus pendant que Pilot lit sa réponse ou
-  travaille, ni si vous avez repris la main pour écrire dans la zone. Ce délai
-  n'est pas réglable : il n'y a ni réglage, ni bouton, ni indicateur.
+- **La demande part deux secondes après votre dernier mot** (par défaut).
+  Pilot n'attend plus que le moteur de reconnaissance veuille bien se taire :
+  **après ce délai sans nouveau mot entendu**, la demande part. Tant que vous
+  parlez, rien ne part — **chaque nouveau mot repousse l'échéance** —, et rien
+  ne part non plus pendant que Pilot lit sa réponse ou travaille, ni si vous
+  avez repris la main pour écrire dans la zone.
+- **Ce délai se règle**, à un seul endroit : ⚙️ **Options → onglet
+  « Assistant » → section « Mode Vocal »**, de **1 à 5 secondes** par pas d'une
+  demi-seconde, **2 secondes** au départ, et la valeur choisie s'affiche en
+  toutes lettres (« 2,5 secondes »). Il est mémorisé et s'applique **tout de
+  suite** : une demande déjà en train de partir n'est pas modifiée, c'est la
+  suivante qui suit la nouvelle valeur.
 - **Pilot parle court dans ce mode.** Comme la voix est le seul chemin, la
   réponse est celle d'une **conversation** : **deux ou trois phrases au plus**,
   sans liste, sans titre, sans nom de fichier, sans code — juste ce qui est
@@ -565,6 +570,10 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   **choix de la voix**, l'**état de la lecture** et l'**explication**, regroupés
   au même endroit — ce réglage n'existe nulle part ailleurs (ni dans un autre
   onglet des Options, ni dans une fenêtre par message).
+- **Juste en dessous, la section « Mode Vocal »** porte le **Délai d'envoi** de
+  l'écran vocal (de 1 à 5 secondes, **2 secondes** par défaut) : le temps
+  d'attente après votre dernier mot avant que la demande parte toute seule.
+  Aucun autre réglage ne le concerne, et il n'existe nulle part ailleurs.
 - **Vous écoutez chaque voix avant de choisir** : sous la liste, chaque voix
   proposée a son bouton **« ▶ Écouter »**, qui lit une **phrase d'exemple courte**
   en français. Le même bouton devient **« ⏹ Arrêter »** pendant la lecture, et
@@ -1244,8 +1253,10 @@ texte à la voix.
 - **Dans l'écran Vocal, aucun bouton à toucher** : parler suffit. La dictée
   s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
   travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
-  ci-dessus, **deux secondes après votre dernier mot** (chaque nouveau mot
-  repousse ces deux secondes, donc rien ne part tant que vous parlez). Un appui
+  ci-dessus, **après votre dernier mot** (chaque nouveau mot repousse l'échéance,
+  donc rien ne part tant que vous parlez). Ce **délai d'envoi** (deux secondes
+  par défaut) se règle dans ⚙️ Options → onglet **« Assistant »** → section
+  **« Mode Vocal »**, de **1 à 5 secondes**. Un appui
   sur 🎙️ arrête la dictée et elle ne se rouvre pas contre
   votre volonté. En quittant le mode Vocal, le micro est coupé. Sur un **projet
   sensible** (dictée cloud), l'écran Vocal ne dicte pas. Si la dictée ne peut pas

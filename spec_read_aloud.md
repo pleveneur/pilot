@@ -106,6 +106,12 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
 
 - **Aucun doublon** : ce réglage n'existe dans aucun autre onglet des paramètres
   et dans aucune fenêtre par message (vérifié par test).
+- **Juste en dessous**, la section voisine `#settings-section-vocal-delay`
+  (« Mode Vocal ») porte le **délai d'envoi** de l'écran vocal
+  (`#setting-vocal-silence-send`, champ de configuration
+  `vocal_silence_send_ms`, 1 à 5 s par pas de 0,5 s, **2 s par défaut**), décrit
+  dans `spec_modes_ecran_vocal.md` § 6bis.1. Il est **voisin, pas mélangé** : la
+  section de la voix ne contient aucun élément du mode Vocal, et réciproquement.
 - Le libellé du champ est relié (`<label for>`), le champ décrit sa note et sa
   ligne d'état (`aria-describedby`), la ligne d'état est annoncée.
 - Le sélecteur est rempli **à l'ouverture de la modale** et **à l'ouverture de

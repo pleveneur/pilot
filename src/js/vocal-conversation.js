@@ -48,7 +48,7 @@
 //
 // Vocabulaire de la décision du SILENCE (`decideVocalSilenceSend`) :
 //   action = VOCAL_SILENCE_WAIT    un mot vient d'arriver : attendre encore
-//                                  VOCAL_SILENCE_SEND_MS (2 s)
+//                                  délai réglé (2 s par défaut)
 //   action = VOCAL_SILENCE_CANCEL  annuler le minuteur (rien ne partira)
 //   action = VOCAL_SILENCE_CLOSE   échéance atteinte sans nouveau mot : refermer
 //                                  la dictée — l'envoi reste celui d'aujourd'hui
@@ -129,12 +129,50 @@ export const VOCAL_DICTATION_HOLD = "rien";
  * parfois très long). L'écran ne décidait donc jamais lui-même que la phrase
  * était terminée : on parlait, le texte s'écrivait, puis on attendait.
  *
- * Cette valeur n'est PAS un réglage : elle ne se règle ni ne s'affiche, et il
- * n'existe aucun autre délai de ce genre dans l'écran.
+ * Cette valeur est le DÉFAUT du réglage : depuis que le délai est réglable
+ * (Paramètres → onglet « Assistant » → section « Mode Vocal », 1 à 5 s par pas
+ * de 0,5 s, champ `vocal_silence_send_ms`), elle sert de valeur quand rien n'est
+ * réglé et de repli quand la configuration est illisible. Elle reste la SEULE
+ * valeur par défaut : aucun autre module ne la recopie.
  */
 export const VOCAL_SILENCE_SEND_MS = 2000;
 
-/** Attendre encore : le minuteur est (re)programmé à `VOCAL_SILENCE_SEND_MS`. */
+/** Borne basse du réglage (ms). */
+export const VOCAL_SILENCE_SEND_MIN_MS = 1000;
+/** Borne haute du réglage (ms). */
+export const VOCAL_SILENCE_SEND_MAX_MS = 5000;
+/** Pas du curseur du réglage (ms) : une demi-seconde. */
+export const VOCAL_SILENCE_SEND_STEP_MS = 500;
+
+/**
+ * Ramène une valeur quelconque (réglage, configuration ancienne, valeur
+ * absente) à un délai RÉELLEMENT utilisable : borné à 1–5 s et aligné sur le pas
+ * du curseur. Absent, illisible, nul ou négatif ⇒ la valeur PAR DÉFAUT (2 s).
+ *
+ * Fonction PURE : c'est le seul endroit qui décide de ce qu'une valeur veut
+ * dire. Elle sert à la fois à l'écran de réglage (affichage et enregistrement)
+ * et à la décision du silence (lecture de la valeur réglée).
+ */
+export function normalizeVocalSilenceSendMs(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return VOCAL_SILENCE_SEND_MS;
+  const borne = Math.min(VOCAL_SILENCE_SEND_MAX_MS, Math.max(VOCAL_SILENCE_SEND_MIN_MS, n));
+  const pas = Math.round(borne / VOCAL_SILENCE_SEND_STEP_MS) * VOCAL_SILENCE_SEND_STEP_MS;
+  return Math.min(VOCAL_SILENCE_SEND_MAX_MS, Math.max(VOCAL_SILENCE_SEND_MIN_MS, pas));
+}
+
+/**
+ * Libellé lisible du délai réglé : « 2 secondes », « 1 seconde », « 2,5 secondes ».
+ * Une seule formulation pour tout le produit (aucun autre formatage).
+ */
+export function vocalSilenceSendLabel(value) {
+  const ms = normalizeVocalSilenceSendMs(value);
+  const secondes = ms / 1000;
+  const texte = Number.isInteger(secondes) ? String(secondes) : String(secondes).replace(".", ",");
+  return `${texte} ${secondes <= 1 ? "seconde" : "secondes"}`;
+}
+
+/** Attendre encore : le minuteur est (re)programmé au délai réglé (`delai`). */
 export const VOCAL_SILENCE_WAIT = "attendre";
 /** Ne rien fermer, et annuler le minuteur en vol s'il y en a un. */
 export const VOCAL_SILENCE_CANCEL = "annuler";
@@ -367,10 +405,16 @@ export function planVocalConversation(etats = {}, memoire = {}) {
  *   6. aucun mot récupéré    → rien à envoyer (et rien n'a été écrit)
  *   7. échéance + des mots   → FERMER la dictée ; l'envoi reste celui
  *                              d'aujourd'hui (fin d'écoute → envoi automatique)
- *   8. mot reçu              → attendre `VOCAL_SILENCE_SEND_MS` de plus
+ *   8. mot reçu              → attendre le délai RÉGLÉ de plus (2 s par défaut,
+ *                              champ `vocal_silence_send_ms`)
+ *
+ * Le délai n'est pas lu ici dans une constante : il arrive AVEC l'état
+ * (`delaiMs`), fourni par le seul lecteur du réglage — l'écran Vocal, au moment
+ * précis où il arme son minuteur. La fonction reste donc pure, et une valeur
+ * absente ou illisible retombe sur le défaut (2 s).
  *
  * @param {object} [etats] `modeOuvert`, `pilotParle`, `reflechit`, `occupe`,
- *   `dicteeOuverte`, `repriseMain`, `motEntendu`
+ *   `dicteeOuverte`, `repriseMain`, `motEntendu`, `delaiMs`
  * @param {"mot"|"echeance"} [moment] d'où vient la question
  * @returns {{action: string, raison: string, delai: number}}
  */
@@ -395,5 +439,7 @@ export function decideVocalSilenceSend(etats = {}, moment = "mot") {
   }
   // 8. Un mot vient d'arriver : il repousse l'échéance (aucune coupure en pleine
   // phrase). Le minuteur en vol est remplacé — il n'y en a jamais deux.
-  return { action: VOCAL_SILENCE_WAIT, raison: "mot-entendu", delai: VOCAL_SILENCE_SEND_MS };
+  // Le délai est celui que l'appelant a REÇU (réglage), jamais une constante
+  // lue ici : absent ou illisible, il retombe sur le défaut (2 s).
+  return { action: VOCAL_SILENCE_WAIT, raison: "mot-entendu", delai: normalizeVocalSilenceSendMs(e.delaiMs) };
 }

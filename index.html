@@ -1387,6 +1387,21 @@
               <button type="button" id="btn-read-aloud-recheck" class="web-btn" title="Rev&eacute;rifier maintenant la pr&eacute;sence du moteur et du mod&egrave;le (l'&eacute;tat affich&eacute; peut &ecirc;tre p&eacute;rim&eacute;).">V&eacute;rifier &agrave; nouveau</button>
             </div>
           </div>
+          <!-- Mode Vocal : SEUL endroit ou se regle le delai d'envoi apres le
+               dernier mot (juste sous le reglage de la voix). Meme mecanisme de
+               memorisation que les reglages voisins : champ de configuration
+               `vocal_silence_send_ms`, applique sans redemarrage. -->
+          <div class="settings-section" id="settings-section-vocal-delay">
+            <h3 class="settings-section-title"><i data-lucide="mic" class="icon-sm"></i> Mode Vocal</h3>
+            <div class="setting-row">
+              <label for="setting-vocal-silence-send" title="En mode Vocal, votre demande part toute seule apres ce delai sans nouveau mot (deux secondes par defaut). Un delai court rend la conversation plus vive ; un delai long laisse le temps de reflechir entre deux phrases. Chaque mot que vous dites repousse l'echeance.">D&eacute;lai d'envoi :</label>
+              <input type="range" id="setting-vocal-silence-send" min="1000" max="5000" step="500" value="2000" style="flex:1;max-width:200px;" aria-describedby="vocal-silence-send-note" />
+              <span id="vocal-silence-send-label" style="min-width:90px;text-align:right;font-size:12px;">2 secondes</span>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="vocal-silence-send-note" role="note">En mode Vocal, votre demande part toute seule apr&egrave;s ce d&eacute;lai sans nouveau mot&nbsp;; chaque mot que vous dites repousse l'&eacute;ch&eacute;ance. Le r&eacute;glage prend effet imm&eacute;diatement&nbsp;: une demande d&eacute;j&agrave; en train de partir n'est pas modifi&eacute;e, c'est la suivante qui suit la nouvelle valeur.</span>
+            </div>
+          </div>
           <div class="settings-section">
             <h3 class="settings-section-title"><i data-lucide="building-2" class="icon-sm"></i> Clients</h3>
             <div class="setting-row">

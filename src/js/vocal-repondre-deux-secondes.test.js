@@ -399,11 +399,19 @@ describe("câblage dans super-agent.js : un minuteur, un seul chemin d'envoi", (
     expect(etat).not.toContain("SpeechRecognition");
   });
 
-  it("aucun réglage, aucun bouton, aucun affichage de débogage ajouté", () => {
-    // Le délai n'est pas réglable et ne s'affiche pas.
+  it("aucune valeur en dur ni trace de débogage dans le module pur", () => {
+    // Le délai PAR DÉFAUT n'est jamais recopié hors du module de décisions :
+    // l'écran Vocal ne connaît que la valeur relue (`vocalSilenceSendMs`).
+    // Le réglage lui-même vit ailleurs (Paramètres + configuration) et il est
+    // verrouillé par `vocal-delai-envoi-reglable.test.js`.
     expect(SUPER).not.toContain("VOCAL_SILENCE_SEND_MS");
+    expect(SUPER).not.toMatch(/vocalSilenceSendMs\s*=\s*2000/);
     expect(MODULE).not.toContain("localStorage");
     expect(MODULE).not.toContain("read_aloud_");
+    // Le module pur ne LIT aucune configuration (le champ n'y est que cité en
+    // commentaire) : la valeur arrive par l'état, jamais par un appel.
+    expect(MODULE).not.toContain("invoke(");
+    expect(MODULE).not.toContain("get_config");
     // Aucune trace de débogage propre à ce délai.
     expect(SUPER).not.toMatch(/console\.[a-z]+\([^)]*silence/i);
   });
@@ -414,12 +422,12 @@ describe("documentation : la spec et l'aide disent les deux secondes", () => {
   it("la spec du mode Vocal nomme le délai et son signal", () => {
     expect(SPEC_VOCAL).toMatch(/deux secondes/i);
     expect(SPEC_VOCAL).toMatch(/dernier mot/i);
-    expect(SPEC_VOCAL).toMatch(/décideVocalSilenceSend/);
+    expect(SPEC_VOCAL).toMatch(/decideVocalSilenceSend/);
   });
 
   it("la spec de la dictée vocale le dit aussi (une seule règle, deux docs)", () => {
     expect(SPEC_DICTEE).toMatch(/deux secondes/i);
-    expect(SPEC_DICTEE).toMatch(/décideVocalSilenceSend/);
+    expect(SPEC_DICTEE).toMatch(/decideVocalSilenceSend/);
     expect(SPEC_DICTEE).toMatch(/dernier mot/i);
   });
 
