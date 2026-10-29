@@ -466,8 +466,8 @@ En mode **Vocal** :
 - **Quand Pilot lit sa réponse**, une lueur ambre se lève **au bord** du cercle :
   c'est la voix de Pilot, **à l'extérieur** du disque (la vôtre s'allume
   **dedans**, en vert). Ce liseré **suit sa voix** : il s'étend quand ses mots
-  portent, se resserre dans les pauses. Il s'étend loin — environ **44 px**
-  au-delà du cercle (**128 px de rayon** au plus) — sans jamais toucher la phrase
+  portent, se resserre dans les pauses. Il s'étend loin — environ **88 px**
+  au-delà du cercle (**256 px de rayon** au plus) — sans jamais toucher la phrase
   d'état ni la barre de saisie, et sans agrandir la fenêtre.
   **Comment il suit, selon la voix** : avec les **voix installées sur votre
   ordinateur** (les voix françaises locales), Pilot joue lui-même le son et
@@ -478,8 +478,27 @@ En mode **Vocal** :
   dans les **pauses de la ponctuation**. Dans les deux cas, le silence laisse la
   lueur au repos, et deux phrases de longueurs différentes ne bougent pas
   pareil.
+- **Le halo du cercle reste allumé, même au repos.** Il ne s'éteint plus quand
+  vous vous taisez : c'est **la couleur** qui dit l'état (thème au repos, vert
+  quand il vous entend, violet quand il réfléchit, ambre quand il parle), et
+  c'est la **forme** qui dit le reste (la couronne s'élargit quand Pilot parle,
+  un arc tourne quand il réfléchit). L'écran n'est donc plus jamais éteint, et il
+  ne change pas d'intensité d'un état à l'autre : rien ne clignote.
+- **Le cercle est plus grand**, et il s'adapte à la hauteur de votre fenêtre : il
+  occupe **de 120 à 336 px** de large (336 px sur un écran de bureau habituel),
+  pour que sa lumière ne soit jamais rognée sur une fenêtre courte.
+- **Le bas de l'écran s'efface quand vous ne faites rien.** Au repos, la phrase
+  d'état et la zone de saisie disparaissent après **deux secondes et demie** :
+  l'écran ne garde que le cercle. **Bougez la souris, cliquez, tournez la molette
+  ou tapez une touche** : le bas revient aussitôt (`Échap`, lui, sort du mode).
+  Il **reste affiché** tant que Pilot vous écoute ou vous répond, tant que le
+  champ contient du texte (une dictée en cours de transcription), et tant qu'une
+  panne de micro est annoncée. Le cercle, le bouton « Réveiller … », le logo et
+  le bouton « Travail », eux, **ne disparaissent jamais**, et le cercle **ne
+  bouge pas d'un pixel** quand le bas s'efface.
 - **Si vous avez réduit les animations**, cette lueur reste **allumée et fixe**,
-  à sa taille pleine — elle ne clignote pas et ne disparaît pas.
+  à sa taille pleine — elle ne clignote pas et ne disparaît pas ; le bas, lui,
+  apparaît et disparaît **d'un coup**, sans fondu.
 - **L'écran distingue le silence de la parole** : quand vous vous taisez, il est
   au **repos** (couleur du thème, « Je vous écoute. ») ; dès que votre voix est
   réellement entendue, il passe en **écoute** (vert, « Je vous écoute… ») et y

@@ -121,6 +121,19 @@ import {
   vocalRestartText,
   VOCAL_RESTART_VERB,
 } from "./vocal-restart.js";
+// LE BAS DE L'ECRAN S'EFFACE AU REPOS (CONCEPTION-ecran-vocal-cercle-et-bas.md
+// §2) : la DECISION est PURE et vit dans vocal-chrome.js (les quatre
+// circonstances qui interdisent le masquage, le seuil de 4 px, la touche
+// Echap, le delai de 2 500 ms). Ici, on ne fait que l'appliquer, en UN SEUL
+// point d'ecriture (`vocalSyncChrome`), avec UN SEUL minuteur.
+import {
+  vocalChromeVisible,
+  vocalChromeClass,
+  vocalChromeWakeKey,
+  vocalChromeMoved,
+  VOCAL_CHROME_IDLE_MS,
+  VOCAL_CHROME_HIDDEN_CLASS,
+} from "./vocal-chrome.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage, purgeAgentTabView } from "./agent-pi.js";
 import {
@@ -3595,6 +3608,25 @@ export async function createSuperAgent(container) {
   // `pilot-read-aloud-state`, emis par read-aloud.js) : SEULE source de l'etat
   // « Pilot parle ». Aucun second lecteur n'est cree.
   let vocalSpeaking = false;
+  // ── LE BAS DE L'ECRAN S'EFFACE AU REPOS (conception « cercle et bas » §2) ──
+  // Quatre etats seulement, declares ICI pour la meme raison que ci-dessus :
+  // `applyVocalState` peut etre appele des l'ouverture de l'onglet, donc avant
+  // le corps de l'ecran Vocal plus bas (une `let` declaree la-bas serait en
+  // zone morte temporelle).
+  //  - `vocalChromeTimer` : L'UNIQUE minuteur du masquage (0 = aucun). Jamais
+  //    deux : chaque reveil l'annule et le repose ;
+  //  - `vocalChromeEtat` : le dernier etat calcule par `applyVocalState`, pour
+  //    que les autres appels (frappe, dictee) n'aient pas a le recalculer ni a
+  //    le deviner dans les classes CSS ;
+  //  - `vocalChromePointeur` : derniere position connue du pointeur (regle 4 :
+  //    ne pas cacher ce que la souris vise) ;
+  //  - `vocalChromeRepere` : derniere position qui a REVEILLE le bas. C'est le
+  //    point de depart du seuil de 4 px — le tremblement d'une main posee ne
+  //    reveille donc jamais l'ecran.
+  let vocalChromeTimer = 0;
+  let vocalChromeEtat = "idle";
+  let vocalChromePointeur = null;
+  let vocalChromeRepere = null;
   // ── L'ENVELOPPE DE PAROLE MESUREE (voix locale) ──
   // Le metre (analyseur monte sur le son que Pilot joue vraiment) vit dans
   // vocal-enveloppe-aigu.js. Il n'existe QUE pendant le mode Vocal : cree a
@@ -3903,6 +3935,10 @@ export async function createSuperAgent(container) {
   if (inputEl) {
     inputEl.addEventListener("input", () => {
       if (voiceActive) voiceUserTookOver = true;
+      // §2.5 : une frappe REVEILLE le bas de l'ecran Vocal (et le decompose
+      // repart). Hors du mode, `vocalWakeChrome` ne fait rien du tout :
+      // l'ecouteur reste celui du champ, il n'est ni duplique ni conditionnel.
+      vocalWakeChrome();
     });
   }
 
@@ -4026,6 +4062,10 @@ export async function createSuperAgent(container) {
       const sep = preText && !preText.endsWith(" ") ? " " : "";
       inputEl.value = preText + sep + transcript;
       resizeInput();
+      // §2.5 : un texte DICTE occupe la zone — le bas revient, comme pour une
+      // frappe (l'ecriture du moteur n'emet aucun `input`, c'est donc ici que
+      // l'ecran l'apprend).
+      vocalWakeChrome();
       // ENVOI SUR SILENCE : chaque TEXTE recupere (provisoire ou definitif)
       // repousse l'echeance du delai REGLE (2 s par defaut, 1 a 5 s). Un texte
       // identique au precedent n'est pas un nouveau mot : il ne la repousse pas.
@@ -4763,6 +4803,145 @@ export async function createSuperAgent(container) {
     // programme a l'instant, et le bouton ne doit pas s'allumer pour un
     // demi-clignement de 350 ms.
     vocalSyncRestartButton(state);
+    // LE BAS S'EFFACE AU REPOS (§2.6). Dernier appel de la fonction, et SEUL
+    // point d'ecriture de la classe : aucun autre endroit ne pose ni ne retire
+    // `.vocal-chrome-hidden`. Il est APRES le bouton de relance pour la meme
+    // raison (l'etat vient d'etre fige).
+    vocalSyncChrome(state);
+  }
+
+  /** Annule l'unique minuteur du bas. Rien d'autre : aucune classe, aucun etat. */
+  function clearVocalChromeTimer() {
+    if (!vocalChromeTimer) return;
+    clearTimeout(vocalChromeTimer);
+    vocalChromeTimer = 0;
+  }
+
+  /**
+   * LE MINUTEUR UNIQUE du masquage du bas : 2 500 ms, repart de zero a chaque
+   * geste. Il n'en existe qu'un (cette variable), il est toujours annule avant
+   * d'etre repose, et il est retire a la sortie du mode : aucune minuterie ne
+   * survit a l'ecran.
+   */
+  function vocalRestartChromeTimer() {
+    clearVocalChromeTimer();
+    vocalChromeTimer = setTimeout(() => {
+      vocalChromeTimer = 0;
+      // Le delai vient de sonner : c'est la SEULE chose qui puisse effacer le
+      // bas, et seulement si les quatre regles ne le retiennent pas. Le minuteur
+      // n'est pas repose ici (sinon il tournerait sans fin).
+      vocalSyncChrome();
+    }, VOCAL_CHROME_IDLE_MS);
+  }
+
+  /**
+   * Le pointeur est-il sur la zone du bas ? (regle 4 du module pur : on ne
+   * cache pas ce que la souris vise.) Lit les trois rectangles REELLEMENT
+   * peints : un noeud efface (opacite 0) garde sa place, donc ses mesures —
+   * c'est ce qui permet de revenir sur la zone sans avoir a la deviner.
+   */
+  function vocalChromePointeurSurLeBas() {
+    if (!vocalOverlay || !vocalChromePointeur) return false;
+    const { x, y } = vocalChromePointeur;
+    for (const selecteur of [".vocal-status", ".vocal-input", ".vocal-mic-fix"]) {
+      const noeud = vocalOverlay.querySelector(selecteur);
+      if (!noeud) continue;
+      let rect = null;
+      try {
+        rect = noeud.getBoundingClientRect();
+      } catch (_) {
+        rect = null;
+      }
+      if (!rect || (rect.width === 0 && rect.height === 0)) continue;
+      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return true;
+    }
+    return false;
+  }
+
+  /**
+   * POINT D'ECRITURE UNIQUE de `.vocal-chrome-hidden` (§2.6).
+   *
+   * Il ne DECIDE rien : la decision est pure (`vocal-chrome.js`), les faits sont
+   * ceux du moment ; ce bloc les rassemble, applique la classe et c'est tout.
+   *
+   * Le bas est visible dans DEUX cas :
+   *  - le decompte tourne (`vocalChromeTimer` non nul) — « pendant ces 2,5 s, le
+   *    bas est visible, y compris si l'on ne fait rien » (§2.3) ;
+   *  - aucune des quatre circonstances ne permet le masquage (decision pure).
+   *
+   * Le minuteur n'est JAMAIS pose ici : seuls les gestes (`vocalWakeChrome`) et
+   * l'entree dans le mode le posent. Un appel qui ne vient d'aucun geste ne peut
+   * donc pas rallumer indefiniment le bas.
+   *
+   * @param {string} [state] etat visuel deja calcule (sinon le dernier connu)
+   */
+  function vocalSyncChrome(state) {
+    if (!vocalOverlay) {
+      clearVocalChromeTimer();
+      return;
+    }
+    if (state) vocalChromeEtat = state;
+    const champ = inputEl || null;
+    const texte = champ ? String(champ.value == null ? "" : champ.value) : "";
+    const faits = {
+      etat: vocalChromeEtat,
+      saisie: texte.trim() !== "" || (champ ? document.activeElement === champ : false),
+      micFerme: vocalMicFerme,
+      pointeurActif: vocalChromePointeurSurLeBas(),
+    };
+    const visible = vocalChromeTimer !== 0 || vocalChromeVisible(faits);
+    // SEUL endroit qui ecrit la classe, et la correspondance classe/visibilite
+    // est celle du module pur (`vocalChromeClass`) : aucun deuxieme juge.
+    const classe = vocalChromeClass(visible);
+    vocalOverlay.classList.toggle(VOCAL_CHROME_HIDDEN_CLASS, classe !== "");
+  }
+
+  /**
+   * UN GESTE : le bas revient et le decompte repart de zero (§2.2). C'est le
+   * seul chemin qui (re)pose le minuteur en cours de mode.
+   */
+  function vocalWakeChrome() {
+    if (!vocalOverlay) return;
+    vocalRestartChromeTimer();
+    vocalSyncChrome();
+  }
+
+  // Les QUATRE facons de reveiller le bas (§2.5) : pointeur qui bouge de 4 px,
+  // clic, molette, clavier — sauf Echap (la touche de sortie du mode). Posees a
+  // l'entree du mode, retirees a la sortie : aucun ecouteur ne survit.
+  const onVocalChromePointerMove = (e) => {
+    if (!vocalOverlay) return;
+    const position = { x: e.clientX, y: e.clientY };
+    vocalChromePointeur = position;
+    if (!vocalChromeMoved(position, vocalChromeRepere)) return;
+    vocalChromeRepere = position;
+    vocalWakeChrome();
+  };
+  const onVocalChromePointerDown = (e) => {
+    vocalChromePointeur = { x: e.clientX, y: e.clientY };
+    vocalChromeRepere = vocalChromePointeur;
+    vocalWakeChrome();
+  };
+  const onVocalChromeWheel = () => {
+    vocalWakeChrome();
+  };
+  const onVocalChromeKeydown = (e) => {
+    if (!vocalChromeWakeKey(e && e.key)) return;
+    vocalWakeChrome();
+  };
+
+  function attachVocalChromeListeners() {
+    document.addEventListener("pointermove", onVocalChromePointerMove, true);
+    document.addEventListener("pointerdown", onVocalChromePointerDown, true);
+    document.addEventListener("wheel", onVocalChromeWheel, { capture: true, passive: true });
+    document.addEventListener("keydown", onVocalChromeKeydown, true);
+  }
+
+  function detachVocalChromeListeners() {
+    document.removeEventListener("pointermove", onVocalChromePointerMove, true);
+    document.removeEventListener("pointerdown", onVocalChromePointerDown, true);
+    document.removeEventListener("wheel", onVocalChromeWheel, true);
+    document.removeEventListener("keydown", onVocalChromeKeydown, true);
   }
 
   /**
@@ -5420,58 +5599,99 @@ export async function createSuperAgent(container) {
     // (`screen-mode.js`) : entrer ici, c'est etre en « Vocal », meme quand on
     // vient de « Assistant seul » (dont la sortie a ecrit « Detaille »).
     rememberScreenMode("vocal");
+    // §2.5 : les QUATRE facons de reveiller le bas sont posees ICI, a l'entree,
+    // et retirees a la sortie. Le bas demarre VISIBLE (on entre dans l'ecran, on
+    // n'arrive pas sur un ecran vide) ; le premier decompte part tout seul.
+    vocalChromePointeur = null;
+    vocalChromeRepere = null;
+    vocalChromeEtat = "idle";
+    attachVocalChromeListeners();
+    // Entrer dans le mode EST un geste : le decompte part donc deja, et le bas
+    // est visible a l'ouverture (on n'arrive jamais sur un ecran nu).
+    vocalRestartChromeTimer();
     applyVocalState();
   }
 
   function exitVocal() {
     if (!vocalOverlay) return;
-    // QUITTER l'ecran, c'est rendre le silence : si Pilot est en train de lire
-    // (lecture declenchee par ce mode), sortir l'arrete. Sans cela, une voix
-    // lancee ici continuerait dans « Detaille », qui ne doit rien changer a son
-    // propre comportement. L'arret passe par la SEULE voie existante.
-    if (vocalSpeaking) stopReading();
-    // L'ENVELOPPE : plus de mesure du tout derriere l'ecran (l'espion du son
-    // local est debranche, la boucle est annulee, l'analyseur est lache), et
-    // les valeurs posees disparaissent avec l'overlay retire plus bas.
-    if (vocalEnvelopeMeter) {
-      vocalEnvelopeMeter.arreter();
-      vocalEnvelopeMeter = null;
+    // ── LA SORTIE NE DEPEND PAS DU SUCCES DU DEMONTAGE (issue #381) ──
+    // Le calque plein ecran n'est retire QU'A LA FIN de cette fonction : une
+    // exception levee au milieu du demontage (arret de la lecture, du micro,
+    // des minuteries, de la dictee) laissait donc l'ecran Vocal en place,
+    // `vocalOverlay` non nul et l'utilisateur sans AUCUNE sortie — les trois
+    // voies d'appel (`#mode-logo`, Echap, fermeture de l'onglet) rappelaient
+    // la meme fonction et echouaient au meme endroit. Seule la saisie
+    // clavier repondait encore ; il fallait tuer le processus.
+    // Le demontage est donc enferme dans un `try` dont le `catch` ne propage
+    // rien : la restitution des trois noeuds et le retrait du calque, ecrits
+    // PLUS BAS, sont atteints dans tous les cas.
+    try {
+      // §2.5 : aucun ecouteur du bas ne survit a l'ecran, et aucune minuterie non
+      // plus. La classe part avec l'overlay (il est retire plus bas), mais on
+      // l'efface tout de suite pour que rien ne depende de l'ordre de retrait.
+      clearVocalChromeTimer();
+      detachVocalChromeListeners();
+      vocalChromePointeur = null;
+      vocalChromeRepere = null;
+      vocalChromeEtat = "idle";
+      if (vocalOverlay) vocalOverlay.classList.remove(VOCAL_CHROME_HIDDEN_CLASS);
+      // QUITTER l'ecran, c'est rendre le silence : si Pilot est en train de lire
+      // (lecture declenchee par ce mode), sortir l'arrete. Sans cela, une voix
+      // lancee ici continuerait dans « Detaille », qui ne doit rien changer a son
+      // propre comportement. L'arret passe par la SEULE voie existante.
+      if (vocalSpeaking) stopReading();
+      // L'ENVELOPPE : plus de mesure du tout derriere l'ecran (l'espion du son
+      // local est debranche, la boucle est annulee, l'analyseur est lache), et
+      // les valeurs posees disparaissent avec l'overlay retire plus bas.
+      if (vocalEnvelopeMeter) {
+        vocalEnvelopeMeter.arreter();
+        vocalEnvelopeMeter = null;
+      }
+      // La source « rythme » (voix du systeme) s'arrete avec le mode : aucune
+      // horloge ne continue derriere l'ecran.
+      vocalStopRhythmMeter();
+      vocalClearEnvelope();
+      // CONVERSATION PARLEE : la sortie FERME la dictee (aucun peripherique ne
+      // reste ouvert derriere l'ecran) et annule tout armement programme. Meme
+      // regle que le micro de mesure : on ne vous ecoute pas hors de cet ecran.
+      clearVocalArmTimer();
+      // ENVOI SUR SILENCE : la sortie n'envoie rien de tardif — le minuteur part
+      // avec le mode, comme l'armement.
+      clearVocalSilenceTimer();
+      if (voiceActive) stopVoiceInput();
+      vocalApresLecture = false;
+      vocalArretManuel = false;
+      vocalDictationErreur = "";
+      // LOT 3 : le micro est COUPE a la sortie — flux ARRETE (pistes `stop()`),
+      // contexte audio ferme, boucle de mesure annulee. Pas seulement « ignore » :
+      // aucun peripherique ne reste ouvert derriere l'ecran.
+      if (vocalMic) {
+        vocalMic.fermer();
+        vocalMic = null;
+      }
+      vocalMicListening = false;
+      vocalMicCapte = false;
+      vocalMicFerme = "";
+      vocalMicDemande = false;
+      // La reponse sur le projet sensible ne survit pas a la sortie : la prochaine
+      // entree la redemande (une valeur perimee pourrait bloquer une dictee
+      // legitime, ou en ouvrir une sur un projet devenu 🔒 entre-temps).
+      vocalSensibiliteConnue = false;
+      vocalSensibiliteIndisponible = false;
+    } catch (err) {
+      // Un demontage qui echoue est TRACE et N'EMPECHE RIEN : l'ecran se ferme
+      // quand meme, c'est la seule chose qui compte pour l'utilisateur.
+      try {
+        console.warn("[vocal] demontage incomplet a la sortie :", err);
+      } catch (_) {
+        /* une console absente ne bloque pas la sortie */
+      }
     }
-    // La source « rythme » (voix du systeme) s'arrete avec le mode : aucune
-    // horloge ne continue derriere l'ecran.
-    vocalStopRhythmMeter();
-    vocalClearEnvelope();
-    // CONVERSATION PARLEE : la sortie FERME la dictee (aucun peripherique ne
-    // reste ouvert derriere l'ecran) et annule tout armement programme. Meme
-    // regle que le micro de mesure : on ne vous ecoute pas hors de cet ecran.
-    clearVocalArmTimer();
-    // ENVOI SUR SILENCE : la sortie n'envoie rien de tardif — le minuteur part
-    // avec le mode, comme l'armement.
-    clearVocalSilenceTimer();
-    if (voiceActive) stopVoiceInput();
-    vocalApresLecture = false;
-    vocalArretManuel = false;
-    vocalDictationErreur = "";
-    // LOT 3 : le micro est COUPE a la sortie — flux ARRETE (pistes `stop()`),
-    // contexte audio ferme, boucle de mesure annulee. Pas seulement « ignore » :
-    // aucun peripherique ne reste ouvert derriere l'ecran.
-    if (vocalMic) {
-      vocalMic.fermer();
-      vocalMic = null;
-    }
-    vocalMicListening = false;
-    vocalMicCapte = false;
-    vocalMicFerme = "";
-    vocalMicDemande = false;
-    // La reponse sur le projet sensible ne survit pas a la sortie : la prochaine
-    // entree la redemande (une valeur perimee pourrait bloquer une dictee
-    // legitime, ou en ouvrir une sur un projet devenu 🔒 entre-temps).
-    vocalSensibiliteConnue = false;
-    vocalSensibiliteIndisponible = false;
     // Symetrie exacte de enterVocal : les TROIS noeuds deplaces sortent de
     // l'overlay AVANT son retrait, sinon ils seraient detruits avec lui et les
     // autres ecrans perdraient le bouton des modes, l'entree « Travail » et la
     // barre de saisie. Chacun retrouve son parent ET son voisin d'origine.
+    // Cette partie est HORS du `try` : elle est donc toujours executee.
     const activiteHome = vocalActivityHome;
     const activite = document.getElementById("agent-activity");
     if (activite && activiteHome && activiteHome.parent) {
@@ -5502,9 +5722,15 @@ export async function createSuperAgent(container) {
     if (inputEl && vocalPlaceholderHome !== null) {
       inputEl.placeholder = vocalPlaceholderHome;
       vocalPlaceholderHome = null;
-      resizeInput();
+      try {
+        resizeInput();
+      } catch (_) {
+        /* une hauteur qui ne se recalcule pas ne retient personne */
+      }
     }
     // Mode REELLEMENT affiche : retour a « Detaille » dans la cle de memoire.
+    // Ecrit en DERNIER et sans condition : c'est lui qui dit, a la prochaine
+    // ouverture de l'onglet, que l'ecran a bien ete quitte (issue #381).
     noteImmersiveExited();
     // La teinte de reflexion de la zone de saisie (desormais revenue dans
     // l'onglet) est resynchronisee sur l'etat reel.

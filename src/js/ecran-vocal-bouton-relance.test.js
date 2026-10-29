@@ -56,6 +56,19 @@ function px(css, prop) {
   return Number(m[1]);
 }
 
+// Taille PLEINE du disque, en pixels : la BORNE HAUTE du jeton `--vocal-orb-size`
+// (le disque suit desormais la hauteur de la fenetre, de 120 a 336 px —
+// CONCEPTION-ecran-vocal-cercle-et-bas.md §1.5). C'est cette borne qui sert de
+// reference aux calculs de ce fichier : le bouton, lui, ne porte aucune taille,
+// il suit le disque.
+const DISQUE_PX = (() => {
+  const jeton = /--vocal-orb-size:\s*clamp\((\d+)px,[^;]*?,\s*(\d+)px\)/.exec(
+    bloc(CSS, ".pilot-vocal {"),
+  );
+  expect(jeton, "jeton `--vocal-orb-size` illisible").not.toBeNull();
+  return Number(jeton[2]);
+})();
+
 // ---------------------------------------------------------------------------
 describe("1. l'objet pose dans l'ecran : un rond DANS le disque", () => {
   const build = corpsFonction(SUPER, "function buildVocalOverlay()");
@@ -255,7 +268,7 @@ describe("4. la geometrie : il OCCUPE la surface interieure, sans en deborder", 
   it("son cercle COINCIDE avec le bord interieur de l'anneau, sans un pixel de trop", () => {
     // Chiffres LUS dans le CSS, jamais recopies : si l'un bouge sans l'autre,
     // ce test tombe et dit pourquoi.
-    const disque = px(orb, "width");
+    const disque = DISQUE_PX;
     const anneau = px(orb, "border");
     // Le disque n'a pas de `box-sizing` particulier : sa boite de padding fait
     // `width` x `width`, donc l'enfant en `inset: 0` mesure `width` x `width`.
@@ -271,16 +284,17 @@ describe("4. la geometrie : il OCCUPE la surface interieure, sans en deborder", 
     expect(rayonUtile + anneau - rayonDuBouton).toBe(anneau);
   });
 
-  it("aucune valeur ne depend d'une taille de fenetre", () => {
+  it("aucune valeur n'est propre au bouton : il suit le disque, rien d'autre", () => {
     // Pas d'unite relative a la fenetre, pas de dimension en pourcentage : le
-    // disque est en pixels fixes et le bouton est absolu. Le rapport bouton /
-    // disque est donc le meme dans une petite et une grande fenetre.
-    expect(restart).not.toMatch(/\d(vw|vh|vmin|vmax)/);
+    // bouton n'a AUCUNE taille a lui, et le disque n'en a qu'UNE (le jeton
+    // `--vocal-orb-size`), partagee par `width` et `height`. Quelle que soit la
+    // hauteur de la fenetre, le rapport bouton / disque ne peut donc pas varier.
+    expect(restart).not.toMatch(/\d+(vw|vh|vmin|vmax)/);
     expect(restart).not.toMatch(
       /(width|height|min-width|max-width|min-height|max-height):\s*[\d.]+(%|vw|vh)/,
     );
-    expect(orb).toMatch(/width:\s*168px/);
-    expect(orb).toMatch(/height:\s*168px/);
+    expect(orb).toMatch(/width:\s*var\(--vocal-orb-size\)/);
+    expect(orb).toMatch(/height:\s*var\(--vocal-orb-size\)/);
   });
 
   it("le texte ne peut pas sortir du cercle, meme au pire cas", () => {
@@ -288,7 +302,7 @@ describe("4. la geometrie : il OCCUPE la surface interieure, sans en deborder", 
     expect(restart).toMatch(/overflow:\s*hidden/);
     // 2. Et la place laissee au texte tient dans le disque, meme sur trois
     //    lignes — le pire cas du libelle borne par `vocalRestartText`.
-    const disque = px(orb, "width");
+    const disque = DISQUE_PX;
     const police = px(restart, "font-size");
     const interligne = Number(/line-height:\s*(\d+(?:\.\d+)?)/.exec(restart)[1]);
     const padding = Number(/padding:\s*0 (\d+)px/.exec(restart)[1]);
@@ -299,8 +313,10 @@ describe("4. la geometrie : il OCCUPE la surface interieure, sans en deborder", 
   });
 
   it("le disque ne recoit ni `overflow` ni taille nouvelle", () => {
-    expect(orb).toMatch(/width:\s*168px/);
-    expect(orb).toMatch(/height:\s*168px/);
+    // Une seule taille, lue du jeton : le bouton en `inset: 0` en decoule, donc
+    // il n'y a rien a recalculer quand la fenetre change de hauteur.
+    expect(orb).toMatch(/width:\s*var\(--vocal-orb-size\)/);
+    expect(orb).toMatch(/height:\s*var\(--vocal-orb-size\)/);
     expect(orb).not.toMatch(/overflow/);
   });
 

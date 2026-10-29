@@ -154,7 +154,8 @@ export function levelToWidth(niveau) {
  * Meme echelle de perception que le trait (racine carree), mais SANS plancher :
  * au silence le halo n'existe pas (0), l'interieur du disque ne montre jamais un
  * rond residuel (CONCEPTION-cercle-equaliseur.md §6.3). Le rayon vaut
- * `halo x 82 px` (le CSS projette cette valeur sur le rayon du disque).
+ * `halo x 166 px` (le CSS projette cette valeur sur le rayon du disque, double
+ * le 2026-11-13 : 82 px avant, cf. CONCEPTION-ecran-vocal-cercle-et-bas.md §1).
  * @param {number} niveau
  * @returns {number} 0..1, arrondi au millieme
  */

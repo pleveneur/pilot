@@ -11573,6 +11573,19 @@ summary:focus-visible {
   position: fixed;
   inset: 0;
   z-index: 99990;
+  /* ── LE CALQUE NE CAPTE PAS TOUS LES CLICS (issue #381) ──
+     Un calque `position: fixed; inset: 0` sans `pointer-events` est une CIBLE
+     DE CLIC sur tout le viewport : mesure faite dans un vrai navigateur (CSS
+     du projet, DOM de `buildVocalOverlay`), `document.elementFromPoint` au
+     centre de la croix d'onglet renvoyait `div.pilot-vocal`, pas la croix.
+     Tout ce que l'ecran recouvre — la rangee d'onglets et sa croix, le bandeau
+     de la barre de fenetre — ne recevait donc AUCUN clic : la troisieme sortie
+     du mode (fermer l'onglet) etait physiquement inatteignable a la souris.
+     Ici le calque ne capte plus rien ; la regle suivante rend le clic aux
+     SEULS elements qui en ont besoin. La bande de 0 a
+     `--window-controls-height` (celle de la rangee d'onglets) redevient
+     ainsi cliquable, et avec elle la croix de l'onglet. */
+  pointer-events: none;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -11581,7 +11594,33 @@ summary:focus-visible {
   /* Entree / sortie : 0,3 s de fondu du fond — pas de zoom, on change d'ecran
      et on ne deplie pas un panneau (§4.2). */
   animation: vocal-fade-in var(--transition-smooth);
+  /* ── LES TROIS TAILLES DE L'OBJET, A UN SEUL ENDROIT ──
+     (CONCEPTION-ecran-vocal-cercle-et-bas.md §1.) Le disque DOUBLE (168 ->
+     336 px) et ses deux lueurs avec lui : la couronne de l'enveloppe de parole
+     et l'arc de reflexion sont des FRACTIONS du disque, jamais des pixels
+     independants — ils suivent donc le disque sans une ligne de plus, et le
+     bouton de relance (`inset: 0`) aussi.
+     TAILLE DU DISQUE, formule UNIQUE (§1.5) : elle suit la hauteur de la
+     fenetre, bornee a 120 px en bas et 336 px en haut.
+         120 px · (hauteur - 289) x 21/32 · 336 px
+     A 500 px de haut : 138 px ; a 750 px : 303 px ; des 1024 px : 336 px.
+     Les 289 px sont la place prise par le reste de l'ecran (air du haut, barre
+     de 44 px, ligne d'etat, saisie, marge basse) : la boite du halo
+     (disque + 2 x couronne) tient donc toujours dans la fenetre, elle n'est
+     jamais rognee. Aucun autre reglage, aucune autre formule. */
+  --vocal-orb-size: clamp(120px, calc((100vh - 289px) * 21 / 32), 336px);
+  /* La couronne de l'enveloppe de parole : 88 px pour un disque de 336 px
+     (soit la meme proportion que 44 px pour 168 px). */
+  --vocal-crown: calc(var(--vocal-orb-size) * 88 / 336);
+  /* L'arc de reflexion : 12 px pour un disque de 336 px (6 px pour 168 px). */
+  --vocal-arc: calc(var(--vocal-crown) * 12 / 88);
 }
+/* La liste de ce qui reste cliquable sur cet ecran (une regle
+   `pointer-events: auto`) est en FIN de section, sous le titre
+   « CE QUI RESTE CLIQUABLE SUR L'ECRAN VOCAL » : elle ne peut pas etre posee
+   ici, ou le nom de ses selecteurs tomberait avant les blocs qu'ils designent
+   et ferait lire le mauvais fragment aux tests qui decoupent la feuille de
+   style a partir de ces noms. */
 /* Le plein ecran ne laisse rien defiler derriere lui. */
 .pilot-vocal-active {
   overflow: hidden;
@@ -11697,14 +11736,19 @@ body.pilot-vocal-active #agent-activity {
 .pilot-vocal.vocal-state-thinking { --vocal-state: var(--vocal-think); }
 .pilot-vocal.vocal-state-speaking { --vocal-state: var(--vocal-speak); }
 
-/* Disque de 168 px : anneau de 2 px dans la couleur d'etat (stable, lisible
-   meme quand le remplissage est tres transparent) + remplissage radial de
-   18 % au centre a 0 % aux bords — la « lumiere », sans aucune image. */
+/* Disque de 336 px au plus (168 x 2) : anneau de 2 px dans la couleur d'etat
+   (stable, lisible meme quand le remplissage est tres transparent) +
+   remplissage radial de 18 % au centre a 0 % aux bords — la « lumiere », sans
+   aucune image. TAILLE : elle n'est PAS ecrite ici, elle vient du jeton
+   `--vocal-orb-size` pose sur l'overlay (seule source, voir plus haut) ; le
+   halo (`inset: 0`), le bouton de relance (`inset: 0`) et le rayon utile en
+   decoulent sans une ligne de plus. Le disque reste en pixels : il ne depend
+   que de la HAUTEUR de la fenetre, jamais de sa largeur. */
 .vocal-orb {
   position: relative;
   flex: 0 0 auto;
-  width: 168px;
-  height: 168px;
+  width: var(--vocal-orb-size);
+  height: var(--vocal-orb-size);
   border-radius: 50%;
   border: 2px solid var(--vocal-state, var(--vocal-rest));
   background: radial-gradient(
@@ -11716,11 +11760,12 @@ body.pilot-vocal-active #agent-activity {
 }
 /* L'ENVELOPPE DE PAROLE (Pilot) suit le SON REEL de sa voix depuis le
    12/11 : sa geometrie est inchangee (degrade inverse, pic au bord), mais sa
-   BOITE passe le 28/10 de 232 x 232 px (inset -32) a 256 x 256 px
-   (inset -44) : le proprietaire a retenu un RAYON DE HALO de 128 px, contre
-   116 px avant. Le `closest-side` vaut donc 128 px : le bord de l'anneau
-   (84 px) tombe a 66 % du rayon, et la couronne lumineuse s'etend de 84 a
-   128 px, soit 44 px au-dela du disque (32 px avant).
+   BOITE est un multiple du disque : 336 + 2 x 88 = 512 x 512 px pour un
+   disque de 336 px (256 x 256 px pour 168 px avant le doublement). Le
+   `closest-side` vaut donc la moitie de la boite (256 px) : le bord de
+   l'anneau (168 px) tombe a 66 % du rayon, et la couronne lumineuse s'etend de
+   168 a 256 px, soit 88 px au-dela du disque. Tout est en POURCENTAGE de la
+   boite : doubler le disque ne change aucun arret.
    Arrets chiffres, du centre vers le bord : 0 % -> 0 %, 66 % (bord du disque)
    -> 0 %, 81 % -> 8 %, 90 % -> 20 %, 100 % (bord de la boite) -> 34 %
    (>= 30 % exige, contraste 2,28:1 en sombre et 1,60:1 en clair, cf.
@@ -11731,12 +11776,19 @@ body.pilot-vocal-active #agent-activity {
    POSITIONNEMENT : la boite est ABSOLUE (hors flux, comme avant) : elle
    n'elargit donc pas la fenetre et ne peut pas creer de barre de defilement
    (l'ecran est `overflow: hidden` en mode Vocal). Son interieur (0 a 66 %, soit
-   0 a 84 px) est entierement TRANSPARENT : la lueur ne peint jamais sur le
-   disque lumineux, elle reste autour de lui, derriere lui a l'oeil. */
+   0 a 168 px) est entierement TRANSPARENT : la lueur ne peint jamais sur le
+   disque lumineux, elle reste autour de lui, derriere lui a l'oeil.
+   LUEUR TOUJOURS VISIBLE (§1.4) : elle n'est plus eteinte au repos. Le repos
+   vaut l'extension MINIMALE de la mesure (36 px pour 336 px de disque, soit
+   0,7969 de la boite : 204 px de rayon pour 256) — exactement la valeur que
+   `super-agent.js` applique quand il mesure. Les quatre etats ne se
+   distinguent donc plus par l'intensite mais par la COULEUR (`--vocal-state`),
+   la GEOMETRIE (l'arc) et le PEINTRE (mesure, rythme, souffle). Aucun seuil de
+   decision sur la voix n'est touche (0,06 / 0,03). */
 .vocal-orb::before {
   content: "";
   position: absolute;
-  inset: -44px;
+  inset: calc(var(--vocal-crown) * -1);
   border-radius: 50%;
   background: radial-gradient(
     closest-side,
@@ -11746,7 +11798,14 @@ body.pilot-vocal-active #agent-activity {
     color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 20%, transparent) 90%,
     color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 34%, transparent) 100%
   );
-  opacity: 0;
+  /* ALLUMEE DANS LES QUATRE ETATS, a intensite CONSTANTE (meme alpha au bord :
+     34 %). Le repos n'est donc plus un etat sans lueur : il a la lueur
+     minimale, celle que le silence produit deja quand la mesure tourne. */
+  opacity: 1;
+  /* 204 / 256 = 0,7969 : le bord de la boite reste 36 px au-dela de l'anneau
+     (18 px pour l'ancien disque). Une seule verite : c'est la valeur de repos
+     de la mesure (`envelopeFromEnergy(0)`), recopiee ici pour le repli. */
+  transform: scale(0.7969);
   transition: opacity var(--transition-smooth);
   pointer-events: none;
 }
@@ -11759,11 +11818,11 @@ body.pilot-vocal-active #agent-activity {
    RYTHME du texte lu (voix du systeme, qui ne livre aucun flux audio) —
    `super-agent.js` pose la classe `.vocal-envelope-live` et deux variables lues
    ici : `scale` et `alpha` (intensite, 0,8 a 1). `scale` est le facteur de la
-   BOITE ENTIERE
-   (256 px de large, du centre a 128 px) : 0,7969 au repos (bord a 102 px, soit
-   18 px au-dela de l'anneau de 84 px) et 1 a pleine voix (bord a 128 px, soit
-   44 px). Reduire le tout autour du centre ne peut donc jamais ramener le bord
-   sous l'anneau — le repli ci-dessous est cette valeur de repos. L'animation decorative est alors ETEINTE : une seule mesure, un
+   BOITE ENTIERE (512 px de large, du centre a 256 px) : 0,7969 au repos (bord a
+   204 px, soit 36 px au-dela de l'anneau de 168 px) et 1 a pleine voix (bord a
+   256 px, soit 88 px). Reduire le tout autour du centre ne peut donc jamais
+   ramener le bord sous l'anneau — le repli ci-dessous est cette valeur de
+   repos. L'animation decorative est alors ETEINTE : une seule mesure, un
    seul affichage, et le silence ramene l'enveloppe au repos au lieu d'une
    pulsation inventee. `transition: none` : le lissage est deja fait image par
    image dans le code (une transition ajouterait un second lissage).
@@ -11775,11 +11834,13 @@ body.pilot-vocal-active #agent-activity {
   transform: scale(var(--vocal-envelope-scale, 0.7969));
   transition: none;
 }
-/* Arc de la REFLEXION : 60 degres qui tournent en 3 s autour de l'anneau. */
+/* Arc de la REFLEXION : 60 degres qui tournent en 3 s autour de l'anneau.
+   Debord de 12 px (6 px pour un disque de 168 px) : il glisse dans la couronne
+   de l'enveloppe sans jamais la depasser. */
 .vocal-orb::after {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: calc(var(--vocal-arc) * -1);
   border-radius: 50%;
   background: conic-gradient(
     from 0deg,
@@ -11806,12 +11867,14 @@ body.pilot-vocal-active #agent-activity {
 
 /* --- LOT B — LE HALO D'ECOUTE : la voix de l'UTILISATEUR, a l'interieur du
    disque (CONCEPTION-cercle-equaliseur.md §6). Un seul element, ENFANT du
-   disque : `inset: 0` le pose dans la boite de padding (164 x 164 px, donc
-   82 px de rayon) et `border-radius: 50%` decoupe son propre fond, qui s'arrete
-   au plus tard a `closest-side` = 82 px. Il ne peut donc jamais deborder sur
-   l'anneau (82 -> 84 px) ni atteindre le contour de la voix de Pilot (83 px et
-   au-dela). Aucun `overflow: hidden` sur le disque : il decouperait aussi
-   l'enveloppe de parole et l'arc de reflexion. */
+   disque : `inset: 0` le pose dans la boite de padding (332 x 332 px pour un
+   disque de 336 px, donc 166 px de rayon) et `border-radius: 50%` decoupe son
+   propre fond, qui s'arrete au plus tard a `closest-side` = 166 px. Il ne peut
+   donc jamais deborder sur l'anneau (166 -> 168 px) ni atteindre le contour de
+   la voix de Pilot (167 px et au-dela). La pente est la MEME qu'avant (racine
+   du niveau, `levelToHalo`), projetee sur le nouveau rayon : 82 -> 166 px.
+   Aucun `overflow: hidden` sur le disque : il decouperait aussi l'enveloppe de
+   parole et l'arc de reflexion. */
 .vocal-halo {
   position: absolute;
   inset: 0;
@@ -11844,6 +11907,12 @@ body.pilot-vocal-active #agent-activity {
    (decision 5 : chaque lueur a SA couleur, une par voix). */
 .pilot-vocal.vocal-state-listening .vocal-halo {
   opacity: 1;
+  /* PLANCHER D'ECOUTE (§1.4) : des que l'etat « ecoute » est vrai, la voix de
+     l'utilisateur se voit — le halo ne peut plus rester colle a zero. Meme
+     pente qu'avant (racine du niveau), projete sur le nouveau rayon :
+     0,30 x 166 = 50 px au minimum. Aucun seuil de la DETECTION n'est touche :
+     `vocalCapte` garde ses 0,06 / 0,03. */
+  --vocal-halo: max(0.3, var(--vocal-heard, 0));
 }
 .pilot-vocal:not(.vocal-state-listening) .vocal-halo {
   --vocal-halo: 0;
@@ -11859,13 +11928,15 @@ body.pilot-vocal-active #agent-activity {
 
    GEOMETRIE (verifiee par un test, pas seulement affirmee) : `.vocal-orb` n'a
    pas de `box-sizing` particulier (contenu par defaut, pas de remise a zero
-   globale dans ce fichier), donc sa boite de padding fait 168 x 168 px et le
-   rayon UTILE — le bord interieur de l'anneau de 2 px — vaut 84 px. Un enfant
+   globale dans ce fichier), donc sa boite de padding vaut la taille du disque
+   (`--vocal-orb-size`, 336 px au plus) et le rayon UTILE — le bord interieur de
+   l'anneau de 2 px — vaut la moitie moins 2 px (166 px pour 336). Un enfant
    ABSOLU en `inset: 0` occupe exactement cette boite de padding, et
-   `border-radius: 50%` lui donne le cercle de rayon 84 px : le bouton et le bord
-   interieur de l'anneau COINCIDENT, sans un pixel de depassement. Cela ne depend
-   d'AUCUNE taille de fenetre : le disque est fixe a 168 px et le bouton est
-   absolu (aucune unite `vw`/`vh`, aucun pourcentage, aucune taille en plus).
+   `border-radius: 50%` lui donne le cercle du rayon utile : le bouton et le bord
+   interieur de l'anneau COINCIDENT, sans un pixel de depassement. Le bouton ne
+   porte donc AUCUNE taille propre : il suit le disque, quelle que soit la
+   hauteur de la fenetre (aucune unite `vw`/`vh`, aucun pourcentage, aucune
+   taille en plus de son cote).
 
    HORS DU FLUX (`position: absolute`) : il ne decale donc ni le disque, ni la
    phrase d'etat, ni la barre de saisie — la mise en page est identique, avec ou
@@ -11902,7 +11973,9 @@ body.pilot-vocal-active #agent-activity {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 14px;
+  /* 24 px de retrait (14 px pour un disque de 168 px) : le libelle garde la
+     meme place relative a l'interieur du cercle, en proportion. */
+  padding: 0 24px;
   /* Rond, et sans bord a lui : le contour du disque lui sert de bord. */
   border: none;
   border-radius: 50%;
@@ -11918,7 +11991,11 @@ body.pilot-vocal-active #agent-activity {
   letter-spacing: -0.01em;
   text-align: center;
   cursor: pointer;
-  transition: background var(--transition), color var(--transition);
+  /* `opacity` / `transform` / `visibility` : l'effacement du bas (§2.6). Le
+     delai de `visibility` est pose dans la regle de masquage. */
+  transition: background var(--transition), color var(--transition),
+    opacity var(--transition), transform var(--transition),
+    visibility 0s linear 0s;
 }
 .vocal-restart:hover {
   background: color-mix(in srgb, var(--text-primary) 16%, transparent);
@@ -11972,7 +12049,10 @@ body.pilot-vocal-active #agent-activity {
   line-height: 1.4;
   text-align: center;
   color: var(--text-primary);
-  transition: opacity var(--transition);
+  /* Opacite + translation : l'effacement du bas (§2.6). Aucune autre
+     transition n'existait ici. */
+  transition: opacity var(--transition), transform var(--transition),
+    visibility 0s linear 0s;
 }
 
 /* --- §2.4 La zone de saisie : toujours visible, discrete ---
@@ -11985,6 +12065,9 @@ body.pilot-vocal-active #agent-activity {
   flex: 0 0 auto;
   width: min(720px, calc(100vw - 32px));
   margin: 0 auto 16px;
+  /* Effacement du bas (§2.6) : meme duree que les deux autres noeuds. */
+  transition: opacity var(--transition), transform var(--transition),
+    visibility 0s linear 0s;
 }
 .vocal-input .agent-chat-input-bar {
   padding: 0;
@@ -12029,11 +12112,49 @@ body.pilot-vocal-active #agent-activity {
   display: none;
 }
 
+/* --- §2.6 LE BAS DE L'ECRAN S'EFFACE AU REPOS (CONCEPTION-ecran-vocal-cercle-et-bas.md §2) ---
+   TROIS noeuds, jamais quatre : la ligne d'etat, la zone de saisie et le
+   bouton de depannage du micro. Le disque, le bouton de relance, le logo (qui
+   EST le bouton des trois modes) et l'entree « Travail » ne sont JAMAIS
+   masques : aucune regle de ce bloc ne les nomme, et un test le verifie.
+   LA FORME DU MASQUAGE, dans cet ordre :
+     1. opacite 0 (le fondu de 180 ms, `--transition`, duree des transitions du
+        projet) ;
+     2. translation de 8 px vers le bas (le seul mouvement, meme duree) ;
+     3. `visibility: hidden`, RETARDEE d'autant — sinon le noeud disparaitrait
+        d'un coup et le fondu ne se verrait pas ;
+     4. `pointer-events: none` : un noeud invisible ne recoit aucun clic.
+   INTERDITS : `display: none`, `position: absolute`, une hauteur ou une marge
+   a zero. L'ESPACE RESTE RESERVE, donc le disque ne bouge pas d'un pixel et
+   rien ne defile quand le bas s'efface. Le retour est le meme chemin a
+   l'envers, sans deuxieme regle.
+   QUI DECIDE : `vocalSyncChrome` (super-agent.js), seul ecrivain de la classe,
+   d'apres la decision PURE de src/js/vocal-chrome.js. Le CSS ne fait que
+   l'aspect : aucun etat, aucun minuteur, aucun seuil ici. */
+.pilot-vocal.vocal-chrome-hidden .vocal-status,
+.pilot-vocal.vocal-chrome-hidden .vocal-input,
+.pilot-vocal.vocal-chrome-hidden .vocal-mic-fix {
+  opacity: 0;
+  transform: translateY(8px);
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--transition), transform var(--transition),
+    visibility 0s linear 180ms;
+}
+/* Mouvement reduit : l'effacement est INSTANTANE (aucun fondu, aucune
+   translation animee). L'espace reste reserve et le bas revient au premier
+   geste : rien d'autre ne change. */
+.pilot-vocal.vocal-reduced.vocal-chrome-hidden .vocal-status,
+.pilot-vocal.vocal-reduced.vocal-chrome-hidden .vocal-input,
+.pilot-vocal.vocal-reduced.vocal-chrome-hidden .vocal-mic-fix {
+  transition: none;
+}
+
 /* --- §4.2/§4.3 Mouvement reduit : le MEME drapeau que les animations
    d'ouverture (prefers-reduced-motion + parametre modal_animations, pose par
    super-agent.js via la classe .vocal-reduced). Disque immobile — la couleur
    et le mot portent l'etat —, transitions 0 s. L'enveloppe de parole garde sa
-   taille pleine (44 px, rayon de 128 px) et son intensite : FIXE mais VISIBLE,
+   taille pleine (88 px, rayon de 256 px) et son intensite : FIXE mais VISIBLE,
    jamais eteinte.
    Aucun nouvel ecran de reglage n'est cree pour cela. */
 .pilot-vocal.vocal-reduced,
@@ -12041,7 +12162,9 @@ body.pilot-vocal-active #agent-activity {
 .pilot-vocal.vocal-reduced .vocal-orb::before,
 .pilot-vocal.vocal-reduced .vocal-orb::after,
 .pilot-vocal.vocal-reduced .vocal-halo,
-.pilot-vocal.vocal-reduced .vocal-status {
+.pilot-vocal.vocal-reduced .vocal-status,
+.pilot-vocal.vocal-reduced .vocal-input,
+.pilot-vocal.vocal-reduced .vocal-mic-fix {
   animation: none;
   transition: none;
 }
@@ -12055,6 +12178,10 @@ body.pilot-vocal-active #agent-activity {
 .pilot-vocal.vocal-reduced.vocal-state-speaking .vocal-orb::before {
   opacity: 1;
   animation: none;
+  /* L'extension PLEINE (88 px, soit 256 px de rayon : la boite entiere),
+     ecrite explicitement : la lueur est fixe mais a sa taille maximale, jamais
+     ramenee au repos. */
+  transform: scale(1);
 }
 /* Enveloppe = REPLI du contour (CONCEPTION-cercle-equaliseur.md §7.3) : des que
    le peintre du contour spectral pose `.vocal-spectrum-live` sur l'overlay,
@@ -12069,12 +12196,46 @@ body.pilot-vocal-active #agent-activity {
   transition: none;
 }
 /* LOT B : en mouvement reduit le halo ne s'anime pas, mais il reste LISIBLE —
-   rayon fixe de 0,55 x 82 = 45,1 px en ecoute (jamais une animation muette),
+   rayon fixe de 0,55 x 166 = 91,3 px en ecoute (jamais une animation muette),
    eteint dans les trois autres etats (§6.8). Une declaration directe sur
    `.vocal-halo` gagne sur la valeur heritee de l'overlay ; `planLevel` ne pose
    d'ailleurs rien en mouvement reduit, donc rien ne peut la contredire. */
 .pilot-vocal.vocal-reduced.vocal-state-listening .vocal-halo {
   --vocal-halo: 0.55;
+}
+
+/* ── CE QUI RESTE CLIQUABLE SUR L'ECRAN VOCAL (issue #381) ──
+   `pointer-events` s'HERITE : reactiver ces six hotes suffit a rendre le clic
+   a tout leur contenu (la barre de saisie et ses boutons, le disque et ses
+   deux boutons, le panneau de « Travail »).
+   Les deux noeuds DEPLACES dans l'overlay (`#mode-logo`, `#agent-activity`)
+   sont explicitement nommes : ils vivent dans la bande de 36 px redevenue
+   traversante, donc sans cette ligne le bouton des trois modes et l'entree
+   « Travail » seraient les deux seules choses que le correctif rendrait
+   inatteignables.
+   Les trois zones de l'ecran (la barre du haut, la scene et la ligne d'etat),
+   plus la barre de saisie, captent a nouveau : la zone situee SOUS la rangee
+   d'onglets reste propriete de l'ecran, aucun clic ne tombe dans un onglet ou
+   un editeur invisible, et le curseur de la saisie n'est jamais vole par un
+   clic dans le vide.
+   AUCUN calque DECORATIF n'est nomme ici : ni le halo, ni le disque, ni l'une
+   de ses deux lueurs, ni l'enveloppe de parole. Ils sont sous `.vocal-stage`
+   ou sous le disque et gardent `pointer-events: none` (regles de leurs blocs
+   respectifs) : un decor ne capte jamais un clic. Un test le verifie
+   (src/js/vocal-aucun-calque-ne-capte-les-clics.test.js).
+   Les boutons de fenetre restent hors sujet : `#window-controls` est a
+   `z-index: 100001`, au-dessus de l'overlay.
+   PLACE : cette regle est la DERNIERE de la section, apres tous les blocs
+   qu'elle nomme. Posee juste apres `.pilot-vocal`, elle ferait tomber le nom
+   de ses selecteurs avant ces blocs et les tests qui decoupent la feuille de
+   style a partir d'un nom liraient le mauvais fragment. */
+.pilot-vocal .vocal-top,
+.pilot-vocal .vocal-stage,
+.pilot-vocal .vocal-status,
+.pilot-vocal .vocal-input,
+.pilot-vocal #mode-logo,
+.pilot-vocal #agent-activity {
+  pointer-events: auto;
 }
 
 @keyframes vocal-fade-in {
@@ -12089,12 +12250,17 @@ body.pilot-vocal-active #agent-activity {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
-/* Enveloppe de parole : la respiration garde sa duree et son echelle, mais son
-   opacite ne descend plus sous 0,80 — la lueur du bord (34 %) reste visible a
-   chaque instant (0,272 d'alpha effectif au minimum). */
+/* Enveloppe de parole : la respiration garde sa duree, mais son opacite ne
+   descend plus sous 0,80 — la lueur du bord (34 %) reste visible a chaque
+   instant (0,272 d'alpha effectif au minimum). Son ECHELLE est ramenee a
+   l'amplitude REELLE de la mesure, en proportion du disque double : 0,78
+   (199 px de rayon, soit 31 px au-dela de l'anneau de 168) a 0,86 (220 px, soit
+   52 px). Calee sur l'ancien disque de 168 px, l'amplitude d'origine
+   (0,94 -> 1,06) ferait sauter la couronne de 36 a 72 px au premier mot, et
+   sortir la lueur de la boite de 512 px. */
 @keyframes vocal-speak-glow {
-  0%, 100% { transform: scale(0.94); opacity: 0.8; }
-  50% { transform: scale(1.06); opacity: 1; }
+  0%, 100% { transform: scale(0.78); opacity: 0.8; }
+  50% { transform: scale(0.86); opacity: 1; }
 }
 /* ================================================================
    PRISE EN MAIN — NIVEAU 2 : l'équipe d'agents (spec_onboarding.md)

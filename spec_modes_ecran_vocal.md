@@ -4,6 +4,10 @@
 > lot 4a (`174cc45`), lot 4b (couper la réflexion, voir ce fichier §6),
 > **conversation parlée** (§6bis : parler déclenche une demande, sans bouton).
 >
+> **§ 3ter : 🟡 conception écrite, non livrée** — la colonne de droite de l'écran
+> Vocal (tâches en haut, portrait au pied, aucun espace réservé sans personnage)
+> n'existe pas encore dans le code. Tout le reste de ce document décrit le code livré.
+>
 > Ce document décrit **ce que Pilot fait réellement**, relu dans le code livré.
 > Les raisons de conception (mesures de contraste, choix de placement, découpage
 > en lots) restent dans `docs/rapports/RAPPORT-trois-modes-ecran-vocal.md`.
@@ -106,17 +110,39 @@ l'entrée **« Travail »**, qui est un **bouton** et non un affichage, le sont)
 retour de la conversation sur cet écran est interdit par un test dédié
 (`src/js/ecran-vocal-nu.test.js`).
 
+Depuis le 2026-10-29, l'écran peut **en plus** être réduit au seul personnage
+d'un clic : l'écran nu décrit ici est le **maximum** de ce que l'écran affiche,
+pas son minimum (voir §4ter).
+
 1. **Barre de 44 px**, juste **sous** la bande des trois boutons de fenêtre
    (`margin-top: var(--window-controls-height)`) : elle ne porte **rien** — c'est
    une bande de respiration. Le logo, qui est le bouton des trois modes, se pose
    **au-dessus** d'elle, à la même place que dans les autres modes.
-2. **Au centre**, le **disque de 168 px** (anneau plein de 2 px + remplissage
-   lumineux de 18 % au centre, 0 % aux bords : aucune image), qui contient un
-   **halo intérieur** (`.vocal-halo`, la voix de l'utilisateur, §4) et, sur
-   **toute sa surface intérieure**, le **bouton de relance de l'écoute** (§3bis).
-   Le bloc suit la fenêtre sans calcul ; le bouton de dépannage du micro
-   (`.vocal-mic-fix`), masqué par défaut, se pose **sous** le disque, dans la
-   même scène.
+2. **Au centre**, le **disque** — **336 px** au plus, et **de 120 à 336 px
+   suivant la hauteur de la fenêtre** (13/11 : un seul jeton, voir
+   ci-dessous) — anneau plein de 2 px + remplissage lumineux de 18 % au centre,
+   0 % aux bords : aucune image. Il contient un **halo intérieur**
+   (`.vocal-halo`, la voix de l'utilisateur, §4) et, sur **toute sa surface
+   intérieure**, le **bouton de relance de l'écoute** (§3bis). Le bouton de
+   dépannage du micro (`.vocal-mic-fix`), masqué par défaut, se pose **sous** le
+   disque, dans la même scène.
+
+   **La taille ne dépend que de la HAUTEUR de la fenêtre** (13/11) : trois jetons
+   sur `.pilot-vocal`, et **rien d'autre** — tout le reste s'en déduit par
+   `calc()`, donc aucune valeur ne peut diverger :
+
+   | Jeton | Valeur | Ce qu'il décrit |
+   |---|---|---|
+   | `--vocal-orb-size` | `clamp(120px, calc((100vh - 289px) * 21 / 32), 336px)` | le disque : 336 px dès 801 px de haut |
+   | `--vocal-crown` | `calc(var(--vocal-orb-size) * 88 / 336)` | la couronne : 88 px à 336 px de disque |
+   | `--vocal-arc` | `calc(var(--vocal-crown) * 12 / 88)` | l'arc de réflexion : 12 px |
+
+   **Pourquoi une formule** : une couronne de 88 px autour d'un disque de 336 px
+   fait une boîte de **512 px**, plus que la **hauteur minimale** de la fenêtre
+   (500 px). Le disque rétrécit donc avec la hauteur, et **le halo n'est jamais
+   rogné** : à 500 px de haut, le disque fait 138 px et sa boîte 211 px ; la
+   marge entre la boîte et la fenêtre vaut toujours **289 px** au-dessus du
+   plancher.
 3. **Juste au-dessus de la barre de saisie**, l'**unique ligne d'état**
    (`.vocal-status`) : elle n'est plus sous le cercle (28/10). C'est le **même**
    texte, le **même** style, la **même** logique d'état ; seul l'emplacement
@@ -125,7 +151,8 @@ retour de la conversation sur cet écran est interdit par un test dédié
    place sous lui et ne peut ni pousser la mise en page ni faire défiler l'écran.
    Elle se peint **après** l'enveloppe de parole et n'a **aucun fond** : elle ne
    recouvre ni la lueur ni la saisie, et rien ne la recouvre.
-4. **La zone de saisie**, en bas, **toujours visible** et discrète : c'est la barre
+4. **La zone de saisie**, en bas, **visible pendant l'action et effacée au repos**
+   (13/11, §4bis : elle revient au geste) et discrète : c'est la barre
    de saisie de l'onglet Assistant, **déplacée** (même nœud, même envoi, même
    dictée 🎙️), 720 px au plus, centrée, 16 px de marge basse, sans filet ni fond
    pleine largeur, plafonnée à **120 px** de haut (au lieu de 200 px dans l'onglet).
@@ -168,15 +195,15 @@ quitter l'écran pour la relancer.
   en `position: absolute` avec `inset: 0` — **aucune** `width`/`height` propre,
   aucun `top`/`left`/`right`/`margin`, **jamais** de `transform` : rien à
   neutraliser en mouvement réduit, rien à recalculer. Le disque n'ayant pas de
-  `box-sizing` particulier, sa boîte de padding fait 168 × 168 px et son rayon
-  utile (bord **intérieur** de l'anneau de 2 px) vaut **84 px** : l'enfant en
-  `inset: 0` mesure 168 × 168 px et son `border-radius: 50%` décrit **exactement**
-  ce cercle de rayon 84 px. Il **touche** le bord intérieur de l'anneau, ne le
+  `box-sizing` particulier, sa boîte de padding vaut `--vocal-orb-size` et son
+  rayon utile (bord **intérieur** de l'anneau de 2 px) vaut **166 px** pour un
+  disque de 336 px : l'enfant en `inset: 0` et son `border-radius: 50%` décrivent
+  **exactement** ce cercle. Il **touche** le bord intérieur de l'anneau, ne le
   recouvre pas, ne peut pas déborder, et la seule épaisseur entre lui et
-  l'extérieur du disque est l'anneau lui-même. Cela ne dépend d'**aucune** taille
-  de fenêtre (disque en pixels fixes, bouton absolu, aucune unité `vw`/`vh`,
-  aucun pourcentage de dimension). Aucun `overflow` n'est ajouté au disque : il
-  découperait l'enveloppe de parole (`::before`, 256 × 256, `inset: -44px`).
+  l'extérieur du disque est l'anneau lui-même. Il ne porte **aucune** unité de
+  fenêtre : il suit le jeton du disque, donc il rétrécit avec lui sur un écran
+  court, sans jamais s'en écarter. Aucun `overflow` n'est ajouté au disque : il
+  découperait l'enveloppe de parole (`::before`, 512 × 512, `inset: -88px`).
 - **État : celui de la dictée, jamais un drapeau local.** La visibilité est une
   **décision pure** (`src/js/vocal-restart.js`, `vocalRestartVisible`), appliquée
   en **un seul point** (`vocalSyncRestartButton`, à la fin de
@@ -223,6 +250,48 @@ très longs, pureté) et `src/js/ecran-vocal-bouton-relance.test.js` (branchemen
 voie unique, ordre, géométrie calculée, point d'écriture unique du libellé,
 non-recouvrement, mouvement réduit).
 
+---
+
+## 3ter. La colonne de droite de l'écran Vocal (tâches, personnage) — 🟡 conception écrite, **non livrée**
+
+> **Rien de cette section n'est dans le code aujourd'hui** : les colonnes de l'écran
+> Vocal n'existent pas encore (`grep -c "vocal-side" src/css/style.css src/js/super-agent.js`
+> → 0). Cette section décrit ce que la colonne de droite **doit** montrer, pour que la
+> conception écrite et la spécification disent la même chose. Elle sera marquée ✅ au fur et
+> à mesure des lots. Conception complète :
+> `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md` et son amendement
+> `docs/conceptions/CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md`.
+
+Quand la place le permet (seuil d'affichage des colonnes), l'écran Vocal montre à droite
+**une** colonne qui parle du **travail**, dans cet ordre de haut en bas : le titre
+« TÂCHES », **la liste des tâches**, puis — **s'il y a un personnage** — son portrait
+(72 px) et la pastille de son nom, puis **une** ligne disant ce que fait l'agent à cet
+instant. **Deux cas, et un seul critère** :
+
+- **Un personnage est actif si et seulement si un portrait affichable existe**
+  (`getAssistantPortrait() !== ""`). Rien d'autre n'est lu : aucun réglage, aucun état
+  mémorisé, aucun redémarrage — le personnage est déjà relu à l'ouverture de l'onglet et
+  à chaque retour de focus de la fenêtre.
+- **Avec un personnage** : les tâches sont **en haut** (elles commencent à la même place que
+  le personnage soit actif ou non) et le portrait est **au pied** de la colonne ; **98 px**
+  sont réservés à son bloc (72 + 6 + 20). La liste affiche jusqu'à **6** tâches.
+- **Sans personnage** : le bloc du portrait **n'existe pas** — pas d'image de remplacement,
+  pas de cadre, pas de logo —, la liste **prend toute la hauteur** (elle gagne exactement les
+  **98 px**) et affiche jusqu'à **8** tâches. **Aucune zone réservée.** Le nom du personnage
+  reste lisible sur le bouton de relance du cercle (« Réveiller *Nom* »), donc rien n'est
+  perdu.
+- La liste **ne défile pas** (la colonne ne reçoit aucun clic) : le nombre de lignes suit la
+  hauteur, l'excédent est écrit « + N autre(s) » et la liste complète reste dans le bouton
+  **« Travail »**. Une colonne sans mission affiche « Aucune tâche en cours », jamais du vide.
+- **Aucun réglage nouveau, aucune persistance** : l'écran ne mémorise rien du personnage ; le
+  passage d'un cas à l'autre se fait en **une peinture**, sans animation, et ne déplace ni le
+  haut de la colonne ni la ligne d'activité.
+
+Les trois sorties (logo, Échap, fermeture de l'onglet) et les colonnes sans clic restent
+**inchangées** : la colonne de droite n'ajoute aucune zone cliquable.
+
+---
+
 ## 4. Les quatre états visuels
 
 **Une seule** classe d'état à la fois sur l'overlay : deux états simultanés sont
@@ -243,8 +312,8 @@ niveau à montrer par voix, et chaque voix a **sa** couleur :
 
 | Ce qu'on voit | Où | Quelle voix | Teinte |
 |---|---|---|---|
-| le **halo intérieur** (`.vocal-halo`) | dans le disque, jusqu'à 82 px de rayon | **la vôtre** (mesurée) | `--vocal-listen` |
-| l'**enveloppe de parole** (`.vocal-orb::before`) | la **couronne extérieure** (84 → **128 px** de rayon, soit **44 px** de débord) | **celle de Pilot** (lue) | `--vocal-speak` |
+| le **halo intérieur** (`.vocal-halo`) | dans le disque, jusqu'à 166 px de rayon | **la vôtre** (mesurée) | `--vocal-listen` |
+| l'**enveloppe de parole** (`.vocal-orb::before`) | la **couronne extérieure** (168 → **256 px** de rayon, soit **88 px** de débord) | **celle de Pilot** (lue) | `--vocal-speak` |
 | le **contour** du disque | l'anneau | **celle de Pilot** (lue) | `--vocal-state` |
 
 Le mot « halo » ne désigne **que** le halo intérieur, celui de votre voix ;
@@ -277,8 +346,11 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   entière — elle allume l'état « écoute » et remplit le halo intérieur. Rien
   d'autre n'a bougé dans `vocal-mic.js` (aucune ligne touchée).
 - **Le halo intérieur** (lot B, `CONCEPTION-cercle-equaliseur.md` §6) remplit le
-  **disque** de la même mesure : son rayon vaut **racine(niveau) × 82 px**, donc
-  **0 au silence** — aucun rond résiduel. Il n'existe **qu'en écoute** : deux
+  **disque** de la même mesure : son rayon vaut **racine(niveau) × 166 px**, donc
+  **0 au silence** — aucun rond résiduel. **Plancher (13/11)** : dès que l'état
+  est « écoute », le rayon ne descend plus sous **0,30 × 166 = 50 px** — la voix
+  de l'utilisateur se voit toujours quand elle est écoutée, et les deux seuils de
+  la **détection** ne changent pas (0,06 / 0,03). Il n'existe **qu'en écoute** : deux
   gardes tombent ensemble (opacité et valeur 0), si bien que l'écho que le micro
   entend parfois de Pilot **n'est jamais dessiné**. Sa couleur est **toujours**
   `--vocal-listen`, jamais l'état : une couleur par voix, les deux ne se
@@ -290,9 +362,9 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   l'extension et de l'intensité. Le choix est **pur et testé** : bande → énergie
   0..1 (silence → **0**, aigu riche → **proche de 1**, son grave → **0**), puis
   lissage du projet (montée **0,5**, retombée **0,12**), puis projection :
-  **18 px** au repos → **44 px** à pleine voix, opacité **0,80 → 1**. L'extension
-  ne peut donc **pas** dépasser 44 px, et le silence **ramène au repos** au lieu
-  de faire pulser une lumière toute seule.
+  **36 px** au repos → **88 px** à pleine voix, opacité **0,80 → 1**. L'extension
+  ne peut donc **pas** dépasser 88 px (256 px de rayon au total), et le silence
+  **ramène au repos** au lieu de faire pulser une lumière toute seule.
 - **Deux sources, jamais les deux à la fois** : la décision est **pure et
   testée** (`planSpeechEnvelopeSource`) et son ordre **est** la règle. En
   **mouvement réduit** ou quand le **contour spectral** peint déjà cette voix,
@@ -324,19 +396,24 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
 - **La lueur de parole est visible au bord, pas cachée au centre**
   (`docs/rapports/RAPPORT-halo-parole.md`, puis
   `docs/rapports/RAPPORT-halo-suivant-le-son.md`). L'enveloppe de parole
-  (`.vocal-orb::before`, boîte de **256 × 256 px**, `inset: -44px`) porte un
+  (`.vocal-orb::before`, boîte de **512 × 512 px**, `inset: -88px`) porte un
   dégradé **inversé** : transparent au centre, puis **8 %** au-delà du bord du
   disque (81 % du rayon), **20 %** à 90 % et **34 %** au bord de la boîte (100 %). Le
   pic est donc **sur la couronne extérieure**, la seule partie qui **déborde** du
   disque opaque ; la lumière ne se perd plus sous le disque. Mesuré : contraste
   **2,28 : 1** en thème sombre et **1,60 : 1** en thème clair (avant : 1,044 : 1
-  et 1,041 : 1, sous le seuil de perception). **La couronne mesure 44 px** de
-  large (84 → **128 px** de rayon, rayon retenu le 28/10 ; 32 px avant le 12/11) :
-  le débordement s'arrête à 128 px, et la boîte (256 px) tient dans la hauteur
-  minimale de la fenêtre (500 px), donc elle n'écrase ni la phrase ni la saisie.
-  En repli animé, `vocal-speak-glow` respire **autour de 128 px** (0,94 → 1,06),
-  et son opacité ne descend plus sous **0,80** : la lueur respire sans jamais
-  s'éteindre.
+  et 1,041 : 1, sous le seuil de perception). **La couronne mesure 88 px** de
+  large (168 → **256 px** de rayon ; 44 px avant le 13/11) : le débordement
+  s'arrête à 256 px. La boîte (512 px) est plus haute que la **hauteur minimale**
+  de la fenêtre (500 px) : c'est **la formule du §3** qui la fait tenir — le
+  disque rétrécit avec la hauteur, jamais la couronne par rapport au disque. La
+  couronne est donc **toujours allumée** dans les quatre états (§4, tableau des
+  états) : elle ne s'éteint plus au repos, les états se distinguent par la
+  **couleur**, la **géométrie** et les peintres supplémentaires. En repli animé,
+  `vocal-speak-glow` respire **autour de la largeur de repos** (0,78 → 0,86, soit
+  199 → 220 px de rayon), et son opacité ne descend plus sous **0,80** : la lueur
+  respire sans jamais s'éteindre **et sans faire sauter la couronne** au premier
+  mot.
 - **L'enveloppe est le REPLI du contour, jamais un doublon**
   (`CONCEPTION-cercle-equaliseur.md` §7.3) : dès que le contour spectral est
   peint (voix locale installée, classe `.vocal-spectrum-live` posée sur
@@ -348,14 +425,135 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
 - **Mouvement réduit** : le même drapeau que les animations d'ouverture
   (`prefers-reduced-motion` **et** le réglage « Animer l'ouverture des modales »).
   Quand il est actif, plus aucune animation, plus aucune transition, et le
-  **halo intérieur** est **figé** à 0,55 en écoute (éteint dans les trois autres
-  états) : il reste **lisible**, ce n'est jamais une animation muette. Le code ne
+  **halo intérieur** est **figé** à 0,55 (**91 px** de rayon) en écoute (éteint
+  dans les trois autres états) : il reste **lisible**, ce n'est jamais une animation muette. Le code ne
   pose **aucune** valeur dans ce cas (`planLevel` comme `planSpeechEnvelope`
   refusent d'écrire). La **lueur de parole** obéit à la même règle : ni
   clignotement ni disparition — elle est **fixe mais visible**, à sa **taille
-  pleine** (les 44 px de la boîte, 128 px de rayon) et **opacité 1**, sans
-  animation ni transformation. **Aucun nouveau réglage** n'a été créé pour cet
+  pleine** (les 88 px de débord, 256 px de rayon, `transform: scale(1)` explicite)
+  et **opacité 1**, sans animation ; la **taille** est alors le seul signe qui
+  reste entre le repos (36 px) et la parole (88 px). **Aucun nouveau réglage** n'a été créé pour cet
   écran.
+
+## 4bis. Le bas de l'écran s'efface au repos (13/11)
+
+Décision du propriétaire : **l'écran nu va jusqu'au bout** — au repos, le bas
+disparaît, et il **revient au geste**. Le cercle, lui, ne bouge **pas d'un
+pixel** : la promesse « le cercle est le centre de l'écran » ne dépend plus de
+la présence du texte.
+
+**Ce qui s'efface, et ce qui reste.** Trois nœuds, **et eux seuls** : la ligne
+d'état (`.vocal-status`), la zone de saisie (`.vocal-input`) et le bouton de
+dépannage du micro (`.vocal-mic-fix`, déjà masqué sauf panne). **Restent
+toujours là** : le disque, la couronne, le halo vert, l'arc, le bouton
+« Réveiller <Nom> », la barre du haut de 44 px, le **logo** — qui est le bouton
+des trois modes, donc toujours atteignable —, le bouton **« Travail »** et les
+boutons système de la fenêtre.
+
+**Le geste (quatre façons de le réveiller)** : un mouvement de pointeur de
+**4 px cumulés** au moins (sous ce seuil, le tremblement d'une main posée ne
+réveille rien), un **appui** de pointeur, la **molette**, ou **n'importe quelle
+touche sauf `Échap`** (qui sort du mode, inchangé). Un geste sur un bas effacé
+ne déclenche rien d'autre que le réveil : **aucun contrôle invisible n'est
+activable**.
+
+**Le remasquage** : **2 500 ms** sans aucun geste, **un seul minuteur**, relancé
+à zéro à chaque geste — pendant ces 2,5 s le bas est visible, même si l'on ne
+fait rien. **Quatre situations l'interdisent**, et l'**ordre de la décision est
+la spec** :
+
+| # | Situation | Pourquoi |
+|---|---|---|
+| 1 | un **message du micro fermé** est affiché | une panne reste lisible, et son bouton « Autoriser le micro » cliquable |
+| 2 | le **champ contient du texte**, ou il a le **focus** | on ne cache jamais ce que l'on écrit, ni le champ où l'on tape (dictée en cours de transcription) |
+| 3 | l'état est **écoute** ou **parole** | la ligne d'état dit alors que le micro est ouvert, ou que Pilot répond : on ne l'efface pas |
+| 4 | le **pointeur est sur la zone du bas** | on ne fait pas disparaître sous le curseur ce qu'il désigne |
+
+**Cas particulier, voulu** : au repos avec la dictée **armée mais encore
+silencieuse** — le cas normal de cet écran — le champ est vide et l'état est
+« repos », donc le bas **s'efface**. La dictée armée n'est pas une dictée *en
+cours* ; le **premier mot** entendu fait passer l'état en « écoute » et fait
+revenir le bas. Une **panne de micro**, une **transcription en cours** et une
+**lecture à voix haute**, elles, ne laissent **jamais** le bas s'effacer.
+
+**Le fondu** : **180 ms** (le `var(--transition)` du projet), opacité 1 → 0,
+`translateY(0)` → `translateY(8px)` (le bas s'enfonce vers le bas),
+`visibility: hidden` **à la fin** du fondu et `visible` **immédiatement** au
+retour, `pointer-events: none` une fois effacé. Jamais de `display: none` :
+**la place est conservée**, donc le disque est centré **exactement** de la même
+façon dans les deux situations. En **mouvement réduit**, aucun fondu, aucune
+translation : `transition: none`.
+
+**Où la décision vit** : un module **pur** `src/js/vocal-chrome.js` (aucun DOM,
+aucune minuterie) — `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4),
+`vocalChromeVisible({ etat, saisie, micFerme, pointeurActif })`,
+`vocalChromeClass(visible)`, `vocalChromeWakeKey(touche)` et
+`vocalChromeMoved(courant, repere)`. Son **seul point d'écriture** est
+`vocalSyncChrome(state)`, en **dernière ligne** de `applyVocalState` (après
+`vocalSyncRestartButton`) : il lit le DOM, appelle la décision pure et pose ou
+retire la classe `vocal-chrome-hidden`. Aucun autre endroit ne l'écrit. Trois
+appels **sans logique** s'y ajoutent : les quatre écouteurs (posés à la fin de
+`enterVocal`, retirés au début de `exitVocal`), le point d'écriture du **texte
+dicté** (`rec.onresult`) et l'écouteur `input` **existant** de la saisie.
+
+## 4ter. L'état nu : tout masquer sauf le portrait (décision du 2026-10-29) — 🟡 conception écrite, **non livrée**
+
+Décision du propriétaire : **tout ce que l'écran Vocal affiche, sauf le portrait
+lui-même, peut être masqué puis remis** par un petit bouton discret. C'est un
+geste, pas un réglage : rien à mémoriser, rien à configurer.
+
+**Ce qui se masque — ensemble, d'un seul clic.** Le disque et ce qu'il porte
+(enveloppe de parole, arc de réflexion, couronne, bouton « Réveiller <Nom> »), la
+ligne d'état, la barre de saisie, le bouton « Autoriser le micro », les deux
+colonnes de l'écran (§3ter) — et le fond et le filet de la barre du haut, qui
+redevient une simple bande. **Un seul état, pas de masquage séparé** (ni les
+colonnes seules, ni le bas seul) : deux interrupteurs voisins seraient un
+réglage déguisé, et le bas a déjà son effacement automatique (§4bis).
+
+**Ce qui reste, toujours.** Le **portrait** et la pastille de son nom — il ne
+bouge pas d'un pixel, sa place est conservée : c'est la seule exception, décidée
+par le propriétaire. Le **bouton d'affichage**, seul moyen de tout réafficher.
+Et, au-dessus de l'overlay, les **trois sorties** (le logo, `Échap`, la fermeture
+de l'onglet) et le bouton **« Travail »** : l'état nu ne les touche pas. Sans
+personnage actif (§3ter), il ne reste que le bouton — état voulu.
+
+**Le bouton.** Une icône seule (`œil` quand tout est visible, `œil barré` quand
+tout est masqué), 28 × 24 px, dans la **barre du haut de 44 px**, centrée,
+`pointer-events: auto` **sur lui-même** — il n'ajoute **pas** de septième hôte
+cliquable, il vit dans `.vocal-top` qui en est déjà un. L'infobulle et
+l'`aria-label` disent **l'état d'abord, l'action ensuite** (« tout est visible —
+cliquer pour ne garder que le personnage »). `aria-pressed` suit l'état.
+**Jamais `hidden`, jamais `disabled`**, même quand la fenêtre est trop étroite
+pour les colonnes : ce qu'il commande existe toujours.
+
+**Comment le masquage est fait.** Une **seule** classe d'état, `vocal-bare`, sur
+l'overlay — distincte de `vocal-chrome-hidden` (§4bis), qui garde son rôle et ses
+trois nœuds. Les nœuds masqués passent en `opacity: 0` puis `visibility: hidden`
+(retardée de 180 ms) et `pointer-events: none` ; **jamais `display: none`** et
+**aucune règle de dimension ni de position** : le portrait et le disque restent
+à leur place, le retour ne fait rien sauter. Le portrait n'est **pas nommé** par
+le bloc : on ne peut pas masquer ce qu'on n'a pas écrit. En mouvement réduit,
+`transition: none`.
+
+**Le bas qui s'efface et l'état nu.** `vocalSyncChrome` ne rallume plus le bas
+quand l'état nu est posé (un seul terme ajouté, à un seul endroit) : sinon bouger
+la souris ferait revenir la saisie dans un écran qu'on vient de vider.
+`vocal-chrome.js` ne change pas d'une ligne, et son dernier appel dans
+`applyVocalState` reste `vocalSyncRestartButton`.
+
+**La mémoire : aucune.** On entre **toujours** avec tout visible ; l'état tient
+tant qu'on reste dans l'écran (changement de projet, redimensionnement, arrivée
+d'une réponse, lecture) et **tombe** à la sortie du mode. Ni `localStorage`, ni
+fichier, ni case à cocher.
+
+**Aucun clic avalé.** `.pilot-vocal` reste `pointer-events: none` ; un nœud
+masqué ne reçoit rien ; le bouton est le seul nœud de la scène à garder un
+pointeur. Vérifié à l'œil (§8) et, au lot 2, par un test
+(`src/js/ecran-vocal-bouton-affichage.test.js`, **à écrire**).
+
+Détail complet — inventaire nœud par nœud, chiffres de la bande, tableau des
+états, ce qui ne change dans aucun test :
+`docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md` § 6.
 
 ## 5. Le micro : quand il s'ouvre, quand il se ferme
 
@@ -843,12 +1041,64 @@ ce risque.
 `Ctrl+Shift+A` (le raccourci du plein écran de l'assistant) **sort** aussi du mode
 Vocal au lieu d'empiler un second plein écran.
 
+**Les trois voies valent aussi à l'état nu** (§4ter) : masquer tout ne masque
+ni le logo, ni la croix de l'onglet, et ne change rien à `Échap` —
+`onVocalKeydown` n'est pas modifié. Un écran qui ne garde que le visage garde
+**trois portes**, jamais zéro.
+
 **Jamais deux pleins écrans superposés** : entrer en Vocal sort d'abord de
 « Assistant seul », et entrer en « Assistant seul » sort d'abord du Vocal — la
 garde est posée aux deux endroits qui créent un overlay. **Symétrie exacte** :
 tout nœud déplacé à l'entrée (le logo, qui est le bouton des modes, la barre de
 saisie) est restitué à sa place et dans le bon ordre, avec son texte d'invite et
 sa hauteur d'origine.
+
+## 8bis. Aucun calque ne capte les clics (issue #381)
+
+**La règle** : l'écran Vocal est un calque plein viewport
+(`.pilot-vocal` : `position: fixed; inset: 0; z-index: 99990`). **Un calque
+plein écran ne capte jamais le clic** : il porte `pointer-events: none`, et
+le clic n'est rendu qu'aux **hôtes** qui en ont besoin.
+
+**Pourquoi c'est une règle et pas un détail** : en v0.6.4 le calque n'avait
+pas `pointer-events`. Il absorbait donc **tous** les clics du viewport — sans
+aucun gestionnaire à lui, le clic ne menait nulle part. Résultat : le logo
+(qui **est** le bouton des trois modes), `Échap` et la croix de l'onglet
+étaient les trois voies de sortie du §8 et **les trois étaient muettes** ; il
+fallait tuer le processus.
+
+**Les six hôtes, liste exhaustive** (`.pilot-vocal` + sélecteur) : `.vocal-top`,
+`.vocal-stage`, `.vocal-status`, `.vocal-input`, `#mode-logo`,
+`#agent-activity`. `pointer-events` s'hérite : réactiver ces six nœuds rend le
+clic à tout leur contenu (barre de saisie et ses boutons, disque et ses deux
+boutons, panneau de « Travail »). Les deux nœuds **déplacés** dans l'overlay
+sont nommés explicitement : sans eux, le correctif rendrait inatteignables
+précisément le bouton des modes et l'entrée « Travail ».
+
+**Aucun calque décoratif n'est nommé** — ni `.vocal-halo`, ni `.vocal-orb`, ni
+ses deux lueurs (`::before`, `::after`), ni l'enveloppe de parole : ils gardent
+`pointer-events: none`, et c'est **nécessaire** puisque les pseudo-éléments du
+disque débordent de sa boîte (la couronne volerait sinon les clics de la zone
+qui l'entoure). Un décor ne capte jamais un clic.
+
+**La sortie ne dépend pas du succès du démontage** : `exitVocal` enferme le
+nettoyage (lecture, micro, minuteurs, dictée) dans un `try` dont le `catch`
+**trace et n'empêche rien** ; la restitution des trois nœuds et le retrait de
+l'overlay sont écrits **après** le `catch`, donc toujours atteints. Une
+exception au milieu du démontage ne peut plus laisser l'écran en place avec
+l'utilisateur sans porte de sortie.
+
+**Ce qui tient la règle** : `src/js/vocal-aucun-calque-ne-capte-les-clics.test.js`
+— `pointer-events: none` sur le calque, liste **exhaustive** des six hôtes
+(tout autre sélecteur réclamant `pointer-events: auto` dans la section fait
+échouer le test), `pointer-events: none` sur les trois calques décoratifs,
+les trois voies de sortie du §8 (garde de modale d'`Échap` comprise) et le
+retrait de l'overlay **après** le `catch`.
+
+**Place de la règle dans la feuille de style** : elle est la **dernière** de la
+section Vocal, après tous les blocs qu'elle nomme. Posée juste après
+`.pilot-vocal`, le nom de ses sélecteurs tomberait avant ces blocs et les tests
+qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 
 ## 9. Ce qui n'est pas fait (et n'est pas simulé)
 
@@ -867,12 +1117,14 @@ sa hauteur d'origine.
 | Fichier | Rôle |
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
-| `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
+| `src/js/super-agent.js` | `enterVocal` / `exitVocal` (pose et retrait des quatre écouteurs et de l'unique minuteur du bas, §4bis), `vocalSyncChrome` (**seul** point d'écriture de `.vocal-chrome-hidden`), `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
 | `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, **reprise bornée d'un armement refusé pour une raison passagère** (`vocalResumeRetry` + `VOCAL_RESUME_RETRY_MS` / `VOCAL_RESUME_MAX_RETRIES` / `VOCAL_RESUME_TRANSIENT_REASONS`), désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur **instantanée** — durée mesurée < `VOICE_EMPTY_SESSION_INSTANT_MS` (1 s) —, jamais une erreur affichée, un arrêt demandé, une reprise en main, et **jamais un silence d'une durée réelle**) |
 | `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : les **quatre niveaux** de longueur (`VOCAL_BREVITY_LEVELS`, `normalizeVocalBrevityLevel`, `vocalBrevityLabel`), la consigne d'un niveau (`vocalBrevityInstruction`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
+| `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les quatre règles **dans l'ordre**), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
+| 🟡 **à livrer** (lot 2) `super-agent.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton-œil posé **après** `buildVocalOverlay()`, dans `.vocal-top`), `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed` et l'infobulle), le terme `!vocalBare` dans `vocalSyncChrome`, la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 
@@ -909,6 +1161,15 @@ compteur),
 consigne, texte de l'utilisateur intact et non tronqué, consigne **absente** hors
 du mode Vocal — chat écrit et Assistant inchangés —, un seul appel dans toute
 l'application, cas de sécurité exclus explicitement, documentation à jour),
+`vocal-chrome-masque.test.js` (**le bas effacé au repos** §4bis : les quatre
+règles **dans l'ordre**, le masquage permis au repos avec la dictée **armée mais
+silencieuse**, jamais pendant l'écoute / la parole / une panne de micro / un
+champ occupé, 2 500 ms et **un seul** minuteur, seuil de 4 px, `Échap` qui ne
+réveille rien, décision prise **en dernière ligne** de `applyVocalState`, la
+classe écrite à **un seul** endroit, les quatre écouteurs posés puis **retirés**,
+la dictée et la frappe qui font revenir le bas, le masquage qui **ne nomme que
+les trois nœuds du bas** — jamais le disque, le bouton de relance, le logo ni
+« Travail » — et qui **ne change pas la mise en page**),
 `vocal-restart.test.js` + `ecran-vocal-bouton-relance.test.js` (bouton de relance
 §3bis : visible hors dictée, absent pendant l'écoute et pendant la parole / la
 réflexion, absent sans transcription, aucun état incohérent, libellé
@@ -919,6 +1180,15 @@ calculée** (rayon du bouton = rayon intérieur du disque, seule épaisseur rest
 = l'anneau, aucune unité de fenêtre), aucun recouvrement du halo ni de la phrase
 d'état, aucune animation et mouvement réduit respecté).
 
+`vocal-aucun-calque-ne-capte-les-clics.test.js` tient la règle du §8bis :
+`pointer-events: none` sur le calque plein écran, liste **exhaustive** des six
+hôtes qui reçoivent le clic (tout autre sélecteur réclamant `pointer-events:
+auto` dans la section fait échouer le test), `pointer-events: none` sur les
+trois calques décoratifs (halo, lueur du disque, arc), les **trois** voies de
+sortie qui appellent bien `exitVocal` (garde de modale d'`Échap` comprise) et le
+retrait de l'overlay **après** le `catch` — la sortie ne dépend pas du succès du
+démontage.
+
 ## 11. Ce qui est prouvé, et ce qui dépend de votre matériel
 
 **Prouvé par les tests** : le cycle des trois modes, la clé unique et la migration,
@@ -926,6 +1196,9 @@ le libellé et l'infobulle, la structure de l'écran, une seule classe d'état, 
 priorité parole > réflexion > écoute, les trois sorties, la restitution des nœuds,
 l'arrêt réel du micro, et — sur images audio simulées — **zéro auto-coupure** sur
 30 s d'écho résiduel puis **une** coupure quand une voix continue dépasse le seuil.
+Est aussi prouvé que l'**écran ne bloque plus les clics** : le calque est
+traversant, seuls ses six hôtes captent, aucun décor ne capte, et les trois
+portes de sortie mènent à `exitVocal` (§8bis).
 Est aussi prouvé que la coupure pendant une réflexion ne part **qu'une fois**, ne
 part **pas** sur un bruit court ni sur un silence, et emprunte le **même** chemin
 d'arrêt que le bouton Stop (aucun second `invoke` d'arrêt dans le code).

@@ -19,9 +19,15 @@
 //   5. La conversation n'est JAMAIS peinte pendant le mode (regle CSS dediee,
 //      independante de la couleur de fond de l'overlay), sans casser les
 //      mesures de defilement (`visibility`, jamais `display: none`).
-//   6. Ce que l'ecran nu DOIT garder (objet 168 px, saisie 720 px, trois
-//      sorties du mode, mouvement reduit) : aucun nettoyage futur ne doit les
-//      emporter en meme temps que la conversation.
+//   6. Ce que l'ecran nu DOIT garder (objet de 120 a 336 px suivant la hauteur,
+//      saisie 720 px, trois sorties du mode, mouvement reduit) : aucun nettoyage
+//      futur ne doit les emporter en meme temps que la conversation.
+//   7. Le bas s'efface au repos (13/11) SANS que l'ecran nu change : la classe
+//      `vocal-chrome-hidden` ne nomme que la ligne d'etat, la saisie et le
+//      bouton du micro, et le masquage ne retire aucune place — donc l'objet
+//      reste au centre. Les quatre regles ordonnees du masquage sont tenues par
+//      `vocal-chrome-masque.test.js` ; ici on ne verifie que le PERIMETRE et la
+//      mise en page.
 //
 // Les commentaires sont en ASCII ; les chaines qui viennent de l'interface sont
 // copiees telles quelles.
@@ -199,7 +205,13 @@ describe("5. la conversation n'est jamais peinte pendant le mode Vocal", () => {
 // ---------------------------------------------------------------------------
 describe("6. ce que l'ecran nu doit garder", () => {
   it("l'objet et la saisie gardent leurs mesures, le trait n'existe plus", () => {
-    expect(bloc(CSS, ".vocal-orb {")).toMatch(/width:\s*168px/);
+    // L'objet a double le 13/11 et suit la hauteur de la fenetre : sa mesure est
+    // le jeton borne 120..336 px, pas un nombre en dur (il ne peut donc plus
+    // deborder d'un ecran court).
+    expect(bloc(CSS, ".vocal-orb {")).toMatch(/width:\s*var\(--vocal-orb-size\)/);
+    expect(bloc(CSS, ".pilot-vocal {")).toMatch(
+      /--vocal-orb-size:\s*clamp\(120px,[^;]*336px\)/,
+    );
     expect(bloc(CSS, ".vocal-input {")).toMatch(/width:\s*min\(720px/);
     // Un trait qui reviendrait par une regle CSS serait aussi genant qu'un
     // trait dans le balisage : les deux sont refuses ici.
@@ -227,5 +239,28 @@ describe("7. la regle est ecrite noir sur blanc (spec + aide integree)", () => {
     const aide = sliceSource(HELP, "<!-- HELP:modes-ecran -->", "<!-- /HELP:modes-ecran -->", 100);
     expect(aide).toMatch(/Rien de la conversation n'y est\s+affich/i);
     expect(aide).toMatch(/écran nu/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("8. le bas efface au repos ne touche qu'au bas", () => {
+  const masque = sliceSource(CSS, ".pilot-vocal.vocal-chrome-hidden .vocal-status,", "}", 80);
+
+  it("la classe ne nomme que les trois noeuds du bas, jamais le cercle ni les boutons", () => {
+    const noeuds = [...masque.matchAll(/\.vocal-chrome-hidden \.([a-z-]+)/g)].map((m) => m[1]);
+    expect(noeuds).toEqual(["vocal-status", "vocal-input", "vocal-mic-fix"]);
+    // Le cercle, la couronne, le bouton de relance, la barre du haut, le logo
+    // (bouton des trois modes) et « Travail » restent la, toujours atteignables.
+    expect(masque).not.toMatch(/vocal-orb|vocal-halo|vocal-restart|vocal-top/);
+    expect(CSS).not.toMatch(/\.vocal-chrome-hidden[^{]*#(mode-logo|agent-activity)/);
+  });
+
+  it("le masquage ne change pas la mise en page : le cercle ne bouge pas", () => {
+    // Opacite + translation seulement : la ligne d'etat et la saisie gardent
+    // leur place dans la colonne, donc le centrage de l'objet est identique.
+    expect(masque).toMatch(/opacity:\s*0/);
+    expect(masque).toMatch(/transform:\s*translateY\(8px\)/);
+    expect(masque).not.toMatch(/display:\s*none/);
+    expect(masque).not.toMatch(/position:\s*absolute/);
   });
 });

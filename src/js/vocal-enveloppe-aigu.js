@@ -74,23 +74,28 @@ export const ENVELOPE_RISE = 0.5;
 export const ENVELOPE_FALL = 0.12;
 
 /**
- * Rayon de l'anneau du disque, en pixels : 168 px de boite / 2. C'est le point
- * de depart de la couronne lumineuse (mesure de la feuille de style, §2.2).
+ * Rayon de l'anneau du disque, en pixels : 336 px de boite / 2 (le disque a
+ * double le 2026-11-13, CONCEPTION-ecran-vocal-cercle-et-bas.md §1). C'est le
+ * point de depart de la couronne lumineuse (mesure de la feuille de style,
+ * §2.2). Le disque peut descendre a 120 px sur une petite fenetre : cette
+ * constante decrit la taille PLEINE, celle sur laquelle la boite de 512 px est
+ * calee — elle ne sert qu'a calculer un facteur, jamais une position absolue.
  */
-export const ENVELOPE_RING_PX = 84;
+export const ENVELOPE_RING_PX = 168;
 
-/** Extension de l'enveloppe au repos, en pixels au-dela de l'anneau. */
-export const ENVELOPE_MIN_PX = 18;
+/** Extension de l'enveloppe au repos, en pixels au-dela de l'anneau (36 px). */
+export const ENVELOPE_MIN_PX = 36;
 
 /**
  * Extension de l'enveloppe pleine, en pixels au-dela de l'anneau.
  *
- * 44 px depuis le 28/10 (decision du proprietaire) : l'anneau est a 84 px et
- * la boite de l'enveloppe (`inset: -44px`, 256 px de large) va jusqu'a 128 px
- * de rayon. La valeur n'est donc plus 32 px : c'est ELLE qui donne au halo son
- * rayon retenu de **128 px** a pleine voix (84 + 44).
+ * 88 px depuis le doublement du disque (l'ancienne valeur etait 44 px pour un
+ * disque de 168 px : meme proportion) : l'anneau est a 168 px et la boite de
+ * l'enveloppe (`inset: -88px`, 512 px de large) va jusqu'a 256 px de rayon,
+ * soit **256 px** a pleine voix (168 + 88). C'est ELLE qui donne au halo son
+ * extension maximale ; aucune autre constante ne la double.
  */
-export const ENVELOPE_MAX_PX = 44;
+export const ENVELOPE_MAX_PX = 88;
 
 /** Intensite de l'enveloppe au repos : elle ne s'eteint jamais (0,8). */
 export const ENVELOPE_MIN_ALPHA = 0.8;
@@ -207,19 +212,19 @@ export function smoothEnvelopeEnergy(precedent, mesure) {
  * Energie -> extension et intensite de l'enveloppe. PURE.
  *
  * L'extension est l'ecart, en pixels, entre l'anneau du disque et le bord de
- * l'enveloppe : `ENVELOPE_MIN_PX` (18 px) au repos, `ENVELOPE_MAX_PX` (44 px)
+ * l'enveloppe : `ENVELOPE_MIN_PX` (36 px) au repos, `ENVELOPE_MAX_PX` (88 px)
  * a pleine voix.
  *
  * `scale` est le facteur applique au CSS (`transform: scale(...)`). ATTENTION :
- * la boite de l'enveloppe n'est pas un simple disque de 44 px — elle va du
- * centre jusqu'a `ENVELOPE_RING_PX + ENVELOPE_MAX_PX` (128 px, soit la boite de
- * 256 px). Une transformation reduit donc TOUTE la boite autour de son centre :
- * pour que le bord de la couronne tombe pile a `84 + extension`, il faut
- * `scale = (84 + extension) / 128`. Au repos : 102 / 128 = 0,7969 (la couronne
- * fait bien 18 px au-dela de l'anneau) ; a pleine voix : 1 (44 px, soit un halo
- * de 128 px de rayon). Diviser l'extension par 44 donnerait 0,409, ce qui
- * ramenerait le bord a 52 px — c'est-a-dire SOUS l'anneau, donc invisible :
- * c'est ce piege que cette formule evite.
+ * la boite de l'enveloppe n'est pas un simple disque de 88 px — elle va du
+ * centre jusqu'a `ENVELOPE_RING_PX + ENVELOPE_MAX_PX` (= 512 / 2 = 256 px,
+ * soit la moitie de la boite). Une transformation reduit donc TOUTE la boite
+ * autour de son centre : pour que le bord de la couronne tombe pile a
+ * `168 + extension`, il faut `scale = (168 + extension) / 256`. Au repos :
+ * 204 / 256 = 0,7969 (la couronne fait bien 36 px au-dela de l'anneau) ; a
+ * pleine voix : 1 (88 px, soit un rayon de 256 px). Diviser l'extension par 88
+ * donnerait 0,409, ce qui ramenerait le bord a 105 px — c'est-a-dire SOUS
+ * l'anneau, donc invisible : c'est ce piege que cette formule evite.
  *
  * L'intensite ne s'effondre jamais : de 0,8 a 1 (l'enveloppe ne clignote pas,
  * elle respire), comme le plancher de l'animation qu'elle remplace.

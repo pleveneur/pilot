@@ -185,13 +185,13 @@ describe("2. lissage : montee rapide, retombee lente, jamais d'oscillation", () 
 });
 
 // ---------------------------------------------------------------------------
-describe("3. extension bornee a ~44 px au-dela de l'anneau (halo de 128 px)", () => {
-  it("au repos : 18 px, la lueur ne s'eteint pas (alpha 0,8)", () => {
+describe("3. extension bornee a ~88 px au-dela de l'anneau (halo de 512 px)", () => {
+  it("au repos : 36 px, la lueur ne s'eteint pas (alpha 0,8)", () => {
     const halo = envelopeFromEnergy(0);
     expect(halo.extension).toBe(ENVELOPE_MIN_PX);
-    // Le facteur porte sur la boite ENTIERE (centre -> 128 px), pas sur les
-    // 44 px d'extension : c'est ce qui garde le bord de la couronne a
-    // 84 + 18 = 102 px au lieu de le ramener sous l'anneau.
+    // Le facteur porte sur la boite ENTIERE (centre -> 256 px), pas sur les
+    // 88 px d'extension : c'est ce qui garde le bord de la couronne a
+    // 168 + 36 = 204 px au lieu de le ramener sous l'anneau.
     expect(halo.scale).toBeCloseTo((ENVELOPE_RING_PX + ENVELOPE_MIN_PX) / (ENVELOPE_RING_PX + ENVELOPE_MAX_PX), 3);
     expect(halo.scale).toBeCloseTo(0.7969, 3);
     // La couronne mesure donc EXACTEMENT l'extension annoncee.
@@ -201,13 +201,13 @@ describe("3. extension bornee a ~44 px au-dela de l'anneau (halo de 128 px)", ()
     expect(halo.alpha).toBe(0.8);
   });
 
-  it("a pleine voix : 44 px, opacite pleine, rayon de 128 px", () => {
+  it("a pleine voix : 88 px, opacite pleine, rayon de 256 px", () => {
     const halo = envelopeFromEnergy(1);
     expect(halo.extension).toBe(ENVELOPE_MAX_PX);
-    expect(halo.extension).toBe(44);
+    expect(halo.extension).toBe(88);
     expect(halo.scale).toBe(1);
-    // Le rayon retenu par le proprietaire (28/10) : 84 + 44 = 128 px.
-    expect(ENVELOPE_RING_PX + halo.extension).toBe(128);
+    // Le disque a double le 13/11 : 168 + 88 = 256 px (44 px pour 84 px avant).
+    expect(ENVELOPE_RING_PX + halo.extension).toBe(256);
     expect(halo.alpha).toBe(1);
   });
 
@@ -219,24 +219,25 @@ describe("3. extension bornee a ~44 px au-dela de l'anneau (halo de 128 px)", ()
       expect(halo.extension).toBeLessThanOrEqual(ENVELOPE_MAX_PX);
       expect(halo.extension).toBeGreaterThanOrEqual(ENVELOPE_MIN_PX);
       // L'extension affichee EST l'echelle : une seule verite, et la couronne
-      // peinte fait bien 18 a 44 px au-dela de l'anneau de 84 px.
+      // peinte fait bien 36 a 88 px au-dela de l'anneau de 168 px.
       const couronne = (ENVELOPE_RING_PX + ENVELOPE_MAX_PX) * halo.scale - ENVELOPE_RING_PX;
       expect(couronne).toBeCloseTo(halo.extension, 0);
-      expect(couronne).toBeGreaterThanOrEqual(17.5);
-      expect(couronne).toBeLessThanOrEqual(44.5);
+      expect(couronne).toBeGreaterThanOrEqual(35.5);
+      expect(couronne).toBeLessThanOrEqual(88.5);
       expect(halo.alpha).toBeGreaterThanOrEqual(ENVELOPE_MIN_ALPHA);
       expect(halo.alpha).toBeLessThanOrEqual(1);
     }
   });
 
-  it("la boite du halo fait 256 px (inset -44) et reste hors du flux", () => {
-    // 168 px de disque + 2 x 44 px : la boite fait 256 px de large, donc
-    // 128 px de rayon, et elle est ABSOLUE — elle n'elargit rien, ne pousse
-    // rien et ne peut pas creer de barre de defilement.
+  it("la boite du halo fait 512 px (une couronne par cote) et reste hors du flux", () => {
+    // 336 px de disque + 2 x 88 px : la boite fait 512 px de large, donc
+    // 256 px de rayon, et elle est ABSOLUE — elle n'elargit rien, ne pousse
+    // rien et ne peut pas creer de barre de defilement. La couronne est une
+    // FRACTION du disque (22 / 84), donc le nombre n'est plus ecrit en dur.
     const corps = bloc(CSS, ".vocal-orb::before {");
-    expect(corps).toMatch(/inset:\s*-44px/);
+    expect(corps).toMatch(/inset:\s*calc\(var\(--vocal-crown\) \* -1\)/);
     expect(corps).toMatch(/position:\s*absolute/);
-    expect(168 + 2 * 44).toBe(256);
+    expect(336 + 2 * 88).toBe(512);
   });
 });
 
@@ -306,8 +307,11 @@ describe("5. mouvement reduit : fixe mais visible (jamais eteint)", () => {
     );
     expect(corps).toMatch(/opacity:\s*1/);
     expect(corps).toMatch(/animation:\s*none/);
-    // Aucun `transform` : la boite de 256 px est deja a son extension pleine.
-    expect(corps).not.toMatch(/transform/);
+    // L'echelle est ECRITE explicitement, a sa valeur PLEINE (1 = 256 px de
+    // rayon, la boite entiere) : sans elle, la regle de base laisserait la
+    // lueur a son echelle de repos (0,7969) alors que le mode reduit doit la
+    // montrer a sa taille maximale, immobile.
+    expect(corps).toMatch(/transform:\s*scale\(1\)/);
   });
 
   it("la regle qui mesure l'enveloppe pose une animation nulle", () => {

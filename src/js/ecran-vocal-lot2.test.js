@@ -208,10 +208,16 @@ describe("3. l'UNIQUE ligne d'etat (§2.3)", () => {
 
 // ---------------------------------------------------------------------------
 describe("4. l'objet lumineux et son trait (§2.2)", () => {
-  it("le disque fait 168 px, en anneau plein de 2 px + remplissage radial", () => {
+  it("le disque fait de 120 a 336 px (un seul jeton), anneau de 2 px + remplissage radial", () => {
     const corps = bloc(CSS, ".vocal-orb {");
-    expect(corps).toMatch(/width:\s*168px/);
-    expect(corps).toMatch(/height:\s*168px/);
+    // Le 13/11 le disque a double et suit la hauteur de la fenetre
+    // (CONCEPTION-ecran-vocal-cercle-et-bas.md §1.5). Il ne porte donc plus une
+    // taille en dur mais le jeton UNIQUE, borne 120..336 px, et ses deux lueurs
+    // (`--vocal-crown`, `--vocal-arc`) en sont des fractions.
+    expect(corps).toMatch(/width:\s*var\(--vocal-orb-size\)/);
+    expect(corps).toMatch(/height:\s*var\(--vocal-orb-size\)/);
+    const overlay = bloc(CSS, ".pilot-vocal {");
+    expect(overlay).toMatch(/--vocal-orb-size:\s*clamp\(120px,[^;]*336px\)/);
     expect(corps).toMatch(/border-radius:\s*50%/);
     expect(corps).toMatch(/border:\s*2px solid var\(--vocal-state/);
     expect(corps).toMatch(/radial-gradient\(/);
@@ -302,7 +308,7 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
 //   - il n'existe qu'en ecoute : deux gardes qui tombent ensemble ;
 //   - en mouvement reduit il est fige mais LISIBLE, pas eteint.
 describe("4bis. le halo d'ecoute (lot B) : la voix de l'utilisateur", () => {
-  it("il est ENFANT du disque, pose dans sa boite interieure (82 px de rayon)", () => {
+  it("il est ENFANT du disque, pose dans sa boite interieure (166 px de rayon)", () => {
     const corps = corpsFonction(SUPER, "function buildVocalOverlay");
     // ENFANT DIRECT du disque : le balisage du disque, du `div` a sa fermeture.
     // Depuis le bouton de relance (decisions 401/402), le disque contient DEUX

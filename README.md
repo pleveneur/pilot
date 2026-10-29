@@ -116,10 +116,12 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - **Détaillé** est l'écran habituel : explorateur, onglets, agent, tout est là.
 - **Assistant seul** ne garde que la conversation de l'Assistant (🧭), en plein
   écran.
-- **Vocal** est un écran plein : au centre, un **objet lumineux** dont la couleur
-  dit l'état (**repos**, **écoute**, **réflexion**, **parole**), un **trait de
-  niveau** juste dessous et **une seule ligne de texte** (« Je vous écoute. »,
-  « Je réfléchis. », « Je réponds. »). Rien de la conversation n'y est affiché.
+- **Vocal** est un écran plein : au centre, un **objet lumineux** — un grand
+  cercle, qui s'adapte à la hauteur de votre fenêtre — dont la couleur dit
+  l'état (**repos**, **écoute**, **réflexion**, **parole**), et **une seule ligne
+  de texte** (« Je vous écoute. », « Je réfléchis. », « Je réponds. »). Son
+  **halo reste allumé même au repos** : il ne clignote pas, c'est la couleur et
+  la forme qui parlent. Rien de la conversation n'y est affiché.
   Ouvrir le micro ne suffit pas à passer en **écoute** : c'est **votre voix** qui
   l'allume, et le retour au **repos** se fait tout seul quand vous vous taisez.
 - **La réponse s'y lit à voix haute** (même voix et même bouton « 🔊 Écouter »
@@ -137,8 +139,11 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   **une voix franche et continue finit toujours par le faire taire**, jamais
   l'inverse. Le **casque** est la situation où cela marche le mieux. Hors du mode
   Vocal, rien ne change : les réponses se lisent jusqu'au bout.
-- La **zone de saisie** reste visible en bas et grandit quand vous écrivez
-  (jusqu'à 120 px) ; elle garde son micro de dictée 🎙️.
+- La **zone de saisie** est là quand vous en avez besoin : elle **s'efface au
+  repos** (avec la ligne d'état) et **revient au moindre geste** — souris,
+  clic, molette ou touche. Elle grandit quand vous écrivez (jusqu'à 120 px) et
+  garde son micro de dictée 🎙️. Le cercle, le bouton « Réveiller … », le logo et
+  le bouton « Travail », eux, ne disparaissent jamais.
 - **On en sort par les trois mêmes chemins** : le **même bouton** (mode suivant),
   la touche **Échap**, ou la **fermeture de l'onglet**. Deux pleins écrans ne se
   superposent jamais : passer en « Assistant seul » ou en « Vocal » sort d'abord

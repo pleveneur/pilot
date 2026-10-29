@@ -64,9 +64,9 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Réponse sur la documentation (ex-aide intégrée ❓) | `spec_help.md` |
 | Revue de code assistée (H5) | `spec_review.md` |
 | Lecture des réponses à voix haute (bouton 🔊, réglage unique de la voix, voix française locale hors ligne) | `spec_read_aloud.md` |
-| Trois modes d'écran (Détaillé · Assistant seul · Vocal) et écran Vocal (micro, coupure de la parole, enveloppe de parole qui suit le son, trait de niveau retiré) | `spec_modes_ecran_vocal.md` |
+| Trois modes d'écran (Détaillé · Assistant seul · Vocal) et écran Vocal (micro, coupure de la parole, enveloppe de parole qui suit le son, trait de niveau retiré, **état nu § 4ter** : tout masquable sauf le portrait, un seul bouton-œil, aucune mémorisation ; **§ 8bis : aucun calque ne capte les clics** — le calque plein écran est traversant, seuls six hôtes captent, verrou `src/js/vocal-aucun-calque-ne-capte-les-clics.test.js`, issue #381) | `spec_modes_ecran_vocal.md` |
 | Conversation parlée interruptible (couper Pilot en pleine phrase) — document de conception à trancher | `docs/architecture-conversation-vocale-interruptible.md` |
-| Portrait dans le cercle + deux colonnes (discussion à gauche, tâches à droite) — document de conception à trancher | `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md` |
+| Portrait dans le cercle + deux colonnes (discussion à gauche, tâches à droite) — document de conception à trancher | `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md` (**§ 6 : tout masquer d'un geste, sauf le portrait** — décision 9 du 2026-10-29) |
 | Context Engine (auto-contexte agent) | `spec_context_engine.md` |
 | Code Graph (graphe de connaissances projet) | `spec_code_graph.md` |
 | Diff Review agent (modifications) | `spec_diff_review.md` |
