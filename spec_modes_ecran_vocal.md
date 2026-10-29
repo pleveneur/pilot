@@ -493,12 +493,32 @@ la sortie du mode, avant le retrait du calque.
   deux ») : le mécanisme existant ne l'a jamais prévu, et le deviner serait
   répondre à la place de l'utilisateur.
 - **La dictée ne répond pas à ma place** : tant qu'une question attend, la
-  dictée automatique de l'écran est **fermée** (règle 4b de
-  `vocal-conversation.js` ; une dictée déjà ouverte est fermée). Sans cette
-  garde, une phrase prononcée à côté serait partie comme réponse — et une
+  dictée **automatique** de l'écran est **fermée** (règle 4b de
+  `vocal-conversation.js` ; une dictée ouverte automatiquement est fermée). Sans
+  cette garde, une phrase prononcée à côté serait partie comme réponse — et une
   **confirmation** (dont la valeur par défaut est « oui ») aurait été validée
-  sans un geste. Le geste 🎙️ la rouvre : dicter sa réponse est un acte
-  explicite.
+  sans un geste. **Le geste 🎙️, lui, tient** : une dictée ouverte par le bouton
+  n'est pas refermée par l'arrivée de la question (`ouvertureParGeste`), sinon
+  le bouton se refermerait dans la milliseconde qui suit le clic et l'écran
+  promettrait une dictée impossible. Dicter sa réponse est un acte explicite.
+- **La question rend la SAISIE ET LES BOUTONS pleinement actifs** (complément) :
+  - **le curseur est déjà dans le champ** quand la question s'affiche : on peut
+    écrire, dicter et valider **sans geste préalable**, et `Entrée` répond.
+    C'est `pendingQuestionChromeSync` — le rappel déjà appelé à **chaque**
+    changement de la file — qui le fait, par la décision **pure**
+    `src/js/vocal-question-utilisable.js` (`decideVocalQuestionFocus` /
+    `planVocalQuestionFocus`). Le curseur n'est donné **que** dans cet écran,
+    **jamais** par-dessus une modale ouverte, et **seulement à l'arrivée** d'une
+    question : un re-rendu (le clic d'un choix multiple) ne le retire pas au
+    champ sous les doigts de l'utilisateur ;
+  - **aucun clic n'est avalé** : la zone de saisie — et la rangée qu'elle porte
+    — est peinte **devant** la scène (`position: relative; z-index: 1`, aucun
+    décalage, aucune taille touchée). Le disque peint au-delà de sa boîte et ne
+    descend pas sous 120 px : sur une fenêtre basse, une question de 140 px plus
+    le bouton de micro écrasent la scène, et sans cet ordre de peinture le bas
+    du disque passait devant le haut de la rangée et mangeait le clic. Aucun
+    hôte cliquable n'est ajouté (§8bis : les **six** hôtes ne bougent pas, la
+    rangée hérite du pointeur de `.vocal-input`).
 - **Place et clic** : au repos, sans question, la rangée est vide et ne prend
   **aucune place** ; avec une question, sa hauteur est bornée (140 px, 22 vh sur
   les fenêtres basses, défilement interne) pour que la formule du disque (§1.5)
@@ -1232,6 +1252,22 @@ sortie qui appellent bien `exitVocal` (garde de modale d'`Échap` comprise) et l
 retrait de l'overlay **après** le `catch` — la sortie ne dépend pas du succès du
 démontage.
 
+`ecran-vocal-question-visible.test.js` tient le §4bis pour les questions (la
+rangée vit dans `.vocal-input`, une seule question à la fois, FIFO sans perte,
+rien n'expire, aucune règle ne la cache).
+`ecran-vocal-question-utilisable.test.js` tient le **complément** : le curseur est
+donné **à l'arrivée** d'une question (`decideVocalQuestionFocus` : jamais hors du
+mode, jamais par-dessus une modale, jamais en re-rendu ; la question suivante le
+reprend) par le **seul** point `pendingQuestionChromeSync`, la saisie **répond** à
+la question par le chemin existant (`send` → `validatePendingQuestion`, détour
+placé **avant** l'envoi normal, après l'arrêt de la lecture), la zone de saisie
+passe **devant** la scène (`position: relative; z-index: 1`, sans décalage ni
+taille) tout en restant **sous** le logo (2) et « Travail » (3), la liste des
+**six** hôtes du §8bis ne bouge pas (la rangée hérite du pointeur de
+`.vocal-input`, aucun `pointer-events: none` sur la saisie hors effacement du
+bas), et une dictée ouverte par le **geste** 🎙️ **tient** devant une question
+(`ouvertureParGeste`) alors que la dictée **automatique** reste fermée.
+
 ## 11. Ce qui est prouvé, et ce qui dépend de votre matériel
 
 **Prouvé par les tests** : le cycle des trois modes, la clé unique et la migration,
@@ -1242,6 +1278,11 @@ l'arrêt réel du micro, et — sur images audio simulées — **zéro auto-coup
 Est aussi prouvé que l'**écran ne bloque plus les clics** : le calque est
 traversant, seuls ses six hôtes captent, aucun décor ne capte, et les trois
 portes de sortie mènent à `exitVocal` (§8bis).
+Est aussi prouvé qu'une **question affichée dans l'écran Vocal est utilisable du
+premier coup** : le curseur est déjà dans le champ sans geste préalable, la saisie
+(et la rangée qui la surmonte) est peinte devant la scène, donc aucun clic n'est
+avalé, et la dictée ouverte par le geste 🎙️ n'est pas refermée par l'arrivée de la
+question.
 Est aussi prouvé que la coupure pendant une réflexion ne part **qu'une fois**, ne
 part **pas** sur un bruit court ni sur un silence, et emprunte le **même** chemin
 d'arrêt que le bouton Stop (aucun second `invoke` d'arrêt dans le code).

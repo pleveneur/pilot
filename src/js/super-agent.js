@@ -110,6 +110,13 @@ import {
   VOCAL_MESSAGE_DICTEE_ECHEC,
   VOCAL_MESSAGE_SENSIBILITE_INCONNUE,
 } from "./vocal-conversation.js";
+// LA QUESTION DOIT RENDRE LA SAISIE UTILISABLE (spec_modes_ecran_vocal.md
+// §4bis) : la décision « le champ prend-il le curseur à l'arrivée d'une
+// question ? » et sa mémoire sont PURES et vivent dans ce module. Ici, on ne
+// fait que l'appliquer, au point déjà appelé à chaque changement de la file
+// (`pendingQuestionChromeSync`) : aucun second point d'écriture, aucun
+// minuteur, aucun second affichage.
+import { planVocalQuestionFocus } from "./vocal-question-utilisable.js";
 // LE BOUTON DE RELANCE DE L'ECOUTE (« Réveiller <Nom> », decisions 401 / 402) :
 // les DEUX decisions (se voit-il ? que dit-il ?) sont PURES et vivent dans ce
 // module. Ici, on ne fait que les appliquer (`vocalSyncRestartButton`,
@@ -3565,9 +3572,39 @@ export async function createSuperAgent(container) {
   registerPendingBar(pendingBar, inputEl);
   // ÉCRAN VOCAL : la question en attente retient le bas (voir
   // `pendingQuestionChromeSync` et la règle 5 de `vocal-chrome.js`).
+  //
+  // §4bis — LA QUESTION REND LA SAISIE UTILISABLE : c'est ICI, et nulle
+  // part ailleurs, qu'une question qui s'affiche donne le curseur à la zone
+  // de saisie. `applyVocalState` / `enterVocal` ne tournent PAS à l'arrivée
+  // d'une question : ce rappel est le seul point appelé à chaque changement de
+  // la file (`renderActivePendingQuestion`), donc le seul endroit où l'écran
+  // peut apprendre qu'une question vient d'apparaître. Conséquence : on peut
+  // écrire, dicter et valider sans geste préalable, et `Entrée` répond à la
+  // question par le chemin EXISTANT de `send` (qui détourne l'envoi vers
+  // `validatePendingQuestion`).
+  // `vocalQuestionFocused` est la mémoire du curseur (l'identifiant de la
+  // question qui l'a reçu) : un re-rendu — le clic d'un choix multiple rappelle
+  // le rendu — ne retire donc pas le curseur au champ sous les doigts de
+  // l'utilisateur. La décision et la mémoire sont celles du module PUR.
+  let vocalQuestionFocused = "";
   pendingQuestionChromeSync = () => {
     if (!vocalOverlay) return;
     vocalSyncChrome();
+    const tete = pendingQuestions[0];
+    const plan = planVocalQuestionFocus({
+      vocal: true,
+      questionId: tete ? String(tete.id == null ? "" : tete.id) : "",
+      // Une modale ouverte garde le curseur (même garde que `applyVocalState`).
+      modalOuverte: !!document.querySelector(".modal:not(.hidden)"),
+      dejaConcentre: vocalQuestionFocused,
+    });
+    vocalQuestionFocused = plan.memoire;
+    if (!plan.focus || !inputEl) return;
+    try {
+      inputEl.focus();
+    } catch (_) {
+      /* un champ absent ne bloque rien */
+    }
   };
   // Affiche/masque le bandeau « assistant occupé » dans la barre de saisie.
   function setBusyHint(visible) {
@@ -3954,6 +3991,19 @@ export async function createSuperAgent(container) {
   // la zone n'est plus réécrite (sa saisie prime) et rien ne part tout seul
   // (décision : `decideVoiceAutoSend({ userEdited })`, même règle que l'agent π).
   let voiceUserTookOver = false;
+// QUI A OUVERT LA DICTÉE (spec_modes_ecran_vocal.md §4bis) : `true` quand la
+// session en cours a été ouverte par un GESTE de l'utilisateur (bouton 🎙️),
+// `false` quand elle a été armée toute seule par l'écran Vocal. La différence
+// n'est pas décorative : une question de l'assistant ferme la dictée AUTOMATIQUE
+// (une phrase prononcée à côté vaudrait réponse — et « oui » pour une
+// confirmation), mais ne referme JAMAIS une dictée ouverte par un geste : dicter
+// SA réponse est un acte explicite. Sans ce drapeau, le bouton 🎙️ se refermait
+// dans la milliseconde qui suivait le clic (`applyVocalState` →
+// `planVocalConversation` → `desarmer`) et l'écran promettait une dictée
+// impossible. Posé par les deux seuls appelants de `startVoiceInput`, remis à
+// zéro à la fermeture de la session ; l'état le combine de toute façon à
+// `voiceActive`, donc un drapeau périmé est sans effet.
+let vocalDicteeParGeste = false;
   if (inputEl) {
     inputEl.addEventListener("input", () => {
       if (voiceActive) voiceUserTookOver = true;
@@ -3968,6 +4018,8 @@ export async function createSuperAgent(container) {
     // Empêche onresult/onend de réécrire le textarea après l'envoi.
     voiceActive = false;
     voiceStopVoulu = true;
+    // La session est fermée : le fait « ouverte par un geste » ne lui survit pas.
+    vocalDicteeParGeste = false;
     // La dictée se referme : le minuteur d'envoi sur silence n'a plus lieu
     // d'être (une demande ne part jamais d'une dictée fermée).
     clearVocalSilenceTimer();
@@ -4012,6 +4064,9 @@ export async function createSuperAgent(container) {
     // sans effet et l'historique des fins vides resterait plein.
     vocalSessionsVides = [];
     vocalDicteeSuspendue = false;
+    // GESTE explicite (et non armement automatique) : la session qui s'ouvre
+    // n'est jamais refermée par l'arrivée d'une question (regle 4b).
+    vocalDicteeParGeste = true;
     startVoiceInput();
     applyVocalState();
   }
@@ -5347,6 +5402,11 @@ export async function createSuperAgent(container) {
       reflechit: reflectingActive === true,
       occupe: backendBusy === true || isStreaming === true,
       dicteeOuverte: voiceActive === true,
+      // DICTÉE OUVERTE PAR UN GESTE, ET TOUJOURS EN COURS : une question de
+      // l'assistant ne la referme pas — dicter sa réponse est un acte explicite.
+      // Faux dès qu'aucune session n'est ouverte, donc un drapeau périmé ne
+      // rouvre rien tout seul.
+      ouvertureParGeste: voiceActive === true && vocalDicteeParGeste === true,
       // UNE QUESTION DE L'ASSISTANT ATTEND UNE REPONSE (regle 4b) : la dictee
       // automatique se ferme, sinon une phrase prononcee a cote vaudrait
       // reponse — et « oui » pour une confirmation. La question se repond au
@@ -5372,6 +5432,9 @@ export async function createSuperAgent(container) {
     if (vocalProjectSensible === true) return;
     if (voiceActive) return;
     vocalApresLecture = false;
+    // ARMEMENT AUTOMATIQUE (aucun geste) : la session qui s'ouvre se referme
+    // donc a l'arrivee d'une question (regle 4b de `vocal-conversation.js`).
+    vocalDicteeParGeste = false;
     startVoiceInput();
     applyVocalState();
   }

@@ -26,6 +26,10 @@
 //   reflechit         Pilot travaille (l'agent réfléchit)
 //   occupe            le moteur est occupé (backendBusy / isStreaming)
 //   dicteeOuverte     une session de dictée est déjà ouverte
+//   ouvertureParGeste cette session a été ouverte par un GESTE de l'utilisateur
+//                     (bouton 🎙️) et non par l'armement automatique — et elle
+//                     est toujours en cours. Une question ne la referme pas
+//                     (règle 4b) : dicter SA réponse est un acte explicite
 //   question          UNE QUESTION de l'assistant attend une RÉPONSE (la
 //                     rangée de boutons de l'écran Vocal) : la dictée ne
 //                     s'arme pas toute seule, sinon une phrase prononcée à
@@ -62,13 +66,17 @@
 //   2. hors du mode      → aucune dictée n'est armée par cet écran
 //   3. Pilot parle       → désarmée : on ne se transcrit pas soi-même
 //   4. Pilot travaille   → désarmée : le tour en cours prime
-//   4b. une question attend une réponse → désarmée (et une dictée déjà
-//                          ouverte est FERMÉE) : on ne répond pas à la place
-//                          de l'utilisateur. Une confirmation envoyée par une
-//                          phrase prononcée à côté vaudrait « oui » ; l'écran
+//   4b. une question attend une réponse → désarmée (et une dictée ouverte
+//                          AUTOMATIQUEMENT est FERMÉE) : on ne répond pas à la
+//                          place de l'utilisateur. Une confirmation envoyée par
+//                          une phrase prononcée à côté vaudrait « oui » ; l'écran
 //                          attend donc un CLIC sur la question, ou un texte
-//                          TAPÉ volontairement. Le geste 🎙️ reste possible :
-//                          dicter une réponse est un acte explicite.
+//                          TAPÉ volontairement. Le geste 🎙️ reste possible — et
+//                          il TIENT : une dictée ouverte par ce geste n'est pas
+//                          refermée par la question (`ouvertureParGeste`), sinon
+//                          le bouton se refermerait dans la milliseconde qui
+//                          suit le clic et l'écran promettrait une dictée
+//                          impossible. Dicter une réponse est un acte explicite.
 //   5. déjà ouverte      → on ne l'ouvre pas deux fois (idempotence)
 //   5b. arrêt manuel     → on ne la rouvre pas : un geste explicite prime sur
 //                          l'automatisme (le geste 🎙️ la rouvre pour de bon)
@@ -371,10 +379,13 @@ export function decideVocalDictation(etats = {}) {
   // prononcée à côté (un commentaire, un mot à quelqu'un d'autre) partirait
   // alors comme réponse, et pour une CONFIRMATION elle vaudrait « oui » :
   // répondre à la place de l'utilisateur. On DÉSARME donc, y compris une dictée
-  // DÉJÀ OUVERTE (placée avant la règle 5, qui ne fait que la maintenir). Le
-  // geste 🎙️, lui, rouvre la dictée quand on veut dicter sa réponse : c'est un
-  // acte explicite, jamais un effet de bord du silence.
-  if (e.question === true) {
+  // ouverte AUTOMATIQUEMENT (placée avant la règle 5, qui ne fait que la
+  // maintenir). Le geste 🎙️, lui, rouvre la dictée quand on veut dicter sa
+  // réponse : c'est un acte explicite, jamais un effet de bord du silence — et
+  // CETTE dictée-là n'est pas refermée par la question (`ouvertureParGeste`),
+  // sinon le bouton se refermerait aussitôt et l'écran promettrait une dictée
+  // impossible. Une dictée ouverte par geste tombe donc à la règle 5 (maintenue).
+  if (e.question === true && e.ouvertureParGeste !== true) {
     return { action: VOCAL_DICTATION_DISARM, raison: "question-en-attente", delai: 0 };
   }
   // 5. Déjà ouverte : on ne l'ouvre pas une seconde fois.

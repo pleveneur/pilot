@@ -585,6 +585,14 @@ En mode **Vocal** :
   d'état, ni la zone de saisie. Un nom très long est abrégé au milieu du cercle,
   mais l'infobulle et la voix des lecteurs d'écran disent toujours le nom
   **entier**.
+- **Une question de Pilot se répond sur place.** Quand il vous pose une
+  question — un choix, une confirmation, une réponse à écrire — elle apparaît
+  **juste au-dessus de la barre de saisie** (et rien d'autre de la conversation
+  ne s'affiche pour autant). La zone de saisie est **déjà prête** : le curseur y
+  est, vous pouvez **écrire, dicter 🎙️ ou appuyer sur Entrée** sans cliquer
+  d'abord, et les **boutons de la question répondent du premier coup**. Une
+  question **ne s'efface jamais toute seule** : elle attend votre geste. S'il y
+  en a plusieurs, elles s'enchaînent dans l'ordre, sans en perdre aucune.
 - **La demande part deux secondes après votre dernier mot** (par défaut).
   Pilot n'attend plus que le moteur de reconnaissance veuille bien se taire :
   **après ce délai sans nouveau mot entendu**, la demande part. Tant que vous

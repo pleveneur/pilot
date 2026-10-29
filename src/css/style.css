@@ -12068,6 +12068,22 @@ body.pilot-vocal-active #agent-activity {
   /* Effacement du bas (§2.6) : meme duree que les deux autres noeuds. */
   transition: opacity var(--transition), transform var(--transition),
     visibility 0s linear 0s;
+  /* ── AU-DESSUS DE LA SCENE (§4bis) ──
+     La zone de saisie et la question qu'elle porte passent devant la scene.
+     Ce n'est pas un reglage esthetique : le disque est `position: relative`
+     dans `.vocal-stage` (un des hôtes cliquables) et il PEINT au-dela de sa
+     boite sur une fenetre basse (le disque ne peut pas descendre sous le
+     minimum de 120 px, alors que la scene, elle, peut etre ecrasee par une
+     question de 140 px plus le bouton de depannage du micro). Sans cet ordre
+     de peinture, le BAS du disque pouvait donc recouvrir le HAUT de la rangee
+     et avaler le clic : un bouton qui ne repond pas du premier coup.
+     `position: relative` sans decalage ne deplace RIEN et ne change aucune
+     mise en page ; `z-index: 1` reste sous le logo des trois modes (2) et sous
+     l'entree « Travail » (3), tous deux dans la bande du haut, et ne cree
+     aucun hote cliquable nouveau (issue #381 : la liste des six hôtes ne
+     bouge pas — le clic reste celui herite de `.vocal-input`). */
+  position: relative;
+  z-index: 1;
 }
 .vocal-input .agent-chat-input-bar {
   padding: 0;
