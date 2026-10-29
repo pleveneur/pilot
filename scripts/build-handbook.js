@@ -29,6 +29,7 @@ const SOURCES = [
   "spec_orchestration.md",
   "spec_web_remote.md",
   "spec_voice_input.md",
+  "spec_modes_ecran_vocal.md",
   "spec_pdf2md.md",
   "spec_context_engine.md",
   "spec_code_graph.md",

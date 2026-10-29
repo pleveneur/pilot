@@ -249,17 +249,27 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
       "vocal-halo",
       "vocal-restart",
       "vocal-mic-fix",
+      // LOT 1 (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.1) : les deux
+      // colonnes laterales, leur conteneur de liste, puis le portrait et son
+      // nom AU PIED de la colonne de droite.
+      "vocal-side-discussion",
+      "vocal-side-tasks",
+      "vocal-side-body",
+      "vocal-portrait",
+      "vocal-portrait-name",
       "vocal-status",
       "vocal-input",
     ]);
-    // La scene est REFERMEE avant la phrase : deux `</div>` (objet puis scene).
+    // La scene est REFERMEE avant la phrase : trois `</div>` (objet, conteneur
+    // de liste, scene). Les deux colonnes sont des `<aside>` : elles se ferment
+    // par `</aside>`, elles ne comptent donc pas ici.
     const scene = sliceSource(
       corps,
       '<div class="vocal-stage">',
       '<div class="vocal-status"',
       20,
     );
-    expect(scene.match(/<\/div>/g)?.length).toBe(2);
+    expect(scene.match(/<\/div>/g)?.length).toBe(3);
     expect(bloc(CSS, ".vocal-stage")).toMatch(/gap:\s*32px/);
   });
 

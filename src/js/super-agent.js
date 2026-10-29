@@ -188,6 +188,9 @@ import {
   personaDisplayName,
   refreshAssistantPersona,
 } from "./assistant-persona.js";
+// LOT 1 (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.4) : la largeur des
+// deux colonnes laterales de l'ecran Vocal — decision PURE, une seule formule.
+import { planVocalSides } from "./vocal-sides.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections, buildReminderInjection, buildReminderInjectionMessage, formatReminderGroupNotificationLabel, formatReminderHoldNotice, createReminderHoldGuard } from "./super-agent-schedule.js";
 // MÉNAGE DES RAPPELS : décision UNIQUE (pures) des rappels devenus inutiles —
 // mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
@@ -2072,6 +2075,105 @@ function applyVocalRestartLabel(bouton) {
 }
 
 /**
+ * Pose le PORTRAIT du personnage actif et son nom dans la colonne de droite de
+ * l'ecran Vocal (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.3) : un
+ * medaillon rond de 72 px, AU PIED de la colonne, et son nom en dessous.
+ *
+ * Trois regles, et rien d'autre :
+ *   1. `src` est ecrit SEULEMENT s'il change (reaffecter le meme `src` relance le
+ *      chargement de l'image) ;
+ *   2. le nom est ecrit par `superAgentDisplayLabel()` — la regle unique
+ *      (personnage, sinon nom regle, sinon nom habituel) — sur le TEXTE, avec
+ *      `title` et `aria-label` pour le nom entier : aucune zone cliquable ;
+ *   3. sans portrait, l'image ET la pastille sont `hidden`. AUCUN repli sur le
+ *      logo dans la colonne : sans personnage, il n'y a pas d'image.
+ *
+ * Ne lit rien du disque (la lecture est faite par `refreshAssistantPersona`) et
+ * n'appelle jamais `invoke` : l'etat du personnage vit en memoire.
+ *
+ * @param {Element|null} [racine] overlay vocal (par defaut : celui de l'ecran)
+ */
+function applyVocalPortrait(racine) {
+  const ov =
+    racine ||
+    (typeof document !== "undefined" ? document.querySelector(".pilot-vocal") : null);
+  if (!ov) return;
+  const img = ov.querySelector(".vocal-portrait");
+  const nomEl = ov.querySelector(".vocal-portrait-name");
+  const source = getAssistantPortrait();
+  if (img) {
+    if (source) {
+      if (img.getAttribute("src") !== source) img.src = source;
+      img.hidden = false;
+    } else {
+      img.hidden = true;
+      // Aucune image de remplacement ne doit rester derriere un portrait
+      // masque : l'attribut est retire, il n'est pas pointe ailleurs.
+      if (img.hasAttribute("src")) img.removeAttribute("src");
+    }
+  }
+  if (nomEl) {
+    const nom = superAgentDisplayLabel();
+    if (nomEl.textContent !== nom) nomEl.textContent = nom;
+    if (nomEl.getAttribute("title") !== nom) nomEl.setAttribute("title", nom);
+    if (nomEl.getAttribute("aria-label") !== nom) nomEl.setAttribute("aria-label", nom);
+    nomEl.hidden = !source;
+  }
+}
+
+/**
+ * La taille du disque, en pixels, telle que le CSS la calcule.
+ *
+ * Le disque suit une formule UNIQUE ecrite dans la feuille de style
+ * (`--vocal-orb-size`). On la LIT donc : aucun second calcul ne peut deriver.
+ * Le repli n'invente rien — il rejoue la meme formule, avec les memes bornes.
+ *
+ * @returns {number} taille du disque en px (0 si elle est illisible)
+ */
+function vocalOrbSizePx() {
+  try {
+    if (vocalOverlay && typeof getComputedStyle === "function") {
+      const valeur = parseFloat(
+        getComputedStyle(vocalOverlay).getPropertyValue("--vocal-orb-size"),
+      );
+      if (Number.isFinite(valeur) && valeur > 0) return valeur;
+    }
+  } catch (_) {
+    /* valeur illisible : on rejoue la formule ci-dessous */
+  }
+  const hauteur = typeof window !== "undefined" ? Number(window.innerHeight) : 0;
+  if (!Number.isFinite(hauteur) || hauteur <= 0) return 0;
+  return Math.max(120, Math.min(336, ((hauteur - 289) * 21) / 32));
+}
+
+/**
+ * SEUL point d'ecriture de la largeur des deux colonnes laterales de l'ecran
+ * Vocal (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.4) : `--vocal-side`
+ * et la classe `vocal-sides-off`, d'apres la decision PURE `planVocalSides`.
+ *
+ * Appele a l'ENTREE dans le mode et a chaque changement de taille de fenetre.
+ * Aucune ecriture hors de l'overlay : rien n'est conserve, rien n'est publie —
+ * l'etat des colonnes ne survit pas a la sortie de l'ecran.
+ */
+function vocalSyncSides() {
+  if (!vocalOverlay) return;
+  const plan = planVocalSides({
+    width: typeof window !== "undefined" ? window.innerWidth : 0,
+    height: typeof window !== "undefined" ? window.innerHeight : 0,
+    orbSize: vocalOrbSizePx(),
+    hasPortrait: getAssistantPortrait() !== "",
+  });
+  vocalOverlay.style.setProperty("--vocal-side", `${plan.track}px`);
+  vocalOverlay.classList.toggle("vocal-sides-off", !plan.shown);
+  // `track = 0` = colonnes ABSENTES : sans `hidden`, les deux `<aside>` vides
+  // resteraient dans la grille et y creeraient des pistes fantomes.
+  for (const selecteur of [".vocal-side-discussion", ".vocal-side-tasks"]) {
+    const colonne = vocalOverlay.querySelector(selecteur);
+    if (colonne) colonne.hidden = !plan.shown;
+  }
+}
+
+/**
  * Applique le personnage actif à l'interface : nom de l'onglet 🧭 et, si le
  * plein écran de l'Assistant est ouvert, son titre « Bonjour, je suis … » et
  * l'image de son cercle (portrait, sinon le logo Pilot).
@@ -2097,6 +2199,11 @@ export function applyAssistantPersonaUi() {
     // mis a jour — la VISIBILITE appartient a `applyVocalState`
     // (`vocalSyncRestartButton`), point d'ecriture unique des deux.
     applyVocalRestartLabel();
+    // LOT 1 : le portrait de la colonne de droite et son nom suivent le MEME
+    // point d'application — un changement de personnage les met a jour sans
+    // aucun mecanisme nouveau. Il ne lit rien : l'etat du personnage vit en
+    // memoire, `refreshAssistantPersona` fait la seule lecture.
+    applyVocalPortrait();
   } catch (_) {
     /* overlay vocal absent : rien a faire */
   }
@@ -4804,6 +4911,26 @@ let vocalDicteeParGeste = false;
              Il n'apparait que si le micro est ferme (refus, absence, panne) ;
              le mode reste utilisable sans lui. -->
         <button type="button" class="vocal-mic-fix hidden">Autoriser le micro</button>
+        <!-- LOT 1 (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.1) : LES DEUX
+             COLONNES LATERALES, enfants de la scene (c'est la grille qui les
+             place). Elles sont VIDES au lot 1 : la grille existe des maintenant
+             pour que la liste ordonnee des tests ne bouge qu'une fois. Elles
+             precisent la ligne d'etat dans le document, elles ne peuvent donc
+             pas se poser au-dessus d'elle. -->
+        <aside class="vocal-side-discussion vocal-side"></aside>
+        <aside class="vocal-side-tasks vocal-side">
+          <!-- Conteneur DYNAMIQUE de la liste des taches (lot 2) : vide ici. Il
+               est place AVANT le portrait, qui vient donc AU PIED de la
+               colonne (revision du 2026-10-29). -->
+          <div class="vocal-side-body"></div>
+          <!-- LE PORTRAIT DU PERSONNAGE et son nom : poses par
+               'applyVocalPortrait'. `alt` vide : l'image est decorative, le nom
+               est ecrit juste en dessous. Masques tant que le personnage n'est
+               pas connu — et masques DEFINITIVEMENT s'il n'y en a pas : aucun
+               repli sur le logo dans la colonne. -->
+          <img class="vocal-portrait" alt="" hidden />
+          <span class="vocal-portrait-name" hidden></span>
+        </aside>
       </div>
       <div class="vocal-status" role="status" aria-live="polite">Je vous écoute.</div>
       <div class="vocal-input"></div>
@@ -5717,7 +5844,16 @@ let vocalDicteeParGeste = false;
     // Entrer dans le mode EST un geste : le decompte part donc deja, et le bas
     // est visible a l'ouverture (on n'arrive jamais sur un ecran nu).
     vocalRestartChromeTimer();
+    // LOT 1 : le portrait du personnage et son nom dans la colonne de droite,
+    // puis la largeur des deux colonnes.
+    applyVocalPortrait(vocalOverlay);
     applyVocalState();
+    // LOT 1 : seule ecriture de `--vocal-side` et de la classe `vocal-sides-off`.
+    // Elle vient EN DERNIER, une fois l'etat pose : la largeur ne depend que de
+    // la fenetre et du personnage, jamais de l'etat de la dictee.
+    vocalSyncSides();
+    // Les colonnes suivent la fenetre : un seul ecouteur, retire a la sortie.
+    window.addEventListener("resize", vocalSyncSides);
   }
 
   function exitVocal() {
@@ -5786,6 +5922,9 @@ let vocalDicteeParGeste = false;
       // legitime, ou en ouvrir une sur un projet devenu 🔒 entre-temps).
       vocalSensibiliteConnue = false;
       vocalSensibiliteIndisponible = false;
+      // LOT 1 : l'ecouteur des colonnes part avec l'ecran (meme nom de fonction
+      // qu'a l'entree, aucun ecouteur orphelin sur la fenetre).
+      window.removeEventListener("resize", vocalSyncSides);
     } catch (err) {
       // Un demontage qui echoue est TRACE et N'EMPECHE RIEN : l'ecran se ferme
       // quand meme, c'est la seule chose qui compte pour l'utilisateur.

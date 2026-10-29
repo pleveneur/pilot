@@ -216,9 +216,11 @@ describe("5. la petite barre sous le cercle a ETE RETIREE (12/11)", () => {
       '<div class="vocal-status"',
       20,
     );
-    // Deux `</div>` : l'objet lumineux, puis la scene. La phrase vient APRES,
-    // donc elle n'est plus l'enfant du bloc du disque.
-    expect(scene.match(/<\/div>/g)?.length).toBe(2);
+    // Trois `</div>` (l'objet lumineux, le conteneur de liste de la colonne de
+    // droite, la scene) et deux `</aside>` (les deux colonnes) : la scene est
+    // refermee JUSTE avant la phrase, qui n'est donc plus l'enfant du disque.
+    expect(scene.match(/<\/div>/g)?.length).toBe(3);
+    expect(scene.match(/<\/aside>/g)?.length).toBe(2);
     // L'ecart de la pile ne reserve plus de place au texte ; le texte se peint
     // APRES l'enveloppe (`position: relative`) et n'a aucun fond.
     expect(bloc(CSS, ".vocal-stage")).toMatch(/gap:\s*32px/);

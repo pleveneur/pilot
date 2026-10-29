@@ -131,6 +131,12 @@ describe("1. l'objet pose dans l'ecran : un rond DANS le disque", () => {
       "vocal-halo",
       "vocal-restart",
       "vocal-mic-fix",
+      // LOT 1 : les deux colonnes laterales et le portrait de la colonne droite.
+      "vocal-side-discussion",
+      "vocal-side-tasks",
+      "vocal-side-body",
+      "vocal-portrait",
+      "vocal-portrait-name",
       "vocal-status",
       "vocal-input",
     ]);

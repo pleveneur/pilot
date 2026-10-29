@@ -11614,6 +11614,15 @@ summary:focus-visible {
   --vocal-crown: calc(var(--vocal-orb-size) * 88 / 336);
   /* L'arc de reflexion : 12 px pour un disque de 336 px (6 px pour 168 px). */
   --vocal-arc: calc(var(--vocal-crown) * 12 / 88);
+  /* LA BOITE DU DISQUE : le disque et ses deux couronnes (512 px pour un
+     disque de 336 px). Jeton DERIVE, jamais un reglage : il ne peut pas
+     diverger du disque, et les colonnes n'ont pas a recopier `+ 2 x couronne`
+     (trois occasions de se tromper). Il sert de HAUTEUR aux deux colonnes. */
+  --vocal-orb-box: calc(var(--vocal-orb-size) + 2 * var(--vocal-crown));
+  /* Largeur d'UNE colonne laterale : valeur de depart (aucune colonne) ; la
+     seule ecrivaine est `vocalSyncSides()` (super-agent.js), qui la pose a
+     chaque entree dans le mode et a chaque changement de taille de fenetre. */
+  --vocal-side: 0px;
 }
 /* La liste de ce qui reste cliquable sur cet ecran (une regle
    `pointer-events: auto`) est en FIN de section, sous le titre
@@ -11715,19 +11724,122 @@ body.pilot-vocal-active #agent-activity {
    ligne d'etat, et suit la fenetre sans calcul.
    Depuis le 28/10 la ligne d'etat n'est PLUS dans ce bloc : elle vit
    au-dessus de la barre de saisie (§2.3). Le `gap` ne sert donc plus qu'au
-   bouton de depannage du micro, le seul autre enfant du bloc ; il ne laisse
-   aucun vide residuel quand ce bouton est masque (un seul enfant visible =
-   aucun ecart dessine). */
+   bouton de depannage du micro ; il ne laisse aucun vide residuel quand ce
+   bouton est masque (une rangee vide = aucun ecart dessine).
+   DEPUIS LE LOT 1 (29/10) ce bloc est une GRILLE A TROIS PISTES : les deux
+   colonnes laterales l'encadrent, le disque garde le milieu. */
 .vocal-stage {
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
+  /* TROIS PISTES : la colonne de gauche, le disque, la colonne de droite
+     (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.2). Les deux pistes
+     laterales valent `--vocal-side`, donc 0 quand les colonnes sont masquees.
+     Le placement des enfants est EXPLICITE (`grid-area` / `grid-column`) plus
+     bas : l'auto-placement mettrait le disque dans la piste 1, largeur 0, et
+     il disparaitrait. */
+  display: grid;
+  grid-template-columns: var(--vocal-side) var(--vocal-orb-size) var(--vocal-side);
+  grid-template-rows: 1fr auto;
+  align-items: center;
+  justify-items: center;
+  /* Les pistes sont centrees dans la largeur : quand les colonnes sont plus
+     etroites que la place disponible (plafond de 320 ou 400 px), le disque
+     reste exactement au centre de l'ecran. */
+  justify-content: center;
+  /* `gap: 32px` RESTE (l'assertion `/gap:\s*32px/` le lit) : c'est l'ecart de
+     RANGEE entre le disque et le bouton de depannage du micro, exactement
+     l'ecart d'avant. `column-gap` pose APRES l'annule horizontalement et
+     donne les 24 px de jour de chaque cote du disque. */
+  gap: 32px;
+  column-gap: 24px;
+  /* Le jour vertical venait du `padding: 16px` du flex. Les colonnes font la
+     hauteur exacte de la boite du disque : ces 32 px de haut et de bas les
+     auraient coupees en bas a 100vh = 801px. `align-items: center` donne deja
+     l'air vertical. */
+  padding: 0 16px;
+}
+
+/* --- §2.2 (lot 1) LES DEUX COLONNES LATERALES ---
+   Elles sont VIDES au lot 1 : la grille existe des maintenant pour que la
+   liste ordonnee des tests ne bouge qu'une fois, et les lots 2 et 3 les
+   remplissent. Meme hauteur, meme largeur, symetriques autour du disque. */
+.vocal-side {
+  grid-row: 1;
+  /* La hauteur de la BOITE DU DISQUE (512 px pour 336 px de disque), jamais
+     plus : ni la ligne d'etat ni la barre de saisie ne peuvent etre
+     recouvertes. `100 %` la reduit dans la seule situation ou la grille a une
+     seconde rangee (bouton « Autoriser le micro » affiche). */
+  height: min(var(--vocal-orb-box), 100%);
+  justify-self: stretch;
+  overflow: hidden;
+  /* Aucun calque ne capte le clic (issue #381) : les colonnes sont du decor
+     tant que le lot 3 n'a pas pose ses propres hotes. */
+  pointer-events: none;
+  user-select: none;
+}
+/* Colonne absente (fenetre trop etroite) : `hidden` est pose par
+   `vocalSyncSides()`. La regle est EXPLICITE parce que le `display` ci-dessous
+   est ecrit par la feuille de style : l'attribut seul ne suffirait pas a
+   retirer la colonne de la grille. Elle masque la COLONNE, jamais ses
+   enfants — aucun `[hidden]` global sous `.vocal-side`. */
+.vocal-side[hidden] {
+  /* `!important` comme le prescrit le document (§2.2, colonne « [hidden] sur
+     ces noeuds ») : le `display` est ecrit par `.vocal-side-discussion` et
+     `.vocal-side-tasks`, et la colonne doit sortir de la grille, pas seulement
+     de la peinture. */
+  display: none !important;
+}
+.vocal-side-discussion {
+  grid-column: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 32px;
-  padding: 16px;
+  /* Le titre reste en haut, la discussion tombe au BAS (lot 3) : un apercu
+     court ne flotte pas au milieu. */
+  justify-content: space-between;
+}
+.vocal-side-tasks {
+  grid-column: 3;
+  display: flex;
+  flex-direction: column;
+  /* Le HAUT de la colonne ne bouge pas : titre et premiere tache a la meme
+     place, avec ou sans portrait. */
+  justify-content: flex-start;
+  overflow: hidden;
+}
+/* La liste (remplie au lot 2) : c'est ELLE qui absorbe la hauteur libre. Deux
+   marges automatiques se partageraient l'air et le portrait flotterait au
+   milieu de la colonne. */
+.vocal-side-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+/* LE PORTRAIT DU PERSONNAGE, AU PIED de la colonne de droite (revision du
+   2026-10-29) : un medaillon de 72 px, jamais dans le disque. `hidden` quand
+   il n'y a pas de personnage — AUCUN repli sur le logo dans la colonne. */
+.vocal-portrait {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  align-self: center;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+/* Son nom, sous le medaillon : une pastille lisible sur le voile des colonnes,
+   JAMAIS une zone cliquable (le nom complet vit sur le texte). */
+.vocal-portrait-name {
+  align-self: center;
+  margin-block-start: 6px;
+  font-size: var(--font-sm);
+  background: color-mix(in srgb, var(--bg-app) 88%, transparent);
+  border-radius: 999px;
+  padding: 2px 10px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Teinte de l'etat : UNE seule variables, posee par UNE seule classe d'etat
    sur l'overlay (deux etats simultanes sont impossibles par construction). */
@@ -12267,6 +12379,35 @@ body.pilot-vocal-active #agent-activity {
    d'ailleurs rien en mouvement reduit, donc rien ne peut la contredire. */
 .pilot-vocal.vocal-reduced.vocal-state-listening .vocal-halo {
   --vocal-halo: 0.55;
+}
+
+/* ── §2.2 (lot 1) LE PLACEMENT DANS LA GRILLE ──
+   L'ordre du DOM ne donne pas l'ordre visuel : en grille, l'auto-placement
+   mettrait le disque dans la PISTE 1 (celle de la colonne de gauche, largeur 0
+   quand les colonnes sont masquees) et il disparaitrait. Les cinq enfants
+   concernes portent donc leur place, qui ne depend plus de l'ordre d'ecriture
+   du balisage. Regles posees APRES les blocs du disque et du bouton : aucun
+   test qui decoupe la feuille a partir de ces selecteurs ne lit le mauvais
+   fragment. */
+/* Le disque reste dans la piste du MILIEU. */
+.vocal-stage > .vocal-orb {
+  grid-area: 1 / 2;
+}
+/* Le bouton de depannage du micro ne change pas de camp : rangee 2, MEME
+   colonne que le disque (sans cela il tomberait sous la colonne de gauche).
+   `gap: 32px` fait l'ecart de rangee, exactement celui d'avant. */
+.vocal-stage > .vocal-mic-fix {
+  grid-area: 2 / 2;
+}
+/* Colonnes absentes (`track = 0`, fenetre trop etroite) : la grille repasse a
+   UNE seule piste, sinon les deux colonnes sorties laisseraient le disque dans
+   une piste de largeur 0 — et deux `column-gap` fantomes le decentreraient. */
+.vocal-stage.vocal-sides-off {
+  grid-template-columns: var(--vocal-orb-size);
+}
+.vocal-stage.vocal-sides-off > .vocal-orb,
+.vocal-stage.vocal-sides-off > .vocal-mic-fix {
+  grid-column: 1;
 }
 
 /* ── CE QUI RESTE CLIQUABLE SUR L'ECRAN VOCAL (issue #381) ──

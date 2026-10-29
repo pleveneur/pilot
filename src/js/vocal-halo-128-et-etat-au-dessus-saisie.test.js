@@ -307,6 +307,12 @@ describe("5. la phrase d'etat est AU-DESSUS de la barre de saisie", () => {
       "vocal-halo",
       "vocal-restart",
       "vocal-mic-fix",
+      // LOT 1 : les deux colonnes laterales et le portrait de la colonne droite.
+      "vocal-side-discussion",
+      "vocal-side-tasks",
+      "vocal-side-body",
+      "vocal-portrait",
+      "vocal-portrait-name",
       "vocal-status",
       "vocal-input",
     ]);
@@ -322,10 +328,11 @@ describe("5. la phrase d'etat est AU-DESSUS de la barre de saisie", () => {
       '<div class="vocal-status"',
       20,
     );
-    // Deux `</div>` : l'objet lumineux, puis la scene. La phrase n'est donc
-    // plus l'enfant du bloc du disque — aucun noeud orphelin, aucun espace
-    // reserve (le `gap` ne sert plus qu'au bouton de depannage, masque).
-    expect(scene.match(/<\/div>/g)?.length).toBe(2);
+    // Trois `</div>` : l'objet lumineux, le conteneur de liste de la colonne de
+    // droite, puis la scene. Les deux colonnes sont des `<aside>`, qui se
+    // ferment autrement et ne comptent donc pas.
+    expect(scene.match(/<\/div>/g)?.length).toBe(3);
+    expect(scene.match(/<\/aside>/g)?.length).toBe(2);
     expect(scene).not.toMatch(/vocal-status/);
   });
 

@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-29 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-29 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1357,6 +1357,27 @@ texte à la voix.
   sensible** (dictée cloud), l'écran Vocal ne dicte pas. Si la dictée ne peut pas
   démarrer (micro refusé, occupé, réseau absent), la phrase s'affiche **dans la
   ligne d'état de l'écran** et vous continuez au clavier.
+
+---
+
+<!-- HELP-TOPIC:vocal-colonnes-portrait -->
+### Les colonnes de l'écran Vocal et le portrait (lot 1)
+Sur un écran assez large, l'écran Vocal encadre le cercle de **deux colonnes** : la
+**discussion** à gauche, le **travail** à droite. Elles sont **vides pour l'instant** —
+les tâches et la discussion y arriveront dans les prochaines étapes. Sous une certaine
+largeur (fenêtre étroite), elles **n'apparaissent pas du tout** : le cercle reste seul au
+milieu, jamais écrasé, jamais décalé.
+
+Dans la colonne de droite, **tout en bas**, le **portrait du personnage** apparaît en
+médaillon rond, avec son nom juste en dessous. Pas de personnage déposé par le projet
+**Présences** ? Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la
+colonne reste simplement sans image. Le portrait suit un éventuel changement de personnage
+sans redémarrer Pilot.
+
+Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
+recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les
+colonnes ne captent **aucun clic** : les boutons de sortie et la barre de saisie restent
+les seuls endroits cliquables de l'écran.
 
 ---
 

@@ -252,43 +252,90 @@ non-recouvrement, mouvement réduit).
 
 ---
 
-## 3ter. La colonne de droite de l'écran Vocal (tâches, personnage) — 🟡 conception écrite, **non livrée**
+## 3ter. La colonne de droite de l'écran Vocal (tâches, personnage, avatar) — 🟡 **lot 1 livré**, lots 2 et 3 à venir
 
-> **Rien de cette section n'est dans le code aujourd'hui** : les colonnes de l'écran
-> Vocal n'existent pas encore (`grep -c "vocal-side" src/css/style.css src/js/super-agent.js`
-> → 0). Cette section décrit ce que la colonne de droite **doit** montrer, pour que la
-> conception écrite et la spécification disent la même chose. Elle sera marquée ✅ au fur et
-> à mesure des lots. Conception complète :
+> **État réel (lot 1, appliqué)** : la **structure** des colonnes existe — deux
+> `<aside class="vocal-side">` enfants de la scène (discussion à gauche, tâches à
+> droite), la grille à trois pistes de `.vocal-stage`, et dans la colonne de droite le
+> **portrait du personnage au pied** (médaillon rond de 72 px) avec son nom. La lecture de
+> la largeur est unique : `planVocalSides()` (`src/js/vocal-sides.js`), appliquée par
+> `vocalSyncSides()` à l'entrée et à chaque changement de taille de fenêtre ; sous 240 px de
+> place disponible, les deux colonnes sont **absentes** (`hidden` + `.vocal-sides-off`).
+> **Rien n'est encore écrit dans les colonnes** : ni titre, ni liste de tâches, ni ligne
+> d'activité, ni bouton de masquage — c'est le travail des **lots 2 et 3**. Ce qui suit
+> décrit donc l'état **visé** ; seules les phrases marquées « lot 1 » décrivent le code
+> d'aujourd'hui. Conception complète :
 > `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md` et son amendement
-> `docs/conceptions/CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md`.
+> `docs/conceptions/CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md` — la **zone
+> d'image** et ses trois cas sont au **§ 7bis** du premier.
 
 Quand la place le permet (seuil d'affichage des colonnes), l'écran Vocal montre à droite
 **une** colonne qui parle du **travail**, dans cet ordre de haut en bas : le titre
-« TÂCHES », **la liste des tâches**, puis — **s'il y a un personnage** — son portrait
-(72 px) et la pastille de son nom, puis **une** ligne disant ce que fait l'agent à cet
-instant. **Deux cas, et un seul critère** :
+« TÂCHES », **la liste des tâches**, puis **l'image** de la zone d'image — le portrait du
+personnage, ou à défaut l'avatar du visage, ou rien —, puis **une** ligne disant ce que fait
+l'agent à cet instant. **Trois cas, et deux critères qui sont des faits** (complément du
+2026-10-29), **dans cet ordre de priorité** :
 
-- **Un personnage est actif si et seulement si un portrait affichable existe**
-  (`getAssistantPortrait() !== ""`). Rien d'autre n'est lu : aucun réglage, aucun état
-  mémorisé, aucun redémarrage — le personnage est déjà relu à l'ouverture de l'onglet et
-  à chaque retour de focus de la fenêtre.
-- **Avec un personnage** : les tâches sont **en haut** (elles commencent à la même place que
-  le personnage soit actif ou non) et le portrait est **au pied** de la colonne ; **98 px**
-  sont réservés à son bloc (72 + 6 + 20). La liste affiche jusqu'à **6** tâches.
-- **Sans personnage** : le bloc du portrait **n'existe pas** — pas d'image de remplacement,
-  pas de cadre, pas de logo —, la liste **prend toute la hauteur** (elle gagne exactement les
-  **98 px**) et affiche jusqu'à **8** tâches. **Aucune zone réservée.** Le nom du personnage
-  reste lisible sur le bouton de relance du cercle (« Réveiller *Nom* »), donc rien n'est
-  perdu.
+- **1. Un personnage occupe la zone d'image si et seulement si un portrait affichable
+  existe** (`getAssistantPortrait() !== ""`). Rien d'autre n'est lu : aucun réglage, aucun
+  état mémorisé, aucun redémarrage — le personnage est déjà relu à l'ouverture de l'onglet et
+  à chaque retour de focus de la fenêtre. Les tâches sont **en haut** (elles commencent à la
+  même place qu'il y ait une image ou non) et le portrait est **au pied** de la colonne ;
+  **98 px** sont réservés à son bloc (72 + 6 + 20). La liste affiche jusqu'à **6** tâches.
+- **2. Sinon, l'avatar du visage (PLface) occupe la zone s'il tourne et répond**
+  (`invoke("plface_status")`, la même sonde que l'écran Paramètres → Avatar) **et si sa
+  taille est connue** ; **180 px** sont réservés (son plancher : 160 × 180) et la liste
+  affiche jusqu'à **4** tâches. Pilot **ne dessine rien** dans cette zone : c'est la fenêtre
+  de l'avatar — sans cadre, transparente, toujours au-dessus — qui s'y tient. **Ni cadre, ni
+  ombre, ni rond, ni logo, ni nom** : l'avatar n'a pas de nom, et rien ne remplace son image.
+  L'avatar **n'est pas** une zone cliquable de Pilot : il n'entre pas dans les six hôtes.
+- **3. Sinon** : le bloc d'image **n'existe pas** — pas d'image de remplacement, pas de cadre,
+  pas de logo —, la liste **prend toute la hauteur** (elle gagne exactement les **98 px** du
+  portrait, ou les **180 px** de l'avatar) et affiche jusqu'à **8** tâches. **Aucune zone
+  réservée.** Le nom du personnage reste lisible sur le bouton de relance du cercle
+  (« Réveiller *Nom* »), donc rien n'est perdu.
+- **La zone n'existe que si la liste garde au moins une ligne** : sous la plus petite fenêtre
+  qui la permet, elle n'est pas dessinée (cas 3), l'avatar reste où il est et n'est **pas**
+  déplacé. **Une zone qui ne dessine rien ne fait jamais un trou** : dans tous les cas,
+  l'espace vide se lit comme de l'air, jamais comme une image manquante — aucun message,
+  aucune icône cassée, jamais le logo dans la zone.
+- **Déplacer l'avatar, poser sa taille** : Pilot sait **déplacer** la fenêtre de l'avatar
+  (`/set_position`, en pixels physiques, déjà branché) mais **pas** lui imposer une taille
+  (PLface n'expose aucune route de taille). C'est pourquoi le cas 2 exige que la taille soit
+  connue : sans elle il ne s'affiche pas, et rien n'est déplacé — un avatar trop grand pourrait
+  recouvrir le logo, donc **une sortie**. Ce n'est pas une commodité, c'est la contrainte qui
+  prime.
 - La liste **ne défile pas** (la colonne ne reçoit aucun clic) : le nombre de lignes suit la
   hauteur, l'excédent est écrit « + N autre(s) » et la liste complète reste dans le bouton
   **« Travail »**. Une colonne sans mission affiche « Aucune tâche en cours », jamais du vide.
-- **Aucun réglage nouveau, aucune persistance** : l'écran ne mémorise rien du personnage ; le
-  passage d'un cas à l'autre se fait en **une peinture**, sans animation, et ne déplace ni le
-  haut de la colonne ni la ligne d'activité.
+- **Aucun réglage nouveau, aucune persistance** : l'écran ne mémorise rien du personnage ni de
+  l'avatar ; le passage d'un cas à l'autre se fait en **une peinture**, sans animation, et ne
+  déplace ni le haut de la colonne ni la ligne d'activité. Le complément du 2026-10-29
+  n'ajoute **ni minuterie, ni nœud, ni case à cocher** : la place de l'avatar est décidée à
+  chaque affichage, pas mémorisée.
 
 Les trois sorties (logo, Échap, fermeture de l'onglet) et les colonnes sans clic restent
 **inchangées** : la colonne de droite n'ajoute aucune zone cliquable.
+
+<!-- HELP:vocal-colonnes-portrait -->
+### Les colonnes de l'écran Vocal et le portrait (lot 1)
+Sur un écran assez large, l'écran Vocal encadre le cercle de **deux colonnes** : la
+**discussion** à gauche, le **travail** à droite. Elles sont **vides pour l'instant** —
+les tâches et la discussion y arriveront dans les prochaines étapes. Sous une certaine
+largeur (fenêtre étroite), elles **n'apparaissent pas du tout** : le cercle reste seul au
+milieu, jamais écrasé, jamais décalé.
+
+Dans la colonne de droite, **tout en bas**, le **portrait du personnage** apparaît en
+médaillon rond, avec son nom juste en dessous. Pas de personnage déposé par le projet
+**Présences** ? Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la
+colonne reste simplement sans image. Le portrait suit un éventuel changement de personnage
+sans redémarrer Pilot.
+
+Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
+recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les
+colonnes ne captent **aucun clic** : les boutons de sortie et la barre de saisie restent
+les seuls endroits cliquables de l'écran.
+<!-- /HELP:vocal-colonnes-portrait -->
 
 ---
 
