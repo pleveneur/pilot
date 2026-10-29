@@ -46,7 +46,15 @@ import {
 // `VOICE_END_EMPTY` est la SEULE facon de savoir qu'une fin d'ecoute n'a rien
 // transcrit : c'est ce que compte le plafond des sessions vides, et la nature de
 // la fin est tranchee LA (`isSilentEmptyVoiceEnd`), jamais recopiee ici.
-import { applyVoiceEnd, isSilentEmptyVoiceEnd } from "./voice-auto-send.js";
+// `VOICE_EMPTY_SESSION_INSTANT_MS` est le seuil de duree qui distingue un
+// SILENCE ordinaire (vraie ecoute, l'ecran se rearment) d'un retour INSTANTANE
+// du moteur (la boucle que le plafond arrete) : le seuil vit dans ce module,
+// l'ecran ne fait que MESURER la duree de la session.
+import {
+  applyVoiceEnd,
+  isSilentEmptyVoiceEnd,
+  VOICE_EMPTY_SESSION_INSTANT_MS,
+} from "./voice-auto-send.js";
 // MODE VOCAL : PILOT PARLE COURT (reponse breve, developpee seulement si on le
 // demande). La consigne de conversation parlee et son SEUL assemblage
 // (`composeVocalPrompt`) vivent dans vocal-brevity.js ; ce fichier ne fait que
@@ -3878,6 +3886,11 @@ export async function createSuperAgent(container) {
     // au repos, et un echec qui persiste se reaffiche aussitot.
     clearVocalDictationError();
     if (voiceActive) return true;
+    // DUREE de la session, mesuree a la SEULE fin d'ecoute (`rec.onend`) : elle
+    // permet de distinguer un silence ordinaire (la session a vraiment ecoute)
+    // d'un retour instantane du moteur (le profil de la boucle). Aucune autre
+    // mesure, aucune horloge partagee.
+    const debutSession = Date.now();
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
     rec.lang = VOICE_LANG;
@@ -3984,7 +3997,15 @@ export async function createSuperAgent(container) {
       // (`no-speech` / `aborted` sans message), qui echappait au plafond et
       // laissait le micro se rouvrir sans limite face a un ecran muet. La nature
       // de la fin vient du module pur (aucune seconde detection du vide).
-      vocalNoteEmptySession(fin, { erreurAffichee, arretDemande });
+      // DUREE MESUREE jusqu'ici : une fin de SILENCE d'une duree reelle n'est
+      // pas une panne, elle n'alimente donc pas le plafond (defaut corrige :
+      // trois silences ordinaires suspendaient l'ecoute pour de bon et l'ecran
+      // annoncait « La dictee n'a pas fonctionne »).
+      vocalNoteEmptySession(fin, {
+        erreurAffichee,
+        arretDemande,
+        dureeMs: Date.now() - debutSession,
+      });
       if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
       // CONVERSATION PARLEE : une fin d'ecoute (silence, arret du moteur, demande
       // envoyee) reapplique l'etat de l'ecran, sinon la dictee resterait fermee
@@ -4685,27 +4706,45 @@ export async function createSuperAgent(container) {
 
   /**
    * PLAFOND DES SESSIONS VIDES : compte une fin d'ecoute qui n'a RIEN transcrit
-   * et pose le verrou quand le plafond est atteint.
+   * ET qui est revenue INSTANTANEMENT, et pose le verrou quand le plafond est
+   * atteint.
    *
-   * Trois gardes, et aucune n'est decidee ici :
+   * Quatre gardes, et aucune n'est decidee ici :
    *   - le MODE : hors de l'ecran Vocal, rien ne s'arme tout seul, donc rien
    *     n'est compte (l'onglet agent pi garde son comportement) ;
    *   - la NATURE de la fin : une fin qui n'a RIEN transcrit et qui n'a pas
-   *     affiche d'erreur compte, qu'elle soit la fin normale et vide
+   *     affiche d'erreur peut compter, qu'elle soit la fin normale et vide
    *     (`VOICE_END_EMPTY`) ou la fin SILENCIEUSE du moteur (`no-speech`,
-   *     `aborted` sans geste), qui echappait au plafond. Le constat du vide et
-   *     la nature de la fin sont tranches par `applyVoiceEnd` / le module pur
-   *     (`isSilentEmptyVoiceEnd`) — jamais une seconde detection du vide ;
+   *     `aborted` sans geste). Le constat du vide et la nature de la fin sont
+   *     tranches par `applyVoiceEnd` / le module pur (`isSilentEmptyVoiceEnd`)
+   *     — jamais une seconde detection du vide ;
+   *   - la DUREE : le module pur ecarte toute fin d'une duree REELLE (>= 1 s).
+   *     Un silence ordinaire n'est pas une panne : il ne suspend rien et la
+   *     dictee se rearment (regle du proprietaire : « tant qu'il est en mode
+   *     Vocal, la dictee doit se rearmer seule apres chaque fin de session »).
+   *     Ce module ne fait que MESURER et transmettre (`dureeMs`) ;
    *   - le CHIFFRE : `noteEmptyVocalSession` (pure, testee) garde la fenetre de
-   *     30 s et dit si les 3 fins vides y sont.
+   *     30 s et dit si les 3 fins vides instantanees y sont. Une session qui a
+   *     VRAIMENT ecoute remet ce chiffre a zero : deux retours instantanes
+   *     separes par une conversation ne s'additionnent pas.
    * Le verrou pose ne se leve pas avec le temps : le geste 🎙️ ou une nouvelle
    * entree dans le mode le leve (et remet l'historique a zero).
    * @param {{reason?: string, dictatedText?: string}} [fin] resultat de `applyVoiceEnd`
-   * @param {{erreurAffichee?: boolean, arretDemande?: boolean}} [contexte]
+   * @param {{erreurAffichee?: boolean, arretDemande?: boolean, dureeMs?: number}} [contexte]
    */
   function vocalNoteEmptySession(fin, contexte) {
     if (!vocalOverlay) return;
-    if (!isSilentEmptyVoiceEnd(fin, contexte)) return;
+    if (!isSilentEmptyVoiceEnd(fin, contexte)) {
+      // Une fin qui n'alimente pas le plafond EFFACE l'historique des retours
+      // instantanes des lors que la session a REELLEMENT tenu le micro
+      // (`dureeMs` >= seuil) : le moteur a ecoute, ce n'est pas une boucle.
+      // Sans cela, deux retours instantanes separes par une vraie conversation
+      // finiraient par s'additionner et suspendraient l'ecoute pour rien.
+      if (contexte && Number(contexte.dureeMs) >= VOICE_EMPTY_SESSION_INSTANT_MS) {
+        vocalSessionsVides = [];
+      }
+      return;
+    }
     const pas = noteEmptyVocalSession(vocalSessionsVides, Date.now());
     vocalSessionsVides = pas.sessions;
     if (pas.suspendu === true) vocalDicteeSuspendue = true;

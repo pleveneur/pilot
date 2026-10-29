@@ -265,10 +265,21 @@ extraite de `toggleVoiceInput`) et le **même** envoi (`applyVoiceEnd` → `send
   `vocalDictationMessage(code)` rend **une phrase** (micro refusé, micro occupé,
   réseau, projet sensible, dictée indisponible, échec) qui dit toujours d'écrire
   la demande ; `aborted` et `no-speech` ne disent rien (ce ne sont pas des
-  pannes). Le texte reste dans la zone : si `send()` refuse, rien n'est perdu.
+  pannes, et un silence ne produit donc jamais de message d'échec). Le texte
+  reste dans la zone : si `send()` refuse, rien n'est perdu.
 - **Pendant une dictée, la voix ne coupe rien** : `vocalBargeIn` rend la main si
   `voiceActive` (c'est la voix qu'on transcrit). Aucun seuil de `vocal-mic.js`
   n'est modifié.
+- **Un silence n'est pas une panne** (défaut corrigé, cf.
+  `docs/rapports/RAPPORT-dictee-vocale-coupee.md`) : le plafond des sessions
+  vides ne compte plus que les retours **instantanés** du moteur (durée mesurée
+  < `VOICE_EMPTY_SESSION_INSTANT_MS`, 1 s, dans `voice-auto-send.js`). Une fin
+  d'écoute qui a **réellement écouté** se réarme, **n'affiche aucun message** et
+  **remet le compte à zéro**. Le moteur de reconnaissance termine lui-même la
+  session toutes les quelques secondes de silence : compter ces fins normales
+  suspendait l'écoute au bout de trois pauses en annonçant « La dictée n'a pas
+  fonctionné » alors que le son était capté. Un vrai échec (permission, micro
+  occupé, périphérique, réseau) garde **sa** phrase, une seule, et ne boucle pas.
 
 **Prouvé** (`src/js/vocal-parler-declenche-une-demande.test.js`, 30 cas) : les
 décisions, les messages, le câblage (un seul point d'application, une seule voie,
@@ -325,7 +336,7 @@ décisions de l'écran** (`src/js/vocal-conversation.js`, pures). Elle **ne lit
   Pilot lit ou réfléchit, si la dictée s'est refermée, ou si l'utilisateur a
   **repris la main** dans la zone (`voiceUserTookOver`). Une dictée **muette**
   n'envoie rien. Les gardes existantes (projet sensible, micro de mesure, plafond
-  des fins vides, dictée unique) sont **inchangées**.
+  des fins vides **instantanées**, dictée unique) sont **inchangées**.
 - **Ordre des règles** (c'est la spec, il est testé tel quel) : hors mode → Pilot
   parle → Pilot travaille → dictée refermée → reprise en main → aucun mot →
   **échéance : refermer** (au moment du mot : attendre le **délai réglé**, deux
@@ -453,7 +464,10 @@ texte à la voix.
   s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
   travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
   ci-dessus, **après votre dernier mot** (chaque nouveau mot repousse l'échéance,
-  donc rien ne part tant que vous parlez). Ce **délai d'envoi** (deux secondes
+  donc rien ne part tant que vous parlez). **Un silence n'arrête rien** : quand
+  vous vous taisez un moment, l'écoute se referme et **se rouvre toute seule**,
+  sans message d'échec — vous reprenez la parole quand vous voulez. Ce **délai
+  d'envoi** (deux secondes
   par défaut) se règle dans ⚙️ Options → onglet **« Assistant »** → section
   **« Mode Vocal »**, de **1 à 5 secondes**. Un appui
   sur 🎙️ arrête la dictée et elle ne se rouvre pas contre

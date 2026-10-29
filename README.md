@@ -175,10 +175,13 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   rouvre pas contre votre volonté. Si Pilot ne peut pas dicter (micro refusé ou
   occupé, pas de réseau, dictée indisponible sur ce poste, projet **sensible**),
   la ligne d'état **le dit** et vous continuez au clavier.
-- **Si la dictée ne transcrit rien trois fois de suite** (en moins de 30
-  secondes), Pilot **cesse de rouvrir le micro tout seul** au lieu de boucler :
-  la ligne d'état vous invite à écrire, et **un clic sur 🎙️** (ou un retour dans
-  le mode) rétablit la dictée automatique.
+- **Un silence n'arrête rien** : quand vous vous taisez un moment, l'écoute se
+  referme et **se rouvre toute seule**, sans message d'échec — vous reprenez la
+  parole quand vous voulez. Pilot ne cesse de rouvrir le micro tout seul que si
+  le moteur de reconnaissance rend la main **immédiatement** — trois fois de suite
+  en moins de 30 secondes — sans avoir rien transcrit (le micro tournerait en
+  boucle pour rien) : la ligne d'état vous invite alors à écrire, et **un clic
+  sur 🎙️** (ou un retour dans le mode) rétablit la dictée automatique.
 - Ce qui **reste à venir** : la relance de l'agent avec ce que vous venez de dire
   (aujourd'hui, une coupure ou une réponse laisse la main à la parole, mais
   l'agent n'est jamais relancé tout seul).

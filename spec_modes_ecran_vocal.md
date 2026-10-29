@@ -447,20 +447,34 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
 - **Elle se réarme quand la lecture d'une réponse est finie**, avec une marge de
   silence plus longue (600 ms) : c'est la **conversation continue** du mode —
   répondre puis reparler, sans rien toucher.
-- **Un plafond arrête les sessions vides** : si le moteur de reconnaissance rend
-  la main **sans rien transcrire trois fois en moins de 30 secondes**, la dictée
-  **cesse de s'armer toute seule** — sinon le micro serait rouvert en boucle
-  pour rien. Le plafond est une **fonction pure** (`noteEmptyVocalSession`), il
-  ne compte que les fins **vides** — la fin **normale et vide** comme la fin
-  **silencieuse du moteur** (`no-speech`, `aborted` sans geste, qui rendaient la
-  main sans rien dire et échappaient au plafond), jamais une erreur **affichée**,
-  jamais un arrêt **demandé** (🎙️, envoi, sortie du mode), jamais une reprise
-  en main — et **seulement dans cet écran**. Le constat du vide et la nature de
-  la fin sont tranchés à **un seul endroit** (`isSilentEmptyVoiceEnd` et
-  `VOICE_END_*`, dans `voice-auto-send.js`) : aucune seconde détection.
+- **Un plafond arrête les retours INSTANTANÉS du moteur** : si le moteur de
+  reconnaissance rend la main **sans rien transcrire trois fois en moins de
+  30 secondes**, la dictée **cesse de s'armer toute seule** — sinon le micro
+  serait rouvert en boucle pour rien. Le plafond est une **fonction pure**
+  (`noteEmptyVocalSession`), il ne compte que les fins **vides** — la fin
+  **normale et vide** comme la fin **silencieuse du moteur** (`no-speech`,
+  `aborted` sans geste, qui rendaient la main sans rien dire et échappaient au
+  plafond), jamais une erreur **affichée**, jamais un arrêt **demandé** (🎙️,
+  envoi, sortie du mode), jamais une reprise en main — et **seulement dans cet
+  écran**. Le constat du vide et la nature de la fin sont tranchés à **un seul
+  endroit** (`isSilentEmptyVoiceEnd` et `VOICE_END_*`, dans
+  `voice-auto-send.js`) : aucune seconde détection.
+  **Un SILENCE n'est pas une panne** (défaut corrigé, cf.
+  `docs/rapports/RAPPORT-dictee-vocale-coupee.md`) : une fin d'écoute qui a
+  **réellement écouté** — durée mesurée ≥ `VOICE_EMPTY_SESSION_INSTANT_MS`
+  (1 s) — n'alimente **jamais** le plafond, et une telle écoute **remet le
+  compte à zéro**. Le moteur de reconnaissance termine lui-même la session
+  toutes les quelques secondes de silence ; compter ces fins normales
+  suspendait l'écoute au bout de trois pauses en annonçant un échec alors que
+  le son était capté. Le plafond ne vise donc plus que le **retour
+  instantané** (le moteur rend la main sans avoir écouté), seul profil de
+  boucle. La durée est **mesurée** dans `super-agent.js` (`debutSession` → `rec.onend`)
+  et transmise au compteur ; le seuil, lui, vit dans `voice-auto-send.js` —
+  aucun réglage utilisateur.
   Il **ne se lève pas avec le temps** : un **geste** le rétablit — un clic sur
   🎙️, ou une nouvelle entrée dans le mode. La ligne d'état l'annonce
-  (« La dictée n'a pas fonctionné : écrivez votre demande. », phrase existante).
+  (« La dictée n'a pas fonctionné : écrivez votre demande. », phrase existante),
+  et **seulement** dans ce cas : un silence ne produit aucun message.
 - **Un geste explicite prime toujours** : un clic sur 🎙️ pour arrêter la dictée
   la laisse fermée (elle ne se rouvre pas 350 ms plus tard).
 - **Les trois sorties du mode la ferment** : aucun périphérique ne reste ouvert
@@ -745,7 +759,7 @@ sa hauteur d'origine.
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
 | `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
-| `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur, jamais une erreur affichée, un arrêt demandé ou une reprise en main) |
+| `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur **instantanée** — durée mesurée < `VOICE_EMPTY_SESSION_INSTANT_MS` (1 s) —, jamais une erreur affichée, un arrêt demandé, une reprise en main, et **jamais un silence d'une durée réelle**) |
 | `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : les **quatre niveaux** de longueur (`VOCAL_BREVITY_LEVELS`, `normalizeVocalBrevityLevel`, `vocalBrevityLabel`), la consigne d'un niveau (`vocalBrevityInstruction`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
@@ -771,6 +785,12 @@ revue indépendante : **attente bornée** du statut du projet — délai dépass
 phrase affichée **et** geste qui fonctionne, jamais « projet libre » supposé —
 et **plafond atteignable** : une fin silencieuse du moteur compte, 3 fins vides
 en 30 s ⇒ plus d'armement automatique),
+`dictee-vocale-se-rearme.test.js` (défaut « le micro est coupé, la dictée n'a pas
+fonctionné » : **un silence n'est pas une panne** — une fin d'écoute d'une durée
+réelle n'alimente pas le plafond et n'affiche aucun message, la dictée se réarme
+après chaque fin normale, la boucle **instantanée** reste arrêtée, rien ne s'arme
+hors du mode et jamais deux sessions ; durée **mesurée** et transmise au seul
+compteur),
 `vocal-reponses-courtes.test.js` (**réponse courte du mode Vocal** : contenu de la
 consigne, texte de l'utilisateur intact et non tronqué, consigne **absente** hors
 du mode Vocal — chat écrit et Assistant inchangés —, un seul appel dans toute

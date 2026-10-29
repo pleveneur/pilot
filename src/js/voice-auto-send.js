@@ -33,6 +33,26 @@ export const VOICE_END_EMPTY = "texte-vide";
 /** Fin normale avec du texte dicté : on envoie, une seule fois. */
 export const VOICE_END_SEND = "fin-normale-avec-texte";
 
+/**
+ * DUREE MINIMALE D'UNE VRAIE ECOUTE (ms) — au-dela, une fin d'ecoute VIDE n'est
+ * pas une boucle : c'est un silence.
+ *
+ * Le defaut que ce seuil corrige (proprietaire : « en mode vocal, a un moment
+ * donne, le micro est coupe ») : le plafond des sessions vides (`isSilentEmptyVoiceEnd`
+ * + `noteEmptyVocalSession`) comptait TOUTE fin vide, donc aussi le silence
+ * ordinaire — que le moteur de reconnaissance termine lui-meme toutes les
+ * quelques secondes. Trois silences dans la fenetre de 30 s suspendaient alors
+ * l'ecoute pour de bon, en affichant « La dictee n'a pas fonctionne » alors que
+ * le son etait parfaitement capte.
+ *
+ * La distinction est MESUREE, pas supposee : une session qui a tenu le micro au
+ * moins une seconde a REELLEMENT ecoute (les fins de silence des moteurs
+ * arrivent apres plusieurs secondes) ; une session qui rend la main en moins
+ * d'une seconde n'a pas pu ecouter — c'est un retour instantane, la boucle que
+ * le plafond doit arreter. Aucun reglage : c'est une mesure interne.
+ */
+export const VOICE_EMPTY_SESSION_INSTANT_MS = 1000;
+
 /** Texte dicté ramené à sa forme utile (jamais `null`/`undefined`). */
 export function normalizedVoiceText(dictatedText) {
   return String(dictatedText == null ? "" : dictatedText).trim();
@@ -109,12 +129,18 @@ export function applyVoiceEnd(input) {
  * ne s'affiche — le profil exact du défaut d'origine (un écran muet).
  *
  * Comptent donc : la fin normale et vide, ET la fin silencieuse du moteur (rien
- * transcrit, aucune erreur affichée, aucun arrêt demandé). Ne comptent pas : une
- * erreur affichée (elle a déjà sa phrase), un arrêt demandé (bouton 🎙️, envoi,
- * sortie du mode) et une reprise en main de l'utilisateur.
+ * transcrit, aucune erreur affichée, aucun arrêt demandé) — mais **seulement
+ * quand elle est INSTANTANÉE** (`dureeMs` < `VOICE_EMPTY_SESSION_INSTANT_MS`).
+ * Ne comptent pas non plus : une erreur affichée (elle a déjà sa phrase), un
+ * arrêt demandé (bouton 🎙️, envoi, sortie du mode), une reprise en main de
+ * l'utilisateur, et surtout **une fin de SILENCE d'une durée réelle** : c'est
+ * une pause, pas une panne — elle se réarme toute seule (règle du propriétaire).
  *
  * @param {{reason?: string, dictatedText?: string}} [fin] résultat d'`applyVoiceEnd`
- * @param {{erreurAffichee?: boolean, arretDemande?: boolean}} [contexte]
+ * @param {{erreurAffichee?: boolean, arretDemande?: boolean, dureeMs?: number}} [contexte]
+ *   `dureeMs` : durée MESURÉE de la session qui vient de finir. Fournie et
+ *   supérieure au seuil ⇒ vraie écoute, la fin est normale (jamais comptée).
+ *   Absente ⇒ comportement historique (une fin vide instantanée compte).
  * @returns {boolean} vrai si la fin alimente le plafond
  */
 export function isSilentEmptyVoiceEnd(fin, contexte = {}) {
@@ -128,6 +154,11 @@ export function isSilentEmptyVoiceEnd(fin, contexte = {}) {
   if (c.erreurAffichee === true) return false;
   // Un arrêt DEMANDÉ (🎙️, envoi, sortie du mode) n'est jamais une boucle.
   if (c.arretDemande === true) return false;
+  // Une VRAIE écoute qui se termine en silence n'est pas une boucle : c'est le
+  // silence ordinaire d'une conversation, et l'écran doit se réarmer (le défaut
+  // corrigé : il restait mort et annonçait un échec).
+  const duree = Number(c.dureeMs);
+  if (Number.isFinite(duree) && duree >= VOICE_EMPTY_SESSION_INSTANT_MS) return false;
   // Fin normale et vide, ou fin du moteur sans rien dire : les DEUX comptent.
   return fin.reason === VOICE_END_EMPTY || fin.reason === VOICE_END_NO_SESSION;
 }

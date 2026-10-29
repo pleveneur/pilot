@@ -195,7 +195,11 @@ describe("le branchement du plafond dans l'écran", () => {
     // Le contexte est lu AVANT le traitement de la fin, puis transmis.
     expect(SUPER).toMatch(/const arretDemande = voiceStopVoulu;/);
     expect(SUPER).toMatch(/const fin = applyVoiceEnd\(\{/);
-    expect(SUPER).toMatch(/vocalNoteEmptySession\(fin, \{ erreurAffichee, arretDemande \}\);/);
+    // Les deux drapeaux, plus la duree MESUREE de la session (un silence d'une
+    // duree reelle n'est pas une panne : cf. RAPPORT-dictee-vocale-coupee.md).
+    expect(SUPER).toMatch(
+      /vocalNoteEmptySession\(fin, \{\s*erreurAffichee,\s*arretDemande,\s*dureeMs: Date\.now\(\) - debutSession,\s*\}\);/,
+    );
     // Un seul passage par `applyVoiceEnd` : aucune seconde fin d'écoute.
     expect((SUPER.match(/applyVoiceEnd\(\{/g) || []).length).toBe(1);
   });

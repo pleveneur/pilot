@@ -262,10 +262,13 @@ describe("4. Plafond des sessions vides : 3 en 30 s, puis plus d'armement", () =
   });
 
   it("le verrou est pose par la fin d'ecoute et par rien d'autre", () => {
-    // `onend` lit le resultat d'`applyVoiceEnd` et le passe au compteur, avec le
-    // contexte de la session (erreur affichee ? arret demande ?).
     expect(SUPER).toMatch(/const fin = applyVoiceEnd\(\{/);
-    expect(SUPER).toMatch(/vocalNoteEmptySession\(fin, \{ erreurAffichee, arretDemande \}\);/);
+    // Le contexte de la session est transmis : erreur affichee ? arret demande ?
+    // et la duree MESUREE de la session (defaut « dictee coupee » : une fin de
+    // silence d'une duree reelle n'alimente pas le plafond).
+    expect(SUPER).toMatch(
+      /vocalNoteEmptySession\(fin, \{\s*erreurAffichee,\s*arretDemande,\s*dureeMs: Date\.now\(\) - debutSession,\s*\}\);/,
+    );
     expect((SUPER_CODE.match(/vocalDicteeSuspendue = true/g) || []).length).toBe(1);
     // Il entre dans l'etat par le champ que la decision pure lit.
     expect(SUPER).toMatch(/sessionsVides: vocalDicteeSuspendue === true,/);
@@ -292,7 +295,11 @@ describe("5. La documentation dit la verite de l'ecran", () => {
   it("la spec distingue le micro de MESURE de la DICTEE, et nomme le repli", () => {
     expect(SPEC).toMatch(/micro de MESURE/);
     expect(SPEC).toMatch(/local-fallback/);
-    expect(SPEC).toMatch(/plafond arrête les sessions vides/i);
+    // Doctrine corrigee (RAPPORT-dictee-vocale-coupee.md) : le plafond ne vise
+    // plus « les sessions vides » en general (un silence n'est pas une panne)
+    // mais les retours INSTANTANES du moteur.
+    expect(SPEC).toMatch(/plafond arrête les retours INSTANTANÉS/i);
+    expect(SPEC).toMatch(/un SILENCE n'est pas une panne/i);
   });
 
   it("le README et l'aide embarquee disent la meme chose, en langage utilisateur", () => {

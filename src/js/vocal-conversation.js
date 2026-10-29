@@ -62,8 +62,10 @@
 //   5b. arrêt manuel     → on ne la rouvre pas : un geste explicite prime sur
 //                          l'automatisme (le geste 🎙️ la rouvre pour de bon)
 //   5c. sessions vides   → on ne la rouvre plus toute seule : le moteur a rendu
-//                          la main sans rien transcrire trop de fois de suite
-//                          (le geste 🎙️ ou une nouvelle entrée rétablit)
+//                          la main sans rien transcrire trop de fois de suite,
+//                          et PRESQUE AUSSITÔT (une fin de silence ordinaire,
+//                          elle, ne suspend rien : la dictée se réarme — un
+//                          silence n'est pas une panne).
 //   6. erreur en cours   → désarmée : on ne relaie pas un échec en boucle
 //   7. sans transcription→ désarmée, et la ligne d'état le dit (jamais muet)
 //   7b. statut du projet NON VÉRIFIÉ (l'attente bornée de la réponse a expiré)
@@ -97,14 +99,21 @@ export const VOCAL_ARM_DELAY_MS = 350;
 export const VOCAL_ARM_AFTER_READ_MS = 600;
 
 /**
- * PLAFOND DES SESSIONS VIDES — nombre de fins d'écoute SANS TEXTE qui suspendent
- * l'armement automatique de la dictée.
+ * PLAFOND DES SESSIONS VIDES — nombre de fins d'écoute SANS TEXTE **ET
+ * INSTANTANÉES** qui suspendent l'armement automatique de la dictée.
  *
  * Le cycle que ce plafond arrête : le moteur de reconnaissance rend la main sans
- * rien transcrire (`no-speech`), la fin d'écoute réapplique l'état, la dictée se
- * réarme 350 ms plus tard, et cela sans fin — le micro est rouvert en boucle et
- * rien ne se passe à l'écran. Trois sessions vides dans une fenêtre courte ne
- * sont plus un hasard : on cesse d'armer.
+ * rien transcrire (`no-speech`) **presque aussitôt**, la fin d'écoute réapplique
+ * l'état, la dictée se réarme 350 ms plus tard, et cela sans fin — le micro est
+ * rouvert en boucle et rien ne se passe à l'écran. Trois retours instantanés
+ * dans une fenêtre courte ne sont plus un hasard : on cesse d'armer.
+ *
+ * Ce que ce plafond ne compte PAS (défaut corrigé, propriétaire : « en mode
+ * vocal, à un moment donné, le micro est coupé ») : une fin de **silence**
+ * ordinaire, c'est-à-dire une session qui a RÉELLEMENT écouté (durée mesurée
+ * supérieure au seuil `VOICE_EMPTY_SESSION_INSTANT_MS` de `voice-auto-send.js`).
+ * Un silence n'est pas une panne : il ne suspend rien, la dictée se réarme, et
+ * l'écran n'annonce jamais « La dictée n'a pas fonctionné » pour un silence.
  */
 export const VOCAL_EMPTY_SESSION_LIMIT = 3;
 
@@ -282,7 +291,9 @@ export function decideVocalDictation(etats = {}) {
     return { action: VOCAL_DICTATION_HOLD, raison: "arret-manuel", delai: 0 };
   }
   // 5c. PLAFOND DES SESSIONS VIDES : le moteur a rendu la main sans rien
-  // transcrire trop de fois de suite. On ne rouvre plus le micro tout seul ;
+  // transcrire trop de fois de suite, et presque aussitôt (cf.
+  // `VOCAL_EMPTY_SESSION_LIMIT` : une fin de silence d'une durée réelle n'est
+  // PAS comptée, la dictée se réarme). On ne rouvre plus le micro tout seul ;
   // un geste de l'utilisateur (🎙️) ou une nouvelle entrée dans le mode rétablit.
   if (e.sessionsVides === true) {
     return { action: VOCAL_DICTATION_HOLD, raison: "sessions-vides", delai: 0 };

@@ -538,11 +538,15 @@ En mode **Vocal** :
 - La réponse se **lit à voix haute** (voir « Écouter une réponse à voix
   haute ») : comme l'écran est nu, c'est le moyen d'entendre la réponse. Au
   repos, **parler suffit** : la dictée s'ouvre toute seule, la demande part,
-  et l'écoute reprend après la réponse (conversation continue). Si la dictée ne
-  transcrit rien trois fois de suite, Pilot cesse de rouvrir le micro tout
-  seul : **un clic sur 🎙️** la rétablit. Comptent comme « rien transcrit » les
-  fins **vides** de la dictée, y compris celles où le moteur s'arrête **sans rien
-  dire** — c'est ce qui empêche le micro de se rouvrir sans limite.
+  et l'écoute reprend après la réponse (conversation continue). **Un silence
+  n'arrête rien** : quand vous vous taisez un moment, l'écoute se referme
+  simplement et **se rouvre toute seule** — vous pouvez reprendre la parole
+  quand vous voulez, sans toucher à rien, et rien ne s'affiche comme un échec.
+  Pilot ne cesse de rouvrir le micro tout seul que dans un seul cas : le moteur
+  de reconnaissance rend la main **immédiatement**, plusieurs fois de suite,
+  sans avoir rien transcrit (le micro tournerait en boucle pour rien). Alors
+  **un clic sur 🎙️** la rétablit. Une vraie panne (micro refusé, occupé,
+  réseau absent) s'affiche **en une phrase**, dans la ligne d'état.
 - **La demande part deux secondes après votre dernier mot** (par défaut).
   Pilot n'attend plus que le moteur de reconnaissance veuille bien se taire :
   **après ce délai sans nouveau mot entendu**, la demande part. Tant que vous
@@ -1292,7 +1296,10 @@ texte à la voix.
   s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
   travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
   ci-dessus, **après votre dernier mot** (chaque nouveau mot repousse l'échéance,
-  donc rien ne part tant que vous parlez). Ce **délai d'envoi** (deux secondes
+  donc rien ne part tant que vous parlez). **Un silence n'arrête rien** : quand
+  vous vous taisez un moment, l'écoute se referme et **se rouvre toute seule**,
+  sans message d'échec — vous reprenez la parole quand vous voulez. Ce **délai
+  d'envoi** (deux secondes
   par défaut) se règle dans ⚙️ Options → onglet **« Assistant »** → section
   **« Mode Vocal »**, de **1 à 5 secondes**. Un appui
   sur 🎙️ arrête la dictée et elle ne se rouvre pas contre
