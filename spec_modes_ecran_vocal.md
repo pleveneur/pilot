@@ -111,9 +111,10 @@ sont). Le retour de la conversation sur cet écran est interdit par un test déd
    **au-dessus** d'elle, à la même place que dans les autres modes.
 2. **Au centre**, le **disque de 168 px** (anneau plein de 2 px + remplissage
    lumineux de 18 % au centre, 0 % aux bords : aucune image), qui contient un
-   **halo intérieur** (`.vocal-halo`, la voix de l'utilisateur, §4). Le bloc suit
-   la fenêtre sans calcul, et il ne contient **rien d'autre** (seul le bouton de
-   dépannage du micro peut s'y ajouter, masqué par défaut).
+   **halo intérieur** (`.vocal-halo`, la voix de l'utilisateur, §4) et, dans son
+   **haut**, le **bouton de relance de l'écoute** (§3bis). Le bloc suit la
+   fenêtre sans calcul ; le bouton de dépannage du micro (`.vocal-mic-fix`),
+   masqué par défaut, se pose **sous** le disque, dans la même scène.
 3. **Juste au-dessus de la barre de saisie**, l'**unique ligne d'état**
    (`.vocal-status`) : elle n'est plus sous le cercle (28/10). C'est le **même**
    texte, le **même** style, la **même** logique d'état ; seul l'emplacement
@@ -134,6 +135,62 @@ sont). Le retour de la conversation sur cet écran est interdit par un test déd
 **Rien de la conversation n'est affiché** sur cet écran : ni les messages, ni les
 outils, ni l'état des agents, ni un résumé des derniers échanges. C'est le
 principe même du mode, et il ne dépend d'aucun réglage.
+
+## 3bis. Le bouton de relance, dans le haut du disque (« ok <personnage> »)
+
+Décisions du propriétaire (401 et 402 du 2026-10-29) : un **bouton rond**, de la
+même forme que le cercle, posé **à l'intérieur du haut** du cercle, dont **le
+contour du cercle sert de bord** — pas d'anneau propre, pas de débordement : il
+doit paraître faire partie de l'objet lumineux. Il répond au problème concret de
+la dictée qui s'arrête : sans lui, il fallait quitter l'écran pour la relancer.
+
+- **Place, calculée** : le bouton (`.vocal-restart`, **56 px**) est un **enfant**
+  du disque, en `position: absolute`, `top: 3px`, centré par `left: 0; right: 0;
+  margin: 0 auto` (**jamais** de `transform` : rien à neutraliser en mouvement
+  réduit). Le disque n'ayant pas de `box-sizing` particulier, sa boîte de padding
+  fait 168 × 168 px (rayon utile **84 px**, centre à 84 px du haut) : le point du
+  bouton le plus éloigné du centre est à **81 px**, donc **3 px à l'intérieur**.
+  Il tient **entièrement dans le disque**, et cela ne dépend d'aucune taille de
+  fenêtre (disque et bouton sont en pixels fixes). Aucun `overflow` n'est ajouté
+  au disque : il découperait l'enveloppe de parole (`::before`, 256 × 256,
+  `inset: -44px`).
+- **État : celui de la dictée, jamais un drapeau local.** La visibilité est une
+  **décision pure** (`src/js/vocal-restart.js`, `vocalRestartVisible`), appliquée
+  en **un seul point** (`vocalSyncRestartButton`, à la fin de
+  `applyVocalState`), **après** `vocalSyncConversation` — donc jamais pendant les
+  350 ms d'un réarmement déjà programmé. Il est **visible** quand la dictée ne
+  tourne pas (repos, après une panne, après un arrêt manuel), **disparu pendant
+  l'écoute**, **disparu pendant que Pilot parle ou travaille** (la dictée y est
+  fermée par construction : un bouton y mentirait, et il se poserait sur le halo),
+  et **absent** sur un poste sans transcription (il ne peut rien ouvrir).
+- **Clic : la voie existante.** Il appelle `toggleVoiceInput` — la fonction
+  **déjà** branchée sur le bouton 🎙️ de la barre de saisie — donc exactement les
+  mêmes effets (levée des verrous, demande du micro de mesure, démarrage, boucle
+  normale de conversation). `startVoiceInput` n'est définie qu'une fois et le
+  bouton ne l'appelle jamais lui-même : **aucune seconde voie**.
+- **Étiquette** : « ok » + le **premier mot** du nom du **personnage actif**
+  (`superAgentDisplayLabel()` : personnage → nom réglé → « Assistant »), borné à
+  10 caractères avec « … » au-delà. Le module n'invente et ne retient aucun nom ;
+  l'étiquette est réécrite à chaque application d'état et à chaque changement de
+  personnage.
+- **Discret et accessible** : fond `color-mix(in srgb, var(--text-primary) 8%,
+  transparent)` (aucune couleur en dur), texte de 10 px, **aucune animation**
+  (le seul `transition` de fond est coupé par `vocal-reduced`), `aria-label` +
+  `title` = « Lancer l'écoute », focus visible du projet (`--ring`).
+  `aria-hidden` **a quitté le disque** : il contenait un décor, il contient
+  maintenant un vrai contrôle (un sous-arbre `aria-hidden` avec un bouton
+  focusable est un piège).
+- **Rien n'est déplacé** : cercle, phrase d'état et barre de saisie gardent leur
+  place ; le bouton, absolu, ne participe à aucune mise en page et ne recouvre ni
+  le halo (jamais visible en écoute) ni la phrase d'état (sous le disque).
+
+Ce bouton ne remplace pas celui de la barre de saisie et n'en est pas un
+doublon : les deux commandent la même chose, celui du cercle est le **geste
+principal** du mode Vocal (le seul visible sans quitter l'écran).
+
+Couverture : `src/js/vocal-restart.test.js` (décisions, étiquettes, pureté) et
+`src/js/ecran-vocal-bouton-relance.test.js` (branchement, voie unique, ordre,
+géométrie calculée, non-recouvrement, mouvement réduit).
 
 ## 4. Les quatre états visuels
 
@@ -762,6 +819,7 @@ sa hauteur d'origine.
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur **instantanée** — durée mesurée < `VOICE_EMPTY_SESSION_INSTANT_MS` (1 s) —, jamais une erreur affichée, un arrêt demandé, une reprise en main, et **jamais un silence d'une durée réelle**) |
 | `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : les **quatre niveaux** de longueur (`VOCAL_BREVITY_LEVELS`, `normalizeVocalBrevityLevel`, `vocalBrevityLabel`), la consigne d'un niveau (`vocalBrevityInstruction`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
+| `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartLabel` (« ok » + premier mot, 10 car. maxi), `VOCAL_RESTART_TITLE`. Aucun DOM, aucun micro, aucun état gardé |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 
@@ -794,7 +852,14 @@ compteur),
 `vocal-reponses-courtes.test.js` (**réponse courte du mode Vocal** : contenu de la
 consigne, texte de l'utilisateur intact et non tronqué, consigne **absente** hors
 du mode Vocal — chat écrit et Assistant inchangés —, un seul appel dans toute
-l'application, cas de sécurité exclus explicitement, documentation à jour).
+l'application, cas de sécurité exclus explicitement, documentation à jour),
+`vocal-restart.test.js` + `ecran-vocal-bouton-relance.test.js` (bouton de relance
+§3bis : visible hors dictée, absent pendant l'écoute et pendant la parole / la
+réflexion, absent sans transcription, aucun état incohérent, étiquette du
+personnage bornée, **clic sur la voie existante** et une seule définition de
+`startVoiceInput`, application après `vocalSyncConversation`, **géométrie
+calculée** (81 ≤ 84 px), aucun recouvrement du halo ni de la phrase d'état, aucune
+animation et mouvement réduit respecté).
 
 ## 11. Ce qui est prouvé, et ce qui dépend de votre matériel
 

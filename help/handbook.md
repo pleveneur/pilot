@@ -545,8 +545,18 @@ En mode **Vocal** :
   Pilot ne cesse de rouvrir le micro tout seul que dans un seul cas : le moteur
   de reconnaissance rend la main **immédiatement**, plusieurs fois de suite,
   sans avoir rien transcrit (le micro tournerait en boucle pour rien). Alors
-  **un clic sur 🎙️** la rétablit. Une vraie panne (micro refusé, occupé,
+  **un clic sur le rond « ok » du cercle** (ou sur 🎙️) la rétablit. Une vraie
+  panne (micro refusé, occupé,
   réseau absent) s'affiche **en une phrase**, dans la ligne d'état.
+- **Le rond « ok <personnage> » relance l'écoute.** Dans le **haut du cercle**,
+  un petit bouton rond porte « **ok** » suivi du nom de votre personnage
+  (par exemple « ok Nova ») : un clic sur ce rond relance l'écoute et la
+  conversation, exactement comme le bouton 🎙️ de la barre de saisie. Il est
+  **visible quand la dictée ne tourne pas** et **disparaît pendant l'écoute** —
+  d'un coup d'œil, vous savez donc si Pilot vous entend. Il fait **partie de
+  l'objet lumineux** (c'est le contour du cercle qui lui sert de bord) et ne
+  déplace rien : ni le cercle, ni la phrase d'état, ni la zone de saisie. Son
+  infobulle dit « Lancer l'écoute ».
 - **La demande part deux secondes après votre dernier mot** (par défaut).
   Pilot n'attend plus que le moteur de reconnaissance veuille bien se taire :
   **après ce délai sans nouveau mot entendu**, la demande part. Tant que vous

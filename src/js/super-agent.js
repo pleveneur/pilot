@@ -102,6 +102,11 @@ import {
   VOCAL_MESSAGE_DICTEE_ECHEC,
   VOCAL_MESSAGE_SENSIBILITE_INCONNUE,
 } from "./vocal-conversation.js";
+// LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> », decisions 401 / 402) :
+// les DEUX decisions (se voit-il ? que dit-il ?) sont PURES et vivent dans ce
+// module. Ici, on ne fait que les appliquer (`vocalSyncRestartButton`) et
+// brancher le clic sur la voie de demarrage EXISTANTE — aucune seconde voie.
+import { vocalRestartVisible, vocalRestartLabel, VOCAL_RESTART_TITLE } from "./vocal-restart.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage, purgeAgentTabView } from "./agent-pi.js";
 import {
@@ -2019,6 +2024,17 @@ export function applyAssistantPersonaUi() {
     }
   } catch (_) {
     /* re-rendu d'onglet impossible : l'affichage reste celui d'avant */
+  }
+  try {
+    // Le bouton de relance de l'ecran Vocal porte le nom (« ok <personnage> ») :
+    // il suit le personnage actif comme l'onglet, et ne garde aucun nom a lui.
+    // S'il est masque, seule son etiquette est mise a jour — la VISIBILITE
+    // appartient a `applyVocalState` (`vocalSyncRestartButton`).
+    const badge =
+      typeof document !== "undefined" ? document.querySelector(".vocal-restart") : null;
+    if (badge) badge.textContent = vocalRestartLabel(label);
+  } catch (_) {
+    /* overlay vocal absent : rien a faire */
   }
   try {
     const ov = typeof document !== "undefined" ? document.querySelector(".superagent-immersive") : null;
@@ -4578,7 +4594,18 @@ export async function createSuperAgent(container) {
     ov.innerHTML = `
       <div class="vocal-top"></div>
       <div class="vocal-stage">
-        <div class="vocal-orb" aria-hidden="true"><span class="vocal-halo"></span></div>
+        <div class="vocal-orb">
+          <span class="vocal-halo"></span>
+          <!-- LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> », decisions
+               401 / 402) : ROND, pose A L'INTERIEUR du haut du disque, dont le
+               contour sert de bord. Il est MASQUE au depart — c'est
+               'applyVocalState' qui decide, une fois l'etat REEL connu :
+               visible quand la dictee ne tourne pas, disparu pendant
+               l'ecoute. Aucun drapeau local, aucune promesse avant la mesure.
+               'aria-hidden' a quitte le disque : ce bouton est un vrai
+               controle, il doit etre atteignable au clavier et nomme. -->
+          <button type="button" class="vocal-restart hidden" title="${VOCAL_RESTART_TITLE}" aria-label="${VOCAL_RESTART_TITLE}">ok</button>
+        </div>
         <!-- LOT 3 (§2.5) : bouton de depannage, MASQUE tant que le micro capte.
              Il n'apparait que si le micro est ferme (refus, absence, panne) ;
              le mode reste utilisable sans lui. -->
@@ -4654,6 +4681,42 @@ export async function createSuperAgent(container) {
     // (armer au repos, desarmer pendant la parole et le travail). Point
     // d'application UNIQUE, en fin de fonction : aucun autre appelant.
     vocalSyncConversation();
+    // LE BOUTON DE RELANCE suit l'etat REEL de la dictee. Places APRES
+    // `vocalSyncConversation` a dessein : l'armement vient peut-etre d'etre
+    // programme a l'instant, et le bouton ne doit pas s'allumer pour un
+    // demi-clignement de 350 ms.
+    vocalSyncRestartButton(state);
+  }
+
+  /**
+   * LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> »).
+   *
+   * Il ne DECIDE rien : la visibilite et l'etiquette sont des fonctions pures
+   * (`vocal-restart.js`), l'etat de la dictee vient des variables reelles
+   * (`voiceActive`, `vocalArmTimer`, `voiceSupported`), et le nom vient de
+   * `superAgentDisplayLabel` (personnage actif). Ce bloc ne fait que les
+   * appliquer au DOM, comme la ligne d'etat juste au-dessus.
+   *
+   * Le bouton ne recouvre rien : il est ABSOLU dans le disque (donc hors du
+   * flux : ni le cercle, ni la phrase d'etat, ni la barre de saisie ne bougent)
+   * et il ne se pose sur le halo que si les deux pouvaient s'afficher ensemble —
+   * ce que la regle 4 de `vocalRestartVisible` interdit (le halo ne s'allume
+   * qu'en ecoute, et l'ecoute est justement l'etat ou le bouton disparait).
+   * @param {string} state etat visuel deja calcule par `applyVocalState`
+   */
+  function vocalSyncRestartButton(state) {
+    if (!vocalOverlay) return;
+    const bouton = vocalOverlay.querySelector(".vocal-restart");
+    if (!bouton) return;
+    const visible = vocalRestartVisible({
+      transcription: voiceSupported === true,
+      dicteeOuverte: voiceActive === true,
+      armementProgramme: !!vocalArmTimer,
+      etat: state,
+    });
+    bouton.classList.toggle("hidden", !visible);
+    const etiquette = vocalRestartLabel(superAgentDisplayLabel());
+    if (bouton.textContent !== etiquette) bouton.textContent = etiquette;
   }
 
   /**
@@ -5202,6 +5265,15 @@ export async function createSuperAgent(container) {
         applyVocalState();
       });
     }
+    // ── LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> ») ──
+    // Le clic emprunte la voie de demarrage qui EXISTE DEJA : `toggleVoiceInput`,
+    // exactement la fonction branchee sur le bouton 🎙️ de la barre de saisie
+    // ci-dessus. Ce bouton ne cree donc pas de seconde voie : il ne fait que
+    // rendre le geste principal disponible la ou l'ecran est nu. Il ne leve pas
+    // non plus les verrous du mode — `toggleVoiceInput` les traite comme pour
+    // 🎙️ (meme code, meme resultat).
+    const relance = vocalOverlay.querySelector(".vocal-restart");
+    if (relance) relance.addEventListener("click", toggleVoiceInput);
     // Placeholder plus court : ici, le modele de phrase de l'assistant (28 mots)
     // serait du bruit (§2.4). Restitue a la sortie.
     if (inputEl) {

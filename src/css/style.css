@@ -11807,6 +11807,85 @@ body.pilot-vocal-active .agent-chat-messages {
   --vocal-halo: 0;
 }
 
+/* --- LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> ») ---
+   Fiche du proprietaire (decisions 401 et 402 du suivi) : un bouton ROND, de la
+   MEME forme que le disque, pose A L'INTERIEUR du haut du disque, dont le
+   contour du disque sert de bord — il n'a donc AUCUN anneau propre, aucune
+   bordure, aucune ombre, et il ne deborde jamais de l'objet lumineux : il en
+   fait partie.
+
+   GEOMETRIE (verifiee par un test, pas seulement affirmee) : `.vocal-orb` n'a
+   pas de `box-sizing` particulier (contenu par defaut, pas de remise a zero
+   globale dans ce fichier), donc sa boite de padding fait 168 x 168 px, son
+   rayon interieur 84 px et son centre a 84 px du haut. Un bouton de 56 px a
+   `top: 3px` a son centre a 31 px du haut, soit 53 px au-dessus du centre du
+   disque ; son point le plus eloigne est donc a 53 + 28 = 81 px du centre,
+   c'est-a-dire 3 px A L'INTERIEUR du rayon interieur. Il tient entierement dans
+   le disque, et cela ne depend d'AUCUNE taille de fenetre : le disque est fixe
+   a 168 px et le bouton est en position ABSOLUE.
+
+   HORS DU FLUX (`position: absolute`) : il ne decale donc ni le disque, ni la
+   phrase d'etat, ni la barre de saisie — la mise en page est identique, avec ou
+   sans lui. Et il ne recouvre jamais le halo : le halo ne s'allume qu'en
+   `vocal-state-listening`, etat ou ce bouton est justement masque (regle 4 de
+   `vocalRestartVisible`).
+
+   VISIBILITE : elle n'est PAS decidee ici. `super-agent.js`
+   (`vocalSyncRestartButton`, appele a la fin de `applyVocalState`) pose ou
+   retire `.hidden` d'apres l'etat REEL de la dictee, et l'etiquette vient du
+   personnage actif. Le CSS ne fait que l'aspect.
+
+   ACCESSIBILITE : c'est un vrai `<button>`, atteignable au clavier et nomme
+   (`aria-label` + `title` = « Lancer l'ecoute ») ; le focus reprend le motif du
+   projet (--accent + --ring), comme `#tree-filter:focus`.
+
+   MOUVEMENT : aucune animation, aucun deplacement, aucun clignotement. Le seul
+   effet est un changement de fond au survol, coupe en mouvement reduit. */
+.vocal-restart {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  box-sizing: border-box;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  /* Rond, et sans bord a lui : le contour du disque lui sert de bord. */
+  border: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: var(--fw-medium);
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  text-align: center;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.vocal-restart:hover {
+  background: color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+.vocal-restart:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+/* Masque = absent de l'ecran ET de la navigation au clavier : la visibilite est
+   posee par le code, jamais deduite d'une classe d'etat CSS. */
+.vocal-restart.hidden {
+  display: none;
+}
+/* Mouvement reduit : le changement de fond lui-meme est coupe (aucune
+   transition a l'entree du mode ni au survol). */
+.pilot-vocal.vocal-reduced .vocal-restart {
+  transition: none;
+}
+
 /* Le trait de niveau (200 x 3 px) a ETE RETIRE le 12/11 : decision du
    proprietaire, qui revient sur l'avenant du 28/10 (« la petite barre reste »).
    Le niveau du micro continue d'etre mesure — il allume l'etat « ecoute » et

@@ -233,6 +233,7 @@ describe("5. la phrase d'etat est AU-DESSUS de la barre de saisie", () => {
       "vocal-stage",
       "vocal-orb",
       "vocal-halo",
+      "vocal-restart",
       "vocal-mic-fix",
       "vocal-status",
       "vocal-input",

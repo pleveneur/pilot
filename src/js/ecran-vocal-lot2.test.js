@@ -241,6 +241,7 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
       "vocal-stage",
       "vocal-orb",
       "vocal-halo",
+      "vocal-restart",
       "vocal-mic-fix",
       "vocal-status",
       "vocal-input",
@@ -303,7 +304,13 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
 describe("4bis. le halo d'ecoute (lot B) : la voix de l'utilisateur", () => {
   it("il est ENFANT du disque, pose dans sa boite interieure (82 px de rayon)", () => {
     const corps = corpsFonction(SUPER, "function buildVocalOverlay");
-    expect(corps).toMatch(/class="vocal-orb"[^>]*><span class="vocal-halo"/);
+    // ENFANT DIRECT du disque : le balisage du disque, du `div` a sa fermeture.
+    // Depuis le bouton de relance (decisions 401/402), le disque contient DEUX
+    // enfants (le halo et ce bouton), separes par un commentaire : la garde ne
+    // peut donc plus exiger que le halo soit la PREMIERE chose apres le `div`.
+    // Ce qui compte est inchange : le halo est dans la boite du disque.
+    const disque = sliceSource(corps, '<div class="vocal-orb">', "</div>", 40);
+    expect(disque).toMatch(/<span class="vocal-halo">/);
     const halo = bloc(CSS, ".vocal-halo {");
     expect(halo).toMatch(/position:\s*absolute/);
     expect(halo).toMatch(/inset:\s*0/);

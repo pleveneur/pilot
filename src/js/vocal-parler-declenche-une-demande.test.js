@@ -248,12 +248,18 @@ describe("cablage dans super-agent.js", () => {
   it("UN SEUL point d'application : la fin de applyVocalState", () => {
     const etat = corpsFonction(SUPER, "function applyVocalState()");
     expect(etat).toContain("vocalSyncConversation();");
-    // Le point d'application est bien la DERNIERE instruction de la fonction :
-    // la decision voit donc l'etat qui vient d'etre applique.
-    const fin = etat.trimEnd();
-    expect(fin.endsWith("vocalSyncConversation();\n  }") || fin.endsWith("vocalSyncConversation();")).toBe(
-      true
-    );
+    // Le point d'application est le DERNIER appel qui touche a la DICTEE : la
+    // decision voit donc l'etat qui vient d'etre applique. Ce qui peut le
+    // suivre est purement PRESENTATIONNEL — aujourd'hui le bouton de relance,
+    // qui lit l'etat reel et n'ecrit rien de la dictee. Nomme ici pour que rien
+    // d'autre ne s'y glisse en silence.
+    const [, apres] = etat.split("vocalSyncConversation();");
+    const suite = apres
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "" && !l.startsWith("//"))
+      .join(" ");
+    expect(suite).toBe("vocalSyncRestartButton(state);");
     // Une seule occurrence dans TOUT le fichier : aucun second appelant.
     expect((SUPER.match(/vocalSyncConversation\(\);/g) || [])).toHaveLength(1);
   });
