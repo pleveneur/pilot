@@ -251,6 +251,21 @@ Chaque outil est `executionMode: "sequential"` (bloque pi en attendant la
 réponse, comme la porte pré-écriture). Les `promptSnippet` / `promptGuidelines`
 instruisent le LLM d'utiliser ces outils au lieu d'écrire la question en texte.
 
+**Aucune échéance sur une question humaine** (exception NOMMÉE
+`HUMAN_DIALOG_NO_DEADLINE = Object.freeze({})`, sans champ `timeout`). Une
+question posée à l'utilisateur reste valide **jusqu'à sa réponse ou son
+annulation** : passé un délai, l'agent abandonnait la question alors que l'écran
+laissait les boutons cliquables, et le clic tardif était jeté en silence
+(`docs/diag-question-expiree-et-texte-repete.md`, `docs/RAPPORT-QUESTION-SANS-EXPIRATION.md`).
+La borne reste OBLIGATOIRE quand c'est une **machine** qui attend (dialogue
+automatique / MCP, `mcp-client.src.ts`, porte pré-écriture) : deux cas distincts.
+Garde-fou : `src/js/extensions-ui-timeout.test.js` (borne finie et plafonnée
+partout, exception nommée autorisée dans le seul `pilot-choices.ts`) et
+`src/js/question-humaine-sans-expiration.test.js` (la question humaine ne meurt
+pas, la réponse tardive est reçue, l'outil automatique garde sa borne). Côté
+écran, une réponse qui n'a pas pu être transmise est **signalée** (aucun retour
+silencieux).
+
 ### Frontend (`agent-pi.js`)
 
 `handleExtensionUiRequest` rend `select`/`confirm`/`input` **inline dans la bulle

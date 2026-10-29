@@ -36,12 +36,28 @@ const MULTI_SENTINEL = "PILOT_MULTI_CHOICE::";
 // La valeur renvoyée est un JSON `{ confirmed: boolean, note?: string }`.
 const CONFIRM_SENTINEL = "PILOT_CONFIRM::";
 
-// Garde-fou anti-blocage : en mode RPC, un `ctx.ui.*` émet un
-// `extension_ui_request` et pi attend la réponse SANS limite de temps. Ces
-// outils posent une question à l'utilisateur : on garde une attente longue
-// (30 min) mais BORNÉE, pour qu'une question restée sans réponse ne fige pas la
-// session ni la file d'attente du projet.
-const PILOT_UI_OPTS = { timeout: 1800000 };
+// EXCEPTION NOMMÉE — « QUESTION HUMAINE SANS ÉCHÉANCE ».
+//
+// En mode RPC, un `ctx.ui.*` émet un `extension_ui_request` et pi attend la
+// réponse ; l'option `timeout` arme une minuterie qui, à l'échéance, DÉTACHE la
+// question (`pendingExtensionRequests.delete(id)` côté pi) et rend la main à
+// l'agent avec « pas de réponse ».
+//
+// Une échéance est légitime quand c'est une MACHINE qui attend (dialogue
+// automatique, serveur MCP : cf. `PILOT_UI_OPTS` de `mcp-client.src.ts`). Elle
+// ne l'est PAS quand c'est un HUMAIN qui doit répondre : passé le délai, l'agent
+// abandonnait la question alors que l'écran laissait les boutons cliquables —
+// un clic tardif était jeté en silence (défaut « la question expire sans
+// prévenir », cf. `docs/diag-question-expiree-et-texte-repete.md`).
+//
+// Décision : les dialogues destinés à l'utilisateur de CE fichier n'ont AUCUNE
+// échéance — ils restent valides jusqu'à sa réponse (ou son annulation).
+// `HUMAN_DIALOG_NO_DEADLINE` est l'exception NOMMÉE, explicite et repérable :
+// un objet d'options SANS champ d'échéance, donc pi n'arme aucune minuterie. Le
+// garde-fou `src/js/extensions-ui-timeout.test.js` reconnaît ce nom et n'exige
+// plus de borne pour ces appels ; il continue d'exiger une borne finie et
+// plafonnée PARTOUT ailleurs.
+const HUMAN_DIALOG_NO_DEADLINE = Object.freeze({});
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -59,9 +75,9 @@ export default function (pi: ExtensionAPI) {
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const choice = await ctx.ui.select(params.title, params.options, PILOT_UI_OPTS);
+      const choice = await ctx.ui.select(params.title, params.options, HUMAN_DIALOG_NO_DEADLINE);
       if (choice == null) {
-        return { content: [{ type: "text", text: "L'utilisateur a annulé le choix (ou n'a pas répondu dans le délai imparti de 30 min)." }] };
+        return { content: [{ type: "text", text: "L'utilisateur a annulé le choix." }] };
       }
       // Pilot renvoie un JSON `{ selected: string, note?: string }`
       // (note = précision optionnelle saisie par l'utilisateur).
@@ -109,9 +125,9 @@ export default function (pi: ExtensionAPI) {
       // Titre préfixé par le sentinel → Pilot rend une multi-sélection.
       // La valeur renvoyée est un JSON `{ selected: string[], note?: string }`
       // (note = précision optionnelle saisie par l'utilisateur).
-      const choice = await ctx.ui.select(MULTI_SENTINEL + params.title, params.options, PILOT_UI_OPTS);
+      const choice = await ctx.ui.select(MULTI_SENTINEL + params.title, params.options, HUMAN_DIALOG_NO_DEADLINE);
       if (choice == null) {
-        return { content: [{ type: "text", text: "L'utilisateur a annulé le choix (ou n'a pas répondu dans le délai imparti de 30 min)." }] };
+        return { content: [{ type: "text", text: "L'utilisateur a annulé le choix." }] };
       }
       let selected: string[] = [];
       let note = "";
@@ -152,10 +168,10 @@ export default function (pi: ExtensionAPI) {
       const choice = await ctx.ui.select(
         CONFIRM_SENTINEL + JSON.stringify({ title: params.title, message: params.message }),
         ["Oui", "Non"],
-        PILOT_UI_OPTS,
+        HUMAN_DIALOG_NO_DEADLINE,
       );
       if (choice == null) {
-        return { content: [{ type: "text", text: "L'utilisateur a annulé la confirmation (ou n'a pas répondu dans le délai imparti de 30 min)." }] };
+        return { content: [{ type: "text", text: "L'utilisateur a annulé la confirmation." }] };
       }
       let confirmed = false;
       let note = "";
@@ -197,9 +213,9 @@ export default function (pi: ExtensionAPI) {
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const value = await ctx.ui.input(params.title, params.placeholder || "", PILOT_UI_OPTS);
+      const value = await ctx.ui.input(params.title, params.placeholder || "", HUMAN_DIALOG_NO_DEADLINE);
       if (value == null) {
-        return { content: [{ type: "text", text: "L'utilisateur a annulé la saisie (ou n'a pas répondu dans le délai imparti de 30 min)." }] };
+        return { content: [{ type: "text", text: "L'utilisateur a annulé la saisie." }] };
       }
       return { content: [{ type: "text", text: `Saisie de l'utilisateur : ${value}` }] };
     },

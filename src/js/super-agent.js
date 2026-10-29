@@ -2244,6 +2244,12 @@ const pendingQuestions = [];    // file FIFO de questions en attente
 let telegramAskedQuestion = null;
 const SUPERAGENT_PLACEHOLDER_DEFAULT = "Poser une question sur tous les projets… (Entrée pour envoyer)";
 const PENDING_NOTE_PLACEHOLDER = "Votre précision (optionnel)… puis validez";
+// Défaut « une question expire en silence » (docs/diag-question-expiree-et-
+// texte-repete.md) : quand une réponse ne peut PLUS être transmise à l'agent
+// (question déjà répondue par un autre canal, file avancée, session relancée),
+// on le DIT à l'utilisateur au lieu de jeter son clic sans un mot.
+const PENDING_QUESTION_INACTIVE_NOTICE =
+  "⚠️ Cette question n'est plus active : votre réponse n'a pas été transmise à l'agent.";
 
 /** Relie la barre de questions en attente à la barre de saisie principale. */
 function registerPendingBar(barEl, inputEl) {
@@ -2430,13 +2436,29 @@ async function finishPendingQuestion(q, value, cancelled) {
     // Course « première réponse gagne » : si cette soumission a été refusée
     // (question déjà répondue / application concurrente en cours), ne JAMAIS
     // finaliser — sinon la file avancerait à tort (question suivante perdue).
-    if (outcome && outcome.applied === false) return;
+    // HONNÊTETÉ : on ne laisse pas croire que la réponse est partie, on le DIT.
+    if (outcome && outcome.applied === false) {
+      notifyPendingQuestionInactive();
+      return;
+    }
     clearPendingInput();
     finalizePendingQuestion();
   } catch (err) {
     console.error("Erreur envoi choix assistant:", err);
     renderActivePendingQuestion();
   }
+}
+
+/** Signale honnêtement qu'une réponse n'a PAS pu être transmise : la question
+ * n'est plus attendue par l'agent (déjà répondue par un autre canal, file
+ * avancée, session relancée). Aucun message n'est affiché si l'onglet est
+ * fermé (plus d'écran pour le lire). Aucune réponse n'est décidée à la place
+ * de l'utilisateur.
+ * @param {HTMLElement|null} [messagesEl]
+ */
+function notifyPendingQuestionInactive(messagesEl = superMessagesEl) {
+  if (!messagesEl) return;
+  appendSystemMessage(messagesEl, PENDING_QUESTION_INACTIVE_NOTICE);
 }
 
 /** Valide la question active avec la précision saisie (appel depuis send()). */

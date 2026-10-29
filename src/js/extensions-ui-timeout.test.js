@@ -24,7 +24,14 @@
  *     refuse la modification (fail-closed) au lieu de suspendre la session ;
  *  4. garde-fou statique : TOUS les appels `await ctx.ui.*` des extensions
  *     passent une borne `timeout` (aucune régression possible, y compris dans
- *     une extension future).
+ *     une extension future) — SAUF l'EXCEPTION NOMMÉE des dialogues HUMAINS
+ *     (`HUMAN_DIALOG_NO_DEADLINE`, cf. `pilot-choices.ts`), qui n'ont plus
+ *     d'échéance : une question posée à l'utilisateur reste valide jusqu'à sa
+ *     réponse (défaut « la question expire en silence », diag
+ *     `docs/diag-question-expiree-et-texte-repete.md`). L'exception est
+ *     DÉCLARÉE ICI (liste blanche d'un seul fichier) et vérifiée : elle ne peut
+ *     pas s'étendre par inadvertance à un dialogue automatique / MCP, qui garde
+ *     sa borne.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
@@ -47,6 +54,17 @@ const MAX_HUMAN_TIMEOUT_MS = 30 * 60 * 1000;
 const HUMAN_FACING = new Set(["pilot-choices.ts", "pilot-edit-gate.ts", "mcp-client.src.ts"]);
 /** Extension GÉNÉRÉE (gitignorée) : sa source `mcp-client.src.ts` est vérifiée. */
 const GENERATED = new Set(["pilot-mcp-client.ts"]);
+
+// ── EXCEPTION NOMMÉE « dialogue humain sans échéance » ───────────────────────
+// Une question posée à l'utilisateur ne doit JAMAIS expirer toute seule : passé
+// l'ancienne borne de 30 min, l'agent abandonnait la question alors que l'écran
+// laissait les boutons cliquables (clic tardif jeté en silence). L'exception est
+// donc un NOM explicite, autorisé dans UN SEUL fichier (questions humaines) :
+// une question automatique / MCP, elle, garde sa borne.
+const NO_DEADLINE_CONST = "HUMAN_DIALOG_NO_DEADLINE";
+const NO_DEADLINE_ALLOWED = new Set(["pilot-choices.ts"]);
+/** Déclaration exigée de l'exception : un objet d'options SANS aucune échéance. */
+const NO_DEADLINE_DECL = /const HUMAN_DIALOG_NO_DEADLINE\s*=\s*Object\.freeze\(\{\s*\}\)/;
 
 /**
  * Simule `createExtensionUIContext()` de pi en mode RPC (fidèle à
@@ -224,13 +242,14 @@ function dialogCallSites(source) {
   return sites;
 }
 
-describe("garde-fou statique : aucun dialogue d'extension non borné", () => {
+describe("garde-fou statique : aucun dialogue d'extension non borné (sauf exception NOMMÉE des questions humaines)", () => {
   const files = readdirSync(EXT_DIR)
     .filter((f) => f.endsWith(".ts") && !GENERATED.has(f))
     .sort();
 
-  it("chaque `await ctx.ui.*` passe une option `timeout` finie et plafonnée", () => {
+  it("chaque `await ctx.ui.*` passe une option `timeout` finie et plafonnée — sauf l'exception nommée des dialogues humains", () => {
     let checked = 0;
+    let exceptions = 0;
     const problems = [];
 
     for (const file of files) {
@@ -238,10 +257,21 @@ describe("garde-fou statique : aucun dialogue d'extension non borné", () => {
       const constMatch = source.match(/const PILOT_UI_OPTS\s*=\s*\{\s*timeout:\s*([\d_]+)\s*\}/);
       const constValue = constMatch ? Number(constMatch[1].replace(/_/g, "")) : null;
       const cap = HUMAN_FACING.has(file) ? MAX_HUMAN_TIMEOUT_MS : MAX_SERVICE_TIMEOUT_MS;
+      const declaresNoDeadline = NO_DEADLINE_DECL.test(source);
 
       for (const site of dialogCallSites(source)) {
         checked++;
         const where = `${file}:${site.line} (ctx.ui.${site.method})`;
+        // EXCEPTION NOMMÉE : dialogue HUMAIN sans échéance (cf. pilot-choices.ts).
+        if (new RegExp(`\\b${NO_DEADLINE_CONST}\\b`).test(site.args)) {
+          exceptions++;
+          if (!NO_DEADLINE_ALLOWED.has(file)) {
+            problems.push(`${where} : exception « ${NO_DEADLINE_CONST} » interdite dans ce fichier (réservée aux questions humaines : ${[...NO_DEADLINE_ALLOWED].join(", ")})`);
+          } else if (!declaresNoDeadline) {
+            problems.push(`${where} : utilise l'exception « ${NO_DEADLINE_CONST} » mais sa déclaration « const ${NO_DEADLINE_CONST} = Object.freeze({}) » est absente ou porte une échéance`);
+          }
+          continue;
+        }
         let timeout = null;
         if (/\bPILOT_UI_OPTS\b/.test(site.args)) {
           if (constValue == null) {
@@ -252,7 +282,7 @@ describe("garde-fou statique : aucun dialogue d'extension non borné", () => {
         } else {
           const inline = site.args.match(/timeout:\s*([\d_]+)/);
           if (!inline) {
-            problems.push(`${where} : AUCUNE borne « timeout » — pi attendrait à vie (bug « agents figés »)`);
+            problems.push(`${where} : AUCUNE borne « timeout » — pi attendrait à vie (bug « agents figés »). Seule exception admise, NOMMÉE : « ${NO_DEADLINE_CONST} » (question humaine).`);
             continue;
           }
           timeout = Number(inline[1].replace(/_/g, ""));
@@ -263,6 +293,10 @@ describe("garde-fou statique : aucun dialogue d'extension non borné", () => {
     }
 
     expect(problems, problems.join("\n")).toEqual([]);
+    // Les 4 dialogues de pilot-choices (2 questions à choix, 1 confirmation,
+    // 1 saisie) sont l'EXCEPTION, et elle seule : si ce nombre change, c'est
+    // qu'un dialogue a changé de nature — vérifier que c'est bien HUMAIN.
+    expect(exceptions, "exception « dialogue humain sans échéance » attendue sur les 4 dialogues de pilot-choices.ts").toBe(4);
     // 48 appels bornés au moment du correctif : si ce nombre change, c'est que
     // des dialogues ont été ajoutés/retirés — vérifier qu'ils sont bien bornés.
     expect(checked).toBeGreaterThanOrEqual(48);
