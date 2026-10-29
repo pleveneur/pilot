@@ -132,10 +132,9 @@ function ecranVocal() {
 
 // ── 1. La règle pure : quels refus méritent une reprise ────────────────────
 describe("1. la règle pure dit quels refus méritent une reprise", () => {
-  it("les quatre refus PASSAGERS sont repris, avec le délai du module", () => {
+  it("les trois refus PASSAGERS sont repris, avec le délai du module", () => {
     expect(VOCAL_RESUME_TRANSIENT_REASONS).toEqual([
       "pilot-parle",
-      "tour-en-cours",
       "mesure-fermee",
       "sensibilite-inconnue",
     ]);
@@ -143,6 +142,26 @@ describe("1. la règle pure dit quels refus méritent une reprise", () => {
       expect(vocalResumeRetry(raison, 0), raison).toBe(VOCAL_RESUME_RETRY_MS);
     }
     expect(VOCAL_RESUME_RETRY_MS).toBe(400);
+  });
+
+  it("« tour-en-cours » n'est PLUS un refus à reprendre : la dictée reste ARMÉE", () => {
+    // Décision du propriétaire (2026-11) : un tour en cours ne ferme plus
+    // l'oreille (correctif « le mode vocal ne répond plus quand l'assistante
+    // travaille »). La raison existe encore — elle accompagne un ARMEMENT —
+    // mais elle ne doit plus jamais être traitée comme un refus passager :
+    // il n'y a rien à reprendre, la dictée est déjà ouverte.
+    expect(VOCAL_RESUME_TRANSIENT_REASONS).not.toContain("tour-en-cours");
+    expect(vocalResumeRetry("tour-en-cours", 0)).toBe(0);
+    // Et pendant un tour, la décision est un armement, jamais un désarmement.
+    for (const e of [
+      { ...REPOS, reflechit: true, occupe: true },
+      { ...REPOS, occupe: true },
+      { ...REPOS, reflechit: true },
+    ]) {
+      const d = decideVocalDictation(e);
+      expect(d.action).toBe(VOCAL_DICTATION_ARM);
+      expect(d.raison).toBe("tour-en-cours");
+    }
   });
 
   it("les refus DÉFINITIFS ne sont JAMAIS repris (aucune relance en silence)", () => {
@@ -247,12 +266,17 @@ describe("3. jamais d'ouverture pendant que Pilot parle", () => {
     expect(ecran.ouvertures).toBe(1);
   });
 
-  it("un tour en cours est un refus passager, jamais une ouverture", () => {
+  it("un tour en cours n'est PAS un refus : l'écoute s'ouvre pendant le travail", () => {
+    // Décision du propriétaire (2026-11) : « quand l'assistante travaille, le
+    // mode vocal doit répondre ». Le tour en cours ouvre donc l'écoute, avec la
+    // marge du repos — il ne la ferme plus (« tour-en-cours » n'est plus un
+    // refus passager, donc plus rien à reprendre : la dictée est déjà ouverte).
     const ecran = ecranVocal();
-    ecran.plan(() => REPOS);
-    ecran.avance(60_000, () => ({ ...REPOS, occupe: true }));
-    expect(ecran.ouvert).toBe(false);
-    expect(decideVocalDictation({ ...REPOS, occupe: true }).raison).toBe("tour-en-cours");
+    const plan = ecran.plan(() => ({ ...REPOS, occupe: true }));
+    expect(plan.delai).toBe(VOCAL_ARM_DELAY_MS);
+    ecran.avance(VOCAL_ARM_DELAY_MS, () => ({ ...REPOS, occupe: true }));
+    expect(ecran.ouvert).toBe(true);
+    expect(ecran.ouvertures).toBe(1);
   });
 });
 

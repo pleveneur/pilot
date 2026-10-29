@@ -9,9 +9,14 @@
 //   2. Chaque nouveau TEXTE (provisoire ou définitif) REPOUSSE l'échéance : on
 //      ne coupe jamais quelqu'un qui parle encore.
 //   3. Un SEUL minuteur à la fois, annulé dès que la dictée se referme, quand
-//      Pilot parle ou réfléchit, et aux trois sorties du mode.
-//   4. Aucun envoi pendant la lecture, la réflexion, ou après une reprise en
-//      main de l'utilisateur dans la zone de saisie (garde existante).
+//      Pilot parle, et aux trois sorties du mode. Un TOUR EN COURS ne l'annule
+//      plus (décision du propriétaire, 2026-11) : la demande part, elle est
+//      accusée puis mise en file — voir demande-pendant-le-tour.js.
+//   4. Aucun envoi pendant la lecture, ou après une reprise en main de
+//      l'utilisateur dans la zone de saisie (gardes existantes). Pendant un
+//      tour de l'assistant, la demande PART quand même : elle n'est jamais
+//      perdue (elle attend la fin du tour), c'était le symptôme « le mode vocal
+//      ne répond plus quand l'assistante travaille ».
 //   5. Aucun second envoi, aucun second moteur : à l'échéance on REFERME la
 //      dictée par la voie qui existe déjà (l'arrêt du moteur), et sa fin
 //      d'écoute normale passe par `applyVoiceEnd` → `send`, comme aujourd'hui.
@@ -103,11 +108,23 @@ describe("décision : un mot repousse, l'échéance referme, les gardes annulent
     }
   });
 
-  it("Pilot TRAVAILLE : rien ne part (le tour en cours prime)", () => {
+  it("Pilot TRAVAILLE : la demande PART quand même (elle sera mise en file)", () => {
+    // Décision du propriétaire (2026-11) : un tour en cours n'est plus un refus.
+    // La décision est EXACTEMENT celle du repos ; c'est `send` qui, voyant le
+    // moteur occupé, accuse la demande et la met en file. Rien n'est perdu.
     for (const moment of ["mot", "echeance"]) {
-      expect(decideVocalSilenceSend({ ...PRET, reflechit: true }, moment).raison).toBe("tour-en-cours");
-      expect(decideVocalSilenceSend({ ...PRET, occupe: true }, moment).raison).toBe("tour-en-cours");
+      for (const cle of ["reflechit", "occupe"]) {
+        const libre = decideVocalSilenceSend({ ...PRET }, moment);
+        const occupe = decideVocalSilenceSend({ ...PRET, [cle]: true }, moment);
+        expect(occupe.action, `${cle}/${moment}`).toBe(libre.action);
+        expect(occupe.raison, `${cle}/${moment}`).toBe(libre.raison);
+      }
     }
+    // L'échéance referme VRAIMENT la dictée pendant un tour (c'est ce qui
+    // déclenche la fin d'écoute, donc l'envoi).
+    expect(decideVocalSilenceSend({ ...PRET, reflechit: true }, "echeance").action).toBe(
+      VOCAL_SILENCE_CLOSE
+    );
   });
 
   it("l'utilisateur a REPRIS LA MAIN : rien ne part", () => {
@@ -147,10 +164,13 @@ describe("décision : un mot repousse, l'échéance referme, les gardes annulent
     expect(
       decideVocalSilenceSend({ ...PRET, pilotParle: true, reflechit: true }, "echeance").raison
     ).toBe("pilot-parle");
-    // la réflexion AVANT « dictée fermée »
+    // le tour en cours n'a AUCUN effet sur la décision (il ne refuse plus rien)
+    expect(
+      decideVocalSilenceSend({ ...PRET, reflechit: true, occupe: true }, "echeance").raison
+    ).toBe("silence");
     expect(
       decideVocalSilenceSend({ ...PRET, reflechit: true, dicteeOuverte: false }, "echeance").raison
-    ).toBe("tour-en-cours");
+    ).toBe("dictee-fermee");
     // la dictée fermée AVANT la reprise en main
     expect(
       decideVocalSilenceSend({ ...PRET, dicteeOuverte: false, repriseMain: true }, "echeance").raison
@@ -261,14 +281,15 @@ describe("dans le temps : le délai est respecté et chaque mot le repousse", ()
     expect(b.envois).toHaveLength(0);
   });
 
-  it("rien ne part pendant que Pilot RÉFLÉCHIT", () => {
+  it("la demande part AUSSI pendant que Pilot RÉFLÉCHIT (mise en file, pas perdue)", () => {
     vi.useFakeTimers();
     const b = banc();
     b.mot();
     b.etat.reflechit = true;
     b.sync();
     vi.advanceTimersByTime(10_000);
-    expect(b.envois).toHaveLength(0);
+    // La fin d'écoute a bien eu lieu : la demande est passée par `send`.
+    expect(b.envois).toEqual(["envoyer"]);
   });
 
   it("rien ne part après une REPRISE EN MAIN dans la zone de saisie", () => {

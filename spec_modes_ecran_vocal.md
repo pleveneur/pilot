@@ -836,10 +836,26 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
   (`applyVoiceEnd` → `send`) — donc **un seul envoi**, jamais deux.
 - **La demande part deux secondes après le dernier mot** (§6bis.1) : Pilot ne
   dépend plus de la fin que déclare — tardivement — le moteur de reconnaissance.
-- **Elle se désarme pendant que Pilot parle** (on ne se transcrit pas soi-même)
-  et **pendant qu'il travaille** (le tour en cours prime). « Pilot parle »
-  comprend les **replis de voix** (§6.1) : une réponse lue avec la voix du
-  système ne laisse pas le micro se rouvrir.
+- **Elle se désarme pendant que Pilot parle** (on ne se transcrit pas soi-même).
+  « Pilot parle » comprend les **replis de voix** (§6.1) : une réponse lue avec
+  la voix du système ne laisse pas le micro se rouvrir.
+- **Elle reste ARMÉE pendant que Pilot travaille** (décision du propriétaire,
+  2026-11 ; défaut corrigé, `docs/rapports/RAPPORT-MODE-VOCAL.md`). Avant, le
+  tour en cours **fermait** la dictée : pendant toute une tâche longue l'écran
+  restait muet, on parlait dans le vide, et la demande — pourtant transcrite —
+  ne partait jamais. Aujourd'hui un tour en cours ne refuse **plus** rien :
+  la dictée s'arme (marge du repos, 350 ms), et une demande arrivée pendant le
+  travail est **accusée tout de suite** puis **mise en file** (règle et file
+  dans `src/js/demande-pendant-le-tour.js`, plafond cinq demandes) — elle part
+  **à la fin du tour**, dans l'ordre reçu, par le **chemin d'envoi existant**
+  (`send`). Le travail en cours n'est **ni interrompu ni perdu**, et l'écran
+  répond **immédiatement**. L'accusé s'affiche aux **deux** endroits qui
+  existent : la conversation, et **l'unique ligne d'état** de cet écran (sans
+  elle, l'accusé serait invisible ici — c'était le symptôme). Aucun délai
+  n'est annoncé ni subi : la file n'est vidée que sur la **fin de tour réelle**
+  (ou quand le moteur déclare lui-même n'avoir aucune session en traitement,
+  seul cas où le tour restait marqué « en cours » pour toujours — le « j'ai dû
+  relancer mon onglet »). Le bouton 🎙️ n'est plus refusé pendant un tour.
 - **Elle se réarme quand la lecture d'une réponse est finie**, avec une marge de
   silence plus longue (600 ms) : c'est la **conversation continue** du mode —
   répondre puis reparler, sans rien toucher.
@@ -849,10 +865,13 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
   le tour n'est pas retombé, la mesure du micro se réouvre, la réponse de
   sensibilité du projet est encore en vol. La minuterie de réarmement était un
   **coup unique** : à l'échéance, un seul de ces refus la consommait et **plus
-  rien n'écoutait** jusqu'à un clic sur le rond. Ces quatre raisons sont
-  désormais **reprises** (`vocalResumeRetry` : 400 ms, **huit fois au plus**,
-  soit ≈ 3,2 s), **une seule minuterie à la fois** et la **même** décision
-  réévaluée à chaque essai — aucune ouverture décidée par la minuterie. Les
+  rien n'écoutait** jusqu'à un clic sur le rond. Ces refus sont désormais
+  **repris** (`vocalResumeRetry` : 400 ms, **huit fois au plus**, soit ≈ 3,2 s),
+  **une seule minuterie à la fois** et la **même** décision réévaluée à chaque
+  essai — aucune ouverture décidée par la minuterie. Trois raisons sont
+  **passagères** (`pilot-parle`, `mesure-fermee`, `sensibilite-inconnue`) ;
+  depuis la décision 2026-11, **un tour en cours n'en est plus une** : la
+  dictée est armée pendant le travail, il n'y a donc rien à reprendre. Les
   refus **définitifs** (projet sensible, arrêt 🎙️, plafond des sessions vides,
   erreur, dictée indisponible, hors du mode) ne sont **jamais** repris : la
   reprise est bornée, donc **aucune boucle** n'est possible. Le rond

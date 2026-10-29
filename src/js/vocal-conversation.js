@@ -65,7 +65,12 @@
 //   1. projet sensible   → jamais de dictée (règle du local-first, inchangée)
 //   2. hors du mode      → aucune dictée n'est armée par cet écran
 //   3. Pilot parle       → désarmée : on ne se transcrit pas soi-même
-//   4. Pilot travaille   → désarmée : le tour en cours prime
+//   4. Pilot travaille   → ARMÉE (décision du propriétaire, 2026-11) : le tour
+//                          en cours ne ferme plus l'oreille. La demande est
+//                          prise, accusée tout de suite, puis traitée à la fin
+//                          du tour (voir demande-pendant-le-tour.js). L'écran
+//                          vocal répond donc TOUJOURS, même pendant une tâche
+//                          longue.
 //   4b. une question attend une réponse → désarmée (et une dictée ouverte
 //                          AUTOMATIQUEMENT est FERMÉE) : on ne répond pas à la
 //                          place de l'utilisateur. Une confirmation envoyée par
@@ -99,7 +104,10 @@
 //                          voit donc comme une panne de mesure (phrase du micro,
 //                          bouton « Autoriser le micro »), jamais comme une
 //                          dictée qui marche avec un trait figé.
-//   8. au repos          → ARMÉE, après un court délai (voir ci-dessous)
+//   8. au repos — et pendant que Pilot TRAVAILLE → ARMÉE, après un court délai
+//                          (voir ci-dessous). Seules la raison rendue
+//                          (`tour-en-cours`) et la marge d'armement changent :
+//                          ce n'est jamais un refus.
 //
 // Les règles 5 à 7 passent AVANT 7b/7d : une dictée ouverte par un GESTE
 // explicite n'est pas refermée par une mesure fermée ou une réponse en
@@ -157,8 +165,10 @@ export const VOCAL_RESUME_MAX_RETRIES = 8;
 export const VOCAL_RESUME_TRANSIENT_REASONS = Object.freeze([
   // La voix de Pilot sort encore (queue audio) ou un morceau suivant s'annonce.
   "pilot-parle",
-  // Le tour en cours n'est pas encore retombé, ou l'outil suivant démarre.
-  "tour-en-cours",
+  // NOTE : « tour-en-cours » n'est plus ici — un tour en cours n'est plus un
+  // refus (règle 4) : la dictée est ARMÉE pendant le travail, il n'y a donc rien
+  // à reprendre. La raison existe toujours, mais elle accompagne un armement
+  // (règle 8), jamais un abandon.
   // La mesure du niveau se réouvre (elle vient AVANT la dictée, règle 7d).
   "mesure-fermee",
   // La réponse IPC « ce projet est-il sensible ? » est encore en vol.
@@ -369,10 +379,17 @@ export function decideVocalDictation(etats = {}) {
   if (e.pilotParle === true) {
     return { action: VOCAL_DICTATION_DISARM, raison: "pilot-parle", delai: 0 };
   }
-  // 4. Pilot travaille : le tour en cours prime sur l'écoute.
-  if (e.reflechit === true || e.occupe === true) {
-    return { action: VOCAL_DICTATION_DISARM, raison: "tour-en-cours", delai: 0 };
-  }
+  // 4. Pilot travaille : L'OREILLE RESTE OUVERTE (décision du propriétaire,
+  // 2026-11). Le tour en cours ne ferme plus la dictée : c'était la cause du
+  // symptôme « le mode vocal ne répond plus quand l'assistante travaille » —
+  // l'écran restait muet pendant toute la tâche, sans un mot, et la demande
+  // dictée partait dans le vide. Une demande prononcée pendant un tour est
+  // désormais ACCUSÉE et MISE EN FILE (demande-pendant-le-tour.js) puis traitée
+  // à la fin du tour : le travail n'est ni interrompu ni perdu.
+  // Cette règle ne DÉSARME jamais : elle ne choisit que la raison et le délai
+  // d'armement (règle 8), APRÈS toutes les gardes ci-dessous — un projet
+  // sensible, une erreur en cours ou une mesure fermée refusent toujours,
+  // même pendant un tour.
   // 4b. UNE QUESTION ATTEND UNE REPONSE (correctif « les questions ne sont pas
   // visibles dans l'écran Vocal »). L'agent est en attente : il ne « travaille »
   // donc pas au sens de la règle 4, et le micro s'armerait — une phrase
@@ -435,11 +452,15 @@ export function decideVocalDictation(etats = {}) {
   if (e.mesureOuverte !== true) {
     return { action: VOCAL_DICTATION_DISARM, raison: "mesure-fermee", delai: 0 };
   }
-  // 8. Repos : on arme, avec la marge qui convient au moment.
+  // 8. Prêt à écouter : au repos, ET pendant que Pilot travaille (règle 4).
+  // On arme, avec la marge qui convient au moment. « Après la lecture » passe
+  // avant le travail : la voix de Pilot sort encore des haut-parleurs quand le
+  // dernier mot est prononcé, et c'est la marge la plus longue des trois.
   const apresLecture = e.apresLecture === true;
+  const travaille = e.reflechit === true || e.occupe === true;
   return {
     action: VOCAL_DICTATION_ARM,
-    raison: apresLecture ? "apres-lecture" : "au-repos",
+    raison: apresLecture ? "apres-lecture" : travaille ? "tour-en-cours" : "au-repos",
     delai: apresLecture ? VOCAL_ARM_AFTER_READ_MS : VOCAL_ARM_DELAY_MS,
   };
 }
@@ -516,7 +537,11 @@ export function planVocalConversation(etats = {}, memoire = {}) {
  * L'ORDRE DES RÈGLES EST LA SPÉCIFICATION (il est testé tel quel) :
  *   1. hors du mode          → rien ne part (cet écran n'envoie aucune demande)
  *   2. Pilot parle           → rien : il ne s'envoie pas une demande par-dessus
- *   3. Pilot travaille       → rien : le tour en cours prime
+ *   3. Pilot travaille       → l'échéance REFERME la dictée et la demande part :
+ *                              elle est accusée puis mise en file, donc jamais
+ *                              perdue, et le tour en cours n'est pas
+ *                              interrompu (décision du propriétaire, 2026-11,
+ *                              voir demande-pendant-le-tour.js)
  *   4. dictée refermée       → rien (fin du moteur, erreur, arrêt : déjà traité)
  *   5. reprise en main       → rien : l'utilisateur a tapé, sa saisie prime
  *   6. aucun mot récupéré    → rien à envoyer (et rien n'a été écrit)
@@ -542,8 +567,12 @@ export function decideVocalSilenceSend(etats = {}, moment = "mot") {
   if (e.modeOuvert !== true) return annuler("hors-mode");
   // 2. Pilot lit sa réponse : on ne s'envoie pas une demande par-dessus lui.
   if (e.pilotParle === true) return annuler("pilot-parle");
-  // 3. Pilot travaille : le tour en cours prime sur l'écoute.
-  if (e.reflechit === true || e.occupe === true) return annuler("tour-en-cours");
+  // 3. Pilot travaille : PLUS d'annulation. Un tour en cours ne jette plus la
+  // demande de l'utilisateur — c'était le second visage du même symptôme : on
+  // parlait pendant une tâche longue, le texte était pourtant transcrit, et il
+  // ne partait jamais. L'échéance referme donc la dictée comme au repos ; la
+  // demande est accusée puis mise en file par `send`, sans interrompre le tour.
+  // Seule la règle 2 (Pilot lit) protège encore sa parole de la nôtre.
   // 4. La dictée est déjà refermée : il n'y a plus rien à fermer ni à envoyer.
   if (e.dicteeOuverte !== true) return annuler("dictee-fermee");
   // 5. Reprise en main : sa saisie prime, rien ne part sans sa validation.

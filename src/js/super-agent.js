@@ -110,6 +110,21 @@ import {
   VOCAL_MESSAGE_DICTEE_ECHEC,
   VOCAL_MESSAGE_SENSIBILITE_INCONNUE,
 } from "./vocal-conversation.js";
+// DEMANDE ARRIVEE PENDANT UN TOUR (correctif « le mode vocal ne repond plus
+// quand l'assistante travaille ») : une demande tapee ou DICTEE pendant que le
+// moteur travaille n'est plus refusee — elle est accusee tout de suite, mise en
+// file, et traitee a la fin du tour par le chemin d'envoi EXISTANT. Les
+// decisions (accuser, enfiler, refuser, prendre la suivante) sont PURES et
+// vivent dans ce module ; l'ordre de sortie n'est ecrit qu'a un seul endroit.
+import {
+  decideDemandePendantLeTour,
+  prendreDemandeEnAttente,
+  DEMANDE_ENFILER,
+  DEMANDE_REFUSEE,
+  MESSAGE_DEMANDE_ACCUSEE,
+  MESSAGE_DEMANDE_FILE_PLEINE,
+  VOCAL_MESSAGE_DEMANDE_ACCUSEE,
+} from "./demande-pendant-le-tour.js";
 // LA QUESTION DOIT RENDRE LA SAISIE UTILISABLE (spec_modes_ecran_vocal.md
 // §4bis) : la décision « le champ prend-il le curseur à l'arrivée d'une
 // question ? » et sa mémoire sont PURES et vivent dans ce module. Ici, on ne
@@ -4084,6 +4099,19 @@ export async function createSuperAgent(container) {
 
   // État de streaming
   let isStreaming = false;
+  // DEMANDES REÇUES PENDANT UN TOUR (correctif « l'écran Vocal ne répond plus
+  // quand l'assistante travaille »). File d'attente bornée, dans l'ordre reçu :
+  // une demande dictée ou tapée pendant que le moteur travaille est accusée
+  // immédiatement puis part à la fin du tour. Aucune minuterie, aucun délai :
+  // la file est vidée sur la fin de tour réelle et sur l'état que le moteur
+  // déclare lui-même (voir `flushDemandesEnAttente`).
+  let demandesEnAttente = [];
+  // Vrai quand la SUPERVISION a vu le moteur réellement en traitement depuis
+  // qu'une demande a été mise en file. C'est la seule condition qui autorise le
+  // filet « redonner la main » de la sonde (voir `flushDemandesEnAttente`) :
+  // sans elle, une simple latence de la sonde juste après un envoi pourrait
+  // faire partir une seconde demande par-dessus la première.
+  let tourEnCoursVu = false;
   // Bug 1 (UX) : vrai quand on a déjà informé l'utilisateur qu'il ne peut pas
   // envoyer pendant que l'assistant est occupé (évite de répéter le message).
   let busyNotified = false;
@@ -4166,7 +4194,6 @@ let vocalDicteeParGeste = false;
 
   function toggleVoiceInput() {
     if (!voiceSupported) return;
-    if (isStreaming) { appendSystemMessage(messagesEl, "⏳ L'assistant est en cours, patiente la fin pour dicter."); return; }
     if (voiceActive) { stopVoiceInput(); vocalArretManuel = true; applyVocalState(); return; }
     // Projet sensible : la dictee cloud reste bloquee (regle inchangee), et le
     // refus se VOIT (ligne d'etat en mode Vocal, conversation sinon).
@@ -4383,10 +4410,17 @@ let vocalDicteeParGeste = false;
         // Assistant libéré → rejouer les comptes rendus mis en attente (fin de
         // run survenue pendant que l'assistant rédigeait).
         flushPendingSuperAgentReports().catch(() => {});
+        // LES DEMANDES RECUES PENDANT LE TOUR PARTENT MAINTENANT (correctif « le
+        // mode vocal ne repond plus quand l'assistante travaille ») : le tour est
+        // fini, la file est videe DANS L'ORDRE, par le chemin d'envoi EXISTANT.
+        // `partie` dit si une demande vient de partir : dans ce cas on ne lit pas
+        // la reponse precedente a voix haute (deux voix se chevaucheraient) —
+        // elle reste dans la conversation, avec son bouton d'ecoute.
+        const demandePartie = flushDemandesEnAttente();
         // LOT 2 (§5) : en mode Vocal, la réponse qui vient de se terminer est lue
         // à voix haute. On actionne le bouton d'écoute existant (aucune seconde
         // lecture) ; hors mode Vocal, cette fonction ne fait rien.
-        autoReadVocalReply();
+        if (!demandePartie) autoReadVocalReply();
       });
     } catch (err) {
       console.error("[rpc-event-superagent] erreur:", err);
@@ -4975,6 +5009,13 @@ let vocalDicteeParGeste = false;
    * @returns {string} la phrase a afficher
    */
   function vocalStatusLine(state) {
+    // UNE DEMANDE ATTEND SON TOUR (correctif « le mode vocal ne repond plus
+    // quand l'assistante travaille ») : l'accuse occupe la ligne d'etat AVANT
+    // tout le reste, parce que c'est la seule chose que l'utilisateur doit
+    // savoir a cet instant — sa demande est prise, elle n'est pas perdue, et
+    // elle partira des que le travail en cours sera fini. Cette ligne est le
+    // SEUL texte de l'ecran Vocal : sans elle, l'accuse resterait invisible.
+    if (demandesEnAttente.length > 0) return VOCAL_MESSAGE_DEMANDE_ACCUSEE;
     if (state !== "idle") return vocalStatusText(state);
     if (vocalMicFerme) return vocalMicFerme;
     const raison = decideVocalDictation(vocalConversationState()).raison;
@@ -6252,6 +6293,81 @@ let vocalDicteeParGeste = false;
     }
   });
 
+  // ── DEMANDES REÇUES PENDANT UN TOUR (file bornée, dans l'ordre) ──
+  /**
+   * MET EN FILE une demande arrivée pendant que l'Assistant travaillait, et
+   * l'ACCUSE tout de suite.
+   *
+   * L'accusé est écrit aux DEUX endroits qui existent déjà, jamais un troisième :
+   * la conversation (onglet Assistant) et l'UNIQUE ligne d'état de l'écran Vocal
+   * (via `applyVocalState`). Aucun nouveau noeud, aucun nouveau message flottant.
+   * Le texte n'est PAS conservé dans la zone de saisie : il est déjà pris, il ne
+   * peut donc pas être perdu — et la zone reste libre pour la demande suivante.
+   *
+   * @param {string} text demande déjà validée (non vide)
+   */
+  function enfilerDemande(text) {
+    demandesEnAttente = [...demandesEnAttente, text];
+    tourEnCoursVu = false;
+    busyNotified = true;
+    statusEl.textContent = "🕓 Demande en attente";
+    setBusyHint(true);
+    appendSystemMessage(messagesEl, MESSAGE_DEMANDE_ACCUSEE);
+    // L'accusé prend aussi la ligne d'état du mode Vocal : sans cela,
+    // l'utilisateur qui vient de parler devant un écran muet ne verrait rien.
+    applyVocalState();
+  }
+
+  /**
+   * VIDE LA FILE des demandes reçues pendant un tour — une seule, la plus
+   * ancienne — par le chemin d'envoi EXISTANT.
+   *
+   * Appelée à DEUX moments, tous deux RÉELS (aucun délai, aucun minuteur) :
+   *  - la fin de tour (`agent_end`), l'évènement qui dit que le moteur a rendu
+   *    la main ;
+   *  - la supervision (`get_agent_supervision`) quand elle affirme qu'AUCUNE
+   *    session n'est en traitement alors qu'un tour local est encore marqué
+   *    « en cours » : c'est le seul cas où `isStreaming` reste collé (un
+   *    `agent_end` manqué, un arrêt pendant un outil) et où l'écran resterait
+   *    muet pour de bon — le « j'ai dû relancer mon onglet ».
+   *
+   * @param {boolean} [forcer] l'état du moteur est l'autorité (voir ci-dessus)
+   * @returns {boolean} vrai si une demande vient de partir
+   */
+  function flushDemandesEnAttente(forcer = false) {
+    // Les gardes du chemin d'envoi existant s'appliquent AVANT de consommer la
+    // file : tant que le moteur `pi` n'est pas vérifié, ou qu'une question attend
+    // une réponse, la demande reste en file (elle repartira, rien n'est perdu).
+    if (!canAssistantReflect()) return false;
+    if (hasPendingQuestion()) return false;
+    const { texte, reste } = prendreDemandeEnAttente(
+      demandesEnAttente,
+      forcer ? false : isStreaming || backendBusy,
+    );
+    if (texte === null) return false;
+    demandesEnAttente = reste;
+    tourEnCoursVu = false;
+    if (forcer) {
+      isStreaming = false;
+      backendBusy = false;
+    }
+    busyNotified = false;
+    setBusyHint(false);
+    // Le texte est REMIS DANS LA ZONE : l'envoi emprunte le chemin EXISTANT
+    // (`send`), il n'y a pas de second mécanisme. `send` vide la zone de façon
+    // synchrone (avant son premier `await`) : le brouillon éventuel de
+    // l'utilisateur est donc restitué aussitôt, sans écraser ce qu'il écrit.
+    const brouillon = inputEl.value;
+    inputEl.value = texte;
+    resizeInput();
+    void send();
+    if (inputEl.value === "") {
+      inputEl.value = brouillon;
+      resizeInput();
+    }
+    return true;
+  }
+
   // ── Envoi (session persistante : streaming + mémoire de conversation) ──
   async function send() {
     // LOT 2 (§3.1) : en mode Vocal, ecrire puis valider pendant que Pilot parle
@@ -6283,16 +6399,32 @@ let vocalDicteeParGeste = false;
     // jour par get_agent_supervision et l'événement agent_start), en plus de
     // l'état local isStreaming. Un backend occupé en arrière-plan (prompt
     // distant, relance programmée, compaction) ne doit pas accepter puis perdre
-    // la saisie : on la conserve dans le champ et on informe l'utilisateur.
-    if (isStreaming || backendBusy) {
-      // Bug 1 (UX) : pendant que l'assistant est occupé, ne pas perdre
-      // silencieusement le texte saisi. On le garde dans le champ (aucun
-      // effacement) et on informe l'utilisateur une seule fois par tour occupé.
-      if (!busyNotified) {
-        busyNotified = true;
-        statusEl.textContent = "⏳ Occupé…";
-        setBusyHint(true);
-      }
+    // la saisie.
+    // CORRECTIF « le mode vocal ne répond plus quand l'assistante travaille » :
+    // un tour en cours ne REFUSE plus la demande. Elle est ACCUSÉE tout de suite
+    // (une phrase, la même dans la conversation et sur la ligne d'état de
+    // l'écran Vocal) puis mise EN FILE, et elle part à la fin du tour par ce
+    // même chemin d'envoi — le travail en cours n'est ni interrompu ni perdu.
+    // Avant : la demande restait dans la zone de saisie, l'explication partait
+    // sur `statusEl` (ligne qui n'existe PAS dans l'écran Vocal) et une dictée
+    // envoyée automatiquement tombait dans le vide : rien ne partait jamais.
+    const decisionDemande = decideDemandePendantLeTour({
+      texte: text,
+      occupe: isStreaming || backendBusy,
+      enAttente: demandesEnAttente.length,
+    });
+    if (decisionDemande.action === DEMANDE_ENFILER) {
+      enfilerDemande(text);
+      return;
+    }
+    if (decisionDemande.action === DEMANDE_REFUSEE) {
+      // File pleine : le texte RESTE dans la zone de saisie (rien n'est perdu)
+      // et l'écran Vocal le dit sur sa seule ligne d'état, jamais en silence.
+      busyNotified = true;
+      statusEl.textContent = "⏳ Demandes en attente";
+      setBusyHint(true);
+      appendSystemMessage(messagesEl, MESSAGE_DEMANDE_FILE_PLEINE);
+      applyVocalState();
       return;
     }
     if (voiceActive) stopVoiceInput();
@@ -6513,7 +6645,7 @@ let vocalDicteeParGeste = false;
       // Ne retire rien si la session reste morte (vrai blocage préservé).
       if (alive) removeSuperAgentDisconnectedEvent();
       const processing = alive && (agent.state === "running" || agent.state === "compacting");
-      const isStreaming = statusEl.classList.contains("agent-status-streaming");
+      const classeStreaming = statusEl.classList.contains("agent-status-streaming");
       const isError = statusEl.classList.contains("agent-status-error");
       // A15 : bascule vers « Réfléchit… » dès que l'assistant traite, même si
       // l'élément est encore dans son état initial (classe agent-status seule,
@@ -6538,7 +6670,11 @@ let vocalDicteeParGeste = false;
         statusEl.textContent = "Réfléchit…";
         statusEl.className = "agent-status agent-status-streaming";
         setReflecting(true);
-      } else if (!processing && isStreaming) {
+        // Le moteur TRAVAILLE vraiment : c'est la seule condition qui autorise
+        // le filet de securite ci-dessous a redonner la main a une demande en
+        // attente (jamais sur une simple latence juste apres un envoi).
+        if (demandesEnAttente.length > 0) tourEnCoursVu = true;
+      } else if (!processing && classeStreaming) {
         backendBusy = false;
         statusEl.textContent = "Prêt";
         statusEl.className = "agent-status agent-status-idle";
@@ -6554,6 +6690,18 @@ let vocalDicteeParGeste = false;
         // l'assistant ne réfléchit plus — aucune autre source ne peut le
         // rallumer (le travail des autres agents n'entre pas dans la décision).
         setReflecting(false);
+        // DEMANDE EN ATTENTE + moteur LIBRE = l'écran doit répondre. Si le moteur
+        // a été VU en traitement depuis la mise en file (`tourEnCoursVu`) et qu'il
+        // déclare maintenant n'avoir AUCUNE session en traitement alors qu'un tour
+        // local est encore marqué « en cours », c'est que la fin de tour n'est
+        // jamais arrivée (arrêt pendant un outil) : `isStreaming` resterait collé
+        // à `true` pour toujours et plus aucune demande ne partirait — c'était le
+        // « j'ai dû relancer mon onglet ». L'état du MOTEUR fait foi (aucun délai
+        // choisi ici) : la file repart par le chemin d'envoi existant.
+        if (isStreaming && tourEnCoursVu && demandesEnAttente.length > 0) {
+          setReflecting(true);
+          flushDemandesEnAttente(true);
+        }
       }
       // Filet périodique : si l'assistant est libre (aucun traitement) et que
       // des comptes rendus sont en attente, en rejouer un (no-op si occupé).

@@ -40,6 +40,7 @@ import {
   planVocalConversation,
   vocalDictationMessage,
 } from "./vocal-conversation.js";
+import { VOCAL_MESSAGE_DEMANDE_ACCUSEE } from "./demande-pendant-le-tour.js";
 
 const ICI = dirname(fileURLToPath(import.meta.url));
 const lire = (rel) =>
@@ -89,13 +90,27 @@ describe("decision : quand la dictee s'arme et quand elle se desarme", () => {
     expect(d.raison).toBe("pilot-parle");
   });
 
-  it("pendant que Pilot TRAVAILLE, la dictee est DESARMEE (le tour en cours prime)", () => {
-    expect(decideVocalDictation({ modeOuvert: true, reflechit: true }).raison).toBe("tour-en-cours");
-    expect(decideVocalDictation({ modeOuvert: true, occupe: true }).raison).toBe("tour-en-cours");
+  it("pendant que Pilot TRAVAILLE, la dictee reste ARMEE (le tour en cours ne la ferme plus)", () => {
+    // Decision du proprietaire (2026-11) : « quand l'assistante travaille, le mode
+    // vocal doit repondre ». Le tour en cours n'est donc plus un DESARMEMENT :
+    // il choisit seulement la raison et la marge d'armement (repli sur les
+    // valeurs du repos). La demande dictee pendant le tour est accusee puis mise
+    // en file (demande-pendant-le-tour.js) : rien n'est perdu, rien n'est coupe.
+    const d1 = decideVocalDictation({ modeOuvert: true, ...PRET, reflechit: true });
+    expect(d1.action).toBe(VOCAL_DICTATION_ARM);
+    expect(d1.raison).toBe("tour-en-cours");
+    expect(d1.delai).toBe(VOCAL_ARM_DELAY_MS);
+    const d2 = decideVocalDictation({ modeOuvert: true, ...PRET, occupe: true });
+    expect(d2.action).toBe(VOCAL_DICTATION_ARM);
+    expect(d2.raison).toBe("tour-en-cours");
     // Les deux a la fois ne changent rien.
     expect(
-      decideVocalDictation({ modeOuvert: true, reflechit: true, occupe: true }).action
-    ).toBe(VOCAL_DICTATION_DISARM);
+      decideVocalDictation({ modeOuvert: true, ...PRET, reflechit: true, occupe: true }).action
+    ).toBe(VOCAL_DICTATION_ARM);
+    // Et l'accuse existe VRAIMENT : le texte que l'ecran Vocal affiche pendant
+    // le travail dit que la demande est prise (il n'y a pas d'autre message).
+    expect(typeof VOCAL_MESSAGE_DEMANDE_ACCUSEE).toBe("string");
+    expect(VOCAL_MESSAGE_DEMANDE_ACCUSEE.length).toBeGreaterThan(10);
   });
 
   it("hors du mode Vocal, cet ecran n'arme RIEN", () => {
