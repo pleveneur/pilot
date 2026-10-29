@@ -230,9 +230,29 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
     expect(corps).not.toMatch(/vocal-level/);
   });
 
-  it("le disque et la ligne d'etat sont a 32 px (la place de l'enveloppe)", () => {
-    // 24 px avant le 12/11 ; 32 px parce que l'enveloppe de parole occupe
-    // desormais ces 32 px au-dela de l'anneau : le texte ne passe pas dessous.
+  it("la ligne d'etat a quitte le bloc du disque (elle est au-dessus de la saisie)", () => {
+    // 28/10 : le texte n'est plus sous le cercle. Il est un enfant DIRECT de
+    // l'overlay, entre le bloc du disque et la barre de saisie — le `gap` de la
+    // pile ne reserve donc plus aucune place au texte.
+    const corps = corpsFonction(SUPER, "function buildVocalOverlay");
+    const ordre = [...corps.matchAll(/class="(vocal-[a-z-]+)/g)].map((m) => m[1]);
+    expect(ordre).toEqual([
+      "vocal-top",
+      "vocal-stage",
+      "vocal-orb",
+      "vocal-halo",
+      "vocal-mic-fix",
+      "vocal-status",
+      "vocal-input",
+    ]);
+    // La scene est REFERMEE avant la phrase : deux `</div>` (objet puis scene).
+    const scene = sliceSource(
+      corps,
+      '<div class="vocal-stage">',
+      '<div class="vocal-status"',
+      20,
+    );
+    expect(scene.match(/<\/div>/g)?.length).toBe(2);
     expect(bloc(CSS, ".vocal-stage")).toMatch(/gap:\s*32px/);
   });
 

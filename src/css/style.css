@@ -11630,8 +11630,13 @@ body.pilot-vocal-active .agent-chat-messages {
 
 /* --- §2.2 Le centre : l'objet lumineux --- */
 /* Esprit « interface Cornelius » : pas de cadre, pas de carte, pas de
-   bordure. Le bloc (disque + trait + ligne d'etat) est centre dans l'espace
-   entre la barre haute et la zone de saisie, et suit la fenetre sans calcul. */
+   bordure. Le disque est centre dans l'espace entre la barre haute et la
+   ligne d'etat, et suit la fenetre sans calcul.
+   Depuis le 28/10 la ligne d'etat n'est PLUS dans ce bloc : elle vit
+   au-dessus de la barre de saisie (§2.3). Le `gap` ne sert donc plus qu'au
+   bouton de depannage du micro, le seul autre enfant du bloc ; il ne laisse
+   aucun vide residuel quand ce bouton est masque (un seul enfant visible =
+   aucun ecart dessine). */
 .vocal-stage {
   flex: 1 1 auto;
   min-height: 0;
@@ -11640,10 +11645,6 @@ body.pilot-vocal-active .agent-chat-messages {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* 32 px entre le disque et la ligne d'etat (§2.2 et §2.3) : c'est l'ecart
-     qui laisse a l'ENVELOPPE DE PAROLE la place qu'elle occupe desormais
-     (32 px au-dela de l'anneau), sans jamais deborder sur le texte. Le trait
-     de niveau a disparu : la pile est disque -> 32 px -> ligne d'etat. */
   gap: 32px;
   padding: 16px;
 }
@@ -11673,27 +11674,34 @@ body.pilot-vocal-active .agent-chat-messages {
 }
 /* L'ENVELOPPE DE PAROLE (Pilot) suit le SON REEL de sa voix depuis le
    12/11 : sa geometrie est inchangee (degrade inverse, pic au bord), mais sa
-   BOITE passe de 200 x 200 px (inset -18) a 232 x 232 px (inset -32). Le
-   `closest-side` vaut donc 116 px : le bord de l'anneau (84 px) tombe a 72 %
-   du rayon, et la couronne lumineuse s'etend de 84 a 116 px, soit 32 px
-   au-dela du disque — sans jamais atteindre la ligne d'etat (32 px d'ecart).
-   Arrets chiffres, du centre vers le bord : 0 % -> 0 %, 72 % (bord du disque)
-   -> 0 %, 84 % -> 8 %, 92 % -> 20 %, 100 % (bord de la boite) -> 34 %
+   BOITE passe le 28/10 de 232 x 232 px (inset -32) a 256 x 256 px
+   (inset -44) : le proprietaire a retenu un RAYON DE HALO de 128 px, contre
+   116 px avant. Le `closest-side` vaut donc 128 px : le bord de l'anneau
+   (84 px) tombe a 66 % du rayon, et la couronne lumineuse s'etend de 84 a
+   128 px, soit 44 px au-dela du disque (32 px avant).
+   Arrets chiffres, du centre vers le bord : 0 % -> 0 %, 66 % (bord du disque)
+   -> 0 %, 81 % -> 8 %, 90 % -> 20 %, 100 % (bord de la boite) -> 34 %
    (>= 30 % exige, contraste 2,28:1 en sombre et 1,60:1 en clair, cf.
-   docs/rapports/RAPPORT-halo-parole.md). En etat « parole », `--vocal-state`
-   vaut exactement `--vocal-speak` : c'est la teinte de la voix de Pilot, et
-   aucun jeton nouveau n'est cree. */
+   docs/rapports/RAPPORT-halo-parole.md). Le degrade reste CONTINU d'un arret
+   a l'autre : aucune arete, aucune ombre dure. En etat « parole »,
+   `--vocal-state` vaut exactement `--vocal-speak` : c'est la teinte de la voix
+   de Pilot, et aucun jeton nouveau n'est cree.
+   POSITIONNEMENT : la boite est ABSOLUE (hors flux, comme avant) : elle
+   n'elargit donc pas la fenetre et ne peut pas creer de barre de defilement
+   (l'ecran est `overflow: hidden` en mode Vocal). Son interieur (0 a 66 %, soit
+   0 a 84 px) est entierement TRANSPARENT : la lueur ne peint jamais sur le
+   disque lumineux, elle reste autour de lui, derriere lui a l'oeil. */
 .vocal-orb::before {
   content: "";
   position: absolute;
-  inset: -32px;
+  inset: -44px;
   border-radius: 50%;
   background: radial-gradient(
     closest-side,
     color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 0%, transparent) 0%,
-    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 0%, transparent) 72%,
-    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 8%, transparent) 84%,
-    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 20%, transparent) 92%,
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 0%, transparent) 66%,
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 8%, transparent) 81%,
+    color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 20%, transparent) 90%,
     color-mix(in srgb, var(--vocal-state, var(--vocal-rest)) 34%, transparent) 100%
   );
   opacity: 0;
@@ -11710,9 +11718,9 @@ body.pilot-vocal-active .agent-chat-messages {
    `super-agent.js` pose la classe `.vocal-envelope-live` et deux variables lues
    ici : `scale` et `alpha` (intensite, 0,8 a 1). `scale` est le facteur de la
    BOITE ENTIERE
-   (232 px de large, du centre a 116 px) : 0,8793 au repos (bord a 102 px, soit
-   18 px au-dela de l'anneau de 84 px) et 1 a pleine voix (bord a 116 px, soit
-   32 px). Reduire le tout autour du centre ne peut donc jamais ramener le bord
+   (256 px de large, du centre a 128 px) : 0,7969 au repos (bord a 102 px, soit
+   18 px au-dela de l'anneau de 84 px) et 1 a pleine voix (bord a 128 px, soit
+   44 px). Reduire le tout autour du centre ne peut donc jamais ramener le bord
    sous l'anneau — le repli ci-dessous est cette valeur de repos. L'animation decorative est alors ETEINTE : une seule mesure, un
    seul affichage, et le silence ramene l'enveloppe au repos au lieu d'une
    pulsation inventee. `transition: none` : le lissage est deja fait image par
@@ -11722,7 +11730,7 @@ body.pilot-vocal-active .agent-chat-messages {
 .pilot-vocal.vocal-envelope-live.vocal-state-speaking .vocal-orb::before {
   animation: none;
   opacity: var(--vocal-envelope-alpha, 1);
-  transform: scale(var(--vocal-envelope-scale, 0.8793));
+  transform: scale(var(--vocal-envelope-scale, 0.7969));
   transition: none;
 }
 /* Arc de la REFLEXION : 60 degres qui tournent en 3 s autour de l'anneau. */
@@ -11810,10 +11818,23 @@ body.pilot-vocal-active .agent-chat-messages {
    Un seul texte, 15 px (--font-zone), graisse 500, centre. Couleur TOUJOURS
    neutre : la couleur d'etat vit dans l'objet, jamais dans le texte
    (--text-primary : 15,4:1 en sombre, 15,6:1 en clair). --text-muted est
-   interdit ici (2,90:1 en clair). */
+   interdit ici (2,90:1 en clair).
+   PLACE (28/10) : elle n'est plus sous le cercle, elle est JUSTE AU-DESSUS de
+   la barre de saisie — meme contenu, meme style, meme changement d'etat,
+   aucune logique d'etat nouvelle. Elle est un enfant DIRECT de l'overlay (entre
+   `.vocal-stage` et `.vocal-input`), donc elle ne participe plus au centrage du
+   disque et ne peut ni pousser la mise en page ni faire defiler l'ecran
+   (`overflow: hidden` sur `.pilot-vocal-active`).
+   `position: relative` : le texte se peint APRES l'enveloppe de parole (qui est
+   absolue dans le disque), donc la lueur ne passe jamais devant le texte ; et
+   il n'a aucun fond : il ne masque pas la lueur non plus. Les deux marges
+   (8 px au-dessus, 12 px en dessous) l'ecartent du cercle et de la saisie. */
 .vocal-status {
   flex: 0 0 auto;
+  position: relative;
   max-width: 640px;
+  margin: 8px auto 12px;
+  padding: 0 16px;
   font-family: var(--font-ui);
   font-size: var(--font-zone);
   font-weight: var(--fw-medium);
@@ -11881,7 +11902,8 @@ body.pilot-vocal-active .agent-chat-messages {
    d'ouverture (prefers-reduced-motion + parametre modal_animations, pose par
    super-agent.js via la classe .vocal-reduced). Disque immobile — la couleur
    et le mot portent l'etat —, transitions 0 s. L'enveloppe de parole garde sa
-   taille pleine (32 px) et son intensite : FIXE mais VISIBLE, jamais eteinte.
+   taille pleine (44 px, rayon de 128 px) et son intensite : FIXE mais VISIBLE,
+   jamais eteinte.
    Aucun nouvel ecran de reglage n'est cree pour cela. */
 .pilot-vocal.vocal-reduced,
 .pilot-vocal.vocal-reduced .vocal-orb,

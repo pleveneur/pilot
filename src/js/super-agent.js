@@ -4545,7 +4545,12 @@ export async function createSuperAgent(container) {
     if (vocalReducedMotion()) ov.classList.add("vocal-reduced");
     // Structure (de haut en bas) : la barre de 44 px (VIDE : elle ne recoit
     // plus le bouton des modes, qui entre dans l'overlay — lot 2), l'objet
-    // lumineux, puis l'UNIQUE ligne d'etat, puis la zone de saisie discrete.
+    // lumineux, puis la barre de saisie discrete. L'UNIQUE ligne d'etat n'est
+    // plus sous le cercle (28/10) : elle se pose AU-DESSUS DE LA BARRE DE
+    // SAISIE, en enfant direct de l'overlay — meme contenu, meme style, meme
+    // changement d'etat (`applyVocalState` la retrouve par son selecteur, ou
+    // qu'elle soit). L'ancien emplacement est libere : aucun noeud orphelin,
+    // aucun espace reserve sous le disque.
     // Le trait de niveau (200 x 3 px) a ete retire le 12/11 (decision du
     // proprietaire, qui revient sur l'avenant du 28/10) : la mesure du micro
     // reste, elle ne se dessine plus. Aucun cadre, aucune carte.
@@ -4553,12 +4558,12 @@ export async function createSuperAgent(container) {
       <div class="vocal-top"></div>
       <div class="vocal-stage">
         <div class="vocal-orb" aria-hidden="true"><span class="vocal-halo"></span></div>
-        <div class="vocal-status" role="status" aria-live="polite">Je vous écoute.</div>
         <!-- LOT 3 (§2.5) : bouton de depannage, MASQUE tant que le micro capte.
              Il n'apparait que si le micro est ferme (refus, absence, panne) ;
              le mode reste utilisable sans lui. -->
         <button type="button" class="vocal-mic-fix hidden">Autoriser le micro</button>
       </div>
+      <div class="vocal-status" role="status" aria-live="polite">Je vous écoute.</div>
       <div class="vocal-input"></div>
     `;
     return ov;

@@ -19,7 +19,8 @@
 //      ABSENCE — noeud, regle et pourcentage : la mesure du micro reste, elle
 //      ne se dessine plus.
 //   6. L'enveloppe suit le SON REEL quand il est mesurable (voix locale) :
-//      extension bornee a 32 px au-dela de l'anneau, intensite de 0,8 a 1,
+//      extension bornee a 44 px au-dela de l'anneau (halo de 128 px de rayon),
+//      intensite de 0,8 a 1,
 //      aucune pulsation au repos. Un seul afficheur par voix.
 //
 // Les commentaires sont en ASCII ; les selecteurs CSS et les nombres lus sont
@@ -37,6 +38,7 @@ const ICI = dirname(fileURLToPath(import.meta.url));
 const lire = (rel) =>
   readFileSync(join(ICI, "..", "..", rel), "utf8").replace(/\r\n/g, "\n");
 const CSS = lire("src/css/style.css");
+const SUPER = lire("src/js/super-agent.js");
 
 /** Corps d'un bloc CSS `selecteur { ... }` (premiere occurrence, verifiee). */
 function bloc(css, selecteur) {
@@ -100,8 +102,10 @@ describe("2. l'alpha de la parole au bord est >= 0,30", () => {
     expect(ALPHA_BORD).toBe(0.34);
   });
 
-  it("la couronne visible (bord du disque a 84 %, bord de la boite a 100 %) monte bien", () => {
-    const couronne = ARRETS.filter((a) => a.position >= 84);
+  it("la couronne visible (bord du disque a 66 %, bord de la boite a 100 %) monte bien", () => {
+    // 66 % = bord de l'anneau dans une boite de 256 px (128 px de rayon) :
+    // 84 / 128 = 0,656, arrondi a 66 % dans la feuille de style.
+    const couronne = ARRETS.filter((a) => a.position >= 66);
     expect(couronne.length).toBeGreaterThanOrEqual(2);
     // Strictement croissante : aucun palier transparent residuel.
     for (let i = 1; i < couronne.length; i++) {
@@ -199,9 +203,27 @@ describe("5. la petite barre sous le cercle a ETE RETIREE (12/11)", () => {
     expect(ecran).not.toMatch(/setProperty\("--vocal-level"/);
   });
 
-  it("la ligne d'etat est posee la ou le trait etait (32 px sous le disque)", () => {
-    // L'ecart de la pile n'est pas un detail : l'enveloppe occupe desormais ces
-    // 32 px, donc le texte ne peut pas se retrouver dessous.
+  it("la ligne d'etat n'est plus sous le disque (28/10) : la scene est refermee avant elle", () => {
+    const corps = sliceSource(
+      SUPER,
+      "function buildVocalOverlay",
+      "function vocalStatusLine",
+      200,
+    );
+    const scene = sliceSource(
+      corps,
+      '<div class="vocal-stage">',
+      '<div class="vocal-status"',
+      20,
+    );
+    // Deux `</div>` : l'objet lumineux, puis la scene. La phrase vient APRES,
+    // donc elle n'est plus l'enfant du bloc du disque.
+    expect(scene.match(/<\/div>/g)?.length).toBe(2);
+    // L'ecart de la pile ne reserve plus de place au texte ; le texte se peint
+    // APRES l'enveloppe (`position: relative`) et n'a aucun fond.
     expect(bloc(CSS, ".vocal-stage")).toMatch(/gap:\s*32px/);
+    const phrase = bloc(CSS, ".vocal-status {");
+    expect(phrase).toMatch(/position:\s*relative/);
+    expect(phrase).not.toMatch(/background/);
   });
 });

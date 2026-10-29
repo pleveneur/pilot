@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-28 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-29 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -452,7 +452,8 @@ ce qui est affiché.
   écran.
 - **Vocal** : un **écran nu** — un objet lumineux dont la couleur dit l'état
   (**repos**, **écoute**, **réflexion**, **parole**) et **une seule ligne de
-  texte**. **Rien de la conversation n'y est
+  texte**, posée **juste au-dessus de la barre de saisie** (elle n'est plus sous
+  le cercle). **Rien de la conversation n'y est
   affiché** (aucun message, pas même en petit) : la conversation reste entière
   dans l'onglet de l'agent, où vous la retrouvez en quittant le mode.
 
@@ -466,8 +467,9 @@ En mode **Vocal** :
 - **Quand Pilot lit sa réponse**, une lueur ambre se lève **au bord** du cercle :
   c'est la voix de Pilot, **à l'extérieur** du disque (la vôtre s'allume
   **dedans**, en vert). Ce liseré **suit sa voix** : il s'étend quand ses mots
-  portent, se resserre dans les pauses. Il s'étend loin — environ **32 px**
-  au-delà du cercle — sans jamais toucher la ligne de texte.
+  portent, se resserre dans les pauses. Il s'étend loin — environ **44 px**
+  au-delà du cercle (**128 px de rayon** au plus) — sans jamais toucher la phrase
+  d'état ni la barre de saisie, et sans agrandir la fenêtre.
   **Comment il suit, selon la voix** : avec les **voix installées sur votre
   ordinateur** (les voix françaises locales), Pilot joue lui-même le son et
   l'écoute vraiment : la lueur suit le **timbre aigu** de ce qu'il dit. Avec la

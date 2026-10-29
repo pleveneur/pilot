@@ -14,7 +14,7 @@
 //   - `highBandBins` / `highBandEnergy` : donnees d'un analyseur + frequence
 //     d'echantillonnage -> 0..1, sur la bande la PLUS HAUTE de la voix ;
 //   - `smoothEnvelopeEnergy` : lissage (montee rapide, retombee lente) ;
-//   - `envelopeFromEnergy` : energie -> extension (18..32 px) + alpha (0,8..1) ;
+//   - `envelopeFromEnergy` : energie -> extension (18..44 px) + alpha (0,8..1) ;
 //   - `planSpeechEnvelope` : qui a le droit de porter la parole (jamais deux
 //     afficheurs, rien en mouvement reduit, rien sans mesure).
 //
@@ -23,8 +23,9 @@
 // poser deux variables de style.
 //
 // UN SEUL AFFICHEUR, DEUX SOURCES (decisions du proprietaire, 12/11 puis
-// 28/10 soir) : le meme halo, la meme enveloppe, la meme extension (~32 px).
-// Ce qui change d'un moteur vocal a l'autre, c'est la SOURCE de la mesure :
+// 28/10 soir) : le meme halo, la meme enveloppe, la meme extension (44 px, soit
+// un rayon de 128 px). Ce qui change d'un moteur vocal a l'autre, c'est la
+// SOURCE de la mesure :
 //   - voix LOCALE (Piper) : Pilot joue lui-meme le son, la page l'ecoute
 //     (`createMediaElementSource` + `AnalyserNode`) — mesure REELLE de l'aigu ;
 //   - voix du SYSTEME (`speechSynthesis`) : le navigateur ne rend AUCUN flux
@@ -81,8 +82,15 @@ export const ENVELOPE_RING_PX = 84;
 /** Extension de l'enveloppe au repos, en pixels au-dela de l'anneau. */
 export const ENVELOPE_MIN_PX = 18;
 
-/** Extension de l'enveloppe pleine, en pixels au-dela de l'anneau. */
-export const ENVELOPE_MAX_PX = 32;
+/**
+ * Extension de l'enveloppe pleine, en pixels au-dela de l'anneau.
+ *
+ * 44 px depuis le 28/10 (decision du proprietaire) : l'anneau est a 84 px et
+ * la boite de l'enveloppe (`inset: -44px`, 256 px de large) va jusqu'a 128 px
+ * de rayon. La valeur n'est donc plus 32 px : c'est ELLE qui donne au halo son
+ * rayon retenu de **128 px** a pleine voix (84 + 44).
+ */
+export const ENVELOPE_MAX_PX = 44;
 
 /** Intensite de l'enveloppe au repos : elle ne s'eteint jamais (0,8). */
 export const ENVELOPE_MIN_ALPHA = 0.8;
@@ -199,19 +207,19 @@ export function smoothEnvelopeEnergy(precedent, mesure) {
  * Energie -> extension et intensite de l'enveloppe. PURE.
  *
  * L'extension est l'ecart, en pixels, entre l'anneau du disque et le bord de
- * l'enveloppe : `ENVELOPE_MIN_PX` (18 px) au repos, `ENVELOPE_MAX_PX` (32 px)
+ * l'enveloppe : `ENVELOPE_MIN_PX` (18 px) au repos, `ENVELOPE_MAX_PX` (44 px)
  * a pleine voix.
  *
  * `scale` est le facteur applique au CSS (`transform: scale(...)`). ATTENTION :
- * la boite de l'enveloppe n'est pas un simple disque de 32 px — elle va du
- * centre jusqu'a `ENVELOPE_RING_PX + ENVELOPE_MAX_PX` (116 px, soit la boite de
- * 232 px). Une transformation reduit donc TOUTE la boite autour de son centre :
+ * la boite de l'enveloppe n'est pas un simple disque de 44 px — elle va du
+ * centre jusqu'a `ENVELOPE_RING_PX + ENVELOPE_MAX_PX` (128 px, soit la boite de
+ * 256 px). Une transformation reduit donc TOUTE la boite autour de son centre :
  * pour que le bord de la couronne tombe pile a `84 + extension`, il faut
- * `scale = (84 + extension) / 116`. Au repos : 102 / 116 = 0,8793 (la couronne
- * fait bien 18 px au-dela de l'anneau) ; a pleine voix : 1 (32 px). Diviser
- * l'extension par 32 donnerait 0,5625, ce qui ramenerait le bord a 65 px —
- * c'est-a-dire SOUS l'anneau, donc invisible : c'est ce piege que cette
- * formule evite.
+ * `scale = (84 + extension) / 128`. Au repos : 102 / 128 = 0,7969 (la couronne
+ * fait bien 18 px au-dela de l'anneau) ; a pleine voix : 1 (44 px, soit un halo
+ * de 128 px de rayon). Diviser l'extension par 44 donnerait 0,409, ce qui
+ * ramenerait le bord a 52 px — c'est-a-dire SOUS l'anneau, donc invisible :
+ * c'est ce piege que cette formule evite.
  *
  * L'intensite ne s'effondre jamais : de 0,8 a 1 (l'enveloppe ne clignote pas,
  * elle respire), comme le plancher de l'animation qu'elle remplace.

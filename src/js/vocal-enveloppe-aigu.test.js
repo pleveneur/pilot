@@ -185,15 +185,15 @@ describe("2. lissage : montee rapide, retombee lente, jamais d'oscillation", () 
 });
 
 // ---------------------------------------------------------------------------
-describe("3. extension bornee a ~32 px au-dela de l'anneau", () => {
+describe("3. extension bornee a ~44 px au-dela de l'anneau (halo de 128 px)", () => {
   it("au repos : 18 px, la lueur ne s'eteint pas (alpha 0,8)", () => {
     const halo = envelopeFromEnergy(0);
     expect(halo.extension).toBe(ENVELOPE_MIN_PX);
-    // Le facteur porte sur la boite ENTIERE (centre -> 116 px), pas sur les
-    // 32 px d'extension : c'est ce qui garde le bord de la couronne a
+    // Le facteur porte sur la boite ENTIERE (centre -> 128 px), pas sur les
+    // 44 px d'extension : c'est ce qui garde le bord de la couronne a
     // 84 + 18 = 102 px au lieu de le ramener sous l'anneau.
     expect(halo.scale).toBeCloseTo((ENVELOPE_RING_PX + ENVELOPE_MIN_PX) / (ENVELOPE_RING_PX + ENVELOPE_MAX_PX), 3);
-    expect(halo.scale).toBeCloseTo(0.8793, 3);
+    expect(halo.scale).toBeCloseTo(0.7969, 3);
     // La couronne mesure donc EXACTEMENT l'extension annoncee.
     const rayonCss = (ENVELOPE_RING_PX + ENVELOPE_MAX_PX) * halo.scale;
     expect(rayonCss - ENVELOPE_RING_PX).toBeCloseTo(halo.extension, 0);
@@ -201,11 +201,13 @@ describe("3. extension bornee a ~32 px au-dela de l'anneau", () => {
     expect(halo.alpha).toBe(0.8);
   });
 
-  it("a pleine voix : 32 px, opacite pleine", () => {
+  it("a pleine voix : 44 px, opacite pleine, rayon de 128 px", () => {
     const halo = envelopeFromEnergy(1);
     expect(halo.extension).toBe(ENVELOPE_MAX_PX);
-    expect(halo.extension).toBe(32);
+    expect(halo.extension).toBe(44);
     expect(halo.scale).toBe(1);
+    // Le rayon retenu par le proprietaire (28/10) : 84 + 44 = 128 px.
+    expect(ENVELOPE_RING_PX + halo.extension).toBe(128);
     expect(halo.alpha).toBe(1);
   });
 
@@ -217,21 +219,24 @@ describe("3. extension bornee a ~32 px au-dela de l'anneau", () => {
       expect(halo.extension).toBeLessThanOrEqual(ENVELOPE_MAX_PX);
       expect(halo.extension).toBeGreaterThanOrEqual(ENVELOPE_MIN_PX);
       // L'extension affichee EST l'echelle : une seule verite, et la couronne
-      // peinte fait bien 18 a 32 px au-dela de l'anneau de 84 px.
+      // peinte fait bien 18 a 44 px au-dela de l'anneau de 84 px.
       const couronne = (ENVELOPE_RING_PX + ENVELOPE_MAX_PX) * halo.scale - ENVELOPE_RING_PX;
       expect(couronne).toBeCloseTo(halo.extension, 0);
       expect(couronne).toBeGreaterThanOrEqual(17.5);
-      expect(couronne).toBeLessThanOrEqual(32.5);
+      expect(couronne).toBeLessThanOrEqual(44.5);
       expect(halo.alpha).toBeGreaterThanOrEqual(ENVELOPE_MIN_ALPHA);
       expect(halo.alpha).toBeLessThanOrEqual(1);
     }
   });
 
-  it("l'ecart du disque a la ligne d'etat laisse la place a ces 32 px", () => {
-    // 32 px d'extension + 32 px d'ecart : le texte ne passe jamais dessous.
-    expect(bloc(CSS, ".vocal-stage")).toMatch(/gap:\s*32px/);
-    // La boite de l'enveloppe deborde de 32 px de l'anneau (168 + 2 x 32).
-    expect(bloc(CSS, ".vocal-orb::before {")).toMatch(/inset:\s*-32px/);
+  it("la boite du halo fait 256 px (inset -44) et reste hors du flux", () => {
+    // 168 px de disque + 2 x 44 px : la boite fait 256 px de large, donc
+    // 128 px de rayon, et elle est ABSOLUE — elle n'elargit rien, ne pousse
+    // rien et ne peut pas creer de barre de defilement.
+    const corps = bloc(CSS, ".vocal-orb::before {");
+    expect(corps).toMatch(/inset:\s*-44px/);
+    expect(corps).toMatch(/position:\s*absolute/);
+    expect(168 + 2 * 44).toBe(256);
   });
 });
 
@@ -301,7 +306,7 @@ describe("5. mouvement reduit : fixe mais visible (jamais eteint)", () => {
     );
     expect(corps).toMatch(/opacity:\s*1/);
     expect(corps).toMatch(/animation:\s*none/);
-    // Aucun `transform` : la boite de 232 px est deja a son extension pleine.
+    // Aucun `transform` : la boite de 256 px est deja a son extension pleine.
     expect(corps).not.toMatch(/transform/);
   });
 

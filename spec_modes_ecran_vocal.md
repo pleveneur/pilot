@@ -109,20 +109,26 @@ sont). Le retour de la conversation sur cet écran est interdit par un test déd
    (`margin-top: var(--window-controls-height)`) : elle ne porte **rien** — c'est
    une bande de respiration. Le logo, qui est le bouton des trois modes, se pose
    **au-dessus** d'elle, à la même place que dans les autres modes.
-2. **Au centre**, un bloc vertical : un **disque de 168 px** (anneau plein de 2 px
-   + remplissage lumineux de 18 % au centre, 0 % aux bords : aucune image), qui
-   contient un **halo intérieur** (`.vocal-halo`, la voix de l'utilisateur, §4),
-   puis **32 px** plus bas **l'unique ligne d'état**. Le bloc suit la fenêtre sans
-   calcul. Ces **32 px** sont exactement la place de l'**enveloppe de parole**,
-   qui déborde de 32 px au-delà de l'anneau (le trait de niveau, qui occupait une
-   rangée entre les deux, est **retiré** depuis le 12/11 — §4).
-3. **La zone de saisie**, en bas, **toujours visible** et discrète : c'est la barre
+2. **Au centre**, le **disque de 168 px** (anneau plein de 2 px + remplissage
+   lumineux de 18 % au centre, 0 % aux bords : aucune image), qui contient un
+   **halo intérieur** (`.vocal-halo`, la voix de l'utilisateur, §4). Le bloc suit
+   la fenêtre sans calcul, et il ne contient **rien d'autre** (seul le bouton de
+   dépannage du micro peut s'y ajouter, masqué par défaut).
+3. **Juste au-dessus de la barre de saisie**, l'**unique ligne d'état**
+   (`.vocal-status`) : elle n'est plus sous le cercle (28/10). C'est le **même**
+   texte, le **même** style, la **même** logique d'état ; seul l'emplacement
+   change. Elle est un **enfant direct** de l'écran (entre le bloc du disque et la
+   saisie), donc elle ne participe plus au centrage du disque, ne réserve aucune
+   place sous lui et ne peut ni pousser la mise en page ni faire défiler l'écran.
+   Elle se peint **après** l'enveloppe de parole et n'a **aucun fond** : elle ne
+   recouvre ni la lueur ni la saisie, et rien ne la recouvre.
+4. **La zone de saisie**, en bas, **toujours visible** et discrète : c'est la barre
    de saisie de l'onglet Assistant, **déplacée** (même nœud, même envoi, même
    dictée 🎙️), 720 px au plus, centrée, 16 px de marge basse, sans filet ni fond
    pleine largeur, plafonnée à **120 px** de haut (au lieu de 200 px dans l'onglet).
    Son texte d'invite y devient **« Écrivez, ou parlez. »** et il est restitué tel
    quel à la sortie.
-4. **Un bouton de dépannage, caché par défaut** : « Autoriser le micro »
+5. **Un bouton de dépannage, caché par défaut** : « Autoriser le micro »
    (`.vocal-mic-fix`), qui n'apparaît que si le micro est fermé.
 
 **Rien de la conversation n'est affiché** sur cet écran : ni les messages, ni les
@@ -150,7 +156,7 @@ niveau à montrer par voix, et chaque voix a **sa** couleur :
 | Ce qu'on voit | Où | Quelle voix | Teinte |
 |---|---|---|---|
 | le **halo intérieur** (`.vocal-halo`) | dans le disque, jusqu'à 82 px de rayon | **la vôtre** (mesurée) | `--vocal-listen` |
-| l'**enveloppe de parole** (`.vocal-orb::before`) | la **couronne extérieure** (84 → 116 px de rayon, soit **32 px** de débord) | **celle de Pilot** (lue) | `--vocal-speak` |
+| l'**enveloppe de parole** (`.vocal-orb::before`) | la **couronne extérieure** (84 → **128 px** de rayon, soit **44 px** de débord) | **celle de Pilot** (lue) | `--vocal-speak` |
 | le **contour** du disque | l'anneau | **celle de Pilot** (lue) | `--vocal-state` |
 
 Le mot « halo » ne désigne **que** le halo intérieur, celui de votre voix ;
@@ -196,8 +202,8 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   l'extension et de l'intensité. Le choix est **pur et testé** : bande → énergie
   0..1 (silence → **0**, aigu riche → **proche de 1**, son grave → **0**), puis
   lissage du projet (montée **0,5**, retombée **0,12**), puis projection :
-  **18 px** au repos → **32 px** à pleine voix, opacité **0,80 → 1**. L'extension
-  ne peut donc **pas** dépasser 32 px, et le silence **ramène au repos** au lieu
+  **18 px** au repos → **44 px** à pleine voix, opacité **0,80 → 1**. L'extension
+  ne peut donc **pas** dépasser 44 px, et le silence **ramène au repos** au lieu
   de faire pulser une lumière toute seule.
 - **Deux sources, jamais les deux à la fois** : la décision est **pure et
   testée** (`planSpeechEnvelopeSource`) et son ordre **est** la règle. En
@@ -230,18 +236,19 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
 - **La lueur de parole est visible au bord, pas cachée au centre**
   (`docs/rapports/RAPPORT-halo-parole.md`, puis
   `docs/rapports/RAPPORT-halo-suivant-le-son.md`). L'enveloppe de parole
-  (`.vocal-orb::before`, boîte de **232 × 232 px**, `inset: -32px`) porte un
-  dégradé **inversé** : transparent au centre, puis **8 %** au bord du disque
-  (84 % du rayon), **20 %** à 92 % et **34 %** au bord de la boîte (100 %). Le
+  (`.vocal-orb::before`, boîte de **256 × 256 px**, `inset: -44px`) porte un
+  dégradé **inversé** : transparent au centre, puis **8 %** au-delà du bord du
+  disque (81 % du rayon), **20 %** à 90 % et **34 %** au bord de la boîte (100 %). Le
   pic est donc **sur la couronne extérieure**, la seule partie qui **déborde** du
   disque opaque ; la lumière ne se perd plus sous le disque. Mesuré : contraste
   **2,28 : 1** en thème sombre et **1,60 : 1** en thème clair (avant : 1,044 : 1
-  et 1,041 : 1, sous le seuil de perception). **La couronne mesure 32 px** de
-  large (84 → 116 px de rayon) depuis le 12/11 : le débordement a doublé pour que
-  la respiration se voie, et l'écart de 32 px avec la ligne d'état l'empêche de
-  passer dessous. En repli animé, `vocal-speak-glow` garde sa durée et son
-  échelle, mais son opacité ne descend plus sous **0,80** : la lueur respire sans
-  jamais s'éteindre.
+  et 1,041 : 1, sous le seuil de perception). **La couronne mesure 44 px** de
+  large (84 → **128 px** de rayon, rayon retenu le 28/10 ; 32 px avant le 12/11) :
+  le débordement s'arrête à 128 px, et la boîte (256 px) tient dans la hauteur
+  minimale de la fenêtre (500 px), donc elle n'écrase ni la phrase ni la saisie.
+  En repli animé, `vocal-speak-glow` respire **autour de 128 px** (0,94 → 1,06),
+  et son opacité ne descend plus sous **0,80** : la lueur respire sans jamais
+  s'éteindre.
 - **L'enveloppe est le REPLI du contour, jamais un doublon**
   (`CONCEPTION-cercle-equaliseur.md` §7.3) : dès que le contour spectral est
   peint (voix locale installée, classe `.vocal-spectrum-live` posée sur
@@ -258,8 +265,9 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   pose **aucune** valeur dans ce cas (`planLevel` comme `planSpeechEnvelope`
   refusent d'écrire). La **lueur de parole** obéit à la même règle : ni
   clignotement ni disparition — elle est **fixe mais visible**, à sa **taille
-  pleine** (les 32 px de la boîte) et **opacité 1**, sans animation ni
-  transformation. **Aucun nouveau réglage** n'a été créé pour cet écran.
+  pleine** (les 44 px de la boîte, 128 px de rayon) et **opacité 1**, sans
+  animation ni transformation. **Aucun nouveau réglage** n'a été créé pour cet
+  écran.
 
 ## 5. Le micro : quand il s'ouvre, quand il se ferme
 
