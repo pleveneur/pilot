@@ -464,7 +464,11 @@ texte à la voix.
   s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
   travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
   ci-dessus, **après votre dernier mot** (chaque nouveau mot repousse l'échéance,
-  donc rien ne part tant que vous parlez). **Un silence n'arrête rien** : quand
+  donc rien ne part tant que vous parlez). **L'écoute repart d'elle-même après
+  chaque réponse** : si Pilot finit à peine sa phrase ou si le micro se libère un
+  instant plus tard, elle réessaie quelques instants (jamais indéfiniment) au lieu
+  de rester fermée — le rond « Réveiller … » n'est donc qu'un **secours**. **Un
+  silence n'arrête rien** : quand
   vous vous taisez un moment, l'écoute se referme et **se rouvre toute seule**,
   sans message d'échec — vous reprenez la parole quand vous voulez. Ce **délai
   d'envoi** (deux secondes

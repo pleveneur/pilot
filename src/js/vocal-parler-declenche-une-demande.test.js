@@ -291,7 +291,8 @@ describe("cablage dans super-agent.js", () => {
 
   it("la decision est REEVALUEE a l'echeance (l'etat a pu changer pendant l'attente)", () => {
     const plan = corpsFonction(SUPER, "function vocalApplyConversationPlan(plan)");
-    expect(plan).toContain("if (decideVocalDictation(vocalConversationState()).action !== VOCAL_DICTATION_ARM) return;");
+    expect(plan).toContain("const decision = decideVocalDictation(vocalConversationState());");
+    expect(plan).toContain("if (decision.action !== VOCAL_DICTATION_ARM) {");
     expect(plan).toContain("armVoiceInput();");
   });
 

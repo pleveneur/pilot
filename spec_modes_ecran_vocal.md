@@ -535,6 +535,20 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
 - **Elle se réarme quand la lecture d'une réponse est finie**, avec une marge de
   silence plus longue (600 ms) : c'est la **conversation continue** du mode —
   répondre puis reparler, sans rien toucher.
+- **Ce réarmement ne s'abandonne plus sur un refus passager** (défaut corrigé,
+  `docs/rapports/RAPPORT-reprise-ecoute-auto.md`) : juste après une réponse, l'écran
+  n'est presque jamais « exactement au repos » — la voix de Pilot sort encore,
+  le tour n'est pas retombé, la mesure du micro se réouvre, la réponse de
+  sensibilité du projet est encore en vol. La minuterie de réarmement était un
+  **coup unique** : à l'échéance, un seul de ces refus la consommait et **plus
+  rien n'écoutait** jusqu'à un clic sur le rond. Ces quatre raisons sont
+  désormais **reprises** (`vocalResumeRetry` : 400 ms, **huit fois au plus**,
+  soit ≈ 3,2 s), **une seule minuterie à la fois** et la **même** décision
+  réévaluée à chaque essai — aucune ouverture décidée par la minuterie. Les
+  refus **définitifs** (projet sensible, arrêt 🎙️, plafond des sessions vides,
+  erreur, dictée indisponible, hors du mode) ne sont **jamais** repris : la
+  reprise est bornée, donc **aucune boucle** n'est possible. Le rond
+  « Réveiller <Nom> » reste le **secours**, jamais le chemin normal.
 - **Un plafond arrête les retours INSTANTANÉS du moteur** : si le moteur de
   reconnaissance rend la main **sans rien transcrire trois fois en moins de
   30 secondes**, la dictée **cesse de s'armer toute seule** — sinon le micro
@@ -846,7 +860,7 @@ sa hauteur d'origine.
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal`, `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
-| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
+| `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, **reprise bornée d'un armement refusé pour une raison passagère** (`vocalResumeRetry` + `VOCAL_RESUME_RETRY_MS` / `VOCAL_RESUME_MAX_RETRIES` / `VOCAL_RESUME_TRANSIENT_REASONS`), désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur **instantanée** — durée mesurée < `VOICE_EMPTY_SESSION_INSTANT_MS` (1 s) —, jamais une erreur affichée, un arrêt demandé, une reprise en main, et **jamais un silence d'une durée réelle**) |
 | `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : les **quatre niveaux** de longueur (`VOCAL_BREVITY_LEVELS`, `normalizeVocalBrevityLevel`, `vocalBrevityLabel`), la consigne d'un niveau (`vocalBrevityInstruction`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
@@ -862,7 +876,10 @@ seule coupure, négatifs bruit court / silence / écho, écran inchangé),
 `vocal-parler-declenche-une-demande.test.js` + décisions pures couvertes par
 `vocal-conversation.js` (conversation parlée : armer au repos, désarmer pendant
 la lecture et le travail, réarmer après la lecture, fermeture aux trois sorties,
-un seul envoi, erreurs dans la ligne d'état),
+un seul envoi, erreurs dans la ligne d'état), `vocal-reprise-ecoute-auto.test.js`
+(**l'écoute repart après chaque réponse** : reprise des refus passagers bornée et
+replanifiée par la même minuterie, jamais pendant la lecture, jamais après un
+arrêt 🎙️ ni sur un refus définitif, aucune boucle possible),
 `vocal-correctifs-revue.test.js` (repli de voix = « Pilot parle », phrase
 « dictée indisponible » affichée, plafond des sessions vides et levée par un
 geste), `vocal-repondre-deux-secondes.test.js` (délai de **deux secondes après le

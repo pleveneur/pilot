@@ -99,6 +99,74 @@ export const VOCAL_ARM_DELAY_MS = 350;
 export const VOCAL_ARM_AFTER_READ_MS = 600;
 
 /**
+ * REPRISE DE L'ÉCOUTE — délai entre deux tentatives d'armement (ms).
+ *
+ * Le défaut que cette constante corrige (propriétaire : « après chaque
+ * réponse, l'écoute doit repartir toute seule ») : l'armement automatique était
+ * un COUP UNIQUE. La minuterie de reprise (600 ms après le dernier mot lu) était
+ * programmée une seule fois, et à l'échéance elle rendait la main SANS RIEN
+ * reprogrammer dès que l'écran n'était pas exactement au repos — ce qui est le
+ * cas juste après une réponse (queue audio de la voix de Pilot, tour en cours
+ * qui se referme, mesure du micro qui se réouvre, réponse de sensibilité encore
+ * en vol). La dictée restait alors fermée jusqu'au prochain geste, et le rond
+ * « Réveiller <Nom> » devenait le seul chemin : exactement le symptôme.
+ *
+ * Toutes ces raisons disent « pas maintenant », jamais « jamais » : on réessaie,
+ * au lieu d'abandonner.
+ */
+export const VOCAL_RESUME_RETRY_MS = 400;
+
+/**
+ * NOMBRE MAXIMAL de reprises d'une même tentative d'armement.
+ *
+ * Ce plafond est la garantie qu'aucune boucle n'est créée : une mesure du micro
+ * réellement fermée, une voix qui ne se tait pas ou un backend qui reste occupé
+ * finissent par arrêter les reprises (au pire 8 × 400 ms ≈ 3,2 s). Une nouvelle
+ * intention (nouveau plan d'armement, fin de lecture, fin de tour, geste) repart
+ * d'un décompte neuf.
+ */
+export const VOCAL_RESUME_MAX_RETRIES = 8;
+
+/**
+ * RAISONS PASSAGÈRES — les seules qui méritent une reprise.
+ *
+ * Une raison absente de cette liste est DÉFINITIVE : projet sensible, arrêt
+ * manuel de l'utilisateur, plafond des sessions vides, erreur en cours, dictée
+ * indisponible sur le poste, hors du mode. Aucune de ces situations ne doit
+ * jamais être réessayée en silence : c'est un choix, pas une attente.
+ */
+export const VOCAL_RESUME_TRANSIENT_REASONS = Object.freeze([
+  // La voix de Pilot sort encore (queue audio) ou un morceau suivant s'annonce.
+  "pilot-parle",
+  // Le tour en cours n'est pas encore retombé, ou l'outil suivant démarre.
+  "tour-en-cours",
+  // La mesure du niveau se réouvre (elle vient AVANT la dictée, règle 7d).
+  "mesure-fermee",
+  // La réponse IPC « ce projet est-il sensible ? » est encore en vol.
+  "sensibilite-inconnue",
+]);
+
+/**
+ * Faut-il REPRENDRE (réessayer) l'armement refusé, et dans quel délai ?
+ *
+ * PURE : aucune horloge, aucun effet. Rend `0` quand il ne faut pas réessayer
+ * (refus définitif, ou plafond de reprises atteint) et le délai de reprise
+ * sinon.
+ *
+ * @param {string} raison la `raison` rendue par `decideVocalDictation`
+ * @param {number} [tentatives] reprises déjà faites pour cette tentative
+ * @returns {number} délai de reprise (ms), ou `0` = ne pas réessayer
+ */
+export function vocalResumeRetry(raison, tentatives = 0) {
+  const motif = String(raison == null ? "" : raison);
+  if (!VOCAL_RESUME_TRANSIENT_REASONS.includes(motif)) return 0;
+  const n = Number(tentatives);
+  const faites = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  if (faites >= VOCAL_RESUME_MAX_RETRIES) return 0;
+  return VOCAL_RESUME_RETRY_MS;
+}
+
+/**
  * PLAFOND DES SESSIONS VIDES — nombre de fins d'écoute SANS TEXTE **ET
  * INSTANTANÉES** qui suspendent l'armement automatique de la dictée.
  *

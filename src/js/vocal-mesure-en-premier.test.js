@@ -36,7 +36,7 @@ import {
   VOCAL_DICTATION_DISARM,
 } from "./vocal-conversation.js";
 import { shouldAskVocalMic } from "./vocal-mic.js";
-import { neutraliserSource } from "./source-slice.js";
+import { neutraliserSource, sliceSource } from "./source-slice.js";
 
 // `super-agent.js` touche `window` au chargement et importe des modules Tauri :
 // memes doublures que les autres tests d'ecran Vocal, posees AVANT l'import.
@@ -173,11 +173,16 @@ describe("2. mesure fermee : la dictee ne s'arme pas, la panne affichee est cell
 
   it("la dictee n'est pas ouverte pour autant (aucune capture fantome)", () => {
     // L'armement programme reverifie la MEME decision au moment d'ouvrir : la
-    // mesure tombe entre-temps, la dictee ne part pas.
+    // mesure tombe entre-temps, la dictee ne part pas. Le refus ne rend plus la
+    // main en silence (il est REPRIS quand il est passager, voir
+    // `vocal-reprise-ecoute-auto.test.js`), mais il n'ouvre jamais :
+    // `armVoiceInput()` reste dans le seul chemin « la decision dit ARM ».
     const applique = corpsFonction(SUPER, "function vocalApplyConversationPlan");
-    expect(applique).toMatch(
-      /if \(decideVocalDictation\(vocalConversationState\(\)\)\.action !== VOCAL_DICTATION_ARM\) return;/,
-    );
+    expect(applique).toMatch(/const decision = decideVocalDictation\(vocalConversationState\(\)\);/);
+    expect(applique).toMatch(/if \(decision\.action !== VOCAL_DICTATION_ARM\) \{/);
+    // Aucune ouverture dans la branche de refus.
+    const refus = sliceSource(applique, "if (decision.action !== VOCAL_DICTATION_ARM) {", "\n      }", 40);
+    expect(refus).not.toMatch(/armVoiceInput\(\)/);
   });
 });
 

@@ -98,6 +98,7 @@ import {
 import {
   decideVocalDictation,
   planVocalConversation,
+  vocalResumeRetry,
   decideVocalSilenceSend,
   normalizeVocalSilenceSendMs,
   vocalDictationMessage,
@@ -5173,10 +5174,34 @@ export async function createSuperAgent(container) {
     if (plan.desarmer && voiceActive) stopVoiceInput();
     if (plan.desarmer || plan.couper) vocalApresLecture = false;
     if (!plan.delai || vocalArmTimer) return;
+    // Reprises deja faites pour CETTE tentative d'armement. Un nouveau plan
+    // (nouvelle intention : fin de tour, fin de lecture, geste) repart de zero.
+    const tentatives = Number(plan.tentatives) > 0 ? Math.floor(Number(plan.tentatives)) : 0;
     vocalArmTimer = setTimeout(() => {
       vocalArmTimer = 0;
       if (!vocalOverlay) return;
-      if (decideVocalDictation(vocalConversationState()).action !== VOCAL_DICTATION_ARM) return;
+      const decision = decideVocalDictation(vocalConversationState());
+      if (decision.action !== VOCAL_DICTATION_ARM) {
+        // REPRISE (au lieu de l'abandon silencieux) : juste apres une reponse,
+        // l'ecran n'est presque jamais « exactement au repos » (queue audio de
+        // la voix de Pilot, tour en cours qui se referme, mesure du micro qui
+        // se reouvre, reponse de sensibilite encore en vol). Ces refus disent
+        // « pas maintenant », jamais « jamais » : la decision PURE dit lesquels
+        // meritent une reprise, et combien de fois. Une seule minuterie en vol,
+        // un nombre BORNE de reprises, et la decision est REEVALUEE a chaque
+        // fois — jamais une ouverture decidee ici.
+        const relance = vocalResumeRetry(decision.raison, tentatives);
+        if (relance) {
+          vocalApplyConversationPlan({
+            raison: decision.raison,
+            desarmer: false,
+            couper: false,
+            delai: relance,
+            tentatives: tentatives + 1,
+          });
+        }
+        return;
+      }
       armVoiceInput();
     }, plan.delai);
   }
