@@ -8,10 +8,12 @@
  * (`vocalSyncChrome`), qui ne fait rien d'autre que d'appliquer ce que ce
  * module tranche.
  *
- * Les TROIS noeuds concernes, et eux seuls : la ligne d'etat, la zone de saisie,
+ * Les TROIS noeuds masques, et eux seuls : la ligne d'etat, la zone de saisie,
  * le bouton de depannage du micro. Le disque, le bouton de relance, le logo
  * (bouton des trois modes) et l'entree « Travail » ne sont JAMAIS masques : le
- * CSS ne les nomme pas, et un test le verifie.
+ * CSS ne les nomme pas, et un test le verifie. La rangee des questions en
+ * attente n'est pas masquee non plus : elle vit DANS la zone de saisie, et la
+ * regle 5 ci-dessous interdit de l'effacer tant qu'une question attend.
  */
 
 /** Delai avant le REMASQUAGE, quand aucun geste ne vient : 2 500 ms. */
@@ -28,9 +30,9 @@ export const VOCAL_CHROME_MOVE_PX = 4;
 export const VOCAL_CHROME_HIDDEN_CLASS = "vocal-chrome-hidden";
 
 /**
- * PEUT-ON effacer le bas ? PURE — l'ORDRE de ces quatre regles EST la spec.
+ * PEUT-ON effacer le bas ? PURE — l'ORDRE de ces cinq regles EST la spec.
  *
- * Rend `true` quand au moins une des quatre circonstances INTERDIT le
+ * Rend `true` quand au moins une des cinq circonstances INTERDIT le
  * masquage — c'est-a-dire quand le bas doit rester a l'ecran :
  *
  *  1. **Le micro est ferme** (refus, absence, occupation, panne) : le bouton
@@ -42,12 +44,18 @@ export const VOCAL_CHROME_HIDDEN_CLASS = "vocal-chrome-hidden";
  *     dit que Pilot repond. Aucun des deux ne peut etre efface.
  *  4. **Le pointeur est sur la zone du bas** : on ne cache pas ce que la souris
  *     vise.
+ *  5. **Une question de l'assistant attend une reponse** : la rangee de
+ *     boutons vit au-dessus de la ligne de saisie, donc DANS le bas. L'effacer
+ *     rendrait la question invisible et le travail resterait bloque sans que
+ *     l'utilisateur puisse savoir pourquoi. Une question humaine ne s'efface
+ *     jamais : ce n'est pas un decor, c'est ce qu'on attend de vous.
  *
- * Aucune autre circonstance ne retient le bas : au repos, champ vide et pointeur
- * ailleurs, le masquage est permis (et la dictee armee mais encore muette n'y
- * change rien — c'est le cas particulier voulu : l'ecran reste nu).
+ * Aucune autre circonstance ne retient le bas : au repos, champ vide, aucune
+ * question en attente et pointeur ailleurs, le masquage est permis (et la
+ * dictee armee mais encore muette n'y change rien — c'est le cas particulier
+ * voulu : l'ecran reste nu).
  *
- * @param {{etat?: string, saisie?: boolean, micFerme?: string|boolean, pointeurActif?: boolean}} [faits]
+ * @param {{etat?: string, saisie?: boolean, micFerme?: string|boolean, pointeurActif?: boolean, question?: boolean}} [faits]
  * @returns {boolean} true = le bas reste visible (masquage interdit)
  */
 export function vocalChromeVisible(faits = {}) {
@@ -60,6 +68,11 @@ export function vocalChromeVisible(faits = {}) {
   if (f.etat === "listening" || f.etat === "speaking") return true;
   // 4. Pointeur sur la zone du bas.
   if (f.pointeurActif === true) return true;
+  // 5. Une question de l'assistant attend une reponse (regle ajoutee avec le
+  // correctif « les questions ne sont pas visibles dans l'ecran Vocal ») : le
+  // bas porte la rangee de boutons, il ne s'efface donc jamais tant qu'une
+  // question est en file. Rien n'expire ici : c'est l'utilisateur qui repond.
+  if (f.question === true) return true;
   // Rien ne retient le bas : le masquage est permis.
   return false;
 }

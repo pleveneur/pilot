@@ -2,7 +2,7 @@
 // (`docs/conceptions/CONCEPTION-ecran-vocal-cercle-et-bas.md` §2).
 //
 // CE QUE CE FICHIER VERROUILLE (et pourquoi) :
-//   1. La decision PURE (`src/js/vocal-chrome.js`) : les quatre circonstances
+//   1. La decision PURE (`src/js/vocal-chrome.js`) : les CINQ circonstances
 //      qui interdisent le masquage, DANS L'ORDRE du document, et le masquage
 //      permis au repos — y compris dictée armée mais encore silencieuse.
 //   2. Les deux bornes du geste : 2 500 ms de delai, 4 px de mouvement, et
@@ -118,7 +118,21 @@ describe("1. la decision pure : quatre circonstances retiennent le bas", () => {
     expect(vocalChromeVisible({ etat: "idle", pointeurActif: false })).toBe(false);
   });
 
-  it("l'ORDRE des quatre regles est celui du document (1 -> 4)", () => {
+  it("regle 5 — une QUESTION de l'assistant en attente retient le bas", () => {
+    // La rangee des questions vit DANS la zone de saisie : l'effacer rendrait
+    // la question invisible et le travail resterait bloque sans explication.
+    expect(vocalChromeVisible({ etat: "idle", question: true })).toBe(true);
+    // Un `false` explicite, ou l'absence du fait, n'interdit rien : hors
+    // question, le masquage reste permis (ecran nu).
+    expect(vocalChromeVisible({ etat: "idle", question: false })).toBe(false);
+    // Une question retient le bas MEME quand tout le reste autorise le
+    // masquage (repos, champ vide, pointeur ailleurs).
+    expect(
+      vocalChromeVisible({ etat: "idle", saisie: false, micFerme: "", pointeurActif: false, question: true }),
+    ).toBe(true);
+  });
+
+  it("l'ORDRE des cinq regles est celui du document (1 -> 5)", () => {
     // Il se lit dans le source : chaque regle garde son numero, et la premiere
     // est bien le micro ferme. Un ordre change serait un changement de spec.
     const src = readFileSync(join(ICI, "vocal-chrome.js"), "utf8").replace(/\r\n/g, "\n");
@@ -127,6 +141,7 @@ describe("1. la decision pure : quatre circonstances retiennent le bas", () => {
       ["2. Champ occupe", "saisie"],
       ["3. Pilot ecoute ou parle", "etat"],
       ["4. Pointeur sur la zone du bas", "pointeurActif"],
+      ["5. Une question", "question"],
     ];
     let precedent = -1;
     for (const [commentaire, champ] of paires) {
@@ -194,16 +209,19 @@ describe("3. le branchement : un minuteur, un point d'ecriture, quatre ecouteurs
     expect(corps).toMatch(/vocalSyncRestartButton\(state\);\s*$/m);
   });
 
-  it("`vocalSyncChrome` lit les QUATRE faits et n'ecrit la classe qu'a un seul endroit", () => {
+  it("`vocalSyncChrome` lit les CINQ faits et n'ecrit la classe qu'a un seul endroit", () => {
     const corps = corpsFonction(SUPER, "function vocalSyncChrome(");
     // Les faits : l'etat, le champ (texte ou focus), la panne du micro, le
-    // pointeur. S'il en manque un, la regle correspondante ne s'applique jamais.
+    // pointeur, la question en attente. S'il en manque un, la regle
+    // correspondante ne s'applique jamais.
     expect(corps).toMatch(/etat:\s*vocalChromeEtat/);
     expect(corps).toMatch(/saisie:/);
     expect(corps).toMatch(/champ\.value/);
     expect(corps).toMatch(/document\.activeElement === champ/);
     expect(corps).toMatch(/micFerme:\s*vocalMicFerme/);
     expect(corps).toMatch(/pointeurActif:\s*vocalChromePointeurSurLeBas\(\)/);
+    // La question vient de la FILE (source unique), pas d'un drapeau local.
+    expect(corps).toMatch(/question:\s*hasPendingQuestion\(\)/);
     // La decision est PURE et la classe vient de sa correspondance unique.
     expect(corps).toMatch(/vocalChromeVisible\(faits\)/);
     expect(corps).toMatch(/vocalChromeClass\(visible\)/);

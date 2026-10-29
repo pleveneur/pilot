@@ -12083,6 +12083,55 @@ body.pilot-vocal-active #agent-activity {
   color: var(--text-secondary);
 }
 
+/* --- §2.7 LA QUESTION DE L'ASSISTANT S'AFFICHE ICI (correctif) ---
+   LE DEFAUT CORRIGE : la rangee des questions en attente (`#pendingBar`,
+   #132) restait dans le wrapper de l'onglet, DERRIERE ce calque opaque. En
+   mode Vocal, une question (choix, choix multiple, confirmation, saisie
+   libre) n'etait donc peinte nulle part : l'utilisateur ne voyait rien et le
+   travail restait bloque, sans un mot. La rangee est desormais DEPLACEE dans
+   `.vocal-input`, JUSTE AU-DESSUS de la ligne de saisie (meme noeud, memes
+   boutons, memes reponses) : rien n'est duplique, aucun second mecanisme de
+   reponse n'existe.
+   L'APPARENCE : aucune carte, aucun cadre, aucun fond — la rangee prend le
+   style de l'ecran (texte sur le fond de l'app, comme la ligne d'etat). Seul
+   son conteneur est borne en hauteur pour qu'une longue liste de choix ne
+   puisse pas manger le disque (`overflow-y: auto`) ; au repos, sans question,
+   il est vide et ne peint rien (aucun filet residuel : le filet du conteneur
+   d'origine est retire ici).
+   JAMAIS MASQUEE : la regle 5 de `vocal-chrome.js` interdit l'effacement du
+   bas tant qu'une question attend, et un test le verifie.
+   HAUTEUR BORNEE, ET CALCULEE POUR NE RIEN ROGNER : la place reservee au reste
+   de l'ecran vaut 289 px (§1.5, formule unique du disque). Une question ne peut
+   donc pas prendre plus de 140 px sans mordre sur la boite du halo : c'est le
+   plafond retenu (et 22 vh sur les fenetres basses, ou le disque est deja au
+   minimum). A 750 px de haut, la scene garde 472 px pour une boite de halo de
+   460 px ; a 500 px, 252 px pour 182 px. Le disque et sa couronne ne sont donc
+   jamais rognes, et le portrait n'est jamais recouvert par la question. */
+.pilot-vocal .agent-pending-bar-container {
+  border-top: none;
+  background: transparent;
+  max-height: min(140px, 22vh);
+  margin: 0;
+  padding: 0 2px;
+}
+/* Sans question, la rangee ne prend AUCUNE place : pas de marge residuelle au
+   dessus de la ligne de saisie (l'ecran au repos reste exactement celui du
+   lot 2). */
+.pilot-vocal .agent-pending-bar-container:empty {
+  margin: 0;
+  padding: 0;
+}
+.pilot-vocal .agent-pending-bar {
+  padding: 0 0 10px;
+  text-align: center;
+}
+.pilot-vocal .agent-pending-title {
+  margin-bottom: 8px;
+}
+.pilot-vocal .agent-choice-buttons {
+  justify-content: center;
+}
+
 /* --- §2.5 (lot 3) Le bouton de depannage du micro ---
    Masque tant que le micro capte. Il n'apparait que si le micro est ferme
    (refus, absence, occupation, panne) : il ne remplace aucune commande et ne

@@ -2261,6 +2261,13 @@ let pendingBarEl = null;        // conteneur #pendingBar (défini par createSupe
 let pendingInputEl = null;      // textarea #superagent-input (défini par createSuperAgent)
 let superMessagesEl = null;     // zone des messages du chat (définie par createSuperAgent)
 const pendingQuestions = [];    // file FIFO de questions en attente
+// ÉCRAN VOCAL — la question en attente ne peut pas être invisible : ce rappel
+// est posé par createSuperAgent (`vocalSyncChrome`, seul point d'écriture du
+// masquage du bas) et appelé à CHAQUE changement de la file, pour que l'écran
+// réapplique sa décision avec le fait « une question attend ». Sans lui, une
+// question arrivée pendant que le bas est effacé resterait hors de l'écran.
+// Il ne pose aucun minuteur et ne décide rien : il relit les faits.
+let pendingQuestionChromeSync = null;
 // Telegram (étape 2, lot 1) : question actuellement publiée sur Telegram, pour
 // ne pas la republier à chaque re-rendu. Réinitialisé à la fermeture de l'onglet.
 let telegramAskedQuestion = null;
@@ -2317,6 +2324,10 @@ function renderActivePendingQuestion() {
   if (reflectingHero) reflectingHero.classList.remove("sa-immersive-reflecting");
   // Placeholder de la barre adapté quand une question est en attente.
   if (pendingInputEl) pendingInputEl.placeholder = q.placeholder || PENDING_NOTE_PLACEHOLDER;
+  // ÉCRAN VOCAL : la file vient de changer (question arrivée, répondue ou
+  // suivante) — le bas de l'écran réapplique sa décision, sinon une question
+  // posée pendant que le bas est effacé ne serait jamais peinte.
+  if (typeof pendingQuestionChromeSync === "function") pendingQuestionChromeSync();
 }
 
 /** Ajoute une question à la file et re-rend la barre. */
@@ -3552,6 +3563,12 @@ export async function createSuperAgent(container) {
   const modelSelect = toolbar.querySelector("#superagent-model-select");
   const analyzeDataBtn = toolbar.querySelector('[data-action="analyze-data"]');
   registerPendingBar(pendingBar, inputEl);
+  // ÉCRAN VOCAL : la question en attente retient le bas (voir
+  // `pendingQuestionChromeSync` et la règle 5 de `vocal-chrome.js`).
+  pendingQuestionChromeSync = () => {
+    if (!vocalOverlay) return;
+    vocalSyncChrome();
+  };
   // Affiche/masque le bandeau « assistant occupé » dans la barre de saisie.
   function setBusyHint(visible) {
     superSetBusyHint(visible);
@@ -3597,6 +3614,11 @@ export async function createSuperAgent(container) {
   // « Travail » : restitution exacte, sans doublon ni perte.
   let vocalModeButtonHome = null;
   let vocalInputHome = null;
+  // QUATRIEME noeud deplace par l'ecran Vocal (correctif « une question ne
+  // peut pas y etre invisible ») : la rangee des questions en attente
+  // (`#pendingBar`). Meme patron : place d'origine memorisee, restitution
+  // exacte a la sortie.
+  let vocalQuestionsHome = null;
   // L'entree « Travail » est le TROISIEME noeud deplace par l'ecran Vocal : le
   // MEME noeud que dans « Detaille » et dans « Assistant seul » (aucune copie,
   // aucun second panneau). Meme patron que `immersiveActivityHome`.
@@ -4885,6 +4907,11 @@ export async function createSuperAgent(container) {
     const texte = champ ? String(champ.value == null ? "" : champ.value) : "";
     const faits = {
       etat: vocalChromeEtat,
+      // Une QUESTION de l'assistant attend une reponse : le bas reste visible,
+      // et avec lui la rangee de boutons qui porte la question (regle 5 de
+      // `vocal-chrome.js`). Lire la file ici est la seule chose dont ce point
+      // d'ecriture a besoin : aucune decision n'est prise dans ce bloc.
+      question: hasPendingQuestion(),
       saisie: texte.trim() !== "" || (champ ? document.activeElement === champ : false),
       micFerme: vocalMicFerme,
       pointeurActif: vocalChromePointeurSurLeBas(),
@@ -5320,6 +5347,11 @@ export async function createSuperAgent(container) {
       reflechit: reflectingActive === true,
       occupe: backendBusy === true || isStreaming === true,
       dicteeOuverte: voiceActive === true,
+      // UNE QUESTION DE L'ASSISTANT ATTEND UNE REPONSE (regle 4b) : la dictee
+      // automatique se ferme, sinon une phrase prononcee a cote vaudrait
+      // reponse — et « oui » pour une confirmation. La question se repond au
+      // CLIC, ou en tapant (ou en dictant apres un geste) sa reponse.
+      question: hasPendingQuestion(),
       arretManuel: vocalArretManuel === true,
       // Plafond des sessions vides : verrou pose par `vocalNoteEmptySession`,
       // leve par un geste de l'utilisateur seulement.
@@ -5494,6 +5526,19 @@ export async function createSuperAgent(container) {
     if (inputBar && zone) {
       vocalInputHome = { parent: inputBar.parentNode, next: inputBar.nextSibling };
       zone.appendChild(inputBar);
+    }
+    // LA QUESTION EN ATTENTE ENTRE DANS L'ECRAN (correctif). Le defaut :
+    // `#pendingBar` restait dans le conteneur de l'onglet, DERRIERE ce calque
+    // opaque (`z-index: 99990`, fond `--bg-app`). Une question de l'assistant
+    // (choix, choix multiple, confirmation, saisie libre) etait donc posee
+    // hors de l'ecran : l'utilisateur ne voyait rien et le travail restait
+    // bloque, sans message. Elle est DEPLACEE ici comme les trois autres
+    // noeuds — meme noeud, memes boutons, memes reponses — et posee JUSTE
+    // AU-DESSUS de la ligne de saisie : ni le disque, ni la ligne d'etat, ni la
+    // saisie ne sont masques ou recouverts (aucun placement absolu).
+    if (pendingBar && zone) {
+      vocalQuestionsHome = { parent: pendingBar.parentNode, next: pendingBar.nextSibling };
+      zone.insertBefore(pendingBar, inputBar && inputBar.parentNode === zone ? inputBar : null);
     }
     // LOT 2 : le LOGO des trois modes entre dans l'OVERLAY, hors du flux : il
     // se pose au meme endroit que dans les deux autres modes par la seule
@@ -5687,10 +5732,11 @@ export async function createSuperAgent(container) {
         /* une console absente ne bloque pas la sortie */
       }
     }
-    // Symetrie exacte de enterVocal : les TROIS noeuds deplaces sortent de
+    // Symetrie exacte de enterVocal : les QUATRE noeuds deplaces sortent de
     // l'overlay AVANT son retrait, sinon ils seraient detruits avec lui et les
-    // autres ecrans perdraient le bouton des modes, l'entree « Travail » et la
-    // barre de saisie. Chacun retrouve son parent ET son voisin d'origine.
+    // autres ecrans perdraient le bouton des modes, l'entree « Travail », la
+    // barre de saisie et la rangee des questions. Chacun retrouve son parent
+    // ET son voisin d'origine.
     // Cette partie est HORS du `try` : elle est donc toujours executee.
     const activiteHome = vocalActivityHome;
     const activite = document.getElementById("agent-activity");
@@ -5709,6 +5755,19 @@ export async function createSuperAgent(container) {
       modeHome.parent.insertBefore(modeButton, next);
     }
     vocalModeButtonHome = null;
+    // LA QUESTION RETROUVE SA PLACE AVANT la barre de saisie : dans le
+    // conteneur de l'onglet elle etait le DERNIER enfant, apres `inputBar`.
+    // La restitution se fait donc AVANT celle de `inputBar` et AVANT le retrait
+    // du calque : une question encore en attente a la sortie du mode reste
+    // donc visible dans l'onglet.
+    if (pendingBar && vocalQuestionsHome && vocalQuestionsHome.parent) {
+      const nextQuestion =
+        vocalQuestionsHome.next && vocalQuestionsHome.next.parentNode === vocalQuestionsHome.parent
+          ? vocalQuestionsHome.next
+          : null;
+      vocalQuestionsHome.parent.insertBefore(pendingBar, nextQuestion);
+    }
+    vocalQuestionsHome = null;
     if (inputBar && vocalInputHome && vocalInputHome.parent) {
       const next = vocalInputHome.next && vocalInputHome.next.parentNode === vocalInputHome.parent ? vocalInputHome.next : null;
       vocalInputHome.parent.insertBefore(inputBar, next);
@@ -6329,6 +6388,7 @@ export async function createSuperAgent(container) {
       clearTelegramQuestion();
       if (pendingBar) pendingBar.innerHTML = "";
       pendingBarEl = null;
+      pendingQuestionChromeSync = null;
       pendingInputEl = null;
       superMessagesEl = null;
       // Suivi du travail (haut droite) : le panneau est GLOBAL, il survit à la

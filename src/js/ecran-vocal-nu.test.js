@@ -119,7 +119,6 @@ describe("2. rien de la conversation n'entre dans l'ecran a l'entree du mode", (
     for (const interdit of [
       "messagesEl",
       "toolbar",
-      "pendingBar",
       "busyHint",
       "statusEl",
       "wrapper",
@@ -128,6 +127,17 @@ describe("2. rien de la conversation n'entre dans l'ecran a l'entree du mode", (
         interdit,
       );
     }
+    // UNE EXCEPTION ECRITE, comme celle du bouton « Travail » ci-dessus : la
+    // RANGEE DES QUESTIONS (`#pendingBar`) entre dans l'ecran Vocal. Ce que
+    // l'ecran nu interdit, c'est de ramener LA CONVERSATION ; une question n'est
+    // pas la conversation — c'est ce qui attend un geste, et elle doit rester
+    // au-dessus de la ligne de saisie. Sans ce deplacement, la question etait
+    // peinte NULLE PART (derriere le calque opaque) et le travail restait
+    // bloque sans un mot : `docs/rapports/RAPPORT-questions-invisibles-ecran-vocal.md`.
+    // Ce qui est deplace est le MEME noeud, jamais une copie, et le verrou
+    // `src/js/ecran-vocal-question-visible.test.js` exige en plus qu'elle soit
+    // posee AVANT la barre de saisie et qu'elle ne soit JAMAIS masquee.
+    expect(enter).toContain("pendingBar");
     // Aucun contenu n'est ecrit dans l'ecran a l'entree : il n'est que structure.
     expect(enter).not.toMatch(/innerHTML/);
     expect(enter).not.toMatch(/textContent/);

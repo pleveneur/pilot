@@ -26,6 +26,10 @@
 //   reflechit         Pilot travaille (l'agent réfléchit)
 //   occupe            le moteur est occupé (backendBusy / isStreaming)
 //   dicteeOuverte     une session de dictée est déjà ouverte
+//   question          UNE QUESTION de l'assistant attend une RÉPONSE (la
+//                     rangée de boutons de l'écran Vocal) : la dictée ne
+//                     s'arme pas toute seule, sinon une phrase prononcée à
+//                     côté vaudrait réponse (voir règle 4b)
 //   arretManuel       l'utilisateur a ARRÊTÉ la dictée lui-même (le geste prime)
 //   sessionsVides     TROP de fins d'écoute sans texte (plafond atteint : la
 //                     dictée ne s'arme plus jusqu'au prochain geste)
@@ -58,6 +62,13 @@
 //   2. hors du mode      → aucune dictée n'est armée par cet écran
 //   3. Pilot parle       → désarmée : on ne se transcrit pas soi-même
 //   4. Pilot travaille   → désarmée : le tour en cours prime
+//   4b. une question attend une réponse → désarmée (et une dictée déjà
+//                          ouverte est FERMÉE) : on ne répond pas à la place
+//                          de l'utilisateur. Une confirmation envoyée par une
+//                          phrase prononcée à côté vaudrait « oui » ; l'écran
+//                          attend donc un CLIC sur la question, ou un texte
+//                          TAPÉ volontairement. Le geste 🎙️ reste possible :
+//                          dicter une réponse est un acte explicite.
 //   5. déjà ouverte      → on ne l'ouvre pas deux fois (idempotence)
 //   5b. arrêt manuel     → on ne la rouvre pas : un geste explicite prime sur
 //                          l'automatisme (le geste 🎙️ la rouvre pour de bon)
@@ -303,6 +314,10 @@ export function vocalDictationMessage(code) {
     case "aborted":
     case "no-speech":
       return "";
+    // Une question attend une reponse : ce n'est pas une panne, il n'y a rien a
+    // annoncer (la question elle-meme est a l'ecran, avec ses boutons).
+    case "question-en-attente":
+      return "";
     case "non-supporte":
     // Meme phrase pour la RAISON que pour le code du moteur : le poste n'a pas
     // de reconnaissance vocale (`sans-transcription`, lu par la ligne d'etat),
@@ -349,6 +364,18 @@ export function decideVocalDictation(etats = {}) {
   // 4. Pilot travaille : le tour en cours prime sur l'écoute.
   if (e.reflechit === true || e.occupe === true) {
     return { action: VOCAL_DICTATION_DISARM, raison: "tour-en-cours", delai: 0 };
+  }
+  // 4b. UNE QUESTION ATTEND UNE REPONSE (correctif « les questions ne sont pas
+  // visibles dans l'écran Vocal »). L'agent est en attente : il ne « travaille »
+  // donc pas au sens de la règle 4, et le micro s'armerait — une phrase
+  // prononcée à côté (un commentaire, un mot à quelqu'un d'autre) partirait
+  // alors comme réponse, et pour une CONFIRMATION elle vaudrait « oui » :
+  // répondre à la place de l'utilisateur. On DÉSARME donc, y compris une dictée
+  // DÉJÀ OUVERTE (placée avant la règle 5, qui ne fait que la maintenir). Le
+  // geste 🎙️, lui, rouvre la dictée quand on veut dicter sa réponse : c'est un
+  // acte explicite, jamais un effet de bord du silence.
+  if (e.question === true) {
+    return { action: VOCAL_DICTATION_DISARM, raison: "question-en-attente", delai: 0 };
   }
   // 5. Déjà ouverte : on ne l'ouvre pas une seconde fois.
   if (e.dicteeOuverte === true) {

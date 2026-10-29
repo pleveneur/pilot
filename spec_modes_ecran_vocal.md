@@ -444,7 +444,10 @@ la présence du texte.
 
 **Ce qui s'efface, et ce qui reste.** Trois nœuds, **et eux seuls** : la ligne
 d'état (`.vocal-status`), la zone de saisie (`.vocal-input`) et le bouton de
-dépannage du micro (`.vocal-mic-fix`, déjà masqué sauf panne). **Restent
+dépannage du micro (`.vocal-mic-fix`, déjà masqué sauf panne). La **rangée des
+questions de l'assistant** vit **dans** `.vocal-input`, juste au-dessus de la
+ligne de saisie (voir le paragraphe « Une question… » ci-dessous) : elle ne
+réclame donc aucun nœud de plus et n'est **jamais** effacée. **Restent
 toujours là** : le disque, la couronne, le halo vert, l'arc, le bouton
 « Réveiller <Nom> », la barre du haut de 44 px, le **logo** — qui est le bouton
 des trois modes, donc toujours atteignable —, le bouton **« Travail »** et les
@@ -459,7 +462,7 @@ activable**.
 
 **Le remasquage** : **2 500 ms** sans aucun geste, **un seul minuteur**, relancé
 à zéro à chaque geste — pendant ces 2,5 s le bas est visible, même si l'on ne
-fait rien. **Quatre situations l'interdisent**, et l'**ordre de la décision est
+fait rien. **Cinq situations l'interdisent**, et l'**ordre de la décision est
 la spec** :
 
 | # | Situation | Pourquoi |
@@ -468,6 +471,43 @@ la spec** :
 | 2 | le **champ contient du texte**, ou il a le **focus** | on ne cache jamais ce que l'on écrit, ni le champ où l'on tape (dictée en cours de transcription) |
 | 3 | l'état est **écoute** ou **parole** | la ligne d'état dit alors que le micro est ouvert, ou que Pilot répond : on ne l'efface pas |
 | 4 | le **pointeur est sur la zone du bas** | on ne fait pas disparaître sous le curseur ce qu'il désigne |
+| 5 | **une question de l'assistant attend une réponse** | la rangée de boutons qui la porte vit dans le bas : l'effacer rendrait la question invisible et bloquerait le travail sans un mot |
+
+**Une question de l'assistant est visible et répondable dans cet écran
+(correctif).** Les questions de l'assistant — choix, choix multiple,
+confirmation, saisie libre — étaient rendues dans la rangée `#pendingBar` de
+l'onglet, donc **derrière** le calque opaque de l'écran Vocal : en mode Vocal
+elles n'apparaissaient **nulle part**, et le travail restait bloqué sans un mot.
+La rangée est désormais **déplacée** dans `.vocal-input`, **juste au-dessus de
+la ligne de saisie** : même nœud, mêmes boutons, mêmes réponses, aucune copie et
+**aucun second affichage**. Elle est **dans le flux** (ni le disque, ni la ligne
+d'état, ni le champ ne sont recouverts) et **restituée exactement à sa place** à
+la sortie du mode, avant le retrait du calque.
+- **Une seule question à la fois, sans perte** : la file FIFO existante montre
+  sa **tête**, la réponse fait avancer la file, la suivante prend la place.
+  **Rien n'expire** : une question humaine attend un geste, elle ne s'efface
+  jamais toute seule.
+- **On répond au clic** sur les boutons ; pour une **saisie libre**, on tape la
+  réponse dans la barre juste en dessous (le chemin d'envoi existant la détourne
+  vers la question). **Pas de réponse vocale directe aux choix** (« oui », « la
+  deux ») : le mécanisme existant ne l'a jamais prévu, et le deviner serait
+  répondre à la place de l'utilisateur.
+- **La dictée ne répond pas à ma place** : tant qu'une question attend, la
+  dictée automatique de l'écran est **fermée** (règle 4b de
+  `vocal-conversation.js` ; une dictée déjà ouverte est fermée). Sans cette
+  garde, une phrase prononcée à côté serait partie comme réponse — et une
+  **confirmation** (dont la valeur par défaut est « oui ») aurait été validée
+  sans un geste. Le geste 🎙️ la rouvre : dicter sa réponse est un acte
+  explicite.
+- **Place et clic** : au repos, sans question, la rangée est vide et ne prend
+  **aucune place** ; avec une question, sa hauteur est bornée (140 px, 22 vh sur
+  les fenêtres basses, défilement interne) pour que la formule du disque (§1.5)
+  reste tenue. Elle ne réclame **aucun hôte cliquable de plus** : elle hérite du
+  pointeur de `.vocal-input`.
+- **Hors du mode Vocal, rien ne change** : les styles ajoutés sont bornés à
+  `.pilot-vocal`, la présentation d'origine de la rangée dans l'onglet est
+  intacte. Détail : `docs/conceptions/CONCEPTION-ecran-vocal-cercle-et-bas.md`
+  § 2.7.
 
 **Cas particulier, voulu** : au repos avec la dictée **armée mais encore
 silencieuse** — le cas normal de cet écran — le champ est vide et l'état est
@@ -486,15 +526,18 @@ translation : `transition: none`.
 
 **Où la décision vit** : un module **pur** `src/js/vocal-chrome.js` (aucun DOM,
 aucune minuterie) — `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4),
-`vocalChromeVisible({ etat, saisie, micFerme, pointeurActif })`,
+`vocalChromeVisible({ etat, saisie, micFerme, pointeurActif, question })`,
 `vocalChromeClass(visible)`, `vocalChromeWakeKey(touche)` et
 `vocalChromeMoved(courant, repere)`. Son **seul point d'écriture** est
 `vocalSyncChrome(state)`, en **dernière ligne** de `applyVocalState` (après
 `vocalSyncRestartButton`) : il lit le DOM, appelle la décision pure et pose ou
-retire la classe `vocal-chrome-hidden`. Aucun autre endroit ne l'écrit. Trois
+retire la classe `vocal-chrome-hidden`. Aucun autre endroit ne l'écrit. Quatre
 appels **sans logique** s'y ajoutent : les quatre écouteurs (posés à la fin de
 `enterVocal`, retirés au début de `exitVocal`), le point d'écriture du **texte
-dicté** (`rec.onresult`) et l'écouteur `input` **existant** de la saisie.
+dicté** (`rec.onresult`), l'écouteur `input` **existant** de la saisie, et le
+rappel `pendingQuestionChromeSync` (appelé à chaque changement de la file des
+questions, pour que le bas revienne si une question arrive alors qu'il est
+effacé).
 
 ## 4ter. L'état nu : tout masquer sauf le portrait (décision du 2026-10-29) — 🟡 conception écrite, **non livrée**
 
