@@ -4924,7 +4924,7 @@ let vocalDicteeParGeste = false;
                colonne (revision du 2026-10-29). -->
           <div class="vocal-side-body"></div>
           <!-- LE PORTRAIT DU PERSONNAGE et son nom : poses par
-               'applyVocalPortrait'. `alt` vide : l'image est decorative, le nom
+               'applyVocalPortrait'. 'alt' vide : l'image est decorative, le nom
                est ecrit juste en dessous. Masques tant que le personnage n'est
                pas connu — et masques DEFINITIVEMENT s'il n'y en a pas : aucun
                repli sur le logo dans la colonne. -->
@@ -4971,6 +4971,22 @@ let vocalDicteeParGeste = false;
     return vocalStatusText(state);
   }
 
+  /**
+   * LE noeud de la ligne d'etat — et le SEUL endroit du fichier ou son
+   * selecteur est ecrit.
+   *
+   * Deux usages, deux roles distincts, un seul noeud :
+   *  - `applyVocalState` y ECRIT son texte (point d'ecriture unique) ;
+   *  - `vocalChromePointeurSurLeBas` le LIT (rectangle) pour savoir si le
+   *    pointeur vise le bas de l'ecran.
+   * Un second litteral ailleurs serait un second point d'ecriture possible :
+   * c'est ce que verrouille `dictee-vocale-se-rearme.test.js`.
+   * @returns {Element|null}
+   */
+  function vocalStatusNode() {
+    return vocalOverlay ? vocalOverlay.querySelector(".vocal-status") : null;
+  }
+
   /** Applique l'etat visuel : UNE seule classe d'etat, et la ligne de texte. */
   function applyVocalState() {
     if (!vocalOverlay) return;
@@ -4989,7 +5005,7 @@ let vocalDicteeParGeste = false;
       "vocal-state-speaking"
     );
     vocalOverlay.classList.add(vocalStateClass(etats));
-    const ligne = vocalOverlay.querySelector(".vocal-status");
+    const ligne = vocalStatusNode();
     // Une seule ligne (§2.3) : les phrases de l'ecran et, au repos seulement,
     // les messages clairs (micro ferme, dictee indisponible, plafond de
     // sessions vides). La parole et la reflexion gardent la priorite. La
@@ -5047,8 +5063,15 @@ let vocalDicteeParGeste = false;
   function vocalChromePointeurSurLeBas() {
     if (!vocalOverlay || !vocalChromePointeur) return false;
     const { x, y } = vocalChromePointeur;
-    for (const selecteur of [".vocal-status", ".vocal-input", ".vocal-mic-fix"]) {
-      const noeud = vocalOverlay.querySelector(selecteur);
+    // Les trois noeuds du bas, dans l'ordre de lecture de l'ecran. La ligne
+    // d'etat passe par son accesseur : son selecteur n'est ecrit qu'UNE fois
+    // dans tout le fichier (voir `vocalStatusNode`).
+    const noeuds = [
+      vocalStatusNode(),
+      vocalOverlay.querySelector(".vocal-input"),
+      vocalOverlay.querySelector(".vocal-mic-fix"),
+    ];
+    for (const noeud of noeuds) {
       if (!noeud) continue;
       let rect = null;
       try {

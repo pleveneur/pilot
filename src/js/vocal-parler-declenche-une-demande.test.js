@@ -250,16 +250,22 @@ describe("cablage dans super-agent.js", () => {
     expect(etat).toContain("vocalSyncConversation();");
     // Le point d'application est le DERNIER appel qui touche a la DICTEE : la
     // decision voit donc l'etat qui vient d'etre applique. Ce qui peut le
-    // suivre est purement PRESENTATIONNEL — aujourd'hui le bouton de relance,
-    // qui lit l'etat reel et n'ecrit rien de la dictee. Nomme ici pour que rien
-    // d'autre ne s'y glisse en silence.
+    // suivre est purement PRESENTATIONNEL, et il est nomme ici, DANS L'ORDRE,
+    // pour que rien d'autre ne s'y glisse en silence :
+    //   1. le bouton de relance, qui lit l'etat reel de la dictee ;
+    //   2. le bas qui s'efface au repos (§2.6 de la spec du mode Vocal), dernier
+    //      appel de la fonction, seul point d'ecriture de `.vocal-chrome-hidden`.
+    // Ajouter une troisieme instruction ici, ou les inverser, fait echouer ce
+    // test : la liste est EXHAUSTIVE, pas un simple prefixe.
     const [, apres] = etat.split("vocalSyncConversation();");
     const suite = apres
       .split("\n")
       .map((l) => l.trim())
-      .filter((l) => l !== "" && !l.startsWith("//"))
-      .join(" ");
-    expect(suite).toBe("vocalSyncRestartButton(state);");
+      .filter((l) => l !== "" && !l.startsWith("//"));
+    expect(suite).toEqual([
+      "vocalSyncRestartButton(state);",
+      "vocalSyncChrome(state);",
+    ]);
     // Une seule occurrence dans TOUT le fichier : aucun second appelant.
     expect((SUPER.match(/vocalSyncConversation\(\);/g) || [])).toHaveLength(1);
   });

@@ -226,8 +226,16 @@ describe("3. un silence ne s'annonce jamais comme un échec", () => {
     // « La dictée n'a pas fonctionné ».
     const corps = sliceSource(SUPER, "function reportVoiceFailure", "\n  }\n", 40);
     expect(corps).toMatch(/if \(!texte\) return;/);
-    // Un seul point d'écriture de la ligne d'état (`.vocal-status`).
+    // Un seul point d'écriture de la ligne d'état (`.vocal-status`) : le
+    // sélecteur n'est écrit qu'UNE fois dans tout le fichier, dans l'accesseur
+    // `vocalStatusNode` (l'autre usage — la géométrie du bas — passe par lui).
     expect((SUPER.match(/\.vocal-status/g) || []).length).toBe(1);
+    const accesseur = sliceSource(SUPER, "function vocalStatusNode", "\n  }\n", 40);
+    expect(accesseur).toContain('querySelector(".vocal-status")');
+    // Et le texte de cette ligne n'est affecté qu'à UN seul endroit.
+    expect((SUPER.match(/ligne\.textContent\s*=/g) || []).length).toBe(1);
+    // `reportVoiceFailure` n'écrit jamais le texte lui-même : il passe par l'état.
+    expect(corps).not.toMatch(/textContent/);
   });
 
   it("le plafond ne peut plus être atteint par un silence (donc plus de message)", () => {
