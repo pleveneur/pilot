@@ -57,6 +57,14 @@ Un lot qui ne peut pas passer T17 ne se livre pas.
 | 8 | **Trois lots**, livrables seuls et dans cet ordre : **lot 1** portrait ; **lot 2** tâches + ligne d'activité (+ le bouton d'affichage, qui n'a de sens qu'une fois les colonnes remplies, § 6) ; **lot 3** discussion **et** levée de l'interdit — la doctrine de l'écran nu est isolée dans son lot, avec ses mises à jour de spec et d'aide. | § 2, § 3, § 4, § 6 |
 | 9 | **Tout ce que l'écran affiche se masque d'un seul geste, sauf le portrait.** Un petit bouton discret (une icône d'œil, dans la barre du haut) retire **ensemble** le disque, la couronne, la ligne d'état, la saisie, les colonnes et le fond de la barre ; **le personnage reste**, et le même bouton remet tout. **Rien n'est mémorisé** : on entre toujours avec tout visible. *(décision du 2026-10-29, postérieure aux huit premières — elle ne rouvre aucune d'elles : les trois sorties, le logo-bouton et l'effacement du bas sont intacts.)* | § 6 (entier) |
 
+> **Décision 9 — les quatre points laissés en attente sont tranchés le 2026-10-29** (réponses
+> du propriétaire, reprises ici sans les rouvrir). **(1)** Le bouton d'affichage **n'existe
+> que dans l'écran Vocal** → § 6.4. **(2)** Sans personnage actif, il ne reste **que le
+> bouton**, et le disque ne reste pas pour le remplir → § 6.5. **(3)** L'infobulle dit
+> « **le portrait** », jamais « le personnage » → § 6.4. **(4)** Le fondu du masquage reste à
+> **180 ms**, jamais l'instantané → § 6.7. Les passages concernés vont donc du § 6.4 au § 6.7 ;
+> le § 6.6 (la mémoire) n'est pas touché, et aucune autre ligne de la décision 9 ne change.
+
 ### Ce que ces lots ne font pas (et pourquoi)
 
 | Ce qui est hors périmètre | La raison |
@@ -719,7 +727,7 @@ Cette section remplace ce premier jet. **Trois** choses changent :
 |---|---|---|
 | **Portée** | les deux colonnes | **tout, sauf le personnage** (§ 6.3) |
 | **Libellé** | le mot « Informations » + icône `info` | **icône seule** (`eye` / `eye-off`) ; le sens est dans l'infobulle (§ 6.4) |
-| **Quand le bouton existe** | `hidden` dès que `track = 0` | **toujours présent** : ce qu'il commande existe même quand les colonnes ne tiennent pas (§ 6.4) |
+| **Quand le bouton existe** | `hidden` dès que `track = 0` | **toujours présent dans l'écran Vocal, et là seulement** : ce qu'il commande existe même quand les colonnes ne tiennent pas (§ 6.4) |
 
 Tout le reste du premier jet est **conservé** : sa place (enfant de `.vocal-top`), sa taille,
 son fond translucide, `aria-pressed`, l'infobulle qui dit l'état puis l'action, l'absence
@@ -794,6 +802,11 @@ plus facile à trouver.
 
 ### 6.4 Le bouton : place, taille, apparence, état, infobulle
 
+**Dans quels écrans.** Ce bouton n'existe **que** dans l'écran Vocal. Les modes « Détaillé » et
+« Assistant seul » n'ont pas de disque à sauver : y masquer tout ne laisserait qu'un écran
+vide, et leur équivalent est déjà le logo-bouton des trois modes — un second bouton y serait
+une commande de plus pour un geste qui a déjà sa porte.
+
 **Place.** Enfant de `.vocal-top`, jamais de l'overlay : il suit la barre, il ne peut pas
 dériver si la barre bouge, et il **n'ajoute aucun hôte** (§ 5.1 — `.vocal-top` est déjà
 cliquable, le bouton n'a besoin que de `pointer-events: auto` sur lui-même).
@@ -837,6 +850,18 @@ tout est visible, `eye-off` quand tout est masqué — la même paire que dans t
 aucune légende à apprendre. Elle est posée par `setIcon()` (`src/js/icons.js`), à 14 px, avec
 le mécanisme existant : **aucune dépendance nouvelle, aucune icône à dessiner**.
 
+**Les deux libellés, mot pour mot.** L'infobulle (`title`) et l'`aria-label` portent la même
+phrase, l'**état d'abord**, l'**action ensuite** :
+
+| État | `title` **et** `aria-label` |
+|---|---|
+| tout visible | « tout est visible — cliquer pour ne garder que le portrait » |
+| tout masqué | « tout est masqué — cliquer pour tout réafficher » |
+
+Le mot est **« le portrait »**, jamais « le personnage » : c'est plus court dans une
+infobulle, et « personnage » désigne l'entité du carnet — deux mots pour deux choses, aucune
+confusion à lever à la lecture.
+
 ### 6.5 Ce qui reste toujours visible quand tout est masqué
 
 Trois choses, dans cet ordre d'importance :
@@ -853,7 +878,10 @@ Ce qui reste à l'écran, en plus : **le fond** (la couleur de l'application) et
 du haut, **rien d'autre que le bouton** — la barre perd son fond et son filet, elle n'est plus
 une barre, seulement l'endroit où le bouton se pose.
 
-Et si le personnage manque : **le bouton, et c'est tout** (§ 6.3, cas particulier).
+Et si le personnage manque : **le bouton, et c'est tout** (§ 6.3, cas particulier). C'est
+l'état voulu, et le disque ne reste **pas** pour tenir compagnie au bouton : un disque sans
+personnage est déjà muet, le laisser contredirait « tout masquer » et créerait un état nu à
+deux vitesses — avec un visage, et sans.
 
 ### 6.6 La mémorisation : aucune, et c'est un choix
 
@@ -905,6 +933,10 @@ propre : un clic, un appel, une écriture.
 translation** (le disque ne doit pas glisser, il doit s'éteindre). En mouvement réduit
 (`prefers-reduced-motion` ou `_pilotModalAnimations`), `transition: none` : l'extinction est
 instantanée.
+
+**Ces 180 ms ne deviennent jamais un instantané.** Un écran qui s'éteint d'un coup se lit
+comme un bug, pas comme un geste : le fondu dit qu'une chose vient de se ranger du regard, il
+ne dit pas que l'affichage a sauté.
 
 **Le bas qui s'efface et le mode nu ne se battent pas.** `vocalSyncChrome()` calcule :
 

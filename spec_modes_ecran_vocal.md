@@ -640,14 +640,23 @@ bouge pas d'un pixel, sa place est conservée : c'est la seule exception, décid
 par le propriétaire. Le **bouton d'affichage**, seul moyen de tout réafficher.
 Et, au-dessus de l'overlay, les **trois sorties** (le logo, `Échap`, la fermeture
 de l'onglet) et le bouton **« Travail »** : l'état nu ne les touche pas. Sans
-personnage actif (§3ter), il ne reste que le bouton — état voulu.
+personnage actif (§3ter), il ne reste **que le bouton**, et le disque ne reste pas
+pour le remplir : un disque sans personnage est déjà muet, le laisser
+contredirait « tout masquer » et créerait un état nu à deux vitesses.
+
+**Le bouton n'existe que dans l'écran Vocal.** « Détaillé » et « Assistant seul »
+n'ont pas de disque à sauver : y masquer tout ne laisserait qu'un écran vide, et
+leur équivalent est déjà le logo-bouton des trois modes.
 
 **Le bouton.** Une icône seule (`œil` quand tout est visible, `œil barré` quand
 tout est masqué), 28 × 24 px, dans la **barre du haut de 44 px**, centrée,
 `pointer-events: auto` **sur lui-même** — il n'ajoute **pas** de septième hôte
 cliquable, il vit dans `.vocal-top` qui en est déjà un. L'infobulle et
-l'`aria-label` disent **l'état d'abord, l'action ensuite** (« tout est visible —
-cliquer pour ne garder que le personnage »). `aria-pressed` suit l'état.
+l'`aria-label` disent **l'état d'abord, l'action ensuite** : « tout est visible —
+cliquer pour ne garder que le portrait », puis « tout est masqué — cliquer pour
+tout réafficher ». Le mot est **« le portrait »** et non « le personnage » : plus
+court dans une infobulle, et « personnage » nomme l'entité du carnet — deux mots
+pour deux choses. `aria-pressed` suit l'état.
 **Jamais `hidden`, jamais `disabled`**, même quand la fenêtre est trop étroite
 pour les colonnes : ce qu'il commande existe toujours.
 
@@ -658,7 +667,9 @@ trois nœuds. Les nœuds masqués passent en `opacity: 0` puis `visibility: hidd
 **aucune règle de dimension ni de position** : le portrait et le disque restent
 à leur place, le retour ne fait rien sauter. Le portrait n'est **pas nommé** par
 le bloc : on ne peut pas masquer ce qu'on n'a pas écrit. En mouvement réduit,
-`transition: none`.
+`transition: none`. Le fondu dure **180 ms**, jamais l'instantané : un écran qui
+s'éteint d'un coup se lit comme un bug, pas comme un geste — il dit qu'une chose
+vient de se ranger du regard, pas que l'affichage a sauté.
 
 **Le bas qui s'efface et l'état nu.** `vocalSyncChrome` ne rallume plus le bas
 quand l'état nu est posé (un seul terme ajouté, à un seul endroit) : sinon bouger
