@@ -3,8 +3,16 @@
 // Le projet « Présences » dépose, quand un personnage est activé, deux fichiers
 // dans un dossier que Pilot se contente de LIRE :
 //
-//   <dossier de données de l'application>/.pilot/portrait/nom.txt     (le nom)
-//   <dossier de données de l'application>/.pilot/portrait/portrait.png (l'image)
+//   <dossier applicatif de Pilot>/.pilot/portrait/nom.txt      (le nom)
+//   <dossier applicatif de Pilot>/.pilot/portrait/portrait.png (l'image)
+//
+// « Dossier applicatif de Pilot » est celui que Présences désigne dans sa
+// décision D23 (docs/DECISIONS.md) : `<dossier personnel>/.pilot`, c'est-à-dire
+// `C:\Users\<utilisateur>\.pilot` sous Windows, `~/.pilot` ailleurs — donc
+// `~/.pilot/portrait`. Pilot lisait auparavant le dossier de données TAURI
+// (`%APPDATA%\com.pilot.editor`), qui n'est PAS le même dossier : le portrait
+// déposé par Présences n'y était jamais, et l'écran ne pouvait rien afficher.
+// `persona_dir_candidates` ci-dessous dit, dans l'ORDRE, où Pilot cherche.
 //
 // Contrat (fixé par la demande, non modifiable ici) :
 //   - fichier ABSENT = aucun personnage actif → l'Assistant garde son nom et son
@@ -25,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 
-/// Sous-dossier du dossier de données de l'application où Présences dépose.
+/// Sous-dossier du dossier applicatif de Pilot où Présences dépose.
 pub const PERSONA_DIR: &str = ".pilot";
 /// Dossier du personnage actif (sous `PERSONA_DIR`).
 pub const PERSONA_SUBDIR: &str = "portrait";
@@ -38,6 +46,11 @@ pub const PERSONA_NAME_MAX_CHARS: usize = 60;
 /// Taille maximale de l'image retenue (8 Mio) : au-delà, repli sur l'icône
 /// habituelle plutôt que de charger un fichier démesuré dans le WebView.
 pub const PERSONA_IMAGE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+/// Variable d'environnement par laquelle Présences désigne un autre dossier
+/// applicatif de Pilot (voir `Presences/src/chemins.ts`, `VARIABLE_DOSSIER_PILOT`).
+/// Ce n'est PAS un réglage de Pilot : quand elle est absente, le dossier par
+/// défaut (`<dossier personnel>/.pilot`) est utilisé, comme avant.
+pub const PRESENCES_PILOT_DIR_ENV: &str = "PRESENCES_PILOT_DIR";
 
 /// Signature PNG (8 premiers octets) : un `portrait.png` qui n'en est pas un
 /// n'est pas affiché (repli), jamais une image cassée dans l'interface.
@@ -53,12 +66,66 @@ pub struct Persona {
     pub portrait: Option<String>,
 }
 
-/// Dossier du personnage actif sous le dossier de données de l'application.
+/// Dossier du personnage actif sous un dossier applicatif de Pilot donné.
 ///
 /// Fonction PURE (aucune entrée/sortie) : c'est le seul endroit où le chemin du
 /// contrat est construit, donc le seul à vérifier.
 pub fn persona_dir(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join(PERSONA_DIR).join(PERSONA_SUBDIR)
+}
+
+/// Dossiers où Pilot cherche le personnage actif, DANS L'ORDRE, doublons retirés.
+///
+/// Fonction PURE (aucune entrée/sortie, aucune variable d'environnement lue
+/// ici : l'appelant les résout) :
+///
+///   1. `override_dir/portrait` — `PRESENCES_PILOT_DIR` (dossier applicatif de
+///      Pilot désigné explicitement par Présences) ;
+///   2. `<home>/.pilot/portrait` — **ce que Présences dépose** (D23) ;
+///   3. `<app_data_dir>/.pilot/portrait` — l'emplacement historique de Pilot,
+///      conservé pour qu'aucun autre hôte ne perde l'affichage.
+///
+/// Un argument `None` retire simplement son candidat.
+pub fn persona_dir_candidates(
+    app_data_dir: Option<&Path>,
+    home_dir: Option<&Path>,
+    override_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut pousser = |dir: PathBuf| {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    };
+    if let Some(racine) = override_dir {
+        if !racine.as_os_str().is_empty() {
+            pousser(persona_dir(racine));
+        }
+    }
+    if let Some(home) = home_dir {
+        // `persona_dir(home)` = `<home>/.pilot/portrait` : le dossier de D23.
+        pousser(persona_dir(home));
+    }
+    if let Some(data) = app_data_dir {
+        pousser(persona_dir(data));
+    }
+    dirs
+}
+
+/// Lit le personnage dans le PREMIER dossier qui contient au moins un des deux
+/// fichiers (`nom.txt` ou `portrait.png`), puis s'arrête là.
+///
+/// Aucune fusion entre dossiers : le nom et l'image viennent toujours du MÊME
+/// dépôt, jamais de deux. Aucun dossier utilisable → `Persona::default()`.
+pub fn read_persona_from(dirs: &[PathBuf]) -> Persona {
+    for dir in dirs {
+        let a_un_nom = dir.join(PERSONA_NAME_FILE).is_file();
+        let a_une_image = dir.join(PERSONA_IMAGE_FILE).is_file();
+        if a_un_nom || a_une_image {
+            return read_persona(dir);
+        }
+    }
+    Persona::default()
 }
 
 /// Normalise le contenu de `nom.txt` : première ligne utile, espaces rognés,
@@ -132,16 +199,26 @@ pub fn read_persona(dir: &Path) -> Persona {
 
 /// Commande Tauri : personnage actif de l'Assistant (`{ name, portrait }`).
 ///
-/// Fail-open de bout en bout : un dossier de données non résoluble donne
+/// Cherche dans l'ORDRE de `persona_dir_candidates` : le dossier désigné par
+/// `PRESENCES_PILOT_DIR` s'il est défini, puis `<dossier personnel>/.pilot/portrait`
+/// (ce que Présences dépose, décision D23), puis `<app_data_dir>/.pilot/portrait`
+/// (emplacement historique). Aucun chemin en dur : les trois sont résolus par
+/// Tauri ou par l'environnement, donc portables Windows / macOS / Linux.
+///
+/// Fail-open de bout en bout : aucun dossier résoluble donne
 /// `Persona::default()` — l'Assistant garde alors son nom et son icône
 /// habituels, sans erreur et sans message.
 #[tauri::command]
 pub fn read_assistant_persona(app: tauri::AppHandle) -> Persona {
     use tauri::Manager as _;
-    match app.path().app_data_dir() {
-        Ok(data_dir) => read_persona(&persona_dir(&data_dir)),
-        Err(_) => Persona::default(),
-    }
+    let app_data = app.path().app_data_dir().ok();
+    let home = app.path().home_dir().ok();
+    let racine = std::env::var(PRESENCES_PILOT_DIR_ENV)
+        .ok()
+        .map(|v| PathBuf::from(v.trim()))
+        .filter(|p| !p.as_os_str().is_empty());
+    let dirs = persona_dir_candidates(app_data.as_deref(), home.as_deref(), racine.as_deref());
+    read_persona_from(&dirs)
 }
 
 #[cfg(test)]
@@ -258,5 +335,89 @@ mod tests {
         let mut gros = PNG_SIGNATURE.to_vec();
         gros.resize(PERSONA_IMAGE_MAX_BYTES as usize + 1, 0);
         assert_eq!(png_data_url(&gros), None);
+    }
+
+    // ── Emplacement du depot (correctif « le portrait n'apparait pas ») ──────
+    //
+    // Presences depose dans `<dossier personnel>/.pilot/portrait` (sa decision
+    // D23). Pilot lisait `<app_data_dir>/.pilot/portrait` : deux dossiers
+    // differents, donc aucun portrait a l'ecran. Ces trois tests tiennent
+    // l'ordre des emplacements et l'absence de fusion entre deux depots.
+
+    #[test]
+    fn l_emplacement_de_presences_passe_avant_celui_de_tauri() {
+        let dirs = persona_dir_candidates(
+            Some(Path::new("/data/app")),
+            Some(Path::new("/home/moi")),
+            None,
+        );
+        assert_eq!(
+            dirs,
+            vec![
+                Path::new("/home/moi").join(".pilot").join("portrait"),
+                Path::new("/data/app").join(".pilot").join("portrait"),
+            ],
+            "le dossier personnel (ce que Presences depose) est lu EN PREMIER"
+        );
+    }
+
+    #[test]
+    fn le_dossier_designe_par_presences_passe_en_tete_et_aucun_doublon() {
+        let dirs = persona_dir_candidates(
+            Some(Path::new("/home/moi")),
+            Some(Path::new("/home/moi")),
+            Some(Path::new("/home/moi")),
+        );
+        assert_eq!(
+            dirs,
+            vec![Path::new("/home/moi").join(".pilot").join("portrait")],
+            "trois fois le meme dossier = un seul candidat"
+        );
+        // Un dossier de surcharge VIDE n'est pas un candidat (aucune racine
+        // vide ne doit designer `/portrait`).
+        let vide = persona_dir_candidates(None, None, Some(Path::new("")));
+        assert!(vide.is_empty(), "surcharge vide : aucun candidat");
+        // Aucun dossier resoluble : aucun candidat, jamais une panne.
+        assert!(persona_dir_candidates(None, None, None).is_empty());
+    }
+
+    #[test]
+    fn le_premier_dossier_qui_a_un_fichier_gagne_et_rien_n_est_fusionne() {
+        let home = dossier_de_test("home");
+        let data = dossier_de_test("data");
+        let dirs = persona_dir_candidates(Some(&data), Some(&home), None);
+        let dossier_home = home.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        let dossier_data = data.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        std::fs::create_dir_all(&dossier_home).expect("depot Presences");
+        std::fs::create_dir_all(&dossier_data).expect("depot historique");
+
+        // Aucun fichier nulle part : aucun personnage.
+        assert_eq!(read_persona_from(&dirs), Persona::default());
+
+        // Le depot de Presences porte le nom ET l'image ; l'historique l'image
+        // d'un AUTRE personnage : c'est le premier dossier qui gagne, en entier.
+        std::fs::write(dossier_home.join(PERSONA_NAME_FILE), "Sylvie\n").expect("nom.txt");
+        std::fs::write(dossier_home.join(PERSONA_IMAGE_FILE), png_minimal()).expect("portrait.png");
+        std::fs::write(dossier_data.join(PERSONA_NAME_FILE), "Ancien\n").expect("nom ancien");
+        let persona = read_persona_from(&dirs);
+        assert_eq!(
+            persona.name.as_deref(),
+            Some("Sylvie"),
+            "le nom vient du dossier de Presences, jamais de l'autre"
+        );
+        assert!(persona.portrait.is_some(), "le portrait du meme dossier est lu");
+
+        // Le dossier de Presences n'a plus que le nom : c'est LUI qui repond,
+        // meme si l'autre dossier contient encore une image.
+        let _ = std::fs::remove_file(dossier_home.join(PERSONA_IMAGE_FILE));
+        let persona = read_persona_from(&dirs);
+        assert_eq!(persona.name.as_deref(), Some("Sylvie"));
+        assert_eq!(
+            persona.portrait, None,
+            "aucune fusion : l'image de l'autre dossier n'est pas empruntee"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

@@ -11306,6 +11306,16 @@ body.pilot-loading *::after {
   height: 40px;
   display: block;
 }
+/* Personnage actif (Presences) : le portrait REMPLIT le rond, sans etirement ni
+   deformation. La classe d'etat est posee par `applyAssistantPersonaUi`
+   (super-agent.js) SEULEMENT quand un portrait existe ; sans personnage elle
+   n'est pas posee et le logo Pilot garde sa taille de 40 px ci-dessus. */
+.sa-immersive-hero-mark.sa-immersive-hero-mark--portrait img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
 .sa-immersive-hero-title {
   margin: 0 0 7px;
   font-size: 25px;

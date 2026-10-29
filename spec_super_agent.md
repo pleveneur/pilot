@@ -2070,15 +2070,26 @@ que Pilot **lit seulement** :
 
 | Élément | Chemin |
 |---|---|
-| nom affiché | `<dossier de données de Pilot>/.pilot/portrait/nom.txt` |
-| image affichée | `<dossier de données de Pilot>/.pilot/portrait/portrait.png` |
+| nom affiché | `<dossier personnel>/.pilot/portrait/nom.txt` |
+| image affichée | `<dossier personnel>/.pilot/portrait/portrait.png` |
 
+- **Emplacement** : c'est le dossier que Présences **dépose** (sa décision D23) —
+  `~/.pilot/portrait`, soit `C:\Users\<utilisateur>\.pilot\portrait` sous
+  Windows. Pilot le lit en PREMIER ; il garde ensuite deux replis, dans cet
+  ordre : `PRESENCES_PILOT_DIR/portrait` (variable d'environnement par laquelle
+  Présences désigne un autre dossier) puis `<app_data_dir>/.pilot/portrait`
+  (l'emplacement historique de Pilot). L'ordre et le choix du dossier vivent dans
+  la fonction PURE `persona_dir_candidates` (`src-tauri/src/persona.rs`) : le
+  premier dossier qui contient **au moins un** des deux fichiers est retenu tel
+  quel, **aucune fusion** entre deux dépôts (le nom et l'image viennent toujours
+  du même).
 - **Fichier absent = aucun personnage actif** → nom réglé (⚙️ → Assistant →
   Nom, sinon « Assistant ») et icône 🧭. L'absence n'est pas une panne :
   aucune erreur, aucun message, aucune trace console.
 - **Lecture côté Rust** (décision) : commande Tauri **`read_assistant_persona`**
   (`src-tauri/src/persona.rs`) renvoyant `{ name, portrait }`. C'est le seul
-  côté qui connaît `app_data_dir()` ; aucun chemin n'est écrit à la main
+  côté qui résout les dossiers, via Tauri (`home_dir()`, `app_data_dir()`) ;
+  aucun chemin n'est écrit à la main
   (`PathBuf::join`), donc Windows / macOS / Linux sans branche. L'image voyage
   en `data:image/png;base64,…` (convention d'affichage d'image déjà utilisée
   par le WebView). Repli décidé côté Rust : dossier absent, fichier vide, nom

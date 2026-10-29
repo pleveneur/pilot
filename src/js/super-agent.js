@@ -2371,7 +2371,22 @@ export function applyAssistantPersonaUi() {
     const mark = ov.querySelector(".sa-immersive-hero-mark img");
     if (mark) {
       // Portrait du personnage actif, sinon le logo Pilot habituel.
-      mark.src = getAssistantPortrait() || "/logo_pilot_vector.svg";
+      const portrait = getAssistantPortrait();
+      // AFFECTATION SEULEMENT SI ELLE CHANGE : la valeur est une `data:` URL de
+      // plusieurs megaoctets ; la reaffecter a chaque focus faisait redecoder
+      // l'image pour rien (et clignoter le rond). La comparaison, elle, ne
+      // coute qu'un parcours de chaine.
+      const voulu = portrait || "/logo_pilot_vector.svg";
+      if (mark.src !== voulu) mark.src = voulu;
+      // Le rond du heros signale qu'il porte un PORTRAIT : la feuille de style
+      // fait alors remplir le cercle a l'image (`object-fit: cover`). Sans
+      // personnage, la classe est retiree et le logo garde exactement sa taille
+      // d'origine. `parentElement` manque sur un noeud simule (tests) : garde
+      // simple, aucune exception.
+      const cercle = mark.parentElement;
+      if (cercle && cercle.classList) {
+        cercle.classList.toggle("sa-immersive-hero-mark--portrait", !!portrait);
+      }
     }
   } catch (_) {
     /* overlay absent ou en cours de démontage : rien à faire */
@@ -4757,6 +4772,12 @@ let vocalDicteeParGeste = false;
     // portrait retenus (aucune attente du prochain retour de focus). Aucun
     // personnage → nom habituel et logo Pilot, inchangés.
     applyAssistantPersonaUi();
+    // Démarrage DIRECTEMENT dans ce mode, ou personnage activé dans Présences
+    // sans retour de focus depuis : aucun portrait n'est encore en mémoire et le
+    // héros resterait au logo. Une seule relecture suffit — c'est le mécanisme
+    // existant (`refreshAssistantPersonaAndApply`), rien de nouveau, et elle ne
+    // part que dans ce cas pour ne pas relire 2 Mo d'image à chaque bascule.
+    if (getAssistantPortrait() === "") refreshAssistantPersonaAndApply().catch(() => {});
     localStorage.setItem(IMMERSIVE_KEY, "1");
     // Mode REELLEMENT affiche : la cle de memoire suit (sans ecraser un mode
     // demande par le bouton — « Vocal » emprunte cet ecran au lot 1).
