@@ -1,5 +1,6 @@
-// Tests — LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> »), decisions 401
-// et 402 du suivi du proprietaire (RAPPORT-bouton-ok-nova.md).
+// Tests — LE BOUTON DE RELANCE DE L'ECOUTE (« Réveiller <Nom> »), decisions 401
+// et 402 du suivi du proprietaire (RAPPORT-bouton-ok-nova.md), retouchees le
+// 2026-10-29 (RAPPORT-bouton-reveiller.md).
 //
 // CE QUE CE FICHIER VERROUILLE (et pourquoi) :
 //   1. La VISIBILITE est une DECISION PURE et elle ne se trompe pas de sens :
@@ -10,25 +11,32 @@
 //      aucun bouton pendant que Pilot parle ou travaille (la dictee y est fermee
 //      par construction).
 //   3. Elle n'est jamais un bouton mort : sans transcription disponible, rien.
-//   4. L'ETIQUETTE porte le nom du PERSONNAGE ACTIF, borne pour tenir dans le
-//      rond, et ce module n'invente ni ne retient aucun nom.
+//   4. L'ETIQUETTE est « Réveiller <Nom> », avec le nom du PERSONNAGE ACTIF,
+//      un repli sur le nom HABITUEL de Pilot quand il n'y en a pas, et une
+//      troncature propre quand le nom est tres long (le nom entier restant dans
+//      l'infobulle et le nom accessible) ; ce module n'invente ni ne retient
+//      aucun nom a lui.
 //   5. Le module est PUR : aucun DOM, aucun micro, aucune horloge, aucune
 //      ecriture. Il ne peut donc pas doubler l'etat reel de la dictee.
 //
 // Les commentaires sont en ASCII ; les chaines qui viennent de l'interface
-// (« ok », « Lancer l'écoute ») sont copiees telles quelles.
+// (« Réveiller », « Assistant ») sont copiees telles quelles.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   vocalRestartVisible,
+  vocalRestartName,
   vocalRestartLabel,
-  VOCAL_RESTART_TITLE,
-  VOCAL_RESTART_WORD,
-  VOCAL_RESTART_NAME_MAX,
+  vocalRestartText,
+  VOCAL_RESTART_VERB,
+  VOCAL_RESTART_LABEL_MAX,
   VOCAL_RESTART_ETAT,
 } from "./vocal-restart.js";
+// Le nom HABITUEL vient de `assistant-persona.js` : c'est la MEME constante que
+// l'onglet 🧭. L'importer ici prouve qu'il n'y a pas de second nom par defaut.
+import { DEFAULT_ASSISTANT_NAME } from "./assistant-persona.js";
 
 const ICI = dirname(fileURLToPath(import.meta.url));
 const lire = (rel) => readFileSync(join(ICI, "..", "..", rel), "utf8").replace(/\r\n/g, "\n");
@@ -118,41 +126,87 @@ describe("1. la visibilite suit l'etat REEL de la dictee", () => {
 });
 
 // ---------------------------------------------------------------------------
-describe("2. l'etiquette dit le personnage ACTIF, sans en inventer aucun", () => {
-  it("« ok » + le nom affiche", () => {
-    expect(vocalRestartLabel("Nova")).toBe("ok Nova");
-    expect(VOCAL_RESTART_WORD).toBe("ok");
+describe("2. l'etiquette dit « Réveiller <Nom> », sans inventer aucun nom", () => {
+  it("« Réveiller » + le nom affiche, au mot pres", () => {
+    expect(vocalRestartLabel("Nova")).toBe("Réveiller Nova");
+    expect(VOCAL_RESTART_VERB).toBe("R\u00e9veiller");
+    // Tant que le nom tient dans le cercle, le texte AFFICHE est le libelle
+    // complet : aucune difference entre ce qu'on lit et ce qu'on annonce.
+    expect(vocalRestartText("Nova")).toBe("R\u00e9veiller Nova");
+    // Le nom d'un personnage a droit a ses espaces (il ne s'arrete plus au
+    // premier mot : « Réveiller Nova la gardienne » est un libelle valide).
+    expect(vocalRestartLabel("Nova la gardienne")).toBe("R\u00e9veiller Nova la gardienne");
+    expect(vocalRestartLabel("  Nova   la   gardienne  ")).toBe(
+      "R\u00e9veiller Nova la gardienne",
+    );
   });
 
-  it("sans nom, le bouton reste utilisable : « ok »", () => {
-    expect(vocalRestartLabel("")).toBe("ok");
-    expect(vocalRestartLabel("   ")).toBe("ok");
-    expect(vocalRestartLabel(null)).toBe("ok");
-    expect(vocalRestartLabel(undefined)).toBe("ok");
+  it("sans personnage actif : le nom HABITUEL de Pilot, jamais un trou", () => {
+    // Le repli n'est pas une chaine recopiee ici : c'est `DEFAULT_ASSISTANT_NAME`.
+    const attendu = `R\u00e9veiller ${DEFAULT_ASSISTANT_NAME}`;
+    for (const brut of ["", "   ", "\n\t ", null, undefined]) {
+      expect(vocalRestartLabel(brut), JSON.stringify(brut)).toBe(attendu);
+      expect(vocalRestartText(brut), JSON.stringify(brut)).toBe(attendu);
+      expect(vocalRestartName(brut), JSON.stringify(brut)).toBe(DEFAULT_ASSISTANT_NAME);
+    }
+    // Et jamais « undefined », jamais un double espace, jamais d'espace aux bords.
+    for (const brut of ["", "  ", null, undefined, " Nova "]) {
+      const texte = vocalRestartLabel(brut);
+      expect(texte).not.toMatch(/\s{2,}/);
+      expect(texte.trim()).toBe(texte);
+      expect(texte).not.toBe("R\u00e9veiller undefined");
+      expect(texte).not.toBe("R\u00e9veiller null");
+      expect(texte.startsWith("R\u00e9veiller ")).toBe(true);
+    }
   });
 
-  it("seul le PREMIER mot du nom est garde (un titre ne tiendrait pas)", () => {
-    expect(vocalRestartLabel("Nova la gardienne")).toBe("ok Nova");
-    expect(vocalRestartLabel("  Nova   la   gardienne  ")).toBe("ok Nova");
+  it("un nom TRES long (60 car.) ne casse rien : texte abrege, nom entier garde", () => {
+    const long = "Bartholomew-Casimir de la Tour d'Auvergne Quinzieme du Nom";
+    expect(long.length).toBeLessThanOrEqual(60);
+    expect(long.length).toBeGreaterThan(VOCAL_RESTART_LABEL_MAX);
+    const texte = vocalRestartText(long);
+    // 1. le texte affiche tient dans la borne (comptee en caracteres)
+    expect(Array.from(texte).length).toBeLessThanOrEqual(VOCAL_RESTART_LABEL_MAX);
+    // 2. il est signale comme abrege
+    expect(texte.endsWith("\u2026")).toBe(true);
+    // 3. le verbe est intact et il reste de la place pour le nom
+    expect(texte.startsWith(`R\u00e9veiller `)).toBe(true);
+    expect(texte).not.toBe(`R\u00e9veiller\u2026`);
+    // 4. le nom ENTIER est dans le libelle complet : rien n'est perdu, c'est lui
+    //    que portent l'infobulle et le nom accessible.
+    expect(vocalRestartLabel(long)).toBe(`R\u00e9veiller ${long}`);
   });
 
-  it("un nom trop long est abrege, jamais laisse deborder du rond", () => {
-    const long = "Bartholomew";
-    const etiquette = vocalRestartLabel(long);
-    expect(etiquette.startsWith(`${VOCAL_RESTART_WORD} `)).toBe(true);
-    const nom = etiquette.slice(VOCAL_RESTART_WORD.length + 1);
-    expect(nom.length).toBeLessThanOrEqual(VOCAL_RESTART_NAME_MAX);
-    expect(nom.endsWith("\u2026")).toBe(true);
-    expect(nom).toBe("Bartholom\u2026");
+  it("la coupe tombe sur une fin de MOT, jamais au milieu d'un mot", () => {
+    const long = "Nova la gardienne des claviers anciens et des nuits blanches";
+    const complet = vocalRestartLabel(long);
+    const texte = vocalRestartText(long);
+    const avant = texte.slice(0, -1); // sans le « … »
+    expect(texte.endsWith("\u2026")).toBe(true);
+    // Ce qui reste est un PREFIXE du libelle complet…
+    expect(complet.startsWith(avant)).toBe(true);
+    // …et la coupe tombe juste devant un espace : le mot est entier.
+    expect(complet[avant.length]).toBe(" ");
+    // Aucun espace avant le « … » (il a ete retire, pas laisse trainer).
+    expect(texte).not.toMatch(/\s\u2026$/);
   });
 
-  it("un nom a la limite n'est PAS abrege", () => {
-    const juste = "A".repeat(VOCAL_RESTART_NAME_MAX);
-    expect(vocalRestartLabel(juste)).toBe(`${VOCAL_RESTART_WORD} ${juste}`);
+  it("un texte a la LIMITE n'est pas abrege", () => {
+    const nom = "A".repeat(VOCAL_RESTART_LABEL_MAX - VOCAL_RESTART_VERB.length - 1);
+    const complet = vocalRestartLabel(nom);
+    expect(Array.from(complet).length).toBe(VOCAL_RESTART_LABEL_MAX);
+    expect(vocalRestartText(nom)).toBe(complet);
+    // Un caractere de plus : la coupe s'active.
+    expect(vocalRestartText(`${nom}A`).endsWith("\u2026")).toBe(true);
   });
 
-  it("le libelle d'action est dit en clair (infobulle + nom accessible)", () => {
-    expect(VOCAL_RESTART_TITLE).toBe("Lancer l'\u00e9coute");
+  it("la coupe compte des CARACTERES : un nom avec emoji n'est jamais coupe en deux", () => {
+    const emoji = "Nova \u{1F31F}\u{1F680}\u{1F319}\u{1F3A7}\u{1F3A4}\u{1F525}\u{1F4AB}\u{1F6F8}\u{1F308}\u{1F30D}";
+    const texte = vocalRestartText(emoji);
+    // Aucune demi-paire de substitution laissee seule : le texte reste lisible.
+    expect(texte).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(texte).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(Array.from(texte).length).toBeLessThanOrEqual(VOCAL_RESTART_LABEL_MAX);
   });
 });
 
@@ -174,6 +228,9 @@ describe("3. le module est PUR : il ne touche ni au DOM, ni au micro, ni a la di
     vocalRestartVisible({ ...REPOS, etat: "speaking" });
     expect(vocalRestartVisible(REPOS)).toBe(premier);
     expect(vocalRestartLabel("Nova")).toBe(vocalRestartLabel("Nova"));
+    // Changer de nom ne laisse AUCUNE trace : le module ne retient rien.
+    expect(vocalRestartLabel("Autre")).toBe("R\u00e9veiller Autre");
+    expect(vocalRestartText("Nova")).toBe("R\u00e9veiller Nova");
   });
 
   it("aucune animation, aucune duree : le mouvement reduit est respecte d'avance", () => {

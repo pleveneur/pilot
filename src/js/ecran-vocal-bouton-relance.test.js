@@ -1,6 +1,8 @@
-// Tests — LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> ») : le BRANCHEMENT
+// Tests — LE BOUTON DE RELANCE DE L'ECOUTE (« Réveiller <Nom> ») : le BRANCHEMENT
 // et la GEOMETRIE. Fiche du proprietaire, decisions 401 et 402 du suivi
-// (RAPPORT-bouton-ok-nova.md).
+// (RAPPORT-bouton-ok-nova.md), retouchees le 2026-10-29 : le bouton OCCUPE TOUTE
+// LA SURFACE INTERIEURE du disque, et son libelle dit « Réveiller <Nom> »
+// (RAPPORT-bouton-reveiller.md).
 //
 // `vocal-restart.test.js` verrouille la DECISION (se voit-il ? que dit-il ?).
 // Ce fichier-ci verrouille ce que la decision ne peut pas prouver : que l'objet
@@ -17,9 +19,9 @@
 //   3. Sa visibilite est appliquee depuis l'etat REEL, a la fin de
 //      `applyVocalState`, APRES `vocalSyncConversation` (donc jamais pendant les
 //      350 ms d'un armement deja programme).
-//   4. La geometrie est CALCULEE : taille et position lues dans le CSS, rayon du
-//      disque lu dans le CSS — le bouton tient entierement dedans, sans dependre
-//      d'une taille de fenetre.
+//   4. La geometrie est CALCULEE depuis le CSS : le bouton occupe la surface
+//      INTERIEURE du disque (moins l'epaisseur de la bordure), sans en deborder,
+//      et cela ne depend d'AUCUNE taille de fenetre.
 //   5. Le bouton ne cree AUCUNE mise en page (position absolue), ne recouvre ni
 //      le halo ni la phrase d'etat, et n'anime rien (mouvement reduit compris).
 //
@@ -88,11 +90,23 @@ describe("1. l'objet pose dans l'ecran : un rond DANS le disque", () => {
     // Un sous-arbre `aria-hidden` contenant un bouton focusable est un piege :
     // le noeud serait atteignable au clavier mais muet pour un lecteur d'ecran.
     expect(disque).not.toMatch(/aria-hidden/);
-    // Le libelle est une CHAINE AFFICHEE (constante du module pur, deja
-    // verifiee dans `vocal-restart.test.js`) : elle est interpolee une seule
-    // fois, pour l'infobulle ET pour le nom accessible.
-    expect(disque).toMatch(/aria-label="\$\{VOCAL_RESTART_TITLE\}"/);
-    expect(disque).toMatch(/title="\$\{VOCAL_RESTART_TITLE\}"/);
+  });
+
+  it("l'infobulle, le nom accessible et le texte DISENT LA MEME CHOSE", () => {
+    // Un seul texte, interpole UNE fois, pour les trois : on ne peut pas lire
+    // « Réveiller Nova » a l'ecran et entendre autre chose au lecteur d'ecran.
+    expect(disque).toMatch(
+      /<button type="button" class="vocal-restart hidden" title="\$\{relance\}" aria-label="\$\{relance\}">\$\{relance\}<\/button>/,
+    );
+    // Et ce texte de depart n'est fait que de CONSTANTES : le nom du personnage
+    // n'entre JAMAIS dans du balisage (il vient d'un fichier lu par Rust, il est
+    // pose ensuite par `applyVocalRestartLabel`, en `textContent`).
+    expect(build).toMatch(
+      /const relance = `\$\{VOCAL_RESTART_VERB\} \$\{DEFAULT_ASSISTANT_NAME\}`/,
+    );
+    expect(build, "le nom du personnage interpole en HTML").not.toMatch(
+      /\$\{superAgentDisplayLabel\(\)\}/,
+    );
   });
 
   it("l'ordre des noeuds de l'ecran est inchange autour de lui", () => {
@@ -172,10 +186,27 @@ describe("3. la visibilite est appliquee depuis l'etat REEL de la dictee", () =>
 
   it("la decision et l'etiquette sont PURES (module dedie)", () => {
     expect(sync).toMatch(/vocalRestartVisible\(/);
-    expect(sync).toMatch(/vocalRestartLabel\(superAgentDisplayLabel\(\)\)/);
+    // L'etiquette est posee par le point d'ecriture UNIQUE, pas ici.
+    expect(sync).toMatch(/applyVocalRestartLabel\(bouton\)/);
     expect(SUPER).toMatch(
       /import \{[^}]*vocalRestartVisible[^}]*\} from "\.\/vocal-restart\.js"/,
     );
+  });
+
+  it("le libelle est ecrit a UN SEUL endroit, avec le nom du personnage", () => {
+    const pose = sliceSource(SUPER, "function applyVocalRestartLabel(bouton) {", "\n}\n", 2);
+    // Le nom vient de `superAgentDisplayLabel` (personnage actif, sinon nom
+    // regle, sinon nom habituel) : aucune seconde source de nom.
+    expect(pose).toMatch(/superAgentDisplayLabel\(\)/);
+    // Le texte affiche est borne, le libelle complet porte le nom entier.
+    expect(pose).toMatch(/vocalRestartText\(/);
+    expect(pose).toMatch(/vocalRestartLabel\(/);
+    // Texte, infobulle et nom accessible : les TROIS ensemble, ou pas du tout.
+    expect(pose).toMatch(/el\.textContent = texte/);
+    expect(pose).toMatch(/el\.title = complet/);
+    expect(pose).toMatch(/el\.setAttribute\("aria-label", complet\)/);
+    // Aucun balisage : le nom vient d'un fichier externe, il n'est pas du HTML.
+    expect(pose).not.toMatch(/innerHTML/);
   });
 
   it("elle ne calcule aucun niveau sonore et ne touche pas au halo", () => {
@@ -192,13 +223,12 @@ describe("3. la visibilite est appliquee depuis l'etat REEL de la dictee", () =>
       "\n}\n",
       2,
     );
-    expect(persona).toMatch(/vocal-restart/);
-    expect(persona).toMatch(/vocalRestartLabel\(label\)/);
+    expect(persona).toMatch(/applyVocalRestartLabel\(\)/);
   });
 });
 
 // ---------------------------------------------------------------------------
-describe("4. la geometrie : il tient DANS le disque, a toute taille de fenetre", () => {
+describe("4. la geometrie : il OCCUPE la surface interieure, sans en deborder", () => {
   const orb = bloc(CSS, ".vocal-orb {");
   const restart = bloc(CSS, ".vocal-restart {");
 
@@ -210,37 +240,62 @@ describe("4. la geometrie : il tient DANS le disque, a toute taille de fenetre",
     expect(restart).not.toMatch(/outline:\s*\d/);
   });
 
-  it("il est dans le HAUT du disque, en ABSOLU (aucune mise en page)", () => {
+  it("il est en ABSOLU et couvre TOUTE la surface interieure (`inset: 0`)", () => {
     expect(restart).toMatch(/position:\s*absolute/);
-    expect(restart).toMatch(/top:\s*3px/);
+    // `inset: 0` = la boite de padding du disque, exactement. Aucune taille
+    // propre, aucun decalage, aucune marge : il ne peut donc pas flotter dans
+    // le cercle, ni le depasser, ni se poser de travers.
+    expect(restart).toMatch(/inset:\s*0;/);
+    expect(restart).not.toMatch(/(^|\n)\s*(width|height|top|left|right|bottom):/);
+    expect(restart).not.toMatch(/margin:\s*0 auto/);
     // Centre sans `transform` : rien a neutraliser en mouvement reduit.
-    expect(restart).toMatch(/left:\s*0;/);
-    expect(restart).toMatch(/right:\s*0;/);
-    expect(restart).toMatch(/margin:\s*0 auto/);
     expect(restart).not.toMatch(/transform:/);
   });
 
-  it("le point le plus eloigne du bouton reste DANS le rayon interieur", () => {
+  it("son cercle COINCIDE avec le bord interieur de l'anneau, sans un pixel de trop", () => {
     // Chiffres LUS dans le CSS, jamais recopies : si l'un bouge sans l'autre,
     // ce test tombe et dit pourquoi.
-    const taille = px(restart, "width");
-    const haut = px(restart, "top");
     const disque = px(orb, "width");
     const anneau = px(orb, "border");
     // Le disque n'a pas de `box-sizing` particulier : sa boite de padding fait
-    // `width` x `width` et le rayon interieur de l'anneau vaut la moitie.
-    const rayonUtile = disque / 2;
-    const demi = taille / 2;
-    const centre = haut + demi; // distance du haut de la boite au centre du bouton
-    const distanceAuCentre = rayonUtile - centre;
-    expect(taille).toBeGreaterThan(0);
-    expect(haut).toBeGreaterThanOrEqual(anneau); // il ne mord pas sur l'anneau
-    // Le bord haut du bouton est DANS le disque, et son point le plus eloigne
-    // du centre du disque aussi : aucune taille de fenetre n'y change rien,
-    // puisque le disque et le bouton sont en pixels fixes.
-    expect(distanceAuCentre + demi).toBeLessThanOrEqual(rayonUtile);
-    // Marge restante : il ne touche pas l'anneau (>= 2 px de respiration).
-    expect(rayonUtile - (distanceAuCentre + demi)).toBeGreaterThanOrEqual(2);
+    // `width` x `width`, donc l'enfant en `inset: 0` mesure `width` x `width`.
+    const rayonUtile = disque / 2; // bord INTERIEUR de l'anneau
+    const rayonDuBouton = disque / 2; // `inset: 0` => la boite de padding
+    expect(anneau).toBeGreaterThan(0);
+    // 1. Il ne RECOUVRE pas la bordure : son rayon s'arrete au bord interieur.
+    expect(rayonDuBouton).toBe(rayonUtile);
+    // 2. Il ne DEBORDE pas : le bord exterieur de l'anneau est plus loin.
+    expect(rayonDuBouton).toBeLessThan(rayonUtile + anneau);
+    // 3. Il n'y a aucun JEU : la seule epaisseur entre le bouton et l'exterieur
+    //    du disque est l'anneau lui-meme. « Il devient le cercle. »
+    expect(rayonUtile + anneau - rayonDuBouton).toBe(anneau);
+  });
+
+  it("aucune valeur ne depend d'une taille de fenetre", () => {
+    // Pas d'unite relative a la fenetre, pas de dimension en pourcentage : le
+    // disque est en pixels fixes et le bouton est absolu. Le rapport bouton /
+    // disque est donc le meme dans une petite et une grande fenetre.
+    expect(restart).not.toMatch(/\d(vw|vh|vmin|vmax)/);
+    expect(restart).not.toMatch(
+      /(width|height|min-width|max-width|min-height|max-height):\s*[\d.]+(%|vw|vh)/,
+    );
+    expect(orb).toMatch(/width:\s*168px/);
+    expect(orb).toMatch(/height:\s*168px/);
+  });
+
+  it("le texte ne peut pas sortir du cercle, meme au pire cas", () => {
+    // 1. Dernier recours du CSS : le rond decoupe ce qui depasserait.
+    expect(restart).toMatch(/overflow:\s*hidden/);
+    // 2. Et la place laissee au texte tient dans le disque, meme sur trois
+    //    lignes — le pire cas du libelle borne par `vocalRestartText`.
+    const disque = px(orb, "width");
+    const police = px(restart, "font-size");
+    const interligne = Number(/line-height:\s*(\d+(?:\.\d+)?)/.exec(restart)[1]);
+    const padding = Number(/padding:\s*0 (\d+)px/.exec(restart)[1]);
+    const largeurTexte = disque - 2 * padding;
+    expect(largeurTexte).toBeGreaterThan(0);
+    const hauteurTexte = 3 * police * interligne;
+    expect(Math.hypot(largeurTexte, hauteurTexte)).toBeLessThanOrEqual(disque);
   });
 
   it("le disque ne recoit ni `overflow` ni taille nouvelle", () => {

@@ -102,11 +102,17 @@ import {
   VOCAL_MESSAGE_DICTEE_ECHEC,
   VOCAL_MESSAGE_SENSIBILITE_INCONNUE,
 } from "./vocal-conversation.js";
-// LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> », decisions 401 / 402) :
+// LE BOUTON DE RELANCE DE L'ECOUTE (« Réveiller <Nom> », decisions 401 / 402) :
 // les DEUX decisions (se voit-il ? que dit-il ?) sont PURES et vivent dans ce
-// module. Ici, on ne fait que les appliquer (`vocalSyncRestartButton`) et
-// brancher le clic sur la voie de demarrage EXISTANTE — aucune seconde voie.
-import { vocalRestartVisible, vocalRestartLabel, VOCAL_RESTART_TITLE } from "./vocal-restart.js";
+// module. Ici, on ne fait que les appliquer (`vocalSyncRestartButton`,
+// `applyVocalRestartLabel`) et brancher le clic sur la voie de demarrage
+// EXISTANTE — aucune seconde voie.
+import {
+  vocalRestartVisible,
+  vocalRestartLabel,
+  vocalRestartText,
+  VOCAL_RESTART_VERB,
+} from "./vocal-restart.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage, purgeAgentTabView } from "./agent-pi.js";
 import {
@@ -2007,6 +2013,36 @@ export function superAgentDisplayLabel() {
 }
 
 /**
+ * Pose l'etiquette du bouton de relance de l'ecran Vocal (« Réveiller <Nom> »).
+ *
+ * Un SEUL endroit ecrit ces trois valeurs, pour qu'elles ne puissent pas
+ * diverger : le TEXTE AFFICHE (`vocalRestartText`, abrege sur une fin de mot
+ * quand le nom est trop long pour le cercle), puis l'INFOBULLE et le NOM
+ * ACCESSIBLE, qui portent tous les deux le libelle COMPLET
+ * (`vocalRestartLabel`) — le nom entier n'est donc jamais perdu a l'ecran.
+ *
+ * Le nom vient de `superAgentDisplayLabel` (personnage actif, sinon nom regle,
+ * sinon nom habituel) : aucun second mecanisme de nom n'est cree ici.
+ *
+ * `textContent` et `setAttribute` seulement — jamais d'`innerHTML` : le nom
+ * vient d'un fichier depose par un autre projet, ce n'est pas du balisage.
+ *
+ * @param {Element|null} [bouton] bouton de relance (par defaut : celui de l'ecran)
+ */
+function applyVocalRestartLabel(bouton) {
+  const el =
+    bouton ||
+    (typeof document !== "undefined" ? document.querySelector(".vocal-restart") : null);
+  if (!el) return;
+  const nom = superAgentDisplayLabel();
+  const texte = vocalRestartText(nom);
+  const complet = vocalRestartLabel(nom);
+  if (el.textContent !== texte) el.textContent = texte;
+  if (el.title !== complet) el.title = complet;
+  if (el.getAttribute("aria-label") !== complet) el.setAttribute("aria-label", complet);
+}
+
+/**
  * Applique le personnage actif à l'interface : nom de l'onglet 🧭 et, si le
  * plein écran de l'Assistant est ouvert, son titre « Bonjour, je suis … » et
  * l'image de son cercle (portrait, sinon le logo Pilot).
@@ -2026,13 +2062,12 @@ export function applyAssistantPersonaUi() {
     /* re-rendu d'onglet impossible : l'affichage reste celui d'avant */
   }
   try {
-    // Le bouton de relance de l'ecran Vocal porte le nom (« ok <personnage> ») :
+    // Le bouton de relance de l'ecran Vocal porte le nom (« Réveiller <Nom> ») :
     // il suit le personnage actif comme l'onglet, et ne garde aucun nom a lui.
-    // S'il est masque, seule son etiquette est mise a jour — la VISIBILITE
-    // appartient a `applyVocalState` (`vocalSyncRestartButton`).
-    const badge =
-      typeof document !== "undefined" ? document.querySelector(".vocal-restart") : null;
-    if (badge) badge.textContent = vocalRestartLabel(label);
+    // S'il est masque, seuls son texte, son infobulle et son nom accessible sont
+    // mis a jour — la VISIBILITE appartient a `applyVocalState`
+    // (`vocalSyncRestartButton`), point d'ecriture unique des deux.
+    applyVocalRestartLabel();
   } catch (_) {
     /* overlay vocal absent : rien a faire */
   }
@@ -4591,20 +4626,27 @@ export async function createSuperAgent(container) {
     // Le trait de niveau (200 x 3 px) a ete retire le 12/11 (decision du
     // proprietaire, qui revient sur l'avenant du 28/10) : la mesure du micro
     // reste, elle ne se dessine plus. Aucun cadre, aucune carte.
+    // Libelle de DEPART du bouton de relance : le nom habituel, construit avec
+    // des CONSTANTES (donc sur a interpoler ici). Le nom reel du personnage est
+    // pose ensuite par `applyVocalRestartLabel`, en `textContent` : il vient
+    // d'un fichier lu par Rust, il n'entre jamais dans du balisage.
+    const relance = `${VOCAL_RESTART_VERB} ${DEFAULT_ASSISTANT_NAME}`;
     ov.innerHTML = `
       <div class="vocal-top"></div>
       <div class="vocal-stage">
         <div class="vocal-orb">
           <span class="vocal-halo"></span>
-          <!-- LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> », decisions
-               401 / 402) : ROND, pose A L'INTERIEUR du haut du disque, dont le
-               contour sert de bord. Il est MASQUE au depart — c'est
+          <!-- LE BOUTON DE RELANCE DE L'ECOUTE (« Réveiller <Nom> »), decisions
+               401 / 402 et retouches du 2026-10-29 : ROND, il OCCUPE TOUTE LA
+               SURFACE INTERIEURE du disque (moins l'epaisseur de la bordure) —
+               quand il est affiche, il DEVIENT le cercle, et c'est le contour du
+               disque qui lui sert de bord. Il est MASQUE au depart : c'est
                'applyVocalState' qui decide, une fois l'etat REEL connu :
                visible quand la dictee ne tourne pas, disparu pendant
                l'ecoute. Aucun drapeau local, aucune promesse avant la mesure.
                'aria-hidden' a quitte le disque : ce bouton est un vrai
                controle, il doit etre atteignable au clavier et nomme. -->
-          <button type="button" class="vocal-restart hidden" title="${VOCAL_RESTART_TITLE}" aria-label="${VOCAL_RESTART_TITLE}">ok</button>
+          <button type="button" class="vocal-restart hidden" title="${relance}" aria-label="${relance}">${relance}</button>
         </div>
         <!-- LOT 3 (§2.5) : bouton de depannage, MASQUE tant que le micro capte.
              Il n'apparait que si le micro est ferme (refus, absence, panne) ;
@@ -4689,13 +4731,14 @@ export async function createSuperAgent(container) {
   }
 
   /**
-   * LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> »).
+   * LE BOUTON DE RELANCE DE L'ECOUTE (« Réveiller <Nom> »).
    *
    * Il ne DECIDE rien : la visibilite et l'etiquette sont des fonctions pures
    * (`vocal-restart.js`), l'etat de la dictee vient des variables reelles
    * (`voiceActive`, `vocalArmTimer`, `voiceSupported`), et le nom vient de
    * `superAgentDisplayLabel` (personnage actif). Ce bloc ne fait que les
-   * appliquer au DOM, comme la ligne d'etat juste au-dessus.
+   * appliquer au DOM, comme la ligne d'etat juste au-dessus : la visibilite ici,
+   * l'etiquette par `applyVocalRestartLabel` (point d'ecriture unique).
    *
    * Le bouton ne recouvre rien : il est ABSOLU dans le disque (donc hors du
    * flux : ni le cercle, ni la phrase d'etat, ni la barre de saisie ne bougent)
@@ -4715,8 +4758,9 @@ export async function createSuperAgent(container) {
       etat: state,
     });
     bouton.classList.toggle("hidden", !visible);
-    const etiquette = vocalRestartLabel(superAgentDisplayLabel());
-    if (bouton.textContent !== etiquette) bouton.textContent = etiquette;
+    // Le libelle suit le personnage actif — texte abrege, infobulle et nom
+    // accessible complets — par le point d'ecriture UNIQUE.
+    applyVocalRestartLabel(bouton);
   }
 
   /**

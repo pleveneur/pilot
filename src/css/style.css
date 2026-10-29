@@ -11807,62 +11807,72 @@ body.pilot-vocal-active .agent-chat-messages {
   --vocal-halo: 0;
 }
 
-/* --- LE BOUTON DE RELANCE DE L'ECOUTE (« ok <personnage> ») ---
-   Fiche du proprietaire (decisions 401 et 402 du suivi) : un bouton ROND, de la
-   MEME forme que le disque, pose A L'INTERIEUR du haut du disque, dont le
-   contour du disque sert de bord — il n'a donc AUCUN anneau propre, aucune
-   bordure, aucune ombre, et il ne deborde jamais de l'objet lumineux : il en
-   fait partie.
+/* --- LE BOUTON DE RELANCE DE L'ECOUTE (« Réveiller <Nom> ») ---
+   Fiche du proprietaire (decisions 401 et 402, retouchees le 2026-10-29) : un
+   bouton ROND, de la MEME forme que le disque, qui OCCUPE TOUTE LA SURFACE
+   INTERIEURE du disque, moins l'epaisseur de la bordure. Quand il est affiche,
+   il DEVIENT le cercle : il ne flotte plus dedans. Le contour du disque lui sert
+   de bord — il n'a donc AUCUN anneau propre, aucune bordure, aucune ombre, et il
+   ne peut ni le recouvrir ni en deborder.
 
    GEOMETRIE (verifiee par un test, pas seulement affirmee) : `.vocal-orb` n'a
    pas de `box-sizing` particulier (contenu par defaut, pas de remise a zero
-   globale dans ce fichier), donc sa boite de padding fait 168 x 168 px, son
-   rayon interieur 84 px et son centre a 84 px du haut. Un bouton de 56 px a
-   `top: 3px` a son centre a 31 px du haut, soit 53 px au-dessus du centre du
-   disque ; son point le plus eloigne est donc a 53 + 28 = 81 px du centre,
-   c'est-a-dire 3 px A L'INTERIEUR du rayon interieur. Il tient entierement dans
-   le disque, et cela ne depend d'AUCUNE taille de fenetre : le disque est fixe
-   a 168 px et le bouton est en position ABSOLUE.
+   globale dans ce fichier), donc sa boite de padding fait 168 x 168 px et le
+   rayon UTILE — le bord interieur de l'anneau de 2 px — vaut 84 px. Un enfant
+   ABSOLU en `inset: 0` occupe exactement cette boite de padding, et
+   `border-radius: 50%` lui donne le cercle de rayon 84 px : le bouton et le bord
+   interieur de l'anneau COINCIDENT, sans un pixel de depassement. Cela ne depend
+   d'AUCUNE taille de fenetre : le disque est fixe a 168 px et le bouton est
+   absolu (aucune unite `vw`/`vh`, aucun pourcentage, aucune taille en plus).
 
    HORS DU FLUX (`position: absolute`) : il ne decale donc ni le disque, ni la
    phrase d'etat, ni la barre de saisie — la mise en page est identique, avec ou
    sans lui. Et il ne recouvre jamais le halo : le halo ne s'allume qu'en
    `vocal-state-listening`, etat ou ce bouton est justement masque (regle 4 de
-   `vocalRestartVisible`).
+   `vocalRestartVisible`). L'enveloppe de parole (`::before`) et l'arc de
+   reflexion (`::after`) ne sont pas touches : la structure de l'objet lumineux
+   reste intacte et reapparait normalement quand l'ecoute repart.
+
+   TEXTE : un nom de personnage peut faire 60 caracteres. Le texte affiche est
+   donc borne par la decision pure (`vocalRestartText`, 24 caracteres, coupe sur
+   une fin de mot + « … ») et `overflow: hidden` sur le rond le decoupe au
+   cercle en dernier recours : rien ne peut sortir du disque. Le nom ENTIER reste
+   dans l'infobulle et dans le nom accessible (`vocalRestartLabel`).
 
    VISIBILITE : elle n'est PAS decidee ici. `super-agent.js`
    (`vocalSyncRestartButton`, appele a la fin de `applyVocalState`) pose ou
    retire `.hidden` d'apres l'etat REEL de la dictee, et l'etiquette vient du
-   personnage actif. Le CSS ne fait que l'aspect.
+   personnage actif (`applyVocalRestartLabel`). Le CSS ne fait que l'aspect.
 
    ACCESSIBILITE : c'est un vrai `<button>`, atteignable au clavier et nomme
-   (`aria-label` + `title` = « Lancer l'ecoute ») ; le focus reprend le motif du
-   projet (--accent + --ring), comme `#tree-filter:focus`.
+   (`aria-label` + `title` = le libelle complet « Réveiller <Nom> ») ; le focus
+   reprend le motif du projet (--accent + --ring), comme `#tree-filter:focus`.
 
    MOUVEMENT : aucune animation, aucun deplacement, aucun clignotement. Le seul
    effet est un changement de fond au survol, coupe en mouvement reduit. */
 .vocal-restart {
+  /* Il DEVIENT le cercle : `inset: 0` le pose sur toute la surface interieure
+     du disque (boite de padding 168 x 168, rayon 84) et `border-radius: 50%`
+     lui donne exactement le bord interieur de l'anneau. */
   position: absolute;
-  top: 3px;
-  left: 0;
-  right: 0;
-  margin: 0 auto;
+  inset: 0;
   box-sizing: border-box;
-  width: 56px;
-  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 6px;
+  padding: 0 14px;
   /* Rond, et sans bord a lui : le contour du disque lui sert de bord. */
   border: none;
   border-radius: 50%;
+  /* Le texte reste DANS le cercle, quoi qu'il arrive (le libelle est deja
+     borne par `vocalRestartText`). */
+  overflow: hidden;
   background: color-mix(in srgb, var(--text-primary) 8%, transparent);
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: var(--fw-medium);
-  line-height: 1.15;
+  line-height: 1.2;
   letter-spacing: -0.01em;
   text-align: center;
   cursor: pointer;
