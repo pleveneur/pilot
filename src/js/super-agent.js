@@ -3575,6 +3575,10 @@ export async function createSuperAgent(container) {
   // « Travail » : restitution exacte, sans doublon ni perte.
   let vocalModeButtonHome = null;
   let vocalInputHome = null;
+  // L'entree « Travail » est le TROISIEME noeud deplace par l'ecran Vocal : le
+  // MEME noeud que dans « Detaille » et dans « Assistant seul » (aucune copie,
+  // aucun second panneau). Meme patron que `immersiveActivityHome`.
+  let vocalActivityHome = null;
   // Placeholder d'origine de la zone de saisie : l'ecran Vocal en pose un plus
   // court (§2.4, « Écrivez, ou parlez. ») et le restitue tel quel a la sortie.
   let vocalPlaceholderHome = null;
@@ -5289,6 +5293,19 @@ export async function createSuperAgent(container) {
       vocalModeButtonHome = { parent: modeButton.parentNode, next: modeButton.nextSibling };
       vocalOverlay.appendChild(modeButton);
     }
+    // L'ENTREE « TRAVAIL » EXISTE AUSSI SUR CET ECRAN (decision du
+    // proprietaire) : c'est le MEME noeud du document (`#agent-activity`, ni
+    // copie ni bouton jumeau), peint par le MEME code (agent-activity.js),
+    // alimente par la MEME source et ouvrant le MEME panneau. Sa place ici est
+    // celle de « Detaille » : tout en haut, immediatement a GAUCHE des trois
+    // boutons systeme — une seule regle CSS l'y pose
+    // (`body.pilot-vocal-active #agent-activity`), aucun calcul en JS. Aucun
+    // ecouteur n'est recree : le clic reste celui d'agent-activity.js.
+    const activite = document.getElementById("agent-activity");
+    if (activite) {
+      vocalActivityHome = { parent: activite.parentNode, next: activite.nextSibling };
+      vocalOverlay.appendChild(activite);
+    }
     document.body.appendChild(vocalOverlay);
     document.body.classList.add(VOCAL_ACTIVE_CLASS);
     refreshIcons(vocalOverlay);
@@ -5418,9 +5435,20 @@ export async function createSuperAgent(container) {
     // legitime, ou en ouvrir une sur un projet devenu 🔒 entre-temps).
     vocalSensibiliteConnue = false;
     vocalSensibiliteIndisponible = false;
-    // Symetrie exacte de enterVocal : le bouton des modes d'abord (il doit
-    // sortir de l'overlay AVANT son retrait, sinon le noeud serait detruit),
-    // puis la barre de saisie.
+    // Symetrie exacte de enterVocal : les TROIS noeuds deplaces sortent de
+    // l'overlay AVANT son retrait, sinon ils seraient detruits avec lui et les
+    // autres ecrans perdraient le bouton des modes, l'entree « Travail » et la
+    // barre de saisie. Chacun retrouve son parent ET son voisin d'origine.
+    const activiteHome = vocalActivityHome;
+    const activite = document.getElementById("agent-activity");
+    if (activite && activiteHome && activiteHome.parent) {
+      const nextActivite =
+        activiteHome.next && activiteHome.next.parentNode === activiteHome.parent
+          ? activiteHome.next
+          : null;
+      activiteHome.parent.insertBefore(activite, nextActivite);
+    }
+    vocalActivityHome = null;
     const modeHome = vocalModeButtonHome;
     const modeButton = document.getElementById(SCREEN_MODE_BUTTON_ID);
     if (modeButton && modeHome && modeHome.parent) {

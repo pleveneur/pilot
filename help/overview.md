@@ -449,6 +449,13 @@ ce qui est affiché.
   affiché** (aucun message, pas même en petit) : la conversation reste entière
   dans l'onglet de l'agent, où vous la retrouvez en quittant le mode.
 
+Sur l'écran **Vocal**, le bouton **« Travail »** est là lui aussi : **tout en
+haut, juste à gauche des boutons de la fenêtre**. C'est **le même bouton** que
+sur l'écran habituel (même point d'état, même compteur, même panneau) : un clic
+y ouvre les **agents** et les **tâches** en cours, comme d'habitude. Le suivi
+n'est donc plus à portée de main seulement hors du mode — il ne s'affiche pas
+pour autant en permanence.
+
 En mode **Vocal** :
 
 - **L'intérieur du cercle s'allume avec votre voix** : une lueur verte (la

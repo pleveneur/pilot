@@ -11628,6 +11628,48 @@ body.pilot-vocal-active .agent-chat-messages {
    `body.pilot-vocal-active #mode-logo` (top 8 px, left 13 px). La barre garde
    ses 44 px et son filet : elle devient une bande de respiration. */
 
+/* --- L'ENTREE « TRAVAIL » SUR L'ECRAN VOCAL (decision du proprietaire) ---
+   Le bouton « Travail » (le meme que celui du haut a droite : taches en cours
+   et agents en cours) existe AUSSI sur cet ecran, « tout en haut, juste a
+   gauche des boutons systeme de la fenetre ».
+
+   Ce n'est PAS un second bouton : `super-agent.js` DEPLACE le noeud EXISTANT
+   `#agent-activity` dans l'overlay a l'entree du mode et le restitue a la
+   sortie (meme patron que le logo et la barre de saisie, et que celui de
+   « Assistant seul »). Meme identifiant, meme clic, meme panneau, meme
+   contenu : rien n'est duplique, aucun ecouteur n'est recree.
+
+   PLACE : la seule bande libre de cet ecran est celle des trois boutons
+   systeme (36 px, au-dessus de l'overlay, `z-index: 100001`). L'entree s'y
+   pose donc comme dans « Detaille », mais en ABSOLU — l'overlay recouvre la
+   rangee d'onglets. L'arithmetique vient des jetons deja mesures :
+     top: 7px        -> les 22 px du bouton centres dans la hauteur des touches
+                        (4 px d'air + (28 - 22) / 2), sans les mordre ;
+     right: 142 + 6  -> `--window-controls-width` (le groupe des trois
+                        touches) + les 6 px d'air qui separent deja l'entree
+                        des boutons systeme dans « Detaille ».
+   Aucune valeur nouvelle n'est inventee : la largeur du groupe et celle des
+   touches sont deja verifiees sur le disque par `barre-fenetre-etats.test.js`.
+
+   `z-index: 3` : au-dessus des autres enfants de l'overlay (le logo est a 2),
+   donc le panneau deroulant — pourtant a `z-index: 10001` dans son propre
+   contexte — ne passe jamais SOUS la ligne d'etat ni sous la barre de saisie.
+   Il reste sous les boutons systeme (autre contexte d'empilement) : la fenetre
+   reste fermable et deplacable.
+   `margin: 0` : les marges de la rangee d'onglets n'ont plus de sens ici.
+   Rien d'autre ne bouge sur cet ecran : ni l'objet lumineux, ni la ligne
+   d'etat, ni la barre de saisie, ni le bouton de coupure de la voix (le clic
+   sur la zone de saisie et sur le disque garde son comportement).
+   Verrou : src/js/bouton-travail-ecran-vocal.test.js. */
+body.pilot-vocal-active #agent-activity {
+  position: absolute;
+  top: 7px;
+  right: calc(var(--window-controls-width) + 6px);
+  margin: 0;
+  align-self: flex-start;
+  z-index: 3;
+}
+
 /* --- §2.2 Le centre : l'objet lumineux --- */
 /* Esprit « interface Cornelius » : pas de cadre, pas de carte, pas de
    bordure. Le disque est centre dans l'espace entre la barre haute et la

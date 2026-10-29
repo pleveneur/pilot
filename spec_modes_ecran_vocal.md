@@ -101,8 +101,9 @@ conversation est rendue **invisible tant que l'écran Vocal est actif**
 (`body.pilot-vocal-active .agent-chat-messages { visibility: hidden }` —
 `visibility` et jamais `display: none`, pour ne pas perdre la position de
 défilement à la sortie) ; **aucun conteneur de conversation n'est déplacé** dans
-l'écran (seuls la barre de saisie et le logo, qui est le bouton des modes, le
-sont). Le retour de la conversation sur cet écran est interdit par un test dédié
+l'écran (seuls la barre de saisie, le logo — qui est le bouton des modes — et
+l'entrée **« Travail »**, qui est un **bouton** et non un affichage, le sont). Le
+retour de la conversation sur cet écran est interdit par un test dédié
 (`src/js/ecran-vocal-nu.test.js`).
 
 1. **Barre de 44 px**, juste **sous** la bande des trois boutons de fenêtre
@@ -133,9 +134,25 @@ sont). Le retour de la conversation sur cet écran est interdit par un test déd
 5. **Un bouton de dépannage, caché par défaut** : « Autoriser le micro »
    (`.vocal-mic-fix`), qui n'apparaît que si le micro est fermé.
 
+**Le bouton « Travail » existe aussi sur cet écran** (décision du propriétaire) :
+**tout en haut, immédiatement à gauche des trois boutons de fenêtre**, à la même
+place relative que dans l'écran habituel. C'est **le même bouton** — le nœud
+`#agent-activity` est **déplacé** dans l'écran à l'entrée du mode et **restitué**
+à sa place exacte à la sortie (même patron que le logo et la barre de saisie) :
+même identifiant, même clic, même point d'état, même compteur « en cours /
+total », même panneau à trois onglets (Agents · Tâches · Événements), même fiche
+d'agent. **Rien n'est dupliqué** : aucun second bouton, aucun second panneau,
+aucun second calcul. Le mode Vocal ne fait donc que **rendre accessible** le
+suivi du travail qu'il masquait ; il n'affiche toujours **aucun** état d'agent
+en permanence. Le bandeau des boutons de fenêtre garde la priorité : le bouton
+reste **sous** eux, la fenêtre reste fermable et déplaçable, et le panneau ne
+recouvre ni la ligne d'état ni la zone de saisie. Ni le disque, ni la ligne
+d'état, ni la barre de saisie, ni le bouton de relance ne bougent.
+
 **Rien de la conversation n'est affiché** sur cet écran : ni les messages, ni les
-outils, ni l'état des agents, ni un résumé des derniers échanges. C'est le
-principe même du mode, et il ne dépend d'aucun réglage.
+outils, ni un résumé des derniers échanges. Le suivi des agents y est **joignable
+sur demande** (le bouton « Travail » ci-dessus), jamais peint en permanence.
+C'est le principe même du mode, et il ne dépend d'aucun réglage.
 
 ## 3bis. Le bouton de relance, qui occupe la surface intérieure du disque (« Réveiller <Nom> »)
 

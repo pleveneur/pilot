@@ -90,12 +90,20 @@ describe("1. ce que l'ecran Vocal dessine, et rien d'autre", () => {
 describe("2. rien de la conversation n'entre dans l'ecran a l'entree du mode", () => {
   const enter = corpsFonction(SUPER, "function enterVocal()");
 
-  it("les seuls noeuds deplaces sont la barre de saisie et le logo des modes", () => {
+  it("les seuls noeuds deplaces sont la saisie, le logo et « Travail »", () => {
     expect(enter).toMatch(/zone\.appendChild\(inputBar\)/);
     // Adaptation L4 : le bouton des modes entre dans l'OVERLAY (la barre de
     // 44 px ne le recoit plus). L'intention d'origine est conservee : un seul
     // bouton de sortie deplacé, le meme noeud, jamais recree.
     expect(enter).toMatch(/vocalOverlay\.appendChild\(modeButton\)/);
+    // Decision du proprietaire : l'entree « Travail » est elle aussi DEPLACEE
+    // (le MEME noeud du document, jamais une copie) pour que le suivi du
+    // travail reste joignable depuis cet ecran. Ce n'est pas une exception au
+    // principe de l'ecran nu : c'est un BOUTON, pas un affichage — la
+    // conversation, elle, ne revient pas (assertions du bloc suivant).
+    expect(enter).toMatch(/document\.getElementById\("agent-activity"\)/);
+    expect(enter).toMatch(/vocalOverlay\.appendChild\(activite\)/);
+    expect(enter).not.toMatch(/agent-chat|agent-message/);
     expect(enter, "le bouton est de nouveau pose dans la barre de 44 px").not.toMatch(
       /barre\.appendChild\(modeButton\)/,
     );
