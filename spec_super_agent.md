@@ -2707,10 +2707,13 @@ ancien sans avoir à annuler les plus récents.
   de suivi** (source de vérité), donc identique au Suivi et au Kanban.
 - Association **projet → client**.
 - **Notifications Telegram** (interrupteur « Envoyer les avis sur Telegram » +
-  jeton du bot + identifiant de discussion) : le canal d'avis du propriétaire
-  appartient à l'Assistant, son réglage est donc rangé dans cet onglet
-  (déplacé depuis l'onglet « Agent Pi »). Identifiants DOM et clés de
-  configuration **inchangés** — voir `spec_telegram.md`.
+  jeton du bot + identifiant de discussion) : le canal de conversation du
+  propriétaire appartient à l'Assistant, son réglage est donc rangé dans cet
+  onglet (déplacé depuis l'onglet « Agent Pi »). Identifiants DOM et clés de
+  configuration **inchangés**. Depuis la décision 2026-11, ce canal ne porte
+  **que la conversation** : les avis d'ÉVÉNEMENT (début / fin de mission,
+  changement d'état, alerte, rapport automatique, résumé, message de service)
+  n'y sont **plus envoyés** — voir `spec_telegram.md` § 16.
 - **Fréquence des rappels de surveillance** (Lot A idée 6) : fréquence par défaut
   des **nouveaux** rappels créés par l'Assistant **sans** fréquence explicite
   (`schedule_create` sans `everySeconds`). Choix : 5 / 15 / 30 minutes,

@@ -16,15 +16,26 @@
 // Telegram (`splitForTelegram`) : une phrase courte n'est jamais hâchée.
 //
 //
-// Déduplication SANS PERTE : quand la communication Telegram du dialogue est
-// ACTIVE, c'est l'Assistant qui parle — les avis BRUTS existants (fin de mission
-// d'agent, compte rendu) sont alors RETARDÉS d'une courte fenêtre (cf.
-// `deliverRawTelegramAvis`, appelé par `forwardToTelegram` dans desktop-notify.js)
-// plutôt que coupés : l'avis n'est abandonné que si l'Assistant parle réellement
-// pendant cette fenêtre, sinon il part comme avant. Les ALERTES CRITIQUES
-// (anomalie, arrêt automatique, agent silencieux) ne sont jamais retardées ni
-// coupées. Quand la communication est INACTIVE, les avis de l'étape 1 continuent
-// exactement comme avant.
+// LE CANAL NE PORTE QUE LA CONVERSATION (décision du propriétaire, 2026-11) :
+// « sur Telegram, je veux UNIQUEMENT la conversation question/réponse, exactement
+// comme dans le mode Vocal. Tout message qui annonce un ÉVÉNEMENT doit cesser. »
+// Aucun message d'ÉVÉNEMENT ne part donc plus sur Telegram : début de mission,
+// fin de mission, changement d'état, démarrage d'agent, rapport automatique,
+// alerte technique, résumé de tâche, message de service. Le couperet est UN
+// SEUL : `isTelegramEventMessageAllowed()` (voir ci-dessous), appliqué par
+// `deliverRawTelegramAvis` — le point de passage UNIQUE de tous les avis
+// d'événements (appelé par `forwardToTelegram` dans desktop-notify.js). Le code
+// de ces avis n'est pas détruit : il reste derrière ce couperet, au cas où la
+// décision changerait.
+//
+// Ce qui RESTE, intact : la conversation (une demande → une réponse, plus les
+// questions posées au propriétaire et ses réponses), l'écoute des messages
+// entrants et le dialogue.
+//
+// Historique (conservé pour la mémoire du projet) : la déduplication SANS PERTE
+// retardait les avis bruts d'une courte fenêtre quand la communication du
+// dialogue était ACTIVE, pour ne pas doubler la phrase de l'Assistant. Cette
+// machinerie reste en place, hors d'atteinte désormais, derrière le couperet.
 //
 // Inertie totale : communication coupée OU Telegram non configuré (jeton ou
 // identifiant de discussion vide) ⇒ RIEN n'est tenté (aucun accès réseau, aucune
@@ -51,6 +62,32 @@ import {
  * part ENTIÈRE, et au-delà on découpe en plusieurs messages.
  */
 export const TELEGRAM_DIALOG_MAX_CHARS = TELEGRAM_PART_CHARS;
+
+// ── Politique du canal : la CONVERSATION seule ───────────────────────────────
+
+/**
+ * Vrai si le canal Telegram ne doit porter QUE la conversation (décision du
+ * propriétaire, 2026-11). Constante nommée pour que la règle soit lisible et
+ * tenue par un test : un message d'ÉVÉNEMENT (début / fin de mission, changement
+ * d'état, démarrage d'agent, rapport automatique, alerte technique, résumé de
+ * tâche, message de service) ne s'envoie pas.
+ */
+export const TELEGRAM_CHANNEL_CONVERSATION_ONLY = true;
+
+/**
+ * Un message d'ÉVÉNEMENT a-t-il le droit de partir sur Telegram ?
+ *
+ * Réponse d'aujourd'hui : NON (le canal ne porte que la conversation). Un seul
+ * couperet pour tout le canal : ce que la conversation envoie (la réponse de
+ * l'Assistant, ses questions, les réponses du propriétaire) passe par d'AUTRES
+ * portes et n'est jamais filtré ici.
+ *
+ * Fonction PURE.
+ * @returns {boolean}
+ */
+export function isTelegramEventMessageAllowed() {
+  return TELEGRAM_CHANNEL_CONVERSATION_ONLY !== true;
+}
 
 // ── Filtrage / classification ────────────────────────────────────────────────
 // Signaux d'ALERTE (à transmettre en priorité).
@@ -475,6 +512,9 @@ function rawAvisTurnInProgress() {
 
 /** Envoie un avis brut sans jamais laisser remonter d'erreur. */
 function sendRawAvis(entry) {
+  // Second verrou (le premier est dans `deliverRawTelegramAvis`) : même un avis
+  // déjà mis en attente ne part pas. Canal de conversation uniquement.
+  if (!isTelegramEventMessageAllowed()) return;
   // SOURCE UNIQUE du message (telegram-messages.js) : le texte a déjà été
   // construit par un gabarit ; la porte applique l'anti-rafale et les heures
   // calmes (23 h → 7 h) puis envoie. Inerte en cas d'échec.
@@ -500,6 +540,14 @@ function claimRawAvisForAssistant() {
 export function flushRawTelegramAvis() {
   const entries = rawAvisPending;
   rawAvisPending = [];
+  // Canal de conversation : les avis d'événements ne partent plus du tout. Rien
+  // n'est mis en attente non plus (voir `deliverRawTelegramAvis`), donc cette
+  // liste est vide en pratique ; le verrou est là pour que rien ne puisse
+  // s'échapper si un avis y était entré avant un changement de décision.
+  if (!isTelegramEventMessageAllowed()) {
+    for (const entry of entries) rawAvisTimers.clearTimeout(entry.timer);
+    return;
+  }
   for (const entry of entries) {
     rawAvisTimers.clearTimeout(entry.timer);
     sendRawAvis(entry);
@@ -524,12 +572,17 @@ function scheduleRawAvis(entry, delay) {
 
 /**
  * Livre un avis BRUT de l'étape 1 (fin de tâche d'agent, compte rendu de
- * l'Assistant) en évitant le doublon SANS jamais perdre l'événement :
- *   - alerte CRITIQUE (`opts.critical`, ex. anomalie / arrêt automatique) →
- *     envoyée TOUT DE SUITE, jamais retardée ni coupée ;
- *   - communication du dialogue INACTIVE → envoyée tout de suite (étape 1) ;
- *   - communication ACTIVE → retardée d'une courte fenêtre : abandonnée si
- *     l'Assistant parle réellement (il couvre l'événement), envoyée sinon.
+ * l'Assistant).
+ *
+ * PLUS AUCUN ENVOI (décision du propriétaire, 2026-11) : le canal Telegram ne
+ * porte QUE la conversation, donc ce point de passage — le SEUL par lequel
+ * passent tous les avis d'ÉVÉNEMENT de Pilot — ne produit plus rien : ni envoi
+ * immédiat, ni avis retardé, ni reprise à la fin des heures calmes. Aucun
+ * minuteur n'est armé, donc rien ne subsiste en attente.
+ *
+ * La machinerie d'anti-doublon décrite plus haut n'est PAS détruite : elle reste
+ * écrite, derrière le couperet `isTelegramEventMessageAllowed()`, au cas où la
+ * décision changerait.
  *
  * @param {string} text - texte déjà assemblé par un gabarit de `telegram-messages.js`
  *   (nom court du PROJET en tête : un message = un projet).
@@ -540,6 +593,8 @@ function scheduleRawAvis(entry, delay) {
 export function deliverRawTelegramAvis(text, opts = {}, deps = {}) {
   const message = String(text ?? "").trim();
   if (!message) return;
+  // LE COUPERET DU CANAL : un message d'ÉVÉNEMENT ne part jamais sur Telegram.
+  if (!isTelegramEventMessageAllowed()) return;
   const isActive = deps.isActive || isTelegramDialogActive;
   const entry = {
     text: message,

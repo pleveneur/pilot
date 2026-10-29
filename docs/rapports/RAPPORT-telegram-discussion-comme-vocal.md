@@ -354,3 +354,132 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
   porte sur la **levée** de la règle, pas sur son barème ;
 - **aucun** fichier supprimé, **aucune** publication, **aucun** geste vers le
   dépôt distant.
+
+---
+
+## 6. Précision du propriétaire (2026-11) — le canal ne porte QUE la conversation
+
+### 6.1 La demande, en toutes lettres
+
+> « Sur Telegram, je veux **UNIQUEMENT** la conversation question/réponse entre
+> moi et l'assistant, **exactement comme en mode Vocal**. **Tout message qui
+> annonce un ÉVÉNEMENT doit cesser.** »
+
+### 6.2 Recensement : ce qui n'est pas une réponse à une demande
+
+Tous les points d'envoi de la passerelle ont été relus ; ceux qui ne portent pas
+une **réponse à une demande** sont :
+
+| Message d'ÉVÉNEMENT | Point d'envoi | Type |
+|---|---|---|
+| début de mission | `notifyTaskStarted` → `forwardToTelegram` | `START` |
+| fin de mission (agent local, distant, délégation) | `notifyAgentDone`, `notifyAgentDoneFromRemote` | `END` |
+| fin de mission de l'Assistant / changement d'état | `notifySuperAgentDone` | `END` |
+| démarrage d'agent, étape de travail | `forwardToTelegram` (avis internes) | `START` |
+| rapport automatique, résumé de tâche, compte rendu | `notifyAgentDone`, `notifySuperAgentDone` | `END` |
+| alerte technique (anomalie, arrêt automatique, verrou libéré) | `notifyAnomaly` | `ALERT` |
+| message de service (reprise, relance, file d'attente) | `forwardToTelegram` | `START`/`END` |
+| rappel « rien de décidé » d'une alerte | `notifyAnomaly` | `ALERT` |
+
+Tous passent par **un seul** point de passage : `deliverRawTelegramAvis`
+(`src/js/telegram-dialog.js`), appelé par `forwardToTelegram`
+(`src/js/desktop-notify.js`).
+
+Restent la conversation — et ils n'ont **pas** été touchés : `telegram-inbound.js`
+(écoute, remise d'une demande), `telegram-questions.js` (questions, boutons,
+« première réponse gagne »), `relayAssistantMessageToTelegram` (la réponse).
+
+### 6.3 La neutralisation (conditionnelle, rien de détruit)
+
+```js
+// src/js/telegram-dialog.js
+export const TELEGRAM_CHANNEL_CONVERSATION_ONLY = true;
+export function isTelegramEventMessageAllowed() {
+  return TELEGRAM_CHANNEL_CONVERSATION_ONLY !== true;
+}
+```
+
+- le couperet est **au point de passage unique** : `deliverRawTelegramAvis`
+  retourne **immédiatement** — aucun envoi, **aucun minuteur armé**, rien mis de
+  côté (un avis coupé ne peut donc pas repartir « plus tard ») ;
+- second verrou dans `sendRawAvis`, troisième dans `flushRawTelegramAvis` (les
+  minuteurs en cours sont annulés) : aucun chemin détourné ;
+- **aucun code supprimé** : `notifyTaskStarted`, `notifyAgentDone`,
+  `notifyAgentDoneFromRemote`, `notifySuperAgentDone`, `notifyAnomaly`,
+  `forwardToTelegram`, la machinerie anti-doublon et l'anti-rafale restent
+  branchés. Rebasculer la décision = changer **une constante** ;
+- les **notifications natives** (bureau) ne sont pas concernées.
+
+### 6.4 La garde (test qui échoue si un événement repart)
+
+`src/js/telegram-conversation-seule.test.js` (fichier **neuf**, **15 tests**) —
+modules réels, transport Tauri simulé :
+
+- politique lisible : constante `true`, couperet `false` ;
+- le couperet est au **seul** point de passage, et `desktop-notify.js` ne parle au
+  moteur **que** par lui (une seule occurrence de `telegram_notify`) ;
+- les **six** points d'avis essayés un par un → `telegram_notify` **jamais**
+  appelé ; idem **dialogue actif**, **heures calmes**, **config en échec** ;
+- **rien en attente** (`timers.count() === 0`), puis + 60 s et
+  `flushRawTelegramAvis()` → toujours rien ;
+- **alerte critique** coupée comme les autres ;
+- **la conversation reste entière** : une demande reçue est déposée, une question
+  part, la réponse du propriétaire est consommée, la réponse de l'Assistant part.
+
+Tests existants réécrits pour dire la vérité nouvelle (et non supprimés) :
+`src/js/telegram-notify.test.js` et `src/js/telegram-dialog.test.js` prouvent
+désormais que les avis **restent branchés** et **n'envoient rien**.
+
+### 6.5 Compte-rendu des tests (exécutés réellement)
+
+```
+npx vitest run src/js/telegram-conversation-seule.test.js
+→ PASS (15) FAIL (0)
+
+npx vitest run src/js/telegram-dialog.test.js src/js/telegram-notify.test.js \
+                 src/js/telegram-messages.test.js src/js/telegram-comme-vocal.test.js
+→ PASS (111) FAIL (0)
+
+npm test (suite entière)
+→ Test Files 4 failed | 232 passed (236)
+  Tests      6 failed | 4347 passed (4353)
+```
+
+Les **6 échecs** de la suite entière sont **antérieurs et étrangers** à cette
+tâche : ils portent sur les chantiers **vocal/UI en cours** dans l'arbre de
+travail (`ecran-vocal-lot2.test.js` ×3, `vocal-halo-parole.test.js`,
+`dictee-vocale-se-rearme.test.js`, `vocal-parler-declenche-une-demande.test.js`
+— CSS `.vocal-status` et `vocalSyncChrome`), fichiers que cette tâche n'a **pas**
+modifiés.
+
+**Preuve par neutralisation** (la garde tient vraiment) : constante repassée à
+`false` → **12 échecs** dans `telegram-conversation-seule.test.js` ; restaurée →
+**15 verts**.
+
+Aucune modification **Rust** : `cargo test` n'était pas requis (le moteur
+`telegram.rs` est inchangé).
+
+### 6.6 Documentation
+
+- `spec_telegram.md` : en-tête (décision), § 1, § 2 (périmètre de la décision),
+  § 5 (les avis existent mais sont coupés), § 6 (tests), § 13, § 14 (l'interrupteur
+  ne commande plus que la conversation), et **nouvelle § 16** « Le canal ne porte
+  QUE la conversation » (table avant/après, couperet, garde, compte-rendu) ;
+- bloc d'aide intégrée `<!-- HELP:telegram -->` **réécrit** :
+  « Telegram : la conversation, rien d'autre » — l'utilisateur y lit ce qui ne
+  lui sera **plus** envoyé ;
+- `spec_anomaly.md` (aide) : « Alerte sur Telegram » → **plus envoyée**, les
+  alertes restent dans Pilot et dans les notifications natives ;
+- `spec_super_agent.md` (Paramètres → Assistant) : le canal ne porte que la
+  conversation ;
+- `help/handbook.md` régénéré (`npm run build:handbook`).
+
+### 6.7 Ce qui n'a **pas** été touché
+
+- `telegram-inbound.js` (écoute), `telegram-questions.js` (questions), le
+  dialogue : **intacts** ;
+- la **configuration du bot** (jeton, identifiant, webhook) : **intacte** ;
+- les **seuils du micro**, la **lecture à voix haute**, l'**écran Vocal** :
+  **intacts** ;
+- **aucun** fichier supprimé, **aucune** publication, **aucun** geste vers le
+  dépôt distant.

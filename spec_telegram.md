@@ -28,9 +28,23 @@
 > `src/js/super-agent.js` (branchement des questions) + Paramètres ⚙️ → onglet
 > **Assistant**.
 >
-> **Étape 1 = ENVOI.** Pilot prévient le propriétaire sur Telegram quand il a
-> quelque chose à lui dire : fin de tâche d'un agent, anomalie d'agent bloqué,
-> arrêt automatique d'une session.
+> **LE CANAL NE PORTE QUE LA CONVERSATION (décision du propriétaire, 2026-11).**
+> « Sur Telegram, je veux **uniquement** la conversation question/réponse entre
+> moi et l'assistant, exactement comme en mode Vocal. **Tout message qui annonce
+> un ÉVÉNEMENT doit cesser.** » Les avis d'ÉVÉNEMENT (début de mission, fin de
+> mission, changement d'état, démarrage d'agent, rapport automatique, alerte
+> technique, résumé de tâche, message de service) ne partent donc **plus** sur
+> Telegram : ils sont **coupés** au point de passage unique des avis
+> (`deliverRawTelegramAvis`, couperet `isTelegramEventMessageAllowed()`), sans
+> être détruits — le jour où la décision changerait, un seul endroit changerait
+> (§ 16). Restent intacts : la **conversation** (demande → réponse), les
+> **questions** de l'Assistant et les **réponses** du propriétaire, l'**écoute**
+> des messages entrants et le **dialogue**.
+>
+> **Étape 1 = ENVOI (historique).** Pilot prévenait le propriétaire sur Telegram
+> quand il avait quelque chose à lui dire : fin de tâche d'un agent, anomalie
+> d'agent bloqué, arrêt automatique d'une session. Ces messages n'existent plus
+> sur le canal (§ 16).
 > **Étape 2 = RÉCEPTION.** **Lot 0** : Pilot **lit** les messages que le
 > propriétaire écrit à son bot et les remet à la conversation de l'Assistant.
 > **Lot 1** : quand l'Assistant **pose une question**, elle est **aussi envoyée
@@ -46,22 +60,22 @@
 > inactive ⇒ rien ne change par rapport à l'étape 1.
 
 <!-- HELP:telegram -->
-## Aide utilisateur — Notifications Telegram
+## Aide utilisateur — Telegram : la conversation, rien d'autre
 
-Pilot peut vous prévenir **sur Telegram** quand il a quelque chose à vous dire,
-même si vous êtes loin de l'ordinateur :
-
-- **fin de tâche d'un agent** (chat de l'agent π, tâche déléguée, run d'agents) ;
-- **alerte d'anomalie** : un agent semble bloqué (actif sans progression) ;
-- **arrêt automatique d'une session** (agent bloqué arrêté, verrou de run
-  libéré).
+Sur Telegram, vous retrouvez **exactement la conversation** que vous auriez avec
+l'assistant — comme sur l'écran Vocal : vous **écrivez une demande**, il vous
+**répond**. **Rien d'autre** ne vous y est envoyé : aucun message de **début** ou
+de **fin de mission**, aucun **rapport automatique**, aucun **résumé de tâche**,
+aucune **alerte technique**, aucun **message de service**. Ces informations
+restent **dans Pilot** (et, si vous l'avez activé, dans les **notifications de
+votre bureau**) : le canal Telegram ne les annonce plus du tout.
 
 **Réglage** : dans **Options ⚙️ → onglet Assistant**, section
 **« Notifications Telegram »** :
 
 1. cochez **« Me prévenir sur Telegram »** ;
 2. collez le **jeton du bot** (fourni par **@BotFather** dans Telegram) ;
-3. indiquez l'**identifiant de discussion** qui recevra les avis (votre
+3. indiquez l'**identifiant de discussion** qui recevra les messages (votre
    identifiant personnel, ou celui d'un groupe).
 
 Pour obtenir ces deux valeurs : créez un bot auprès de **@BotFather**
@@ -70,13 +84,12 @@ auprès de **@userinfobot** (ou de l'API `getUpdates`).
 
 **Comportement quand c'est désactivé (par défaut)** : tant que l'interrupteur
 est décoché **ou** qu'un des deux champs est vide, **rien n'est envoyé** sur
-Telegram (aucun message de début ni de fin, aucune alerte) et **aucun message
-d'erreur** ne s'affiche. Décocher le réglage suffit à tout arrêter ; les alertes
-restent alors visibles **dans Pilot**.
+Telegram et **aucun message d'erreur** ne s'affiche. Décocher le réglage suffit
+à tout arrêter ; les informations restent alors visibles **dans Pilot**.
 
 **Un seul réglage, que l'Assistant peut changer lui-même** :
 
-- c'est le **seul** interrupteur des notifications Telegram (il n'existe aucune
+- c'est le **seul** interrupteur de la communication Telegram (il n'existe aucune
   seconde case ailleurs) ;
 - demandez-le **en toutes lettres** à l'Assistant, dans Pilot **ou** sur
   Telegram — « préviens-moi sur Telegram », « arrête de me prévenir », « coupe
@@ -84,42 +97,32 @@ restent alors visibles **dans Pilot**.
   phrase**, sans vous redemander ;
 - **si vous écrivez au bot sur Telegram**, le réglage se **réactive
   automatiquement** (vous écrivez là, donc vous voulez y être prévenu) : le geste
-  est journalisé et l'interrupteur des Options apparaît coché. Un message
-  venant d'**une autre personne** ne change jamais ce réglage.
+  est journalisé et l'interrupteur des Options apparaît coché. Un message venant
+  d'**une autre personne** ne change jamais ce réglage.
 
-**Ce que vous recevez est court et rangé** :
+**Ce qui passe par le canal est court et net** :
 
-- **un message = un projet**, dont le **nom est en tête** (« MakeFilm : … ») :
-  quand deux projets tournent en même temps, vous savez toujours de qui on
-  parle, et vous recevez **un message par projet** (jamais un message mélangé) ;
-- **trois types de message seulement** :
-  - **début** (une ligne : le projet et ce qui commence) ;
-  - **fin** (deux lignes au plus : « livré » ou « échec », puis ce que **vous**
-    pouvez tester) ;
-  - **alerte** (une ligne : ce qui bloque **et** ce qu'il faut décider — s'il n'y
-    a rien à décider, vous n'êtes pas dérangé) ;
+- **votre demande** et **la réponse de l'Assistant** — rien de plus ;
+- **les questions** qu'il vous pose (choix, confirmation, saisie libre) et
+  **vos réponses** — voir ci-dessous ;
 - **pas de détails techniques** : ni chemin de fichier, ni nom de fonction, ni
-  numéro de session, ni compte de tests (juste « tests OK » ou « tests KO »),
-  ni branche ni commit ;
+  numéro de session, ni compte de tests, ni branche ni commit ;
 - **aucune heure dans les messages** : un message dit **ce qui se passe**, pas
-  quand ; vous êtes prévenu à l'instant, l'heure n'apporte rien ;
-- **aucun récapitulatif périodique** : pas de bilan du soir, pas de message à
-  heure fixe — uniquement des messages pour un changement réel ;
-- **un seul message par changement réel** : une rafale d'évènements produit un
-  seul envoi, et un évènement sans information utile ne produit **aucun**
-  message ;
-- **heures calmes respectées** : rien entre **23 h et 7 h**, sauf danger
-  immédiat. Les messages de la nuit vous arrivent au réveil, une seule fois.
+  quand ;
+- **aucun récapitulatif** : pas de bilan du soir, pas de message à heure fixe,
+  aucun rapport automatique ;
+- **un seul envoi par réponse** : une même réponse ne vous parvient jamais deux
+  fois.
 
 **Détails utiles** :
 
 - l'envoi se fait **en arrière-plan** : il ne ralentit ni ne bloque jamais
   Pilot ;
-- si Telegram est injoignable (pas de réseau, jeton erroné), l'avis est
-  simplement perdu — **cela n'interrompt jamais le travail en cours** et
-  n'affiche aucune erreur ;
-- ces avis sont **indépendants** des notifications natives (fenêtre Windows) :
-  vous pouvez avoir l'un sans l'autre ;
+- si Telegram est injoignable (pas de réseau, jeton erroné), le message est
+  simplement perdu — **cela n'interrompt jamais la conversation** et n'affiche
+  aucune erreur ;
+- ces messages sont **indépendants** des notifications natives (fenêtre
+  Windows) : vous pouvez avoir l'un sans l'autre ;
 - le jeton est conservé dans votre configuration locale et n'est utilisé que
   pour l'envoi ; il n'apparaît dans aucun journal.
 
@@ -171,15 +174,13 @@ n'apparaît que si l'envoi Telegram est réellement **en état de fonctionner**
 (case **« Me prévenir sur Telegram »** cochée, jeton et identifiant renseignés — ces réglages restent dans **Options ⚙️ → onglet Assistant**) :
 s'il s'affiche, c'est que vos messages partiront vraiment. Une fois activé, ce que
 l'Assistant écrit vous arrive **aussi sur Telegram**, **net et entier** — et
-**seulement quand cela vous est utile** : réponse à votre question,
-fin de mission / compte rendu, alerte, demande d'accord. Rien n'est coupé en
-cours de phrase : la réponse garde les **deux phrases courtes** du mode vocal. Les étapes de travail et
-les détails techniques ne vous sont pas envoyés. Quand cette communication est
-**active**, Pilot évite de vous envoyer deux fois la même information — mais
-**les alertes (anomalie, arrêt automatique) vous parviennent toujours**, et les
-autres avis sont envoyés si l'Assistant n'a finalement rien dit. Quand elle est
-**coupée** (par défaut), les avis continuent exactement comme avant. Le bouton
-indique son état et votre choix est conservé après un redémarrage de Pilot.
+**seulement la conversation** : sa réponse, sa question, sa demande d'accord.
+Rien n'est coupé en cours de phrase : la réponse garde les **deux phrases
+courtes** du mode vocal. Les étapes de travail, les **rapports automatiques**,
+les **résumés de tâche** et les **alertes techniques** ne vous sont **pas**
+envoyés : ils restent dans Pilot. Quand cette communication est **coupée** (par
+défaut), aucune réponse ne part sur Telegram. Le bouton indique son état et
+votre choix est conservé après un redémarrage de Pilot.
 
 🗣️ **Écrire à votre bot, c'est comme parler à l'écran Vocal** : que vous parliez
 dans **Pilot** (écran Vocal) ou que vous **écriviez sur Telegram**, l'Assistant se
@@ -210,6 +211,16 @@ bandeaux). Ces avis supposent que l'utilisateur soit devant la machine. Pour un
 agent qui travaille longtemps (tâche déléguée, orchestration, run d'agents), il
 est utile d'être prévenu **ailleurs** : Telegram est un canal simple (un bot
 officiel, une API HTTP, aucun serveur à héberger).
+
+> **Ce que le canal porte finalement (décision 2026-11, § 16)** : **la
+> conversation, et rien d'autre** — la demande du propriétaire, la réponse de
+> l'Assistant, les questions qu'il pose et les réponses qui leur sont faites.
+> Les **événements** de travail (début / fin de mission, changement d'état,
+> démarrage d'agent, rapport automatique, alerte technique, résumé de tâche,
+> message de service) **ne partent plus** sur Telegram : ils restent dans Pilot
+> et dans les notifications natives. L'historique ci-dessous garde la trace de
+> l'étape 1 (canal d'avis) pour ne pas refaire ce qui existe.
+
 
 ## 2. Périmètre
 
@@ -244,17 +255,29 @@ officiel, une API HTTP, aucun serveur à héberger).
   réponse n'arrive (aucune expiration automatique : la question reste posée).
 
 **Dans le périmètre (étape 2, lot 3, implémentée)** :
-- **l'Assistant « parle »** : ses messages utiles partent **aussi** sur Telegram,
-  **reformulés en une phrase simple** (réponse, fin de mission / compte rendu,
-  alerte, demande d'accord) ; les messages intermédiaires (étapes de travail,
-  bavardage technique, code, chemins de fichiers) sont **écartés** ;
+- **l'Assistant « parle »** : sa réponse, sa question et sa demande d'accord
+  partent **aussi** sur Telegram, **net et entier** ; les messages
+  intermédiaires (étapes de travail, bavardage technique, code, chemins de
+  fichiers) et, depuis la décision 2026-11, **tous les événements de travail**
+  sont **écartés** (§ 16) ;
 - **bouton d'activation** dans l'onglet 🧭 Assistant, **visible uniquement si
   Telegram est configuré** (jeton **et** identifiant présents), sinon
   **totalement invisible** ; il affiche son état (activé / coupé) ;
-- **anti-doublon** : communication active ⇒ les avis bruts (fin de mission
-  d'agent, anomalie, arrêt automatique) ne sont **plus** envoyés en plus ;
-  communication coupée ⇒ comportement de l'étape 1 **strictement inchangé** ;
+- **anti-doublon** (conservé, désormais sans objet) : la machinerie qui
+  retardait les avis bruts quand l'Assistant parlait est **derrière le
+  couperet** ; depuis la décision 2026-11 (§ 16), les avis bruts ne partent
+  **plus jamais**, communication active ou coupée ;
 - **désactivé par défaut** et **persisté** (`telegram_dialog_enabled`).
+
+**Dans le périmètre (décision 2026-11, implémentée — § 16)** :
+- **le canal ne porte que la conversation** : demande → réponse, questions de
+  l'Assistant et réponses du propriétaire ;
+- **aucun message d'ÉVÉNEMENT** (début / fin de mission, changement d'état,
+  démarrage d'agent, rapport automatique, alerte technique, résumé de tâche,
+  message de service) ne part sur Telegram : ils sont **coupés** au point de
+  passage unique (`isTelegramEventMessageAllowed()`), sans être détruits ;
+- **rien n'est mis en attente** : aucun minuteur, aucun report, aucune reprise
+  plus tard — un événement coupé ne peut pas repartir au réveil.
 
 **Hors périmètre (étape 2, lots suivants)** :
 - **boutons** Telegram (réponse par numéro en texte uniquement pour ce lot) ;
@@ -347,6 +370,15 @@ Aucun variant ne peut contenir le jeton (`Failed` est nettoyé).
 
 ## 5. Branchement sur les avis existants
 
+> **État depuis la décision 2026-11 (§ 16)** : tout ce qui suit **existe
+> toujours** dans le code, mais les avis **d'ÉVÉNEMENT** traversent le couperet
+> `isTelegramEventMessageAllowed()` et **ne sont plus envoyés**. La description
+> ci-dessous explique le branchement conservé (un seul point d'entrée, pas de
+> doublon), pas un comportement actif.
+
+
+## 5. Branchement sur les avis existants
+
 Aucune logique de notification n'est dupliquée : un seul point d'entrée côté
 interface, `forwardToTelegram(title, body)` (`src/js/desktop-notify.js`),
 appelé **en tête** des trois fonctions d'avis existantes :
@@ -377,13 +409,18 @@ appelé **en tête** des trois fonctions d'avis existantes :
   - `clean_text` : caractères de contrôle, lignes vides, Unicode/emoji intact,
     troncature sur frontière de caractère ;
   - sécurité : un échec ne divulgue jamais le jeton (`***`).
-- **Interface** (`src/js/telegram-notify.test.js`, 13 tests) — `invoke` et le
-  plugin de notification sont **mockés** : le branchement des trois avis, le
-  non-doublon, l'avalement des échecs, la cohérence des réglages
-  (moteur/HTML/settings.js) et la préservation de la réserve R-B.
-- **Compte-test tracé** : branchement de `notifyAnomaly` retiré → 2 tests
-  **rouges** (`expected [] to deeply equal [Array(1)]`), restauration → 13 tests
-  **verts**, arbre de travail propre.
+- **Interface** (`src/js/telegram-notify.test.js`) — `invoke` et le plugin de
+  notification sont **mockés** : depuis la décision 2026-11 (§ 16), ces tests
+  **prouvent le contraire d'avant** — les avis existent et restent branchés,
+  mais **rien ne part** sur Telegram (avis de fin, alerte, alerte sans décision,
+  config en échec, dialogue actif). La cohérence des réglages
+  (moteur/HTML/settings.js) et la préservation de la réserve R-B restent
+  vérifiées.
+- **Garde du canal** (`src/js/telegram-conversation-seule.test.js`, 15 tests) :
+  aucun message d'ÉVÉNEMENT ne part, rien n'est mis en attente, la conversation
+  reste entière (§ 16.3). Preuve par neutralisation incluse.
+- **Compte-test tracé** : constante `TELEGRAM_CHANNEL_CONVERSATION_ONLY` repassée
+  à `false` → 12 tests **rouges** dans la garde ; restaurée → 15 **verts**.
 
 ## 7. Documentation embarquée (handbook)
 
@@ -870,9 +907,13 @@ le **même** encodage de clic change de **sens** : `q<génération>:<index>`
 
 ## 13. Refonte des messages — un projet par message, trois types seulement
 
-> **Statut : ✅ Implémenté.** Refonte demandée par le propriétaire : « quand deux
+> **Statut : ✅ Implémenté, puis ⛔ hors service pour trois types sur quatre
+> (décision 2026-11, § 16).** Refonte demandée par le propriétaire : « quand deux
 > projets tournent en même temps, je ne sais plus qui fait quoi, et je reçois
-> trop d'informations inutiles. »
+> trop d'informations inutiles. » Le module reste la **source unique** des textes
+> et de leurs règles ; mais `START`, `END` et `ALERT` sont des **ÉVÉNEMENTS** :
+> ils sont coupés avant l'envoi et ne partent plus. Seul `ASSISTANT` (la
+> conversation) passe encore.
 
 ### 13.1 Source unique de vérité (`src/js/telegram-messages.js`)
 
@@ -988,6 +1029,10 @@ l'étape 1, **conservé tel quel, sans doublon** :
 Le réglage voisin `telegram_dialog_enabled` n'est **pas** un second interrupteur
 de notification : il ne décide que de la **reformulation du dialogue** de
 l'Assistant (§ 11), n'a aucune case, et ne peut donc pas contredire celui-ci.
+
+Depuis la décision 2026-11 (§ 16), cet interrupteur ne commande plus que la
+**conversation** : les avis d'ÉVÉNEMENT étant coupés avant lui, le cocher ne peut
+plus provoquer l'arrivée d'un message de début, de fin de mission ou d'alerte.
 
 ### 14.2 Comment l'assistant LIT l'état : le même outil, sans argument
 
@@ -1173,3 +1218,84 @@ vrai, transport Tauri simulé) échoue si :
 sur la limite de caractères. Côté Rust : `super_agent` (texte tel quel pour un
 message du propriétaire, gabarit conservé pour un compte rendu, nature qui
 survit à la boîte durable et au rejeu, nature inconnue = compte rendu).
+
+## 16. Le canal ne porte QUE la conversation (décision 2026-11)
+
+> **Statut : ✅ Implémenté.** Décision du propriétaire, en toutes lettres :
+> « Sur Telegram, je veux **UNIQUEMENT** la conversation question/réponse entre
+> moi et l'assistant, **exactement comme en mode Vocal**. **Tout message qui
+> annonce un ÉVÉNEMENT doit cesser.** »
+
+### 16.1 Ce qui ne part plus, et ce qui reste
+
+| Message | Avant | Depuis la décision |
+|---|---|---|
+| demande du propriétaire → conversation | envoyée | **envoyée** (inchangé) |
+| réponse de l'Assistant | envoyée | **envoyée** (inchangé) |
+| question de l'Assistant + réponse du propriétaire | envoyées | **envoyées** (inchangé, boutons compris) |
+| début de mission (`START`, `notifyTaskStarted`) | envoyé | **coupé** |
+| fin de mission (`END`, `notifyAgentDone`, `notifyAgentDoneFromRemote`, `notifySuperAgentDone`) | envoyé | **coupé** |
+| changement d'état, résumé de tâche, compte rendu automatique | envoyé | **coupé** |
+| démarrage d'agent, message de travail | envoyé | **coupé** |
+| alerte technique (`ALERT`, `notifyAnomaly`, arrêt automatique, verrou libéré) | envoyé | **coupé** |
+| message de service (reprise, relance, file d'attente) | envoyé | **coupé** |
+
+Ces informations **n'ont pas disparu** de Pilot : elles restent dans la
+conversation, dans l'onglet Activité et dans les **notifications natives**. Le
+canal Telegram n'en porte plus aucune.
+
+### 16.2 Le couperet, un seul endroit (`src/js/telegram-dialog.js`)
+
+```
+export const TELEGRAM_CHANNEL_CONVERSATION_ONLY = true;
+export function isTelegramEventMessageAllowed() {
+  return TELEGRAM_CHANNEL_CONVERSATION_ONLY !== true;
+}
+```
+
+Il est appliqué par `deliverRawTelegramAvis(text, opts, deps)` — **le seul point
+de passage** des avis d'événements (c'est lui qu'appelle `forwardToTelegram` de
+`desktop-notify.js`) :
+
+- le retour est **immédiat** : aucun envoi, **aucun minuteur armé**, rien mis de
+  côté → un événement coupé ne peut pas repartir plus tard ;
+- un second verrou existe dans `sendRawAvis` et un troisième dans
+  `flushRawTelegramAvis` (les minuteurs en cours sont annulés) : aucun chemin
+  détourné ne peut faire partir un avis ;
+- **tout le reste est conservé** : `notifyTaskStarted`, `notifyAgentDone`,
+  `notifyAgentDoneFromRemote`, `notifySuperAgentDone`, `notifyAnomaly`,
+  `forwardToTelegram`, la machinerie anti-doublon et les notifications natives
+  restent **branchées** — seule la sortie Telegram est coupée. Rebasculer la
+  décision = changer **une** constante.
+
+**Intacts** : `telegram-inbound.js` (écoute et remise des messages),
+`telegram-questions.js` (questions, boutons, première réponse gagne),
+`relayAssistantMessageToTelegram` (la réponse), la configuration du bot
+(jeton, identifiant, webhook) et le moteur Rust (`telegram.rs`).
+
+### 16.3 La garde (test)
+
+`src/js/telegram-conversation-seule.test.js` (**15 tests**) échoue si un message
+d'événement repart un jour sur Telegram :
+
+- la politique est **lisible** (`TELEGRAM_CHANNEL_CONVERSATION_ONLY === true`,
+  `isTelegramEventMessageAllowed() === false`) ;
+- le couperet est **au seul point de passage** et `desktop-notify.js` ne parle au
+  moteur que par lui (une seule occurrence de `telegram_notify` = l'envoyeur par
+  défaut) ;
+- **les six points d'avis** de l'interface, essayés un par un (début de mission,
+  fin à distance, fin avec suite à tester, changement d'état, anomalie, avis
+  brut), ne produisent **aucun** envoi — y compris **dialogue actif**, pendant
+  les **heures calmes**, et quand la **config échoue** ;
+- **rien n'est mis en attente** (`timers.count() === 0`, puis avance de 60 s +
+  `flushRawTelegramAvis()` → toujours rien) ;
+- une **alerte critique** est coupée comme les autres ;
+- **la conversation reste entière** : une demande reçue par l'écoute est bien
+  déposée dans la conversation, une question part, la réponse du propriétaire
+  est consommée, et la réponse de l'Assistant part sur le canal.
+
+**Preuve par neutralisation** : constante repassée à `false` → **12 tests
+rouges** ; restaurée → **15 verts**.
+
+`src/js/telegram-notify.test.js` et `src/js/telegram-dialog.test.js` (réécrits)
+verrouillent le même fait au niveau de leurs branchements respectifs.

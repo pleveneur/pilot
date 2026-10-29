@@ -4318,11 +4318,13 @@ normalement** l'agent au lieu de rester en file derrière un couple
   la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
   bloqués (délégués + standard)** (seuil 10 min). Activés par
   défaut.
-- **Alerte sur Telegram** : si la passerelle Telegram est activée
-  (**Options ⚙️ → Agent → Notifications Telegram**), ces alertes (anomalie
-  détectée, arrêt automatique, verrou de run libéré) vous sont **aussi**
-  envoyées sur Telegram. Voir la section « Notifications Telegram » de cette
-  aide.
+- **Alerte sur Telegram** : **plus envoyée depuis la décision 2026-11** — le
+  canal Telegram ne porte **que la conversation** avec l'Assistant. Les alertes
+  (anomalie détectée, arrêt automatique, verrou de run libéré) restent visibles
+  **dans Pilot** (panneau Activité, fiche de l'agent) et par les
+  **notifications natives** si vous les avez activées. La passerelle Telegram
+  n'en transporte plus aucune ; la section « Telegram » de cette aide dit ce qui
+  y passe désormais (`spec_telegram.md` § 16).
 - **Prise en compte immédiate (issue #89)** : ces réglages (seuils et
   activations) sont **relus en continu**, à chaque passage de la surveillance
   (toutes les **30 s**). Un changement dans les Options s'applique donc
@@ -4348,22 +4350,22 @@ normalement** l'agent au lieu de rester en file derrière un couple
 ---
 
 <!-- HELP-TOPIC:telegram -->
-## Aide utilisateur — Notifications Telegram
+## Aide utilisateur — Telegram : la conversation, rien d'autre
 
-Pilot peut vous prévenir **sur Telegram** quand il a quelque chose à vous dire,
-même si vous êtes loin de l'ordinateur :
-
-- **fin de tâche d'un agent** (chat de l'agent π, tâche déléguée, run d'agents) ;
-- **alerte d'anomalie** : un agent semble bloqué (actif sans progression) ;
-- **arrêt automatique d'une session** (agent bloqué arrêté, verrou de run
-  libéré).
+Sur Telegram, vous retrouvez **exactement la conversation** que vous auriez avec
+l'assistant — comme sur l'écran Vocal : vous **écrivez une demande**, il vous
+**répond**. **Rien d'autre** ne vous y est envoyé : aucun message de **début** ou
+de **fin de mission**, aucun **rapport automatique**, aucun **résumé de tâche**,
+aucune **alerte technique**, aucun **message de service**. Ces informations
+restent **dans Pilot** (et, si vous l'avez activé, dans les **notifications de
+votre bureau**) : le canal Telegram ne les annonce plus du tout.
 
 **Réglage** : dans **Options ⚙️ → onglet Assistant**, section
 **« Notifications Telegram »** :
 
 1. cochez **« Me prévenir sur Telegram »** ;
 2. collez le **jeton du bot** (fourni par **@BotFather** dans Telegram) ;
-3. indiquez l'**identifiant de discussion** qui recevra les avis (votre
+3. indiquez l'**identifiant de discussion** qui recevra les messages (votre
    identifiant personnel, ou celui d'un groupe).
 
 Pour obtenir ces deux valeurs : créez un bot auprès de **@BotFather**
@@ -4372,13 +4374,12 @@ auprès de **@userinfobot** (ou de l'API `getUpdates`).
 
 **Comportement quand c'est désactivé (par défaut)** : tant que l'interrupteur
 est décoché **ou** qu'un des deux champs est vide, **rien n'est envoyé** sur
-Telegram (aucun message de début ni de fin, aucune alerte) et **aucun message
-d'erreur** ne s'affiche. Décocher le réglage suffit à tout arrêter ; les alertes
-restent alors visibles **dans Pilot**.
+Telegram et **aucun message d'erreur** ne s'affiche. Décocher le réglage suffit
+à tout arrêter ; les informations restent alors visibles **dans Pilot**.
 
 **Un seul réglage, que l'Assistant peut changer lui-même** :
 
-- c'est le **seul** interrupteur des notifications Telegram (il n'existe aucune
+- c'est le **seul** interrupteur de la communication Telegram (il n'existe aucune
   seconde case ailleurs) ;
 - demandez-le **en toutes lettres** à l'Assistant, dans Pilot **ou** sur
   Telegram — « préviens-moi sur Telegram », « arrête de me prévenir », « coupe
@@ -4386,42 +4387,32 @@ restent alors visibles **dans Pilot**.
   phrase**, sans vous redemander ;
 - **si vous écrivez au bot sur Telegram**, le réglage se **réactive
   automatiquement** (vous écrivez là, donc vous voulez y être prévenu) : le geste
-  est journalisé et l'interrupteur des Options apparaît coché. Un message
-  venant d'**une autre personne** ne change jamais ce réglage.
+  est journalisé et l'interrupteur des Options apparaît coché. Un message venant
+  d'**une autre personne** ne change jamais ce réglage.
 
-**Ce que vous recevez est court et rangé** :
+**Ce qui passe par le canal est court et net** :
 
-- **un message = un projet**, dont le **nom est en tête** (« MakeFilm : … ») :
-  quand deux projets tournent en même temps, vous savez toujours de qui on
-  parle, et vous recevez **un message par projet** (jamais un message mélangé) ;
-- **trois types de message seulement** :
-  - **début** (une ligne : le projet et ce qui commence) ;
-  - **fin** (deux lignes au plus : « livré » ou « échec », puis ce que **vous**
-    pouvez tester) ;
-  - **alerte** (une ligne : ce qui bloque **et** ce qu'il faut décider — s'il n'y
-    a rien à décider, vous n'êtes pas dérangé) ;
+- **votre demande** et **la réponse de l'Assistant** — rien de plus ;
+- **les questions** qu'il vous pose (choix, confirmation, saisie libre) et
+  **vos réponses** — voir ci-dessous ;
 - **pas de détails techniques** : ni chemin de fichier, ni nom de fonction, ni
-  numéro de session, ni compte de tests (juste « tests OK » ou « tests KO »),
-  ni branche ni commit ;
+  numéro de session, ni compte de tests, ni branche ni commit ;
 - **aucune heure dans les messages** : un message dit **ce qui se passe**, pas
-  quand ; vous êtes prévenu à l'instant, l'heure n'apporte rien ;
-- **aucun récapitulatif périodique** : pas de bilan du soir, pas de message à
-  heure fixe — uniquement des messages pour un changement réel ;
-- **un seul message par changement réel** : une rafale d'évènements produit un
-  seul envoi, et un évènement sans information utile ne produit **aucun**
-  message ;
-- **heures calmes respectées** : rien entre **23 h et 7 h**, sauf danger
-  immédiat. Les messages de la nuit vous arrivent au réveil, une seule fois.
+  quand ;
+- **aucun récapitulatif** : pas de bilan du soir, pas de message à heure fixe,
+  aucun rapport automatique ;
+- **un seul envoi par réponse** : une même réponse ne vous parvient jamais deux
+  fois.
 
 **Détails utiles** :
 
 - l'envoi se fait **en arrière-plan** : il ne ralentit ni ne bloque jamais
   Pilot ;
-- si Telegram est injoignable (pas de réseau, jeton erroné), l'avis est
-  simplement perdu — **cela n'interrompt jamais le travail en cours** et
-  n'affiche aucune erreur ;
-- ces avis sont **indépendants** des notifications natives (fenêtre Windows) :
-  vous pouvez avoir l'un sans l'autre ;
+- si Telegram est injoignable (pas de réseau, jeton erroné), le message est
+  simplement perdu — **cela n'interrompt jamais la conversation** et n'affiche
+  aucune erreur ;
+- ces messages sont **indépendants** des notifications natives (fenêtre
+  Windows) : vous pouvez avoir l'un sans l'autre ;
 - le jeton est conservé dans votre configuration locale et n'est utilisé que
   pour l'envoi ; il n'apparaît dans aucun journal.
 
@@ -4473,15 +4464,13 @@ n'apparaît que si l'envoi Telegram est réellement **en état de fonctionner**
 (case **« Me prévenir sur Telegram »** cochée, jeton et identifiant renseignés — ces réglages restent dans **Options ⚙️ → onglet Assistant**) :
 s'il s'affiche, c'est que vos messages partiront vraiment. Une fois activé, ce que
 l'Assistant écrit vous arrive **aussi sur Telegram**, **net et entier** — et
-**seulement quand cela vous est utile** : réponse à votre question,
-fin de mission / compte rendu, alerte, demande d'accord. Rien n'est coupé en
-cours de phrase : la réponse garde les **deux phrases courtes** du mode vocal. Les étapes de travail et
-les détails techniques ne vous sont pas envoyés. Quand cette communication est
-**active**, Pilot évite de vous envoyer deux fois la même information — mais
-**les alertes (anomalie, arrêt automatique) vous parviennent toujours**, et les
-autres avis sont envoyés si l'Assistant n'a finalement rien dit. Quand elle est
-**coupée** (par défaut), les avis continuent exactement comme avant. Le bouton
-indique son état et votre choix est conservé après un redémarrage de Pilot.
+**seulement la conversation** : sa réponse, sa question, sa demande d'accord.
+Rien n'est coupé en cours de phrase : la réponse garde les **deux phrases
+courtes** du mode vocal. Les étapes de travail, les **rapports automatiques**,
+les **résumés de tâche** et les **alertes techniques** ne vous sont **pas**
+envoyés : ils restent dans Pilot. Quand cette communication est **coupée** (par
+défaut), aucune réponse ne part sur Telegram. Le bouton indique son état et
+votre choix est conservé après un redémarrage de Pilot.
 
 🗣️ **Écrire à votre bot, c'est comme parler à l'écran Vocal** : que vous parliez
 dans **Pilot** (écran Vocal) ou que vous **écriviez sur Telegram**, l'Assistant se

@@ -9,9 +9,10 @@
 //   4. la VISIBILITÉ du bouton selon la configuration ;
 //   5. la CONSERVATION du réglage d'une session à l'autre et la compatibilité
 //      d'une configuration ancienne (champ absent = valeur par défaut) ;
-//   6. l'ABSENCE de doublon d'avis SANS PERTE : en communication active, un avis
-//      brut non critique est retardé puis abandonné si l'Assistant parle, envoyé
-//      sinon ; les ALERTES ne sont jamais retardées ni coupées.
+//   6. le CANAL DE CONVERSATION : plus AUCUN message d'ÉVÉNEMENT ne part sur
+//      Telegram (début/fin de mission, changement d'état, alerte, rapport
+//      automatique) ; seule la conversation (demande → réponse, questions et
+//      réponses du propriétaire) passe.
 //
 // Le comportement du moteur (inertie, nettoyage, envoi via un faux envoyeur) est
 // couvert par les tests Rust de `src-tauri/src/telegram.rs` et de `lib.rs`.
@@ -360,17 +361,20 @@ describe("conservation du réglage et compatibilité d'une ancienne config", () 
   });
 });
 
-describe("absence de doublon d'avis (et zéro perte)", () => {
-  it("communication INACTIVE → avis brut transmis (message de FIN, projet en tête)", async () => {
+describe("canal de conversation : aucun message d'ÉVÉNEMENT ne part sur Telegram", () => {
+  it("communication INACTIVE → un avis de fin de mission ne part PAS", async () => {
+    // Décision du propriétaire (2026-11) : « sur Telegram, je veux UNIQUEMENT la
+    // conversation question/réponse, exactement comme en mode Vocal. Tout message
+    // qui annonce un ÉVÉNEMENT doit cesser. » Un avis de fin de mission est un
+    // message d'événement : il ne part pas, même quand rien ne le couvrirait.
     await forwardToTelegram("Pilot — Agent terminé", "✅ terminé", {
       project: "G:/IA_PL/pilot",
       result: "terminé",
     });
-    // Un message = UN projet : nom court en tête, verdict, aucun chemin.
-    expect(telegramMessages()).toEqual(["pilot : livré — terminé"]);
+    expect(telegramMessages()).toEqual([]);
   });
 
-  it("communication ACTIVE → une ALERTE n'est jamais retardée ni coupée", async () => {
+  it("communication ACTIVE → une ALERTE ne part pas non plus", async () => {
     setTelegramDialogConfigured(true);
     setTelegramDialogEnabled(true);
     await forwardToTelegram("Pilot — Anomalie détectée", "⚠️ agent bloqué", {
@@ -378,12 +382,12 @@ describe("absence de doublon d'avis (et zéro perte)", () => {
       project: "G:/IA_PL/pilot",
       decision: "relancer la tâche ou vérifier l'agent",
     });
-    expect(telegramMessages()).toEqual([
-      "⚠️ pilot : agent bloqué — à décider : relancer la tâche ou vérifier l'agent",
-    ]);
+    // Une alerte est un message d'ÉVÉNEMENT : le canal ne la porte plus, même
+    // critique. Elle reste visible sur le bureau (notification desktop).
+    expect(telegramMessages()).toEqual([]);
   });
 
-  it("communication ACTIVE → avis non critique RETARDÉ, puis envoyé si l'Assistant ne parle pas", async () => {
+  it("communication ACTIVE → rien n'est mis en attente : aucun minuteur ne peut s'échapper plus tard", async () => {
     setTelegramDialogConfigured(true);
     setTelegramDialogEnabled(true);
     const timers = manualTimers();
@@ -392,11 +396,12 @@ describe("absence de doublon d'avis (et zéro perte)", () => {
       project: "G:/IA_PL/pilot",
       result: "terminé",
     });
-    // Retardé (pas encore envoyé) mais PAS perdu : il part à l'échéance.
+    // Pas d'envoi, et surtout RIEN en attente : ni à l'échéance, ni plus tard.
     expect(telegramMessages()).toEqual([]);
-    expect(timers.count()).toBe(1);
-    timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS);
-    expect(telegramMessages()).toEqual(["pilot : livré — terminé"]);
+    expect(timers.count()).toBe(0);
+    timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS * 3);
+    flushRawTelegramAvis();
+    expect(telegramMessages()).toEqual([]);
   });
 
   it("communication ACTIVE → avis retardé ABANDONNÉ si l'Assistant parle pendant la fenêtre", async () => {
@@ -414,11 +419,11 @@ describe("absence de doublon d'avis (et zéro perte)", () => {
     );
     expect(sent).toBe(true);
     timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS * 3);
-    // Pas de doublon : seule la phrase de l'Assistant est partie.
+    // Seule la phrase de l'Assistant est partie (la conversation), aucun avis.
     expect(telegramMessages()).toEqual(["pilot : ✅ La tâche déléguée est terminée."]);
   });
 
-  it("communication ACTIVE → un tour en cours repousse l'échéance, la fin de tour sans parole déclenche l'avis", async () => {
+  it("communication ACTIVE → la fin d'un tour en cours ne fait rien repartir", async () => {
     setTelegramDialogConfigured(true);
     setTelegramDialogEnabled(true);
     const timers = manualTimers();
@@ -430,11 +435,11 @@ describe("absence de doublon d'avis (et zéro perte)", () => {
       result: "terminé",
     });
     timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS);
-    // Le tour de l'Assistant est en cours : on attend sa fin réelle.
     expect(telegramMessages()).toEqual([]);
     busy = false;
     flushRawTelegramAvis();
-    expect(telegramMessages()).toEqual(["pilot : livré — terminé"]);
+    // La fin du tour ne déclenche plus aucun avis : le canal reste au repos.
+    expect(telegramMessages()).toEqual([]);
   });
 
   it("communication ACTIVE → l'Assistant parle à la place, en une phrase", () => {

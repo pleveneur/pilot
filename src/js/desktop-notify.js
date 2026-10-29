@@ -17,12 +17,21 @@
 // de tâche d'un agent, les événements de l'assistant et les alertes
 // d'anomalie / arrêt automatique.
 //
-// Étape 2, lot 3 : quand l'Assistant « parle » sur Telegram (communication du
-// dialogue active), les avis bruts non critiques sont RETARDÉS d'une courte
-// fenêtre pour éviter un doublon avec la phrase de l'Assistant, sans jamais
-// risquer de les perdre (`deliverRawTelegramAvis` dans telegram-dialog.js). Les
-// avis d'ALERTE (anomalie, arrêt automatique) passent en `critical` : ils
-// partent TOUT DE SUITE, quoi qu'il arrive.
+// LE CANAL TELEGRAM NE PORTE QUE LA CONVERSATION (décision du propriétaire,
+// 2026-11) : tout ce qui suit (début de mission, fin de mission, démarrage
+// d'agent, rapport automatique, alerte technique, résumé de tâche, message de
+// service) est un message d'ÉVÉNEMENT — il est donc COUPÉ au point de passage
+// unique `deliverRawTelegramAvis` (couperet `isTelegramEventMessageAllowed()`).
+// Ces appels restent en place : ils alimentent la notification DESKTOP, et le
+// jour où la décision changerait, seul le couperet changerait. Rien n'est
+// supprimé, rien n'échappe au couperet.
+//
+// Étape 2, lot 3 (historique) : quand l'Assistant « parlait » sur Telegram, les
+// avis bruts non critiques étaient retardés d'une courte fenêtre pour éviter un
+// doublon avec sa phrase, et les alertes passaient en `critical` (tout de suite).
+// Cette machinerie reste écrite dans `deliverRawTelegramAvis` (telegram-dialog.js)
+// mais se trouve DÉSORMAIS derrière le couperet « canal de conversation » : elle
+// ne s'exécute plus. Aucun avis d'ÉVÉNEMENT ne part, aucune alerte non plus.
 //
 // REFONTE DES MESSAGES (deux projets suivis en même temps) : le texte de l'avis
 // Telegram n'est PLUS composé ici. Il vient de la SOURCE UNIQUE
@@ -85,8 +94,15 @@ function eventFromNotice(title, body, opts = {}) {
 }
 
 /**
- * Transmet un avis à la passerelle Telegram (spec_telegram.md, étape 1 :
- * ENVOI seulement).
+ * Transmet un avis à la passerelle Telegram (spec_telegram.md).
+ *
+ * ATTENTION — CANAL DE CONVERSATION (décision du propriétaire, 2026-11) : ce
+ * point d'entrée ne sert QUE des messages d'ÉVÉNEMENT (début, fin, alerte,
+ * changement d'état, rapport automatique…). Ils ne partent PLUS sur Telegram :
+ * le couperet est dans `deliverRawTelegramAvis` (`isTelegramEventMessageAllowed`),
+ * seul point de passage de tous les avis. L'appel reste ici parce qu'il est
+ * commun aux quatre points d'avis et qu'il ne coûte rien ; le jour où la
+ * décision changerait, un seul endroit changerait.
  *
  * Le texte vient de la source unique `telegram-messages.js`. Le moteur (Rust)
  * décide seul de l'inertie : passerelle désactivée ou mal configurée → aucun
@@ -98,10 +114,9 @@ function eventFromNotice(title, body, opts = {}) {
  * OS) : Telegram est un canal indépendant, il ne doit pas être conditionné par
  * le réglage des notifications desktop.
  *
- * Étape 2, lot 3 (anti-doublon SANS PERTE) : quand la communication du dialogue
- * est ACTIVE, l'avis part immédiatement s'il est `critical` (alerte), sinon il
- * est retardé d'une courte fenêtre et n'est abandonné que si l'Assistant parle
- * réellement pendant celle-ci (voir `deliverRawTelegramAvis`).
+ * Étape 2, lot 3 (anti-doublon SANS PERTE) : la machinerie de retard/abandon des
+ * avis bruts existe toujours dans `deliverRawTelegramAvis`, mais elle est
+ * derrière le couperet « canal de conversation » : rien ne part.
  *
  * Un évènement qui ne porte AUCUNE information utile au propriétaire (corps
  * vide, purement technique) ne produit aucun envoi : pas de message « néant ».
@@ -165,6 +180,9 @@ async function ensurePermission() {
  * Notifie le DÉBUT d'une tâche lancée à distance (« MakeFilm : correction de
  * l'autotest lancée »). Une seule ligne, aucun détail technique : le
  * propriétaire sait que quelque chose commence et sur quel projet.
+ *
+ * Telegram : un message d'ÉVÉNEMENT (début de mission) — il ne part plus sur le
+ * canal Telegram, qui ne porte que la conversation (voir `forwardToTelegram`).
  * @param {{project?: string, action?: string}} [opts]
  * @returns {Promise<void>}
  */
@@ -198,15 +216,18 @@ export async function notifyAgentDoneFromRemote(opts = {}) {
  * le réglage est désactivé (défaut), on n'émet rien. Le mode remote est
  * insensible au réglage (l'utilisateur a explicitement lancé à distance).
  *
- * Telegram : message de FIN (deux lignes maximum) — nom court du PROJET en tête,
- * résultat (« livré » ou « échec »), puis éventuellement ce qu'il reste à tester.
+ * Telegram : un message d'ÉVÉNEMENT (fin de mission) — il ne part donc PLUS sur
+ * le canal Telegram, qui ne porte que la conversation (couperet dans
+ * `deliverRawTelegramAvis`). La notification desktop, elle, est inchangée.
  * @param {object} [opts] — { project?, ok?, result?, testable?, title?, body?, local?, telegram? }
  */
 export async function notifyAgentDone(opts = {}) {
   const title = opts.title || "Pilot — Agent terminé";
   const body = opts.body || "✅ L'agent a terminé.";
-  // Passerelle Telegram (spec_telegram.md) : transmise en premier, en
-  // arrière-plan, indépendamment du réglage local et de la permission OS.
+  // Passerelle Telegram : un message d'ÉVÉNEMENT (fin de tâche) — il ne part plus
+  // sur le canal, qui ne porte que la conversation (couperet unique dans
+  // `deliverRawTelegramAvis`). L'appel reste pour la notification desktop, qui
+  // suit son propre chemin.
   forwardToTelegram(title, body, {
     type: TELEGRAM_MESSAGE_TYPES.END,
     project: opts.project,
@@ -245,16 +266,16 @@ export async function notifyAgentDone(opts = {}) {
  * #16) : si désactivé, on n'émet rien — évite la sur-notification sur les
  * réponses banales de l'assistant. Défensif (ne lève jamais d'erreur).
  *
- * Telegram : message de FIN du projet concerné (`project` = chemin ou nom).
- * `telegram: false` = information purement interne : rien ne part.
+ * Telegram : un message d'ÉVÉNEMENT (fin de mission ou alerte) — il ne part plus
+ * sur le canal, qui ne porte que la conversation (couperet dans
+ * `deliverRawTelegramAvis`). `telegram: false` = information purement interne.
  * @param {object} [opts] — { project?, ok?, result?, testable?, title?, body?, telegram? }
  */
 export async function notifySuperAgentDone(opts = {}) {
   const title = opts.title || "Pilot — Assistant";
   const body = opts.body || "ℹ️ L'assistant signale un événement important.";
-  // Passerelle Telegram : canal indépendant du réglage `notify_super_agent_done`.
-  // Une ALERTE (`type: "alert"`) suit le gabarit d'alerte (une ligne, décision
-  // attendue) ; tout le reste est un message de FIN du projet concerné.
+  // Passerelle Telegram : l'appel reste (même chemin que les autres avis), mais
+  // le couperet du canal l'arrête — aucun événement de l'Assistant ne part.
   forwardToTelegram(title, body, {
     type: opts.type === TELEGRAM_MESSAGE_TYPES.ALERT ? TELEGRAM_MESSAGE_TYPES.ALERT : TELEGRAM_MESSAGE_TYPES.END,
     project: opts.project,
@@ -291,16 +312,18 @@ export async function notifySuperAgentDone(opts = {}) {
  * `anomaly_detection_enabled` (défaut on) : si la surveillance est désactivée,
  * on n'émet rien. Défensif (ne lève jamais d'erreur).
  *
- * Telegram : ALERTE d'UNE ligne — ce qui bloque ET la décision attendue. Sans
- * décision, aucune alerte ne part (jamais de bruit sans action possible).
+ * Telegram : un message d'ÉVÉNEMENT (alerte technique) — il ne part plus sur le
+ * canal Telegram, qui ne porte que la conversation (voir `forwardToTelegram`).
  * @param {object} [opts] — { project?, problem?, decision?, danger?, title?, body? }
  */
 export async function notifyAnomaly(opts = {}) {
   const title = opts.title || "Pilot — Anomalie détectée";
   const body = opts.body || "⚠️ Un agent semble bloqué (actif sans progression).";
-  // Passerelle Telegram : ALERTE — elle ne doit JAMAIS être retardée ni coupée,
-  // même si la communication du dialogue est active (une anomalie ou un arrêt
-  // automatique est trop important pour dépendre de la parole de l'Assistant).
+  // Passerelle Telegram : alerte = message d'ÉVÉNEMENT. Le canal ne porte que la
+  // conversation : l'alerte ne part donc plus (couperet unique dans
+  // `deliverRawTelegramAvis`), et elle n'est ni retardée ni mise en attente pour
+  // autant — elle est coupée, quel que soit l'état du dialogue. La notification
+  // desktop, elle, est émise comme avant.
   // Transmise même si la notification native est désactivée côté surveillance
   // (`anomaly_detection_enabled`). Seul un DANGER IMMÉDIAT franchit les heures
   // calmes (23 h → 7 h).
