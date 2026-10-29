@@ -14,7 +14,7 @@ import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus,
 // installée ICI, au seul endroit qui connaît à la fois le bus d'agents (runs en
 // cours) et l'activité RÉELLE des sessions (agent qui travaille sans run).
 import { isRunInProgress } from "./agents-bus.js";
-import { isProjectAgentBusy, initOwnerEngagementWatch, startTaskCounter, startSuperMissionsWatch } from "./super-agent.js";
+import { isProjectAgentBusy, initOwnerEngagementWatch, startTaskCounter, startSuperMissionsWatch, refreshAssistantPersonaAndApply } from "./super-agent.js";
 import { getAgentActivitySnapshot, subscribeAgentActivity, isAgentWorking, initAgentActivity } from "./agent-activity.js";
 // Bande de contexte supprimee (docs/proposition-bande-contexte-allegee.md) :
 // le fil « Projet > projet > onglet » n'existe plus. L'entree « Travail » vit
@@ -581,6 +581,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   // bouton « Afficher l'onglet » de la fiche appelle tabs._openAgent /
   // tabs.openFile.
   initAgentActivity(tabs);
+  // PERSONNAGE ACTIF (Présences) : lecture au DEMARRAGE, puis a chaque retour de
+  // focus de la fenetre. C'est le point qui alimente TOUTES les surfaces qui
+  // affichent le nom de l'assistant (titre de l'onglet 🧭, liste des agents en
+  // haut a droite, ecran Vocal) : sans lui, le nom du personnage n'apparaissait
+  // qu'apres l'ouverture de l'onglet 🧭. La relecture faite par l'onglet lui-meme
+  // partage la MEME lecture disque (assistant-persona.js). Fail-open : une
+  // lecture impossible laisse le nom regle.
+  refreshAssistantPersonaAndApply().catch(() => {});
+  window.addEventListener("focus", () => {
+    refreshAssistantPersonaAndApply().catch(() => {});
+  });
   // Compteur « Travail » (bouton de la rangee d'onglets) : demarre ICI, avec
   // l'application, et non dans la fabrique de l'onglet 🧭 Assistant. Sans cela,
   // tant que l'onglet 🧭 n'avait jamais ete ouvert, le calcul du compte

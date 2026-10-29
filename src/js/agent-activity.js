@@ -38,6 +38,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { formatWorkingSince, formatWorkingSinceShort } from "./duree-travail.js";
+// PERSONNAGE ACTIF (Présences) : la liste des agents en haut a droite porte le
+// MEME nom que le titre de l'onglet. La supervision nomme la session de
+// l'assistant d'apres le nom REGLE (« Nova ») : sans ce branchement, le nom du
+// personnage etait ignore partout ailleurs que dans l'onglet. Une seule regle,
+// celle de `assistant-persona.js` — aucune copie de la priorite ici.
+import { getAssistantPersonaName, personaDisplayName } from "./assistant-persona.js";
 
 // Dernière activité connue par agent (timestamp), alimentée par
 // `agent-state-changed`. Clé = agentId (id brut, ex: "superagent" ou l'id agent).
@@ -140,7 +146,13 @@ export function flattenAgents(
       // alimente `rawId` (arrêt ciblé, ouverture d'onglet) et la clé
       // d'horodatage d'activité. Un libellé mis à la place de l'identifiant
       // casserait ces actions.
-      const label = a.name || a.agent || "";
+      // L'assistant : le libelle affiche suit la SEULE regle de nom (personnage
+      // actif -> nom regle -> « Assistant »). Le nom que porte la session cote
+      // moteur EST le nom regle : il ne doit pas gagner sur le personnage.
+      // L'IDENTITE, elle, ne change pas (`rawId`/`agentId` restent « superagent »).
+      const label = isSuper
+        ? personaDisplayName(getAssistantPersonaName(), a.name || a.agent || "")
+        : a.name || a.agent || "";
       const state = a.state || "stopped";
       const busy = state === "running" || state === "compacting";
       // Travail EFFECTIF de la session, lu sur l'ACTIVITE REELLE : soit l'agent

@@ -2239,15 +2239,31 @@ export async function refreshAssistantPersonaAndApply() {
 
 /**
  * Sélectionne, dans la liste d'agents d'un projet pseudo-global de supervision, la
- * session de l'assistant : le libellé suit le nom réglé (⚙️ → Assistant → Nom).
- * La correspondance exacte est privilégiée ; on ne retombe sur l'ancien libellé codé
- * en dur « Magnus » que s'il n'existe AUCUNE session au nom configuré (compatibilité
- * avec un cœur plus ancien). Purement fonctionnel (aucune config ni DOM) : testable.
+ * session de l'assistant.
+ *
+ * DEUX libellés sont acceptés, dans cet ordre :
+ *   1. le nom AFFICHÉ (`superAgentDisplayLabel` : personnage actif, sinon nom
+ *      réglé, sinon nom habituel) ;
+ *   2. le nom RÉGLÉ (`⚙️ → Assistant → Nom`) — c'est sous ce nom que le moteur
+ *      enregistre la session d'assistant (`dashboard.rs`). Sans ce second
+ *      passage, activer un personnage faisait échouer la sonde : l'assistant
+ *      était déclaré « Déconnecté » et son état de travail restait faux, alors
+ *      que la session existait.
+ * On ne retombe sur l'ancien libellé codé en dur « Magnus » que s'il n'existe
+ * AUCUNE session à ces deux noms (compatibilité avec un cœur plus ancien).
+ * Purement fonctionnel (aucune config ni DOM) : testable.
+ *
+ * @param {Array} agents - sessions du projet pseudo-global (`proj.agents`)
+ * @param {string} label - nom affiché de l'assistant
+ * @param {string} [configuredLabel] - nom réglé dans les paramètres (identité de
+ *   la session côté moteur)
  */
-export function findAssistantSessionAgent(agents, label) {
+export function findAssistantSessionAgent(agents, label, configuredLabel) {
   const list = agents || [];
-  const wanted = (label || "").trim();
-  if (wanted) {
+  const candidats = [label, configuredLabel]
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter((v) => v !== "");
+  for (const wanted of candidats) {
     const exact = list.find((a) => a && a.agent === wanted);
     if (exact) return exact;
   }
@@ -6481,8 +6497,10 @@ let vocalDicteeParGeste = false;
       // Le libellé de l'assistant suit le nom réglé (⚙️ → Assistant → Nom) : on
       // compare le libellé courant, avec repli sur l'ancien libellé codé en dur
       // (compatibilité avec un cœur qui n'aurait pas encore la correction).
+      // Le nom RÉGLÉ est aussi transmis : avec un personnage actif, le nom
+      // AFFICHÉ diffère du libellé de la session côté moteur.
       const superLabel = superAgentDisplayLabel();
-      const agent = proj && findAssistantSessionAgent(proj.agents, superLabel);
+      const agent = proj && findAssistantSessionAgent(proj.agents, superLabel, configCache.name);
       // Anti-blocage (bug démarrage) : ne verrouille « occupé » QUE si le
       // processus super-agent est RÉELLEMENT en cours de génération (état
       // running/compacting) ET vivant (`alive`). Un processus mort/déconnecté
@@ -7475,7 +7493,7 @@ function scheduleTransientDisconnect(messagesEl, statusEl, onFail) {
       // (libellé « Magnus » introuvable) : un faux départ rattrapé était pris
       // pour un vrai blocage au bout de la fenêtre de grâce.
       const superLabel = superAgentDisplayLabel();
-      const agent = proj && findAssistantSessionAgent(proj.agents, superLabel);
+      const agent = proj && findAssistantSessionAgent(proj.agents, superLabel, configCache.name);
       alive = !!(agent && agent.alive);
     } catch (_) { /* ignore, on garde alive=false et on test le délai */ }
     if (alive) {

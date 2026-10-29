@@ -176,6 +176,24 @@ export function resetAssistantPersona() {
 }
 
 /**
+ * Lecture en cours (promesse partagee). Deux surfaces relisent le personnage
+ * sur le MEME evenement — l'onglet 🧭 et la liste des agents (main.js) — et le
+ * portrait pese plusieurs Mo : une seule lecture disque par evenement.
+ * La promesse est oubliee des qu'elle est reglee, donc deux lectures
+ * SUCCESSIVES (changer de personnage) lisent bien deux fois.
+ */
+let refreshInFlight = null;
+
+/** Lit la commande Rust, pannes comprises (aucune exception vers l'appelant). */
+async function readPersona(call) {
+  try {
+    return await call("read_assistant_persona");
+  } catch (_) {
+    return null; // repli silencieux : aucun personnage actif
+  }
+}
+
+/**
  * Relit le personnage actif auprès du socle Rust.
  *
  * **Fail-open** : toute erreur (commande absente, dossier non résoluble, disque,
@@ -187,12 +205,14 @@ export function resetAssistantPersona() {
  * @returns {Promise<{name: string, portrait: string}>} état retenu
  */
 export async function refreshAssistantPersona(deps = {}) {
-  const call = deps && typeof deps.invoke === "function" ? deps.invoke : invoke;
-  let payload = null;
-  try {
-    payload = await call("read_assistant_persona");
-  } catch (_) {
-    payload = null; // repli silencieux : aucun personnage actif
+  const injected = deps && typeof deps.invoke === "function" ? deps.invoke : null;
+  // Appelant de test : sa lecture lui appartient, jamais partagee avec une
+  // autre (sinon deux scenarios de test pourraient se voler leur reponse).
+  if (injected) return setAssistantPersona(await readPersona(injected));
+  if (!refreshInFlight) {
+    refreshInFlight = readPersona(invoke).finally(() => {
+      refreshInFlight = null;
+    });
   }
-  return setAssistantPersona(payload);
+  return setAssistantPersona(await refreshInFlight);
 }

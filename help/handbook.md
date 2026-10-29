@@ -1875,14 +1875,17 @@ apprend et répond.
 ### Le personnage actif (nom et portrait)
 - Quand un **personnage est activé** dans Présences, l'Assistant **prend son
   nom** et affiche **son portrait** à la place de l'icône 🧭 : dans le titre de
-  l'onglet 🧭 et, en mode « Assistant seul », dans l'accueil (« Bonjour, je
-  suis … ») et dans le cercle.
+  l'onglet 🧭, dans la **liste des agents** (cercle en haut à droite) et, en
+  mode « Assistant seul », dans l'accueil (« Bonjour, je suis … ») et dans le
+  cercle.
 - **Aucun personnage actif** (aucun fichier déposé) : rien ne change —
   l'Assistant garde le nom réglé dans **Options ⚙️ → Assistant** et son icône
   habituelle. Ce n'est **pas une panne** : aucun message, aucune erreur.
 - **Changer de personnage ne demande aucun redémarrage** : l'Assistant relit le
-  personnage **à l'ouverture de son onglet** et **quand la fenêtre reprend le
-  focus**.
+  personnage **au démarrage**, **à l'ouverture de son onglet** et **quand la
+  fenêtre reprend le focus**. Ce même relevé alimente toutes les surfaces qui
+  affichent son nom (titre de l'onglet, liste des agents, écran Vocal), pas
+  seulement l'onglet ouvert.
 - Pilot **ne fait que lire** ces informations : il ne crée ni ne modifie jamais
   le dossier du personnage, et il n'écrit rien dedans.
 - Le nom réglé dans les paramètres reste le **repli** : il réapparaît dès qu'il
