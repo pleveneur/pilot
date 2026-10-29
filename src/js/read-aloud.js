@@ -991,8 +991,16 @@ export function createSpeaker(win, options = {}) {
       });
     }
 
+    // Un morceau n'est JAMAIS prononce deux fois : la synthese du systeme peut
+    // signaler deux fois la fin d'un meme enonce (Chromium / WebView2), et
+    // `onend` fait alors avancer la suite deux fois — le morceau suivant
+    // partait en double et la meme phrase s'entendait deux fois de suite. Les
+    // index ne reculent jamais : un morceau deja lance est ignore.
+    let dernierMorceau = -1;
     const speakIndex = (index) => {
       if (token.stopped || currentPlayback !== playback) return;
+      if (index <= dernierMorceau) return;
+      dernierMorceau = index;
       if (index >= chunks.length) {
         currentPlayback = null;
         token.stopped = true;

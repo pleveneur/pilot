@@ -29,6 +29,13 @@ import {
   stopReading,
   isReadAloudSpeaking,
 } from "./read-aloud.js";
+// UNE REPONSE NE SE LIT PAS DEUX FOIS : la lecture automatique de l'ecran
+// Vocal part de la fin de tour, et un tour peut avoir PLUSIEURS fins
+// (`agent_end` de relance). L'etat du bouton retombait a `idle` entre-temps,
+// donc la meme reponse etait relue en entier. La decision (le bouton se
+// souvient qu'il a deja ete lu automatiquement) vit dans ce module pur ; ce
+// fichier ne fait que la demander avant d'actionner le bouton.
+import { claimAutoRead } from "./reponse-lue-une-seule-fois.js";
 // LOT 3 (ecran Vocal) : le NIVEAU DU MICRO. Toute la capture (demande de
 // permission, flux, analyseur, lissage, ARRET reel) vit dans vocal-mic.js ; ce
 // fichier ne fait que brancher ses trois retours et ne contient donc aucune des
@@ -5495,6 +5502,10 @@ export async function createSuperAgent(container) {
     // lecture par-dessus la premiere.
     const etat = bouton.dataset ? bouton.dataset.readState : "";
     if (etat && etat !== "idle") return;
+    // CETTE reponse a deja ete lue automatiquement : on ne la relit pas. La
+    // garde precedente ne suffit pas (elle tombe a `idle` des que la lecture
+    // est finie, et un tour peut avoir plusieurs fins de tour).
+    if (!claimAutoRead(bouton)) return;
     try {
       bouton.click();
     } catch (_) {

@@ -16,6 +16,17 @@ Bouton **« 🔊 Écouter » / « ⏹ Arrêter »** sous chaque réponse de l'ag
      Hors mode Vocal, la règle « rien ne se lit tout seul » est inchangée, et
      l'état « Pilot parle » de l'écran vient uniquement de
      `READ_ALOUD_STATE_EVENT` (aucune seconde source).
+     - **Une réponse n'est lue qu'UNE fois** (`reponse-lue-une-seule-fois.js`) :
+       un tour peut avoir plusieurs fins (`agent_end` de relance), et la lecture
+       automatique part de chaque fin de tour. Le bouton d'écoute se souvient
+       donc qu'il a déjà été lu automatiquement (`dataset.vocalAutoRead`) :
+       `claimAutoRead` refuse la seconde lecture. La marque vit sur le bouton,
+       donc elle meurt avec la bulle ; le clic **manuel** reste libre.
+     - **Aucun morceau n'est prononcé deux fois** (`read-aloud.js`) :
+       `speakIndex` retient le dernier index lancé et ignore un index antérieur
+       ou égal. Un `onend` signalé deux fois par le moteur (Chromium / WebView2)
+       ne peut donc plus mettre deux fois la phrase suivante dans la file de
+       synthèse.
    - **Parler par-dessus Pilot arrête la lecture (lot 4a).** Pendant que Pilot
      lit **en mode Vocal**, une prise de parole de l'utilisateur arrête la
      lecture **immédiatement et proprement** : l'arrêt emprunte `stopReading()`
