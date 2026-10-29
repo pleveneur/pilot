@@ -81,8 +81,10 @@ l'échéance, et la branche de refus n'ouvre jamais la dictée.
 
 ## 4. Preuve
 
-- Commit : **`ff12937`** — `fix(vocal): l'ecoute repart toute seule apres
-  chaque reponse`, sur la base `160611f` (11 fichiers, +756/−12).
+- Commit de livraison du chantier : **`d11b692`** —
+  `fix(vocal): l'ecoute repart toute seule apres chaque reponse`, sur la base
+  `160611f` (11 fichiers, +756/−12). Ce rapport lui-même a été corrigé juste
+  après (son hash de livraison), dans un commit documentaire séparé.
 - Front : **4 296 tests verts, 0 échec** (`npx vitest run`).
 - Rust : **4 passed, 0 failed, 1 ignored** (`--lib help::`), handbook
   régénéré avant la compilation.
