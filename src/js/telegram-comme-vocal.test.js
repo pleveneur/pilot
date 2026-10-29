@@ -267,3 +267,97 @@ describe("une panne, un refus, une erreur, une demande de confirmation se disent
     expect(messages).toMatch(/export const TELEGRAM_PART_CHARS = 3000;/);
   });
 });
+
+// ── 4. La brièveté est LEVÉE sur demande explicite ─────────────────────────
+//
+// Précision du propriétaire (2026-11) : la brièveté est le DÉFAUT, mais elle ne
+// vaut QUE tant qu'il ne demande pas le détail. Dès qu'il demande explicitement
+// plus de détails (« détaille », « explique », « pourquoi », « comment »,
+// « donne-moi le détail »), la règle de longueur NE S'APPLIQUE PLUS et Pilot
+// développe AUTANT QU'IL FAUT — et cela vaut DES DEUX CÔTÉS, Telegram comme mode
+// vocal. Ces tests échouent si la consigne commune perd cette levée, ou si un
+// seul canal la perdait.
+describe("la brièveté ne vaut plus quand le propriétaire demande le détail", () => {
+  const NIVEAUX = ["tres-courte", "courtes", "moyenne", "detaillees"];
+  const ORIGINES = [VOCAL_BREVITY_ORIGIN_VOCAL, VOCAL_BREVITY_ORIGIN_TELEGRAM];
+
+  /** La clause de développement d'une consigne (celle qui porte la levée). */
+  const clauseDeveloppement = (consigne) =>
+    consigne.split("\n").find((l) => l.includes("demande explicitement de développer"));
+
+  it("les deux canaux la portent, pour les quatre niveaux", () => {
+    for (const origine of ORIGINES) {
+      for (const niveau of NIVEAUX) {
+        const consigne = vocalBrevityInstruction(niveau, origine);
+        const clause = clauseDeveloppement(consigne);
+        expect(clause, `${origine}/${niveau} : la levée doit exister`).toBeTruthy();
+        // Les mots que le propriétaire peut employer sont cités, y compris
+        // « donne-moi le détail » (précision explicite de la mission).
+        for (const mot of ["détaille", "explique", "pourquoi", "comment", "donne-moi le détail"]) {
+          expect(clause, `${origine}/${niveau}/${mot}`).toContain(mot);
+        }
+        // La levée est NOMMÉE, et la longueur n'est plus bornée.
+        expect(clause, `${origine}/${niveau}`).toMatch(/NE S'APPLIQUE PLUS/);
+        expect(clause, `${origine}/${niveau}`).toMatch(/autant qu'il faut/);
+        // Le développement reste une réponse PARLÉE (jamais un tableau, du code).
+        expect(clause, `${origine}/${niveau}`).toMatch(/compréhensible à l'oreille/);
+      }
+    }
+  });
+
+  it("c'est la MÊME levée, mot pour mot, des deux côtés", () => {
+    for (const niveau of NIVEAUX) {
+      const vocal = vocalBrevityInstruction(niveau, VOCAL_BREVITY_ORIGIN_VOCAL);
+      const telegram = vocalBrevityInstruction(niveau, VOCAL_BREVITY_ORIGIN_TELEGRAM);
+      // Une seule formulation, aucune seconde consigne « Telegram » : si l'une
+      // des deux la perdait, cette égalité tomberait.
+      expect(clauseDeveloppement(telegram)).toBe(clauseDeveloppement(vocal));
+    }
+  });
+
+  it("elle n'est JAMAIS dans l'en-tête : un canal ne peut pas la perdre seul", () => {
+    for (const origine of ORIGINES) {
+      const consigne = vocalBrevityInstruction(VOCAL_BREVITY_DEFAULT_LEVEL, origine);
+      const entete = consigne.split("\n").slice(0, 2).join("\n");
+      // Les deux premières lignes ne disent que le canal ; la levée vit dans le
+      // corps commun (règles de longueur + développement + exceptions).
+      expect(entete).not.toMatch(/NE S'APPLIQUE PLUS|demande explicitement de développer/);
+    }
+  });
+
+  it("une demande qui demande le détail part AVEC la levée", () => {
+    const demande = "Explique-moi en détail où en est le projet et pourquoi.";
+    const vocal = composeVocalPrompt(demande, { modeVocal: true, niveau: "courtes" });
+    const telegram = composeTelegramPrompt(demande, { niveau: "courtes" });
+    for (const [canal, message] of [
+      ["vocal", vocal],
+      ["telegram", telegram],
+    ]) {
+      // La demande reste intacte en tête, et la consigne qui la suit lève la
+      // brièveté : le modèle reçoit l'autorisation de développer.
+      expect(message.startsWith(demande), canal).toBe(true);
+      expect(message, canal).toContain(clauseDeveloppement(message));
+      expect(message, canal).toMatch(/NE S'APPLIQUE PLUS/);
+      expect(message, canal).toMatch(/autant qu'il faut/);
+    }
+  });
+
+  it("la levée n'existe qu'UNE fois dans le source (aucune copie qui divergerait)", () => {
+    const brevity = lire("./vocal-brevity.js").replace(/\r\n/g, "\n");
+    // La clause EXACTE (prise dans la consigne réellement produite) n'apparaît
+    // qu'une fois : c'est le texte unique de `DEVELOPPEMENT`. Deux occurrences =
+    // deux formulations possibles, donc un canal qui peut perdre la levée sans
+    // que l'autre s'en aperçoive.
+    const clause = clauseDeveloppement(
+      vocalBrevityInstruction(VOCAL_BREVITY_DEFAULT_LEVEL, VOCAL_BREVITY_ORIGIN_VOCAL)
+    );
+    expect(clause).toBeTruthy();
+    expect(brevity.split(clause)).toHaveLength(2);
+    // Aucun autre module ne recopie la levée (ni son début, ni sa portée).
+    for (const nom of ["super-agent.js", "telegram-inbound.js", "telegram-dialog.js"]) {
+      const src = lire(`./${nom}`).replace(/\r\n/g, "\n");
+      expect(src, nom).not.toContain("demande explicitement de développer");
+      expect(src, nom).not.toContain("autant qu'il faut");
+    }
+  });
+});

@@ -222,3 +222,135 @@ Dont, pour cette tâche (`super_agent`) : **146 passed**, avec trois tests neufs
   plafond `MAX_INJECTED_MESSAGE_CHARS` ;
 - la remise durable sans perte : `delivered=0` **toujours** écrit avant
   l'injection, rejeu borné, accusé obligatoire.
+
+---
+
+## 5. Précision du propriétaire — la brièveté est LEVÉE sur demande explicite
+
+**Règle exacte du propriétaire** (relue et intégrée *a posteriori*, valable **des
+deux côtés** — Telegram **et** mode vocal) :
+
+- par défaut, une réponse est **courte** : rien de plus que l'utile, **sans
+  listes, sans titres, sans code, sans noms de fichiers** ;
+- **si** le propriétaire demande **explicitement** plus de détails
+  (« détaille », « explique », « pourquoi », « comment », « donne-moi le
+  détail »…), **la brièveté ne s'applique plus** : on développe **autant qu'il
+  faut**, en restant compréhensible **à l'oreille** (des phrases, jamais un
+  tableau ni du code) ;
+- cette levée doit être reconnue **dans les deux canaux** : un message Telegram
+  qui demande le détail reçoit une réponse développée, et une demande orale qui
+  demande le détail est développée aussi ;
+- les **autres exceptions passent toujours avant** : une panne, un refus, une
+  erreur, une demande de confirmation se disent **entièrement**.
+
+### 5.1 Ce qui existait déjà (rien n'a été refait)
+
+La clause de développement existait, mais elle était **muette sur la levée
+elle-même** : *« Si l'utilisateur demande explicitement de développer
+(« détaille », « explique », « pourquoi », « comment »), alors développe : donne
+le détail demandé… »*. Un modèle pouvait donc comprendre « développe » **dans la
+limite du niveau choisi** (« très courte » = une phrase), et la liste de mots ne
+contenait pas « donne-moi le détail ». Point important : cette clause vivait
+**déjà** dans le **corps commun** de la consigne (`DEVELOPPEMENT`, dans
+`src/js/vocal-brevity.js`), donc **hors de l'en-tête** propre au canal — un canal
+ne pouvait pas la perdre seul. Aucune seconde consigne n'a été créée.
+
+### 5.2 Ce qui a été ajouté (un seul endroit)
+
+`src/js/vocal-brevity.js`, constante `DEVELOPPEMENT` (source **unique**, partagée
+par `composeVocalPrompt` et `composeTelegramPrompt`) :
+
+> Si l'utilisateur demande explicitement de développer **ou plus de détails**
+> (« détaille », « explique », « pourquoi », « comment », **« donne-moi le
+> détail »**), alors développe **autant qu'il faut** : **la règle de brièveté NE
+> S'APPLIQUE PLUS**, donne le détail demandé **en entier**, en restant
+> compréhensible à l'oreille (des phrases suivies, jamais un tableau ni de
+> code).
+
+Trois ajouts seulement : les **mots déclencheurs** complets (dont « donne-moi le
+détail »), la **levée nommée** (« la règle de brièveté ne s'applique plus »), et
+la **portée** (« autant qu'il faut », « en entier »). Le reste de la consigne
+(niveaux de longueur, exceptions graves, absence de troncature) est **inchangé**.
+
+### 5.3 Le test qui tient la règle
+
+Nouveau bloc dans `src/js/telegram-comme-vocal.test.js` —
+« la brièveté ne vaut plus quand le propriétaire demande le détail » (5 tests) :
+
+| Test | Échoue si… |
+|---|---|
+| « les deux canaux la portent, pour les quatre niveaux » | la clause commune perd la levée, un mot déclencheur, « NE S'APPLIQUE PLUS » ou « autant qu'il faut », sur **un seul** des deux canaux et **un seul** des quatre niveaux |
+| « c'est la MÊME levée, mot pour mot, des deux côtés » | une consigne « Telegram » divergeait de celle du mode vocal |
+| « elle n'est JAMAIS dans l'en-tête » | la levée migrait dans l'en-tête d'un canal (un canal pourrait alors la perdre seul) |
+| « une demande qui demande le détail part AVEC la levée » | le message **envoyé** (`composeVocalPrompt` **et** `composeTelegramPrompt`) ne portait plus la levée, ou la demande n'était plus intacte en tête |
+| « la levée n'existe qu'UNE fois dans le source » | une seconde formulation apparaissait dans `vocal-brevity.js`, `super-agent.js`, `telegram-inbound.js` ou `telegram-dialog.js` |
+
+Le fixture **verbatim** de `src/js/vocal-longueur-reglable.test.js`
+(`CONSIGNE_DEFAUT`, la consigne du niveau par défaut recopiée mot pour mot) a été
+mis à jour parce que **la règle a changé** — jamais pour faire passer un test.
+
+### 5.4 Résultats RÉELS des tests
+
+Preuve que le nouveau test échoue **sans** la levée (mutation temporaire : la
+clause remplacée par « Reste toujours bref, quel que soit le niveau choisi. »,
+puis fichier restauré) :
+
+```
+npx vitest run src/js/telegram-comme-vocal.test.js
+→ × les deux canaux la portent, pour les quatre niveaux
+  × une demande qui demande le détail part AVEC la levée
+  × la levée n'existe qu'UNE fois dans le source
+  Tests  3 failed | 12 passed (15)
+```
+
+Après restauration :
+
+```
+npx vitest run src/js/telegram-comme-vocal.test.js \
+                src/js/vocal-longueur-reglable.test.js \
+                src/js/vocal-reponses-courtes.test.js
+→ 3 fichiers, 81 tests : 81 passed  (dont les 5 neufs)
+```
+
+Suite frontend complète :
+
+```
+npm test  →  Tests  6 failed | 4332 passed (4338)
+```
+
+Les **6** échecs sont **exactement ceux déjà présents avant cette précision**
+(chantier de l'écran Vocal en cours, hors périmètre et non touché ici) :
+`dictee-vocale-se-rearme.test.js` (1), `ecran-vocal-lot2.test.js` (3),
+`vocal-halo-parole.test.js` (1), `vocal-parler-declenche-une-demande.test.js` (1)
+— tous portent sur `.vocal-status` / `style.css` / `vocalSyncChrome`, jamais sur
+la consigne de brièveté. Le nombre de tests est passé de **4333** à **4338** :
+les 5 tests neufs, tous verts.
+
+Suite Rust (aucun fichier Rust modifié ; lancée pour l'anti-régression) :
+
+```
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+→ test result: ok. 810 passed; 0 failed; 1 ignored
+```
+
+### 5.5 Documentation
+
+- `spec_telegram.md` § 15.2 : nouvelle sous-section « La brièveté est LEVÉE sur
+  demande explicite (les deux côtés) » (citation de la clause, conséquences
+  tenues par les tests) ; § 15.5 : le nouveau test est décrit avec sa preuve de
+  mutation ; bloc `<!-- HELP:telegram -->` complété en langage utilisateur ;
+- `spec_modes_ecran_vocal.md` : § 6bis.2 (« Ce que la consigne demande ») et
+  § 6bis.3 invariant (a) disent désormais que la demande explicite de détails
+  **lève** la brièveté, dans les **deux** canaux ;
+- `help/handbook.md` régénéré (`npm run build:handbook`).
+
+### 5.6 Ce qui n'a **pas** été touché (périmètre)
+
+- les **seuils du micro**, la détection de parole, la lecture à voix haute,
+  l'écran Vocal : **intacts** ;
+- la **configuration du bot Telegram** (jeton, webhook) : **intacte** ;
+- les **niveaux de longueur** eux-mêmes (une phrase / deux phrases / quatre à six
+  / développée) et le réglage `vocal_brevity_level` : **inchangés** — la précision
+  porte sur la **levée** de la règle, pas sur son barème ;
+- **aucun** fichier supprimé, **aucune** publication, **aucun** geste vers le
+  dépôt distant.

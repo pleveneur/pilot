@@ -40,8 +40,12 @@
 //     demande venue de Telegram (meme consigne, meme ordre, meme niveau regle).
 //
 // CE QUI NE CHANGE JAMAIS, QUEL QUE SOIT LE NIVEAU :
-//   - une demande explicite de developper (« detaille », « explique »,
-//     « pourquoi », « comment ») passe AVANT le niveau choisi ;
+//   - une demande explicite de developper ou d'avoir plus de details
+//     (« detaille », « explique », « pourquoi », « comment », « donne-moi le
+//     detail ») LEVE la brievete : la regle de longueur NE S'APPLIQUE PLUS et
+//     Pilot developpe AUTANT QU'IL FAUT, en restant comprehensible a l'oreille.
+//     Cette levee est la MEME dans les deux canaux (Telegram et mode Vocal) :
+//     elle vit dans la clause partagee ci-dessous, jamais dans un en-tete ;
 //   - une panne, un refus, une erreur (outil, micro, agent) ou une demande de
 //     confirmation restent ENTIEREMENT dits, meme au niveau « tres courte » ;
 //   - hors du mode Vocal, le texte est INCHANGE ;
@@ -121,11 +125,22 @@ const REGLES = {
 };
 
 /**
- * La clause « developper si on le demande » — la MEME pour les quatre niveaux
- * (la demande de l'utilisateur passe avant la longueur).
+ * La clause « DEVELOPPER SI ON LE DEMANDE » — la MEME pour les quatre niveaux ET
+ * pour les deux canaux (elle est dans le corps commun, jamais dans l'en-tete).
+ *
+ * Decision du proprietaire (precision de la mission Telegram) : la brievete est
+ * le DEFAUT, mais une demande explicite de details la LEVE entierement. Il faut
+ * donc que la consigne le dise sans ambiguite pour qu'un modele ne s'arrete pas
+ * au nombre de phrases du niveau choisi :
+ *   - les mots que l'utilisateur peut employer sont cites (dont « donne-moi le
+ *     detail », ajoute par cette precision) ;
+ *   - la levee est NOMMEE (« la regle de brievete ne s'applique plus ») ;
+ *   - la longueur n'est plus bornee (« developpe autant qu'il faut ») ;
+ *   - le canal ne change RIEN : un message Telegram qui demande le detail
+ *     recoit la meme levee qu'une demande orale.
  */
 const DEVELOPPEMENT =
-  "Si l'utilisateur demande explicitement de développer (« détaille », « explique », « pourquoi », « comment »), alors développe : donne le détail demandé, en restant compréhensible à l'oreille (des phrases, jamais de tableau ni de code).";
+  "Si l'utilisateur demande explicitement de développer ou plus de détails (« détaille », « explique », « pourquoi », « comment », « donne-moi le détail »), alors développe autant qu'il faut : la règle de brièveté NE S'APPLIQUE PLUS, donne le détail demandé en entier, en restant compréhensible à l'oreille (des phrases suivies, jamais un tableau ni de code).";
 
 /** La clause d'exception (securite dite en entier) de chaque niveau. */
 const EXCEPTIONS = {

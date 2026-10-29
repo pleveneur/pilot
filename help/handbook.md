@@ -4490,7 +4490,9 @@ comporte **exactement de la même façon** :
 - **même longueur de réponse** : il répond **court** selon le réglage choisi
   (Options ⚙️ → onglet Assistant → **Longueur des réponses**) — deux phrases
   courtes par défaut — et ne fait **ni liste, ni titre, ni bloc de code**, ni nom
-  de fichier ; si vous demandez **explicitement** un détail, il développe ;
+  de fichier ; **si vous demandez explicitement le détail** (« détaille »,
+  « explique », « pourquoi », « comment », « donne-moi le détail »), la brièveté
+  **ne s'applique plus** : il développe **autant qu'il faut**, en phrases ;
 - **même conversation** : votre message est un **tour de conversation** dans le
   fil en cours, pas un rapport à classer. Il garde le contexte, ne repart pas de
   zéro et ne vous redemande pas ce qu'il sait déjà ;

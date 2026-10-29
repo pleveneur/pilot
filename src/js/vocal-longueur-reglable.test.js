@@ -75,7 +75,7 @@ const CONSIGNE_DEFAUT = [
   "## Mode vocal — parler court",
   "Cette demande vient de l'écran Vocal de Pilot : la conversation n'y est pas affichée et ta réponse va être LUE À VOIX HAUTE.",
   "Règle de conversation parlée : réponds en DEUX phrases, exactement deux, pas trois — comme à l'oral. Pas de listes, pas de titres, pas de tableaux, pas de noms de fichiers, pas de code. Va droit à ce qui est utile à dire à voix haute : ce que tu as fait, ce que ça donne, ce qu'il faut décider.",
-  "Si l'utilisateur demande explicitement de développer (« détaille », « explique », « pourquoi », « comment »), alors développe : donne le détail demandé, en restant compréhensible à l'oreille (des phrases, jamais de tableau ni de code).",
+  "Si l'utilisateur demande explicitement de développer ou plus de détails (« détaille », « explique », « pourquoi », « comment », « donne-moi le détail »), alors développe autant qu'il faut : la règle de brièveté NE S'APPLIQUE PLUS, donne le détail demandé en entier, en restant compréhensible à l'oreille (des phrases suivies, jamais un tableau ni de code).",
   "Exception qui passe AVANT la brièveté : une panne, un refus, une erreur (outil, micro, agent) ou une demande de confirmation se disent ENTIÈREMENT — tout ce qu'il faut pour comprendre et agir, même si c'est plus long que deux phrases. Ne cache jamais une information utile pour rester court.",
 ].join("\n");
 

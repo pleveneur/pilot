@@ -710,9 +710,12 @@ Le défaut corrigé : dans l'écran Vocal, Pilot répondait comme dans un chat �
   comme à l'oral — **pas de listes, pas de titres, pas de tableaux,
   pas de noms de fichiers, pas de code** — et aller droit à ce qui est **utile à
   dire à voix haute**. Si l'utilisateur demande explicitement de développer
-  (« détaille », « explique », « pourquoi », « comment »), Pilot développe : le
-  détail demandé, **compréhensible à l'oreille** (des phrases, jamais un tableau
-  ni de code).
+  **ou plus de détails** (« détaille », « explique », « pourquoi », « comment »,
+  « donne-moi le détail »), alors la brièveté est **levée** : Pilot développe
+  **autant qu'il faut**, le détail demandé **en entier**, **compréhensible à
+  l'oreille** (des phrases suivies, jamais un tableau ni de code). Cette levée
+  est **la même** dans les deux canaux (mode Vocal et Telegram) : elle vit dans
+  la clause partagée de la consigne, jamais dans l'en-tête propre au canal.
 - **Les cas de sécurité sont exclus explicitement** : une **panne**, un **refus**,
   une **erreur** (outil, micro, agent) et une **demande de confirmation** restent
   dits **entièrement**, même si c'est plus long que le nombre de phrases du
@@ -765,13 +768,18 @@ pas trois ») pour qu'un modèle ne puisse pas les lire de travers.
   réglage change s'applique à la **demande suivante**, jamais à une demande déjà
   partie.
 - **Ce qui ne change jamais, quel que soit le niveau** : (a) une demande
-  explicite de développer (« détaille », « explique », « pourquoi », « comment »)
-  passe **avant** le niveau choisi ; (b) une **panne**, un **refus**, une
-  **erreur** (outil, micro, agent) ou une **demande de confirmation** se disent
-  **entièrement**, même en « très courte » ; (c) **aucune troncature** : la
-  brièveté vient de la consigne, jamais d'une coupe (aucune `slice`, aucune
-  limite de caractères) ; (d) **hors du mode Vocal**, le texte est **inchangé** ;
-  (e) une **demande vide** ne reçoit **aucune consigne**.
+  explicite de développer **ou plus de détails** (« détaille », « explique »,
+  « pourquoi », « comment », « donne-moi le détail ») **lève la brièveté** — la
+  règle de longueur **ne s'applique plus**, Pilot développe **autant qu'il
+  faut** — et passe donc **avant** le niveau choisi ; elle vaut **des deux
+  côtés** (mode Vocal **et** Telegram), d'où son emplacement dans le corps
+  commun de la consigne (`DEVELOPPEMENT`) et non dans l'en-tête ; (b) une
+  **panne**, un **refus**, une **erreur** (outil, micro, agent) ou une **demande
+  de confirmation** se disent **entièrement**, même en « très courte » ; (c)
+  **aucune troncature** : la brièveté vient de la consigne, jamais d'une coupe
+  (aucune `slice`, aucune limite de caractères) ; (d) **hors du mode Vocal**, le
+  texte est **inchangé** ; (e) une **demande vide** ne reçoit **aucune
+  consigne**.
 - **Réglage, à UN SEUL endroit** : Paramètres → onglet **« Assistant »** →
   section **« Mode Vocal »**, **sous le curseur du délai d'envoi**
   (`#setting-vocal-brevity-level`, un seul choix, quatre libellés venus du module

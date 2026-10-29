@@ -188,7 +188,9 @@ comporte **exactement de la même façon** :
 - **même longueur de réponse** : il répond **court** selon le réglage choisi
   (Options ⚙️ → onglet Assistant → **Longueur des réponses**) — deux phrases
   courtes par défaut — et ne fait **ni liste, ni titre, ni bloc de code**, ni nom
-  de fichier ; si vous demandez **explicitement** un détail, il développe ;
+  de fichier ; **si vous demandez explicitement le détail** (« détaille »,
+  « explique », « pourquoi », « comment », « donne-moi le détail »), la brièveté
+  **ne s'applique plus** : il développe **autant qu'il faut**, en phrases ;
 - **même conversation** : votre message est un **tour de conversation** dans le
   fil en cours, pas un rapport à classer. Il garde le contexte, ne repart pas de
   zéro et ne vous redemande pas ce qu'il sait déjà ;
@@ -1092,6 +1094,29 @@ qu'un test compare ligne à ligne. `composeTelegramPrompt(text, { niveau })` et
 `composeWithInstruction` : la demande reste **intacte en tête**, la consigne
 suit.
 
+#### La brièveté est LEVÉE sur demande explicite (les deux côtés)
+
+La brièveté est le **défaut**, pas une règle absolue. La clause partagée
+`DEVELOPPEMENT` de `vocal-brevity.js` dit, dans les **deux** canaux :
+
+> si l'utilisateur demande explicitement de développer **ou plus de détails**
+> (« détaille », « explique », « pourquoi », « comment », « donne-moi le
+> détail »), alors développe **autant qu'il faut** : la règle de brièveté **ne
+> s'applique plus**, donne le détail demandé **en entier**, en restant
+> **compréhensible à l'oreille** (des phrases suivies, jamais un tableau ni du
+> code).
+
+Conséquences tenues par des tests :
+
+- la levée est dans le **corps commun** (jamais dans l'en-tête propre à un
+  canal), donc **un canal ne peut pas la perdre seul** : un message Telegram qui
+  demande le détail reçoit la même levée qu'une demande orale ;
+- la formulation commune n'existe **qu'une fois** dans le source (aucune copie
+  dans `super-agent.js`, `telegram-inbound.js`, `telegram-dialog.js`) ;
+- les **exceptions graves** (panne, refus, erreur, demande de confirmation,
+  § 15.4) restent **avant** la brièveté : elles se disent en entier, demande de
+  détail ou non.
+
 Hors mode vocal et hors Telegram, la demande reste **inchangée** (aucun autre
 écran ne change de comportement).
 
@@ -1134,7 +1159,14 @@ vrai, transport Tauri simulé) échoue si :
 - la remise ne porte pas `kind: OWNER_MESSAGE_KIND` (continuité perdue), ou si
   Rust recadrait un message du propriétaire en « [Résumé de session] » ;
 - la nature n'était plus relue dans la boîte durable au rejeu ;
-- une seconde consigne « Telegram » était recopiée hors de `vocal-brevity.js`.
+- une seconde consigne « Telegram » était recopiée hors de `vocal-brevity.js` ;
+- **la levée de la brièveté sur demande explicite disparaissait** : un test
+  vérifie, pour les **quatre** niveaux et les **deux** canaux, que la clause cite
+  « donne-moi le détail », nomme la levée (« NE S'APPLIQUE PLUS ») et autorise à
+  développer « autant qu'il faut » ; il vérifie aussi que cette clause est
+  **identique** des deux côtés, qu'elle n'est **pas** dans l'en-tête et qu'elle
+  n'apparaît **qu'une fois** dans le source. Muté (clause remplacée par « reste
+  toujours bref »), ce test échoue : 3 échecs sur 15 dans ce fichier.
 
 `src/js/telegram-dialog.test.js` verrouille la restitution : une réponse brève
 **n'est pas coupée**, le technique est retiré, et le découpage ne se produit que
