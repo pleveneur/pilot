@@ -11806,6 +11806,11 @@ body.pilot-vocal-active #agent-activity {
      place, avec ou sans portrait. */
   justify-content: flex-start;
   overflow: hidden;
+  /* LOT 2 : les 12 px d'air sous la ligne d'activite (budget du §2.5). Les
+     72 px du medaillon, les 6 px de l'ecart et les 20 px de la pastille n'existent
+     que si le portrait existe : quand il est `hidden`, ils disparaissent avec lui
+     et la liste prend TOUTE la hauteur (0 px reserve, cas B). */
+  padding-block-end: 12px;
 }
 /* La liste (remplie au lot 2) : c'est ELLE qui absorbe la hauteur libre. Deux
    marges automatiques se partageraient l'air et le portrait flotterait au
@@ -11832,11 +11837,112 @@ body.pilot-vocal-active #agent-activity {
 .vocal-portrait-name {
   align-self: center;
   margin-block-start: 6px;
+  line-height: 20px;
   font-size: var(--font-sm);
   background: color-mix(in srgb, var(--bg-app) 88%, transparent);
   border-radius: 999px;
   padding: 2px 10px;
   max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- LOT 2 (§2.2 a §2.7) : CE QUE LA COLONNE DE DROITE MONTRE ---
+   Ordre du document, de haut en bas : titre, liste, portrait, pastille, ligne
+   d'activite. Les hauteurs du budget (§2.5) sont ECRITES ici : elles doivent
+   tomber juste, sinon le nombre de lignes calcule par `planVocalTasks` ne
+   serait plus celui qu'on voit. Cas A : 39 + 72 + 26 + 18 + 12 = 167 px de
+   fixe pour 170 px prevus ; cas B : 69 px pour 72 px prevus. Le reste est de
+   l'air, jamais un debordement. */
+/* Le titre de la colonne : meme mot que le titre de gauche, meme ligne de base
+   (14 px sous le bord haut, 14 px sous lui). */
+.vocal-tasks-title {
+  flex: 0 0 auto;
+  padding-block: 14px;
+  line-height: 11px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* La liste : c'est ELLE qui absorbe la hauteur libre, et elle grandit vers le
+   BAS. Aucun defilement (la colonne est `pointer-events: none`) : l'excedent
+   est dit par « + N autre(s) ». */
+.vocal-side-tasks .vocal-side-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+/* Un en-tete de groupe vaut 20 px (§2.5) : deux en-tetes et une tache font
+   86 px, seuil sous lequel les en-tetes disparaissent. */
+.vocal-task-group {
+  flex: 0 0 auto;
+  height: 20px;
+  line-height: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Une tache vaut 46 px, toujours : l'identite au-dessus, le resume dessous
+   (ordre du panneau du travail, fige par un test). */
+.vocal-task {
+  flex: 0 0 auto;
+  height: 46px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+}
+.vocal-task-who {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vocal-task-mission {
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Le surplus est DIT, colle sous la derniere tache : il ne bouge donc pas
+   quand le personnage apparait. */
+.vocal-side-more {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Aucune mission : une phrase, jamais un trou muet. */
+.vocal-side-empty {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-secondary);
+}
+/* La ligne d'activite, tout en bas : 12 px au-dessus, 18 px de haut, MEME place
+   dans les deux cas. Une seule ligne, jamais deux. */
+.vocal-now {
+  flex: 0 0 auto;
+  margin-block-start: 12px;
+  line-height: 18px;
+  font-size: 11px;
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

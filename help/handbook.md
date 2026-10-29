@@ -1361,18 +1361,27 @@ texte à la voix.
 ---
 
 <!-- HELP-TOPIC:vocal-colonnes-portrait -->
-### Les colonnes de l'écran Vocal et le portrait (lot 1)
+### Les colonnes de l'écran Vocal, les tâches et le portrait (lots 1 et 2)
 Sur un écran assez large, l'écran Vocal encadre le cercle de **deux colonnes** : la
-**discussion** à gauche, le **travail** à droite. Elles sont **vides pour l'instant** —
-les tâches et la discussion y arriveront dans les prochaines étapes. Sous une certaine
-largeur (fenêtre étroite), elles **n'apparaissent pas du tout** : le cercle reste seul au
-milieu, jamais écrasé, jamais décalé.
+**discussion** à gauche, le **travail** à droite. La discussion est **vide pour
+l'instant** — elle arrivera dans une prochaine étape. Sous une certaine largeur (fenêtre
+étroite), les colonnes **n'apparaissent pas du tout** : le cercle reste seul au milieu,
+jamais écrasé, jamais décalé.
 
-Dans la colonne de droite, **tout en bas**, le **portrait du personnage** apparaît en
+La colonne de droite parle du **travail** : le titre **« TÂCHES »**, la **liste des tâches
+en cours** — l'agent et le projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui
+se passe à cet instant. Les tâches sont rangées en **« En cours »** d'abord, **« En
+attente »** ensuite. La liste **ne défile pas** : elle montre ce que la hauteur permet
+(jusqu'à **6** tâches quand un personnage est présent, **8** sans) et, s'il y en a plus, la
+ligne **« + N autre(s) »** le dit — la liste complète reste dans le bouton **« Travail »**.
+Aucune tâche en cours ? La colonne affiche « **Aucune tâche en cours** », jamais du vide.
+
+Dans cette même colonne, **tout en bas**, le **portrait du personnage** apparaît en
 médaillon rond, avec son nom juste en dessous. Pas de personnage déposé par le projet
 **Présences** ? Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la
-colonne reste simplement sans image. Le portrait suit un éventuel changement de personnage
-sans redémarrer Pilot.
+colonne reste simplement sans image, et la liste occupe alors **toute la hauteur**. Le
+portrait suit un éventuel changement de personnage sans redémarrer Pilot, et le haut de la
+colonne ne bouge pas quand il apparaît ou disparaît.
 
 Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les

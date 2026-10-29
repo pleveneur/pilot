@@ -205,13 +205,23 @@ import {
 } from "./assistant-persona.js";
 // LOT 1 (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.4) : la largeur des
 // deux colonnes laterales de l'ecran Vocal — decision PURE, une seule formule.
-import { planVocalSides } from "./vocal-sides.js";
+// LOT 2 (CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md §2.2 a §2.4) :
+// le CONTENU de la colonne de droite — nombre de lignes, groupes, ligne
+// d'activite — reste dans le meme module pur ; ici on ne fait que peindre.
+import {
+  planVocalSides,
+  planVocalTasks,
+  vocalNowLine,
+  VOCAL_SIDES_TICK_MS,
+  VOCAL_TASKS_TITLE,
+  VOCAL_TASKS_EMPTY_TEXT,
+} from "./vocal-sides.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections, buildReminderInjection, buildReminderInjectionMessage, formatReminderGroupNotificationLabel, formatReminderHoldNotice, createReminderHoldGuard } from "./super-agent-schedule.js";
 // MÉNAGE DES RAPPELS : décision UNIQUE (pures) des rappels devenus inutiles —
 // mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
 // « Supprimer les rappels inutiles » de Paramètres → Assistant.
 import { classifyScheduleCleanup, cleanupApplyPayload } from "./super-agent-schedule-cleanup.js";
-import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, buildStartingMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility, splitMissions, setAgentPanelTaskCount, isAgentPanelPaneVisible } from "./agent-activity.js";
+import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, buildStartingMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility, splitMissions, setAgentPanelTaskCount, isAgentPanelPaneVisible, missionWho } from "./agent-activity.js";
 // Compteur du bouton « Travail » : les commandes TAPEES A LA MAIN mises en file
 // sur un projet sont une famille d'attente a part entiere (elles n'etaient
 // comptees nulle part, donc le total affiche etait faux).
@@ -2137,6 +2147,22 @@ function applyVocalPortrait(racine) {
 }
 
 /**
+ * L'overlay de l'ecran Vocal, lu dans le document.
+ *
+ * Ces trois fonctions (`vocalOrbSizePx`, `vocalSyncSides`, repeinture de la
+ * colonne) sont ecrites a la racine du module, alors que l'etat `vocalOverlay`
+ * vit dans la fabrique `createSuperAgent()` : elles ne peuvent donc pas le lire
+ * (une variable `let` de fonction n'existe pas a la racine du module) et
+ * resolvent l'overlay par le SEUL noeud qui le nomme, comme `applyVocalPortrait`.
+ * Aucun second etat n'est tenu.
+ *
+ * @returns {Element|null} l'overlay vocal, ou null hors du mode
+ */
+function vocalOverlayNode() {
+  return typeof document !== "undefined" ? document.querySelector(".pilot-vocal") : null;
+}
+
+/**
  * La taille du disque, en pixels, telle que le CSS la calcule.
  *
  * Le disque suit une formule UNIQUE ecrite dans la feuille de style
@@ -2147,9 +2173,10 @@ function applyVocalPortrait(racine) {
  */
 function vocalOrbSizePx() {
   try {
-    if (vocalOverlay && typeof getComputedStyle === "function") {
+    const ov = vocalOverlayNode();
+    if (ov && typeof getComputedStyle === "function") {
       const valeur = parseFloat(
-        getComputedStyle(vocalOverlay).getPropertyValue("--vocal-orb-size"),
+        getComputedStyle(ov).getPropertyValue("--vocal-orb-size"),
       );
       if (Number.isFinite(valeur) && valeur > 0) return valeur;
     }
@@ -2162,30 +2189,139 @@ function vocalOrbSizePx() {
 }
 
 /**
+ * Le contenu de la liste de la colonne de droite, en HTML.
+ *
+ * Le titre de groupe n'est ecrit que si la colonne a la place de ses en-tetes
+ * (`plan.headers`) ; une colonne sans aucune mission affiche UNE phrase plutot
+ * qu'une liste vide. Le surplus est DIT (« + N autre(s) ») : la colonne ne
+ * defile pas et ne cache rien en silence.
+ *
+ * @param {object} plan resultat de `planVocalTasks`
+ * @returns {string} HTML du conteneur de liste
+ */
+function buildVocalTasksHtml(plan) {
+  if (!plan || plan.empty) {
+    return `<div class="vocal-side-empty">${escapeHtmlForSuper(VOCAL_TASKS_EMPTY_TEXT)}</div>`;
+  }
+  let html = "";
+  for (const groupe of plan.groups) {
+    if (plan.headers) {
+      html += `<div class="vocal-task-group">${escapeHtmlForSuper(
+        `${groupe.label} (${groupe.count})`,
+      )}</div>`;
+    }
+    for (const m of groupe.items) {
+      html += `<div class="vocal-task"><div class="vocal-task-who">${escapeHtmlForSuper(
+        missionWho(m),
+      )}</div><div class="vocal-task-mission">${escapeHtmlForSuper(m.mission || "")}</div></div>`;
+    }
+  }
+  if (plan.more > 0) {
+    html += `<div class="vocal-side-more">+ ${plan.more} autre(s)</div>`;
+  }
+  return html;
+}
+
+/**
+ * Le noeud d'un element de la colonne, cree une seule fois.
+ *
+ * Le titre et la ligne d'activite ne sont PAS dans le modele du lot 1 (aucun
+ * noeud ajoute au balisage statique, donc aucune liste ordonnee de classes ne
+ * bouge) : ils sont crees ici, a leur place imposee — le titre AVANT la liste,
+ * la ligne d'activite APRES le nom du personnage, donc tout en bas.
+ *
+ * @param {Element} colonne la colonne de droite
+ * @param {string} selecteur selecteur de l'element (sa classe)
+ * @param {"first"|"last"} place ou le poser
+ * @returns {Element|null} le noeud, jamais un doublon
+ */
+function vocalColumnNode(colonne, selecteur, place) {
+  const existant = colonne.querySelector(selecteur);
+  if (existant) return existant;
+  const noeud = document.createElement("div");
+  noeud.className = selecteur.replace(/^\./, "");
+  if (place === "first") colonne.insertBefore(noeud, colonne.firstChild);
+  else colonne.appendChild(noeud);
+  return noeud;
+}
+
+/**
+ * Repeint le CONTENU de la colonne de droite (CONCEPTION-ecran-vocal-taches-en-
+ * haut-portrait-en-bas.md §2.2 a §2.4) : titre, liste des taches, ligne
+ * d'activite.
+ *
+ * Le portrait et son nom ne sont pas touches : ils appartiennent a
+ * `applyVocalPortrait`, et le portrait reste AU PIED de la colonne, sous la
+ * liste. Une ecriture n'a lieu que si le texte change : le tic de 900 ms
+ * repasse ici sans faire clignoter la colonne.
+ *
+ * @param {object} plan resultat de `planVocalSides`
+ */
+function vocalRenderColumn(plan) {
+  const ov = vocalOverlayNode();
+  if (!ov || !plan || !plan.shown) return;
+  const colonne = ov.querySelector(".vocal-side-tasks");
+  if (!colonne) return;
+  const missions = collectSuperMissions();
+  const vu = planVocalTasks(missions, {
+    listHeight: plan.listHeight,
+    hasPortrait: plan.hasPortrait,
+  });
+  const titre = vocalColumnNode(colonne, ".vocal-tasks-title", "first");
+  if (titre && titre.textContent !== VOCAL_TASKS_TITLE) titre.textContent = VOCAL_TASKS_TITLE;
+  const liste = colonne.querySelector(".vocal-side-body");
+  if (liste) {
+    const html = buildVocalTasksHtml(vu);
+    if (liste.getAttribute("data-vocal-list") !== html) {
+      liste.innerHTML = html;
+      liste.setAttribute("data-vocal-list", html);
+    }
+  }
+  // Variable nommee `activiteEl`, jamais `ligne` : `ligne` est le nom reserve a la
+  // ligne d'ETAT du bas de l'ecran (un seul point d'ecriture, verrouille par test).
+  const activiteEl = vocalColumnNode(colonne, ".vocal-now", "last");
+  const activite = vocalNowLine(missions);
+  if (activiteEl && activiteEl.textContent !== activite) activiteEl.textContent = activite;
+}
+
+/**
+ * La minuterie du tic qui repeint la colonne de droite (`VOCAL_SIDES_TICK_MS`).
+ * Une seule, posee a l'entree du mode et retiree a la sortie : aucune horloge
+ * ne continue derriere l'ecran.
+ */
+let vocalSidesTick = null;
+
+/**
  * SEUL point d'ecriture de la largeur des deux colonnes laterales de l'ecran
  * Vocal (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.4) : `--vocal-side`
- * et la classe `vocal-sides-off`, d'apres la decision PURE `planVocalSides`.
+ * et la classe `vocal-sides-off`, d'apres la decision PURE `planVocalSides` —
+ * et SEUL point d'ecriture du CONTENU de la colonne de droite, d'apres la
+ * decision PURE `planVocalTasks` (lot 2).
  *
- * Appele a l'ENTREE dans le mode et a chaque changement de taille de fenetre.
- * Aucune ecriture hors de l'overlay : rien n'est conserve, rien n'est publie —
- * l'etat des colonnes ne survit pas a la sortie de l'ecran.
+ * Appele a l'ENTREE dans le mode, a chaque changement de taille de fenetre et
+ * a chaque tic (`VOCAL_SIDES_TICK_MS`) : la colonne suit les missions sans
+ * qu'un second mecanisme soit cree. Aucune ecriture hors de l'overlay : rien
+ * n'est conserve, rien n'est publie — l'etat des colonnes ne survit pas a la
+ * sortie de l'ecran.
  */
 function vocalSyncSides() {
-  if (!vocalOverlay) return;
+  const ov = vocalOverlayNode();
+  if (!ov) return;
   const plan = planVocalSides({
     width: typeof window !== "undefined" ? window.innerWidth : 0,
     height: typeof window !== "undefined" ? window.innerHeight : 0,
     orbSize: vocalOrbSizePx(),
     hasPortrait: getAssistantPortrait() !== "",
   });
-  vocalOverlay.style.setProperty("--vocal-side", `${plan.track}px`);
-  vocalOverlay.classList.toggle("vocal-sides-off", !plan.shown);
+  ov.style.setProperty("--vocal-side", `${plan.track}px`);
+  ov.classList.toggle("vocal-sides-off", !plan.shown);
   // `track = 0` = colonnes ABSENTES : sans `hidden`, les deux `<aside>` vides
   // resteraient dans la grille et y creeraient des pistes fantomes.
   for (const selecteur of [".vocal-side-discussion", ".vocal-side-tasks"]) {
-    const colonne = vocalOverlay.querySelector(selecteur);
+    const colonne = ov.querySelector(selecteur);
     if (colonne) colonne.hidden = !plan.shown;
   }
+  vocalRenderColumn(plan);
 }
 
 /**
@@ -2219,6 +2355,11 @@ export function applyAssistantPersonaUi() {
     // aucun mecanisme nouveau. Il ne lit rien : l'etat du personnage vit en
     // memoire, `refreshAssistantPersona` fait la seule lecture.
     applyVocalPortrait();
+    // LOT 2 : le personnage qui vient d'apparaitre (ou de disparaitre) change le
+    // CAS de la colonne de droite — et avec lui le nombre de lignes de la liste.
+    // Le meme point d'application reapplique donc la decision des colonnes :
+    // une seule peinture, aucun etat intermediaire, aucun second mecanisme.
+    vocalSyncSides();
   } catch (_) {
     /* overlay vocal absent : rien a faire */
   }
@@ -3149,6 +3290,23 @@ function onPanelTabChanged(state) {
  * mission → message explicite, jamais une liste vide trompeuse. Le rendu est
  * PUR (renderMissionsPanelHtml, agent-activity.js).
  */
+/**
+ * Les missions a afficher, en UN SEUL calcul (CONCEPTION-ecran-vocal-taches-en-
+ * haut-portrait-en-bas.md § 2.2).
+ *
+ * Cette fonction ne calcule RIEN elle-meme : elle NOMME le calcul qui existe
+ * deja (`publishSuperMissionsCount`, `buildRunningMissions` puis `splitMissions`)
+ * pour que la colonne de droite de l'ecran Vocal ne puisse pas en avoir un
+ * second. Le bouton « Travail » et la colonne lisent donc la MEME liste et ne
+ * peuvent pas se contredire ; ce point d'entree existe pour que la colonne n'ait
+ * pas a connaitre la publication du compteur.
+ *
+ * @returns {Array} missions courantes (buildRunningMissions)
+ */
+export function collectSuperMissions() {
+  return publishSuperMissionsCount();
+}
+
 /**
  * Publie le COMPTE des missions sur le bouton « Travail » et retourne les
  * missions (aucun rendu de liste). Une seule source de calcul pour le bouton et
@@ -5931,7 +6089,14 @@ let vocalDicteeParGeste = false;
     // LOT 1 : seule ecriture de `--vocal-side` et de la classe `vocal-sides-off`.
     // Elle vient EN DERNIER, une fois l'etat pose : la largeur ne depend que de
     // la fenetre et du personnage, jamais de l'etat de la dictee.
+    // LOT 2 : la colonne se peint au MEME point (titre, liste, ligne d'activite)
+    // et un tic court la tient a jour. Le tic ne relit RIEN du moteur : la sonde
+    // d'activite de l'onglet tourne deja, il ne fait que repeindre.
     vocalSyncSides();
+    //
+    // Un seul tic, pose ici et retire a la sortie.
+    if (vocalSidesTick) clearInterval(vocalSidesTick);
+    vocalSidesTick = setInterval(vocalSyncSides, VOCAL_SIDES_TICK_MS);
     // Les colonnes suivent la fenetre : un seul ecouteur, retire a la sortie.
     window.addEventListener("resize", vocalSyncSides);
   }
@@ -6005,6 +6170,12 @@ let vocalDicteeParGeste = false;
       // LOT 1 : l'ecouteur des colonnes part avec l'ecran (meme nom de fonction
       // qu'a l'entree, aucun ecouteur orphelin sur la fenetre).
       window.removeEventListener("resize", vocalSyncSides);
+      // LOT 2 : la minuterie de la colonne part avec l'ecran, pour la meme
+      // raison qu'a l'entree : aucune horloge ne continue derriere l'ecran.
+      if (vocalSidesTick) {
+        clearInterval(vocalSidesTick);
+        vocalSidesTick = null;
+      }
     } catch (err) {
       // Un demontage qui echoue est TRACE et N'EMPECHE RIEN : l'ecran se ferme
       // quand meme, c'est la seule chose qui compte pour l'utilisateur.

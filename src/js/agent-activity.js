@@ -789,7 +789,8 @@ export function shortMission(text) {
  *    ajoutées avec `waiting: true` (mention « en attente » à l'affichage).
  * @param {Array} list — liste aplatie (flattenAgents).
  * @param {Array<{project: string, mission: string, resume?: string}>} [queued] — missions en file.
- * @returns {Array<{agent: string, project: string, mission: string, waiting: boolean}>}
+ * @returns {Array<{agent: string, project: string, mission: string, waiting: boolean,
+ *   since?: number, toolInProgress?: boolean}>}
  */
 export function buildRunningMissions(list, queued) {
   const out = [];
@@ -809,6 +810,12 @@ export function buildRunningMissions(list, queued) {
     // Début du travail en cours : ajouté SEULEMENT quand il est connu (champ
     // additif, absent sinon — la forme historique de l'entrée est préservée).
     if (a.workingSince) entry.since = a.workingSince;
+    // Additif : l'agent exécute une OPÉRATION (outil en cours) et pas seulement
+    // un raisonnement. La colonne de droite de l'écran Vocal s'en sert pour sa
+    // ligne d'activité (« … exécute une opération » / « … réfléchit »). Posé
+    // SEULEMENT s'il vaut vrai : la forme historique de l'entrée est préservée
+    // pour tous les autres consommateurs.
+    if (a.toolInProgress === true) entry.toolInProgress = true;
     out.push(entry);
   }
   for (const q of queued || []) {
@@ -854,7 +861,7 @@ export function splitMissions(missions) {
 }
 
 /** Libellé « agent — projet » d'une mission (au moins l'un des deux). */
-function missionWho(m) {
+export function missionWho(m) {
   const agent = m.agent || "";
   const project = m.project || "";
   if (agent && project) return `${agent} — ${project}`;

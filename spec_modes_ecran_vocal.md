@@ -252,19 +252,25 @@ non-recouvrement, mouvement réduit).
 
 ---
 
-## 3ter. La colonne de droite de l'écran Vocal (tâches, personnage, avatar) — 🟡 **lot 1 livré**, lots 2 et 3 à venir
+## 3ter. La colonne de droite de l'écran Vocal (tâches, personnage, avatar) — 🟡 **lots 1 et 2 livrés**, lot 3 à venir
 
-> **État réel (lot 1, appliqué)** : la **structure** des colonnes existe — deux
+> **État réel (lots 1 et 2, appliqués)** : la **structure** des colonnes existe — deux
 > `<aside class="vocal-side">` enfants de la scène (discussion à gauche, tâches à
 > droite), la grille à trois pistes de `.vocal-stage`, et dans la colonne de droite le
 > **portrait du personnage au pied** (médaillon rond de 72 px) avec son nom. La lecture de
 > la largeur est unique : `planVocalSides()` (`src/js/vocal-sides.js`), appliquée par
-> `vocalSyncSides()` à l'entrée et à chaque changement de taille de fenêtre ; sous 240 px de
-> place disponible, les deux colonnes sont **absentes** (`hidden` + `.vocal-sides-off`).
-> **Rien n'est encore écrit dans les colonnes** : ni titre, ni liste de tâches, ni ligne
-> d'activité, ni bouton de masquage — c'est le travail des **lots 2 et 3**. Ce qui suit
-> décrit donc l'état **visé** ; seules les phrases marquées « lot 1 » décrivent le code
-> d'aujourd'hui. Conception complète :
+> `vocalSyncSides()` à l'entrée, à chaque changement de taille de fenêtre et à chaque tic de
+> **900 ms** (`VOCAL_SIDES_TICK_MS`) ; sous 240 px de place disponible, les deux colonnes
+> sont **absentes** (`hidden` + `.vocal-sides-off`).
+> **La colonne de droite est REMPLIE** (lot 2) : titre « TÂCHES », liste des tâches (groupes
+> « En cours » puis « En attente », identité puis résumé, **6** lignes au cas A et **8** au
+> cas B, l'excédent écrit « + N autre(s) », « Aucune tâche en cours » si la liste est vide) et
+> **une** ligne d'activité en bas. La décision des tâches vit dans le même module pur
+> (`planVocalTasks`, `vocalTaskRows`, `vocalNowLine`), et la liste des missions vient d'une
+> **source unique** (`collectSuperMissions()`), celle du bouton « Travail » : les deux ne
+> peuvent pas se contredire. **La colonne de gauche reste vide** : c'est le **lot 3**. Ce qui
+> suit décrit donc l'état **visé** ; seules les phrases marquées « lot 1 » / « lot 2 »
+> décrivent le code d'aujourd'hui. Conception complète :
 > `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md` et son amendement
 > `docs/conceptions/CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md` — la **zone
 > d'image** et ses trois cas sont au **§ 7bis** du premier.
@@ -318,18 +324,27 @@ Les trois sorties (logo, Échap, fermeture de l'onglet) et les colonnes sans cli
 **inchangées** : la colonne de droite n'ajoute aucune zone cliquable.
 
 <!-- HELP:vocal-colonnes-portrait -->
-### Les colonnes de l'écran Vocal et le portrait (lot 1)
+### Les colonnes de l'écran Vocal, les tâches et le portrait (lots 1 et 2)
 Sur un écran assez large, l'écran Vocal encadre le cercle de **deux colonnes** : la
-**discussion** à gauche, le **travail** à droite. Elles sont **vides pour l'instant** —
-les tâches et la discussion y arriveront dans les prochaines étapes. Sous une certaine
-largeur (fenêtre étroite), elles **n'apparaissent pas du tout** : le cercle reste seul au
-milieu, jamais écrasé, jamais décalé.
+**discussion** à gauche, le **travail** à droite. La discussion est **vide pour
+l'instant** — elle arrivera dans une prochaine étape. Sous une certaine largeur (fenêtre
+étroite), les colonnes **n'apparaissent pas du tout** : le cercle reste seul au milieu,
+jamais écrasé, jamais décalé.
 
-Dans la colonne de droite, **tout en bas**, le **portrait du personnage** apparaît en
+La colonne de droite parle du **travail** : le titre **« TÂCHES »**, la **liste des tâches
+en cours** — l'agent et le projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui
+se passe à cet instant. Les tâches sont rangées en **« En cours »** d'abord, **« En
+attente »** ensuite. La liste **ne défile pas** : elle montre ce que la hauteur permet
+(jusqu'à **6** tâches quand un personnage est présent, **8** sans) et, s'il y en a plus, la
+ligne **« + N autre(s) »** le dit — la liste complète reste dans le bouton **« Travail »**.
+Aucune tâche en cours ? La colonne affiche « **Aucune tâche en cours** », jamais du vide.
+
+Dans cette même colonne, **tout en bas**, le **portrait du personnage** apparaît en
 médaillon rond, avec son nom juste en dessous. Pas de personnage déposé par le projet
 **Présences** ? Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la
-colonne reste simplement sans image. Le portrait suit un éventuel changement de personnage
-sans redémarrer Pilot.
+colonne reste simplement sans image, et la liste occupe alors **toute la hauteur**. Le
+portrait suit un éventuel changement de personnage sans redémarrer Pilot, et le haut de la
+colonne ne bouge pas quand il apparaît ou disparaît.
 
 Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les
