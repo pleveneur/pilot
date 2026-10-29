@@ -856,6 +856,18 @@ de dictée s'affichaient dans **la conversation**, qui n'est pas affichée ici.
   (ou quand le moteur déclare lui-même n'avoir aucune session en traitement,
   seul cas où le tour restait marqué « en cours » pour toujours — le « j'ai dû
   relancer mon onglet »). Le bouton 🎙️ n'est plus refusé pendant un tour.
+- **Conséquence assumée sur la coupure de parole** (à ne pas redécouvrir) :
+  pendant un travail, la dictée étant **ouverte**, la garde « une dictée ouverte
+  ne coupe rien » (§6bis) s'applique — parler pendant que Pilot **travaille** ne
+  l'**interrompt** donc plus : cela devient une **demande mise en file**, ce qui
+  est exactement le but (accusé immédiat, travail ni interrompu ni perdu). Rien
+  n'est perdu de la coupure : (a) quand Pilot **lit**, la dictée est désarmée,
+  donc parler **coupe la lecture** comme avant ; (b) si la dictée **n'est pas**
+  ouverte (permission refusée, dictée fermée par un geste, plafond des sessions
+  vides atteint), la coupure de la **réflexion** fonctionne comme avant, avec le
+  **même** chemin d'arrêt (`stopSuperAgentTurn`, § 6bis.2) ; (c) le bouton
+  **Stop** reste le geste explicite d'interruption. Aucun seuil, aucune garde,
+  aucun chemin d'arrêt n'a été modifié.
 - **Elle se réarme quand la lecture d'une réponse est finie**, avec une marge de
   silence plus longue (600 ms) : c'est la **conversation continue** du mode —
   répondre puis reparler, sans rien toucher.

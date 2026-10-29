@@ -154,6 +154,15 @@ chevauchent pas. La réponse reste dans la conversation, avec son bouton d'écou
 - Le **barge-in** (§ 6bis) : `vocalInterruptTarget`, le seuil, la garde `if (voiceActive)
   return;`, le chemin d'arrêt **partagé** `stopSuperAgentTurn` → `abort_super_agent` (un seul
   IPC). Aucun test de coupure n'a été touché.
+- **Mais un effet de bord est assumé, et consigné dans la spec** : pendant un travail, la
+  dictée étant désormais **ouverte**, la garde « une dictée ouverte ne coupe rien »
+  s'applique — parler pendant que Pilot **travaille** ne l'**interrompt** plus, cela devient
+  une **demande mise en file** (c'est précisément le but : accusé immédiat, travail ni
+  interrompu ni perdu). La coupure n'est pas perdue pour autant : quand Pilot **lit**, la
+  dictée est désarmée, donc parler **coupe la lecture** comme avant ; si la dictée n'est pas
+  ouverte (permission refusée, geste, plafond des sessions vides), la coupure de la
+  **réflexion** passe par le **même** chemin d'arrêt ; et le bouton **Stop** reste le geste
+  explicite. Aucun seuil, aucune garde, aucun IPC n'a été modifié.
 - Les **décisions fermes** de l'écran : bouton des modes = le logo, barre du bas qui s'efface
   au repos, trois sorties, zone image en haut à droite, « tout masquable sauf le portrait ».
 - Le **silence qui n'est pas une panne**, le **plafond des sessions vides**, les **refus
@@ -209,6 +218,7 @@ une seule minuterie, bornage des reprises, un seul `applyVoiceEnd`, un seul envo
 | J'appuie sur 🎙️ / « Réveiller » | **refusé** (« patiente la fin », message invisible ici) | la dictée s'ouvre |
 | Je tape une demande puis Entrée | refusée ; texte conservé ; explication sur une ligne invisible en mode Vocal | **accusée** et mise en file |
 | L'écran affiche | « Je réfléchis… » puis **plus rien jamais** | « C'est noté, je m'en occupe dès que j'ai terminé. » |
+| Je parle pour **couper** Pilot | coupait la réflexion | pendant le travail : devient une **demande mise en file** (le travail n'est plus interrompu) ; pendant la **lecture** : coupe toujours ; bouton **Stop** inchangé |
 | Le tour se termine | rien ne repart, il faut réappuyer | la file part **toute seule**, dans l'ordre |
 | `agent_end` manqué | `isStreaming` **collé** ⇒ envoi et micro refusés **pour toujours** (relance de l'onglet) | la supervision (état du **moteur**) vide la file et rouvre la main |
 | La réponse précédente est-elle lue deux fois ? | — | non : la lecture est sautée si une demande vient de partir |
