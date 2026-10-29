@@ -2,11 +2,19 @@
 // Telegram.
 //
 // Objectif : ce que l'Assistant écrit dans sa conversation part AUSSI sur
-// Telegram, REFORMULÉ EN UNE PHRASE SIMPLE (langage courant, aucun code, aucun
-// nom de fichier, aucune liste technique, aucune commande). Seuls les messages
-// UTILES sont transmis (réponse à une question du propriétaire, fin de mission /
-// compte rendu, alerte, demande d'accord) ; les messages intermédiaires (étapes
-// de travail, appels d'outils, bavardage technique) sont écartés.
+// Telegram, en langage courant (aucun code, aucun nom de fichier, aucune liste
+// technique, aucune commande). Seuls les messages UTILES sont transmis (réponse
+// à une question du propriétaire, fin de mission / compte rendu, alerte, demande
+// d'accord) ; les messages intermédiaires (étapes de travail, appels d'outils,
+// bavardage technique) sont écartés.
+//
+// LA RÉPONSE EST CELLE D'UNE CONVERSATION (décision du propriétaire, 2026-11) :
+// la demande venue de Telegram reçoit la MÊME consigne de brièveté que l'écran
+// Vocal (source unique `vocal-brevity.js`, cf. `composeTelegramPrompt`). La
+// réponse est donc courte PAR LA CONSIGNE ; le relais ne la coupe plus. Le
+// découpage en PLUSIEURS messages n'existe que pour la limite de caractères de
+// Telegram (`splitForTelegram`) : une phrase courte n'est jamais hâchée.
+//
 //
 // Déduplication SANS PERTE : quand la communication Telegram du dialogue est
 // ACTIVE, c'est l'Assistant qui parle — les avis BRUTS existants (fin de mission
@@ -30,10 +38,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { assistantKindFromAnswers, buildAssistantKindQuestion } from "./laya-gateway.js";
 import { splitLayaChunks } from "./laya-utils.js";
-import { buildAssistantMessage, projectShortName, publishOwnerText } from "./telegram-messages.js";
+import {
+  TELEGRAM_PART_CHARS,
+  buildAssistantMessage,
+  projectShortName,
+  publishOwnerText,
+} from "./telegram-messages.js";
 
-/** Longueur maximale de la phrase envoyée à Telegram. */
-export const TELEGRAM_DIALOG_MAX_CHARS = 200;
+/**
+ * Longueur maximale d'UN message Telegram de conversation. C'est la taille
+ * d'un message (`TELEGRAM_PART_CHARS`), pas une phrase : une réponse brève
+ * part ENTIÈRE, et au-delà on découpe en plusieurs messages.
+ */
+export const TELEGRAM_DIALOG_MAX_CHARS = TELEGRAM_PART_CHARS;
 
 // ── Filtrage / classification ────────────────────────────────────────────────
 // Signaux d'ALERTE (à transmettre en priorité).
@@ -95,42 +112,129 @@ export function stripTechnical(raw) {
  * Renvoie la première phrase d'un texte (le texte entier s'il n'y a pas de
  * ponctuation de fin de phrase). Évite de couper un nombre décimal (ex: « 1.5 »).
  * Fonction PURE.
+ *
+ * Ce n'est PLUS la règle du relais Telegram (une réponse brève part entière) :
+ * l'utilitaire reste, adossé au SEUL découpage en phrases (`splitAssistantSentences`),
+ * pour les appelants qui veulent un titre ou une ligne courte.
  * @param {string} text
  * @returns {string}
  */
 export function firstSentence(text) {
-  const t = String(text ?? "");
-  for (let i = 0; i < t.length; i++) {
-    const ch = t[i];
-    if (ch === "." || ch === "!" || ch === "?") {
-      const prev = t[i - 1] || "";
-      const next = t[i + 1];
-      if (ch === "." && /\d/.test(prev) && /\d/.test(next || "")) continue;
-      if (next === undefined || next === " ") return t.slice(0, i + 1);
-    }
-  }
-  return t;
+  const phrases = splitAssistantSentences(text);
+  return phrases.length > 0 ? phrases[0] : String(text ?? "").trim();
 }
 
 /**
- * Reformule un message de l'Assistant en UNE phrase simple : première phrase
- * débarrassée du technique, ponctuée et bornée en longueur. Retourne "" s'il ne
- * reste rien d'utile (message purement technique / code). Fonction PURE.
- * @param {string} raw
- * @returns {string}
+ * Découpe un texte en PHRASES (la ponctuation finale reste collée à sa phrase).
+ * Évite de couper un nombre décimal (ex: « 1.5 »). Fonction PURE.
+ * @param {string} text
+ * @returns {string[]} les phrases, dans l'ordre (jamais vides)
  */
-export function condenseAssistantMessage(raw) {
+export function splitAssistantSentences(text) {
+  const t = String(text ?? "");
+  const out = [];
+  let debut = 0;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (ch !== "." && ch !== "!" && ch !== "?" && ch !== "…") continue;
+    const prev = t[i - 1] || "";
+    const next = t[i + 1];
+    if (ch === "." && /\d/.test(prev) && /\d/.test(next || "")) continue;
+    if (next !== undefined && next !== " ") continue;
+    const phrase = t.slice(debut, i + 1).trim();
+    if (phrase) out.push(phrase);
+    debut = i + 1;
+  }
+  const reste = t.slice(debut).trim();
+  if (reste) out.push(reste);
+  return out;
+}
+
+/**
+ * Nettoie la réponse de l'Assistant pour le téléphone : retire le technique
+ * (code, chemins, commandes, Markdown), écarte les phrases d'ANNONCE devenues
+ * vides (« Voici le détail : » quand le détail était du code) et ponctue les
+ * phrases qui ne l'étaient pas.
+ *
+ * AUCUNE COUPE ICI : la brièveté vient de la consigne (`vocal-brevity.js`),
+ * jamais d'un tronquage — une réponse coupée au milieu d'une phrase cacherait
+ * une information utile. Fonction PURE.
+ * @param {string} raw
+ * @returns {string} le texte nettoyé ("" s'il ne reste rien d'utile)
+ */
+export function cleanAssistantReply(raw) {
   const cleaned = stripTechnical(raw);
   if (!cleaned || !/[\p{L}\p{N}]/u.test(cleaned)) return "";
-  let sentence = firstSentence(cleaned).replace(/\s+/g, " ").trim();
-  if (!sentence) return "";
-  if (!/[.!?…]$/.test(sentence)) sentence += ".";
-  if (sentence.length > TELEGRAM_DIALOG_MAX_CHARS) {
-    const cut = sentence.slice(0, TELEGRAM_DIALOG_MAX_CHARS - 1);
-    const at = cut.lastIndexOf(" ");
-    sentence = (at > 40 ? cut.slice(0, at) : cut).trimEnd() + "…";
+  const gardees = [];
+  for (const brute of splitAssistantSentences(cleaned)) {
+    const brut = brute.replace(/\s+/g, " ").trim();
+    // Annonce dont le contenu a été retiré avec le technique : deux-points (ou
+    // point-virgule) suivi de rien — « Voici le détail : `src/a.js` » ne dit plus
+    // rien, la phrase est écartée (jamais de message « néant »). Le test porte
+    // sur la phrase AVANT nettoyage, sinon la ponctuation en trop a déjà disparu.
+    const annonceVide = /[:;][\s,.;:…–—-]*$/u.test(brut);
+    // Un séparateur laissé en suspens par le retrait du technique est réduit
+    // (« J'ai modifié et lancé . » → « J'ai modifié et lancé. »).
+    const phrase = brut
+      .replace(/([.!?…])[\s,;:…]+$/u, "$1")
+      .replace(/[\s,;:–—-]+$/u, "")
+      .trim();
+    if (!phrase || !/[\p{L}\p{N}]/u.test(phrase)) continue;
+    if (annonceVide) continue;
+    gardees.push(/[.!?…]$/.test(phrase) ? phrase : `${phrase}.`);
   }
-  return sentence;
+  return gardees.join(" ");
+}
+
+/**
+ * Découpe un texte en messages Telegram de taille acceptable.
+ *
+ * Règle : un texte qui TIENT dans la limite n'est JAMAIS découpé (une phrase
+ * courte n'est jamais hâchée) ; au-delà, la coupe tombe à la fin d'une phrase,
+ * sinon à la fin d'un mot — jamais au milieu d'un mot quand c'est évitable.
+ * Fonction PURE.
+ * @param {string} text
+ * @param {number} [maxChars] taille maximale d'un message
+ * @returns {string[]} les morceaux, dans l'ordre
+ */
+export function splitForTelegram(text, maxChars = TELEGRAM_PART_CHARS) {
+  const t = String(text ?? "").trim();
+  if (!t) return [];
+  const max =
+    Number.isFinite(maxChars) && maxChars > 0 ? Math.floor(maxChars) : TELEGRAM_PART_CHARS;
+  if (t.length <= max) return [t];
+  const morceaux = [];
+  let reste = t;
+  while (reste.length > max) {
+    const fenetre = reste.slice(0, max);
+    let coupe = -1;
+    for (const fin of [". ", "! ", "? ", "… "]) {
+      const at = fenetre.lastIndexOf(fin);
+      if (at > coupe) coupe = at + 1;
+    }
+    if (coupe <= 0) {
+      const espace = fenetre.lastIndexOf(" ");
+      coupe = espace > 0 ? espace : max;
+    }
+    const morceau = reste.slice(0, coupe).trim();
+    if (morceau) morceaux.push(morceau);
+    reste = reste.slice(coupe).trim();
+  }
+  if (reste) morceaux.push(reste);
+  return morceaux;
+}
+
+/**
+ * Messages Telegram à envoyer pour UNE réponse de l'Assistant : nettoyée, puis
+ * découpée seulement si la limite de caractères l'exige. Fonction PURE.
+ * @param {string} raw réponse complète de l'Assistant
+ * @param {number} [maxChars]
+ * @returns {string[]} zéro, un ou plusieurs messages
+ */
+export function prepareAssistantMessages(raw, maxChars = TELEGRAM_PART_CHARS) {
+  const cleaned = cleanAssistantReply(raw);
+  if (!cleaned) return [];
+  return splitForTelegram(cleaned, maxChars);
 }
 
 /**
@@ -484,9 +588,11 @@ function assistantOwnerProject(deps = {}) {
 }
 
 /**
- * Transmet la réponse de l'Assistant sur Telegram, en UNE phrase simple.
- * Inerte (aucun envoi, aucune erreur) si la communication n'est pas active ou si
- * le message n'est pas utile. Les dépendances sont injectables (tests).
+ * Transmet la réponse de l'Assistant sur Telegram : la réponse NETTOYÉE, EN
+ * ENTIER, découpée en plusieurs messages UNIQUEMENT si la limite de caractères
+ * de Telegram l'exige. Inerte (aucun envoi, aucune erreur) si la communication
+ * n'est pas active ou si le message n'est pas utile. Les dépendances sont
+ * injectables (tests).
  *
  * Le message suit la règle de contenu commune (source unique
  * `telegram-messages.js`, gabarit `buildAssistantMessage`) : NOM COURT DU PROJET
@@ -498,27 +604,35 @@ function assistantOwnerProject(deps = {}) {
  * @param {() => boolean} [deps.isActive] - état (défaut : `isTelegramDialogActive`).
  * @param {(text: string) => unknown} [deps.send] - envoi (défaut : `telegram_notify`).
  * @param {string} [deps.project] - projet concerné (défaut : projet actif).
- * @returns {boolean} vrai si un message a été produit (envoyé ou mis de côté).
+ * @param {number} [deps.maxChars] - taille maximale d'un message (tests).
+ * @returns {boolean} vrai si au moins un message a été produit (envoyé ou mis de côté).
  */
 export function relayAssistantMessageToTelegram(text, deps = {}) {
   const isActive = deps.isActive || isTelegramDialogActive;
   if (!isActive()) return false;
   if (!isUsefulAssistantMessage(text)) return false;
-  const line = condenseAssistantMessage(text);
-  if (!line) return false;
-  const message = buildAssistantMessage({ project: assistantOwnerProject(deps), text: line });
-  if (!message) return false;
-  const result = publishOwnerText(message, {
-    project: assistantOwnerProject(deps),
-    send: deps.send || defaultSend,
-  });
-  if (result.status === "empty") return false;
-  if (result.status === "sent" || result.status === "dropped") {
+  const parts = prepareAssistantMessages(text, deps.maxChars);
+  if (parts.length === 0) return false;
+  const project = assistantOwnerProject(deps);
+  let produit = false;
+  let parle = false;
+  for (const part of parts) {
+    const message = buildAssistantMessage({ project, text: part });
+    if (!message) continue;
+    const result = publishOwnerText(message, {
+      project,
+      send: deps.send || defaultSend,
+    });
+    if (result.status === "empty") continue;
+    produit = true;
+    if (result.status === "sent" || result.status === "dropped") parle = true;
+  }
+  if (parle) {
     // L'Assistant a réellement parlé (l'information est sortie) : il couvre
     // l'événement → les avis bruts encore en attente sont abandonnés.
     claimRawAvisForAssistant();
   }
-  return true;
+  return produit;
 }
 
 /**

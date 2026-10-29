@@ -6,6 +6,16 @@
 // a ecouter et lente. Decision du proprietaire : Pilot repond BRIEVEMENT,
 // comme dans une conversation, et ne developpe que si on le lui demande.
 //
+// LE MEME COMPORTEMENT DEPUIS TELEGRAM (decision du proprietaire, 2026-11) :
+// quand le proprietaire ecrit a son bot Telegram, la demande est traitee comme
+// une demande de l'ecran Vocal — meme brievete, meme possibilite de developper
+// sur demande explicite, meme continuite de conversation. La consigne et la
+// facon de l'assembler viennent donc d'ICI et de NULLE PART AILLEURS : il n'y a
+// pas de seconde consigne « Telegram » qui pourrait diverger. SEUL L'EN-TETE
+// change (`EN_TETE_PAR_ORIGINE`) pour dire la VERITE du canal (reponse sur le
+// telephone plutot que lue a voix haute) ; les regles de longueur, la clause de
+// developpement et les exceptions sont MOT POUR MOT les memes.
+//
 // DEPUIS QUE LA LONGUEUR SE REGLE (Parametres -> onglet « Assistant » -> section
 // « Mode Vocal »), la consigne n'est plus FIGEE : elle est CONSTRUITE pour l'un
 // des QUATRE niveaux ci-dessous.
@@ -19,12 +29,15 @@
 //   - `normalizeVocalBrevityLevel(value)` : SEUL juge de ce qu'une valeur vaut
 //     (inconnue, vide, nulle, casse differente -> niveau par defaut) ;
 //   - `vocalBrevityLabel(value)` : SEUL libelle francais d'un niveau ;
-//   - `vocalBrevityInstruction(niveau)` : la consigne exacte d'un niveau ;
+//   - `vocalBrevityInstruction(niveau, origine)` : la consigne exacte d'un
+//     niveau, pour le canal demande (Vocal par defaut, Telegram accepte) ;
 //   - `VOCAL_BREVITY_INSTRUCTION` : la consigne du niveau par defaut (« courtes »,
 //     DEUX phrases) ;
 //   - `composeVocalPrompt(texte, { modeVocal, niveau })` : le SEUL assemblage
 //     « demande + consigne ». Hors du mode Vocal, le texte est rendu INCHANGE :
-//     le chat ecrit et l'onglet Assistant gardent leurs reponses actuelles.
+//     le chat ecrit et l'onglet Assistant gardent leurs reponses actuelles ;
+//   - `composeTelegramPrompt(texte, { niveau })` : le MEME assemblage pour une
+//     demande venue de Telegram (meme consigne, meme ordre, meme niveau regle).
 //
 // CE QUI NE CHANGE JAMAIS, QUEL QUE SOIT LE NIVEAU :
 //   - une demande explicite de developper (« detaille », « explique »,
@@ -69,6 +82,26 @@ const EN_TETE = [
   "## Mode vocal — parler court",
   "Cette demande vient de l'écran Vocal de Pilot : la conversation n'y est pas affichée et ta réponse va être LUE À VOIX HAUTE.",
 ];
+
+/** Canal d'origine d'une demande. Le mode Vocal est le canal de reference. */
+export const VOCAL_BREVITY_ORIGIN_VOCAL = "vocal";
+export const VOCAL_BREVITY_ORIGIN_TELEGRAM = "telegram";
+
+/**
+ * Les deux premieres lignes de la consigne, PAR CANAL D'ORIGINE.
+ *
+ * Seul l'en-tete change : il dit la VERITE du canal (une reponse lue a voix
+ * haute, ou une reponse qui part sur le telephone et a laquelle on repond
+ * depuis la). Les regles de longueur, la clause de developpement et les
+ * exceptions ci-dessous sont IDENTIQUES : c'est la meme conversation.
+ */
+const EN_TETE_PAR_ORIGINE = {
+  [VOCAL_BREVITY_ORIGIN_VOCAL]: EN_TETE,
+  [VOCAL_BREVITY_ORIGIN_TELEGRAM]: [
+    "## Conversation Telegram — répondre court",
+    "Cette demande vient de la conversation Telegram de Pilot : ta réponse part sur son téléphone et il te répond depuis là. C'est un TOUR DE CONVERSATION, la suite du MÊME fil : reprends là où vous en étiez, ne repars pas de zéro et ne transforme pas sa demande en compte rendu à classer.",
+  ],
+};
 
 /**
  * La REGLE DE LONGUEUR de chaque niveau (ce que le niveau demande, en clair).
@@ -131,17 +164,21 @@ export function vocalBrevityLabel(value) {
 
 /**
  * La consigne de conversation parlée d'UN niveau, ajoutée au message envoyé à
- * l'agent pour une demande faite depuis l'écran Vocal.
+ * l'agent pour une demande faite depuis l'écran Vocal ou depuis Telegram.
  *
  * Le niveau « courtes » (defaut) demande DEUX phrases exactement. Aucune
  * troncature n'est faite ici : la longueur vient de la consigne, jamais d'une
  * coupe du texte.
  *
  * @param {string} [niveau] clé de niveau (normalisée ; défaut « courtes »)
+ * @param {string} [origine] canal d'origine (`VOCAL_BREVITY_ORIGIN_*` ; défaut : Vocal)
  * @returns {string} la consigne complète, prête à être ajoutée à la demande
  */
-export function vocalBrevityInstruction(niveau) {
+export function vocalBrevityInstruction(niveau, origine = VOCAL_BREVITY_ORIGIN_VOCAL) {
   const cle = normalizeVocalBrevityLevel(niveau);
+  // Un canal inconnu retombe sur l'en-tete du mode Vocal : la consigne existe
+  // toujours, aucune demande ne part sans elle.
+  const entete = EN_TETE_PAR_ORIGINE[origine] || EN_TETE;
   // Le développement demandé par l'utilisateur passe AVANT le niveau : la
   // priorité est dite en clair pour les niveaux réglés (le niveau par défaut,
   // lui, garde la formulation d'origine, qui dit déjà « alors développe »).
@@ -149,7 +186,7 @@ export function vocalBrevityInstruction(niveau) {
     cle === VOCAL_BREVITY_DEFAULT_LEVEL
       ? DEVELOPPEMENT
       : `Cette demande de développement passe AVANT le niveau de longueur choisi. ${DEVELOPPEMENT}`;
-  return [...EN_TETE, REGLES[cle], developpement, EXCEPTIONS[cle]].join("\n");
+  return [...entete, REGLES[cle], developpement, EXCEPTIONS[cle]].join("\n");
 }
 
 /**
@@ -157,6 +194,24 @@ export function vocalBrevityInstruction(niveau) {
  * comme constante : c'est elle qui part quand aucun niveau n'est transmis.
  */
 export const VOCAL_BREVITY_INSTRUCTION = vocalBrevityInstruction(VOCAL_BREVITY_DEFAULT_LEVEL);
+
+/**
+ * Assemble « demande + consigne » — code PARTAGE par les deux canaux (aucune
+ * seconde mise en forme) :
+ *   - la demande reste INTACTE en tete du message (jamais coupee, jamais
+ *     reformulee) ;
+ *   - une demande vide ne recoit rien (aucune consigne orpheline).
+ *
+ * @param {string} text
+ * @param {string} [niveau]
+ * @param {string} origine
+ * @returns {string}
+ */
+function composeWithInstruction(text, niveau, origine) {
+  const demande = typeof text === "string" ? text : "";
+  if (!demande.trim()) return demande;
+  return `${demande}\n\n${vocalBrevityInstruction(niveau, origine)}`;
+}
 
 /**
  * Compose le message ENVOYE a l'agent : la demande de l'utilisateur, et — si et
@@ -177,6 +232,19 @@ export const VOCAL_BREVITY_INSTRUCTION = vocalBrevityInstruction(VOCAL_BREVITY_D
 export function composeVocalPrompt(text, etats = {}) {
   const demande = typeof text === "string" ? text : "";
   if (!etats || etats.modeVocal !== true) return demande;
-  if (!demande.trim()) return demande;
-  return `${demande}\n\n${vocalBrevityInstruction(etats.niveau)}`;
+  return composeWithInstruction(demande, etats.niveau, VOCAL_BREVITY_ORIGIN_VOCAL);
+}
+
+/**
+ * Compose le message ENVOYE a l'agent pour une demande venue de TELEGRAM :
+ * exactement le meme assemblage que le mode Vocal (`composeWithInstruction`),
+ * avec la MEME consigne de brièveté, au MEME niveau réglé. Rien n'est copie :
+ * seule l'origine change, et elle ne change que l'en-tete.
+ *
+ * @param {string} text message du proprietaire
+ * @param {{ niveau?: string }} [etats] niveau regle (relu par l'appelant)
+ * @returns {string} le message a envoyer a l'agent
+ */
+export function composeTelegramPrompt(text, etats = {}) {
+  return composeWithInstruction(text, etats && etats.niveau, VOCAL_BREVITY_ORIGIN_TELEGRAM);
 }

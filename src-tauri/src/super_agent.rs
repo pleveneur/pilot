@@ -198,6 +198,17 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     // base sur les anciennes bases). Les anciens résumés non livrés restent
     // `delivered=0` et seront rejoués à la prochaine opportunité.
     ensure_column(conn, "session_summaries", "delivered", "INTEGER NOT NULL DEFAULT 0")?;
+    // NATURE D'UNE REMISE (migration ADDITIVE, idempotente) : `""` = compte
+    // rendu (comportement historique, cadré comme un résumé à classer) ;
+    // `OWNER_MESSAGE_KIND` = TOUR DE CONVERSATION du propriétaire (message
+    // Telegram). Une base ancienne démarre à `""` : ses remises en attente
+    // gardent exactement le cadrage qu'elles avaient, aucune n'est dénaturée.
+    ensure_column(
+        conn,
+        "session_summaries",
+        "kind",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
     // MÉNAGE DES RAPPELS (migration ADDITIVE, idempotente) :
     //  - `one_shot` : rappel qui ne doit se déclencher qu'UNE fois (il s'auto-
     //    désactive à la livraison) — la règle de ménage n° 2 supprime ensuite un
@@ -4300,8 +4311,8 @@ fn send_injection_with_ack(service: &AgentService, msg: &str) -> Result<String, 
 /// suite). L'avis de troncature compte lui-même dans la taille versée : le
 /// résultat ne dépasse donc jamais le plafond. Le résumé d'origine n'est jamais
 /// modifié ici (le texte complet reste en base).
-fn build_capped_injection_message(project_path: Option<&str>, summary: &str) -> String {
-    let full = build_injection_message(project_path, summary);
+fn build_capped_injection_message(project_path: Option<&str>, summary: &str, kind: &str) -> String {
+    let full = build_injection_message(project_path, summary, kind);
     let total = full.chars().count();
     if total <= MAX_INJECTED_MESSAGE_CHARS {
         return full;
@@ -4323,6 +4334,26 @@ fn build_capped_injection_message(project_path: Option<&str>, summary: &str) -> 
         if keep == 0 {
             return notice;
         }
+    }
+}
+
+/// NATURE d'une remise à l'assistant : le message du PROPRIÉTAIRE lui-même
+/// (conversation Telegram), à traiter comme un TOUR DE CONVERSATION et non
+/// comme un compte rendu à classer.
+///
+/// Valeur partagée avec `src/js/telegram-messages.js` (`OWNER_MESSAGE_KIND`) :
+/// elle est PERSISTÉE avec la remise, donc un message mis en file puis rejoué
+/// plus tard garde exactement la nature qu'il avait à l'instant où il a été
+/// écrit (une base ancienne relit `""` = compte rendu, comportement inchangé).
+pub(crate) const OWNER_MESSAGE_KIND: &str = "owner-message";
+
+/// Normalise la nature d'une remise reçue de l'interface : seule la valeur
+/// connue est retenue, tout le reste retombe sur le compte rendu (`""`). Aucune
+/// autre nature ne peut donc être inventée par un appelant.
+pub(crate) fn normalize_summary_kind(kind: Option<&str>) -> &'static str {
+    match kind.map(str::trim) {
+        Some(OWNER_MESSAGE_KIND) => OWNER_MESSAGE_KIND,
+        _ => "",
     }
 }
 
@@ -4395,6 +4426,36 @@ pub(crate) fn enqueue_session_summary(
     Ok(SummaryEnqueue { rowid, project_id, deferred: defer })
 }
 
+/// Inscrit la NATURE d'une remise déjà mise en boîte (migration additive :
+/// aucune autre colonne n'est touchée). Fonction pure sur `Connection`.
+pub(crate) fn set_session_summary_kind(
+    conn: &Connection,
+    id: i64,
+    kind: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE session_summaries SET kind = ?1 WHERE id = ?2",
+        rusqlite::params![kind, id],
+    )
+    .map_err(|e| format!("Erreur enregistrement nature de remise: {}", e))?;
+    Ok(())
+}
+
+/// Lit la NATURE d'une remise (`""` = compte rendu, inconnu ou ligne absente).
+/// C'est ce que le rejeu utilise : un message durable retrouve sa nature même
+/// s'il est délivré plusieurs minutes après avoir été écrit. Fonction pure sur
+/// `Connection`.
+pub(crate) fn session_summary_kind(conn: &Connection, id: i64) -> String {
+    conn.query_row(
+        "SELECT kind FROM session_summaries WHERE id = ?1",
+        rusqlite::params![id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+    .unwrap_or_default()
+}
+
 /// Marque une remontée comme livrée (`delivered=1`). Idempotent : repasser sur
 /// une ligne déjà livrée ne la remet pas en attente. Fonction pure sur
 /// `Connection`.
@@ -4457,7 +4518,11 @@ where
         )
         .ok()
     });
-    let msg = build_capped_injection_message(project_path.as_deref(), summary);
+    // La NATURE est relue dans la boîte durable : un message du propriétaire
+    // rejoué plus tard reste un tour de conversation (il ne se transforme pas en
+    // compte rendu à classer entre-temps).
+    let kind = session_summary_kind(conn, id);
+    let msg = build_capped_injection_message(project_path.as_deref(), summary, &kind);
     match send(&msg) {
         Ok(()) => {
             mark_session_summary_delivered(conn, id)?;
@@ -4485,6 +4550,10 @@ pub async fn inject_session_summary(
     session_id: Option<String>,
     summary: String,
     defer: Option<bool>,
+    // NATURE de la remise : `None`/`""` = compte rendu (défaut, comportement
+    // historique) ; `OWNER_MESSAGE_KIND` = tour de conversation du propriétaire
+    // (message Telegram), traité comme une demande de l'écran Vocal.
+    kind: Option<String>,
 ) -> Result<Value, String> {
     // P0-4 : le résumé COMPLET est stocké tel quel (aucune destruction à la
     // source) ; seule la copie VERSÉE dans la conversation est bornée, au
@@ -4497,6 +4566,7 @@ pub async fn inject_session_summary(
     // Mise en boîte durable + décision de remise différée, factorisées dans
     // `enqueue_session_summary` (fonction pure testable : le chemin `defer`
     // n'était couvert par aucun test). Comportement inchangé.
+    let kind = normalize_summary_kind(kind.as_deref());
     let enq = enqueue_session_summary(
         &conn,
         project_path.as_deref(),
@@ -4504,6 +4574,11 @@ pub async fn inject_session_summary(
         &summary,
         defer.unwrap_or(false),
     )?;
+    // La nature est inscrite dans la MÊME boîte durable que le texte (une seule
+    // ligne, une seule vérité) : le rejeu la relira telle quelle.
+    if !kind.is_empty() {
+        set_session_summary_kind(&conn, enq.rowid, kind)?;
+    }
     let project_id = enq.project_id;
     let summary_rowid = enq.rowid;
 
@@ -4531,8 +4606,13 @@ pub async fn inject_session_summary(
         // `get_super_agent_state`) → `spawn_blocking`.
         let service = state.inner().agent_service.clone();
         let path_for_msg = project_path.clone();
+        let kind_for_msg = kind.to_string();
         let attempt = tauri::async_runtime::spawn_blocking(move || {
-            let msg = build_capped_injection_message(path_for_msg.as_deref(), &summary);
+            let msg = build_capped_injection_message(
+                path_for_msg.as_deref(),
+                &summary,
+                &kind_for_msg,
+            );
             send_injection_with_ack(&service, &msg)
         })
         .await
@@ -4572,9 +4652,20 @@ pub async fn inject_session_summary(
     }
 }
 
-/// Construit le message d'injection d'un résumé au super-agent. Le message est
-/// clairement marqué comme un résumé/injection (pas une saisie utilisateur).
-fn build_injection_message(project_path: Option<&str>, summary: &str) -> String {
+/// Construit le message d'injection au super-agent.
+///
+/// DEUX CADRAGES, décidés par la NATURE de la remise (`kind`) :
+///   - compte rendu (défaut, comportement historique) : le message est marqué
+///     comme un résumé/injection, à intégrer dans le suivi de l'assistant ;
+///   - TOUR DE CONVERSATION du propriétaire (`OWNER_MESSAGE_KIND`, message
+///     Telegram) : le texte est versé TEL QUEL, sans gabarit de résumé et sans
+///     consigne de classement — c'est une demande de l'utilisateur, comme une
+///     demande de l'écran Vocal, et la brièveté est déjà portée par la consigne
+///     de `vocal-brevity.js` (source unique) côté interface.
+fn build_injection_message(project_path: Option<&str>, summary: &str, kind: &str) -> String {
+    if kind == OWNER_MESSAGE_KIND {
+        return summary.to_string();
+    }
     format!(
         "[Résumé de session] Projet: {}\n{}\n\nIntègre ces informations dans ton suivi (tâches, décisions, état d'avancement).",
         project_path.unwrap_or(""),
@@ -6748,7 +6839,8 @@ mod tests_inner_helper {
 }
 mod tests {
     use super::{
-        build_capped_injection_message, build_project_context, classify_task_status,
+        build_capped_injection_message, build_injection_message, build_project_context,
+        classify_task_status,
         db_add_task_check, db_delete_task_check, db_delete_task_checks, db_list_task_checks,
         db_set_task_check_done,
         db_add_deliverable, db_delete_task_deliverables, db_list_project_deliverables,
@@ -6758,6 +6850,7 @@ mod tests {
         db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
         deliver_one_summary,
+        normalize_summary_kind, session_summary_kind, set_session_summary_kind, OWNER_MESSAGE_KIND,
         ack_attempts_exhausted, clear_ack_failure, injection_ack, note_ack_failure,
         MAX_INJECTION_ACK_ATTEMPTS,
         enqueue_session_summary, init_db, is_task_open, kanban_ideas,
@@ -8612,7 +8705,7 @@ mod tests {
         let huge = format!("{block}\n{block}\n{block}");
 
         // 1. Le message réellement injecté ne dépasse jamais le plafond unique.
-        let msg = build_capped_injection_message(Some("/proj/plafond"), &huge);
+        let msg = build_capped_injection_message(Some("/proj/plafond"), &huge, "");
         assert!(
             msg.chars().count() <= MAX_INJECTED_MESSAGE_CHARS,
             "le message versé doit être borné au plafond"
@@ -8623,7 +8716,7 @@ mod tests {
         assert!(msg.contains("session_summaries"), "l'avis doit indiquer où lire la suite");
 
         // 2. Un résumé court reste intact (comportement historique préservé).
-        let short = build_capped_injection_message(Some("/proj/plafond"), "compte rendu court");
+        let short = build_capped_injection_message(Some("/proj/plafond"), "compte rendu court", "");
         assert!(short.contains("compte rendu court"));
         assert!(!short.contains("tronqué"));
 
@@ -8657,6 +8750,65 @@ mod tests {
                 "un versement successif ne doit pas contourner le plafond"
             );
         }
+    }
+
+    // ── TELEGRAM = UNE DEMANDE DE L'ÉCRAN VOCAL (et non un compte rendu) ──
+
+    #[test]
+    fn owner_message_keeps_the_prompt_verbatim_and_a_report_keeps_its_framing() {
+        // Le message du propriétaire porte sa propre consigne (celle du mode
+        // vocal, source unique `vocal-brevity.js`). Rust ne doit RIEN y ajouter :
+        // ni gabarit de résumé, ni consigne de classement — sinon le tour de
+        // conversation redevient un compte rendu (écart corrigé).
+        let demande = "Tu peux me dire où on en est ?\n\n## Conversation Telegram — répondre court";
+        let msg = build_injection_message(None, demande, OWNER_MESSAGE_KIND);
+        assert_eq!(msg, demande, "le message du propriétaire est versé tel quel");
+        assert!(!msg.contains("Résumé de session"));
+        assert!(!msg.contains("Intègre ces informations dans ton suivi"));
+
+        // Un compte rendu d'agent garde EXACTEMENT le cadrage historique.
+        let rapport = build_injection_message(Some("/proj/a"), "fin de mission", "");
+        assert_eq!(
+            rapport,
+            "[Résumé de session] Projet: /proj/a\nfin de mission\n\nIntègre ces informations dans ton suivi (tâches, décisions, état d'avancement)."
+        );
+    }
+
+    #[test]
+    fn owner_message_nature_survives_the_durable_box_and_the_replay() {
+        // La nature est écrite dans la MÊME ligne que le texte : un message mis
+        // en file (assistant occupé) puis rejoué plus tard reste un tour de
+        // conversation. Sans cela, la continuité du fil serait perdue au rejeu.
+        let conn = mem_conn();
+        let demande = "Rappelle-moi ce qu'on faisait.";
+        let enq = enqueue_session_summary(&conn, None, None, demande, true).unwrap();
+        assert!(enq.deferred, "assistant occupé → remise différée");
+        set_session_summary_kind(&conn, enq.rowid, OWNER_MESSAGE_KIND).unwrap();
+        assert_eq!(session_summary_kind(&conn, enq.rowid), OWNER_MESSAGE_KIND);
+
+        let mut envoyes = Vec::<String>::new();
+        let sent = deliver_one_summary(&conn, enq.rowid, enq.project_id, demande, |m| {
+            envoyes.push(m.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert!(sent);
+        assert_eq!(envoyes, vec![demande.to_string()], "le rejeu ne recadre pas le message");
+    }
+
+    #[test]
+    fn unknown_nature_falls_back_to_a_report() {
+        // Aucune nature inventée par un appelant : tout ce qui n'est pas connu
+        // retombe sur le compte rendu (comportement historique, zéro surprise).
+        assert_eq!(normalize_summary_kind(None), "");
+        assert_eq!(normalize_summary_kind(Some("")), "");
+        assert_eq!(normalize_summary_kind(Some("   ")), "");
+        assert_eq!(normalize_summary_kind(Some("autre-chose")), "");
+        assert_eq!(normalize_summary_kind(Some(" owner-message ")), OWNER_MESSAGE_KIND);
+        // Une ligne ancienne (colonne absente du code appelant) relit "".
+        let conn = mem_conn();
+        let enq = enqueue_session_summary(&conn, None, None, "rapport", false).unwrap();
+        assert_eq!(session_summary_kind(&conn, enq.rowid), "");
     }
 
     #[test]

@@ -17,6 +17,11 @@
 > une fois la question répondue, son message Telegram est **réécrit** (boutons
 > retirés + mention « déjà répondu »), et un message tardif **ressemblant à une
 > réponse** est **signalé** au lieu de tomber dans la discussion (§ 12).
+> **Même comportement qu'à l'écran Vocal (§ 15)** : une demande venue de Telegram
+> est traitée comme une demande dite à l'écran Vocal — **même consigne de
+> brièveté** (même module, même niveau réglé), **même continuité de
+> conversation**, et la réponse part **entière** (plus de coupe à une phrase :
+> le découpage en plusieurs messages ne sert qu'à la limite de caractères).
 > Composant : `src-tauri/src/telegram.rs` (moteur d'envoi **et** de réception) +
 > `src/js/desktop-notify.js` (avis sortants) + `src/js/telegram-inbound.js`
 > (écoute au démarrage) + `src/js/telegram-questions.js` (questions/réponses) +
@@ -165,15 +170,33 @@ petit bouton de discussion permet d'**activer** cette communication. Il
 n'apparaît que si l'envoi Telegram est réellement **en état de fonctionner**
 (case **« Me prévenir sur Telegram »** cochée, jeton et identifiant renseignés — ces réglages restent dans **Options ⚙️ → onglet Assistant**) :
 s'il s'affiche, c'est que vos messages partiront vraiment. Une fois activé, ce que
-l'Assistant écrit vous arrive **aussi sur Telegram**, **résumé en une phrase
-simple**, et **seulement quand cela vous est utile** : réponse à votre question,
-fin de mission / compte rendu, alerte, demande d'accord. Les étapes de travail et
+l'Assistant écrit vous arrive **aussi sur Telegram**, **net et entier** — et
+**seulement quand cela vous est utile** : réponse à votre question,
+fin de mission / compte rendu, alerte, demande d'accord. Rien n'est coupé en
+cours de phrase : la réponse garde les **deux phrases courtes** du mode vocal. Les étapes de travail et
 les détails techniques ne vous sont pas envoyés. Quand cette communication est
 **active**, Pilot évite de vous envoyer deux fois la même information — mais
 **les alertes (anomalie, arrêt automatique) vous parviennent toujours**, et les
 autres avis sont envoyés si l'Assistant n'a finalement rien dit. Quand elle est
 **coupée** (par défaut), les avis continuent exactement comme avant. Le bouton
 indique son état et votre choix est conservé après un redémarrage de Pilot.
+
+🗣️ **Écrire à votre bot, c'est comme parler à l'écran Vocal** : que vous parliez
+dans **Pilot** (écran Vocal) ou que vous **écriviez sur Telegram**, l'Assistant se
+comporte **exactement de la même façon** :
+
+- **même longueur de réponse** : il répond **court** selon le réglage choisi
+  (Options ⚙️ → onglet Assistant → **Longueur des réponses**) — deux phrases
+  courtes par défaut — et ne fait **ni liste, ni titre, ni bloc de code**, ni nom
+  de fichier ; si vous demandez **explicitement** un détail, il développe ;
+- **même conversation** : votre message est un **tour de conversation** dans le
+  fil en cours, pas un rapport à classer. Il garde le contexte, ne repart pas de
+  zéro et ne vous redemande pas ce qu'il sait déjà ;
+- **les cas graves se disent en entier** : une panne, un refus, une erreur ou une
+  demande de confirmation ne sont **jamais** raccourcis — vous recevez la cause et
+  ce qu'il attend de vous ;
+- **rien n'est tronqué** : le texte part tel qu'il a été écrit. Il n'est découpé en
+  plusieurs messages que s'il dépasse la limite d'un message Telegram.
 <!-- /HELP:telegram -->
 
 ---
@@ -616,23 +639,29 @@ configurée) et ne manipule **jamais** le jeton.
 
 ```
 stripTechnical(raw)                 -> string   // PURE : retire code, liens, URL, chemins, fichiers, commandes, Markdown
-firstSentence(text)                 -> string   // PURE : première phrase (sans couper « 1.5 »)
-condenseAssistantMessage(raw)       -> string   // PURE : phrase simple, ponctuée, bornée (200 car.)
+splitAssistantSentences(text)       -> string[] // PURE : découpage en phrases (ne coupe jamais « 1.5 »)
+firstSentence(text)                 -> string   // PURE : première phrase (utilitaire, n'est plus la règle du relais)
+cleanAssistantReply(raw)            -> string   // PURE : nettoyé, ponctué, ENTIER (aucune borne de phrase)
+splitForTelegram(text, maxChars)    -> string[] // PURE : découpe SEULEMENT si la limite l'exige (fin de phrase, sinon de mot)
+prepareAssistantMessages(raw)      -> string[] // PURE : nettoyage puis découpe en messages de TELEGRAM_PART_CHARS = 3000
 classifyAssistantMessage(raw)       -> "empty"|"alert"|"approval"|"question"|"report"|"intermediate"  // PURE
 isUsefulAssistantMessage(raw)       -> boolean  // PURE : utile ≠ intermédiaire / vide
 computeTelegramDialogVisibility(cfg)-> boolean  // PURE : interrupteur principal + jeton ET identifiant
 relayAssistantMessageToTelegram(text, {isActive, send}) -> boolean
-loadTelegramDialogConfig(invokeFn?) -> Promise<{enabled, visible}>   // relit la config
 deliverRawTelegramAvis(text, {critical, isActive, send}) -> void  // avis BRUT : immédiat si alerte ou comm. coupée, sinon différé
 flushRawTelegramAvis()              -> void   // envoie tout de suite les avis différés (fin de tour sans parole, fermeture d'onglet)
 setRawAvisTimers(timers) / setRawAvisTurnProbe(probe)  // injection (tests / état de tour)
 ```
 
-- **Condensation** : `stripTechnical` retire blocs/inline de code, images et
-  libellés de liens, URL, chemins Windows/POSIX, noms de fichiers à extension de
-  code, lignes de commande, puis les marqueurs Markdown ; `firstSentence` prend la
-  première phrase ; `condenseAssistantMessage` ponctue et borne à
-  `TELEGRAM_DIALOG_MAX_CHARS = 200` caractères (coupe au mot, suffixe `…`).
+- **Aucune condensation, aucun tronquage de la réponse.** `cleanAssistantReply`
+  retire seulement le technique et les annonces vides (« Voici le détail : » dont
+  le contenu est parti) ; la réponse est transmise **entière**. Le découpage en
+  plusieurs messages (`splitForTelegram` / `prepareAssistantMessages`) n'intervient
+  **que** si le texte dépasse `TELEGRAM_PART_CHARS = 3000` caractères — valeur
+  choisie **sous** la borne de la passerelle (`telegram::MAX_TEXT_CHARS = 3500`)
+  pour qu'aucun message ne soit jamais coupé avec un `…`.
+  L'ancienne `condenseAssistantMessage` (première phrase, 200 caractères) a été
+  **supprimée** : elle jetait la seconde phrase des réponses brèves du mode vocal.
 - **Filtrage** : utile = `report` (fin de mission / compte rendu / réponse),
   `alert` (erreur, anomalie, blocage…), `approval` / `question` (demande
   d'accord, question au propriétaire). Écarté = `intermediate` (narration
@@ -655,7 +684,8 @@ setRawAvisTimers(timers) / setRawAvisTurnProbe(probe)  // injection (tests / ét
 
 - **Réponse finale** : à `agent_end`, juste avant `onEnd()` (qui remet
   `lastAssistantRawText` à zéro), `relayAssistantMessageToTelegram(respText)` :
-  un seul envoi, une phrase simple, uniquement si le message est utile.
+  la réponse utile part **entière** (découpée en plusieurs messages seulement
+  au-delà de 3000 caractères).
 - **Alertes** : `appendSystemMessage` transmet en plus sur Telegram tout message
   système classé `alert` (erreur, anomalie, blocage). Les autres messages
   système (accueil, nouvelle session, suivi) ne sont **jamais** transmis.
@@ -1030,3 +1060,84 @@ envoi (trois formes + accusé), (i) une demande **ambiguë** ne change rien. Cô
 Rust : `telegram.rs` (inertie des trois formes d'envoi, réactivation, inconnu) et
 `lib.rs` (aller-retour de sérialisation = survie au redémarrage) ; plus aucun test
 d'injection dans le prompt, puisque l'injection n'existe plus.
+
+---
+
+## 15. Un message Telegram est une demande de l'écran Vocal
+
+**Décision du propriétaire (2026-11)** : le mode vocal est le comportement de
+référence (vraie discussion, réponses courtes et essentielles, conversation qui
+continue). Écrire à son bot Telegram doit donner **exactement** le même
+résultat. La correction ne réécrit pas la passerelle : elle supprime les écarts
+de **construction du prompt** et de **restitution**.
+
+### 15.1 Les écarts corrigés
+
+| Écart | Avant | Après |
+|---|---|---|
+| Consigne de brièveté | aucune (message emballé en « résumé de session ») | `composeTelegramPrompt` — **même module, mêmes règles, même niveau réglé** que le mode Vocal (`vocal-brevity.js`) |
+| Cadrage de la remise | `[Résumé de session] Projet: …` + « Intègre ces informations » | **texte tel quel**, versé comme un tour de conversation (`OWNER_MESSAGE_KIND`) |
+| Nature conservée au rejeu | perdue (re-cadrée en compte rendu) | colonne `kind` (migration **additive**) relue par `deliver_one_summary` |
+| Restitution de la réponse | coupe à la **première phrase**, 200 caractères (`condenseAssistantMessage`) | réponse **entière**, nettoyée ; découpe **uniquement** au-delà de `TELEGRAM_PART_CHARS = 3000` |
+| Alerte | 150 caractères | `MAX_ALERT_CHARS = 300` (cause **et** décision attendue) |
+
+### 15.2 La source unique de la consigne (`src/js/vocal-brevity.js`)
+
+`vocalBrevityInstruction(niveau, origine)` : **seul l'en-tête** dépend du canal
+(« Mode vocal — parler court » / « Conversation Telegram — répondre court » +
+« TOUR DE CONVERSATION … suite du MÊME fil »). Les règles de longueur, la clause
+de développement et les exceptions sont **mot pour mot identiques** — c'est ce
+qu'un test compare ligne à ligne. `composeTelegramPrompt(text, { niveau })` et
+`composeVocalPrompt(text, { niveau, modeVocal })` partagent le même
+`composeWithInstruction` : la demande reste **intacte en tête**, la consigne
+suit.
+
+Hors mode vocal et hors Telegram, la demande reste **inchangée** (aucun autre
+écran ne change de comportement).
+
+### 15.3 La continuité de conversation
+
+Le message est remis comme un **tour de conversation du propriétaire** :
+
+- côté interface, `injectExternalMessageToSuperAgent` passe par la **même porte
+  durable** que les comptes rendus (`inject_session_summary`, ligne écrite
+  `delivered=0` avant toute injection) et pose `kind: OWNER_MESSAGE_KIND`
+  (valeur **partagée** avec `src-tauri/src/super_agent.rs`) ;
+- côté Rust, `build_injection_message(project, summary, kind)` rend le texte
+  **tel quel** quand `kind == OWNER_MESSAGE_KIND`, et garde le gabarit historique
+  pour un compte rendu (`kind` vide ou inconnu) ;
+- la nature **survit au rejeu** : `deliver_one_summary` relit la colonne `kind`,
+  donc un message délivré plusieurs minutes plus tard n'est pas re-cadré en
+  « résumé de session ». La migration est **additive et idempotente**
+  (`ensure_column`) : une base ancienne s'ouvre sans erreur, ses remises en
+  attente gardent leur cadrage historique.
+
+Le niveau de brièveté est relu **au moment de composer** (`get_config` →
+`vocal_brevity_level`, repli sur le niveau par défaut si la lecture échoue) :
+changer le réglage ne modifie que la **prochaine** demande.
+
+### 15.4 Ce qui se dit EN ENTIER
+
+Une panne, un refus, une erreur, une demande de confirmation ne sont **jamais**
+raccourcis : la consigne du niveau réglé les excepte explicitement (clause
+commune aux deux canaux), et les bornes d'envoi laissent la place nécessaire
+(`MAX_ALERT_CHARS = 300`).
+
+### 15.5 Tests
+
+`src/js/telegram-comme-vocal.test.js` (module `super-agent.js` importé pour de
+vrai, transport Tauri simulé) échoue si :
+
+- la demande remise ne porte pas **la consigne du niveau réglé** (elle est
+  comparée à `composeTelegramPrompt`, canal Telegram), ou si les règles
+  différaient du mode Vocal ;
+- la remise ne porte pas `kind: OWNER_MESSAGE_KIND` (continuité perdue), ou si
+  Rust recadrait un message du propriétaire en « [Résumé de session] » ;
+- la nature n'était plus relue dans la boîte durable au rejeu ;
+- une seconde consigne « Telegram » était recopiée hors de `vocal-brevity.js`.
+
+`src/js/telegram-dialog.test.js` verrouille la restitution : une réponse brève
+**n'est pas coupée**, le technique est retiré, et le découpage ne se produit que
+sur la limite de caractères. Côté Rust : `super_agent` (texte tel quel pour un
+message du propriétaire, gabarit conservé pour un compte rendu, nature qui
+survit à la boîte durable et au rejeu, nature inconnue = compte rendu).

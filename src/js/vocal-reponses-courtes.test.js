@@ -156,7 +156,7 @@ describe("composeVocalPrompt : la consigne seulement pour l'ecran Vocal", () => 
 describe("cablage : la consigne n'est ajoutee qu'au point de composition vocal", () => {
   it("la consigne et son assemblage sont IMPORTES, jamais recopies", () => {
     expect(SUPER).toContain(
-      'import { composeVocalPrompt, normalizeVocalBrevityLevel } from "./vocal-brevity.js";'
+      'import { composeVocalPrompt, composeTelegramPrompt, normalizeVocalBrevityLevel } from "./vocal-brevity.js";'
     );
     expect(SUPER).not.toContain("export function composeVocalPrompt");
     expect(SUPER).not.toContain("export const VOCAL_BREVITY_INSTRUCTION");

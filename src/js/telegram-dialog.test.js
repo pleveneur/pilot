@@ -32,7 +32,10 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   TELEGRAM_DIALOG_MAX_CHARS,
   TELEGRAM_RAW_AVIS_GRACE_MS,
-  condenseAssistantMessage,
+  cleanAssistantReply,
+  firstSentence,
+  prepareAssistantMessages,
+  splitForTelegram,
   classifyAssistantMessage,
   classifyAssistantMessageWithLaya,
   isUsefulAssistantMessage,
@@ -109,38 +112,68 @@ afterEach(() => {
   setTelegramGateDeps({ now: () => Date.now() });
 });
 
-describe("condensation d'un message en une phrase simple", () => {
-  it("texte long → première phrase, bornée et ponctuée", () => {
-    const long =
-      "J'ai terminé la mise à jour du module Telegram pour l'Assistant. " +
-      "Ensuite j'ai relu le code, corrigé deux détails, ajouté des tests et " +
-      "vérifié que toute la suite reste verte sans aucune régression.";
-    const out = condenseAssistantMessage(long);
-    expect(out).toBe("J'ai terminé la mise à jour du module Telegram pour l'Assistant.");
+describe("la réponse part ENTIÈRE, nettoyée (plus de coupe à la première phrase)", () => {
+  it("une réponse brève n'est PAS coupée : elle arrive en entier", () => {
+    // Décision du propriétaire : le mode vocal répond en DEUX phrases courtes.
+    // Le relais Telegram ne peut donc plus jeter la seconde.
+    const breve =
+      "J'ai terminé la mise à jour du module Telegram. Deux détails restent à vérifier demain.";
+    const out = cleanAssistantReply(breve);
+    expect(out).toBe(breve);
     expect(out.length).toBeLessThanOrEqual(TELEGRAM_DIALOG_MAX_CHARS);
-    expect(/[.!?…]$/.test(out)).toBe(true);
   });
 
   it("texte technique → aucun code, aucun nom de fichier, aucune commande", () => {
     const tech =
       "J'ai modifié `src/js/telegram-dialog.js` et lancé `npm test`.\n\n" +
       "```js\nconst x = 1;\n```\n\n- 3 fichiers\n- 12 tests";
-    const out = condenseAssistantMessage(tech);
-    expect(out).toBe("J'ai modifié et lancé.");
+    const out = cleanAssistantReply(tech);
+    expect(out.startsWith("J'ai modifié et lancé.")).toBe(true);
     expect(out).not.toMatch(/`|npm|\.js|src\/|```/);
   });
 
+  it("une annonce dont le contenu a été retiré est écartée", () => {
+    // « Voici le détail : » suivi d'un bloc de code : la phrase ne dit plus rien.
+    expect(cleanAssistantReply("J'ai terminé. Voici le détail : `src/a.js`")).toBe(
+      "J'ai terminé."
+    );
+  });
+
   it("texte déjà court → conservé tel quel", () => {
-    expect(condenseAssistantMessage("C'est fait.")).toBe("C'est fait.");
+    expect(cleanAssistantReply("C'est fait.")).toBe("C'est fait.");
   });
 
   it("texte purement technique (que du code) → rien à dire", () => {
-    expect(condenseAssistantMessage("```\nnpm test\n```")).toBe("");
-    expect(condenseAssistantMessage("`src/a.rs` `src/b.rs`")).toBe("");
+    expect(cleanAssistantReply("```\nnpm test\n```")).toBe("");
+    expect(cleanAssistantReply("`src/a.rs` `src/b.rs`")).toBe("");
   });
 
   it("un texte sans ponctuation finale reçoit un point", () => {
-    expect(condenseAssistantMessage("Tout est prêt")).toBe("Tout est prêt.");
+    expect(cleanAssistantReply("Tout est prêt")).toBe("Tout est prêt.");
+  });
+
+  it("le découpage en messages ne se produit QUE sur la limite de caractères", () => {
+    // Une phrase courte n'est jamais hâchée.
+    expect(splitForTelegram("C'est fait.", 3000)).toEqual(["C'est fait."]);
+    expect(prepareAssistantMessages("C'est fait.")).toEqual(["C'est fait."]);
+    // Au-delà de la limite : coupe à la fin d'une phrase, jamais au milieu d'un mot.
+    const long = ["Première phrase assez longue.", "Deuxième phrase assez longue.", "Troisième."]
+      .join(" ");
+    const parts = splitForTelegram(long, 30);
+    expect(parts.length).toBeGreaterThan(1);
+    for (const part of parts) {
+      expect(part.length).toBeLessThanOrEqual(30);
+      expect(part.trim()).toBe(part);
+    }
+    // Rien n'est perdu : les morceaux recollés redonnent le texte.
+    expect(parts.join(" ")).toBe(long);
+    // Un texte qui tient n'est pas découpé.
+    expect(splitForTelegram(long, 1000)).toEqual([long]);
+  });
+
+  it("firstSentence reste adossé au SEUL découpage en phrases", () => {
+    expect(firstSentence("Une. Deux.")).toBe("Une.");
+    expect(firstSentence("1.5 kg de farine")).toBe("1.5 kg de farine");
   });
 });
 

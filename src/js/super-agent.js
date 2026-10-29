@@ -70,7 +70,7 @@ import {
 // leurs reponses actuelles.
 // `normalizeVocalBrevityLevel` est le SEUL juge de ce qu'une valeur de niveau
 // vaut : l'ecran ne decide donc jamais lui-meme ce qu'est un niveau.
-import { composeVocalPrompt, normalizeVocalBrevityLevel } from "./vocal-brevity.js";
+import { composeVocalPrompt, composeTelegramPrompt, normalizeVocalBrevityLevel } from "./vocal-brevity.js";
 // L'ENVELOPPE DE PAROLE SUIT LA VOIX DE PILOT, QUEL QUE SOIT LE MOTEUR : la
 // mesure de l'aigu (voix locale) ET le rythme de la phrase lue (voix du
 // systeme, non mesurable) vivent dans ce module, avec UN seul afficheur. Ici on
@@ -279,10 +279,11 @@ import {
   mcpToggleAnswer,
   mcpToggleSystemMessage,
 } from "./mcp-server-toggle.js";
-// Refonte des messages Telegram : le NOM COURT du projet vient de l'UNIQUE
-// fonction du projet (`projectShortName`) — jamais un chemin, jamais un nom
-// recopié à la main. « Assistant » seulement si aucun projet n'est ouvert.
-import { projectShortName } from "./telegram-messages.js";
+// Telegram : le NOM COURT du projet (`projectShortName`), la taille d'un
+// message (`TELEGRAM_PART_CHARS`) et la NATURE d'une remise du proprietaire
+// (`OWNER_MESSAGE_KIND`) viennent de ce module — jamais un chemin, jamais un nom
+// recopie a la main, jamais une valeur de nature ecrite deux fois.
+import { OWNER_MESSAGE_KIND, projectShortName } from "./telegram-messages.js";
 // TROIS MODES D'ECRAN (lot 1 puis lot 2, RAPPORT-trois-modes-ecran-vocal.md §1
 // a §3) : le mode est decide et memorise par `screen-mode.js` (source unique),
 // qui dit aussi QUEL ecran possede chaque mode (`screenModeScreen`). Ici,
@@ -9842,6 +9843,11 @@ async function sendSuperAgentReport(entry, opts = {}) {
     sessionId: null,
     summary,
     defer: !!opts.defer,
+    // NATURE de la remise : un compte rendu (défaut, "") ou un TOUR DE
+    // CONVERSATION du propriétaire (`OWNER_MESSAGE_KIND`, chemin Telegram).
+    // Rust la persiste avec la remise et s'en sert pour le cadrage ; le rejeu
+    // la relit telle quelle, donc un message délivré plus tard garde sa nature.
+    kind: entry.kind || "",
   });
   warnInjectionFailure(res && res.status, res && res.detail, entry.category || "session");
   // Compte rendu remis IMMÉDIATEMENT (statut « delivered ») : c'est ce prompt qui
@@ -9860,11 +9866,33 @@ async function sendSuperAgentReport(entry, opts = {}) {
   // #3). L'appel est INCONDITIONNEL : les trois statuts (delivered/queued/error)
   // produisent une bulle, avec le statut réel.
   deliverReportReceipt(entry, res, {
-    summary,
+    // Ce que l'écran montre de la remise : le message DU PROPRIÉTAIRE pour un
+    // tour de conversation (`displaySummary`), le compte rendu réel sinon.
+    summary: entry.displaySummary == null ? summary : entry.displaySummary,
     projectName: pathTailName(entry.projectPath),
     append: (receipt) => appendReportReceipt(superWarnMessagesEl, receipt),
   });
   return res;
+}
+
+/**
+ * Lit le niveau de brièveté réglé (Paramètres → Assistant → « Mode Vocal ») et
+ * le rend normalisé, pour une demande qui n'entre pas par l'onglet 🧭 : le
+ * message Telegram est traité avec la MÊME consigne que l'écran Vocal, donc au
+ * MÊME niveau réglé, y compris quand l'onglet de l'Assistant est FERMÉ.
+ *
+ * C'est le juge unique `normalizeVocalBrevityLevel` qui décide ce que vaut la
+ * valeur lue (aucun niveau écrit en dur ici) et la lecture est FAIL-OPEN : une
+ * configuration illisible retombe sur le défaut, sans jamais perdre le message.
+ * @returns {Promise<string|null>} niveau normalisé (null = défaut)
+ */
+async function readReplyBrevityLevel() {
+  try {
+    const cfg = await invoke("get_config");
+    return normalizeVocalBrevityLevel(cfg && cfg.vocal_brevity_level);
+  } catch {
+    return normalizeVocalBrevityLevel(null);
+  }
 }
 
 /**
@@ -9878,6 +9906,14 @@ async function sendSuperAgentReport(entry, opts = {}) {
  * Volontairement SANS effet de bord sur les délégations (à la différence de
  * `injectSessionSummaryToSuperAgent`) : un message entrant n'est pas un retour
  * de tâche.
+ *
+ * TRAITÉ COMME UNE DEMANDE DE L'ÉCRAN VOCAL (décision du propriétaire, 2026-11) :
+ * le message part avec la consigne de brièveté du mode Vocal — MÊME source
+ * unique (`vocal-brevity.js`, assemblage `composeTelegramPrompt`) et MÊME
+ * niveau réglé — et il est remis comme un TOUR DE CONVERSATION
+ * (`OWNER_MESSAGE_KIND`), jamais comme un compte rendu à classer. La continuité
+ * est celle de la conversation de l'Assistant : la porte durable réinjecte dans
+ * la session EN COURS, sans repartir de zéro.
  * @param {string} text - texte du message reçu.
  * @returns {Promise<unknown>}
  */
@@ -9887,10 +9923,21 @@ export async function injectExternalMessageToSuperAgent(text) {
   // émis là-bas ne passe pas ici : on marque le MÊME drapeau (jamais un second),
   // sinon les relances resteraient retenues alors que le propriétaire a écrit.
   ownerEngagedThisSession = true;
+  const demande = typeof text === "string" ? text : "";
+  // La demande est composée par le SEUL assemblage partagé avec l'écran Vocal :
+  // elle reste intacte en tête, la consigne de brièveté suit, au niveau réglé.
+  const summary = composeTelegramPrompt(demande, { niveau: await readReplyBrevityLevel() });
   await superAgentReportGate.deliver({
-    summary: text,
+    summary,
     projectPath: null,
     category: "telegram",
+    // Nature de la remise : un tour de conversation du propriétaire. Rust s'en
+    // sert pour le cadrage (`build_injection_message`) et le rejeu la conserve
+    // telle quelle, donc un message délivré plus tard n'est pas dénaturé.
+    kind: OWNER_MESSAGE_KIND,
+    // Ce que l'écran affiche sous la remise : le message DU PROPRIÉTAIRE, sans
+    // la consigne (elle est pour l'agent, pas pour l'humain).
+    displaySummary: demande,
   });
 }
 

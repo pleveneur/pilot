@@ -144,6 +144,12 @@ describe("findUnprotectedSourceSlices — détecte le motif exact du défaut", (
 // LOT 4 de la presentation : `panneau-suivi-trois-onglets` passe de 9 à 8 — le
 // verrou de position du cercle flottant a été remplacé par deux découpages
 // PROTÉGÉS (`sliceSource`). Compte BAISSÉ, jamais desserré.
+//
+// TELEGRAM COMME LE MODE VOCAL : `telegram-notify-setting` passe de 1 à 0 — son
+// unique découpage non protégé (`slice(0, indexOf("#[cfg(test)]"))`, qui rendait
+// vraie par construction l'assertion « aucune mention de Telegram ») est
+// remplacé par `promptMaterial`, qui n'extrait QUE la matière du prompt et
+// vérifie sa taille avant l'assertion négative. Compte BAISSÉ, jamais desserré.
 const INVENTAIRE_HISTORIQUE = {
   "scripts/mcp-client-extension.test.js": 1,
   "scripts/release-workflow.test.js": 1,
@@ -164,7 +170,6 @@ const INVENTAIRE_HISTORIQUE = {
   "src/js/super-agent-schedule.test.js": 1,
   "src/js/taille-et-style-panneau.test.js": 6,
   "src/js/telegram-dialog.test.js": 1,
-  "src/js/telegram-notify-setting.test.js": 1,
   "src/js/travail-visible.test.js": 1,
   "src/js/update-window-bus.test.js": 2,
   "src/js/updater-attente-qui-bloque.test.js": 2,

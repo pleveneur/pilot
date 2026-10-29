@@ -38,6 +38,29 @@ function readText(rel) {
 const telegramRs = readText("src-tauri/src/telegram.rs");
 const superAgentRs = readText("src-tauri/src/super_agent.rs");
 const libRs = readText("src-tauri/src/lib.rs");
+
+/**
+ * Matière du PROMPT système d'un fichier Rust : les constantes
+ * `SUPER_AGENT_*_PROMPT` et la fonction qui les assemble. C'est exactement ce
+ * qui part au modèle — le reste du fichier n'est pas du prompt.
+ */
+function promptMaterial(src) {
+  const morceaux = [];
+  const re = /const SUPER_AGENT_[A-Z_]*PROMPT\s*:\s*&str\s*=/g;
+  let m = re.exec(src);
+  while (m) {
+    const debut = m.index;
+    const fin = src.indexOf("\nconst ", debut + 1);
+    morceaux.push(src.slice(debut, fin === -1 ? src.length : fin));
+    m = re.exec(src);
+  }
+  const a = src.indexOf("fn assemble_super_agent_system_prompt(");
+  if (a >= 0) {
+    const b = src.indexOf("\n}\n", a);
+    morceaux.push(src.slice(a, b === -1 ? src.length : b));
+  }
+  return morceaux.join("\n");
+}
 const actionsTs = readText("src-tauri/extensions/pilot-assistant-actions.ts");
 const superAgentJs = readText("src/js/super-agent.js");
 const settingsJs = readText("src/js/settings.js");
@@ -312,9 +335,14 @@ describe("(d) AUCUNE valeur figée dans le prompt ou le contexte", () => {
 
   it("le prompt système ne lit plus du tout le réglage", () => {
     expect(count(superAgentRs, "telegram_notify_enabled")).toBe(0);
-    // Aucune mention du réglage dans le prompt : la seule source est l'outil.
-    const prod = superAgentRs.slice(0, superAgentRs.indexOf("#[cfg(test)]"));
-    expect(prod.toLowerCase()).not.toContain("telegram");
+    // Aucune mention du réglage dans le PROMPT : la seule source est l'outil.
+    // La vérification porte sur la MATIÈRE du prompt (constantes
+    // `SUPER_AGENT_*_PROMPT` + leur assemblage) : le reste du fichier a le droit
+    // de parler de Telegram (la nature « message du propriétaire » d'une remise
+    // Telegram, par exemple), mais jamais le prompt.
+    const prompt = promptMaterial(superAgentRs);
+    expect(prompt.length).toBeGreaterThan(500);
+    expect(prompt.toLowerCase()).not.toContain("telegram");
   });
 
   it("la description de l'outil ne prétend plus que l'état est dans le contexte", () => {

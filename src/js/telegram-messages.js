@@ -53,15 +53,50 @@ export const QUIET_END_HOUR = 7;
 /** Fenêtre anti-rafale : deux messages rapprochés pour la même information = un seul. */
 export const TELEGRAM_BURST_WINDOW_MS = 90_000;
 
+/**
+ * Taille maximale d'UN message de conversation (en caractères).
+ *
+ * Elle est choisie pour que le texte ne soit JAMAIS tronqué par la passerelle
+ * d'envoi (`telegram::MAX_TEXT_CHARS` = 3500, qui coupe en annonçant un `…`) :
+ * une réponse brève de l'Assistant arrive donc entière, et un texte plus long
+ * est découpé en PLUSIEURS messages par l'appelant (`splitForTelegram`),
+ * uniquement quand la longueur l'exige.
+ */
+export const TELEGRAM_PART_CHARS = 3000;
+
 /** Bornes de longueur (en caractères) : un message tient sur un écran de téléphone. */
 export const MAX_START_CHARS = 110;
 export const MAX_RESULT_CHARS = 110;
 export const MAX_TESTABLE_CHARS = 110;
-export const MAX_ALERT_CHARS = 150;
-export const MAX_ASSISTANT_CHARS = 200;
+/**
+ * Une ALERTE dit ce qui bloque ET la décision attendue : elle est plus longue
+ * qu'une ligne d'étape, et rien d'utile n'y est coupé (une panne se dit
+ * ENTIÈREMENT — même règle que la consigne de brièveté du mode Vocal).
+ */
+export const MAX_ALERT_CHARS = 300;
+/**
+ * La phrase de l'Assistant : une réponse de conversation, bornée à la taille
+ * d'un message (`TELEGRAM_PART_CHARS`) et non plus à 200 caractères — une
+ * réponse courte du mode Vocal doit arriver ENTIÈRE, jamais coupée en pleine
+ * phrase.
+ */
+export const MAX_ASSISTANT_CHARS = TELEGRAM_PART_CHARS;
 
 /** Nombre maximal de messages mis de côté pendant les heures calmes. */
 export const MAX_HELD_MESSAGES = 20;
+
+/**
+ * NATURE d'une remise à l'Assistant : le message du PROPRIÉTAIRE lui-même
+ * (conversation Telegram), à traiter comme un TOUR DE CONVERSATION et non comme
+ * un compte rendu à classer.
+ *
+ * Valeur partagée avec `src-tauri/src/super_agent.rs` (`OWNER_MESSAGE_KIND`) :
+ * elle est lue dans la boîte durable au moment de la remise, donc un message
+ * rejoué plus tard garde exactement la même nature qu'à l'instant où il a été
+ * écrit. La changer d'un seul côté casserait la continuité (un tour de
+ * conversation redeviendrait un résumé de session) — un test le verrouille.
+ */
+export const OWNER_MESSAGE_KIND = "owner-message";
 
 // ── Nom court du projet — UNE SEULE fonction pour tout le projet ────────────
 
