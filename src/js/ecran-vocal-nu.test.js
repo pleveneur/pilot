@@ -216,11 +216,13 @@ describe("5. la conversation n'est jamais peinte pendant le mode Vocal", () => {
 describe("6. ce que l'ecran nu doit garder", () => {
   it("l'objet et la saisie gardent leurs mesures, le trait n'existe plus", () => {
     // L'objet a double le 13/11 et suit la hauteur de la fenetre : sa mesure est
-    // le jeton borne 120..336 px, pas un nombre en dur (il ne peut donc plus
-    // deborder d'un ecran court).
+    // le jeton borne 100..276 px, pas un nombre en dur (il ne peut donc plus
+    // deborder d'un ecran court). Les bornes ont baisse le 14/11 (336 -> 276) :
+    // le jeton reste unique, et l'ecran nu garde donc exactement le disque de
+    // l'ecran habille.
     expect(bloc(CSS, ".vocal-orb {")).toMatch(/width:\s*var\(--vocal-orb-size\)/);
     expect(bloc(CSS, ".pilot-vocal {")).toMatch(
-      /--vocal-orb-size:\s*clamp\(120px,[^;]*336px\)/,
+      /--vocal-orb-size:\s*clamp\(100px,[^;]*276px\)/,
     );
     expect(bloc(CSS, ".vocal-input {")).toMatch(/width:\s*min\(720px/);
     // Un trait qui reviendrait par une regle CSS serait aussi genant qu'un

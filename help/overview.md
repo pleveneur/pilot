@@ -505,8 +505,8 @@ En mode **Vocal** :
   c'est la **forme** qui dit le reste (la couronne s'élargit quand Pilot parle,
   un arc tourne quand il réfléchit). L'écran n'est donc plus jamais éteint, et il
   ne change pas d'intensité d'un état à l'autre : rien ne clignote.
-- **Le cercle est plus grand**, et il s'adapte à la hauteur de votre fenêtre : il
-  occupe **de 120 à 336 px** de large (336 px sur un écran de bureau habituel),
+- **Le cercle est grand**, et il s'adapte à la hauteur de votre fenêtre : il
+  occupe **de 100 à 276 px** de large (276 px sur un écran de bureau habituel),
   pour que sa lumière ne soit jamais rognée sur une fenêtre courte.
 - **Le bas de l'écran s'efface quand vous ne faites rien.** Au repos, la phrase
   d'état et la zone de saisie disparaissent après **deux secondes et demie** :

@@ -37,6 +37,9 @@ import {
   VOCAL_DISCUSSION_HEAD_PX,
   VOCAL_ORB_BOX_RATIO,
   VOCAL_ORB_RESERVED_PX,
+  // La HAUTEUR des deux colonnes (512 px, la boite du plein disque) : elle ne
+  // suit plus le disque depuis qu'il est plus petit (2026-11-14).
+  VOCAL_SIDE_HEIGHT_PX,
   VOCAL_SIDE_AIR_PX,
   VOCAL_SIDE_BORDER_PX,
   VOCAL_SIDE_FIXED_PX,
@@ -152,9 +155,15 @@ describe("A1 — les deux cadres portent les MEMES declarations de taille", () =
     expect(DECL_DISCUSSION.has("height")).toBe(false);
     expect(DECL_TACHES.has("height")).toBe(false);
     const commun = sliceSource(CSS, ".vocal-side {", "}", 400);
-    expect(commun).toContain("height: min(var(--vocal-orb-box), 100%)");
-    // Et ce n'est pas une valeur ecrite a la main : c'est la boite du disque.
+    expect(commun).toContain("height: min(var(--vocal-side-height), 100%)");
+    // Et ce n'est pas une valeur ecrite a la main : c'est la boite du PLEIN
+    // disque (336 + 2 x 88 = 512), la meme que le module
+    // (`VOCAL_SIDE_HEIGHT_PX`). Depuis le 2026-11-14 le disque est plus petit
+    // (276 px) : sa boite (421 px) ne sert plus de hauteur, sinon la liste
+    // perdrait deux rangees sans qu'on ait rien demande a la liste.
     expect(VOCAL_ORB_BOX_RATIO).toBeCloseTo(1 + (2 * VOCAL_CROWN_PX) / 336, 10);
+    expect(VOCAL_SIDE_HEIGHT_PX).toBe(336 + 2 * VOCAL_CROWN_PX);
+    expect(VOCAL_SIDE_HEIGHT_PX).toBe(512);
   });
 
   it("la LARGEUR des deux colonnes vient du MEME jeton, et d'aucun autre", () => {
@@ -197,7 +206,7 @@ describe("A2 — les deux mesures, fenetre par fenetre", () => {
     [1920, 1080],
   ];
   const disque = (hauteur) =>
-    Math.max(120, Math.min(336, ((hauteur - VOCAL_ORB_RESERVED_PX) * 21) / 32));
+    Math.max(100, Math.min(276, ((hauteur - VOCAL_ORB_RESERVED_PX) * 276) / 512));
 
   it("meme largeur, meme hauteur : les quatre bords sont confondus", () => {
     for (const [width, height] of FENETRES) {
@@ -259,7 +268,7 @@ describe("B — la place du cercle en hauteur", () => {
     [1920, 1080],
   ];
   const disque = (hauteur) =>
-    Math.max(120, Math.min(336, ((hauteur - VOCAL_ORB_RESERVED_PX) * 21) / 32));
+    Math.max(100, Math.min(276, ((hauteur - VOCAL_ORB_RESERVED_PX) * 276) / 512));
 
   it("l'air au-dessus du disque egale l'air en dessous : il est centre, pas remonte", () => {
     // Mesure : la boite du disque (`--vocal-orb-box`) porte le disque et deux
@@ -370,10 +379,20 @@ describe("B — la place du cercle en hauteur", () => {
     // seule source, lue par le halo, le bouton de relance et le rayon utile.
     const declarationsOrb = CSS.match(/--vocal-orb-size:/g) || [];
     expect(declarationsOrb).toHaveLength(1);
-    expect(CSS).toContain("--vocal-orb-size: clamp(120px, calc((100vh - 289px) * 21 / 32), 336px)");
+    expect(CSS).toContain(
+      "--vocal-orb-size: clamp(100px, calc((100vh - 289px) * 276 / 512), 276px)",
+    );
     // La copie de la formule dans le code doit dire la meme chose : c'est elle
-    // qui sert de repli quand `getComputedStyle` ne rend rien.
+    // qui sert de repli quand `getComputedStyle` ne rend rien. Une reduction du
+    // disque appliquee au CSS SEUL ferait deriver le repli : memes bornes, meme
+    // pente, ecrits ici en clair (276 / 512, et non 336 / 21-32).
     expect(SUPER).toContain("VOCAL_ORB_RESERVED_PX");
     expect(VOCAL_ORB_RESERVED_PX).toBe(289);
+    expect(SUPER).toContain(
+      "Math.max(100, Math.min(276, ((hauteur - VOCAL_ORB_RESERVED_PX) * 276) / 512))",
+    );
+    // Et le disque PLEIN est bien plus petit qu'avant : -17,9 % (336 -> 276),
+    // dans la fourchette demandee (15 a 20 %).
+    expect((336 - 276) / 336).toBeCloseTo(0.1786, 4);
   });
 });

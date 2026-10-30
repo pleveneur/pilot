@@ -513,8 +513,8 @@ En mode **Vocal** :
   c'est la **forme** qui dit le reste (la couronne s'élargit quand Pilot parle,
   un arc tourne quand il réfléchit). L'écran n'est donc plus jamais éteint, et il
   ne change pas d'intensité d'un état à l'autre : rien ne clignote.
-- **Le cercle est plus grand**, et il s'adapte à la hauteur de votre fenêtre : il
-  occupe **de 120 à 336 px** de large (336 px sur un écran de bureau habituel),
+- **Le cercle est grand**, et il s'adapte à la hauteur de votre fenêtre : il
+  occupe **de 100 à 276 px** de large (276 px sur un écran de bureau habituel),
   pour que sa lumière ne soit jamais rognée sur une fenêtre courte.
 - **Le bas de l'écran s'efface quand vous ne faites rien.** Au repos, la phrase
   d'état et la zone de saisie disparaissent après **deux secondes et demie** :
@@ -1416,8 +1416,10 @@ le **même axe vertical** que lui, avec son **nom juste dessous**, sur une seule
 du personnage, à défaut celui de votre assistant, jamais les deux. On voit donc toujours à qui
 l'on parle. Le médaillon est **rond**, **jamais rogné**, avec de **vraies marges** (12 px
 d'au-dessus, 12 px sous le nom), et il **grandit avec la hauteur disponible** : **96 px au
-plancher** et **288 px dès une fenêtre de 1 440 × 900** — soit **trois fois** sa taille de
-départ. Pas de personnage déposé par le projet **Présences** ? Il n'y a **aucune image de
+plancher** et **276 px dès une fenêtre de 1 440 × 900** — **2,9 fois** sa taille de départ,
+borné par le diamètre du cercle qu'il surmonte. La cible de **trois fois** (**288 px**)
+datait d'un cercle de 336 px : elle reste la référence du module, et redevient atteignable
+dès que le disque remonte. Pas de personnage déposé par le projet **Présences** ? Il n'y a **aucune image de
 remplacement**, pas même le logo Pilot : la place revient à la fenêtre du visage de l'avatar,
 ou à rien. Le portrait suit un éventuel changement de personnage sans redémarrer Pilot.
 **Le cercle, lui, ne porte ni image ni nom — et la photo ne lui prend aucune place dans la

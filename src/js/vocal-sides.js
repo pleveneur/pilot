@@ -336,8 +336,26 @@ export const VOCAL_IMAGE_PORTRAIT = "portrait";
 export const VOCAL_IMAGE_AVATAR = "avatar";
 /** La zone n'existe pas (aucune image, aucun cadre, aucune place). */
 export const VOCAL_IMAGE_NONE = "none";
+/**
+ * LA HAUTEUR DES DEUX COLONNES, en px : 512, la boite du PLEIN disque (336 px
+ * de disque et deux couronnes de 88).
+ *
+ * Ce chiffre n'est pas nouveau : c'est celui que le budget rendait deja, a
+ * toutes les hauteurs, tant que le disque suivait `(hauteur - 289) x 21/32`.
+ * La boite du disque valait alors EXACTEMENT la place offerte
+ * (21/32 x 512/336 = 1), donc `min(boite, place)` valait `min(512, place)`.
+ *
+ * Depuis le 2026-11-14, le disque est ramene a 276 px (remarque du
+ * proprietaire) : sa boite ne vaut plus que 421 px, et `min(boite, place)`
+ * ferait perdre DEUX rangees de taches a 1024 x 768 (8 -> 6) et une a
+ * 1920 x 1080, alors que la reduction demandee ne concerne que le cercle.
+ * La hauteur des colonnes ne suit donc plus le disque : elle vaut
+ * `min(VOCAL_SIDE_HEIGHT_PX, place)`, soit exactement ce qu'elle valait avant.
+ * Le jeton correspondant dans la feuille de style est `--vocal-side-height`.
+ */
+export const VOCAL_SIDE_HEIGHT_PX = 336 + 2 * VOCAL_CROWN_PX;
 /** Rapport boite / disque : 336 + 2 x 88 = 512 px de boite pour 336 de disque. */
-export const VOCAL_ORB_BOX_RATIO = 1 + (2 * VOCAL_CROWN_PX) / 336;
+export const VOCAL_ORB_BOX_RATIO = VOCAL_SIDE_HEIGHT_PX / 336;
 
 // ── LOT 2 : LE CONTENU DE LA COLONNE DE DROITE ──
 // Source : CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md, § 2.2
@@ -494,11 +512,13 @@ export function planVocalSides({
   // elle-meme, il ne peut pas deborder sur le cercle.
   const taskTrack = track > 0 ? Math.max(0, track - VOCAL_SIDE_CLEARANCE_PX) : 0;
 
-  // La hauteur des colonnes : la boite du disque, plafonnee par la place que la
-  // fenetre offre reellement (jamais 512 px ecrases sur la ligne d'etat). Elle
-  // ne depend NI de la largeur des colonnes NI du nombre de taches.
+  // La hauteur des colonnes : 512 px (la boite du plein disque), plafonnee par
+  // la place que la fenetre offre reellement (jamais 512 px ecrases sur la ligne
+  // d'etat). Elle ne depend NI du disque — plus petit depuis le 2026-11-14, le
+  // suivre ferait perdre des rangees a la liste (voir VOCAL_SIDE_HEIGHT_PX) —
+  // NI de la largeur des colonnes, NI du nombre de taches.
   const place = h - VOCAL_ORB_RESERVED_PX;
-  const columnHeight = Math.max(0, Math.round(Math.min(orb * VOCAL_ORB_BOX_RATIO, place)));
+  const columnHeight = Math.max(0, Math.round(Math.min(VOCAL_SIDE_HEIGHT_PX, place)));
 
   // La zone d'image, dans l'ordre : le personnage, sinon la fenetre du visage,
   // sinon rien. Une zone qui ne laisserait pas au moins UNE tache a la liste

@@ -14,9 +14,13 @@
 //        `VOCAL_SIDE_GAP_PX` (24 px) des DEUX cotes. Avant le correctif, elle
 //        valait `24 - couronne` a gauche, donc NEGATIVE des que la fenetre est
 //        grande : le texte passait dans la lueur du halo.
-//   P4 — le disque n'a pas ete retreci (`VOCAL_ORB_RESERVED_PX` inchange), les
-//        colonnes n'ont pas ete poussees hors de l'ecran, et aucun second jeton
-//        d'espacement n'a ete invente.
+//   P4 — les colonnes n'ont pas ete poussees hors de l'ecran, aucun second jeton
+//        d'espacement n'a ete invente, et la hauteur des colonnes ne suit PLUS le
+//        disque : celui-ci a ete ramene de 336 a 276 px le 2026-11-14 (remarque
+//        du proprietaire, `RAPPORT-ecran-vocal-cercle-reduit.md`), et une hauteur
+//        qui le suivrait ferait perdre deux rangees de taches.
+//        `VOCAL_ORB_RESERVED_PX` (289) est en revanche INCHANGE : la place que
+//        l'ecran prend hors de la rangee n'a pas bouge.
 //
 // Les commentaires sont en ASCII ; les chaines lues dans les sources sont
 // copiees telles quelles.
@@ -33,6 +37,7 @@ import {
   VOCAL_SIDE_CLEARANCE_PX,
   VOCAL_SIDE_GAP_PX,
   VOCAL_ORB_RESERVED_PX,
+  VOCAL_SIDE_HEIGHT_PX,
   planVocalSides,
 } from "./vocal-sides.js";
 
@@ -148,30 +153,41 @@ describe("P2 — la place liberee autour du cercle est la MEME des deux cotes", 
   });
 });
 
-describe("P3 — le disque n'a pas ete retreci et rien n'a ete pousse dehors", () => {
-  it("la formule du disque est inchangee", () => {
-    // La remarque interdisait de regagner de la place en reduisant le cercle :
-    // la hauteur reservee au disque dans la formule des colonnes est la meme.
+describe("P3 — la place gagnee ne vient pas des colonnes, et rien n'est pousse dehors", () => {
+  it("la formule du disque est UNIQUE (elle a baisse le 2026-11-14, -17,9 %)", () => {
+    // La remarque de 2026-10-03 interdisait de « regagner de la place en
+    // reduisant le cercle » pour corriger les colonnes : ce n'est PAS ce qui
+    // s'est passe. Les colonnes ont ete corrigees le 03/10 a disque constant, et
+    // le disque n'a baisse que le 14/11, sur une demande explicite du
+    // proprietaire (« le cercle est un peu trop gros »). La reserve de hauteur
+    // de l'ecran, elle, n'a pas bouge : 289 px.
     expect(VOCAL_ORB_RESERVED_PX).toBe(289);
     expect(regle(".pilot-vocal", 200)).toMatch(
-      /--vocal-orb-size:\s*clamp\(120px, calc\(\(100vh - 289px\) \* 21 \/ 32\), 336px\)/,
+      /--vocal-orb-size:\s*clamp\(100px, calc\(\(100vh - 289px\) \* 276 \/ 512\), 276px\)/,
     );
+    // Une seule declaration : aucun second jeton ne peut deriver du disque.
+    expect((CSS.match(/--vocal-orb-size:/g) || []).length).toBe(1);
   });
 
-  it("le correctif ne touche NI le disque, NI le halo, NI les colonnes elles-memes", () => {
+  it("le correctif ne touche NI le halo, NI l'ecart, NI la hauteur des colonnes", () => {
     // Trois invariants de la conception, verifies ici parce qu'une place gagnee
     // en tirant sur l'un des trois serait une regression du meme ecran.
-    // 1. La couronne (88 px pour 336) et l'arc gardent leur proportion.
+    // 1. La couronne (88 px pour 336) et l'arc gardent leur proportion : le halo
+    //    a exactement l'aspect d'avant, en plus petit (72 px pour 276).
     expect(regle(".pilot-vocal", 200)).toMatch(
       /--vocal-crown:\s*calc\(var\(--vocal-orb-size\) \* 88 \/ 336\)/,
     );
     // 2. L'ecart de grille entre une colonne et le disque ne bouge pas : c'est
     //    LUI qui donne les 24 px mesures ci-dessus.
     expect(regle(".vocal-stage", 60)).toMatch(/column-gap:\s*24px/);
-    // 3. La colonne garde sa hauteur et son debordement coupe : rien n'a ete
-    //    agrandi pour faire de la place.
-    expect(regle(".vocal-side", 60)).toMatch(/height:\s*min\(var\(--vocal-orb-box\), 100%\)/);
+    // 3. La colonne garde SA hauteur (512 px, la boite du PLEIN disque, pas celle
+    //    du disque retreci) et son debordement coupe : rien n'a ete agrandi pour
+    //    faire de la place, et la liste des taches ne perd aucune rangee.
+    expect(regle(".vocal-side", 60)).toMatch(
+      /height:\s*min\(var\(--vocal-side-height\), 100%\)/,
+    );
     expect(regle(".vocal-side", 60)).toMatch(/overflow:\s*hidden/);
+    expect(VOCAL_SIDE_HEIGHT_PX).toBe(512);
   });
 
   it("aucune couleur en dur dans les deux regles touchees", () => {

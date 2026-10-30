@@ -11707,24 +11707,45 @@ summary:focus-visible {
      independants — ils suivent donc le disque sans une ligne de plus, et le
      bouton de relance (`inset: 0`) aussi.
      TAILLE DU DISQUE, formule UNIQUE (§1.5) : elle suit la hauteur de la
-     fenetre, bornee a 120 px en bas et 336 px en haut.
-         120 px · (hauteur - 289) x 21/32 · 336 px
-     A 500 px de haut : 138 px ; a 750 px : 303 px ; des 1024 px : 336 px.
+     fenetre, bornee a 100 px en bas et 276 px en haut.
+         100 px · (hauteur - 289) x 276/512 · 276 px
+     A 500 px de haut : 114 px ; a 750 px : 249 px ; des 801 px : 276 px.
      Les 289 px sont la place prise par le reste de l'ecran (air du haut, barre
      de 44 px, ligne d'etat, saisie, marge basse) : la boite du halo
      (disque + 2 x couronne) tient donc toujours dans la fenetre, elle n'est
-     jamais rognee. Aucun autre reglage, aucune autre formule. */
-  --vocal-orb-size: clamp(120px, calc((100vh - 289px) * 21 / 32), 336px);
+     jamais rognee. Aucun autre reglage, aucune autre formule.
+     RECTIFICATION DU 2026-11-14 (remarque du proprietaire : « le cercle est un
+     peu trop gros ») : le disque valait 336 px au plus et 120 px au plancher
+     (21/32) ; il vaut 276 px au plus et 100 px au plancher (276/512), soit
+     -17,9 % A TOUTES LES HAUTEURS. Le rapport 276/512 garde la meme pente que
+     21/32 (il en est 82,1 %), donc le disque atteint son maximum a la MEME
+     hauteur de fenetre qu'avant (801 px) : seule sa taille change, pas le
+     moment ou elle cesse de grandir. La couronne et l'arc restent des
+     FRACTIONS du disque (88/336 et 12/88) : le halo garde exactement son
+     aspect, en plus petit (72 px de couronne a 276 px de disque). */
+  --vocal-orb-size: clamp(100px, calc((100vh - 289px) * 276 / 512), 276px);
   /* La couronne de l'enveloppe de parole : 88 px pour un disque de 336 px
      (soit la meme proportion que 44 px pour 168 px). */
   --vocal-crown: calc(var(--vocal-orb-size) * 88 / 336);
   /* L'arc de reflexion : 12 px pour un disque de 336 px (6 px pour 168 px). */
   --vocal-arc: calc(var(--vocal-crown) * 12 / 88);
-  /* LA BOITE DU DISQUE : le disque et ses deux couronnes (512 px pour un
-     disque de 336 px). Jeton DERIVE, jamais un reglage : il ne peut pas
-     diverger du disque, et les colonnes n'ont pas a recopier `+ 2 x couronne`
-     (trois occasions de se tromper). Il sert de HAUTEUR aux deux colonnes. */
+  /* LA BOITE DU DISQUE : le disque et ses deux couronnes (421 px pour un
+     disque de 276 px, 512 px pour 336 px). Jeton DERIVE, jamais un reglage :
+     il ne peut pas diverger du disque, et personne n'a a recopier
+     `+ 2 x couronne` (trois occasions de se tromper). Il sert a ecarter les
+     deux lavis du cercle (`--vocal-wash-w`) ; il ne sert PLUS de hauteur aux
+     colonnes (voir `--vocal-side-height`). */
   --vocal-orb-box: calc(var(--vocal-orb-size) + 2 * var(--vocal-crown));
+  /* LA HAUTEUR DES DEUX COLONNES : 512 px, la boite du PLEIN disque d'avant le
+     2026-11-14 (336 + 2 x 88). Elle ne suit PLUS le disque : celui-ci etant
+     ramene a 276 px, sa boite ne vaut plus que 421 px, et deux colonnes de
+     421 px feraient perdre DEUX rangees de taches a 1024 x 768 (8 -> 6) alors
+     que la reduction demandee ne concerne que le cercle. Le chiffre est celui
+     que le budget rendait deja a toutes les fenetres : la boite du disque
+     valait alors exactement la place offerte (21/32 x 512/336 = 1), donc
+     `min(boite, place)` valait `min(512, place)`. Verrou cote module :
+     `VOCAL_SIDE_HEIGHT_PX` (vocal-sides.js), la meme valeur. */
+  --vocal-side-height: 512px;
   /* Largeur d'UNE colonne laterale : valeur de depart (aucune colonne) ; la
      seule ecrivaine est `vocalSyncSides()` (super-agent.js), qui la pose a
      chaque entree dans le mode et a chaque changement de taille de fenetre. */
@@ -11953,7 +11974,7 @@ body.pilot-vocal-active #agent-activity {
   gap: 32px;
   column-gap: 24px;
   /* Le jour vertical venait du `padding: 16px` du flex. Les colonnes font la
-     hauteur exacte de la boite du disque : ces 32 px de haut et de bas les
+     hauteur de `--vocal-side-height` (512 px) : ces 32 px de haut et de bas les
      auraient coupees en bas a 100vh = 801px. `align-items: center` donne deja
      l'air vertical. */
   padding: 0 16px;
@@ -11965,11 +11986,12 @@ body.pilot-vocal-active #agent-activity {
    remplissent. Meme hauteur, meme largeur, symetriques autour du disque. */
 .vocal-side {
   grid-row: 1;
-  /* La hauteur de la BOITE DU DISQUE (512 px pour 336 px de disque), jamais
-     plus : ni la ligne d'etat ni la barre de saisie ne peuvent etre
-     recouvertes. `100 %` la reduit dans la seule situation ou la grille a une
-     seconde rangee (bouton « Autoriser le micro » affiche). */
-  height: min(var(--vocal-orb-box), 100%);
+  /* La HAUTEUR DES COLONNES (512 px, `--vocal-side-height`), jamais plus : ni
+     la ligne d'etat ni la barre de saisie ne peuvent etre recouvertes.
+     `100 %` la reduit dans la seule situation ou la grille a une seconde rangee
+     (bouton « Autoriser le micro » affiche). Elle ne suit PAS le disque : plus
+     petit depuis le 2026-11-14, il ferait perdre des rangees a la liste. */
+  height: min(var(--vocal-side-height), 100%);
   justify-self: stretch;
   overflow: hidden;
   /* Aucun calque ne capte le clic (issue #381) : les colonnes sont du decor, et
@@ -12265,10 +12287,13 @@ body.pilot-vocal-active #agent-activity {
      disque (moins les 64 px du cadre de la composition), plafonnee par la
      largeur du disque et par trois fois le plancher de 96 px. Valeur de repli :
      96 px, le plancher du 2026-10-03 (`VOCAL_PORTRAIT_PX`).
-     Mesure des fenetres du document, medaillon sous le disque (2026-11-13) :
-     97 px a 720 x 520, 116 a 768 x 576, 149 a 896 x 672, 182 a 1024 x 768,
-     193 a 1280 x 800, et la CIBLE de 288 px (3 x) atteinte a 1440 x 900 comme a
-     1920 x 1080. Voir `spec_modes_ecran_vocal.md` § 3ter. */
+     Mesure des fenetres du document, medaillon sous le disque (2026-11-14,
+     disque ramene de 336 a 276 px) : 124 px a 720 x 520, 150 a 768 x 576, 170 a
+     820 x 620, 194 a 896 x 672, 238 a 1024 x 768, 253 a 1280 x 800, puis 276 px
+     a 1440 x 900 comme a 1920 x 1080 : le CERCLE borne le medaillon avant la
+     CIBLE de 288 px (3 x le plancher), qui reste la reference si le disque
+     remonte. Le disque plus petit LIBERE de la hauteur : le medaillon en
+     profite au lieu d'y perdre. Voir `spec_modes_ecran_vocal.md` § 3ter. */
   width: var(--vocal-portrait-size, 96px);
   height: var(--vocal-portrait-size, 96px);
   /* L'ECART AU DISQUE (12 px, `VOCAL_PORTRAIT_AIR_TOP_PX`) : le medaillon se
@@ -12563,6 +12588,11 @@ body.pilot-vocal-active #agent-activity {
    donc jamais deborder sur l'anneau (166 -> 168 px) ni atteindre le contour de
    la voix de Pilot (167 px et au-dela). La pente est la MEME qu'avant (racine
    du niveau, `levelToHalo`), projetee sur le nouveau rayon : 82 -> 166 px.
+   RECTIFICATION DU 2026-11-14 : le disque est ramene a 276 px au plus
+   (`--vocal-orb-size`), donc le rayon utile vaut 136 px et non plus 166. Aucun
+   de ces nombres n'est ecrit dans une regle : `inset: 0` + `closest-side` font
+   TOUT le travail, et la projection suit le disque. Les 166 px ne sont plus que
+   la reference du disque de la conception (336 px).
    Aucun `overflow: hidden` sur le disque : il decouperait aussi l'enveloppe de
    parole et l'arc de reflexion. */
 .vocal-halo {
@@ -12600,7 +12630,8 @@ body.pilot-vocal-active #agent-activity {
   /* PLANCHER D'ECOUTE (§1.4) : des que l'etat « ecoute » est vrai, la voix de
      l'utilisateur se voit — le halo ne peut plus rester colle a zero. Meme
      pente qu'avant (racine du niveau), projete sur le nouveau rayon :
-     0,30 x 166 = 50 px au minimum. Aucun seuil de la DETECTION n'est touche :
+     0,30 x le rayon du disque, soit 41 px au disque de 276 px d'aujourd'hui
+     (50 px a 336). Aucun seuil de la DETECTION n'est touche :
      `vocalCapte` garde ses 0,06 / 0,03. */
   --vocal-halo: max(0.3, var(--vocal-heard, 0));
 }
@@ -12620,7 +12651,8 @@ body.pilot-vocal-active #agent-activity {
    pas de `box-sizing` particulier (contenu par defaut, pas de remise a zero
    globale dans ce fichier), donc sa boite de padding vaut la taille du disque
    (`--vocal-orb-size`, 336 px au plus) et le rayon UTILE — le bord interieur de
-   l'anneau de 2 px — vaut la moitie moins 2 px (166 px pour 336). Un enfant
+   l'anneau de 2 px — vaut la moitie moins 2 px (136 px au disque de 276 px
+   depuis le 14/11, 166 px pour les 336 de la conception). Un enfant
    ABSOLU en `inset: 0` occupe exactement cette boite de padding, et
    `border-radius: 50%` lui donne le cercle du rayon utile : le bouton et le bord
    interieur de l'anneau COINCIDENT, sans un pixel de depassement. Le bouton ne
@@ -13146,7 +13178,8 @@ body.pilot-vocal-active #agent-activity {
   transition: none;
 }
 /* LOT B : en mouvement reduit le halo ne s'anime pas, mais il reste LISIBLE —
-   rayon fixe de 0,55 x 166 = 91,3 px en ecoute (jamais une animation muette),
+   rayon fixe de 0,55 du rayon du disque, soit 74,8 px au disque de 276 px
+   (91,3 px a 336) en ecoute (jamais une animation muette),
    eteint dans les trois autres etats (§6.8). Une declaration directe sur
    `.vocal-halo` gagne sur la valeur heritee de l'overlay ; `planLevel` ne pose
    d'ailleurs rien en mouvement reduit, donc rien ne peut la contredire. */

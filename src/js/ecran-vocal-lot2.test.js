@@ -208,16 +208,18 @@ describe("3. l'UNIQUE ligne d'etat (§2.3)", () => {
 
 // ---------------------------------------------------------------------------
 describe("4. l'objet lumineux et son trait (§2.2)", () => {
-  it("le disque fait de 120 a 336 px (un seul jeton), anneau de 2 px + remplissage radial", () => {
+  it("le disque fait de 100 a 276 px (un seul jeton), anneau de 2 px + remplissage radial", () => {
     const corps = bloc(CSS, ".vocal-orb {");
     // Le 13/11 le disque a double et suit la hauteur de la fenetre
     // (CONCEPTION-ecran-vocal-cercle-et-bas.md §1.5). Il ne porte donc plus une
-    // taille en dur mais le jeton UNIQUE, borne 120..336 px, et ses deux lueurs
+    // taille en dur mais le jeton UNIQUE, borne 100..276 px, et ses deux lueurs
     // (`--vocal-crown`, `--vocal-arc`) en sont des fractions.
+    // Le 14/11 le disque a ete ramene de 336 a 276 px (-17,9 %) a la demande du
+    // proprietaire : le jeton reste UNIQUE, seules ses bornes changent.
     expect(corps).toMatch(/width:\s*var\(--vocal-orb-size\)/);
     expect(corps).toMatch(/height:\s*var\(--vocal-orb-size\)/);
     const overlay = bloc(CSS, ".pilot-vocal {");
-    expect(overlay).toMatch(/--vocal-orb-size:\s*clamp\(120px,[^;]*336px\)/);
+    expect(overlay).toMatch(/--vocal-orb-size:\s*clamp\(100px,[^;]*276px\)/);
     expect(corps).toMatch(/border-radius:\s*50%/);
     expect(corps).toMatch(/border:\s*2px solid var\(--vocal-state/);
     expect(corps).toMatch(/radial-gradient\(/);

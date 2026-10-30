@@ -6,13 +6,26 @@
 // avec lui (44 -> 88 px). Les nombres absolus ont donc change, la REGLE verifiee
 // n'a pas bouge : le halo reste une couronne AUTOUR du disque, il ne le peint
 // jamais, il ne fait rien defiler, et sa boite tient toujours dans la fenetre
-// (desormais par la formule de hauteur, bornee 120..336 px, et non plus par une
+// (desormais par la formule de hauteur, bornee 100..276 px, et non plus par une
 // taille fixe).
 //
+// MISE A JOUR DU 14/11 : le disque PLEIN est ramene de 336 a 276 px (-17,9 %,
+// remarque du proprietaire ; `RAPPORT-ecran-vocal-cercle-reduit.md`). La regle
+// est inchangee et la couronne reste une FRACTION du disque (88/336), donc le
+// halo garde exactement son aspect, en plus petit : 72,3 px de couronne a
+// 276 px de disque, 420,6 px de boite au lieu de 512. Les constantes du module
+// d'enveloppe (`ENVELOPE_RING_PX` = 168, `ENVELOPE_MAX_PX` = 88) n'ont PAS ete
+// touchees : elles decrivent la reference du plein disque de la conception, et
+// ne servent qu'a calculer le FACTEUR `scale`, qui reste valable puisque la
+// feuille de style exprime la couronne en fraction. Deux constantes ici, donc :
+// `DISQUE_PX` (le disque reel d'aujourd'hui) et `DISQUE_CONCEPTION_PX` (la
+// reference des constantes du module).
+//
 // CE QUE CE FICHIER VERROUILLE (et pourquoi) :
-//   1. Le halo atteint un rayon de 256 px (boite de 512 px = 336 + 2 x 88),
-//      extension 88 px au-dela de l'anneau de 168 px, et sa boite TIENT dans la
-//      fenetre quelle que soit sa hauteur (formule unique, bornee).
+//   1. Le halo atteint un rayon de 210,3 px (boite de 420,6 px = 276 + 2 x 72,3),
+//      extension 72,3 px au-dela de l'anneau de 138 px - les memes proportions
+//      que 168 / 88 pour un disque de 336 - et sa boite TIENT dans la fenetre
+//      quelle que soit sa hauteur (formule unique, bornee).
 //   2. Le degrade reste DOUX : continu d'un arret a l'autre (aucun palier
 //      brutal), transparent jusqu'au bord du disque (il ne peint donc jamais
 //      SUR l'objet lumineux, il reste autour), et sans `box-shadow` (aucune
@@ -58,10 +71,21 @@ function bloc(css, selecteur) {
 
 /**
  * Disque de l'objet lumineux, en pixels : la BORNE HAUTE du jeton
- * `--vocal-orb-size` (336 px). La taille reelle suit la hauteur de la fenetre ;
- * c'est cette borne qui fixe la boite du halo, donc les nombres de ce fichier.
+ * `--vocal-orb-size` (276 px depuis le 2026-11-14 ; 336 avant). La taille reelle
+ * suit la hauteur de la fenetre ; c'est cette borne qui fixe la boite du halo,
+ * donc les nombres de ce fichier.
  */
-const DISQUE_PX = 336;
+const DISQUE_PX = 276;
+
+/**
+ * Disque PLEIN de la conception (336 px), sur lequel les constantes du module
+ * d'enveloppe sont calees : `ENVELOPE_RING_PX` = 336 / 2 = 168 et
+ * `ENVELOPE_MAX_PX` = 88. Le module ne les emploie que pour calculer un
+ * FACTEUR (`scale = rayon / 256`), jamais une position absolue : la feuille de
+ * style exprimant la couronne en FRACTION du disque, le facteur reste juste
+ * quand le disque retrecit.
+ */
+const DISQUE_CONCEPTION_PX = 336;
 
 /**
  * Les trois nombres de la conception `cercle et bas`, en clair : ils doivent
@@ -71,26 +95,30 @@ const DISQUE_PX = 336;
 const COURONNE_PX = 88; // `--vocal-crown` a la taille pleine du disque
 const ARC_PX = 12; // `--vocal-arc` a la taille pleine du disque
 const FORMULE_BASE_PX = 289; // place prise par le reste de l'ecran
-const ORB_MIN_PX = 120;
+const ORB_MIN_PX = 100;
 
-/** Boite de l'enveloppe, deduite du disque et de l'extension pleine. */
-const BOITE_HALO_PX = DISQUE_PX + 2 * ENVELOPE_MAX_PX;
+/**
+ * Boite de l'enveloppe au plein disque : le disque et ses deux couronnes - et la
+ * couronne est une FRACTION du disque (88 / 336), comme dans la feuille de
+ * style. 276 + 2 x 72,29 = 420,57 px (512 px avant la reduction du disque).
+ */
+const BOITE_HALO_PX = DISQUE_PX + (2 * DISQUE_PX * COURONNE_PX) / DISQUE_CONCEPTION_PX;
 
 /**
  * Taille du disque pour une hauteur de fenetre donnee, en pixels : la formule
- * UNIQUE du CSS (`clamp(120px, (100vh - 289px) * 21 / 32, 336px)`), recopiee ici
+ * UNIQUE du CSS (`clamp(100px, (100vh - 289px) * 276 / 512, 276px)`), recopiee ici
  * en nombres pour pouvoir la verifier sur plusieurs hauteurs. Elle n'est pas
  * dupliquee dans le code : c'est le CSS qui la porte (voir le test 1.3).
  */
 function disquePourHauteur(hauteur) {
-  const brut = ((hauteur - FORMULE_BASE_PX) * 21) / 32;
+  const brut = ((hauteur - FORMULE_BASE_PX) * DISQUE_PX) / (DISQUE_PX + 2 * COURONNE_PX);
   return Math.min(Math.max(brut, ORB_MIN_PX), DISQUE_PX);
 }
 
 /** Boite du halo (disque + 2 couronnes) pour une hauteur de fenetre. */
 function boiteHaloPourHauteur(hauteur) {
   const disque = disquePourHauteur(hauteur);
-  return disque + 2 * (disque * COURONNE_PX) / DISQUE_PX;
+  return disque + (2 * disque * COURONNE_PX) / DISQUE_CONCEPTION_PX;
 }
 
 /**
@@ -114,11 +142,13 @@ function arretsEnveloppe() {
 const ARRETS = arretsEnveloppe();
 
 // ---------------------------------------------------------------------------
-describe("1. le halo atteint un rayon de 256 px (et suit le disque double)", () => {
-  it("l'extension retenue donne bien 168 + 88 = 256 px de rayon", () => {
-    // Le disque fait 336 px de boite, donc 168 px de rayon : c'est le point de
-    // depart de la couronne lumineuse.
-    expect(ENVELOPE_RING_PX).toBe(DISQUE_PX / 2);
+describe("1. le halo reste une couronne AUTOUR du disque, et suit sa taille", () => {
+  it("les constantes du module decrivent le plein disque de la conception : 168 + 88", () => {
+    // Le module est cale sur le disque PLEIN de la conception (336 px de boite,
+    // donc 168 px de rayon) : c'est le point de depart de la couronne lumineuse,
+    // et le denominateur du facteur `scale`. Ces deux constantes n'ont pas ete
+    // touchees par la reduction du disque : elles ne servent qu'a un facteur.
+    expect(ENVELOPE_RING_PX).toBe(DISQUE_CONCEPTION_PX / 2);
     expect(ENVELOPE_RING_PX + ENVELOPE_MAX_PX).toBe(256);
     // 88 px au-dela de l'anneau (44 px avant le doublement du disque : meme
     // proportion), et non les 32 px de l'origine.
@@ -131,8 +161,9 @@ describe("1. le halo atteint un rayon de 256 px (et suit le disque double)", () 
     // disque, soit 88 px pour 336 px). Un disque qui retrecit ne peut donc plus
     // laisser une couronne de taille fixe qui deborderait de la fenetre.
     expect(corps).toMatch(/inset:\s*calc\(var\(--vocal-crown\) \* -1\)/);
-    // 336 + 2 x 88 = 512 px de boite, donc 256 px de rayon.
-    expect(BOITE_HALO_PX).toBe(512);
+    // 276 + 2 x 72,29 = 420,57 px de boite, donc 210,3 px de rayon (512 px et
+    // 256 px de rayon avant la reduction du disque du 2026-11-14).
+    expect(BOITE_HALO_PX).toBeCloseTo(420.571, 3);
     // Les jetons eux-memes : une seule source, sur l'overlay.
     const overlay = bloc(CSS, ".pilot-vocal {");
     expect(overlay).toMatch(
@@ -146,10 +177,14 @@ describe("1. le halo atteint un rayon de 256 px (et suit le disque double)", () 
   it("la boite du halo TIENT dans la fenetre, quelle que soit sa hauteur", () => {
     // La decision ne se tranche plus sur un nombre fixe (512 px ne tient pas
     // dans les 500 px de la fenetre minimale) mais sur la FORMULE de hauteur :
-    // disque = clamp(120, (hauteur - 289) x 21/32, 336). La boite vaut alors
-    // exactement `hauteur - 289`, donc elle laisse toujours 289 px au reste de
-    // l'ecran (barre de 44 px, phrase d'etat, saisie, marges) : le halo n'est
-    // jamais rogne, et il reste de la place pour le bas.
+    // disque = clamp(100, (hauteur - 289) x 276/512, 276). La boite vaut
+    // 1,5238 x 0,5391 = 0,8214 fois `hauteur - 289` : elle laisse donc AU MOINS
+    // 289 px au reste de l'ecran (barre de 44 px, phrase d'etat, saisie,
+    // marges), et davantage a mesure que la fenetre grandit — c'est le prix,
+    // voulu, d'un disque plus petit. Le halo n'est jamais rogne, et il reste de
+    // la place pour le bas. Avant le 2026-11-14 la pente valait 21/32, dont le
+    // produit par 512/336 faisait exactement 1 : la boite tombait alors pile sur
+    // `hauteur - 289`.
     const mini = CONF.app.windows[0].minHeight;
     expect(mini).toBeGreaterThan(0);
     for (const hauteur of [mini, 600, 750, 860, 1024, 1440]) {
@@ -160,19 +195,22 @@ describe("1. le halo atteint un rayon de 256 px (et suit le disque double)", () 
         `place restante a ${hauteur} px`,
       ).toBeGreaterThanOrEqual(120);
     }
-    // Le plancher de la formule : sous ~472 px de haut, le disque ne retrecit
-    // plus (120 px) — le halo reste entier, il ne disparait pas.
+    // Le plancher de la formule : sous ~474 px de haut, le disque ne retrecit
+    // plus (100 px) — le halo reste entier, il ne disparait pas.
     expect(disquePourHauteur(420)).toBe(ORB_MIN_PX);
     const boite = boiteHaloPourHauteur(420);
-    expect(boite).toBeCloseTo(120 + 2 * (120 * COURONNE_PX) / DISQUE_PX, 3);
+    expect(boite).toBeCloseTo(
+      ORB_MIN_PX + (2 * ORB_MIN_PX * COURONNE_PX) / DISQUE_CONCEPTION_PX,
+      3,
+    );
     expect(boite).toBeLessThanOrEqual(420);
-    // Et le plafond : des 1 024 px de haut, le disque ne grandit plus.
-    expect(disquePourHauteur(1024)).toBe(DISQUE_PX);
+    // Et le plafond : des 801 px de haut, le disque ne grandit plus.
+    expect(disquePourHauteur(801)).toBe(DISQUE_PX);
     expect(disquePourHauteur(1440)).toBe(DISQUE_PX);
     // Et la formule du CSS est bien celle-la (les trois jetons d'un coup).
     const overlay = bloc(CSS, ".pilot-vocal {");
     expect(overlay).toMatch(
-      /--vocal-orb-size:\s*clamp\(120px, calc\(\(100vh - 289px\) \* 21 \/ 32\), 336px\)/,
+      /--vocal-orb-size:\s*clamp\(100px, calc\(\(100vh - 289px\) \* 276 \/ 512\), 276px\)/,
     );
   });
 });

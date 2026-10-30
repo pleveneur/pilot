@@ -47,7 +47,9 @@ function attendu(width, orbSize, height) {
   const nominal =
     width <= LARGE ? NOMINAL : Math.min(PLAFOND, NOMINAL + Math.round((width - LARGE) / 4));
   const track = avail < MIN ? 0 : Math.min(nominal, avail);
-  const columnHeight = Math.round(Math.min(orbSize * (1 + (2 * 88) / 336), height - RESERVE));
+  // La hauteur des colonnes ne suit PLUS le disque (2026-11-14) : elle vaut la
+  // boite du PLEIN disque (512 px), plafonnee par la place offerte.
+  const columnHeight = Math.round(Math.min(512, height - RESERVE));
   return { track, shown: track > 0, columnHeight };
 }
 
@@ -68,17 +70,20 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     // Fenetre, disque, boite, H, avail, track — les colonnes du document, dans
     // son ordre. `boite` ne sert qu'a la lecture : H est min(boite, 100vh - 289).
     const lignes = [
-      [640, 480, 125.3, 217, 0],
-      [720, 520, 151.6, 244, 244],
-      [768, 576, 188.3, 249, 249],
-      [820, 620, 217.2, 261, 261],
-      [896, 672, 251.3, 282, 282],
-      [1024, 768, 314.3, 314, 314],
-      [1280, 800, 335.3, 432, NOMINAL],
-      [1440, 900, 336, 512, NOMINAL],
-      [1600, 900, 336, 592, NOMINAL],
-      [1920, 1080, 336, 752, PLAFOND],
-      [2560, 1440, 336, 1072, PLAFOND],
+      // Disque = clamp(100, (hauteur - 289) x 276/512, 276) : les valeurs du
+      // 2026-11-14 (elles valaient 125,3 / 151,6 / 188,3 / 217,2 / 251,3 /
+      // 314,3 / 335,3 / 336 avec la formule precedente, 21/32 et 336 px).
+      [640, 480, 102.96, 228, 0],
+      [720, 520, 124.52, 257, 257],
+      [768, 576, 154.71, 266, 266],
+      [820, 620, 178.43, 280, 280],
+      [896, 672, 206.46, 304, 304],
+      [1024, 768, 258.21, 342, 342],
+      [1280, 800, 275.46, 462, NOMINAL],
+      [1440, 900, 276, 542, NOMINAL],
+      [1600, 900, 276, 622, NOMINAL],
+      [1920, 1080, 276, 782, PLAFOND],
+      [2560, 1440, 276, 1102, PLAFOND],
     ];
     for (const [largeur, hauteur, disque, avail, colonne] of lignes) {
       const plan = planVocalSides({ width: largeur, height: hauteur, orbSize: disque });
@@ -92,12 +97,12 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
   });
 
   it("le seuil vaut 240 DANS LES DEUX SENS", () => {
-    // 640 x 480 : avail = 217 px, sous le seuil -> aucune colonne du tout.
-    expect(planVocalSides({ width: 640, height: 480, orbSize: 125.3 }).track).toBe(0);
-    // 720 x 520 : avail = 244 px -> la colonne parait, et tient deja une tache
+    // 640 x 480 : avail = 228 px, sous le seuil -> aucune colonne du tout.
+    expect(planVocalSides({ width: 640, height: 480, orbSize: 102.96 }).track).toBe(0);
+    // 720 x 520 : avail = 257 px -> la colonne parait, et tient deja une tache
     // (H = 231, il reste 178 px de liste sous le haut fixe de 53 px).
-    const juste = planVocalSides({ width: 720, height: 520, orbSize: 151.6 });
-    expect(juste.track).toBe(244);
+    const juste = planVocalSides({ width: 720, height: 520, orbSize: 124.52 });
+    expect(juste.track).toBe(257);
     expect(juste.columnHeight).toBe(231);
     expect(juste.listHeight).toBe(178);
   });
@@ -108,10 +113,10 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     // deja. 88 - 24 = 64 px en moins, quel que soit le disque.
     expect(VOCAL_CROWN_PX).toBe(88);
     for (const [largeur, disque] of [
-      [1440, 336],
-      [1280, 335.3],
-      [1024, 314.3],
-      [2560, 336],
+      [1440, 276],
+      [1280, 275.46],
+      [1024, 258.22],
+      [2560, 276],
     ]) {
       const plan = planVocalSides({ width: largeur, height: 900, orbSize: disque });
       expect(plan.taskTrack, `largeur ${largeur}`).toBe(plan.track - (88 - JOUR));
@@ -122,22 +127,22 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     expect(aucune.track).toBe(0);
     expect(aucune.taskTrack).toBe(0);
     // Une piste plus etroite que la couronne ne rend jamais un nombre negatif.
-    const etroite = planVocalSides({ width: 720, height: 520, orbSize: 151.6 });
-    expect(etroite.track).toBe(244);
-    expect(etroite.taskTrack).toBe(180);
+    const etroite = planVocalSides({ width: 720, height: 520, orbSize: 124.52 });
+    expect(etroite.track).toBe(257);
+    expect(etroite.taskTrack).toBe(193);
   });
 
   it("la colonne ne depasse jamais la place disponible (`avail`)", () => {
-    // 768 x 576 : avail = 249 px, donc la colonne est ECRASEE a 249 px et non
+    // 768 x 576 : avail = 266 px, donc la colonne est ECRASEE a 266 px et non
     // laissee a sa valeur nominale de 384.
-    const etroit = planVocalSides({ width: 768, height: 576, orbSize: 188.3 });
-    expect(etroit.track).toBe(249);
+    const etroit = planVocalSides({ width: 768, height: 576, orbSize: 154.71 });
+    expect(etroit.track).toBe(266);
     expect(etroit.track).toBeLessThan(NOMINAL);
   });
 
   it("la formule du document et le module donnent le MEME resultat partout", () => {
     for (let largeur = 800; largeur <= 2600; largeur += 7) {
-      for (const disque of [120, 200, 288, 336]) {
+      for (const disque of [100, 160, 276]) {
         const ici = planVocalSides({ width: largeur, height: 900, orbSize: disque });
         const doc = attendu(largeur, disque, 900);
         expect(ici.track, `largeur ${largeur}, disque ${disque}`).toBe(doc.track);
@@ -152,7 +157,10 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     const etroit = planVocalSides({ width: 1200, height: 900, orbSize: 336 });
     const large = planVocalSides({ width: 2560, height: 900, orbSize: 336 });
     expect(etroit.columnHeight).toBe(large.columnHeight);
-    // 336 + 2 x 88 = 512 px : la boite du disque, entierement disponible.
+    // 512 px : la boite du PLEIN disque (336 + 2 x 88), entierement disponible.
+    // Ce n'est pas la boite du disque d'aujourd'hui (276 + 2 x 72,3 = 420,6) :
+    // la hauteur des colonnes ne la suit plus, sinon la liste perdrait deux
+    // rangees a 1024 x 768 (8 -> 6) sans qu'on ait rien demande a la liste.
     expect(etroit.columnHeight).toBe(512);
     // La meme hauteur, que la fenetre du visage s'affiche ou non : la zone
     // d'image prend sa place DANS la colonne, elle ne l'allonge pas.
@@ -163,9 +171,9 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
   });
 
   it("une fenetre basse ECORCHE la colonne, elle ne la fait pas deborder", () => {
-    // 640 x 480 : la boite du disque vaudrait 191 px et la scene n'en offre que
-    // 191 - c'est bien la fenetre qui decide, jamais la boite.
-    const bas = planVocalSides({ width: 640, height: 480, orbSize: 125.3 });
+    // 640 x 480 : la place offerte vaut 191 px (480 - 289) et elle est plus
+    // petite que les 512 px de la colonne - c'est bien la fenetre qui decide.
+    const bas = planVocalSides({ width: 640, height: 480, orbSize: 102.96 });
     expect(bas.columnHeight).toBe(191);
     expect(bas.columnHeight).toBeLessThan(512);
   });

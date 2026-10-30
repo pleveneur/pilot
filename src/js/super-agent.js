@@ -2240,7 +2240,8 @@ function vocalOverlayNode() {
  *
  * Le disque suit une formule UNIQUE ecrite dans la feuille de style
  * (`--vocal-orb-size`). On la LIT donc : aucun second calcul ne peut deriver.
- * Le repli n'invente rien — il rejoue la meme formule, avec les memes bornes.
+ * Le repli n'invente rien — il rejoue la meme formule, avec les memes bornes
+ * (`clamp(100px, (100vh - 289px) x 276/512, 276px)`, 2026-11-14).
  *
  * @returns {number} taille du disque en px (0 si elle est illisible)
  */
@@ -2258,7 +2259,7 @@ function vocalOrbSizePx() {
   }
   const hauteur = typeof window !== "undefined" ? Number(window.innerHeight) : 0;
   if (!Number.isFinite(hauteur) || hauteur <= 0) return 0;
-  return Math.max(120, Math.min(336, ((hauteur - VOCAL_ORB_RESERVED_PX) * 21) / 32));
+  return Math.max(100, Math.min(276, ((hauteur - VOCAL_ORB_RESERVED_PX) * 276) / 512));
 }
 
 /**

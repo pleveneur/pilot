@@ -125,9 +125,10 @@ décrit ici est le **maximum** de ce que l'écran affiche, pas son minimum.
    (`margin-top: var(--window-controls-height)`) : elle ne porte **rien** — c'est
    une bande de respiration. Le logo, qui est le bouton des trois modes, se pose
    **au-dessus** d'elle, à la même place que dans les autres modes.
-2. **Au centre**, le **disque** — **336 px** au plus, et **de 120 à 336 px
-   suivant la hauteur de la fenêtre** (13/11 : un seul jeton, voir
-   ci-dessous) — anneau plein de 2 px + remplissage lumineux de 18 % au centre,
+2. **Au centre**, le **disque** — **276 px** au plus, et **de 100 à 276 px
+   suivant la hauteur de la fenêtre** (13/11 : un seul jeton ; **ramené de 336 à
+   276 px le 14/11**, −17,9 %, voir ci-dessous et
+   `docs/rapports/RAPPORT-ecran-vocal-cercle-reduit.md`) — anneau plein de 2 px + remplissage lumineux de 18 % au centre,
    0 % aux bords : aucune image. Il contient un **halo intérieur**
    (`.vocal-halo`, la voix de l'utilisateur, §4) et, sur **toute sa surface
    intérieure**, le **bouton de relance de l'écoute** (§3bis). Le bouton de
@@ -140,16 +141,20 @@ décrit ici est le **maximum** de ce que l'écran affiche, pas son minimum.
 
    | Jeton | Valeur | Ce qu'il décrit |
    |---|---|---|
-   | `--vocal-orb-size` | `clamp(120px, calc((100vh - 289px) * 21 / 32), 336px)` | le disque : 336 px dès 801 px de haut |
-   | `--vocal-crown` | `calc(var(--vocal-orb-size) * 88 / 336)` | la couronne : 88 px à 336 px de disque |
+   | `--vocal-orb-size` | `clamp(100px, calc((100vh - 289px) * 276 / 512), 276px)` | le disque : 276 px dès 801 px de haut |
+   | `--vocal-crown` | `calc(var(--vocal-orb-size) * 88 / 336)` | la couronne : une **fraction** du disque (72,3 px à 276 px) |
    | `--vocal-arc` | `calc(var(--vocal-crown) * 12 / 88)` | l'arc de réflexion : 12 px |
+   | `--vocal-side-height` | `512px` | la hauteur des deux colonnes : **la boîte du plein disque**, et non celle du disque d'aujourd'hui (voir § 3ter) |
 
    **Pourquoi une formule** : une couronne de 88 px autour d'un disque de 336 px
-   fait une boîte de **512 px**, plus que la **hauteur minimale** de la fenêtre
+   faisait une boîte de **512 px**, plus que la **hauteur minimale** de la fenêtre
    (500 px). Le disque rétrécit donc avec la hauteur, et **le halo n'est jamais
-   rogné** : à 500 px de haut, le disque fait 138 px et sa boîte 211 px ; la
-   marge entre la boîte et la fenêtre vaut toujours **289 px** au-dessus du
-   plancher.
+   rogné** : à 500 px de haut, le disque fait 113,7 px et sa boîte 173,3 px ; la
+   boîte vaut **0,8214 fois** `hauteur − 289`, donc la marge entre elle et le bas
+   de la fenêtre ne descend **jamais sous 289 px** et grandit avec l'écran — c'est
+   ce qui reste, voulu, d'un disque plus petit. **La couronne reste une fraction
+   du disque** (`88 / 336`) : elle rétrécit avec lui, elle ne déborderait donc
+   jamais, et le halo garde exactement son aspect.
 3. **Juste au-dessus de la barre de saisie**, l'**unique ligne d'état**
    (`.vocal-status`) : elle n'est plus sous le cercle (28/10). C'est le **même**
    texte, le **même** style, la **même** logique d'état ; seul l'emplacement
@@ -208,14 +213,15 @@ quitter l'écran pour la relancer.
   aucun `top`/`left`/`right`/`margin`, **jamais** de `transform` : rien à
   neutraliser en mouvement réduit, rien à recalculer. Le disque n'ayant pas de
   `box-sizing` particulier, sa boîte de padding vaut `--vocal-orb-size` et son
-  rayon utile (bord **intérieur** de l'anneau de 2 px) vaut **166 px** pour un
-  disque de 336 px : l'enfant en `inset: 0` et son `border-radius: 50%` décrivent
+  rayon utile (bord **intérieur** de l'anneau de 2 px) vaut **136 px** pour un
+  disque de 276 px (166 px pour un disque de 336 px) : l'enfant en `inset: 0` et son `border-radius: 50%` décrivent
   **exactement** ce cercle. Il **touche** le bord intérieur de l'anneau, ne le
   recouvre pas, ne peut pas déborder, et la seule épaisseur entre lui et
   l'extérieur du disque est l'anneau lui-même. Il ne porte **aucune** unité de
   fenêtre : il suit le jeton du disque, donc il rétrécit avec lui sur un écran
   court, sans jamais s'en écarter. Aucun `overflow` n'est ajouté au disque : il
-  découperait l'enveloppe de parole (`::before`, 512 × 512, `inset: -88px`).
+  découperait l'enveloppe de parole (`::before`, `inset: calc(var(--vocal-crown) *
+  -1)`, soit 420,6 × 420,6 px au disque plein d'aujourd'hui).
 - **État : celui de la dictée, jamais un drapeau local.** La visibilité est une
   **décision pure** (`src/js/vocal-restart.js`, `vocalRestartVisible`), appliquée
   en **un seul point** (`vocalSyncRestartButton`, à la fin de
@@ -488,8 +494,10 @@ qu'elle perd : 275 px au lieu de 277).
 
 Les deux colonnes s'opposent par leur **alignement** (`justify-self: start` / `end`),
 jamais par leur taille, et leur hauteur ne vient ni de l'une ni de l'autre : elle vient
-d'une **seule** règle commune, `.vocal-side { height: min(var(--vocal-orb-box), 100%) }`,
-c'est-à-dire la boîte du disque. Verrou : `src/js/ecran-vocal-cadres-et-cercle.test.js`
+d'une **seule** règle commune, `.vocal-side { height: min(var(--vocal-side-height),
+100%) }` : la boîte du **plein** disque (`VOCAL_SIDE_HEIGHT_PX` = **512 px**), et non
+celle du disque d'aujourd'hui (421 px), qui ferait perdre deux rangées de tâches à
+1024 × 768 sans que la liste y soit pour rien (14/11, § 3ter). Verrou : `src/js/ecran-vocal-cadres-et-cercle.test.js`
 compare **les deux mesures** (les déclarations de taille, puis les quatre bords sur les
 huit fenêtres) et **non** des valeurs figées : il tombe si l'une des deux colonnes reprend
 une largeur ou une hauteur à elle, ou si l'une oublie de payer l'en-tête que l'autre paie.
@@ -610,6 +618,7 @@ mesure maintenant dans la **rangée du stage** :
    12 px d'air du stage + 8 px d'écart image/nom + 20 px de nom + 12 px d'air + 12 px d'air
    interne du bloc) ;
 2. **jamais plus de trois fois le plancher** (`VOCAL_PORTRAIT_TARGET_PX` = **288 px**) ;
+   en pratique le **diamètre du disque** (276 px) borne avant elle (14/11) ;
 3. **plancher 96 px** (`VOCAL_PORTRAIT_PX`) tant que la place le porte, **56 px**
    (`VOCAL_PORTRAIT_MIN_PX`) en dessous : au-delà on masque plutôt que d'afficher un timbre
    (0 px, la composition redevient le disque seul) ;
@@ -632,31 +641,37 @@ chiffre, du budget au pixel.
 (`VOCAL_SIDE_FIXED_PX` + la seule zone d'image restante, l'avatar). Le nombre de rangées est
 donc **le même avec et sans personnage** — c'est le cœur du point 7.
 
-Mesure réelle des **sept fenêtres** (composition de gauche à droite : disque, médaillon),
-personnage présent, valeurs **mesurées dans le navigateur** après convergence :
+Mesure réelle des **huit fenêtres** (composition de haut en bas : disque, médaillon),
+personnage présent, valeurs **mesurées dans le navigateur** après convergence — relevé du
+**2026-11-14**, disque ramené à 276 px (les valeurs du 13/11 sont entre parenthèses) :
 
 | Fenêtre | Rangée | Disque | Médaillon | Bloc (`taille + 52`) | Composition | Liste | Rangées (avec / sans) |
 |---|---|---|---|---|---|---|---|
-| 720 × 520 | 313 px | 151,6 px | **97 px** | 149 px | 312,6 px | 178 px | **3 / 3** |
-| 768 × 576 | 369 px | 188,3 px | **116 px** | 168 px | 368,3 px | 234 px | **4 / 4** |
-| 896 × 672 | 465 px | 251,3 px | **149 px** | 201 px | 464,3 px | 330 px | **6 / 6** |
-| 1024 × 768 | 561 px | 314,3 px | **182 px** | 234 px | 560,3 px | 426 px | **8 / 8** |
-| 1280 × 800 | 593 px | 335,3 px | **193 px** | 245 px | 592,3 px | 458 px | **8 / 8** |
-| 1440 × 900 | 693 px | 336,0 px | **288 px** | 340 px | 688 px | 459 px | **8 / 8** |
-| 1920 × 1080 | 873 px | 336,0 px | **288 px** | 340 px | 688 px | 459 px | **8 / 8** |
+| 720 × 520 | 313 px | 124,5 px (151,6) | **124 px** (97) | 176 px | 312,5 px | 178 px | **3 / 3** |
+| 768 × 576 | 369 px | 154,7 px (188,3) | **150 px** (116) | 202 px | 368,7 px | 234 px | **4 / 4** |
+| 820 × 620 | 413 px | 178,4 px (217,2) | **170 px** (131) | 222 px | 412,4 px | 278 px | **5 / 5** |
+| 896 × 672 | 465 px | 206,5 px (251,3) | **194 px** (149) | 246 px | 464,5 px | 330 px | **6 / 6** |
+| 1024 × 768 | 561 px | 258,2 px (314,3) | **238 px** (182) | 290 px | 560,2 px | 426 px | **8 / 8** |
+| 1280 × 800 | 593 px | 275,5 px (335,3) | **253 px** (193) | 305 px | 592,5 px | 458 px | **8 / 8** |
+| 1440 × 900 | 693 px | 276,0 px (336,0) | **276 px** (288) | 328 px | 616 px | 459 px | **8 / 8** |
+| 1920 × 1080 | 873 px | 276,0 px (336,0) | **276 px** (288) | 328 px | 616 px | 459 px | **8 / 8** |
 
-**La cible est tenue** : **288 px dès 1440 × 900**, soit **3,0 fois** le plancher de 96 px,
-et **182 à 193 px** aux tailles intermédiaires — contre **274-275 px** au mieux avant le
-point 7, et **jamais plus de deux rangées** de tâches. Ce qui a changé n'est pas une
-constante : c'est **ce à quoi la place est prise**.
+**La cible est tenue au maximum que le disque autorise** : le médaillon ne peut pas être
+plus large que le cercle qu'il surmonte, donc **276 px dès 1440 × 900** (2,9 fois le
+plancher de 96 px) — **288 px** avant la réduction du cercle —, et **150 à 253 px** aux
+tailles intermédiaires (116 à 193 avant), contre **274-275 px** au mieux avant le point 7,
+et **jamais plus de deux rangées** de tâches. Le disque qui rétrécit **libère de la
+hauteur** : le médaillon en profite, il ne perd rien.
 
-Positions réelles relevées au navigateur (largeur 720) :
-`cx(disque) = cx(photo) = cx(stage) = 360` ; avec personnage, le disque occupe
-`86,2 → 237,8` et la photo commence à `249,8`, son nom à `354,8` ; **sans** personnage, le
-disque occupe `160,7 → 312,3` dans une rangée de `313` px — **centré**. À 768 × 576 :
-disque `86,3 → 274,7`, photo à `286,7`, nom à `410,7` ; **sans** personnage,
-`170,3 → 358,7`. À 896 × 672 : disque `86,3 → 337,7`, photo à `349,7`, nom à `506,7` ;
-**sans** personnage, `186,8 → 438,2`.
+Positions réelles relevées au navigateur (relevé du 2026-11-14, arbre de
+`buildVocalOverlay` et feuille de style du projet, une boîte par fenêtre) :
+`cx(disque) = cx(photo) = cx(stage)` **exactement au centre de la fenêtre, avec comme sans
+personnage** — 360 à 720 de large, 384 à 768, 410 à 820, 448 à 896, 512 à 1024, 640 à 1280,
+720 à 1440. Avec personnage à 896 × 672, le disque occupe `94,5 → 301` et la photo commence
+à `313` (écart de 12 px), son nom finit à `535` ; **sans** personnage, le disque occupe
+`217,5 → 424` et la composition **est** centrée. La composition ne descend **jamais** sous
+le bas de la rangée : elle s'arrête 137 px au-dessus (12 px d'air du bas de la composition,
+puis le reste de la rangée).
 
 **Le médaillon ne touche ni le cadre, ni le bord, ni son nom** : 12 px d'air au-dessus
 (`VOCAL_PORTRAIT_AIR_TOP_PX`, comptés dans le bloc), 8 px entre l'image et le nom, 12 px
@@ -741,8 +756,10 @@ le **même axe vertical** que lui, avec son **nom juste dessous**, sur une seule
 du personnage, à défaut celui de votre assistant, jamais les deux. On voit donc toujours à qui
 l'on parle. Le médaillon est **rond**, **jamais rogné**, avec de **vraies marges** (12 px
 d'au-dessus, 12 px sous le nom), et il **grandit avec la hauteur disponible** : **96 px au
-plancher** et **288 px dès une fenêtre de 1 440 × 900** — soit **trois fois** sa taille de
-départ. Pas de personnage déposé par le projet **Présences** ? Il n'y a **aucune image de
+plancher** et **276 px dès une fenêtre de 1 440 × 900** — **2,9 fois** sa taille de départ,
+borné par le diamètre du cercle qu'il surmonte. La cible de **trois fois** (**288 px**)
+datait d'un cercle de 336 px : elle reste la référence du module, et redevient atteignable
+dès que le disque remonte. Pas de personnage déposé par le projet **Présences** ? Il n'y a **aucune image de
 remplacement**, pas même le logo Pilot : la place revient à la fenêtre du visage de l'avatar,
 ou à rien. Le portrait suit un éventuel changement de personnage sans redémarrer Pilot.
 **Le cercle, lui, ne porte ni image ni nom — et la photo ne lui prend aucune place dans la
@@ -812,8 +829,8 @@ niveau à montrer par voix, et chaque voix a **sa** couleur :
 
 | Ce qu'on voit | Où | Quelle voix | Teinte |
 |---|---|---|---|
-| le **halo intérieur** (`.vocal-halo`) | dans le disque, jusqu'à 166 px de rayon | **la vôtre** (mesurée) | `--vocal-listen` |
-| l'**enveloppe de parole** (`.vocal-orb::before`) | la **couronne extérieure** (168 → **256 px** de rayon, soit **88 px** de débord) | **celle de Pilot** (lue) | `--vocal-speak` |
+| le **halo intérieur** (`.vocal-halo`) | dans le disque, jusqu'à son rayon : **136 px** à 276 px de disque (166 à 336) | **la vôtre** (mesurée) | `--vocal-listen` |
+| l'**enveloppe de parole** (`.vocal-orb::before`) | la **couronne extérieure** : **138 → 210,3 px** de rayon à 276 px de disque, soit **72,3 px** de débord (168 → 256, soit 88 px, pour 336) | **celle de Pilot** (lue) | `--vocal-speak` |
 | le **contour** du disque | l'anneau | **celle de Pilot** (lue) | `--vocal-state` |
 
 Le mot « halo » ne désigne **que** le halo intérieur, celui de votre voix ;
@@ -846,9 +863,12 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   entière — elle allume l'état « écoute » et remplit le halo intérieur. Rien
   d'autre n'a bougé dans `vocal-mic.js` (aucune ligne touchée).
 - **Le halo intérieur** (lot B, `CONCEPTION-cercle-equaliseur.md` §6) remplit le
-  **disque** de la même mesure : son rayon vaut **racine(niveau) × 166 px**, donc
+  **disque** de la même mesure : son rayon vaut **racine(niveau) × le rayon du
+  disque** (`closest-side`, donc une valeur qui SUIT le disque : **136 px** au
+  disque de 276 px d'aujourd'hui, 166 px à 336), donc
   **0 au silence** — aucun rond résiduel. **Plancher (13/11)** : dès que l'état
-  est « écoute », le rayon ne descend plus sous **0,30 × 166 = 50 px** — la voix
+  est « écoute », le rayon ne descend plus sous **0,30 × le rayon du disque**
+  (soit **41 px** au disque de 276 px, 50 px à 336) — la voix
   de l'utilisateur se voit toujours quand elle est écoutée, et les deux seuils de
   la **détection** ne changent pas (0,06 / 0,03). Il n'existe **qu'en écoute** : deux
   gardes tombent ensemble (opacité et valeur 0), si bien que l'écho que le micro
@@ -862,9 +882,13 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   l'extension et de l'intensité. Le choix est **pur et testé** : bande → énergie
   0..1 (silence → **0**, aigu riche → **proche de 1**, son grave → **0**), puis
   lissage du projet (montée **0,5**, retombée **0,12**), puis projection :
-  **36 px** au repos → **88 px** à pleine voix, opacité **0,80 → 1**. L'extension
-  ne peut donc **pas** dépasser 88 px (256 px de rayon au total), et le silence
-  **ramène au repos** au lieu de faire pulser une lumière toute seule.
+  **36 px** au repos → **88 px** à pleine voix **pour le plein disque de la
+  conception (336 px)** — et, **dans la même proportion**, **29,6 → 72,3 px** au
+  disque d'aujourd'hui (276 px), parce que l'extension est un **rapport**
+  (`scale`), jamais un nombre de pixels posé : elle suit le disque sans rien
+  régler. Opacité **0,80 → 1**. L'extension ne peut donc **pas** dépasser la
+  couronne, et le silence **ramène au repos** au lieu de faire pulser une lumière
+  toute seule.
 - **Deux sources, jamais les deux à la fois** : la décision est **pure et
   testée** (`planSpeechEnvelopeSource`) et son ordre **est** la règle. En
   **mouvement réduit** ou quand le **contour spectral** peint déjà cette voix,
@@ -896,15 +920,20 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
 - **La lueur de parole est visible au bord, pas cachée au centre**
   (`docs/rapports/RAPPORT-halo-parole.md`, puis
   `docs/rapports/RAPPORT-halo-suivant-le-son.md`). L'enveloppe de parole
-  (`.vocal-orb::before`, boîte de **512 × 512 px**, `inset: -88px`) porte un
+  (`.vocal-orb::before`, boîte du disque **+ deux couronnes**,
+  `inset: calc(var(--vocal-crown) * -1)` — soit **420,6 × 420,6 px** au disque
+  de 276 px, 512 × 512 pour les 336 de la conception) porte un
   dégradé **inversé** : transparent au centre, puis **8 %** au-delà du bord du
   disque (81 % du rayon), **20 %** à 90 % et **34 %** au bord de la boîte (100 %). Le
   pic est donc **sur la couronne extérieure**, la seule partie qui **déborde** du
   disque opaque ; la lumière ne se perd plus sous le disque. Mesuré : contraste
   **2,28 : 1** en thème sombre et **1,60 : 1** en thème clair (avant : 1,044 : 1
-  et 1,041 : 1, sous le seuil de perception). **La couronne mesure 88 px** de
-  large (168 → **256 px** de rayon ; 44 px avant le 13/11) : le débordement
-  s'arrête à 256 px. La boîte (512 px) est plus haute que la **hauteur minimale**
+  et 1,041 : 1, sous le seuil de perception). **La couronne vaut `88 / 336` du
+  disque** (168 → **256 px** de rayon pour 336 px de disque, 44 px avant le
+  13/11 ; **138 → 210,3 px** pour le disque de 276 px d'aujourd'hui, soit
+  **72,3 px** de débord) : le débordement s'arrête au bord de la couronne, jamais
+  au-delà. La boîte du plein disque de la conception (512 px) est plus haute que
+  la **hauteur minimale**
   de la fenêtre (500 px) : c'est **la formule du §3** qui la fait tenir — le
   disque rétrécit avec la hauteur, jamais la couronne par rapport au disque. La
   couronne est donc **toujours allumée** dans les quatre états (§4, tableau des
@@ -932,7 +961,8 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
   clignotement ni disparition — elle est **fixe mais visible**, à sa **taille
   pleine** (les 88 px de débord, 256 px de rayon, `transform: scale(1)` explicite)
   et **opacité 1**, sans animation ; la **taille** est alors le seul signe qui
-  reste entre le repos (36 px) et la parole (88 px). **Aucun nouveau réglage** n'a été créé pour cet
+  reste entre le repos et la parole (dans la proportion **36 → 88** du plein disque de la
+  conception). **Aucun nouveau réglage** n'a été créé pour cet
   écran.
 
 ## 4bis. Le bas de l'écran s'efface au repos (13/11)

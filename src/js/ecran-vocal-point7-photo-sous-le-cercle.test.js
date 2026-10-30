@@ -22,6 +22,14 @@
 //   P5 — la TAILLE du medaillon ne vient pas de la largeur : elle ne change pas
 //        quand seule la largeur change.
 //
+// RECTIFICATION DU 2026-11-14 : le disque a ete ramene de 336 a 276 px. Ce
+// fichier passe `orbSize` en PARAMETRE (la taille reelle du disque ne le
+// concerne pas) et `336` y est la valeur du disque de la CONCEPTION : ses
+// attentes (288 px de medaillon) restent donc vraies et n'ont pas bouge. La
+// taille reelle et le decouplage des colonnes sont verrouilles ailleurs
+// (`vocal-sides.test.js`, `ecran-vocal-cadres-et-cercle.test.js`) ; voir
+// docs/rapports/RAPPORT-ecran-vocal-cercle-reduit.md.
+//
 // Les commentaires sont en ASCII ; les chaines lues dans les sources sont
 // copiees telles quelles.
 
