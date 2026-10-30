@@ -11767,13 +11767,56 @@ summary:focus-visible {
   --vocal-wash-w: calc(50vw - var(--vocal-orb-box) / 2 - 24px);
   /* (2) LA SURFACE DES COLONNES : le jeton de verre des panneaux flottants
      (`--glass-tint`, 94 % — deja defini par les deux themes et herite par les
-     huit sous-themes), ramene a 55 % pour que la transparence se voie. Melange
-     au FOND DU CALQUE, et non au texte : le contraste du texte ne bouge donc
-     pas d'un iota (mesure des dix palettes, `panneaux-translucides-theme.test.js`
-     et `ecran-vocal-marges-transparence-portrait.test.js`).
-     La teinte reste une variable : changer de theme la change sans redemarrage
-     (`glass-theme.js` rafraichit le flou, voir `body.glass-refresh`). */
-  --vocal-glass: color-mix(in srgb, var(--glass-tint) 55%, transparent);
+     huit sous-themes), ramene a 46 % pour que la transparence se voie. Melange
+     au FOND DU CALQUE, et non au texte.
+     Remarque du proprietaire du 2026-11-03 : « baisse l'opacite des panneaux ».
+     55 % -> 46 % : le voile cumule du panneau sur le fond de l'application passe
+     de 0,52 a 0,43. La teinte reste une variable : changer de theme la change
+     sans redemarrage (`glass-theme.js` rafraichit le flou, voir
+     `body.glass-refresh`). Verrou : `vocal-panneaux-bleu-transparent.test.js`.
+
+     POURQUOI PAS PLUS BAS — c'est mesure, pas goute. Le plancher n'est pas la
+     transparence mais la LISIBILITE, et c'est le verrou
+     `ecran-vocal-transparence-visible.test.js` (T2/T3) qui le fixe :
+       - sous 46 %, le panneau n'a plus de bord : l'ecart avec ce qu'il recouvre
+         tombe a 4,05 en `nord` (il faut 4) — il n'y a plus de panneau du tout ;
+       - et le texte courant descend avec : `solarized` tombe a 3,81 pour un
+         plancher de 3,8 (sa palette ne donne deja que 4,13 sur son propre fond).
+     La regle du proprietaire « la lisibilite l'emporte sur la transparence » a
+     donc arbitre : c'est l'opacite qui cede la premiere, pas le texte. */
+  --vocal-glass: color-mix(in srgb, var(--glass-tint) 46%, transparent);
+  /* (2bis) LE BLEU DU BAS REPRIS PAR LES PANNEAUX (meme remarque : « reprends ce
+     bleu, pour les cadres et le texte, sous forme transparente »).
+
+     D'ou vient ce bleu, exactement : ce n'est ecrit nulle part en dur. La zone de
+     saisie prend son contour de focus dans `--accent` (`border-color:
+     var(--accent)` + `box-shadow: var(--ring)`) et son texte d'accent dans
+     `--accent-text`. Les dix palettes definissent ces deux jetons : un changement
+     de theme les recalcule au repeint, sans redemarrage, et aucun sous-theme ne
+     les fige ici (c'est la regle tenue par `684e9f3`).
+
+     Deux jetons, aucun troisieme :
+       --vocal-panel-frame  le CADRE des deux colonnes (55 % du bleu : un filet,
+                            jamais un trait dur), et le liseré interne qui donne
+                            son epaisseur au verre ;
+       --vocal-panel-text   le TEXTE des titres et de l'identite des taches
+                            (`--accent-text`, la variante lisible du bleu).
+
+     POURQUOI PAS DE VOILE BLEU SUR LA SURFACE — essaye, mesure, ecarte. La
+     demande dit « pour les CADRES et le texte » ; un voile de surface en plus
+     (6 % du bleu melange au verre) coutait 0,28 de contraste au texte courant
+     (`tokyo-day` 4,67 -> 4,39) et faisait passer `solarized` SOUS son propre
+     plancher (3,82 -> 3,59 pour un seuil de 3,8) ; a 9 %, les titres tombent a
+     4,37, sous 4,5. Un bleu qui n'est pas
+     demande et qui prend la lisibilite ne passe pas : le voile a ete retire, le
+     panneau reste le verre du theme, et le bleu se voit la ou il a ete demande.
+
+     Mesure des TITRES bleus sur les dix palettes (verre a 46 %) : 5,61 / 4,98 /
+     5,33 / 5,06 / 5,21 / 5,44 / 5,02 / 5,39 / 5,93 / 5,31 — minimum 4,98, quand le
+     texte secondaire qu'ils remplacent tombait a 3,74 (`tokyo-day`). Le bleu
+     releve donc le point faible ; il ne degrade nulle part la cible de 4,5:1. */
+  --vocal-panel-frame: color-mix(in srgb, var(--accent) 55%, transparent);
+  --vocal-panel-text: var(--accent-text);
   /* (3) LA TAILLE DU MEDAILLON. Valeur de depart (le plancher de 96 px) ; la
      seule ecrivaine est `vocalSyncSides()` (super-agent.js), qui pose la valeur
      MESUREE par `vocalPortraitSize` — le budget de la liste et la feuille de
@@ -12142,7 +12185,7 @@ body.pilot-vocal-active #agent-activity {
 .vocal-side-discussion,
 .vocal-side-tasks {
   box-sizing: border-box;
-  border: 1px solid var(--glass-frame);
+  border: 1px solid var(--vocal-panel-frame);
   border-radius: var(--radius-lg);
   /* 10 px de chaque cote : `VOCAL_SIDE_FRAME_PX / 2 - 1` (10 = 22 / 2 - 1). */
   padding-inline: 10px;
@@ -12181,7 +12224,7 @@ body.pilot-vocal-active #agent-activity {
   background-color: var(--vocal-glass);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 10%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent) 18%, transparent);
 }
 /* LA ZONE D'IMAGE, SOUS LE PORTRAIT (complement du 2026-10-29, § 7bis ;
    correction du 2026-10-31) : la place que Pilot reserve a la fenetre du visage
@@ -12293,7 +12336,7 @@ body.pilot-vocal-active #agent-activity {
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: var(--vocal-panel-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -12333,7 +12376,7 @@ body.pilot-vocal-active #agent-activity {
 .vocal-task-who {
   font-size: 11px;
   line-height: 15px;
-  color: var(--text-secondary);
+  color: var(--vocal-panel-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

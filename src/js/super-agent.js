@@ -169,6 +169,7 @@ import {
   vocalChromeClass,
   vocalChromeWakeKey,
   vocalChromeMoved,
+  vocalEtatQuiRetientLeBas,
   VOCAL_CHROME_IDLE_MS,
   VOCAL_CHROME_HIDDEN_CLASS,
 } from "./vocal-chrome.js";
@@ -5849,7 +5850,18 @@ let vocalDicteeParGeste = false;
     const champ = inputEl || null;
     const texte = champ ? String(champ.value == null ? "" : champ.value) : "";
     const faits = {
-      etat: vocalChromeEtat,
+      // L'ETAT QUI PEUT RETENIR LE BAS EST UN FAIT D'USAGE, PAS UNE MESURE
+      // (correctif du 2026-11-03, « la barre ne s'efface plus »). Voir
+      // `vocalEtatQuiRetientLeBas` : une piece silencieuse dont le micro remonte
+      // le plancher de bruit (gain automatique) laissait l'etat fige sur
+      // « ecoute », et la regle 3 retenait alors le bas toute la session. Le
+      // fait est calcule ici, au moment ou l'on decide : la dictee ouverte et le
+      // mot reellement transcrit sont lus dans l'instant, aucun cache.
+      etat: vocalEtatQuiRetientLeBas({
+        etat: vocalChromeEtat,
+        dicteeOuverte: voiceActive === true,
+        motRecu: vocalMotRecu === true,
+      }),
       // Une QUESTION de l'assistant attend une reponse : le bas reste visible,
       // et avec lui la rangee de boutons qui porte la question (regle 5 de
       // `vocal-chrome.js`). Lire la file ici est la seule chose dont ce point

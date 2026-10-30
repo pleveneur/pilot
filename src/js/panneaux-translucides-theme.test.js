@@ -548,6 +548,10 @@ describe("panneaux translucides : rien d'autre ne bouge", () => {
       /\.vocal-side-discussion,\s*\n?\.vocal-side-tasks\s*\{[^}]*background-color[^}]*\}/,
     );
     expect(verre, "la surface des deux colonnes est introuvable").toBeTruthy();
+    // 2026-11-03 : la teinte du theme seule (`--vocal-glass`, 46 %). Le bleu de
+    // la meme remarque va aux CADRES (`--vocal-panel-frame`) et au TEXTE
+    // (`--vocal-panel-text`) ; essaye en voile de surface, il faisait passer
+    // `solarized` sous son plancher (3,59 pour 3,8) et a ete retire.
     expect(declaration(verre[0], "background-color")).toBe("var(--vocal-glass)");
     expect(verre[0]).not.toMatch(COULEUR_EN_DUR);
     expect(declaration(verre[0], "backdrop-filter")).toBe("blur(12px)");

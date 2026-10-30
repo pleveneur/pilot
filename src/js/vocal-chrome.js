@@ -88,6 +88,44 @@ export function vocalChromeVisible(faits = {}) {
 }
 
 /**
+ * L'ETAT QUI RETIENT LE BAS (§2.6, regle 3 de `vocal-chrome.js`) — et pourquoi ce
+ * n'est PAS l'etat de l'ecran tel quel.
+ *
+ * LE DEFAUT CORRIGE (remarque du proprietaire du 2026-11-03 : « la barre ne
+ * s'efface plus du tout »). Le mecanisme d'effacement n'etait pas casse : la
+ * regle 3 interdit le masquage des que l'etat vaut « ecoute » ou « parole ».
+ * Mais depuis que l'etat « ecoute » se calcule sur une MESURE de niveau (lot 3,
+ * `9a8c2cf`), ce fait n'est plus un fait d'usage : la mesure du micro est
+ * ouverte A L'ENTREE du mode et jamais refermee (`requestVocalMeasure(
+ * "entree")`), la descente de l'hysteresis (`VOCAL_VOICE_OFF = 0,03`) est SOUS le
+ * plancher de voix du projet (`BARGE_IN_MIN_LEVEL = 0,05`, vocal-mic.js), et le
+ * micro demande `autoGainControl` : le plancher de bruit d'une piece silencieuse
+ * passe donc au-dessus du seuil de sortie, l'etat ne revient jamais au repos, et
+ * la regle 3 retient le bas pendant toute la session. Le decompte de 2 500 ms
+ * sonnait, `vocalSyncChrome` recalculait, et repondait encore « visible ».
+ *
+ * LE FAIT RETENU EST DONC UN FAIT D'USAGE, JAMAIS UNE MESURE :
+ *  - « parole » retient toujours (Pilot lit une reponse, on doit pouvoir couper) ;
+ *  - « ecoute » ne retient que si la dictee ouverte a REELLEMENT transcrit un mot
+ *    (`vocalMotRecu`) : c'est la seule preuve que l'utilisateur se sert du bas ;
+ *  - tout le reste vaut repos.
+ * Une piece silencieuse, un souffle, un gain automatique : plus rien de cela ne
+ * peut retenir le bas. Aucun second mecanisme n'est ajoute, aucune duree ne
+ * change, aucune autre regle n'est touchee.
+ *
+ * @param {{etat?: string, dicteeOuverte?: boolean, motRecu?: boolean}} [faits]
+ * @returns {"idle"|"listening"|"speaking"} l'etat que la regle 3 a le droit de voir
+ */
+export function vocalEtatQuiRetientLeBas(faits = {}) {
+  const f = faits || {};
+  if (f.etat === "speaking") return "speaking";
+  if (f.etat === "listening" && f.dicteeOuverte === true && f.motRecu === true) {
+    return "listening";
+  }
+  return "idle";
+}
+
+/**
  * La classe CSS a poser sur l'overlay. PURE.
  * `vocalChromeVisible` rend « le bas reste visible » : c'est son INVERSE qui
  * pose la classe — une seule correspondance, jamais deux.

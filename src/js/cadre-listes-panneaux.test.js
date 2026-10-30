@@ -230,7 +230,18 @@ describe("2. le cadre est pose, arrondi, sans inventer de valeur", () => {
     expect(regle, "aucune regle groupee pour les deux colonnes").toBeTruthy();
     expect(regle.selecteur).toMatch(/\.vocal-side-discussion\s*,\s*\n?\.vocal-side-tasks/);
     const corps = regle.corps;
-    expect(corps).toMatch(/border\s*:\s*1px solid var\(--glass-frame\)/);
+    // Remarque du proprietaire du 2026-11-03 : « reprends ce bleu, pour les
+    // cadres et le texte, sous forme transparente ». Le cadre ne prend donc plus
+    // le gris du texte secondaire (`--glass-frame`) mais le bleu du theme
+    // (`--vocal-panel-frame`, 55 % de `--accent`) : ce qui est verifie ici reste
+    // identique — c'est un JETON, il est transparent, et rien n'est ecrit en dur.
+    expect(corps).toMatch(/border\s*:\s*1px solid var\(--vocal-panel-frame\)/);
+    const cadre = vars(".pilot-vocal") || new Map();
+    const jetonCadre = evalValeur(cadre, "var(--vocal-panel-frame)");
+    expect(jetonCadre, "--vocal-panel-frame introuvable").toBeTruthy();
+    expect(jetonCadre).toMatch(/var\(--accent\)/);
+    expect(jetonCadre).toMatch(/transparent/);
+    expect(jetonCadre).not.toMatch(/#[0-9a-fA-F]{3,8}\b|\brgba?\s*\(/);
     expect(corps).toMatch(/border-radius\s*:\s*var\(--radius-lg\)/);
     // Le cadre est PRIS sur la largeur (voir section 3), pas ajoute a cote.
     expect(corps).toMatch(/box-sizing\s*:\s*border-box/);

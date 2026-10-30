@@ -241,7 +241,7 @@ le réveil a donc déjà eu lieu quand le pointeur arrive.
 |---|---|---|
 | 1 | Un **message du micro fermé** est affiché (`vocalMicFerme` non vide) | une panne doit rester lisible, et son bouton « Autoriser le micro » cliquable |
 | 2 | **Le champ contient du texte** (dictée en cours de transcription, brouillon, ou **focus dans le champ**) | on ne cache jamais ce que l'on est en train d'écrire, ni le champ où l'on tape |
-| 3 | L'état est **écoute** ou **parole** | consigne du propriétaire : « quand l'écran reprend parole/écoute » |
+| 3 | L'état est **parole**, ou **écoute** *avec un mot réellement transcrit* | consigne du propriétaire : « quand l'écran reprend parole/écoute ». Correctif du 2026-11-03 : ce fait est un fait d'**usage**, pas la mesure du niveau — la mesure est ouverte à l'entrée du mode et jamais refermée, son seuil de sortie (0,03) est sous le plancher de voix du projet (0,05) et le micro demande `autoGainControl` : une pièce silencieuse remplissait la règle 3 en permanence et le bas ne s'effaçait plus **jamais**. La décision pure `vocalEtatQuiRetientLeBas({ etat, dicteeOuverte, motRecu })` (dans `vocal-chrome.js`) rend `parole` toujours, `écoute` seulement si `dicteeOuverte && motRecu`, et `repos` sinon |
 | 4 | Le **pointeur est sur la zone du bas** (ligne d'état, saisie ou bouton de dépannage) | on ne fait pas disparaître sous le curseur ce qu'il désigne |
 | 5 | **Une question de l'assistant attend une réponse** (§ 2.7) | la rangée de boutons qui la porte vit dans le bas : l'effacer rendrait la question invisible et bloquerait le travail sans un mot |
 
@@ -272,7 +272,7 @@ cercle : elle ne concerne que les deux blocs du bas.
   le focus. Un utilisateur au clavier ne se retrouve donc jamais devant un écran
   sans zone de saisie : il tape, elle revient.
 - **Dictée** : jamais masquée pendant qu'elle produit du texte (règle 2 de
-  § 2.3), ni pendant l'écoute (règle 3). Le texte dicté arrive dans le champ et
+  § 2.3), ni pendant qu'un mot transcrit est arrivé (règle 3). Le texte dicté arrive dans le champ et
   **réveille** le bas au même instant (appel unique depuis le point d'écriture).
 - **Micro en panne** : la phrase et le bouton restent affichés en permanence
   (règle 1). C'est le seul cas où le bas ne s'efface **jamais** : l'écran doit

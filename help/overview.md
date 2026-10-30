@@ -512,9 +512,11 @@ En mode **Vocal** :
   d'état et la zone de saisie disparaissent après **deux secondes et demie** :
   l'écran ne garde que le cercle. **Bougez la souris, cliquez, tournez la molette
   ou tapez une touche** : le bas revient aussitôt (`Échap`, lui, sort du mode).
-  Il **reste affiché** tant que Pilot vous écoute ou vous répond, tant que le
-  champ contient du texte (une dictée en cours de transcription), et tant qu'une
-  panne de micro est annoncée. Le cercle, le bouton « Réveiller … », le logo et
+  Il **reste affiché** tant que Pilot vous répond (pour pouvoir le couper), tant
+  qu'une **phrase que vous venez de dire est en cours de transcription**, tant
+  que le champ contient du texte, et tant qu'une panne de micro est annoncée. Un
+  simple **bruit de fond** — un ventilateur, une pièce silencieuse — ne suffit
+  plus à le retenir : c'est votre usage qui compte, pas le niveau sonore. Le cercle, le bouton « Réveiller … », le logo et
   le bouton « Travail », eux, **ne disparaissent jamais**, et le cercle **ne
   bouge pas d'un pixel** quand le bas s'efface.
 - **Si vous avez réduit les animations**, cette lueur reste **allumée et fixe**,

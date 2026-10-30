@@ -133,7 +133,13 @@ describe("R2 — les colonnes sont du VERRE, pas un filet devant du vide", () =>
 
   it("une teinte, un flou, et rien d'autre", () => {
     const bloc = surface();
-    expect(bloc).toMatch(/background-color:\s*var\(--vocal-glass\)/);
+    // Remarque du proprietaire du 2026-11-03 : la surface est la TEINTE du theme
+    // (`--vocal-glass`, 46 %), une variable : aucune couleur n'est ecrite ici.
+    // Le bleu de la meme remarque va aux CADRES et au TEXTE, pas a la surface :
+    // essaye a 6 %, il faisait passer `solarized` sous son propre plancher
+    // (3,82 -> 3,59) et a 9 % les titres tombaient a 4,37
+    // (voir `vocal-panneaux-bleu-transparent.test.js`).
+    expect(bloc).toMatch(/background-color:\s*var\(--vocal-glass\);/);
     expect(bloc).toMatch(/-webkit-backdrop-filter:\s*blur\(12px\)/);
     expect(bloc).toMatch(/backdrop-filter:\s*blur\(12px\)/);
     // `background-color` et non `background` : le raccourci effacerait l'image
@@ -151,10 +157,13 @@ describe("R2 — les colonnes sont du VERRE, pas un filet devant du vide", () =>
     expect(jeton).toMatch(/color-mix\(/);
     expect(jeton).toMatch(/transparent/);
     expect(jeton).not.toMatch(/#[0-9a-fA-F]{3,8}\b|\brgba?\s*\(|\bhsla?\s*\(/);
-    // 55 % : assez pour lire, assez peu pour voir au travers. (Le plancher
+    // 46 % : assez pour lire, assez peu pour voir au travers. (Le plancher
     // mesure est verifie dans `ecran-vocal-transparence-visible.test.js` :
     // au-dela, la lumiere du fond ne traverse plus assez pour se voir.)
-    expect(jeton).toContain("55%");
+    // 2026-11-03 : 55 % -> 46 %, « baisse l'opacite des panneaux ». Le voile
+    // cumule du panneau sur le fond passe de 0,52 a 0,43. Plus bas n'est pas
+    // possible sans perdre le BORD du panneau (4,05 en `nord`, il en faut 4).
+    expect(jeton).toContain("46%");
   });
 
   it("il y a quelque chose DERRIERE : les deux lavis du calque", () => {

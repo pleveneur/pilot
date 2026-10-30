@@ -427,7 +427,7 @@ rien n'est décidé ici en local :
 
 | Décision | Valeur retenue | Pourquoi |
 |---|---|---|
-| Couleur | `--glass-frame` = `color-mix(in srgb, var(--text-secondary) 80%, transparent)` | Même famille que le texte secondaire des panneaux ; dérivé d'une variable de thème, donc les **dix** palettes suivent, y compris un **changement à chaud** (acquis `684e9f3`, conservé). Mesure : **5,32:1** en sombre par défaut, **3,69:1** en clair, plancher **2,69:1** (tokyo-day) — lisible et discret, et **jamais plus contrasté que le texte** qu'il entoure |
+| Couleur | `--vocal-panel-frame` = `color-mix(in srgb, var(--accent) 55%, transparent)` | **Le bleu de la zone de saisie** (remarque du 2026-11-03 : « reprends ce bleu, pour les cadres et le texte, sous forme transparente »). `--accent` est le contour du champ au focus ; dérivé d'une variable de thème, donc les **dix** palettes suivent, y compris un **changement à chaud** (acquis `684e9f3`, conservé). Mesure du bord sur le verre à 46 % : **4,24:1** au pire (`nord`), **21,79:1** en `tokyo-day`, et **≥ 4:1 partout** — c'est ce plancher qui interdit de descendre sous 46 % d'opacité de verre |
 | Arrondi | `--radius-lg` (**12 px**) | Jeton **existant**, déjà porté par `.projects-dropdown`. Aucun cinquième rayon inventé, jamais une valeur en px écrite sur place |
 | Mesure | `box-sizing: border-box` + `padding-inline: 10px` = **`VOCAL_SIDE_FRAME_PX` = 22 px** | Le cadre est **pris sur** la largeur de la colonne, pas ajouté à côté, et `vocalCharsPerLine()` le retranche **avant** de compter les caractères : la mesure dit vrai, sinon le texte serait coupé plus tôt qu'annoncé |
 
@@ -483,25 +483,38 @@ répondent aux trois exigences à la fois :
 | Pièce | Valeur | Rôle |
 |---|---|---|
 | La lumière du calque | `--vocal-wash` = `color-mix(in srgb, var(--text-primary) 12%, transparent)`, peint en **deux** `radial-gradient` (un par colonne, rayon `--vocal-wash-w` = moitié de la fenêtre moins la boîte du disque et son jour) | Donne **quelque chose à voir au travers** : le lavis s'arrête avant le cercle et ne touche jamais le texte de l'état. Le calque, lui, **reste opaque** (`background: var(--bg-app)`) — on n'y voit jamais la conversation |
-| La surface des colonnes | `--vocal-glass` = `color-mix(in srgb, var(--glass-tint) 55%, transparent)` en `background-color` + `backdrop-filter: blur(12px)` + un **filet lumineux** de 0 px (`box-shadow: inset 0 1px 0` à 10 % du texte du thème) | Le jeton de verre **des panneaux flottants**, ramené à 55 %. Mélange au **fond du calque**, jamais au texte : le contraste du texte ne bouge pas d'un iota. `background-color` et non `background` : le raccourci effacerait l'image de fond du calque. Le flou passe de 8 à 12 px parce qu'à 8 px il ne dissolvait pas la structure d'un lavis large ; le filet lumineux dessine le **bord** du verre sans une seule couleur nouvelle (0 px : il ne prend aucune place, donc rien à retrancher du budget) |
+| La surface des colonnes | `--vocal-glass` = `color-mix(in srgb, var(--glass-tint) 46%, transparent)` en `background-color` + `backdrop-filter: blur(12px)` + un **filet lumineux** de 0 px (`box-shadow: inset 0 1px 0` à 10 % du texte du thème) | Le jeton de verre **des panneaux flottants**, ramené à **46 %** (55 % avant le 2026-11-03 : « baisse l'opacité des panneaux »). Mélange au **fond du calque**, jamais au texte : le contraste du texte ne bouge pas d'un iota. `background-color` et non `background` : le raccourci effacerait l'image de fond du calque. Le flou passe de 8 à 12 px parce qu'à 8 px il ne dissolvait pas la structure d'un lavis large ; le filet lumineux dessine le **bord** du verre sans une seule couleur nouvelle (0 px : il ne prend aucune place, donc rien à retrancher du budget) |
 | Le rafraîchissement | `body.glass-refresh` (`glass-theme.js`) inclut les **deux colonnes** | Une surface qui floute garde l'instantané de l'arrière-plan : sans cela, elle garderait la teinte **précédente** jusqu'au redémarrage (même correctif que les panneaux flottants) |
 
 **Mesure, sur les dix palettes, avec le calcul du compositeur** (lavis → teinte du verre →
 verre ; deux compositions, pas une) : lumière qui traverse **8,1 à 12,6 niveaux**, écart
-panneau/fond **5,1 à 26,1**. Le texte courant garde **12,57:1** en sombre et **14,49:1** en
-clair, et **4,84:1** au pire (`tokyo-day`) ; **`solarized` reste à 3,87:1** parce que sa
-propre palette plafonne à **4,13:1** sur son fond — la transparence ne peut pas rendre un
-texte plus lisible que la palette qui le porte, et **la lisibilité gagne** : on ne
-compense pas en assombrissant la teinte. Les titres (texte secondaire) restent au-dessus
-de **3,81:1** partout.
+panneau/fond **5,1 à 26,1**. Avec le verre à **46 %**, le texte courant garde **12,41:1**
+en sombre et **14,09:1** en clair, et **4,67:1** au pire (`tokyo-day`) ; **`solarized`
+reste à 3,82:1** parce que sa propre palette plafonne à **4,13:1** sur son fond — la
+transparence ne peut pas rendre un texte plus lisible que la palette qui le porte, et
+**la lisibilité gagne** : on ne compense pas en assombrissant la teinte. Les titres
+(`--accent-text`) tiennent **4,98:1** au pire sur les dix palettes, et leur propre
+plancher d'avant (texte secondaire, **3,74:1** en `tokyo-day`) a disparu avec le bleu.
+Le **bord** perd, lui, de la matière quand on baisse l'opacité : à 44 % il tombe à
+**4,05:1** en `nord`, à 42 % à **3,87:1** — il **faut 4:1**, donc 46 % est le plancher
+retenu et il n'est pas arbitraire.
+
+**Le bleu ne va pas sur la surface (mesure, 2026-11-03).** Un voile bleu de surface
+(`color-mix(in srgb, var(--accent) 6%, var(--vocal-glass))`) a été essayé : il coûtait
+**0,28** de contraste au texte courant (`tokyo-day` **4,39**) et faisait passer
+`solarized` **sous son propre plancher** (**3,59** pour 3,8) ; à 9 %, les titres
+tombaient à **4,37**, sous 4,5. La demande portait sur « les cadres et le texte » : le bleu y est, la surface
+reste du **verre de thème**. C'est la lisibilité qui a tranché, et c'est dit.
 
 Aucun réglage n'est ajouté, rien n'est mémorisé, et **rien n'est peint sur le disque** :
 la teinte et le flou ne concernent que les deux colonnes. Verrous :
 `src/js/ecran-vocal-transparence-visible.test.js` (les dix palettes, la lumière qui
 traverse, le bord, le contraste, le changement de thème à chaud) et
 `src/js/ecran-vocal-marges-transparence-portrait.test.js` (surface, jetons, lavis,
-rafraîchissement, état nu), et `src/js/panneaux-translucides-theme.test.js` (dix palettes,
-aucune couleur en dur).
+rafraîchissement, état nu), `src/js/panneaux-translucides-theme.test.js` (dix palettes,
+aucune couleur en dur) et `src/js/vocal-panneaux-bleu-transparent.test.js` (le bleu des
+cadres et du texte : deux jetons seulement, aucun sous-thème ne les fige, contraste des
+titres sur les dix palettes, bord ≥ 4 et **aucun voile de surface**).
 
 ### La taille du médaillon : mesurée, jamais écrite (2026-11-02)
 
@@ -899,6 +912,22 @@ la sortie du mode, avant le retrait du calque.
   `.pilot-vocal`, la présentation d'origine de la rangée dans l'onglet est
   intacte. Détail : `docs/conceptions/CONCEPTION-ecran-vocal-cercle-et-bas.md`
   § 2.7.
+
+**Correctif du 2026-11-03 — la règle 3 ne retient que sur un fait d'USAGE, jamais sur
+une mesure.** La règle 3 (ligne 3 du tableau) était alimentée par l'état de l'écran, et
+depuis la mesure du niveau (lot 3, `9a8c2cf`) « écoute » ne veut plus dire « le micro est
+ouvert » mais « le micro **capte** » : la mesure est ouverte à l'entrée du mode et jamais
+refermée, son seuil de descente (**0,03**) est **sous** le plancher de voix du projet
+(`BARGE_IN_MIN_LEVEL` = 0,05), et le micro demande `autoGainControl` — une pièce
+silencieuse passait donc au-dessus du seuil, l'état ne revenait **jamais** au repos, la
+règle 3 interdisait le masquage pendant toute la session et les 2 500 ms devenaient
+décoratifs. Le fait donné à la règle 3 est désormais la fonction **pure**
+`vocalEtatQuiRetientLeBas({ etat, dicteeOuverte, motRecu })` : `parole` retient toujours
+(on doit pouvoir couper la parole) ; `écoute` ne retient que si **un mot a été réellement
+transcrit** dans la dictée ouverte ; tout le reste vaut `repos`. Le mécanisme lui-même
+n'est **ni doublé, ni déplacé, ni réglé** : même minuteur unique, même point d'écriture,
+mêmes 2 500 ms, mêmes gestes, mêmes cinq règles. Verrou :
+`src/js/vocal-barre-s-efface-au-repos.test.js`.
 
 **Cas particulier, voulu** : au repos avec la dictée **armée mais encore
 silencieuse** — le cas normal de cet écran — le champ est vide et l'état est
@@ -1731,7 +1760,7 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : les **quatre niveaux** de longueur (`VOCAL_BREVITY_LEVELS`, `normalizeVocalBrevityLevel`, `vocalBrevityLabel`), la consigne d'un niveau (`vocalBrevityInstruction`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
-| `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les quatre règles **dans l'ordre**), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
+| `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les quatre règles **dans l'ordre**), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`, et `vocalEtatQuiRetientLeBas` (**le seul fait d'usage** donné à la règle 3 : `parole` retient toujours, `écoute` seulement si un mot a été transcrit). Aucun DOM, aucune minuterie |
 | ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône seule** depuis le 2026-11-02 (le texte visible est retiré ; `title` + `aria-label` = `vocalBareLabel()`, qui dit l'état puis l'action), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed` et l'infobulle), le terme `vocalBare ||` dans `vocalSyncChrome` (le bas est **retenu allumé**, il n'est plus éteint par l'état nu : la zone de saisie n'est pas dans le périmètre, 2026-11-01), la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
 | ✅ **livré** `vocal-sides.js` | **source unique** du budget des colonnes et du personnage (§3ter) : `planVocalSides` (`track`, `taskTrack`, `columnHeight`, `listHeight`, `portraitSize`, `portraitBlock`, `imageZone`), `vocalPortraitSize` (médaillon **mesuré** : place dans le cadre, trois rangées garanties à la liste, cible 288, plancher 96), `vocalPortraitBlockSize` (`taille + 52`), `planVocalImageZone`, `planVocalTasks`, `planVocalDiscussion` — aucun DOM, aucune constante cachée |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
