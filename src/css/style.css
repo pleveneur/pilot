@@ -12443,6 +12443,115 @@ body.pilot-vocal-active #agent-activity {
   transition: none;
 }
 
+/* --- §4bis/§6 (decision 9 du 2026-10-29) L'ETAT NU : TOUT MASQUER SAUF LE PORTRAIT ---
+   Un SEUL petit bouton, dans la barre du haut (`.vocal-top`), en enfant de
+   celle-ci — il n'est pas un septieme hote cliquable (issue #381) : la barre
+   l'est deja, le bouton n'a besoin que de `pointer-events: auto` sur lui-meme.
+   Il porte une ICONE SEULE (14 px) : aucun mot dans une bande qui n'en porte
+   aucun, et l'infobulle (posee par `super-agent.js`, module `vocal-bare.js`) dit
+   l'etat puis l'action. Sa TAILLE ne change jamais d'un etat a l'autre : le point
+   de clic ne bouge pas sous le doigt. Il ne prend jamais de couleur d'etat
+   `--vocal-*` : ce n'est pas un etat de la voix.
+   FORME : 28 x 24 px (la plus petite cible confortable du WCAG 2.2, 24 x 24),
+   centree dans la bande de 44 px ou elle flotte (10 px d'air au-dessus et
+   au-dessous), `z-index: 1` — sous le logo (2), donc la sortie gagne toujours. */
+.vocal-display-toggle {
+  z-index: 1;
+  margin-inline: auto;
+  width: 28px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  /* PAS de `pointer-events` ici, et c'est volontaire : `pointer-events` est une
+     propriete HERITEE, et la barre qui le porte (`.vocal-top`) est deja l'un des
+     six hotes cliquables (issue #381). Declarer `pointer-events: auto` sur le
+     bouton en ferait un septieme hote aux yeux du verrou
+     `vocal-aucun-calque-ne-capte-les-clics.test.js` : le bouton capte le clic
+     par heritage, sans une regle de plus. */
+  transition: background var(--transition), border-color var(--transition),
+    box-shadow var(--transition);
+}
+.vocal-display-toggle:hover,
+.vocal-display-toggle:focus-visible {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* L'ETAT MASQUE — une SEULE classe sur l'overlay (`vocal-bare`), posee par
+   `vocalSyncBare()` (super-agent.js), seul ecrivain. Elle n'a aucun rapport avec
+   `vocal-chrome-hidden` : les deux peuvent etre posees en meme temps.
+   LA FORME, dans cet ordre : opacite 0 (le fondu de 180 ms, `--transition`),
+   puis `visibility: hidden` RETARDEE d'autant — sinon le noeud disparaitrait
+   d'un coup et le fondu ne se verrait pas —, puis `pointer-events: none` : un
+   noeud invisible ne recoit aucun clic et sort du parcours clavier.
+   INTERDITS : `display: none`, une regle de hauteur, de marge, de padding ou de
+   position. L'ESPACE RESTE RESERVE : le disque et le portrait ne bougent pas d'un
+   pixel, et le retour ne les fait pas sauter. Aucune translation non plus : le
+   disque ne glisse pas, il s'eteint.
+   CE QUI N'EST PAS NOMME ICI, ET NE DOIT JAMAIS L'ETRE : le portrait et sa
+   pastille (`.vocal-portrait`, `.vocal-portrait-name`) — la regle la plus sure est
+   l'absence de regle ; le logo (une sortie), l'entree « Travail » (un acces) et
+   les trois boutons systeme (hors de l'overlay).
+   SANS PERSONNAGE, il ne reste que le bouton : le disque s'eteint comme le
+   reste, il ne demeure pas pour lui tenir compagnie. */
+.pilot-vocal.vocal-bare .vocal-orb,
+.pilot-vocal.vocal-bare .vocal-mic-fix,
+.pilot-vocal.vocal-bare .vocal-status,
+.pilot-vocal.vocal-bare .vocal-side-discussion,
+.pilot-vocal.vocal-bare .vocal-side-tasks > .vocal-tasks-title,
+.pilot-vocal.vocal-bare .vocal-side-tasks > .vocal-side-body,
+.pilot-vocal.vocal-bare .vocal-side-tasks > .vocal-now {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--transition), visibility 0s linear 180ms;
+}
+/* LA SAISIE, ecrite a part — seule exception du bloc, et elle est MESUREE. Son
+   clic et son curseur sont deja coupes a la meme seconde par l'effacement du bas
+   (`.vocal-chrome-hidden`, que `vocalSyncChrome` pose, et qui contient desormais
+   `!vocalBare` dans sa condition). Redire ici `pointer-events: none` nommerait la
+   zone de saisie deux fois : le verrou de l'issue #381
+   (`ecran-vocal-question-utilisable.test.js`) n'admet QU'UNE regle de ce genre sur
+   la saisie, celle de l'effacement du bas. La forme ci-dessous suffit : invisible,
+   donc inerte au clic comme au clavier. */
+.pilot-vocal.vocal-bare .vocal-input {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--transition), visibility 0s linear 180ms;
+}
+/* La barre garde sa place et sa hauteur (elle porte le bouton) : elle perd son
+   fond et son filet, et n'est plus une barre. */
+.pilot-vocal.vocal-bare .vocal-top {
+  background: transparent;
+  border-color: transparent;
+}
+/* L'EXCEPTION NOMMEE : le bouton reste utilisable, focusable et trouvable. Il
+   devient alors la seule chose de la bande — fond plein et ombre discrete,
+   trouvable sans crier. Il n'a pas besoin d'y rappeler `pointer-events` :
+   l'effacement ci-dessus ne le nomme pas, et la barre qui le porte le rend
+   cliquable par heritage (meme raison que dans le bloc du bouton). */
+.pilot-vocal.vocal-bare .vocal-top .vocal-display-toggle {
+  opacity: 1;
+  visibility: visible;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+/* Mouvement reduit : l'extinction est INSTANTANEE (aucun fondu). L'espace reste
+   reserve et le bouton reste le seul moyen de tout remettre. */
+.pilot-vocal.vocal-reduced.vocal-bare .vocal-side-discussion,
+.pilot-vocal.vocal-reduced.vocal-bare .vocal-side-tasks > .vocal-tasks-title,
+.pilot-vocal.vocal-reduced.vocal-bare .vocal-side-tasks > .vocal-side-body,
+.pilot-vocal.vocal-reduced.vocal-bare .vocal-side-tasks > .vocal-now {
+  transition: none;
+}
+
 /* --- §4.2/§4.3 Mouvement reduit : le MEME drapeau que les animations
    d'ouverture (prefers-reduced-motion + parametre modal_animations, pose par
    super-agent.js via la classe .vocal-reduced). Disque immobile — la couleur

@@ -8,7 +8,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import markdownit from "markdown-it";
-import { refreshIcons } from "./icons.js";
+import { refreshIcons, setIcon } from "./icons.js";
+// L'ETAT NU DE L'ECRAN VOCAL (decision 9 du 2026-10-29, section 6 de la
+// CONCEPTION-ecran-vocal-portrait-et-colonnes.md) : un SEUL bouton discret
+// masque tout sauf le portrait, puis remet tout. Les DECISIONS (les deux
+// libelles mot pour mot, l'icone, `aria-pressed`, la classe d'etat) sont PURES
+// et vivent dans ce module ; ce fichier ne fait que les appliquer a UN endroit
+// (`vocalSyncBare`) et construire le bouton une fois (`buildVocalDisplayToggle`).
+import {
+  VOCAL_BARE_CLASS,
+  VOCAL_DISPLAY_TOGGLE_CLASS,
+  vocalBareLabel,
+  vocalBareIcon,
+  vocalBarePressed,
+  vocalBareClass,
+  vocalBareNext,
+  normalizeVocalBare,
+} from "./vocal-bare.js";
 // Lecture a voix haute des reponses de l'assistant : rangee d'actions sous la
 // bulle (bouton Ecouter / Arreter). Regles (nettoyage du balisage, decoupage en
 // phrases, une seule lecture a la fois) regroupees dans read-aloud.js.
@@ -3997,6 +4013,14 @@ export async function createSuperAgent(container) {
   let vocalChromeEtat = "idle";
   let vocalChromePointeur = null;
   let vocalChromeRepere = null;
+  // ── L'ETAT NU : TOUT MASQUER SAUF LE PORTRAIT (section 6 de la conception) ──
+  // Un SEUL booleen, en MEMOIRE seulement : ni `localStorage`, ni fichier, ni
+  // entree de configuration (section 6.6). Il repart a « tout visible » a chaque
+  // entree dans le mode, comme les colonnes. Declare ICI pour la meme raison que
+  // les quatre etats du bas : `vocalSyncChrome` peut le lire des l'ouverture de
+  // l'onglet, donc avant le corps de l'ecran Vocal (une `let` declaree la-bas
+  // serait en zone morte temporelle).
+  let vocalBare = false;
   // ── L'ENVELOPPE DE PAROLE MESUREE (voix locale) ──
   // Le metre (analyseur monte sur le son que Pilot joue vraiment) vit dans
   // vocal-enveloppe-aigu.js. Il n'existe QUE pendant le mode Vocal : cree a
@@ -5164,7 +5188,51 @@ let vocalDicteeParGeste = false;
       <div class="vocal-status" role="status" aria-live="polite">Je vous écoute.</div>
       <div class="vocal-input"></div>
     `;
+    // LE BOUTON DE MASQUAGE, dans la barre du haut. Ajoute APRES le modele pour
+    // que la structure de l'ecran reste lisible d'un seul coup d'oeil — meme
+    // patron que le libelle du bouton de relance, pose apres coup.
+    buildVocalDisplayToggle(ov.querySelector(".vocal-top"));
     return ov;
+  }
+
+  /**
+   * LE BOUTON UNIQUE DE MASQUAGE (section 6.4 de la conception du 2026-10-29).
+   *
+   * Il est AJOUTE APRES le modele, dans la barre de 44 px : le balisage de la
+   * barre reste un div vide (la liste ordonnee des classes de `buildVocalOverlay`
+   * ne gagne donc aucune entree, et le modele n'est pas retouche). Il ne
+   * porte QUE l'icone (14 px) et nait dans l'etat « tout visible ».
+   *
+   * Il n'est JAMAIS `hidden` ni `disabled` : il commande une chose qui existe
+   * meme quand les colonnes ne tiennent pas dans la fenetre. Aucun
+   * `aria-controls` non plus : il ne commande pas un noeud nomme, mais l'etat de
+   * l'ecran entier.
+   *
+   * Le clic ne decide rien : il demande la bascule au module pur, puis laisse
+   * `vocalSyncBare` peindre (seul ecrivain).
+   *
+   * @param {Element|null} barre la barre du haut (`.vocal-top`)
+   * @returns {Element|null} le bouton pose, ou null si la barre manque
+   */
+  function buildVocalDisplayToggle(barre) {
+    if (!barre || typeof document === "undefined") return null;
+    const bouton = document.createElement("button");
+    bouton.type = "button";
+    bouton.className = VOCAL_DISPLAY_TOGGLE_CLASS;
+    // Les DEUX attributs portent la MEME phrase, l'etat puis l'action.
+    bouton.setAttribute("title", vocalBareLabel(false));
+    bouton.setAttribute("aria-label", vocalBareLabel(false));
+    bouton.setAttribute("aria-pressed", vocalBarePressed(false) ? "true" : "false");
+    // L'icone est posee par le mecanisme existant, a la taille des menus ; la
+    // taille du BOUTON, elle, ne change jamais d'un etat a l'autre.
+    setIcon(bouton, vocalBareIcon(false), { size: "icon-sm" });
+    bouton.dataset.vocalBareIcon = vocalBareIcon(false);
+    bouton.addEventListener("click", () => {
+      vocalBare = vocalBareNext(vocalBare);
+      vocalSyncBare();
+    });
+    barre.appendChild(bouton);
+    return bouton;
   }
 
   /**
@@ -5357,11 +5425,53 @@ let vocalDicteeParGeste = false;
       micFerme: vocalMicFerme,
       pointeurActif: vocalChromePointeurSurLeBas(),
     };
-    const visible = vocalChromeTimer !== 0 || vocalChromeVisible(faits);
+    // L'ETAT NU COMMANDE LE BAS (section 6.7) : quand tout est masque, le bas ne
+    // revient plus — ni le decompte, ni un geste. Le minuteur continue de tourner
+    // pour rien : on ne le touche pas, sinon une sortie de l'etat nu le
+    // relancerait a la main et l'ecran se rallumerait sans geste.
+    const visible = !vocalBare && (vocalChromeTimer !== 0 || vocalChromeVisible(faits));
     // SEUL endroit qui ecrit la classe, et la correspondance classe/visibilite
     // est celle du module pur (`vocalChromeClass`) : aucun deuxieme juge.
     const classe = vocalChromeClass(visible);
     vocalOverlay.classList.toggle(VOCAL_CHROME_HIDDEN_CLASS, classe !== "");
+  }
+
+  /**
+   * POINT D'ECRITURE UNIQUE de l'etat nu (section 6.7).
+   *
+   * Il ne DECIDE rien : la classe, le libelle, l'icone et `aria-pressed` viennent
+   * du module pur `vocal-bare.js`, d'apres le seul booleen `vocalBare`. Il est
+   * appele par le CLIC du bouton et par `enterVocal()` (remise a « tout
+   * visible ») : aucun `setInterval`, aucun ecouteur, aucun minuteur propre.
+   *
+   * Chaque valeur n'est ecrite que si elle change : le tic de 900 ms des colonnes
+   * repasse a cote sans faire clignoter l'infobulle ni redecoder l'icone.
+   *
+   * A la fin, il rend la main au point d'ecriture du bas : l'effacement du bas
+   * depend desormais de ce booleen, et deux verites sur la meme classe seraient
+   * un etat de trop.
+   */
+  function vocalSyncBare() {
+    if (!vocalOverlay) return;
+    vocalOverlay.classList.toggle(VOCAL_BARE_CLASS, vocalBareClass(vocalBare) !== "");
+    const bouton = vocalOverlay.querySelector(`.${VOCAL_DISPLAY_TOGGLE_CLASS}`);
+    if (bouton) {
+      const libelle = vocalBareLabel(vocalBare);
+      if (bouton.getAttribute("title") !== libelle) {
+        bouton.setAttribute("title", libelle);
+        bouton.setAttribute("aria-label", libelle);
+      }
+      const presse = vocalBarePressed(vocalBare) ? "true" : "false";
+      if (bouton.getAttribute("aria-pressed") !== presse) {
+        bouton.setAttribute("aria-pressed", presse);
+      }
+      const icone = vocalBareIcon(vocalBare);
+      if (bouton.dataset.vocalBareIcon !== icone) {
+        bouton.dataset.vocalBareIcon = icone;
+        setIcon(bouton, icone, { size: "icon-sm" });
+      }
+    }
+    vocalSyncChrome();
   }
 
   /**
@@ -6103,6 +6213,12 @@ let vocalDicteeParGeste = false;
     // Entrer dans le mode EST un geste : le decompte part donc deja, et le bas
     // est visible a l'ouverture (on n'arrive jamais sur un ecran nu).
     vocalRestartChromeTimer();
+    // ETAT NU : on entre TOUJOURS avec tout visible (section 6.6 — l'ecran Vocal
+    // est un mode, pas une preference). La remise a lieu AVANT la peinture des
+    // colonnes et avant `vocalSyncChrome` (appele par `applyVocalState`) : aucun
+    // etat masque ne peut donc survivre d'une entree a l'autre.
+    vocalBare = normalizeVocalBare(false);
+    vocalSyncBare();
     // LOT 1 : le portrait du personnage et son nom dans la colonne de droite,
     // puis la largeur des deux colonnes.
     applyVocalPortrait(vocalOverlay);
@@ -6145,6 +6261,11 @@ let vocalDicteeParGeste = false;
       vocalChromeRepere = null;
       vocalChromeEtat = "idle";
       if (vocalOverlay) vocalOverlay.classList.remove(VOCAL_CHROME_HIDDEN_CLASS);
+      // L'ETAT NU ne survit pas a l'ecran : rien n'est memorise, la prochaine
+      // entree repart de « tout visible » (section 6.6). La classe part avec
+      // l'overlay, mais le booleen est remis a zero ici, tout de suite, pour que
+      // rien ne depende de l'ordre de retrait.
+      vocalBare = normalizeVocalBare(false);
       // QUITTER l'ecran, c'est rendre le silence : si Pilot est en train de lire
       // (lecture declenchee par ce mode), sortir l'arrete. Sans cela, une voix
       // lancee ici continuerait dans « Detaille », qui ne doit rien changer a son
