@@ -86,6 +86,44 @@ export const VOCAL_TASKS_GROUP_WAITING = "En attente";
 /** Placement vertical du disque dans la scene (hors flux : couronnes comprises). */
 export const VOCAL_ORB_RESERVED_PX = 289;
 
+// ── LOT 3 : LE CONTENU DE LA COLONNE DE GAUCHE ──
+// Source : CONCEPTION-ecran-vocal-portrait-et-colonnes.md, § 1.3 (ce que la
+// colonne montre), § 4.2 (les deux mesures de texte) et § 4.3 (les noms).
+// Meme regle que le lot 2 : aucune valeur choisie ici, toutes viennent du
+// document de conception cite ci-dessus (§ 1.3, § 4.2, § 4.3).
+
+/**
+ * Ce que la colonne LIT du DOM : trois echanges au plus. Le plafond borne la
+ * lecture, pas l'affichage (§ 4.2).
+ */
+export const VOCAL_DISCUSSION_MAX_MESSAGES = 6;
+/** Hauteur d'une ligne d'apercu, en px (§ 4.2 : 23 px, soit 8 x 23 = 184 px). */
+export const VOCAL_DISCUSSION_LINE_H = 23;
+/** Ecart entre deux messages, en px (§ 4.2 : le meme 14 px que le budget). */
+export const VOCAL_DISCUSSION_GAP = 14;
+/**
+ * Le haut de la colonne, en px, retire du budget d'unites : c'est le `14` de la
+ * formule du § 4.2, `lignes = floor((H - 14) / 37)`.
+ */
+export const VOCAL_DISCUSSION_HEAD_PX = 14;
+/** Une question tient sur DEUX lignes au plus (decision 3). */
+export const VOCAL_DISCUSSION_QUESTION_LINES = 2;
+/** Une reponse sur HUIT lignes au plus (decision 3). */
+export const VOCAL_DISCUSSION_ANSWER_LINES = 8;
+/**
+ * Largeur moyenne d'un caractere, en px : c'est le `7,6` du § 4.2, qui donne 42
+ * caracteres a 320 px et 52 a 400 px.
+ */
+export const VOCAL_DISCUSSION_CHAR_PX = 7.6;
+/**
+ * La place, en px, que prend la ligne « ... et N echange(s) plus haut » : sa
+ * hauteur (15 px) et son ecart au premier message (14 px). Reservee d'avance,
+ * elle ne peut donc pas pousser un message hors de la colonne.
+ */
+export const VOCAL_DISCUSSION_MORE_PX = 15 + VOCAL_DISCUSSION_GAP;
+/** Le titre de la colonne, en haut (meme reglage que « TACHES »). */
+export const VOCAL_DISCUSSION_TITLE = "DISCUSSION";
+
 /**
  * La largeur des deux colonnes, et la hauteur dont elles disposent.
  *
@@ -257,4 +295,179 @@ export function vocalNowLine(missions) {
     return attente.length === 1 ? "1 mission en attente" : `${attente.length} missions en attente`;
   }
   return "Tout est au repos";
+}
+
+/**
+ * Combien de caracteres tiennent sur une ligne de la colonne : `track / 7,6`.
+ *
+ * C'est ce chiffre qui FIXE le nombre de lignes coupees par `vocalExcerpt` :
+ * aucune constante cachee ne vient doubler la largeur reelle.
+ *
+ * @param {number} track largeur d'une colonne, en px (`planVocalSides`)
+ * @returns {number} caracteres par ligne, au moins 1
+ */
+export function vocalCharsPerLine(track) {
+  const largeur = Number(track);
+  const px = Number.isFinite(largeur) && largeur > 0 ? largeur : 0;
+  return Math.max(1, Math.floor(px / VOCAL_DISCUSSION_CHAR_PX));
+}
+
+/**
+ * Ce texte tient-il dans le budget de lignes ? (dit sans rien modifier)
+ *
+ * @param {string} text texte brut
+ * @param {number} maxLines nombre de lignes autorise
+ * @param {number} charsPerLine caracteres par ligne (`vocalCharsPerLine`)
+ * @returns {boolean} vrai si le texte doit etre coupe
+ */
+export function vocalSideClipped(text, maxLines, charsPerLine) {
+  const brut = normaliserApercu(text);
+  const lignes = Math.max(1, Math.floor(Number(maxLines) || 0));
+  const parLigne = Math.max(1, Math.floor(Number(charsPerLine) || 0));
+  return brut.length > lignes * parLigne;
+}
+
+/**
+ * Un texte ramene sur une seule ligne : l'apercu d'une colonne ne connait ni
+ * saut de ligne ni suite d'espaces.
+ *
+ * @param {string} text texte lu dans le DOM
+ * @returns {string} le meme texte, espaces reduits, sans bord
+ */
+function normaliserApercu(text) {
+  return String(text == null ? "" : text)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Coupe un texte au budget de lignes, SUR UNE FRONTIERE DE MOT et jamais dans un
+ * mot (meme regle que `cutTextAtBoundary` de `speech-text.js`, le precedent du
+ * projet). Le texte rendu porte l'ellipse quand il a ete coupe : une coupe
+ * muette serait un mensonge.
+ *
+ * @param {string} text texte brut
+ * @param {number} maxLines lignes autorisees pour CE message (2 ou 8)
+ * @param {number} charsPerLine caracteres par ligne (`vocalCharsPerLine`)
+ * @returns {{text:string, lines:number, clipped:boolean}}
+ */
+export function vocalExcerpt(text, maxLines, charsPerLine) {
+  const brut = normaliserApercu(text);
+  const lignes = Math.max(1, Math.floor(Number(maxLines) || 0));
+  const parLigne = Math.max(1, Math.floor(Number(charsPerLine) || 0));
+  const budget = lignes * parLigne;
+  if (brut.length <= budget) {
+    return { text: brut, lines: Math.max(1, Math.ceil(brut.length / parLigne)), clipped: false };
+  }
+  // Une place est gardee pour l'ellipse DANS le budget : le texte rendu ne
+  // depasse donc jamais le nombre de lignes annonce.
+  let coupe = brut.slice(0, Math.max(1, budget - 1));
+  const espace = coupe.lastIndexOf(" ");
+  if (espace > 0) coupe = coupe.slice(0, espace);
+  coupe = coupe.replace(/[\s,;:.!?\-\u2013\u2014]+$/, "");
+  if (!coupe) coupe = brut.slice(0, Math.max(1, budget - 1));
+  const texte = `${coupe}\u2026`;
+  return { text: texte, lines: Math.max(1, Math.ceil(texte.length / parLigne)), clipped: true };
+}
+
+/**
+ * Combien de lignes la colonne de gauche peut montrer : `floor((H - 14) / 37)`
+ * (§ 4.2). Les six valeurs du document, rejouees par le test, en decoulent :
+ * 13 a 512 et a 511, 12 a 479, 9 a 383, 8 a 331, 7 a 287, 5 a 231.
+ *
+ * @param {number} columnHeight hauteur de la colonne, en px (`planVocalSides`)
+ * @param {number} track largeur d'une colonne, en px
+ * @returns {{lines:number, charsPerLine:number}}
+ */
+export function planVocalDiscussion(columnHeight, track) {
+  const hauteur = Number(columnHeight);
+  const h = Number.isFinite(hauteur) ? Math.max(0, hauteur) : 0;
+  const unite = VOCAL_DISCUSSION_LINE_H + VOCAL_DISCUSSION_GAP;
+  const lines = Math.max(0, Math.floor((h - VOCAL_DISCUSSION_HEAD_PX) / unite));
+  return { lines, charsPerLine: vocalCharsPerLine(track) };
+}
+
+/**
+ * Ce que la colonne de gauche affiche : les derniers messages, du plus ancien
+ * (haut) au plus recent (bas), chacun coupe a son budget de lignes.
+ *
+ * Le remplissage part du PLUS RECENT et remonte : la colonne est un apercu de
+ * ce qui vient d'etre dit. Des qu'un message ne tient plus, les precedents non
+ * plus (aucun trou : on ne saute jamais un message pour en montrer un plus
+ * vieux). Jamais vide quand la conversation existe : a defaut de place pour un
+ * message entier, le plus recent est montre sur les lignes disponibles.
+ *
+ * @param {Array<{role:string, text:string}>} messages lus par
+ *   `collectVocalDiscussion()`
+ * @param {object} entrees
+ * @param {number} entrees.columnHeight hauteur de la colonne, en px
+ * @param {number} entrees.track largeur d'une colonne, en px
+ * @param {number} [entrees.total] nombre de messages que porte la conversation
+ *   (les plus anciens ne sont pas lus : l'excedent doit quand meme etre dit)
+ * @returns {{items:Array, lines:number, charsPerLine:number, total:number,
+ *   hidden:number, more:number}}
+ */
+export function vocalDiscussionView(messages, { columnHeight, track, total } = {}) {
+  const lues = Array.isArray(messages)
+    ? messages.filter((m) => m && typeof m.text === "string" && m.text.trim())
+    : [];
+  const { lines, charsPerLine } = planVocalDiscussion(columnHeight, track);
+  const totalLu = Number(total);
+  const nombre = Number.isFinite(totalLu) && totalLu > lues.length ? Math.floor(totalLu) : lues.length;
+  const budget = Math.max(0, lines * (VOCAL_DISCUSSION_LINE_H + VOCAL_DISCUSSION_GAP));
+  // La ligne d'excedent est reservee d'avance : quand elle apparait, elle ne
+  // prend la place d'aucun message deja accepte.
+  const dispo = Math.max(0, budget - (lues.length ? VOCAL_DISCUSSION_MORE_PX : 0));
+
+  const retenues = [];
+  let consomme = 0;
+  for (let i = lues.length - 1; i >= 0; i--) {
+    const message = lues[i];
+    const maxLines =
+      message.role === "user"
+        ? VOCAL_DISCUSSION_QUESTION_LINES
+        : VOCAL_DISCUSSION_ANSWER_LINES;
+    const extrait = vocalExcerpt(message.text, maxLines, charsPerLine);
+    const cout = extrait.lines * VOCAL_DISCUSSION_LINE_H + (retenues.length ? VOCAL_DISCUSSION_GAP : 0);
+    if (consomme + cout > dispo) break;
+    consomme += cout;
+    retenues.unshift({ role: message.role === "user" ? "user" : "assistant", text: extrait.text });
+  }
+
+  // Aucun message ne tenait : le plus recent est montre quand meme, coupe a la
+  // place reellement disponible. Une colonne qui n'affiche rien alors que la
+  // conversation existe serait un mensonge silencieux.
+  if (!retenues.length && lues.length) {
+    const derniere = lues[lues.length - 1];
+    const plafond = derniere.role === "user"
+      ? VOCAL_DISCUSSION_QUESTION_LINES
+      : VOCAL_DISCUSSION_ANSWER_LINES;
+    const lignesDispo = Math.min(plafond, Math.max(1, Math.floor(budget / VOCAL_DISCUSSION_LINE_H)));
+    const extrait = vocalExcerpt(derniere.text, lignesDispo, charsPerLine);
+    retenues.push({ role: derniere.role === "user" ? "user" : "assistant", text: extrait.text });
+  }
+
+  const affiches = retenues.length;
+  return {
+    items: retenues,
+    lines,
+    charsPerLine,
+    total: nombre,
+    hidden: Math.max(0, nombre - affiches),
+    more: nombre - affiches > 0 ? Math.ceil((nombre - affiches) / 2) : 0,
+  };
+}
+
+/**
+ * La phrase du surplus : « ... et N echange(s) plus haut ». Un echange vaut une
+ * question et sa reponse (deux messages) : c'est ce que compte la colonne.
+ *
+ * @param {number} n nombre d'echanges plus anciens que ce qui est affiche
+ * @returns {string} la phrase, vide si le surplus est nul
+ */
+export function vocalDiscussionMoreText(n) {
+  const nombre = Number(n);
+  const compte = Number.isFinite(nombre) ? Math.max(0, Math.floor(nombre)) : 0;
+  if (!compte) return "";
+  return `\u2026 et ${compte} \u00e9change${compte >= 2 ? "s" : ""} plus haut`;
 }

@@ -85,12 +85,14 @@ même famille que celui de l'assistant seul, avec un **fondu de 0,3 s** à l'ent
 et à la sortie (pas de zoom : on change d'écran, on ne déplie pas un panneau).
 Aucun cadre, aucune carte, aucune bordure.
 
-**Un écran nu** — décision du propriétaire, 2026-10-28, ferme : on n'y voit que
-l'objet, la ligne d'état et la barre de saisie. **Aucun
-échange de la conversation ne s'y affiche** : ni bulle, ni texte, ni « les deux
-ou trois derniers échanges » en petit sous l'objet, ni par un réglage. La
-conversation n'est pas perdue pour autant : elle reste **entière dans l'onglet de
-l'agent**, où on la retrouve en quittant le mode.
+**Un écran nu** — décision du propriétaire, 2026-10-28, tenue et précisée par le
+lot 3 de la colonne de gauche : au centre, on ne voit que l'objet, la ligne
+d'état et la barre de saisie. **La conversation n'est jamais déplacée** dans cet
+écran : elle reste **entière dans l'onglet de l'agent**, où on la retrouve en
+quittant le mode, et **aucun nœud de conversation n'y entre**. La seule chose qui
+en vient est un **aperçu recopié** — du texte, jamais un nœud — dans la colonne de
+gauche, et **seulement là** (dernier point de §3ter). Rien de cet aperçu ne se
+règle, et il disparaît avec les colonnes quand la fenêtre est trop étroite.
 
 Comme la réponse ne se lit plus à l'écran, c'est la **lecture à voix haute** qui
 la porte (détail : `spec_read_aloud.md` § 1). Elle ne dépend de rien de ce qui
@@ -176,10 +178,13 @@ reste **sous** eux, la fenêtre reste fermable et déplaçable, et le panneau ne
 recouvre ni la ligne d'état ni la zone de saisie. Ni le disque, ni la ligne
 d'état, ni la barre de saisie, ni le bouton de relance ne bougent.
 
-**Rien de la conversation n'est affiché** sur cet écran : ni les messages, ni les
-outils, ni un résumé des derniers échanges. Le suivi des agents y est **joignable
-sur demande** (le bouton « Travail » ci-dessus), jamais peint en permanence.
-C'est le principe même du mode, et il ne dépend d'aucun réglage.
+Dans l'**état nu** (§4ter : tout masqué sauf le portrait), il faut le dire net :
+**Rien de la conversation n'est affiché** sur cet écran — ni les messages, ni les
+outils, ni un résumé des derniers échanges. Le suivi des agents y est **joignable sur
+demande** (le bouton « Travail » ci-dessus), jamais peint en permanence. C'est le
+principe même du mode, et il ne dépend d'aucun réglage. Hors de cet état, le seul
+endroit où la conversation paraît est la **colonne de gauche** (§3ter), en aperçu, en
+texte recopié.
 
 ## 3bis. Le bouton de relance, qui occupe la surface intérieure du disque (« Réveiller <Nom> »)
 
@@ -252,25 +257,28 @@ non-recouvrement, mouvement réduit).
 
 ---
 
-## 3ter. La colonne de droite de l'écran Vocal (tâches, personnage, avatar) — 🟡 **lots 1 et 2 livrés**, lot 3 à venir
+## 3ter. Les colonnes de l'écran Vocal (discussion à gauche ; tâches, personnage, avatar à droite) — ✅ **lots 1, 2 et 3 livrés**
 
-> **État réel (lots 1 et 2, appliqués)** : la **structure** des colonnes existe — deux
+> **État réel (lots 1 à 3, appliqués)** : la **structure** des colonnes existe — deux
 > `<aside class="vocal-side">` enfants de la scène (discussion à gauche, tâches à
-> droite), la grille à trois pistes de `.vocal-stage`, et dans la colonne de droite le
-> **portrait du personnage au pied** (médaillon rond de 72 px) avec son nom. La lecture de
-> la largeur est unique : `planVocalSides()` (`src/js/vocal-sides.js`), appliquée par
+> droite), la grille à trois pistes de `.vocal-stage`, dans la colonne de droite le
+> **portrait du personnage au pied** (médaillon rond de 72 px) avec son nom, et dans
+> celle de gauche l'**aperçu de la discussion**. La lecture de la largeur est unique :
+> `planVocalSides()` (`src/js/vocal-sides.js`), appliquée par
 > `vocalSyncSides()` à l'entrée, à chaque changement de taille de fenêtre et à chaque tic de
 > **900 ms** (`VOCAL_SIDES_TICK_MS`) ; sous 240 px de place disponible, les deux colonnes
 > sont **absentes** (`hidden` + `.vocal-sides-off`).
-> **La colonne de droite est REMPLIE** (lot 2) : titre « TÂCHES », liste des tâches (groupes
-> « En cours » puis « En attente », identité puis résumé, **6** lignes au cas A et **8** au
-> cas B, l'excédent écrit « + N autre(s) », « Aucune tâche en cours » si la liste est vide) et
-> **une** ligne d'activité en bas. La décision des tâches vit dans le même module pur
-> (`planVocalTasks`, `vocalTaskRows`, `vocalNowLine`), et la liste des missions vient d'une
-> **source unique** (`collectSuperMissions()`), celle du bouton « Travail » : les deux ne
-> peuvent pas se contredire. **La colonne de gauche reste vide** : c'est le **lot 3**. Ce qui
-> suit décrit donc l'état **visé** ; seules les phrases marquées « lot 1 » / « lot 2 »
-> décrivent le code d'aujourd'hui. Conception complète :
+> Les deux colonnes sont **remplies** : titre puis contenu. Cote **droite** (lot 2),
+> « TÂCHES », la liste des tâches (groupes « En cours » puis « En attente », identité puis
+> résumé, **6** lignes au cas A et **8** au cas B, l'excédent écrit « + N autre(s) »,
+> « Aucune tâche en cours » si la liste est vide) et **une** ligne d'activité en bas. Cote
+> **gauche** (lot 3), « DISCUSSION » et l'aperçu des derniers echanges (dernier point de
+> cette section). La décision des tâches et celle de l'aperçu vivent dans le même module
+> pur (`planVocalTasks`, `vocalTaskRows`, `vocalNowLine` ; `planVocalDiscussion`,
+> `vocalExcerpt`, `vocalDiscussionView`), la liste des missions vient d'une **source
+> unique** (`collectSuperMissions()`) — celle du bouton « Travail » — et la conversation
+> d'une **lecture unique** (`collectVocalDiscussion()`), si bien qu'aucun affichage ne peut
+> contredire l'autre. Ce qui suit décrit le code d'aujourd'hui. Conception complète :
 > `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md` et son amendement
 > `docs/conceptions/CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md` — la **zone
 > d'image** et ses trois cas sont au **§ 7bis** du premier.
@@ -321,15 +329,78 @@ l'agent à cet instant. **Trois cas, et deux critères qui sont des faits** (com
   chaque affichage, pas mémorisée.
 
 Les trois sorties (logo, Échap, fermeture de l'onglet) et les colonnes sans clic restent
-**inchangées** : la colonne de droite n'ajoute aucune zone cliquable.
+**inchangées** : **aucune** des deux colonnes n'ajoute de zone cliquable.
+
+### La colonne de gauche : l'aperçu de la discussion (lot 3, livré)
+
+À gauche du disque, une colonne symétrique de celle de droite (même hauteur, même
+largeur) montre **ce qui vient d'être dit** :
+
+- le titre **« DISCUSSION »**, en **11 px capitales** (`letter-spacing: 0.08em`),
+  posé à **14 px** du bord haut : il partage **une seule règle typographique** avec
+  « TÂCHES », donc les deux titres sont sur la **même ligne de base** et ne peuvent
+  pas dériver l'un de l'autre ;
+- **l'aperçu collé au bas** de la colonne (`justify-content: space-between`) : le
+  titre reste en haut, les messages tombent en bas — jamais un bloc flottant au
+  milieu ;
+- les **questions** de l'utilisateur en **13 px** (`--font-base`) et en **gris**
+  (`--vocal-ink-soft` : le texte principal mêlé au fond de l'application à 85 %, donc
+  aucune couleur en dur et une teinte qui suit les **dix** palettes), **deux lignes
+  au plus**, décalées de **12 px** ;
+- les **réponses** en **15 px** (`--font-zone`), en `--text-primary`, **huit lignes
+  au plus**, sans décalage ;
+- l'ordre est **chronologique**, du plus ancien (haut) au plus récent (bas) ;
+- le **dégradé d'effacement est en HAUT**, vers le titre, **jamais en bas** : c'est
+  par là que le contenu déborde, puisqu'il remonte du bas. Il ne s'arme que s'il y a
+  effectivement plus haut (`data-vocal-more`, posé par la peinture) ; sans excédent,
+  il effacerait le début du plus ancien message sans rien annoncer.
+
+Le budget suit la hauteur et la largeur **mesurées**, jamais une constante cachée :
+`charsPerLine = floor(track / 7,6)` — **42** caractères à 320 px, 37 à 282, 52 à
+400 — et `lignes = floor((H - 14) / 37)`, soit **13** à 512 px, 12 à 479, 9 à 383, 8 à
+331, 7 à 287, 5 à 231 (le tableau du § 4.2 de la conception, rejoué par un test). La
+coupe se fait **sur une frontière de mot**, jamais dans un mot, et l'ellipse le dit.
+On n'affiche que la **fin** de la conversation, sans trou : dès qu'un message ne
+tient plus, les plus anciens ne sont pas montrés, et la phrase **« … et N échange(s)
+plus haut »** le dit — sa place est **réservée d'avance**, elle ne pousse aucun
+message. `VOCAL_DISCUSSION_MAX_MESSAGES = 6` borne la **lecture** du DOM (trois
+échanges) ; le **total**, lui, reste connu, sinon l'excédent serait tu. Un échange
+(question 2 lignes + réponse 8 lignes) vaut 10 lignes : une colonne de 512 px en
+montre **un**, une colonne de 331 px et plus en montre **deux** — c'est un rappel de
+ce qui vient d'être dit, pas un journal.
+
+**Rien n'est déplacé, rien n'est copié.** `collectVocalDiscussion()`
+(`super-agent.js`) ne fait que **lire** — `.agent-message-user` /
+`.agent-message-assistant` du chat, et le texte de la **bulle**, jamais la rangée
+d'actions qui porte « 🔊 Écouter » — et `vocalRenderDiscussion()`, appelée par
+`vocalSyncSides()`, en recopie le texte. **Un seul point de peinture**, comme pour
+les tâches. Aucun nœud de conversation n'entre dans l'écran, aucun n'est cloné, vidé
+ni déplacé ; les messages système, les blocs d'outils et les réflexions ne sont pas
+repris. Le titre et le corps sont **créés à la peinture**, comme ceux de la colonne
+de droite : le balisage de `buildVocalOverlay()` ne gagne **aucun** nœud et la liste
+ordonnée des classes ne bouge pas. Une écriture n'a lieu que si le texte change, et
+le tic de 900 ms repasse donc sans faire clignoter la colonne.
+
+**Aucun réglage, aucune persistance** : l'aperçu est recalculé à chaque entrée dans le
+mode et à chaque tic. La colonne ne capte **aucun clic** (six hôtes, pas sept — §8bis),
+ne porte aucun nœud focusable et ne réagit pas au survol : un aperçu qu'on ne
+sélectionne pas et qui ne promet aucune action.
 
 <!-- HELP:vocal-colonnes-portrait -->
-### Les colonnes de l'écran Vocal, les tâches et le portrait (lots 1 et 2)
+### Les colonnes de l'écran Vocal, la discussion, les tâches et le portrait
 Sur un écran assez large, l'écran Vocal encadre le cercle de **deux colonnes** : la
-**discussion** à gauche, le **travail** à droite. La discussion est **vide pour
-l'instant** — elle arrivera dans une prochaine étape. Sous une certaine largeur (fenêtre
+**discussion** à gauche, le **travail** à droite. Sous une certaine largeur (fenêtre
 étroite), les colonnes **n'apparaissent pas du tout** : le cercle reste seul au milieu,
 jamais écrasé, jamais décalé.
+
+La colonne de **gauche** montre **ce qui vient d'être dit**, sous le titre
+**« DISCUSSION »** : vos **questions** en petit et en gris (deux lignes au plus), les
+**réponses** en plus grand (huit lignes au plus), du plus ancien en haut au plus récent
+en bas, **collés au bas** de la colonne. C'est un **aperçu**, pas la conversation : elle
+reste **entière dans l'onglet de l'agent**, prête à être relue en quittant le mode. Le
+texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que ce qui
+tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
+cliquable dans la colonne : on la lit, on ne la manipule pas.
 
 La colonne de droite parle du **travail** : le titre **« TÂCHES »**, la **liste des tâches
 en cours** — l'agent et le projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui
@@ -350,6 +421,11 @@ Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonne
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les
 colonnes ne captent **aucun clic** : les boutons de sortie et la barre de saisie restent
 les seuls endroits cliquables de l'écran.
+
+**Tout masquer d'un geste, tout remettre du même geste.** Le **bouton-œil** décrit plus
+haut (« Trois modes d'écran ») emporte aussi **les deux colonnes** : un clic les range,
+un clic les remet, sans un pixel de déplacement — l'espace reste réservé et le portrait
+ne bouge pas. Aucune mémoire : on entre **toujours** avec tout visible.
 <!-- /HELP:vocal-colonnes-portrait -->
 
 ---
@@ -621,7 +697,7 @@ rappel `pendingQuestionChromeSync` (appelé à chaque changement de la file des
 questions, pour que le bas revienne si une question arrive alors qu'il est
 effacé).
 
-## 4ter. L'état nu : tout masquer sauf le portrait (décision du 2026-10-29) — 🟡 conception écrite, **non livrée**
+## 4ter. L'état nu : tout masquer sauf le portrait (décision du 2026-10-29) — ✅ **livré**
 
 Décision du propriétaire : **tout ce que l'écran Vocal affiche, sauf le portrait
 lui-même, peut être masqué puis remis** par un petit bouton discret. C'est un

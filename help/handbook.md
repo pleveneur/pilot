@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-29 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-30 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -454,8 +454,23 @@ ce qui est affiché.
   (**repos**, **écoute**, **réflexion**, **parole**) et **une seule ligne de
   texte**, posée **juste au-dessus de la barre de saisie** (elle n'est plus sous
   le cercle). **Rien de la conversation n'y est
-  affiché** (aucun message, pas même en petit) : la conversation reste entière
-  dans l'onglet de l'agent, où vous la retrouvez en quittant le mode.
+  affiché** — ni bulle, ni message, ni « les derniers échanges » en petit sous le
+  cercle : la conversation reste entière dans l'onglet de l'agent, où vous la
+  retrouvez en quittant le mode. La seule chose qui en paraît est, sur un écran
+  assez large, un **aperçu dans la colonne de gauche** (voir « Les colonnes de
+  l'écran Vocal ») : quelques lignes de texte, qu'on lit sans les cliquer.
+
+**Tout masquer d'un geste, tout remettre du même geste** : dans l'écran Vocal, un
+petit **bouton-œil**, au centre du bandeau du haut, efface en un clic **tout ce que
+l'écran affiche sauf le portrait** — le cercle et sa lumière, la phrase d'état, la
+barre de saisie, les deux colonnes — puis remet tout en place d'un second clic. Son
+infobulle dit **l'état d'abord, l'action ensuite** : « **tout est visible — cliquer
+pour ne garder que le portrait** », puis « **tout est masqué — cliquer pour tout
+réafficher** ». Masqué n'est pas perdu : **rien ne bouge**, l'espace reste réservé,
+le bouton reste le seul élément visible — donc le seul moyen de revenir —, et le
+logo, `Échap` et la fermeture de l'onglet continuent de fonctionner. Sans
+personnage, il ne reste que le bouton. Aucune mémoire : on entre **toujours** avec
+tout visible, et l'état tombe en quittant le mode.
 
 Sur l'écran **Vocal**, le bouton **« Travail »** est là lui aussi : **tout en
 haut, juste à gauche des boutons de la fenêtre**. C'est **le même bouton** que
@@ -1361,12 +1376,20 @@ texte à la voix.
 ---
 
 <!-- HELP-TOPIC:vocal-colonnes-portrait -->
-### Les colonnes de l'écran Vocal, les tâches et le portrait (lots 1 et 2)
+### Les colonnes de l'écran Vocal, la discussion, les tâches et le portrait
 Sur un écran assez large, l'écran Vocal encadre le cercle de **deux colonnes** : la
-**discussion** à gauche, le **travail** à droite. La discussion est **vide pour
-l'instant** — elle arrivera dans une prochaine étape. Sous une certaine largeur (fenêtre
+**discussion** à gauche, le **travail** à droite. Sous une certaine largeur (fenêtre
 étroite), les colonnes **n'apparaissent pas du tout** : le cercle reste seul au milieu,
 jamais écrasé, jamais décalé.
+
+La colonne de **gauche** montre **ce qui vient d'être dit**, sous le titre
+**« DISCUSSION »** : vos **questions** en petit et en gris (deux lignes au plus), les
+**réponses** en plus grand (huit lignes au plus), du plus ancien en haut au plus récent
+en bas, **collés au bas** de la colonne. C'est un **aperçu**, pas la conversation : elle
+reste **entière dans l'onglet de l'agent**, prête à être relue en quittant le mode. Le
+texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que ce qui
+tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
+cliquable dans la colonne : on la lit, on ne la manipule pas.
 
 La colonne de droite parle du **travail** : le titre **« TÂCHES »**, la **liste des tâches
 en cours** — l'agent et le projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui
@@ -1387,6 +1410,11 @@ Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonne
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les
 colonnes ne captent **aucun clic** : les boutons de sortie et la barre de saisie restent
 les seuls endroits cliquables de l'écran.
+
+**Tout masquer d'un geste, tout remettre du même geste.** Le **bouton-œil** décrit plus
+haut (« Trois modes d'écran ») emporte aussi **les deux colonnes** : un clic les range,
+un clic les remet, sans un pixel de déplacement — l'espace reste réservé et le portrait
+ne bouge pas. Aucune mémoire : on entre **toujours** avec tout visible.
 
 ---
 

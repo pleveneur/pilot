@@ -227,10 +227,14 @@ import {
 import {
   planVocalSides,
   planVocalTasks,
+  vocalDiscussionView,
+  vocalDiscussionMoreText,
   vocalNowLine,
   VOCAL_SIDES_TICK_MS,
   VOCAL_TASKS_TITLE,
   VOCAL_TASKS_EMPTY_TEXT,
+  VOCAL_DISCUSSION_TITLE,
+  VOCAL_DISCUSSION_MAX_MESSAGES,
 } from "./vocal-sides.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel, planDueReminderInjections, buildReminderInjection, buildReminderInjectionMessage, formatReminderGroupNotificationLabel, formatReminderHoldNotice, createReminderHoldGuard } from "./super-agent-schedule.js";
 // MÉNAGE DES RAPPELS : décision UNIQUE (pures) des rappels devenus inutiles —
@@ -2301,6 +2305,113 @@ function vocalRenderColumn(plan) {
 }
 
 /**
+ * LA CONVERSATION DE L'ONGLET, LUE ET NON DEPLACEE (lot 3).
+ *
+ * L'ecran Vocal montre un APERCU de ce qui vient d'etre dit, dans la colonne de
+ * gauche : il lit le texte des messages de l'Assistant, il ne les prend pas.
+ * Aucun noeud n'est deplace, clone, vide ou detruit — la conversation reste
+ * entiere dans son onglet (ou elle est de toute facon invisible pendant le mode,
+ * `body.pilot-vocal-active .agent-chat-messages { visibility: hidden }`), et le
+ * defilement de l'historique n'est pas perdu a la sortie.
+ *
+ * Une seule famille est lue : `.agent-message-user` / `.agent-message-assistant`
+ * (les classes existantes du chat). Les messages systeme, les blocs d'outils et
+ * les reflexions ne sont PAS repris — un apercu, pas un journal technique.
+ *
+ * Seuls les `VOCAL_DISCUSSION_MAX_MESSAGES` derniers sont lus, mais le NOMBRE
+ * TOTAL est rendu : les plus anciens ne sont pas lus et doivent pourtant etre
+ * comptes dans « ... et N echange(s) plus haut ».
+ *
+ * @returns {{messages:Array<{role:string, text:string}>, total:number}}
+ */
+function collectVocalDiscussion() {
+  const zone = superMessagesEl;
+  if (!zone || typeof zone.querySelectorAll !== "function") return { messages: [], total: 0 };
+  const noeuds = zone.querySelectorAll(".agent-message-user, .agent-message-assistant");
+  const total = noeuds.length;
+  if (!total) return { messages: [], total: 0 };
+  const debut = Math.max(0, total - VOCAL_DISCUSSION_MAX_MESSAGES);
+  const messages = [];
+  for (let i = debut; i < total; i++) {
+    const el = noeuds[i];
+    if (!el) continue;
+    // La BULLE, jamais le message entier : la rangee d'actions (bouton
+    // « Ecouter ») est posee a cote d'elle et son libelle ne fait pas partie
+    // de ce qui a ete dit.
+    const bulle = typeof el.querySelector === "function" ? el.querySelector(".agent-bubble") : null;
+    const texte = String((bulle || el).textContent || "");
+    if (!texte.trim()) continue;
+    const estUtilisateur = !!(el.classList && el.classList.contains("agent-message-user"));
+    messages.push({ role: estUtilisateur ? "user" : "assistant", text: texte });
+  }
+  return { messages, total };
+}
+
+/**
+ * Le balisage de l'apercu de la colonne de gauche : la phrase du surplus (s'il y
+ * en a un), puis les messages du plus ancien au plus recent.
+ *
+ * @param {object} vue resultat de `vocalDiscussionView`
+ * @returns {string} le HTML de la colonne (texte deja coupe et echappe)
+ */
+function buildVocalDiscussionHtml(vue) {
+  let html = "";
+  const plus = vocalDiscussionMoreText(vue.more);
+  if (plus) html += `<div class="vocal-side-more">${escapeHtmlForSuper(plus)}</div>`;
+  for (const message of vue.items) {
+    const classe =
+      message.role === "user" ? "vocal-msg vocal-msg-user" : "vocal-msg vocal-msg-assistant";
+    html += `<div class="${classe}">${escapeHtmlForSuper(message.text)}</div>`;
+  }
+  return html;
+}
+
+/**
+ * Repeint la COLONNE DE GAUCHE de l'ecran Vocal (CONCEPTION-ecran-vocal-portrait-
+ * et-colonnes.md § 1.3 et § 4.2) : le titre « DISCUSSION » en haut, l'apercu des
+ * derniers echanges colle au bas.
+ *
+ * Le titre et le corps sont CREES ici, a leur place imposee, et non dans le
+ * balisage statique de l'overlay : la liste ordonnee des classes de
+ * `buildVocalOverlay()` ne bouge donc pas d'un element (deux tests la lisent).
+ * Une ecriture n'a lieu que si le texte change : le tic de 900 ms repasse ici
+ * sans faire clignoter la colonne.
+ *
+ * Le masque du haut (`data-vocal-more`) ne s'arme que s'il y a effectivement
+ * plus haut : sans excedent, il effacerait le debut du plus ancien message sans
+ * rien annoncer.
+ *
+ * @param {object} plan resultat de `planVocalSides`
+ */
+function vocalRenderDiscussion(plan) {
+  const ov = vocalOverlayNode();
+  if (!ov || !plan || !plan.shown) return;
+  const colonne = ov.querySelector(".vocal-side-discussion");
+  if (!colonne) return;
+  const lu = collectVocalDiscussion();
+  const vue = vocalDiscussionView(lu.messages, {
+    columnHeight: plan.columnHeight,
+    track: plan.track,
+    total: lu.total,
+  });
+  const titre = vocalColumnNode(colonne, ".vocal-discussion-title", "first");
+  if (titre && titre.textContent !== VOCAL_DISCUSSION_TITLE) {
+    titre.textContent = VOCAL_DISCUSSION_TITLE;
+  }
+  const corps = colonne.querySelector(".vocal-side-body");
+  if (!corps) return;
+  const html = buildVocalDiscussionHtml(vue);
+  if (corps.getAttribute("data-vocal-discussion") !== html) {
+    corps.innerHTML = html;
+    corps.setAttribute("data-vocal-discussion", html);
+  }
+  const plus = vue.hidden > 0 ? "1" : "0";
+  if (colonne.getAttribute("data-vocal-more") !== plus) {
+    colonne.setAttribute("data-vocal-more", plus);
+  }
+}
+
+/**
  * La minuterie du tic qui repeint la colonne de droite (`VOCAL_SIDES_TICK_MS`).
  * Une seule, posee a l'entree du mode et retiree a la sortie : aucune horloge
  * ne continue derriere l'ecran.
@@ -2338,6 +2449,9 @@ function vocalSyncSides() {
     if (colonne) colonne.hidden = !plan.shown;
   }
   vocalRenderColumn(plan);
+  // LOT 3 : la colonne de gauche se peint au MEME endroit, avec la meme
+  // decision de hauteur et de largeur. Aucun second tic, aucune seconde mesure.
+  vocalRenderDiscussion(plan);
 }
 
 /**
