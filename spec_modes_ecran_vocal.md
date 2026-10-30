@@ -775,6 +775,36 @@ réafficher — et avec lui le **portrait du personnage et son nom** (décision 
 > s'éteint. Le bloc d'effacement ne les nomme pas — c'est **la seule façon** de les
 > laisser allumés — et un test le vérifie.
 
+**Le portrait doit être LÀ pour rester.** Correctif du 2026-10-31 (second défaut,
+rapporté par le propriétaire : « il efface tout, y compris le portrait »). Le
+masquage n'est pas une liste de choses à garder mais une liste de nœuds à
+éteindre : `opacity: 0` sur un ancêtre ne peut pas être annulé par un descendant.
+Deux façons de perdre le portrait, toutes deux fermées :
+
+1. **Le ranger dans un nœud masqué.** C'est ce qui s'est produit le 2026-10-31 au
+   matin, quand le personnage avait été transporté au centre du disque
+   (`.vocal-orb` était déjà nommé). Le portrait est désormais un **enfant direct**
+   de la colonne de droite — ni dans le disque, ni dans la liste des tâches, dont
+   le contenu est réécrit (`innerHTML`) toutes les 900 ms.
+2. **Ne pas l'avoir en mémoire.** L'entrée dans l'écran Vocal relisait le
+   personnage *déjà* connu (`applyVocalPortrait`) sans jamais le **demander** :
+   quand Pilot démarre directement en mode Vocal (mode mémorisé) sans que l'onglet
+   🧭 ait été ouvert, la mémoire est vide, le portrait reste `hidden`, et l'état nu
+   ne garde plus **rien** — l'écran paraît entièrement effacé. `enterVocal`
+   applique maintenant la **même garde que le plein écran de l'Assistant**
+   (`if (getAssistantPortrait() === "") refreshAssistantPersonaAndApply()`),
+   une seule fois, seulement si rien n'est en mémoire, et **fail-open** (une
+   lecture impossible laisse l'écran tel quel). Aucun nouveau réglage, aucun
+   appel réseau, aucun second mécanisme.
+
+`src/js/ecran-vocal-masquage-garde-le-portrait.test.js` tient les deux : il
+reconstruit l'arbre de l'écran et vérifie qu'**aucun** sélecteur du masque
+n'atteint le portrait ni son nom (ancêtres compris), avec le contrôle inverse
+(ce qui doit s'éteindre s'éteint bien) ; il vérifie aussi que deux clics redonnent
+l'écran de départ, que le bouton reste atteignable dans les deux états, et que la
+garde d'entrée est présente. Le même calcul, appliqué à l'arbre du 2026-10-31 au
+matin, désigne `.vocal-orb` : le verrou sait donc reconnaître le défaut.
+
 Et, au-dessus de l'overlay, les **trois sorties** (le logo, `Échap`, la fermeture
 de l'onglet) et le bouton **« Travail »** : l'état nu ne les touche pas. Sans
 personnage actif (§3ter), il ne reste **que le bouton**, et le disque ne reste pas
@@ -831,8 +861,10 @@ fichier, ni case à cocher.
 
 **Aucun clic avalé.** `.pilot-vocal` reste `pointer-events: none` ; un nœud
 masqué ne reçoit rien ; le bouton est le seul nœud de la scène à garder un
-pointeur. Vérifié à l'œil (§8) et, au lot 2, par un test
-(`src/js/ecran-vocal-bouton-affichage.test.js`, **à écrire**).
+pointeur. Vérifié à l'œil (§8) et par deux tests
+(`src/js/ecran-vocal-bouton-affichage.test.js` pour le geste et la place,
+`src/js/ecran-vocal-masquage-garde-le-portrait.test.js` pour ce que le masque
+n'atteint jamais).
 
 Détail complet — inventaire nœud par nœud, chiffres de la bande, tableau des
 états, ce qui ne change dans aucun test :

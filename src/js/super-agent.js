@@ -6626,6 +6626,16 @@ let vocalDicteeParGeste = false;
     // ne porte rien : c'est un seul et meme point d'ecriture (`applyVocalPortrait`)
     // qui ecrit l'image ET sa legende.
     applyVocalPortrait(vocalOverlay);
+    // LE PORTRAIT DOIT ETRE LA AVANT QUE L'ETAT NU NE S'APPLIQUE (§4ter : « tout
+    // masquer SAUF le portrait »). Le personnage est lu a l'ouverture de l'onglet
+    // 🧭 et a chaque retour de focus ; entrer DIRECTEMENT ici (mode memorise au
+    // demarrage, onglet 🧭 jamais ouvert) laissait donc la memoire vide, le
+    // portrait `hidden` — et l'etat nu ne gardait alors RIEN, faute de portrait a
+    // laisser. Meme garde, meme mecanisme, aucun nouvel appel ailleurs : une
+    // seule relecture, et seulement quand rien n'est en memoire (l'image est une
+    // URL `data:` de plusieurs megaoctets, on ne la relit pas pour rien).
+    // Fail-open : une lecture impossible laisse l'ecran tel quel.
+    if (getAssistantPortrait() === "") refreshAssistantPersonaAndApply().catch(() => {});
     // La place de la fenetre du visage se redemande a l'entree : la cle de pose
     // ne survit pas a la sortie de l'ecran.
     vocalAvatarKey = "";
