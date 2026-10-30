@@ -1410,13 +1410,21 @@ cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne l
 jamais, même avec un titre très long.
 
 Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
-de la liste et **détaché d'elle** : un médaillon rond de **96 px**, et son **nom** est écrit **juste
+de la liste et **détaché d'elle** : un médaillon rond **d'au moins 96 px**, qui **grandit avec la
+place disponible** — jusqu'à trois fois sa taille de départ dans une grande fenêtre, jamais au
+point de manger les tâches —, et son **nom** est écrit **juste
 dessous**, sur
 une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
 voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
 Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la zone laisse alors la
 place à la fenêtre du visage de l'avatar, ou à rien du tout. Le portrait suit un éventuel
 changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni image ni nom.**
+
+Les deux colonnes sont des **panneaux de verre** : on voit la lumière de l'écran au travers, et
+eux-mêmes n'affichent jamais la conversation ni le contenu d'une autre fenêtre. Elles laissent
+**de l'air** entre leur contenu et leur bord — le dernier message et la dernière tâche
+s'arrêtent avant le trait, le médaillon ne touche pas le haut —, ce qui se lit comme une marge,
+jamais comme une ligne coupée.
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
 au moindre mouvement de la souris, puis **s'efface de nouveau après quelques secondes**
@@ -1433,8 +1441,11 @@ les seuls endroits cliquables de l'écran.
 
 **Tout masquer d'un geste, tout remettre du même geste.** Le **bouton-œil** décrit plus
 haut (« Trois modes d'écran ») emporte aussi **les deux colonnes** : un clic les range,
-un clic les remet, sans un pixel de déplacement — l'espace reste réservé, et **le
-portrait et son nom ne bougent pas**. La **barre de saisie**, elle, n'est pas concernée :
+un clic les remet, sans un pixel de déplacement — l'espace reste réservé, **le portrait
+et son nom ne bougent pas**, et **le cercle reste allumé, identique à lui-même** : c'est
+lui qui dit encore si Pilot écoute, réfléchit ou répond. Le **cadre et le fond** de la
+colonne des tâches s'effacent avec elle : il ne reste pas un rectangle vide autour du
+personnage. La **barre de saisie**, elle, n'est pas concernée :
 elle reste affichée et utilisable, même quand tout le reste est masqué. Aucune mémoire :
 on entre **toujours** avec tout visible.
 

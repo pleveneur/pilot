@@ -236,6 +236,7 @@ import {
   VOCAL_TASKS_EMPTY_TEXT,
   VOCAL_DISCUSSION_TITLE,
   VOCAL_DISCUSSION_MAX_MESSAGES,
+  VOCAL_PORTRAIT_PX,
 } from "./vocal-sides.js";
 // LE FILTRE DE LA COLONNE DE GAUCHE (correctif « la colonne restait vide ») :
 // ce qui a ete DIT, et rien d'autre. Ce module pur decide quels messages sont
@@ -2706,6 +2707,13 @@ function vocalSyncSides() {
   // colonne de GAUCHE lit le MEME jeton (remarque du proprietaire du 2026-10-03 :
   // elle mordait de 64 px dans le halo, son bord interieur a 24 px du disque).
   ov.style.setProperty("--vocal-side-tasks", `${plan.taskTrack}px`);
+  // LA TAILLE DU MEDAILLON DU PERSONNAGE (remarque du proprietaire du 2026-11-02 :
+  // « environ trois fois plus grand »). Elle est MESUREE par `vocalPortraitSize`,
+  // dans le meme plan que la place que la liste garde sous lui : les deux
+  // chiffres ne peuvent donc pas se contredire. Le budget (`listHeight`)
+  // retranche deja ce bloc — ecrire la taille ici ne decale rien, la feuille de
+  // style lit la meme valeur (`--vocal-portrait-size`).
+  ov.style.setProperty("--vocal-portrait-size", `${plan.portraitSize || VOCAL_PORTRAIT_PX}px`);
   ov.classList.toggle("vocal-sides-off", !plan.shown);
   // `track = 0` = colonnes ABSENTES : sans `hidden`, les deux `<aside>` vides
   // resteraient dans la grille et y creeraient des pistes fantomes.

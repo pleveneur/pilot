@@ -95,12 +95,18 @@ describe("T9 — le portrait est en HAUT A DROITE, le disque reste vide", () => 
     expect(relance).toBeGreaterThan(halo);
   });
 
-  it("le CSS le pose en medaillon de 96 px dans la colonne, jamais sur le disque", () => {
+  it("le CSS le pose en medaillon DANS la colonne, jamais sur le disque", () => {
     const portrait = sliceSource(CSS, ".vocal-portrait {", "}", 10);
-    // 96 px (remarque du proprietaire du 2026-10-03 : le portrait etait trop
-    // petit). La valeur est celle de `VOCAL_PORTRAIT_PX`.
-    expect(portrait).toMatch(/width:\s*96px/);
-    expect(portrait).toMatch(/height:\s*96px/);
+    // La taille est MESUREE depuis le 2026-11-02 (remarque du proprietaire :
+    // « environ trois fois plus grand ») : la feuille de style lit
+    // `--vocal-portrait-size`, que `vocalSyncSides` pose d'apres
+    // `vocalPortraitSize`. Le repli est le plancher de 96 px du 2026-10-03, celui
+    // de `VOCAL_PORTRAIT_PX`.
+    expect(portrait).toMatch(/width:\s*var\(--vocal-portrait-size,\s*96px\)/);
+    expect(portrait).toMatch(/height:\s*var\(--vocal-portrait-size,\s*96px\)/);
+    // Le repli porte le planCHER du budget ; l'egalite des deux chiffres est
+    // tenue par `vocal-portrait-detache.test.js` (R1), qui lit les deux sources.
+    expect(portrait).toContain("96px");
     // Rond, garni, centre dans sa colonne, jamais cliquable.
     expect(portrait).toMatch(/border-radius:\s*50%/);
     expect(portrait).toMatch(/object-fit:\s*cover/);

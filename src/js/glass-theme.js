@@ -40,6 +40,12 @@ export const GLASS_SURFACE_SELECTOR = [
   ".projects-dropdown",
   ".context-menu",
   "#agent-activity-dropdown",
+  // Les deux colonnes de l'ecran Vocal floutent leur arriere-plan depuis le
+  // 2026-11-02 (remarque du proprietaire : la transparence ne se voyait pas) :
+  // elles sont composees a part et doivent donc etre recapturees, comme les
+  // panneaux flottants.
+  ".vocal-side-discussion",
+  ".vocal-side-tasks",
 ].join(", ");
 
 // Un seul cablage par fenêtre : deux appels n'empilent pas deux écouteurs.

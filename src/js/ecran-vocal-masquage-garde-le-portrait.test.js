@@ -15,6 +15,11 @@
 // a chaque instant, et pourtant insuffisant : il ne dit rien de l'ENDROIT ou vit
 // le portrait. Ce fichier verifie l'endroit.
 //
+// Note du 2026-11-02 : le disque lui-meme n'est plus eteint par l'etat nu (il
+// reste allume, voir `ecran-vocal-le-cercle-reste-visible.test.js`). Le defaut
+// historique reste donc reproduit autrement ci-dessous — un portrait range dans
+// un panneau qui s'eteint — pour que ce verificateur continue de trancher.
+//
 // CE QU'IL VERROUILLE :
 //   1. aucun selecteur du masque n'atteint le portrait NI son nom, ancetres
 //      compris (le controle de l'autre sens prouve que le verificateur n'est pas
@@ -191,7 +196,7 @@ const blocEffacement = () =>
   neutraliserSource(
     sliceSource(
       CSS,
-      ".pilot-vocal.vocal-bare .vocal-orb,",
+      ".pilot-vocal.vocal-bare .vocal-mic-fix,",
       ".pilot-vocal.vocal-bare .vocal-top {",
       200,
     ),
@@ -284,14 +289,13 @@ describe("1. ce que le masque atteint — et ce qu'il n'atteint JAMAIS (defaut d
     // vide) ferait passer les deux tests precedents en ne verifiant rien.
     const selecteurs = TOUS_LES_SELECTEURS();
     const colonne = chaineDe("vocal-portrait").slice(0, -1); // jusqu'a la colonne
-    // Le disque, la ligne d'etat, la colonne de gauche, le titre, la liste :
-    // tous nommes, tous atteints. LA ZONE DE SAISIE N'EST PLUS DANS CETTE LISTE
-    // (revision du 2026-11-01, avec sa raison : elle y figurait parce qu'une
-    // regle dediee l'eteignait ; cette regle est retiree, le bouton ne la
-    // concerne pas). Son controle est passe en NEGATIF juste apres — il n'est
-    // donc pas supprime, il change de sens.
+    // La ligne d'etat, la colonne de gauche, le titre, la liste : tous nommes,
+    // tous atteints. LE DISQUE N'EST PLUS DANS CETTE LISTE, et son controle est
+    // passe en NEGATIF juste apres (regle du proprietaire, 2026-11-02 : « quand
+    // il desactive l'affichage, le cercle ne doit pas disparaitre »). LA ZONE DE
+    // SAISIE N'Y ETAIT PLUS depuis la revision du 2026-11-01, pour la meme
+    // raison : une regle dediee l'eteignait, cette regle est retiree.
     const attendus = [
-      noeud("div", ["vocal-orb"]),
       noeud("div", ["vocal-status"]),
       noeud("aside", ["vocal-side-discussion", "vocal-side"]),
       noeud("div", ["vocal-side-body"]),
@@ -314,24 +318,35 @@ describe("1. ce que le masque atteint — et ce qu'il n'atteint JAMAIS (defaut d
       eteintPar(selecteurs, [...colonne, noeud("div", ["vocal-input"])]),
       "l'etat nu ne doit jamais atteindre la zone de saisie",
     ).toEqual([]);
+    // ET LE DISQUE (2026-11-02) : jamais atteint, ni lui ni ses pieces, dans
+    // l'arbre reel de l'ecran comme sous la scene. Un cerclé eteint retirerait
+    // a l'ecran nu le seul objet qui dise encore l'etat de la voix.
+    const disque = chaineDe("vocal-orb");
+    expect(disque[disque.length - 1].classes).toContain("vocal-orb");
+    expect(
+      eteintPar(selecteurs, disque),
+      "l'etat nu ne doit jamais atteindre le disque",
+    ).toEqual([]);
   });
 
-  it("le verificateur reproduit le defaut : portrait DANS le disque = eteint", () => {
-    // C'est l'arbre exact du 2026-10-31 au matin (commit afef214), celui que le
-    // proprietaire a vu. Ce test fixe la sensibilite du verificateur : la meme
-    // mesure, sur l'arbre d'alors, DESIGNait le coupable. Le retour de ce
-    // rangement fait donc echouer le premier test de ce fichier.
+  it("le verificateur reproduit le defaut : portrait DANS un panneau eteint = eteint", () => {
+    // C'est l'arbre exact du 2026-10-31 au matin (commit afef214) transpose au
+    // masque d'aujourd'hui : le portrait range DANS un noeud que le bloc eteint
+    // s'eteint avec lui, sans qu'aucune regle ne le nomme. Ce test fixe la
+    // sensibilite du verificateur : la meme mesure DESIGNERA le coupable des
+    // qu'un ancetre du portrait sera nomme. (Le disque, lui, n'est plus eteint :
+    // il ne peut donc plus servir de temoin — le panneau de gauche le remplace.)
     const alors = [
       noeud("div", ["pilot-vocal", "vocal-state-idle", VOCAL_BARE_CLASS]),
       noeud("div", ["vocal-stage"]),
-      noeud("div", ["vocal-orb"]),
+      noeud("aside", ["vocal-side-discussion", "vocal-side"]),
       noeud("img", ["vocal-portrait"]),
     ];
     expect(
       eteintPar(TOUS_LES_SELECTEURS(), alors).map((s) =>
         s.replace(".pilot-vocal.vocal-bare ", ""),
       ),
-    ).toEqual([".vocal-orb"]);
+    ).toEqual([".vocal-side-discussion"]);
   });
 });
 

@@ -82,11 +82,22 @@ export const VOCAL_CROWN_PX = 88;
  */
 export const VOCAL_SIDE_CLEARANCE_PX = VOCAL_CROWN_PX - VOCAL_SIDE_GAP_PX;
 /**
+ * L'AIR interieur du cadre, en px, en HAUT et en BAS de chaque colonne
+ * (remarque du proprietaire, 2026-11-02 : « le contenu touche le cadre »).
+ *
+ * C'est le `12` du budget : la feuille de style le pose en `padding-block-end`
+ * sur les DEUX colonnes (`.vocal-side-discussion`, `.vocal-side-tasks`) et en
+ * `margin-block-start` sur le medaillon du personnage. Le haut des colonnes,
+ * lui, n'a pas besoin de cette marge : le titre y porte deja son
+ * `padding-block: 14px`.
+ */
+export const VOCAL_SIDE_AIR_PX = 12;
+/**
  * Total fixe du haut de la colonne HORS zone d'image : le titre
  * (14 + 11 + 14 = 39 px) et l'air du bas (12 px) = 51 px. Ce qui reste a la
  * suite est la place de la zone d'image, puis celle de la liste.
  */
-export const VOCAL_SIDE_FIXED_PX = 39 + 12;
+export const VOCAL_SIDE_FIXED_PX = 39 + VOCAL_SIDE_AIR_PX;
 
 // ── LA ZONE D'IMAGE, A TROIS CAS ──
 // Source : CONCEPTION-ecran-vocal-portrait-et-colonnes.md, § 7bis (la zone
@@ -101,11 +112,50 @@ export const VOCAL_SIDE_FIXED_PX = 39 + 12;
 //   3. sinon rien du tout : AUCUNE place reservee          -> 0 px
 
 /**
- * Hauteur du medaillon du personnage, en px. 96 px (remarque du proprietaire du
- * 2026-10-03 : « le portrait est trop petit ») — un medaillon plus large que
- * deux lignes de liste, il ne se lit donc plus comme un element de la liste.
+ * Hauteur du medaillon du personnage, en px : le PLANCHER. 96 px (remarque du
+ * proprietaire du 2026-10-03 : « le portrait est trop petit ») — un medaillon
+ * plus large que deux lignes de liste, il ne se lit donc plus comme un element
+ * de la liste.
+ *
+ * Il ne bouge plus : depuis la remarque du 2026-11-02 le medaillon GRANDIT (voir
+ * `vocalPortraitSize`), mais il ne descend jamais sous cette valeur-la.
  */
 export const VOCAL_PORTRAIT_PX = 96;
+/**
+ * La taille DEMANDEE du medaillon, en px : trois fois le plancher (remarque du
+ * proprietaire du 2026-11-02 : « environ trois fois plus grand »).
+ *
+ * C'est une CIBLE, pas une promesse : `vocalPortraitSize` ne la depasse jamais,
+ * mais elle ne l'atteint que si la colonne ET la hauteur la portent. Mesure
+ * reelle des sept fenetres du tableau de `spec_modes_ecran_vocal.md` § 3ter :
+ * 96 px a 720 x 520 et 768 x 576, 102 px a 896 x 672, 198 px a 1024 x 768,
+ * 214 px a 1280 x 800 et 1440 x 900, 231 px au mieux (1920 x 1080, ou la HAUTEUR
+ * prend le relais). 288 px demanderait une colonne de taches de 366 px, que
+ * seule une fenetre de plus de 2000 px de large donne — et il ne resterait alors
+ * que deux rangees de taches.
+ */
+export const VOCAL_PORTRAIT_TARGET_PX = 3 * VOCAL_PORTRAIT_PX;
+/**
+ * La marge, en px, entre le medaillon et le bord interieur du cadre : 10 px,
+ * la meme que la marge interieure du cadre (`VOCAL_SIDE_FRAME_PX / 2 - 1`).
+ * Elle est retiree de la place AVANT de choisir la taille, sinon le medaillon
+ * toucherait le cadre (remarque du proprietaire du 2026-11-02 : « avec une marge
+ * autour de lui »).
+ */
+export const VOCAL_PORTRAIT_EDGE_PX = 10;
+/**
+ * L'AIR entre le haut du cadre et le medaillon, en px. Meme valeur que l'air du
+ * bas (`VOCAL_SIDE_AIR_PX`) : le personnage ne touche pas plus le haut du cadre
+ * qu'il ne touche son bord.
+ */
+export const VOCAL_PORTRAIT_AIR_TOP_PX = VOCAL_SIDE_AIR_PX;
+/**
+ * La place que la liste garde TOUJOURS sous le personnage : son en-tete et TROIS
+ * rangees (40 + 3 x 46 = 178 px). C'est ce qui borne la hauteur du medaillon :
+ * un portrait qui ne laisserait qu'une rangee couterait plus qu'il ne rapporte.
+ */
+export const VOCAL_PORTRAIT_MIN_LIST_PX =
+  2 * VOCAL_TASK_HEADER_PX + 3 * VOCAL_TASK_PX;
 /** Ecart entre le medaillon et son nom, en px. */
 export const VOCAL_PORTRAIT_GAP_PX = 8;
 /** Hauteur de la ligne du nom, en px (la meme que la pastille du bouton). */
@@ -117,15 +167,83 @@ export const VOCAL_PORTRAIT_NAME_PX = 20;
  */
 export const VOCAL_PORTRAIT_AIR_PX = 12;
 /**
- * Le bloc du personnage quand il est la : le medaillon (96), son ecart (8), son
- * nom (20) et l'air qui le detache (12) = 136 px. Sans personnage, ces 136 px
- * reviennent a la liste.
+ * La hauteur d'un bloc de personnage, en px, pour un medaillon de `taille` px :
+ * l'air du haut (12), le medaillon, son ecart (8), son nom (20) et l'air qui le
+ * detache (12), soit `taille + 52`.
+ *
+ * Une SEULE fonction : la feuille de style et le budget de la colonne lisent la
+ * meme decomposition, elles ne peuvent pas deriver l'une de l'autre.
+ *
+ * @param {number} taille diametre du medaillon, en px
+ * @returns {number} la hauteur du bloc, en px (0 pour une taille nulle)
  */
-export const VOCAL_PORTRAIT_BLOCK_PX =
-  VOCAL_PORTRAIT_PX +
-  VOCAL_PORTRAIT_GAP_PX +
-  VOCAL_PORTRAIT_NAME_PX +
-  VOCAL_PORTRAIT_AIR_PX;
+export function vocalPortraitBlockSize(taille) {
+  const px = Number(taille);
+  if (!Number.isFinite(px) || px <= 0) return 0;
+  return (
+    VOCAL_PORTRAIT_AIR_TOP_PX +
+    px +
+    VOCAL_PORTRAIT_GAP_PX +
+    VOCAL_PORTRAIT_NAME_PX +
+    VOCAL_PORTRAIT_AIR_PX
+  );
+}
+/**
+ * Le bloc du personnage quand il est la, au PLANCHER : l'air du haut (12), le
+ * medaillon (96), son ecart (8), son nom (20) et l'air qui le detache (12) =
+ * 148 px. Sans personnage, ces 148 px reviennent a la liste.
+ */
+export const VOCAL_PORTRAIT_BLOCK_PX = vocalPortraitBlockSize(VOCAL_PORTRAIT_PX);
+/**
+ * LA TAILLE DU MEDAILLON, en px (remarque du proprietaire du 2026-11-02 :
+ * « environ trois fois plus grand »). Decision PURE, dans cet ordre :
+ *
+ *   1. jamais plus large que la place : la largeur de la colonne des taches,
+ *      moins le cadre (`VOCAL_SIDE_FRAME_PX`) et moins la marge de chaque cote
+ *      (`VOCAL_PORTRAIT_EDGE_PX`) — le medaillon ne deborde donc jamais du
+ *      cadre, meme dans la plus petite fenetre ;
+ *   2. jamais plus haut que ce qui laisse TROIS rangees a la liste
+ *      (`VOCAL_PORTRAIT_MIN_LIST_PX`) : le portrait ne mange pas les taches ;
+ *   3. jamais plus que la cible (`VOCAL_PORTRAIT_TARGET_PX`, 288 px) ;
+ *   4. jamais moins que le plancher (`VOCAL_PORTRAIT_PX`, 96 px) — sauf si la
+ *      place elle-meme est plus petite (la regle 1 passe avant : on ne deborde
+ *      pas pour tenir un plancher).
+ *
+ * Quand la hauteur ne porte pas les trois rangees, la regle 2 cede la premiere
+ * (elle n'est pas une condition de correction, seulement un confort) : le
+ * medaillon reste au plancher et la liste garde ce qui reste — a 720 x 520,
+ * 32 px, soit la rangee rognee d'avant.
+ *
+ * @param {object} entrees
+ * @param {number} entrees.taskTrack largeur de la colonne des taches, en px
+ * @param {number} entrees.columnHeight hauteur de la colonne (`H`), en px
+ * @returns {number} le diametre du medaillon, en px (0 = pas de medaillon)
+ */
+export function vocalPortraitSize({ taskTrack, columnHeight } = {}) {
+  const largeurColonne = Number(taskTrack);
+  const hauteurColonne = Number(columnHeight);
+  const colonne =
+    Number.isFinite(largeurColonne) && largeurColonne > 0 ? largeurColonne : 0;
+  const H = Number.isFinite(hauteurColonne) && hauteurColonne > 0 ? hauteurColonne : 0;
+  if (colonne <= 0 || H <= 0) return 0;
+  // 1. la largeur disponible DANS le cadre, marge comprise.
+  const place = colonne - VOCAL_SIDE_FRAME_PX - 2 * VOCAL_PORTRAIT_EDGE_PX;
+  if (place <= 0) return 0;
+  // 2. la hauteur qui laisse le haut fixe, le reste du bloc et trois rangees.
+  const parHauteur =
+    H -
+    VOCAL_SIDE_FIXED_PX -
+    VOCAL_PORTRAIT_MIN_LIST_PX -
+    VOCAL_PORTRAIT_AIR_TOP_PX -
+    VOCAL_PORTRAIT_GAP_PX -
+    VOCAL_PORTRAIT_NAME_PX -
+    VOCAL_PORTRAIT_AIR_PX;
+  // 3. la cible, jamais depassee.
+  const taille = Math.min(VOCAL_PORTRAIT_TARGET_PX, place, parHauteur);
+  if (taille >= VOCAL_PORTRAIT_PX) return Math.round(taille);
+  // 4. le plancher, sauf s'il ne tient pas dans la place (regle 1).
+  return Math.round(Math.min(VOCAL_PORTRAIT_PX, place));
+}
 /** Largeur du plancher de la fenetre du visage (PLface), en px (§ 7bis.7). */
 export const VOCAL_AVATAR_W_PX = 160;
 /** Hauteur du plancher de la fenetre du visage (PLface), en px (§ 7bis.7). */
@@ -193,8 +311,14 @@ export const VOCAL_DISCUSSION_GAP = 14;
 /**
  * Le haut de la colonne, en px, retire du budget d'unites : c'est le `14` de la
  * formule du § 4.2, `lignes = floor((H - 14) / 37)`.
+ *
+ * Depuis la remarque du proprietaire du 2026-11-02, la colonne perd AUSSI l'air
+ * du bas (`VOCAL_SIDE_AIR_PX`, 12 px) : le dernier message ne touche plus le
+ * cadre. La formule devient donc `floor((H - 26) / 37)` — mesure inchangee sur
+ * les sept fenetres du document (13 a 512, 13 a 511, 12 a 479, 9 a 383, 8 a 331,
+ * 7 a 287, 5 a 231), l'air se prenant sur la respiration deja comptee.
  */
-export const VOCAL_DISCUSSION_HEAD_PX = 14;
+export const VOCAL_DISCUSSION_HEAD_PX = 14 + VOCAL_SIDE_AIR_PX;
 /** Une question tient sur DEUX lignes au plus (decision 3). */
 export const VOCAL_DISCUSSION_QUESTION_LINES = 2;
 /** Une reponse sur HUIT lignes au plus (decision 3). */
@@ -280,13 +404,21 @@ export function planVocalSides({ width, height, orbSize, hasPortrait, hasAvatar 
   // qui ne dessine rien ne fait jamais un trou »).
   const imageZone = planVocalImageZone({ hasPortrait, hasAvatar, columnHeight });
 
+  // La taille du medaillon du personnage : elle se mesure sur la largeur de la
+  // colonne des taches (dedans le cadre, marge comprise) ET sur la hauteur qui
+  // laisse trois rangees a la liste. Une seule fonction la decide, et le bloc
+  // qu'elle occupe en decoule — la feuille de style et le budget ne peuvent pas
+  // se contredire.
+  const portraitSize = imageZone.portrait
+    ? vocalPortraitSize({ taskTrack, columnHeight })
+    : 0;
+  const portraitBlock = portraitSize ? vocalPortraitBlockSize(portraitSize) : 0;
+
   // Haut fixe de la colonne : le titre et l'air du bas (51 px), PLUS le bloc du
-  // personnage quand il s'affiche (136 px), PLUS la place de la fenetre du
-  // visage quand c'est elle qui occupe la zone (180 px). Le reste va a la liste.
-  const fixe =
-    VOCAL_SIDE_FIXED_PX +
-    (imageZone.portrait ? VOCAL_PORTRAIT_BLOCK_PX : 0) +
-    imageZone.height;
+  // personnage quand il s'affiche (148 px au plancher, `taille + 52`), PLUS la
+  // place de la fenetre du visage quand c'est elle qui occupe la zone (180 px).
+  // Le reste va a la liste.
+  const fixe = VOCAL_SIDE_FIXED_PX + portraitBlock + imageZone.height;
   const listHeight = Math.max(0, columnHeight - fixe);
 
   return {
@@ -298,6 +430,8 @@ export function planVocalSides({ width, height, orbSize, hasPortrait, hasAvatar 
     hasPortrait: imageZone.portrait,
     hasAvatar: imageZone.avatar,
     imageZone,
+    portraitSize,
+    portraitBlock,
   };
 }
 
@@ -318,10 +452,12 @@ export function planVocalSides({ width, height, orbSize, hasPortrait, hasAvatar 
  * La HAUTEUR RENDUE ne compte que l'ESPACE VIDE que Pilot reserve a la fenetre
  * du visage : 0 px au cas 1 et au cas 3, 180 px au cas 2 (le medaillon du
  * personnage et son nom sont de VRAIS noeuds, ils prennent leur place eux-memes:
- * leurs 98 px sont comptes par `planVocalSides`, jamais deux fois).
+ * leur bloc (`taille + 52`) est compte par `planVocalSides`, jamais deux fois).
  *
- * Les totaux du § 7bis.4 deviennent donc, avec H la hauteur de la colonne :
- *   cas 3 : liste = H - 51     cas 1 : liste = H - 187
+ * Les totaux du § 3ter de la specification deviennent donc, avec H la hauteur
+ * de la colonne et `taille` le diametre MESURE du medaillon :
+ *   cas 3 : liste = H - 51
+ *   cas 1 : liste = H - 51 - (taille + 52), soit H - 199 au plancher de 96 px
  *   cas 2 : liste = H - 231
  *
  * @param {object} entrees
@@ -619,9 +755,10 @@ export function vocalExcerpt(text, maxLines, charsPerLine) {
 }
 
 /**
- * Combien de lignes la colonne de gauche peut montrer : `floor((H - 14) / 37)`
- * (§ 4.2). Les six valeurs du document, rejouees par le test, en decoulent :
- * 13 a 512 et a 511, 12 a 479, 9 a 383, 8 a 331, 7 a 287, 5 a 231.
+ * Combien de lignes la colonne de gauche peut montrer : `floor((H - 26) / 37)`
+ * (§ 4.2, air du bas compris — voir `VOCAL_DISCUSSION_HEAD_PX`). Les six valeurs
+ * du document, rejouees par le test, en decoulent : 13 a 512 et a 511, 12 a 479,
+ * 9 a 383, 8 a 331, 7 a 287, 5 a 231.
  *
  * @param {number} columnHeight hauteur de la colonne, en px (`planVocalSides`)
  * @param {number} track largeur d'une colonne, en px

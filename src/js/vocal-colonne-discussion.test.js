@@ -33,6 +33,7 @@ import {
   VOCAL_DISCUSSION_LINE_H,
   VOCAL_DISCUSSION_GAP,
   VOCAL_DISCUSSION_HEAD_PX,
+  VOCAL_SIDE_AIR_PX,
   VOCAL_DISCUSSION_QUESTION_LINES,
   VOCAL_DISCUSSION_ANSWER_LINES,
   VOCAL_DISCUSSION_MORE_PX,
@@ -358,7 +359,12 @@ describe("les deux titres sont sur la MEME ligne : une seule regle", () => {
 
 describe("le tableau § 4.2 se rejoue : les lignes suivent la hauteur", () => {
   it("13 a 512 et a 511, 12 a 479, 9 a 383, 8 a 331, 7 a 287, 5 a 231", () => {
-    expect(VOCAL_DISCUSSION_HEAD_PX).toBe(14);
+    // L'EN-TETE du budget porte le titre (14 px) ET l'air du bas
+    // (`VOCAL_SIDE_AIR_PX`, 12 px) : 26. Le tableau, lui, ne bouge pas — l'air
+    // etait deja compte dans le budget avant d'etre peint (correctif du
+    // 2026-11-02 : la feuille de style l'a recu, la decision le portait deja).
+    expect(VOCAL_DISCUSSION_HEAD_PX).toBe(14 + VOCAL_SIDE_AIR_PX);
+    expect(VOCAL_DISCUSSION_HEAD_PX).toBe(26);
     const attendu = [
       [512, 13],
       [511, 13],

@@ -68,7 +68,7 @@ const blocBouton = () => sliceSource(CSS, ".vocal-display-toggle {", "}", 200);
 const blocEffacement = () =>
   sliceSource(
     CSS,
-    ".pilot-vocal.vocal-bare .vocal-orb,",
+    ".pilot-vocal.vocal-bare .vocal-mic-fix,",
     ".pilot-vocal.vocal-bare .vocal-top {",
     200,
   );
@@ -200,11 +200,13 @@ describe("3. les acquis voisins ne sont pas casses", () => {
     expect(chrome).toMatch(/vocalBare\s*\|\|/);
   });
 
-  it("le bloc d'effacement ne nomme jamais la zone de saisie", () => {
+  it("le bloc d'effacement ne nomme ni la zone de saisie ni le disque", () => {
     // Les commentaires sont neutralises : c'est la REGLE qui compte, pas la
-    // phrase qui explique pourquoi la zone de saisie n'y figure pas.
+    // phrase qui explique pourquoi la zone de saisie (2026-11-01) et le disque
+    // (2026-11-02) n'y figurent pas.
     const effacement = blocEffacement();
     expect(neutraliserSource(effacement)).not.toContain(".vocal-input");
+    expect(neutraliserSource(effacement)).not.toContain(".vocal-orb");
     expect(effacement).not.toMatch(/display:\s*none/);
   });
 

@@ -184,12 +184,14 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     expect(planVocalSides({ width: 1280, height: 120, orbSize: 336 }).listHeight).toBe(0);
   });
 
-  it("le PERSONNAGE, en haut a droite, prend 136 px a la liste (96 + 8 + 20 + 12)", () => {
+  it("le PERSONNAGE, en haut a droite, prend la place de son bloc mesure (148 px au plancher)", () => {
     // Correction du 2026-10-31 : l'image est revenue en tete de la colonne, donc
-    // la colonne lui reserve de nouveau sa place — medaillon (96 depuis la
-    // remarque du proprietaire du 2026-10-03), ecart (8), nom sous l'image (20)
-    // et l'AIR qui detache le personnage de la liste (12). Le disque ne porte rien.
-    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(96 + 8 + 20 + 12);
+    // la colonne lui reserve de nouveau sa place — medaillon (96 px au plancher,
+    // depuis la remarque du proprietaire du 2026-10-03), ecart (8), nom sous
+    // l'image (20), l'AIR qui detache le personnage de la liste (12) et l'AIR qui
+    // le detache du cadre (12 depuis le 2026-11-02). Le disque ne porte rien.
+    // La taille, elle, est MESUREE : le bloc vaut `taille + 52`.
+    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(12 + 96 + 8 + 20 + 12);
     const avec = planVocalSides({
       width: 1280,
       height: 900,
@@ -197,8 +199,10 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
       hasPortrait: true,
     });
     expect(avec.hasPortrait).toBe(true);
-    expect(avec.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 136);
-    expect(avec.listHeight).toBe(325);
+    expect(avec.portraitSize).toBe(214);
+    expect(avec.portraitBlock).toBe(266);
+    expect(avec.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 266);
+    expect(avec.listHeight).toBe(195);
     // Le personnage l'emporte : pas de fenetre du visage en plus, et la zone
     // d'image ne reserve alors AUCUNE place vide (le medaillon est un vrai noeud).
     expect(avec.imageZone.kind).toBe("portrait");
@@ -206,7 +210,7 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     expect(
       planVocalSides({ width: 1280, height: 900, orbSize: 336, hasPortrait: true, hasAvatar: true })
         .listHeight,
-    ).toBe(325);
+    ).toBe(195);
   });
 
   it("aucune entree : aucune colonne, aucune erreur, aucune valeur inventee", () => {

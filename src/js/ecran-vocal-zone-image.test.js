@@ -41,6 +41,7 @@ import {
   vocalAvatarPoseKey,
   planVocalAvatarPlacement,
   vocalTaskRows,
+  vocalPortraitBlockSize,
   VOCAL_AVATAR_W_PX,
   VOCAL_AVATAR_H_PX,
   VOCAL_SIDE_FIXED_PX,
@@ -81,13 +82,13 @@ function corpsFonctionEntete(debut) {
  * avatar, ce qui est verifie plus bas.
  */
 const TABLE_7BIS_4 = [
-  [720, 520, 151.6, 231, [180, 3], [44, 1], null],
-  [768, 576, 188.3, 287, [236, 4], [100, 1], [56, 1]],
-  [820, 620, 217.2, 331, [280, 5], [144, 2], [100, 1]],
-  [896, 672, 251.3, 383, [332, 6], [196, 3], [152, 2]],
-  [1024, 768, 314.3, 479, [428, 8], [292, 5], [248, 4]],
-  [1280, 800, 335.3, 511, [460, 8], [324, 6], [280, 5]],
-  [1440, 900, 336, 512, [461, 8], [325, 6], [281, 5]],
+  [720, 520, 151.6, 231, [180, 3], [32, 1], null],
+  [768, 576, 188.3, 287, [236, 4], [88, 1], [56, 1]],
+  [820, 620, 217.2, 331, [280, 5], [132, 2], [100, 1]],
+  [896, 672, 251.3, 383, [332, 6], [178, 3], [152, 2]],
+  [1024, 768, 314.3, 479, [428, 8], [178, 3], [248, 4]],
+  [1280, 800, 335.3, 511, [460, 8], [194, 3], [280, 5]],
+  [1440, 900, 336, 512, [461, 8], [195, 3], [281, 5]],
 ];
 
 // ---------------------------------------------------------------------------
@@ -120,11 +121,16 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     // PLface (`minWidth: 160`, `minHeight: 180`), la plus petite place possible.
     expect(VOCAL_AVATAR_W_PX).toBe(160);
     expect(VOCAL_AVATAR_H_PX).toBe(180);
-    // Le bloc du personnage, lui, est un vrai bloc : 96 px de medaillon, 8 px
-    // d'ecart, 20 px de nom et 12 px d'air — il se lit dans le haut fixe de la
-    // colonne, pas dans la zone d'image (qui reste alors a 0 px).
+    // Le bloc du personnage, lui, est un vrai bloc : 12 px d'air en haut,
+    // 96 px de medaillon (le PLANCHER), 8 px d'ecart, 20 px de nom et 12 px d'air
+    // — il se lit dans le haut fixe de la colonne, pas dans la zone d'image (qui
+    // reste alors a 0 px). Le medaillon, lui, GRANDIT avec la place disponible
+    // (remarque du proprietaire du 2026-11-02) : `vocalPortraitSize` le mesure, et
+    // le bloc vaut alors `taille + 52` (voir `vocalPortraitBlockSize`).
     expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
-    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(96 + 8 + 20 + 12);
+    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(12 + 96 + 8 + 20 + 12);
+    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(148);
+    expect(vocalPortraitBlockSize(214)).toBe(214 + 52);
   });
 
   it("le personnage l'emporte TOUJOURS sur la fenetre du visage", () => {
@@ -136,8 +142,10 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     expect(portrait.imageZone.kind).toBe(VOCAL_IMAGE_PORTRAIT);
     expect(deux).toEqual(portrait);
     // L'avatar ne pese donc jamais sur la hauteur de liste quand un personnage
-    // est la : 512 - 51 - 136 = 325 px, avec ou sans visage.
-    expect(deux.listHeight).toBe(325);
+    // est la : 512 - 51 - 266 = 195 px, avec ou sans visage (le bloc du
+    // personnage vaut ici 214 + 52 = 266 px : le medaillon mesure 214 px).
+    expect(deux.listHeight).toBe(195);
+    expect(portrait.portraitSize).toBe(214);
     // Une entree absente n'est pas « vrai » : sans personnage, l'avatar decide.
     expect(planVocalSides({ ...cas, hasAvatar: true }).imageZone.kind).toBe(
       VOCAL_IMAGE_AVATAR,

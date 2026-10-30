@@ -11675,6 +11675,27 @@ summary:focus-visible {
   flex-direction: column;
   align-items: center;
   background: var(--bg-app);
+  /* LA LUMIERE DERRIERE LES COLONNES (voir les jetons ci-dessus). `background`
+     reste le fond plein — l'ecran doit rester opaque, on n'y voit jamais la
+     conversation — et ces deux voiles sont peints PAR-DESSUS ce fond plein.
+     Attention au mot : un `background-image` d'un PARENT est peint DERRIERE ses
+     enfants, jamais devant eux. Le disque passe donc par-dessus les lavis, et
+     il ne peut ni etre eteint ni etre assombri par le fond de scene — les deux
+     lavis s'arretent d'ailleurs avant lui (`--vocal-wash-w` retranche la boite
+     du disque et son jour). C'est ce qui rend l'etat nu sur : le cercle y garde
+     exactement le meme rendu qu'a l'etat normal (verrou :
+     `ecran-vocal-le-cercle-reste-visible.test.js`). */
+  background-image:
+    radial-gradient(
+      var(--vocal-wash-w) 46% at 0% 47%,
+      var(--vocal-wash),
+      transparent 75%
+    ),
+    radial-gradient(
+      var(--vocal-wash-w) 46% at 100% 47%,
+      var(--vocal-wash),
+      transparent 75%
+    );
   color: var(--text-primary);
   /* Entree / sortie : 0,3 s de fondu du fond — pas de zoom, on change d'ecran
      et on ne deplie pas un panneau (§4.2). */
@@ -11723,6 +11744,37 @@ summary:focus-visible {
      couronne), 7,32:1 en Pilot sombre, 7,97:1 en Pilot clair ; a 80 % la marge
      tombait a 0,02 au-dessus de 4,5:1 dans One Dark, soit le bruit d'arrondi. */
   --vocal-ink-soft: color-mix(in srgb, var(--text-primary) 85%, var(--bg-app));
+  /* ── LA TRANSPARENCE QU'ON PEUT VOIR (remarque du proprietaire, 2026-11-02) ──
+     Diagnostic, avant de changer une seule valeur : les deux colonnes
+     n'avaient AUCUN fond (seulement un cadre de 1 px), et derriere elles
+     l'overlay peint un `background: var(--bg-app)` UNI. Un panneau transparent
+     sur un fond uni est invisible : il n'y avait rien a voir a travers, et le
+     « verre » se lisait donc comme une plaque opaque. Trois jetons ci-dessous,
+     tous derives de variables du theme ACTIF (aucune couleur en dur, aucun
+     `rgba()`), repondent aux trois exigences a la fois — voir
+     `spec_modes_ecran_vocal.md` § 3ter, « La transparence qu'on voit ».
+
+     (1) LE FOND DU CALQUE PORTE UNE LUMIERE. Deux voiles radiaux, un par
+     colonne, dans la couleur des surfaces flottantes du theme (32 % : un
+     lavis, pas une plaque). Le rayon vaut la moitie de la fenetre moins la
+     boite du disque et son jour : le lavis s'arrete avant le cercle et ne
+     touche jamais le texte de l'etat. Sans ce fond, les colonnes translucides
+     n'auraient, encore une fois, rien a laisser voir. */
+  --vocal-wash: color-mix(in srgb, var(--surface-floating) 32%, transparent);
+  --vocal-wash-w: calc(50vw - var(--vocal-orb-box) / 2 - 24px);
+  /* (2) LA SURFACE DES COLONNES : le jeton de verre des panneaux flottants
+     (`--glass-tint`, 94 % — deja defini par les deux themes et herite par les
+     huit sous-themes), ramene a 62 % pour que la transparence se voie. Melange
+     au FOND DU CALQUE, et non au texte : le contraste du texte ne bouge donc
+     pas d'un iota (mesure des dix palettes, `panneaux-translucides-theme.test.js`).
+     La teinte reste une variable : changer de theme la change sans redemarrage
+     (`glass-theme.js` rafraichit le flou, voir `body.glass-refresh`). */
+  --vocal-glass: color-mix(in srgb, var(--glass-tint) 62%, transparent);
+  /* (3) LA TAILLE DU MEDAILLON. Valeur de depart (le plancher de 96 px) ; la
+     seule ecrivaine est `vocalSyncSides()` (super-agent.js), qui pose la valeur
+     MESUREE par `vocalPortraitSize` — le budget de la liste et la feuille de
+     style lisent donc le meme nombre. */
+  --vocal-portrait-size: 96px;
 }
 /* La liste de ce qui reste cliquable sur cet ecran (une regle
    `pointer-events: auto`) est en FIN de section, sous le titre
@@ -11914,6 +11966,14 @@ body.pilot-vocal-active #agent-activity {
   width: var(--vocal-side-tasks, 100%);
   min-width: 0;
   justify-self: start;
+  /* L'AIR DU BAS (remarque du proprietaire, 2026-11-02 : « le contenu touche le
+     cadre »). Le dernier message ne doit pas s'arreter pile sur le filet : il
+     s'arrete 12 px au-dessus, comme la liste des taches le fait deja
+     (`padding-block-end` sur `.vocal-side-tasks`). Le chiffre est
+     `VOCAL_SIDE_AIR_PX` (`vocal-sides.js`), et `planVocalDiscussion` le
+     retranche de son budget avant de compter les lignes : aucune ligne promise
+     ne peut donc etre rognee par cet air. */
+  padding-block-end: 12px;
 }
 /* --- LOT 3 (§ 1.3 et § 4.2) : CE QUE LA COLONNE DE GAUCHE MONTRE ---
    Le titre en haut, l'apercu des derniers echanges colle au BAS : le dernier
@@ -12032,12 +12092,15 @@ body.pilot-vocal-active #agent-activity {
   width: var(--vocal-side-tasks, 100%);
   min-width: 0;
   justify-self: end;
-  /* LOT 2 (budget du §2.5 revisé, correction du 2026-10-31 ; portrait agrandi et
-     detache le 2026-10-03) : 39 px de titre + 12 px d'air = 51 px de haut fixe,
-     PLUS le bloc du personnage quand il est la (96 + 8 + 20 + 12 = 136 px) et
-     PLUS la fenetre du visage quand c'est elle qui occupe la zone (180 px). La
-     ligne d'activite n'existe plus : la place qu'elle prenait revient a la
-     liste. */
+  /* LOT 2 (budget du §2.5, correction du 2026-10-31 ; portrait agrandi et
+     detache le 2026-10-03, puis 2026-11-02) : 39 px de titre + 12 px d'air =
+     51 px de haut fixe, PLUS le bloc du personnage quand il est la (12 d'air en
+     haut + medaillon + 8 + 20 de nom + 12 d'air = `taille + 52`, soit 148 px au
+     plancher de 96) et PLUS la fenetre du visage quand c'est elle qui occupe la
+     zone (180 px). La ligne d'activite n'existe plus : la place qu'elle prenait
+     revient a la liste. Le medaillon, lui, n'est plus fige a 96 px :
+     `vocalPortraitSize` le mesure, et `vocalSyncSides` ecrit la valeur dans
+     `--vocal-portrait-size`. */
   padding-block-end: 12px;
 }
 /* --- LE CADRE DES DEUX COLONNES (demande du proprietaire, 2026-11-02) ---
@@ -12066,10 +12129,12 @@ body.pilot-vocal-active #agent-activity {
    ces deux blocs-la par leur selecteur, et une regle groupee placee avant les
    priverait de leur contenu.
 
-   La hauteur, elle, n'est PAS touchee : la bordure est deduite de la boite
-   (border-box) mais elle ne prend la place de rien, et aucun `padding-block`
-   n'est ajoute — les 51 px de haut fixe et les 46 px par tache du budget
-   restent exacts. Verrou : src/js/cadre-listes-panneaux.test.js. */
+   La hauteur, elle, n'est PAS touchee ICI : la bordure est deduite de la boite
+   (border-box) mais elle ne prend la place de rien. L'air du bas, lui, est pose
+   dans le bloc de chaque colonne (`padding-block-end`, voir
+   `VOCAL_SIDE_AIR_PX`) : la regle groupee reste libre de tout `padding-block`,
+   pour que la somme `22 = 2 x (1 + 10)` de `VOCAL_SIDE_FRAME_PX` reste exacte.
+   Verrou : src/js/cadre-listes-panneaux.test.js. */
 .vocal-side-discussion,
 .vocal-side-tasks {
   box-sizing: border-box;
@@ -12077,6 +12142,36 @@ body.pilot-vocal-active #agent-activity {
   border-radius: var(--radius-lg);
   /* 10 px de chaque cote : `VOCAL_SIDE_FRAME_PX / 2 - 1` (10 = 22 / 2 - 1). */
   padding-inline: 10px;
+}
+/* LA SURFACE DES DEUX COLONNES (remarque du proprietaire, 2026-11-02 : « la
+   transparence ne se voit pas »).
+
+   Diagnostic, et il n'est pas la ou on l'attendait : ces colonnes n'avaient
+   AUCUN fond. Le « panneau » n'etait qu'un filet de 1 px, et derriere lui
+   l'overlay peint un `background: var(--bg-app)` UNI. Un panneau transparent
+   devant un fond uni est invisible : il n'y avait rien a voir a travers, d'ou
+   l'impression de plaque opaque. Trois pieces, donc, et pas une de plus :
+
+     la TEINTE  `--vocal-glass` : `--glass-tint` (le jeton de verre des panneaux
+                flottants) ramene a 62 %. Elle vient du theme ACTIF par
+                construction — aucune couleur, aucun `rgba()` ecrit ici, et un
+                changement de theme la change sans redemarrage.
+     le FLOU    8 px : il ne sert que s'il y a quelque chose derriere, et c'est
+                desormais le cas (les deux lavis du fond de l'overlay).
+     le FOND    les lavis radiaux de `.pilot-vocal` (voir ses jetons).
+
+   `background-color` et non `background` : le raccourci effacerait l'image de
+   fond heritee, et deux verrous lisent la declaration `background` de ces deux
+   colonnes. La teinte est un MELANGE avec le fond du calque, jamais avec le
+   texte : le contraste du texte ne bouge pas (mesure des dix palettes).
+   Le flou est retire a chaud au changement de theme par `body.glass-refresh`
+   (`glass-theme.js`) : le compositeur recompose la teinte au lieu de garder
+   l'image precedente. */
+.vocal-side-discussion,
+.vocal-side-tasks {
+  background-color: var(--vocal-glass);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 /* LA ZONE D'IMAGE, SOUS LE PORTRAIT (complement du 2026-10-29, § 7bis ;
    correction du 2026-10-31) : la place que Pilot reserve a la fenetre du visage
@@ -12111,14 +12206,23 @@ body.pilot-vocal-active #agent-activity {
    personnage est en tete de colonne, il surplombe la section au lieu d'y
    figurer. */
 .vocal-portrait {
-  /* 96 px (remarque du proprietaire du 2026-10-03 : « le portrait est trop
-     petit, on dirait qu'il appartient a la liste »). Un medaillon plus large que
-     deux lignes de liste : il se lit comme le personnage, plus comme une entree
-     de la liste. La valeur est celle de `VOCAL_PORTRAIT_PX`
-     (`vocal-sides.js`) : le budget de la colonne et la feuille de style lisent
-     le meme chiffre. */
-  width: 96px;
-  height: 96px;
+  /* LA TAILLE EST UNE MESURE, PAS UN CHIFFRE (remarque du proprietaire du
+     2026-11-02 : « environ trois fois plus grand »). Le medaillon vaut
+     `--vocal-portrait-size`, que `vocalSyncSides()` (super-agent.js) pose a la
+     valeur rendue par `vocalPortraitSize` : la place disponible dans la colonne
+     (moins le cadre et sa marge), plafonnee par la hauteur qui laisse trois
+     rangees a la liste, et jamais plus de trois fois le plancher de 96 px.
+     Valeur de repli : 96 px, le plancher du 2026-10-03 (`VOCAL_PORTRAIT_PX`).
+     Mesure des sept fenetres du document : 102 px a 896, 198 a 1024, 214 a 1280
+     et 1440, 231 a 1920 — voir `spec_modes_ecran_vocal.md` § 3ter, « La taille du
+     medaillon ». */
+  width: var(--vocal-portrait-size, 96px);
+  height: var(--vocal-portrait-size, 96px);
+  /* L'AIR AU-DESSUS DU MEDAILLON (meme remarque : il ne touche pas le cadre).
+     12 px, la meme valeur que l'air du bas des colonnes, et c'est
+     `VOCAL_PORTRAIT_AIR_TOP_PX` dans le budget : la place est comptee, pas
+     ajoutee. */
+  margin-block-start: 12px;
   border-radius: 50%;
   object-fit: cover;
   align-self: center;
@@ -12160,9 +12264,10 @@ body.pilot-vocal-active #agent-activity {
    visage — les deux ne s'affichent jamais ensemble), liste. Les hauteurs du
    budget (§2.5) sont ECRITES ici : elles doivent tomber juste, sinon le nombre
    de lignes calcule par `planVocalTasks` ne serait plus celui qu'on voit. Haut
-   fixe : 14 + 11 + 14 (titre) + 12 (air du bas) = 51 px ; 51 + 98 = 149 px avec le
-   personnage ; 51 + 180 = 231 px avec la fenetre du visage. Le reste est de
-   l'air, jamais un debordement. */
+   fixe : 14 + 11 + 14 (titre) + 12 (air du bas) = 51 px ; + 148 px avec le
+   personnage au plancher (air du haut 12 + medaillon 96 + 8 + nom 20 + air 12) ;
+   51 + 180 = 231 px avec la fenetre du visage. Le reste est de l'air, jamais un
+   debordement. */
 /* LE TITRE DES DEUX COLONNES : une seule regle, deux selecteurs — les deux
    titres ne peuvent donc pas deriver l'un de l'autre. 14 px sous le bord haut de
    la colonne, 11 px de haut, 14 px sous lui : « DISCUSSION » et « TACHES » sont
@@ -12806,26 +12911,55 @@ body.pilot-vocal-active #agent-activity {
    d'un coup et le fondu ne se verrait pas —, puis `pointer-events: none` : un
    noeud invisible ne recoit aucun clic et sort du parcours clavier.
    INTERDITS : `display: none`, une regle de hauteur, de marge, de padding ou de
-   position. L'ESPACE RESTE RESERVE : le disque et le portrait ne bougent pas d'un
-   pixel, et le retour ne les fait pas sauter. Aucune translation non plus : le
-   disque ne glisse pas, il s'eteint.
+   position. L'ESPACE RESTE RESERVE : le portrait ne bouge pas d'un pixel, et le
+   retour ne le fait pas sauter. Aucune translation non plus : les panneaux ne
+   glissent pas, ils s'eteignent. Le DISQUE, lui, n'est pas concerne du tout : il
+   reste allume (voir plus bas).
    CE QUI N'EST PAS NOMME ICI, ET NE DOIT JAMAIS L'ETRE : le portrait du
    personnage et son nom (`.vocal-portrait`, `.vocal-portrait-name`) — la
    decision est « tout masquer SAUF le portrait » (2026-10-31 : l'image est
-   revenue en haut a droite de l'ecran avec son nom sous elle, et elle reste la
-   seule chose visible) —, LA ZONE DE SAISIE SOUS LE CERCLE (`.vocal-input`) et
+   revenue en haut a droite de l'ecran avec son nom sous elle) —, LE DISQUE ET
+   TOUT CE QU'IL PORTE (`.vocal-orb`, son enveloppe, son arc, son halo, le
+   bouton « Réveiller ») — c'est l'objet qui dit encore l'etat de la voix, et
+   le proprietaire l'a demande visible dans les deux etats (2026-11-02) —, LA
+   ZONE DE SAISIE SOUS LE CERCLE (`.vocal-input`) et
    la zone d'image (`.vocal-image-zone`, dont la hauteur reservee ne doit pas
    bouger) — la regle la plus sure est l'absence de regle ; le logo (une sortie),
    l'entree « Travail » (un acces) et les trois boutons systeme (hors de
    l'overlay).
    PERIMETRE EXACT (precision du proprietaire, 2026-11-01) : ce bouton masque les
-   panneaux lateraux et la MISE EN SCENE autour du visage (colonnes, disque et
-   halo, ceinture du haut) — JAMAIS la zone de saisie : elle reste affichee et
-   utilisable dans les deux etats, avec son texte, son bouton de dictee et la
-   rangee de questions qu'elle porte. Le bouton ne la concerne pas.
-   SANS PERSONNAGE, il ne reste que le bouton : le disque s'eteint comme le
-   reste, il ne demeure pas pour lui tenir compagnie. */
-.pilot-vocal.vocal-bare .vocal-orb,
+   panneaux lateraux et la MISE EN SCENE autour du visage (colonnes, ceinture
+   du haut) — JAMAIS la zone de saisie : elle reste affichee et utilisable dans
+   les deux etats, avec son texte, son bouton de dictee et la rangee de
+   questions qu'elle porte. Le bouton ne la concerne pas.
+
+   LE DISQUE N'EST PAS DANS CETTE LISTE, ET N'Y ENTRE JAMAIS (correctif du
+   2026-11-02 : « quand il desactive l'affichage, le cercle ne doit pas
+   disparaitre »). Il y figurait — c'etait la CAUSE EXACTE du defaut :
+
+     .pilot-vocal.vocal-bare .vocal-orb { opacity: 0; visibility: hidden; … }
+
+   Le disque etait donc nomme comme le decor qu'on eteint, et l'etat nu
+   l'effacait par sa seule regle — pas par un ancetre, pas par un calque
+   superpose. Ce n'est pas une exception ajoutee APRES coup qui le rallume
+   (une seconde regle `opacity: 1` aurait eu a gagner contre la premiere, a la
+   fois sur la specificite ET sur la transition de `visibility`, retardee de
+   180 ms) : c'est son NOM qui est retire de la liste. Le cercle ne fait plus
+   partie du perimetre, donc il garde exactement ce qu'il a dans l'etat
+   normal — taille, place, bord, enveloppe, arc, respiration, `pointer-events`
+   herite de `.vocal-stage` (qui est l'un des six hotes, issue #381) — sans une
+   ligne de plus.
+
+   LE FOND DE SCENE NE PEUT PAS L'ETEINDRE. Le fond de l'etat nu, ce sont les
+   deux lavis radiaux de `.pilot-vocal` (`background-image`, voir ses jetons) :
+   le `background` d'un parent est peint DERRIERE ses enfants, le disque passe
+   donc par-dessus, et le rayon des lavis (`--vocal-wash-w`) s'arrete avant la
+   boite du disque. Aucun `filter`, aucun voile, aucun `::before` de l'etat nu
+   ne se pose sur l'overlay : une regle de ce genre passerait DEVANT le cercle
+   et le ternirait. Verrou : `ecran-vocal-le-cercle-reste-visible.test.js`.
+   SANS PERSONNAGE, le disque reste : c'est le seul objet de l'ecran qui dise
+   encore l'etat de la voix, et le supprimer ferait un etat nu a deux vitesses
+   selon qu'un personnage est depose ou non. */
 .pilot-vocal.vocal-bare .vocal-mic-fix,
 .pilot-vocal.vocal-bare .vocal-status,
 .pilot-vocal.vocal-bare .vocal-side-discussion,
@@ -12864,6 +12998,32 @@ body.pilot-vocal-active #agent-activity {
   visibility: visible;
   background: var(--bg-elevated);
   box-shadow: var(--shadow-sm);
+}
+/* LE CADRE DU PANNEAU DE DROITE S'EFFACE AUSSI (remarque du proprietaire,
+   2026-11-02 : « quand tout est masque, il reste le cadre du panneau de
+   droite »). L'etat nu retirait le contenu (`> .vocal-tasks-title`,
+   `> .vocal-side-body`) et la colonne de gauche, mais LE CADRE ET LA SURFACE de
+   la colonne des taches restaient : un rectangle de verre vide autour du
+   personnage. Le cadre et le fond vivent sur `.vocal-side-tasks` elle-meme —
+   c'est donc la COLONNE qu'il faut eteindre, et pas ses enfants.
+
+   CE QUI SURVIT, et que cette regle ne nomme donc jamais : le portrait
+   (`.vocal-portrait`) et son nom (`.vocal-portrait-name`), qui sont ses enfants
+   — ils restent en place, au-dessus et sous le medaillon, sans cadre autour
+   d'eux. Le bouton de masquage (dans la barre du haut) et la zone de saisie
+   (sous le cercle) ne sont pas concernes non plus.
+
+   On ne touche NI a `opacity` NI a `visibility` : la colonne reste dans le
+   document, garde sa place et sa hauteur, et le portrait ne bouge pas d'un
+   pixel. Seuls le filet, le fond et le flou tombent — le panneau redevient
+   transparent, il n'est plus un panneau. Memes raisons pour le mouvement
+   reduit : il n'y a aucun fondu a retirer ici, donc aucune transition a
+   annuler. Verrou : `ecran-vocal-marges-transparence-portrait.test.js`. */
+.pilot-vocal.vocal-bare .vocal-side-tasks {
+  background-color: transparent;
+  border-color: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 /* Mouvement reduit : l'extinction est INSTANTANEE (aucun fondu). L'espace reste
    reserve et le bouton reste le seul moyen de tout remettre. */
@@ -13078,7 +13238,8 @@ body.pilot-vocal-active #agent-activity {
 
 /* ── RAFRAICHISSEMENT DES PANNEAUX TRANSLUCIDES AU CHANGEMENT DE THEME ──
    Les surfaces qui floutent l'arriere-plan (`.modal`, `.projects-dropdown`,
-   `.context-menu`, `#agent-activity-dropdown`) sont composees a part : le
+   `.context-menu`, `#agent-activity-dropdown`, et depuis le 2026-11-02 les DEUX
+   colonnes de l'ecran Vocal) sont composees a part : le
    moteur garde un INSTANTANE de l'arriere-plan pour le flouter. Changer de
    theme ne repeint pas cet instantane, et le panneau gardait donc la teinte
    PRECEDENTE — jusqu'au redemarrage.
@@ -13092,7 +13253,9 @@ body.glass-refresh .modal,
 body.glass-refresh .gds-menu-overlay,
 body.glass-refresh .projects-dropdown,
 body.glass-refresh .context-menu,
-body.glass-refresh #agent-activity-dropdown {
+body.glass-refresh #agent-activity-dropdown,
+body.glass-refresh .vocal-side-discussion,
+body.glass-refresh .vocal-side-tasks {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }

@@ -215,16 +215,20 @@ describe("1. le portrait et son nom ne sont JAMAIS atteints par l'etat nu", () =
   });
 
   it("le verificateur n'est pas complaisant : le defaut du 2026-10-31 est vu", () => {
-    // Le matin du 2026-10-31, le portrait vivait DANS le disque. Le meme calcul
-    // doit alors designer `.vocal-orb` : la regle qui eteint le disque emportait
-    // le portrait par heritage d'opacite.
+    // Le matin du 2026-10-31, le portrait vivait DANS un noeud que l'etat nu
+    // eteint. Le meme calcul doit alors designer ce noeud : la regle d'opacite
+    // emportait le portrait par heritage. (Le disque, lui, n'est plus eteint
+    // depuis le 2026-11-02 : il ne peut donc plus servir de temoin — le panneau
+    // de gauche le remplace, avec exactement le meme mecanisme.)
     const defaut = [
       overlay(),
       noeud("div", ["vocal-stage"]),
-      noeud("div", ["vocal-orb"]),
+      noeud("aside", ["vocal-side-discussion", "vocal-side"]),
       noeud("img", ["vocal-portrait"]),
     ];
-    expect(coupables(defaut)).toContain(".pilot-vocal.vocal-bare .vocal-orb");
+    expect(coupables(defaut)).toContain(
+      ".pilot-vocal.vocal-bare .vocal-side-discussion",
+    );
   });
 });
 

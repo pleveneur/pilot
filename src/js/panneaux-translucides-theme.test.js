@@ -34,8 +34,9 @@
  *   5. la liste des surfaces de `body.glass-refresh` diverge de celle du module ;
  *   6. l'evenement de theme est recopie au lieu d'etre importe de `theme.js` ;
  *   7. le rafraichissement n'est plus branche au demarrage ;
- *   8. une colonne de l'ecran Vocal est peinte ou voilee (non-regression : le
- *      disque, le halo, les colonnes et le bouton de masquage ne bougent pas) ;
+ *   8. une colonne de l'ecran Vocal revient a une couleur ecrite en dur, ou
+ *      perd sa surface de verre (decision du 2026-11-02 : les deux colonnes
+ *      prennent la teinte du theme, elles ne sont plus des filets transparents) ;
  *   9. un reglage ou un stockage apparait (aucune preference ajoutee).
  *
  * Aucun navigateur n'est requis : lecture des fichiers (fins de ligne
@@ -533,13 +534,32 @@ describe("panneaux translucides : rien d'autre ne bouge", () => {
     expect(sansCommentairesJs(glassJs)).not.toMatch(/style\.|backgroundColor|backdropFilter/);
   });
 
-  it("les colonnes de l'ecran Vocal ne sont ni peintes ni voilees", () => {
-    // Non-regression : le disque, le halo, les deux colonnes et le bouton de
-    // masquage gardent exactement leur rendu.
-    expect(declaration(blockOf(".vocal-side-discussion"), "background")).toBeNull();
-    expect(declaration(blockOf(".vocal-side-tasks"), "background")).toBeNull();
+  it("les colonnes de l'ecran Vocal prennent la teinte du theme, jamais une couleur en dur", () => {
+    // DECISION DU 2026-11-02 (remarque du proprietaire : « la transparence ne se
+    // voit pas »). Les deux colonnes ne portaient AUCUN fond : un filet de 1 px
+    // devant un `--bg-app` uni. Elles portent maintenant une surface de verre,
+    // et elle obeit aux memes trois regles que les panneaux flottants :
+    //   - la teinte vient du THEME (`--vocal-glass`, un melange de
+    //     `--glass-tint`), jamais d'une couleur ecrite ici ;
+    //   - elle reste translucide (le melange laisse passer le fond du calque) ;
+    //   - le flou est celui des panneaux, et il est rafraichi au changement de
+    //     theme (les colonnes sont dans `GLASS_SURFACE_SELECTOR`).
+    const verre = css.match(
+      /\.vocal-side-discussion,\s*\n?\.vocal-side-tasks\s*\{[^}]*background-color[^}]*\}/,
+    );
+    expect(verre, "la surface des deux colonnes est introuvable").toBeTruthy();
+    expect(declaration(verre[0], "background-color")).toBe("var(--vocal-glass)");
+    expect(verre[0]).not.toMatch(COULEUR_EN_DUR);
+    expect(declaration(verre[0], "backdrop-filter")).toBe("blur(8px)");
+    // Le jeton n'est pas une couleur : c'est un melange du theme actif.
+    const jeton = declaration(blockOf(".pilot-vocal"), "--vocal-glass");
+    expect(jeton).toContain("var(--glass-tint)");
+    expect(jeton).toMatch(/color-mix\(/);
+    expect(jeton).not.toMatch(COULEUR_EN_DUR);
+    // Le CALQUE, lui, ne floute rien : sa propre surface est peinte une fois et
+    // le flou des colonnes lit ce qu'il y a derriere (les deux lavis).
     expect(declaration(blockOf(".pilot-vocal"), "backdrop-filter")).toBeNull();
-    // Les seules surfaces translucides de l'ecran Vocal derivent deja du theme.
+    // Et les surfaces qui derivent deja du theme n'ont pas bouge.
     for (const selector of [".vocal-msg-user", ".vocal-restart"]) {
       const fond = declaration(blockOf(selector), "background");
       expect(fond, selector).toContain("var(--text-primary)");

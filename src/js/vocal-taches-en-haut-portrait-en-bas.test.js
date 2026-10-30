@@ -7,10 +7,14 @@
 //         NOMBRE DE LIGNES qui suit la hauteur : les sept lignes du tableau
 //         § 2.5 pour les sept fenetres du document, plafond 8.
 //   T18 — le haut de la colonne reserve la place du PERSONNAGE : `listH = H - 51`
-//         quand il n'y a rien, `H - 51 - 136` avec son portrait (96 + 8 + 20 + 12), la
+//         quand il n'y a rien, `H - 51 - 148` avec son portrait au plancher et
+//         `H - 51 - (taille + 52)` des que le medaillon grandit (12 + 96 + 8 + 20 +
+//         12), la
 //         fenetre du visage prenant la sienne SUR ce total. Correction du
 //         2026-10-31 : le portrait est REVENU en haut a droite de la colonne, il
 //         n'est plus au centre du disque (mission « ecran Vocal » annulee).
+//         Remarque du proprietaire du 2026-11-02 : le medaillon est MESURE par
+//         `vocalPortraitSize`, donc le bloc n'est plus un chiffre fixe.
 //   T19 — la colonne ne passe JAMAIS sous le cercle (`--vocal-side-tasks`,
 //         une largeur, pas une marge) et l'ordre du document est
 //         titre -> portrait -> zone d'image -> liste, sans ligne d'activite.
@@ -77,13 +81,14 @@ const SEPT_LIGNES = [
 ];
 
 describe("T18 — le haut de la colonne reserve la place du personnage", () => {
-  it("`listH` vaut H - 51 sans rien, H - 51 - 136 avec le portrait", () => {
+  it("`listH` vaut H - 51 sans rien, H - 51 - 148 avec le portrait au plancher", () => {
     for (const [largeur, hauteur, disque, H] of SEPT_LIGNES) {
       const rien = planVocalSides({ width: largeur, height: hauteur, orbSize: disque });
       expect(rien.columnHeight, `${largeur} : H`).toBe(H);
       expect(rien.listHeight, `${largeur} : liste`).toBe(H - VOCAL_SIDE_FIXED_PX);
-      // Le PERSONNAGE d'abord (correction du 2026-10-31) : son bloc de 136 px sort
-      // de la liste, en haut de la colonne.
+      // Le PERSONNAGE d'abord (correction du 2026-10-31) : son bloc sort de la
+      // liste, en haut de la colonne — et ce bloc suit la taille MESUREE du
+      // medaillon (`portraitBlock`), jamais un chiffre fixe.
       const portrait = planVocalSides({
         width: largeur,
         height: hauteur,
@@ -91,17 +96,19 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
         hasPortrait: true,
       });
       expect(portrait.listHeight, `${largeur} : liste avec portrait`).toBe(
-        H - VOCAL_SIDE_FIXED_PX - VOCAL_PORTRAIT_BLOCK_PX,
+        H - VOCAL_SIDE_FIXED_PX - portrait.portraitBlock,
       );
+      expect(portrait.portraitBlock).toBe(portrait.portraitSize + 52);
       expect(portrait.imageZone.kind).toBe(VOCAL_IMAGE_PORTRAIT);
       expect(portrait.imageZone.height).toBe(0);
     }
   });
 
-  it("51 px de base, 136 px de personnage, 180 px de fenetre du visage", () => {
+  it("51 px de base, 148 px de personnage au plancher, 180 px de fenetre du visage", () => {
     expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
-    // 96 px de medaillon + 8 px d'ecart + 20 px de nom + 12 px d'air.
-    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(136);
+    // 12 px d'air en haut + 96 px de medaillon + 8 px d'ecart + 20 px de nom +
+    // 12 px d'air en bas.
+    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(148);
     const av = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasAvatar: true });
     expect(av.columnHeight).toBe(512);
     expect(av.listHeight).toBe(512 - 231);
@@ -117,11 +124,12 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     const deux = planVocalSides({ ...cas, hasPortrait: true, hasAvatar: true });
     const portrait = planVocalSides({ ...cas, hasPortrait: true });
     expect(deux).toEqual(portrait);
-    // 512 - 51 - 136 : le personnage occupe le haut, la zone d'image ne prend rien.
-    expect(deux.listHeight).toBe(325);
+    // 512 - 51 - 266 : le personnage occupe le haut (medaillon mesure 214 px, donc
+    // un bloc de 266), la zone d'image ne prend rien.
+    expect(deux.listHeight).toBe(195);
   });
 
-  it("le plan connait le personnage : `hasPortrait` fait partie de ce qu'il rend", () => {
+  it("le plan connait le personnage : `hasPortrait` et la taille du medaillon en font partie", () => {
     const cas = { width: 1440, height: 900, orbSize: 336 };
     const plan = planVocalSides(cas);
     expect(Object.keys(plan).sort()).toEqual([
@@ -130,12 +138,19 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
       "hasPortrait",
       "imageZone",
       "listHeight",
+      "portraitBlock",
+      "portraitSize",
       "shown",
       "taskTrack",
       "track",
     ]);
+    // Sans personnage, aucun medaillon n'est mesure : la liste garde tout.
+    expect(plan.portraitSize).toBe(0);
+    expect(plan.portraitBlock).toBe(0);
     // Une entree `hasPortrait` bien vraie CHANGE la liste : elle est lue.
-    expect(planVocalSides({ ...cas, hasPortrait: true }).listHeight).toBe(plan.listHeight - 136);
+    const avec = planVocalSides({ ...cas, hasPortrait: true });
+    expect(avec.portraitSize).toBe(214);
+    expect(avec.listHeight).toBe(plan.listHeight - avec.portraitBlock);
     // Et sans personnage ni visage, aucun cas par defaut cache : 51 px, pas plus.
     expect(plan.listHeight).toBe(461);
   });

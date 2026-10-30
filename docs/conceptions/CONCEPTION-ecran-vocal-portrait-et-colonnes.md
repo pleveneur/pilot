@@ -1222,6 +1222,26 @@ portrait (aucun repli sur le logo), et la même règle vaut ici.
 
 ### 7bis.4 Le budget de hauteur, et les sept fenêtres
 
+> **RÉVISION DU 2026-11-02 — LES CHIFFRES DE CE § 7bis.4 SONT PÉRIMÉS, LA SPÉCIFICATION FAIT FOI.**
+> Trois remarques du propriétaire ont changé le budget, et **aucun** des nombres ci-dessous
+> (72 px de médaillon, blocs de 98 / 170 / 252 / 356 px, colonne de 51 px sans air) n'est plus
+> celui du code. Ce qui a changé :
+>
+> - **le médaillon est mesuré, plus figé** : `vocalPortraitSize` le choisit entre un plancher de
+>   **96 px** et une cible de **288 px** (trois fois le plancher), en respectant la place dans le
+>   cadre et trois rangées garanties à la liste. Le bloc du personnage vaut **`taille + 52`**
+>   (148 px au plancher, 266 px dans une grande fenêtre) ;
+> - **le contenu ne touche plus le cadre** : **12 px d'air** en bas des deux colonnes
+>   (`padding-block-end`) et **12 px** au-dessus du médaillon (`margin-block-start`), tous deux
+>   **comptés** dans le budget — l'en-tête de la colonne de gauche passe de 14 à **26 px** ;
+> - **le fond du panneau de droite s'éteint en état nu**, avec son cadre et son flou.
+>
+> Les nombres applicables, la table des sept fenêtres et leurs verrous vivent désormais dans
+> **`spec_modes_ecran_vocal.md`** § 3ter (« La taille du médaillon » et « La transparence qu'on
+> voit »). Le présent document garde la **conception** — l'ordre des cas, l'arbitrage, la forme —
+> et l'histoire des décisions ; il ne fait plus référence pour un chiffre.
+
+
 La décomposition est **celle de la révision** (§ 2.5 de
 `CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md`), recopiée sans un chiffre de plus :
 

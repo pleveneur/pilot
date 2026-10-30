@@ -18,9 +18,10 @@
 //   5. le bouton n'est JAMAIS `hidden` ni `disabled`, meme quand les colonnes ne
 //      tiennent pas dans la fenetre ;
 //   6. le bloc `vocal-bare` ne nomme NI `.vocal-portrait` NI `.vocal-portrait-name` ;
-//   7. il nomme bien le disque, le bouton du micro, la ligne d'etat et les deux
-//      colonnes — et JAMAIS la zone de saisie, qui reste affichee et utilisable
-//      dans les deux etats (precision du proprietaire, 2026-11-01) ;
+//   7. il nomme bien le bouton du micro, la ligne d'etat et les deux colonnes —
+//      et JAMAIS le disque, qui reste visible dans les deux etats (regle du
+//      proprietaire, 2026-11-02), ni la zone de saisie, qui reste affichee et
+//      utilisable dans les deux etats (precision du proprietaire, 2026-11-01) ;
 //   8. il ne contient ni `display: none`, ni regle de hauteur, de marge, de
 //      padding ou de position ;
 //   9. `vocalSyncChrome` RETIENT le bas allume quand l'etat nu est pose ;
@@ -91,7 +92,7 @@ const blocBouton = () => sliceSource(CSS, ".vocal-display-toggle {", "}", 200);
 const blocEffacement = () =>
   sliceSource(
     CSS,
-    ".pilot-vocal.vocal-bare .vocal-orb,",
+    ".pilot-vocal.vocal-bare .vocal-mic-fix,",
     ".pilot-vocal.vocal-bare .vocal-top {",
     200,
   );
@@ -100,7 +101,7 @@ const blocEffacement = () =>
 const sectionNue = () =>
   sliceSource(
     CSS,
-    ".pilot-vocal.vocal-bare .vocal-orb,",
+    ".pilot-vocal.vocal-bare .vocal-mic-fix,",
     "/* --- §4.2/§4.3 Mouvement reduit",
     500,
   );
@@ -441,10 +442,9 @@ describe("6. l'etat masque : une seule classe, un seul ecrivain", () => {
 });
 
 describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
-  it("le bloc nomme le disque, le micro, la ligne d'etat et les deux colonnes", () => {
+  it("le bloc nomme le micro, la ligne d'etat et les deux colonnes", () => {
     const effacement = blocEffacement();
     for (const noeud of [
-      ".vocal-orb",
       ".vocal-mic-fix",
       ".vocal-status",
       ".vocal-side-discussion",
@@ -452,6 +452,11 @@ describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
     ]) {
       expect(effacement).toContain(noeud);
     }
+    // LE DISQUE N'EST PLUS LA (correctif du 2026-11-02 : « quand il desactive
+    // l'affichage, le cercle ne doit pas disparaitre »). Il y figurait, et
+    // c'etait la cause du defaut : le bloc l'eteignait par `opacity: 0`.
+    // Le verrou dedie est `ecran-vocal-le-cercle-reste-visible.test.js`.
+    expect(neutraliserSource(effacement)).not.toContain(".vocal-orb");
     // LA ZONE DE SAISIE N'EST PAS LA (precision du 2026-11-01) : elle reste
     // affichee et utilisable dans les deux etats, texte et micro compris. Une
     // regle d'effacement qui la nomme fait echouer ce test et le verrou dedie
@@ -509,7 +514,7 @@ describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
     // Et le bloc entier de l'etat nu, du premier selecteur au bloc suivant.
     const tout = sliceSource(
       CSS,
-      ".pilot-vocal.vocal-bare .vocal-orb,",
+      ".pilot-vocal.vocal-bare .vocal-mic-fix,",
       "/* --- §4.2/§4.3 Mouvement reduit",
       500,
     );
@@ -520,7 +525,7 @@ describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
     const tout = neutraliserSource(
       sliceSource(
         CSS,
-        ".pilot-vocal.vocal-bare .vocal-orb,",
+        ".pilot-vocal.vocal-bare .vocal-mic-fix,",
         "/* --- §4.2/§4.3 Mouvement reduit",
         500,
       ),
@@ -529,14 +534,18 @@ describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
     expect(tout).not.toContain("#agent-activity");
   });
 
-  it("SANS PERSONNAGE il ne reste que le bouton : le disque ne reste pas", () => {
-    // Le disque est nomme SANS condition : aucune variante « si le portrait
-    // existe », aucun `:has()`, aucun `[hidden]`. Un disque laisse seul
-    // contredirait « tout masquer » et ferait un etat nu a deux vitesses.
+  it("le disque reste, meme SANS PERSONNAGE : il n'est jamais nomme", () => {
+    // Le disque etait nomme SANS condition (aucune variante « si le portrait
+    // existe », aucun `:has()`, aucun `[hidden]`) — c'etait le defaut du
+    // 2026-11-02 : « tout masquer » effacait le cercle lui-meme. Depuis le
+    // correctif, il n'est pas nomme du tout : il reste donc allume dans les
+    // deux etats, avec ou sans personnage. Le bloc garde sa forme simple
+    // (aucune condition), simplement il ne le concerne plus.
     const effacement = blocEffacement();
     expect(effacement).not.toContain(":has(");
     expect(effacement).not.toContain("[hidden]");
     expect(effacement).not.toContain(":not(");
+    expect(neutraliserSource(effacement)).not.toContain(".vocal-orb");
     // Le portrait absent est deja `hidden` dans le modele (il ne remplit donc pas
     // la colonne) ; le bloc ne lui redonne aucune place, il ne le nomme pas du tout.
     expect(corpsOverlay()).toContain('<img class="vocal-portrait" alt="" hidden />');

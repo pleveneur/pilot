@@ -180,8 +180,8 @@ reste **sous** eux, la fenêtre reste fermable et déplaçable, et le panneau ne
 recouvre ni la ligne d'état ni la zone de saisie. Ni le disque, ni la ligne
 d'état, ni la barre de saisie, ni le bouton de relance ne bougent.
 
-Dans l'**état nu** (§4ter : tout masqué, sauf le portrait du personnage en haut à droite,
-son nom, le bouton et la zone de saisie),
+Dans l'**état nu** (§4ter : tout masqué, sauf le cercle, le portrait du personnage
+en haut à droite, son nom, le bouton et la zone de saisie),
 il faut le dire net :
 **Rien de la conversation n'est affiché** sur cet écran — ni les messages, ni les
 outils, ni un résumé des derniers échanges. Le suivi des agents y est **joignable sur
@@ -308,10 +308,14 @@ et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
 **La zone d'image a TROIS cas, examinés dans cet ordre** — ce sont des faits, pas des réglages :
 
 - **1. Le portrait du personnage actif, d'abord, toujours** : le médaillon rond de
-  **96 px** et son nom juste sous lui (8 px d'écart, 20 px de ligne), plus **12 px d'air**
-  avant ce qui suit — un bloc de **136 px** (`VOCAL_PORTRAIT_BLOCK_PX`), pris en haut de la
+  **96 px au plancher, MESURÉ jusqu'à 288 px** (voir « la taille du médaillon »
+  ci-dessous) et son nom juste sous lui (8 px d'écart, 20 px de ligne), plus **12 px
+d'air au-dessus** et **12 px d'air** avant ce qui suit — un bloc de
+  **`taille + 52`** (148 px au plancher, `VOCAL_PORTRAIT_BLOCK_PX`), pris en haut de la
   colonne, donc **en haut à droite de l'écran**, **détaché de la liste** par cet air (aucun
-  filet, aucun cadre : l'écran n'en porte aucun). Il **l'emporte toujours
+  filet, aucun cadre : l'écran n'en porte aucun). Le médaillon **ne touche jamais le
+  cadre** : 12 px d'air au-dessus de lui, 10 px de chaque côté (remarque du propriétaire
+  du 2026-11-02 : « avec une marge autour de lui »). Il **l'emporte toujours
   sur la fenêtre du visage** : si le personnage existe, c'est lui qu'on voit, et la zone
   d'image ne prend plus rien.
 - **2. Sinon, l'avatar du visage (PLface)**, s'il tourne, s'il répond
@@ -324,9 +328,10 @@ et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
 - **3. Sinon** : le bloc d'image **n'existe pas** — pas d'image de remplacement, pas de
   cadre, pas de logo, **aucune zone réservée** — et la liste prend toute la hauteur.
 - **La colonne ne réserve, en plus de la liste, que le titre et l'air du bas : 51 px**
-  (14 de marge + 11 de titre + 14 de marge + 12 d'air), plus **136 px** quand le portrait du
-  personnage est là, plus **180 px** quand la fenêtre du visage est posée. La liste dispose
-  donc de **`H − 51` px**, de **`H − 51 − 136`** avec le personnage, ou de
+  (14 de marge + 11 de titre + 14 de marge + 12 d'air), plus le **bloc du personnage**
+  quand il est là (`taille + 52`, soit 148 px au plancher et 266 px dans une grande
+  fenêtre), plus **180 px** quand la fenêtre du visage est posée. La liste dispose
+  donc de **`H − 51` px**, de **`H − 51 − (taille + 52)`** avec le personnage, ou de
   **`H − 51 − 180`** avec la fenêtre du visage, ce qui lui laisse de **3 à 8** lignes selon
   la fenêtre (`vocalTaskRows`).
 - **La zone n'existe que si la liste garde au moins une ligne** : sous `H = 277` px de
@@ -400,7 +405,8 @@ Le budget suit la hauteur et la largeur **mesurées**, jamais une constante cach
 `charsPerLine = floor((track - cadre) / 7,6)` — où `cadre = VOCAL_SIDE_FRAME_PX
 = 22 px` (1 px de bordure + 10 px de marge intérieure de chaque côté, voir le
 **cadre des panneaux** ci-dessous) : **39** caractères à 320 px, 34 à 282, 49 à
-400 — et `lignes = floor((H - 14) / 37)`, soit **13** à 512 px, 12 à 479, 9 à 383, 8 à
+400 — et `lignes = floor((H - 26) / 37)`, les 26 px étant le titre (14) et l'air du
+bas (12, `VOCAL_DISCUSSION_HEAD_PX`) : soit **13** à 512 px, 12 à 479, 9 à 383, 8 à
 331, 7 à 287, 5 à 231 (le tableau du § 4.2 de la conception, rejoué par un test). La
 coupe se fait **sur une frontière de mot**, jamais dans un mot, et l'ellipse le dit.
 On n'affiche que la **fin** de la conversation, sans trou : dès qu'un message ne
@@ -425,13 +431,78 @@ rien n'est décidé ici en local :
 | Arrondi | `--radius-lg` (**12 px**) | Jeton **existant**, déjà porté par `.projects-dropdown`. Aucun cinquième rayon inventé, jamais une valeur en px écrite sur place |
 | Mesure | `box-sizing: border-box` + `padding-inline: 10px` = **`VOCAL_SIDE_FRAME_PX` = 22 px** | Le cadre est **pris sur** la largeur de la colonne, pas ajouté à côté, et `vocalCharsPerLine()` le retranche **avant** de compter les caractères : la mesure dit vrai, sinon le texte serait coupé plus tôt qu'annoncé |
 
-La **hauteur n'est pas touchée** : aucun `padding-block`, aucune hauteur posée — les
-51 px de haut fixe et les 46 px par tâche restent exacts. Le **même cadre** est porté
+La **hauteur n'est pas prise par le cadre** : aucune hauteur posée, et les 46 px par
+tâche restent exacts. Le **même cadre** est porté
 par **tout panneau translucide** (les deux qui portent `background: var(--glass-tint)` :
 `.projects-dropdown` et `.context-menu`) ; les **voiles** (`--glass-scrim`,
 `--glass-scrim-soft`) sont des surfaces plein écran, ils n'ont pas de bord. Verrou :
 `src/js/cadre-listes-panneaux.test.js` (couleur, arrondi, mesure, contraste sur les dix
 palettes, et 22 px = bordure + marge lus dans la feuille de style).
+
+**L'air du bas, lui, est un vrai `padding-block-end` de 12 px** sur chacune des deux
+colonnes (remarque du propriétaire du 2026-11-02 : « le contenu touche le cadre ») : le
+dernier message et la dernière tâche s'arrêtent 12 px au-dessus du filet. Il est **compté
+avant d'être peint** — `VOCAL_SIDE_AIR_PX = 12` est déjà dans les 51 px du haut fixe et
+dans l'en-tête de la colonne de gauche (26 = 14 + 12) —, donc **aucune ligne promise n'est
+rognée** par lui. Verrou : `src/js/ecran-vocal-marges-transparence-portrait.test.js`.
+
+### La transparence qu'on voit (2026-11-02)
+
+Remarque du propriétaire du 2026-11-02 : « la transparence ne se voit pas ». Le
+diagnostic n'était pas là où on l'attendait — **les deux colonnes n'avaient aucun fond** :
+le « panneau » n'était qu'un filet de 1 px, et derrière lui le calque peint un
+`background: var(--bg-app)` **uni**. Un panneau transparent devant un fond uni est
+invisible : il n'y avait rien à voir au travers, d'où l'impression de plaque opaque. Trois
+pièces, toutes dérivées du **thème actif** (aucune couleur en dur, aucun `rgba()`),
+répondent aux trois exigences à la fois :
+
+| Pièce | Valeur | Rôle |
+|---|---|---|
+| La lumière du calque | `--vocal-wash` = `color-mix(in srgb, var(--surface-floating) 32%, transparent)`, peint en **deux** `radial-gradient` (un par colonne, rayon `--vocal-wash-w` = moitié de la fenêtre moins la boîte du disque et son jour) | Donne **quelque chose à voir au travers** : le lavis s'arrête avant le cercle et ne touche jamais le texte de l'état. Le calque, lui, **reste opaque** (`background: var(--bg-app)`) — on n'y voit jamais la conversation |
+| La surface des colonnes | `--vocal-glass` = `color-mix(in srgb, var(--glass-tint) 62%, transparent)` en `background-color` + `backdrop-filter: blur(8px)` | Le jeton de verre **des panneaux flottants**, ramené à 62 %. Mélange au **fond du calque**, jamais au texte : le contraste du texte ne bouge pas d'un iota. `background-color` et non `background` : le raccourci effacerait l'image de fond du calque |
+| Le rafraîchissement | `body.glass-refresh` (`glass-theme.js`) inclut les **deux colonnes** | Une surface qui floute garde l'instantané de l'arrière-plan : sans cela, elle garderait la teinte **précédente** jusqu'au redémarrage (même correctif que les panneaux flottants) |
+
+Aucun réglage n'est ajouté, rien n'est mémorisé, et **rien n'est peint sur le disque** :
+la teinte et le flou ne concernent que les deux colonnes. Verrous :
+`src/js/ecran-vocal-marges-transparence-portrait.test.js` (surface, jeton, lavis,
+rafraîchissement) et `src/js/panneaux-translucides-theme.test.js` (dix palettes, aucune
+couleur en dur).
+
+### La taille du médaillon : mesurée, jamais écrite (2026-11-02)
+
+Remarque du propriétaire : « le portrait doit être **environ trois fois plus grand** ».
+96 px était donc un plancher, pas une taille. Le médaillon n'est plus figé : la feuille de
+style lit `--vocal-portrait-size`, que `vocalSyncSides()` pose à la valeur rendue par
+`vocalPortraitSize()` — **un seul chiffre**, lu par le budget de la liste et par le CSS.
+La décision est **pure** et prise dans cet ordre :
+
+1. **jamais plus large que la place** : la colonne des tâches moins le cadre (22 px) et
+   moins 10 px de marge de chaque côté — le médaillon ne déborde jamais du cadre ;
+2. **jamais si haut qu'il mange les tâches** : la hauteur doit encore laisser l'en-tête et
+   **trois** rangées à la liste (`VOCAL_PORTRAIT_MIN_LIST_PX` = 40 + 3 × 46 = 178 px) ;
+3. **jamais plus de trois fois le plancher** (cible `VOCAL_PORTRAIT_TARGET_PX` = 288 px) ;
+4. **jamais moins de 96 px** — sauf si la place elle-même est plus petite (la règle 1 passe
+   avant : on ne déborde pas pour tenir un plancher). Quand la hauteur ne porte pas les
+   trois rangées, la règle 2 cède : le médaillon reste au plancher et la liste garde ce qui
+   reste (`H − 51 − 148`, soit 32 px à 720 × 520 : la rangée est rognée d'autant, jamais
+   absente).
+
+Mesure réelle des **sept fenêtres** du tableau § 3ter, personnage présent :
+
+| Fenêtre | Médaillon | Bloc (`taille + 52`) | Liste (`H − 51 − bloc`) | Rangées |
+|---|---|---|---|---|
+| 720 × 520 | 96 px | 148 px | 32 px | 1 (rognée) |
+| 768 × 576 | 96 px | 148 px | 88 px | 1 |
+| 820 × 620 | 96 px | 148 px | 132 px | 2 |
+| 896 × 672 | 102 px | 154 px | 178 px | 3 |
+| 1024 × 768 | 198 px | 250 px | 178 px | 3 |
+| 1280 × 800 | 214 px | 266 px | 194 px | 3 |
+| 1440 × 900 | 214 px | 266 px | 195 px | 3 |
+
+Au-delà (1920 × 1080), la hauteur prend le relais et le médaillon atteint **231 px** —
+**288 px** demanderait une colonne de 366 px, qu'une fenêtre de plus de 2 000 px de large
+donne seulement, et il ne resterait alors que deux rangées : la cible est un plafond, pas
+une promesse.
 
 **Rien n'est déplacé, rien n'est copié.** `collectVocalDiscussion()`
 (`super-agent.js`) ne fait que **lire** les deux familles du chat
@@ -499,13 +570,21 @@ cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne l
 jamais, même avec un titre très long.
 
 Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
-de la liste et **détaché d'elle** : un médaillon rond de **96 px**, et son **nom** est écrit **juste
+de la liste et **détaché d'elle** : un médaillon rond **d'au moins 96 px**, qui **grandit avec la
+place disponible** — jusqu'à trois fois sa taille de départ dans une grande fenêtre, jamais au
+point de manger les tâches —, et son **nom** est écrit **juste
 dessous**, sur
 une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
 voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
 Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la zone laisse alors la
 place à la fenêtre du visage de l'avatar, ou à rien du tout. Le portrait suit un éventuel
 changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni image ni nom.**
+
+Les deux colonnes sont des **panneaux de verre** : on voit la lumière de l'écran au travers, et
+eux-mêmes n'affichent jamais la conversation ni le contenu d'une autre fenêtre. Elles laissent
+**de l'air** entre leur contenu et leur bord — le dernier message et la dernière tâche
+s'arrêtent avant le trait, le médaillon ne touche pas le haut —, ce qui se lit comme une marge,
+jamais comme une ligne coupée.
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
 au moindre mouvement de la souris, puis **s'efface de nouveau après quelques secondes**
@@ -522,8 +601,11 @@ les seuls endroits cliquables de l'écran.
 
 **Tout masquer d'un geste, tout remettre du même geste.** Le **bouton-œil** décrit plus
 haut (« Trois modes d'écran ») emporte aussi **les deux colonnes** : un clic les range,
-un clic les remet, sans un pixel de déplacement — l'espace reste réservé, et **le
-portrait et son nom ne bougent pas**. La **barre de saisie**, elle, n'est pas concernée :
+un clic les remet, sans un pixel de déplacement — l'espace reste réservé, **le portrait
+et son nom ne bougent pas**, et **le cercle reste allumé, identique à lui-même** : c'est
+lui qui dit encore si Pilot écoute, réfléchit ou répond. Le **cadre et le fond** de la
+colonne des tâches s'effacent avec elle : il ne reste pas un rectangle vide autour du
+personnage. La **barre de saisie**, elle, n'est pas concernée :
 elle reste affichée et utilisable, même quand tout le reste est masqué. Aucune mémoire :
 on entre **toujours** avec tout visible.
 <!-- /HELP:vocal-colonnes-portrait -->
@@ -809,19 +891,21 @@ droite, §3ter), donc l'exception de 2026-10-29 **vaut de nouveau, telle quelle*
 le portrait et son nom restent à l'écran, le bouton demeure, la zone de saisie
 aussi (2026-11-01).
 
-**Ce qui se masque — ensemble, d'un seul clic.** Le disque et ce qu'il porte
-(enveloppe de parole, arc de réflexion, couronne, bouton « Réveiller <Nom> »), la
-ligne d'état, le bouton « Autoriser le micro », les deux colonnes de l'écran
-(§3ter) — et le fond et le filet de la barre du haut, qui redevient une simple
-bande. **Un seul état, pas de masquage séparé** (ni les colonnes seules, ni le
-bas seul) : deux interrupteurs voisins seraient un réglage déguisé, et le bas a
-déjà son effacement automatique (§4bis).
+**Ce qui se masque — ensemble, d'un seul clic.** La ligne d'état, le bouton
+« Autoriser le micro », le contenu des deux colonnes de l'écran (§3ter), le
+**cadre et la surface du panneau de droite** — et le fond et le filet de la barre
+du haut, qui redevient une simple bande. **Un seul état, pas de masquage séparé**
+(ni les colonnes seules, ni le bas seul) : deux interrupteurs voisins seraient un
+réglage déguisé, et le bas a déjà son effacement automatique (§4bis).
 
 **Ce qui reste, toujours.** Le **bouton d'affichage**, seul moyen de tout
 réafficher — le **portrait du personnage et son nom** (décision du 2026-10-29,
-rétablie le 2026-10-31 avec le retour du portrait dans la colonne) — et la **zone
-de saisie sous le cercle**, champ de texte et bouton de dictée compris (précision
-du propriétaire, 2026-11-01 : le bouton ne la concerne pas).
+rétablie le 2026-10-31 avec le retour du portrait dans la colonne) — le
+**cercle** et tout ce qu'il porte (enveloppe de parole, arc de réflexion,
+bouton « Réveiller <Nom> ») : « quand on désactive l'affichage, le cercle ne doit
+pas disparaître » (propriétaire, 2026-11-02) — et la **zone de saisie sous le
+cercle**, champ de texte et bouton de dictée compris (précision du propriétaire,
+2026-11-01 : le bouton ne la concerne pas).
 
 > **Révision (correction du 2026-10-31) — le portrait a quitté le cercle.** La
 > mission « écran Vocal » du 2026-10-30 avait transporté le personnage **au centre
@@ -869,12 +953,49 @@ vérificateur, indépendant** : il ne découpe rien dans le CSS, il lit les règ
 puis rejoue le défaut pour prouver qu'il le voit. Portée : le portrait, son nom,
 le bouton (rallumé explicitement) et la zone de saisie (§ ci-dessous).
 
-**Le disque reste UNE pièce nommée.** L'anneau, la couronne, l'enveloppe de parole
-et l'arc ne sont pas nommés séparément : le portrait n'habite plus le disque, il
-n'y a donc rien à dégager par le menu, et sept sélecteurs à la place d'un seul
-laisseraient craindre qu'une pièce oubliée reste allumée — un état nu à deux
-vitesses. Ce qui protège le portrait n'est pas la longueur de la liste, c'est sa
-**place dans l'arbre**, et c'est elle que les deux verrous mesurent.
+**Le cercle n'est PAS dans le périmètre — et n'y entre jamais** (correction du
+2026-11-02 : « quand il désactive l'affichage, le cercle ne doit pas disparaître »).
+Il y figurait : le bloc d'effacement le nommait (`.pilot-vocal.vocal-bare .vocal-orb`)
+et lui appliquait `opacity: 0` puis `visibility: hidden`. C'était la **cause exacte**
+— ni un ancêtre, ni un calque superposé : le disque s'éteignait par **sa propre
+règle**.
+
+**Approche retenue : corriger le périmètre en amont, pas plaider une exception en
+aval.** Le nom du disque est **retiré** de la liste. Une seconde règle qui le
+rallumerait (`opacity: 1`) aurait eu à gagner deux fois — sur la spécificité, puis
+sur la transition de `visibility`, retardée de 180 ms — et aurait laissé deux
+intentions contraires dans la même feuille. Corriger la liste règle les deux à la
+fois et rend la lecture vraie : **ce qui n'est pas nommé garde exactement ce qu'il a
+dans l'état normal** — taille, place, bord, enveloppe, arc, respiration,
+`pointer-events` hérité de `.vocal-stage` (l'un des six hôtes, §8bis).
+**Aucune ligne de style n'a été ajoutée pour le cercle.**
+
+Le disque restait nommé « en une seule pièce » tant qu'il était dans la liste ; il
+n'y est plus, et c'est plus sûr : ni l'anneau, ni la couronne, ni l'enveloppe, ni
+l'arc ne peuvent être éteints séparément, puisqu'**aucun** d'entre eux n'est nommé.
+Ce qui protège le portrait n'est pas la longueur de la liste, c'est sa **place dans
+l'arbre**, et c'est elle que les verrous mesurent.
+
+**Le fond de scène ne peut ni l'éteindre ni l'assombrir.** Le fond de l'état nu, ce
+sont les deux lavis radiaux de `.pilot-vocal` : un `background-image` du calque
+**parent**, donc peint **derrière** ses enfants — le cercle passe par-dessus, et le
+rayon des lavis (`--vocal-wash-w`, qui retranche la boîte du disque et son jour)
+s'arrête avant lui. Aucun voile, aucun `filter`, aucune `opacity`, aucun
+`::before` n'est posé sur l'overlay nu : une règle de ce genre passerait **devant**
+le cercle et le ternirait. Vérifié par `src/js/ecran-vocal-le-cercle-reste-visible.test.js`,
+qui rejoue aussi la mutation (la règle du défaut réintroduite est vue).
+
+**Le cadre du panneau de droite s'efface aussi** (remarque du propriétaire du
+2026-11-02 : « quand tout est masqué, il reste le cadre du panneau de droite »).
+C'était vrai : le contenu de la colonne des tâches s'effaçait, mais **le filet et la
+surface** restaient — un rectangle de verre vide autour du personnage. Puisqu'ils
+vivent sur la colonne elle-même, c'est la **colonne** qu'une **règle séparée** éteint
+(`.pilot-vocal.vocal-bare .vocal-side-tasks` : `background-color`, `border-color` et
+les deux `backdrop-filter` en `transparent`/`none`). Elle **ne touche ni `opacity`,
+ni `visibility`, ni une dimension** : la colonne garde sa place et sa hauteur, et le
+portrait qui vit dedans ne bouge pas d'un pixel. Le portrait, son nom, la zone de
+saisie et le bouton ne sont pas concernés. Verrou :
+`src/js/ecran-vocal-marges-transparence-portrait.test.js` (§R4), en plus des deux ci-dessus.
 
 Et, au-dessus de l'overlay, les **trois sorties** (le logo, `Échap`, la fermeture
 de l'onglet) et le bouton **« Travail »** : l'état nu ne les touche pas. Sans
@@ -916,10 +1037,11 @@ pour les colonnes : ce qu'il commande existe toujours.
 l'overlay — distincte de `vocal-chrome-hidden` (§4bis), qui garde son rôle et ses
 trois nœuds. Les nœuds masqués passent en `opacity: 0` puis `visibility: hidden`
 (retardée de 180 ms) et `pointer-events: none` ; **jamais `display: none`** et
-**aucune règle de dimension ni de position** : le portrait et le disque restent
-à leur place, le retour ne fait rien sauter. Le portrait n'est **pas nommé** par
+**aucune règle de dimension ni de position** : le portrait reste à sa place, le
+retour ne fait rien sauter. Le portrait n'est **pas nommé** par
 le bloc, ni par lui ni par sa légende : on ne peut pas masquer ce qu'on n'a pas
-écrit — c'est exactement ce qui le laisse seul allumé. En mouvement réduit,
+écrit — c'est exactement ce qui le laisse allumé. Il en va de même du **cercle**
+depuis le 2026-11-02 : il n'est pas nommé, donc rien ne l'atteint. En mouvement réduit,
 `transition: none`. Le fondu dure **180 ms**, jamais l'instantané : un écran qui
 s'éteint d'un coup se lit comme un bug, pas comme un geste — il dit qu'une chose
 vient de se ranger du regard, pas que l'affichage a sauté.
@@ -947,11 +1069,12 @@ d'une réponse, lecture) et **tombe** à la sortie du mode. Ni `localStorage`, n
 fichier, ni case à cocher.
 
 **Aucun clic avalé.** `.pilot-vocal` reste `pointer-events: none` ; un nœud
-masqué ne reçoit rien ; le bouton et la zone de saisie sont les seuls nœuds de la
-scène à garder un pointeur. Vérifié à l'œil (§8) et par trois tests
+masqué ne reçoit rien ; le bouton, le cercle et la zone de saisie sont les seuls
+nœuds de la scène à garder un pointeur. Vérifié à l'œil (§8) et par quatre tests
 (`src/js/ecran-vocal-bouton-affichage.test.js` pour le geste et la place,
-`src/js/ecran-vocal-masquage-garde-le-portrait.test.js` et
-`src/js/ecran-vocal-la-saisie-nest-jamais-masquee.test.js` pour ce que le masque
+`src/js/ecran-vocal-masquage-garde-le-portrait.test.js`,
+`src/js/ecran-vocal-la-saisie-nest-jamais-masquee.test.js` et
+`src/js/ecran-vocal-le-cercle-reste-visible.test.js` pour ce que le masque
 n'atteint jamais).
 
 Détail complet — inventaire nœud par nœud, chiffres de la bande, tableau des
@@ -1559,6 +1682,7 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
 | `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les quatre règles **dans l'ordre**), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
 | ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône seule** depuis le 2026-11-02 (le texte visible est retiré ; `title` + `aria-label` = `vocalBareLabel()`, qui dit l'état puis l'action), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed` et l'infobulle), le terme `vocalBare ||` dans `vocalSyncChrome` (le bas est **retenu allumé**, il n'est plus éteint par l'état nu : la zone de saisie n'est pas dans le périmètre, 2026-11-01), la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
+| ✅ **livré** `vocal-sides.js` | **source unique** du budget des colonnes et du personnage (§3ter) : `planVocalSides` (`track`, `taskTrack`, `columnHeight`, `listHeight`, `portraitSize`, `portraitBlock`, `imageZone`), `vocalPortraitSize` (médaillon **mesuré** : place dans le cadre, trois rangées garanties à la liste, cible 288, plancher 96), `vocalPortraitBlockSize` (`taille + 52`), `planVocalImageZone`, `planVocalTasks`, `planVocalDiscussion` — aucun DOM, aucune constante cachée |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 
@@ -1620,10 +1744,17 @@ ratio), `vocal-deux-voix.test.js` (**les deux voix se distinguent** : côté,
 alignement, bulle teintée présente d'un côté et absente de l'autre, **aucune couleur
 en dur**, question bornée entre 60 % et 100 %, aucun `padding-block` ajouté, une
 seule source de classes), `vocal-portrait-detache.test.js` (**le portrait agrandi et
-détaché** : 96 px dans le CSS **et** dans le budget, 136 px de bloc, aucun filet ni
-ombre, le titre « TÂCHES » créé **au-dessus de la liste**, le portrait resté affiché
+détaché** : la taille lue par `var(--vocal-portrait-size, 96px)` **et** par le budget,
+`taille + 52` px de bloc, aucun filet ni ombre, le titre « TÂCHES » créé **au-dessus de
+la liste**, le portrait resté affiché
 en état nu et jamais cliquable, la place prise **sur la liste** et non sur la
-colonne),
+colonne), `ecran-vocal-marges-transparence-portrait.test.js` (**les trois remarques du
+2026-11-02** : air du bas et du haut du médaillon comptés, surface de verre teintée et
+floutée devant les deux lavis du calque, médaillon mesuré jusqu'à trois fois le
+plancher, et cadre du panneau de droite éteint en état nu sans toucher au portrait),
+`panneaux-translucides-theme.test.js` (**la transparence se voit, sur les dix
+palettes** : surface teintée par le thème, aucun `rgba()` ni couleur en dur,
+`backdrop-filter` présent, jeton en `color-mix`),
 `vocal-restart.test.js` + `ecran-vocal-bouton-relance.test.js` (bouton de relance
 §3bis : visible hors dictée, absent pendant l'écoute et pendant la parole / la
 réflexion, absent sans transcription, aucun état incohérent, libellé

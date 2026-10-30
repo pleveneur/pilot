@@ -1,5 +1,14 @@
 # CONCEPTION — Écran Vocal : les tâches en haut à droite, le portrait en bas
 
+> **PÉRIMÉ SUR SES CHIFFRES DEPUIS LE 2026-11-02.** Le bloc du personnage n'est plus de
+> **98 px** (72 + 6 + 20) : le médaillon est **mesuré** par `vocalPortraitSize` entre **96 px**
+> (plancher) et **288 px** (trois fois le plancher, cible jamais dépassée), et son bloc vaut
+> **`taille + 52`** — 148 px au plancher, air du haut (12 px) et air de séparation (12 px)
+> compris. Les **12 px d'air en bas** de la colonne sont aussi comptés (`VOCAL_SIDE_AIR_PX`) :
+> la colonne ne réserve plus 39 px mais **51 px** de haut fixe. Les tableaux de budget du § 2.5
+> et les hauteurs de liste se lisent donc dans **`spec_modes_ecran_vocal.md`** § 3ter, seule
+> source à jour ; ce document garde la **conception** et l'arbitrage.
+>
 > **RÉVISION DU 2026-10-31 — le portrait est REVENU en haut de la colonne, au-dessus des
 > tâches.** Ce document reste **exact** sur son objet propre : la colonne de droite
 > (`columnHeight` / `listHeight`, budget, tableaux), la liste qui ne défile pas et les huit
