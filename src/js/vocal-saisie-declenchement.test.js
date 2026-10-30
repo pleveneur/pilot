@@ -7,7 +7,7 @@
 //
 // LA REMARQUE PORTE SUR LE DECLENCHEMENT, PAS SUR LE MECANISME : le compte a
 // rebours de 2 500 ms existait deja et il etait juste. Le defaut reel etait que
-// la regle 4 du module pur retenait le bas pour une POSITION (`pointeurActif`),
+// la regle 3 du module pur retenait le bas pour une POSITION (`pointeurActif`),
 // et la bande du bas couvre toute la largeur de l'ecran : une souris simplement
 // POSEE dessus — sans bouger, sans cliquer — empechait le masquage POUR TOUJOURS.
 // Il fallait en sortir pour que le decompte reprenne.
@@ -75,16 +75,19 @@ describe("D1 — une POSITION ne retient plus le bas, un GESTE oui", () => {
     expect(vocalChromeVisible({ ...base, pointeurActif: false, pointeurGeste: false })).toBe(false);
   });
 
-  it("les quatre autres circonstances passent AVANT : elles retiennent le bas", () => {
+  it("les autres circonstances passent AVANT : elles retiennent le bas", () => {
     // Le correctif ne peut pas masquer la barre pendant qu'on s'en sert : micro
-    // ferme, champ occupe, ecoute/parole et question l'emportent, meme quand le
-    // geste a expire.
+    // ferme, champ REMPLI et question l'emportent, meme quand le geste a
+    // expire.
     const expire = { pointeurActif: true, pointeurGeste: false, etat: "idle", saisie: false, micFerme: "", question: false };
     expect(vocalChromeVisible({ ...expire, micFerme: "refus" })).toBe(true);
     expect(vocalChromeVisible({ ...expire, saisie: true })).toBe(true);
-    expect(vocalChromeVisible({ ...expire, etat: "listening" })).toBe(true);
-    expect(vocalChromeVisible({ ...expire, etat: "speaking" })).toBe(true);
     expect(vocalChromeVisible({ ...expire, question: true })).toBe(true);
+    // LA PAROLE ET L'ECOUTE N'EN SONT PLUS (decision du proprietaire du
+    // 2026-11-13) : ces deux assertions etaient ecrites dans l'autre sens et
+    // figeaient le defaut « la barre ne s'efface pas ». Elles sont renversees.
+    expect(vocalChromeVisible({ ...expire, etat: "listening" })).toBe(false);
+    expect(vocalChromeVisible({ ...expire, etat: "speaking" })).toBe(false);
   });
 });
 

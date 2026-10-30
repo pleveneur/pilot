@@ -784,12 +784,15 @@ passage d'un cas à l'autre se fait **sans redémarrer** Pilot et **sans qu'aucu
 soit écrite** : rien ne pousse le cercle, c'est l'ensemble qui se recentre.
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
-au moindre mouvement de la souris, puis **s'efface de nouveau après quelques secondes**
-d'immobilité — **même si le pointeur est resté posé dans le bas de l'écran** : c'est le
-geste qui le rappelle, pas la position du curseur, sinon la barre ne partirait plus jamais.
-Elle ne s'efface **jamais** pendant que tout est masqué : ce qui reste à l'écran doit rester
-utilisable, ni pendant que vous écrivez ou dictez, ni pendant que Pilot vous écoute ou vous
-répond, ni tant qu'une question attend votre réponse.
+au moindre mouvement de la souris **ou dès que vous prenez la parole**, puis **s'efface de
+nouveau après deux secondes et demie** d'immobilité — **même si le pointeur est resté posé
+dans le bas de l'écran** : c'est le geste qui le rappelle, pas la position du curseur, sinon
+la barre ne partirait plus jamais. Seules deux choses le retiennent : **du texte dans le
+champ** et **le pointeur qui vient de bouger ou de cliquer dans le bas**. Ni le fait que
+Pilot vous parle, ni celui qu'il vous écoute ne le retiennent : il s'efface pendant une
+réponse lue comme pendant une écoute, et il ne s'efface **jamais** pendant que tout est
+masqué (ce qui reste à l'écran doit rester utilisable), pendant que vous écrivez ou
+dictez, ni tant qu'une question attend votre réponse.
 
 Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les
@@ -983,25 +986,29 @@ toujours là** : le disque, la couronne, le halo vert, l'arc, le bouton
 des trois modes, donc toujours atteignable —, le bouton **« Travail »** et les
 boutons système de la fenêtre.
 
-**Le geste (quatre façons de le réveiller)** : un mouvement de pointeur de
+**Le geste, et la parole** : le bas revient à un mouvement de pointeur de
 **4 px cumulés** au moins (sous ce seuil, le tremblement d'une main posée ne
-réveille rien), un **appui** de pointeur, la **molette**, ou **n'importe quelle
-touche sauf `Échap`** (qui sort du mode, inchangé). Un geste sur un bas effacé
-ne déclenche rien d'autre que le réveil : **aucun contrôle invisible n'est
-activable**.
+réveille rien), à un **appui** de pointeur, à la **molette**, à **n'importe quelle
+touche sauf `Échap`** (qui sort du mode, inchangé), **et quand vous prenez la
+parole** (`vocalBargeIn` appelle le réveil existant : parler ne passe par aucun
+des quatre écouteurs). Un geste sur un bas effacé ne déclenche rien d'autre que
+le réveil : **aucun contrôle invisible n'est activable**.
 
 **Le remasquage** : **2 500 ms** sans aucun geste, **un seul minuteur**, relancé
 à zéro à chaque geste — pendant ces 2,5 s le bas est visible, même si l'on ne
-fait rien. **Cinq situations l'interdisent**, et l'**ordre de la décision est
+fait rien. **Quatre situations l'interdisent**, et l'**ordre de la décision est
 la spec** :
 
 | # | Situation | Pourquoi |
 |---|---|---|
 | 1 | un **message du micro fermé** est affiché | une panne reste lisible, et son bouton « Autoriser le micro » cliquable |
-| 2 | le **champ contient du texte**, ou il a le **focus** | on ne cache jamais ce que l'on écrit, ni le champ où l'on tape (dictée en cours de transcription) |
-| 3 | l'état est **écoute** ou **parole** | la ligne d'état dit alors que le micro est ouvert, ou que Pilot répond : on ne l'efface pas |
-| 4 | le pointeur vient de **bouger** (4 px cumulés) ou de **cliquer** sur la zone du bas, **pendant le décompte** | on ne fait pas disparaître sous le curseur ce qu'il désigne — mais un pointeur **posé** sur la bande du bas (toute la largeur de l'écran) ne retient **rien** : sans cela le bas ne s'effaçait plus jamais, et c'était le défaut du 2026-10-03 |
-| 5 | **une question de l'assistant attend une réponse** | la rangée de boutons qui la porte vit dans le bas : l'effacer rendrait la question invisible et bloquerait le travail sans un mot |
+| 2 | le **champ contient du texte** | on ne cache jamais ce que l'on écrit, ni une dictée en cours de transcription. Un champ **vide** ne retient **rien**, même avec le curseur dedans : le focus n'est pas du texte |
+| 3 | le pointeur vient de **bouger** (4 px cumulés) ou de **cliquer** sur la zone du bas, **pendant le décompte** | on ne fait pas disparaître sous le curseur ce qu'il désigne — mais un pointeur **posé** sur la bande du bas (toute la largeur de l'écran) ne retient **rien** : sans cela le bas ne s'effaçait plus jamais, et c'était le défaut du 2026-10-03 |
+| 4 | **une question de l'assistant attend une réponse** | la rangée de boutons qui la porte vit dans le bas : l'effacer rendrait la question invisible et bloquerait le travail sans un mot |
+
+**Ni la parole de Pilot, ni celle de l'utilisateur, ni l'écoute du micro ne
+figurent dans ce tableau** : ce n'est pas un oubli (voir le correctif du
+2026-11-13 ci-dessous).
 
 **Une question de l'assistant est visible et répondable dans cet écran
 (correctif).** Les questions de l'assistant — choix, choix multiple,
@@ -1059,28 +1066,45 @@ la sortie du mode, avant le retrait du calque.
   intacte. Détail : `docs/conceptions/CONCEPTION-ecran-vocal-cercle-et-bas.md`
   § 2.7.
 
-**Correctif du 2026-11-03 — la règle 3 ne retient que sur un fait d'USAGE, jamais sur
-une mesure.** La règle 3 (ligne 3 du tableau) était alimentée par l'état de l'écran, et
-depuis la mesure du niveau (lot 3, `9a8c2cf`) « écoute » ne veut plus dire « le micro est
-ouvert » mais « le micro **capte** » : la mesure est ouverte à l'entrée du mode et jamais
-refermée, son seuil de descente (**0,03**) est **sous** le plancher de voix du projet
-(`BARGE_IN_MIN_LEVEL` = 0,05), et le micro demande `autoGainControl` — une pièce
-silencieuse passait donc au-dessus du seuil, l'état ne revenait **jamais** au repos, la
-règle 3 interdisait le masquage pendant toute la session et les 2 500 ms devenaient
-décoratifs. Le fait donné à la règle 3 est désormais la fonction **pure**
-`vocalEtatQuiRetientLeBas({ etat, dicteeOuverte, motRecu })` : `parole` retient toujours
-(on doit pouvoir couper la parole) ; `écoute` ne retient que si **un mot a été réellement
-transcrit** dans la dictée ouverte ; tout le reste vaut `repos`. Le mécanisme lui-même
-n'est **ni doublé, ni déplacé, ni réglé** : même minuteur unique, même point d'écriture,
-mêmes 2 500 ms, mêmes gestes, mêmes cinq règles. Verrou :
-`src/js/vocal-barre-s-efface-au-repos.test.js`.
+**Correctif du 2026-11-13 — la parole n'est plus une raison, et le focus non plus.**
+Signalé par le propriétaire : « la barre du bas ne s'efface pas comme elle devrait ».
+Deux causes, toutes deux dans la décision pure, aucun défaut du minuteur :
+
+1. la **règle 3** (l'état est « écoute » ou « parole ») retenait le bas. Elle avait déjà été
+   corrigée une première fois le 2026-11-03 (l'état « écoute » est une **mesure** de
+   niveau, pas un fait d'usage : pièce silencieuse + `autoGainControl` ⇒ l'état ne
+   revenait jamais au repos). Le correctif de 2026-11-03 gardait malgré tout le cas
+   « Pilot parle », si bien qu'une **lecture de réponse** — cas nominal et long —
+   rallumait la barre ;
+2. le champ était réputé **occupé dès qu'il avait le focus**. Or il le garde : après
+   un envoi, après une dictée, après une question. Un champ **vide** mais focalisé
+   retenait donc le bas pour **toute la session**.
+
+La décision ferme est appliquée telle quelle : **2 500 ms de repos ⇒ le bas
+s'efface, quoi qu'il arrive**, et **deux raisons d'usage seulement** le retiennent
+(du texte dans le champ, le pointeur en geste sur la zone du bas) — les deux autres
+lignes du tableau (panne du micro, question en attente) restant des cas de sûreté
+déjà verrouillés. Concrètement : la règle 3 est **supprimée** (le tableau passe de
+cinq à quatre lignes, les suivantes sont renumérotées), la fonction intermédiaire
+`vocalEtatQuiRetientLeBas` **disparaît** (elle n'existait que pour cette règle),
+`vocalSyncChrome` **ne transmet plus aucun état** à la décision, et le fait `saisie`
+vaut désormais « le champ **contient du texte** ». La parole **fait revenir** le bas
+au lieu de le retenir : `vocalBargeIn` (prise de parole détectée par la garde du
+micro) appelle le réveil **existant** — aucun second minuteur, aucun nouvel
+écouteur. Le mécanisme lui-même est intact : même minuteur unique, même point
+d'écriture, mêmes 2 500 ms, mêmes 4 px, mêmes quatre gestes. Verrous :
+`src/js/vocal-barre-effacee-pendant-la-parole.test.js` (la barre s'efface pendant
+que Pilot parle, pendant que l'on parle et pendant que le micro écoute ; le champ
+rempli et le pointeur la retiennent encore ; la parole la réveille) et
+`src/js/vocal-barre-s-efface-au-repos.test.js` (aucun état dans la décision).
 
 **Cas particulier, voulu** : au repos avec la dictée **armée mais encore
 silencieuse** — le cas normal de cet écran — le champ est vide et l'état est
 « repos », donc le bas **s'efface**. La dictée armée n'est pas une dictée *en
-cours* ; le **premier mot** entendu fait passer l'état en « écoute » et fait
-revenir le bas. Une **panne de micro**, une **transcription en cours** et une
-**lecture à voix haute**, elles, ne laissent **jamais** le bas s'effacer.
+cours* ; le **premier mot** entendu remplit le champ (le bas revient) et la
+transcription en cours le retient. Une **panne de micro** et une **transcription
+en cours** ne laissent **jamais** le bas s'effacer ; une **lecture à voix haute**,
+elle, ne le retient plus (mais parler par-dessus la lecture le réveille).
 
 **Le fondu** : **180 ms** (le `var(--transition)` du projet), opacité 1 → 0,
 `translateY(0)` → `translateY(8px)` (le bas s'enfonce vers le bas),
@@ -1908,7 +1932,7 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : les **quatre niveaux** de longueur (`VOCAL_BREVITY_LEVELS`, `normalizeVocalBrevityLevel`, `vocalBrevityLabel`), la consigne d'un niveau (`vocalBrevityInstruction`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
-| `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les quatre règles **dans l'ordre**), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`, et `vocalEtatQuiRetientLeBas` (**le seul fait d'usage** donné à la règle 3 : `parole` retient toujours, `écoute` seulement si un mot a été transcrit). Aucun DOM, aucune minuterie |
+| `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les **quatre** règles **dans l'ordre** : micro fermé, champ rempli, pointeur en geste, question en attente — **aucun état de conversation**, cf. 2026-11-13), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
 | ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône seule** depuis le 2026-11-02 (le texte visible est retiré ; `title` + `aria-label` = `vocalBareLabel()`, qui dit l'état puis l'action), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed` et l'infobulle), le terme `vocalBare ||` dans `vocalSyncChrome` (le bas est **retenu allumé**, il n'est plus éteint par l'état nu : la zone de saisie n'est pas dans le périmètre, 2026-11-01), la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
 | ✅ **livré** `vocal-sides.js` | **source unique** du budget des colonnes et du personnage (§3ter) : `planVocalSides` (`track`, `taskTrack`, `columnHeight`, `listHeight`, `portraitSize`, `portraitBlock`, `imageZone`), `vocalPortraitSize` (médaillon **mesuré sur la HAUTEUR de la rangée** depuis le point 7 : `hauteurDeRangee − disque − 64`, cible 288, plancher 96 puis 56, arrondi vers le bas), `vocalPortraitBlockSize` (`taille + 52`), `planVocalImageZone` (le personnage n'y prend plus de place, l'avatar 180 px), `planVocalTasks`, `planVocalDiscussion` — aucun DOM, aucune constante cachée |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |

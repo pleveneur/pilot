@@ -169,7 +169,6 @@ import {
   vocalChromeClass,
   vocalChromeWakeKey,
   vocalChromeMoved,
-  vocalEtatQuiRetientLeBas,
   VOCAL_CHROME_IDLE_MS,
   VOCAL_CHROME_HIDDEN_CLASS,
 } from "./vocal-chrome.js";
@@ -4463,10 +4462,14 @@ export async function createSuperAgent(container) {
   // zone morte temporelle).
   //  - `vocalChromeTimer` : L'UNIQUE minuteur du masquage (0 = aucun). Jamais
   //    deux : chaque reveil l'annule et le repose ;
-  //  - `vocalChromeEtat` : le dernier etat calcule par `applyVocalState`, pour
-  //    que les autres appels (frappe, dictee) n'aient pas a le recalculer ni a
-  //    le deviner dans les classes CSS ;
-  //  - `vocalChromePointeur` : derniere position connue du pointeur (regle 4 :
+  //  - `vocalChromeEtat` : le dernier etat calcule par `applyVocalState`. IL NE
+  //    DECIDE PLUS RIEN : la decision ne lit aucun etat depuis la decision du
+  //    2026-11-13 (la parole et l'ecoute ne retiennent plus le bas). Il reste
+  //    la MEMOIRE du dernier etat applique, et il est passe par l'appel
+  //    `vocalSyncChrome(state)` que d'autres appels (frappe, dictee) utilisent
+  //    sans argument — le retirer obligerait a changer cette signature pour un
+  //    gain nul ;
+  //  - `vocalChromePointeur` : derniere position connue du pointeur (regle 3 :
   //    ne pas cacher ce que la souris vise) ;
   //  - `vocalChromeRepere` : derniere position qui a REVEILLE le bas. C'est le
   //    point de depart du seuil de 4 px — le tremblement d'une main posee ne
@@ -5857,7 +5860,7 @@ let vocalDicteeParGeste = false;
     vocalChromeTimer = setTimeout(() => {
       vocalChromeTimer = 0;
       // LE GESTE DE POINTEUR EXPIRE AVEC LE DECOMPTE : a partir d'ici, la seule
-      // presence de la souris sur la bande du bas ne retient plus rien (regle 4
+      // presence de la souris sur la bande du bas ne retient plus rien (regle 3
       // de `vocal-chrome.js`). Sans cette remise a zero, un pointeur pose sur la
       // bande retenait le bas POUR TOUJOURS et la barre ne s'effacait plus jamais
       // (remarque du proprietaire du 2026-10-03).
@@ -5870,7 +5873,7 @@ let vocalDicteeParGeste = false;
   }
 
   /**
-   * Le pointeur est-il sur la zone du bas ? (regle 4 du module pur : on ne
+   * Le pointeur est-il sur la zone du bas ? (regle 3 du module pur : on ne
    * cache pas ce que la souris vise.) Lit les trois rectangles REELLEMENT
    * peints : un noeud efface (opacite 0) garde sa place, donc ses mesures —
    * c'est ce qui permet de revenir sur la zone sans avoir a la deviner.
@@ -5917,7 +5920,9 @@ let vocalDicteeParGeste = false;
    * l'entree dans le mode le posent. Un appel qui ne vient d'aucun geste ne peut
    * donc pas rallumer indefiniment le bas.
    *
-   * @param {string} [state] etat visuel deja calcule (sinon le dernier connu)
+   * @param {string} [state] etat visuel deja calcule : il est MEMORISE dans
+   *   `vocalChromeEtat` et n'entre PAS dans la decision (aucun etat de
+   *   conversation ne retient le bas depuis le 2026-11-13)
    */
   function vocalSyncChrome(state) {
     if (!vocalOverlay) {
@@ -5928,26 +5933,26 @@ let vocalDicteeParGeste = false;
     const champ = inputEl || null;
     const texte = champ ? String(champ.value == null ? "" : champ.value) : "";
     const faits = {
-      // L'ETAT QUI PEUT RETENIR LE BAS EST UN FAIT D'USAGE, PAS UNE MESURE
-      // (correctif du 2026-11-03, « la barre ne s'efface plus »). Voir
-      // `vocalEtatQuiRetientLeBas` : une piece silencieuse dont le micro remonte
-      // le plancher de bruit (gain automatique) laissait l'etat fige sur
-      // « ecoute », et la regle 3 retenait alors le bas toute la session. Le
-      // fait est calcule ici, au moment ou l'on decide : la dictee ouverte et le
-      // mot reellement transcrit sont lus dans l'instant, aucun cache.
-      etat: vocalEtatQuiRetientLeBas({
-        etat: vocalChromeEtat,
-        dicteeOuverte: voiceActive === true,
-        motRecu: vocalMotRecu === true,
-      }),
+      // LA PAROLE N'EST PLUS UNE RAISON DE LAISSER LE BAS A L'ECRAN (decision
+      // ferme du proprietaire du 2026-11-13 : « la barre doit s'effacer apres
+      // 2,5 s de repos, QUOI QU'IL ARRIVE »). Aucun fait d'etat n'est donc
+      // transmis a la decision : ni « Pilot parle », ni « l'utilisateur parle »,
+      // ni « le micro ecoute » ne retiennent le bas. Les seules retenues sont
+      // celles du champ REMPLI et du pointeur sur la zone du bas — plus les deux
+      // cas de surete deja verrouilles (panne du micro, question en attente).
+      //
       // Une QUESTION de l'assistant attend une reponse : le bas reste visible,
-      // et avec lui la rangee de boutons qui porte la question (regle 5 de
+      // et avec lui la rangee de boutons qui porte la question (regle 4 de
       // `vocal-chrome.js`). Lire la file ici est la seule chose dont ce point
       // d'ecriture a besoin : aucune decision n'est prise dans ce bloc.
       question: hasPendingQuestion(),
-      saisie: texte.trim() !== "" || (champ ? document.activeElement === champ : false),
+      // Regle 2 : le champ CONTIENT DU TEXTE. Le FOCUS n'est plus une raison :
+      // un champ vide qui gardait le curseur (apres un envoi, un enchainement de
+      // dictee ou une question) retenait le bas pour toute la session — c'etait
+      // la cause « la barre ne s'efface plus » du 2026-11-13.
+      saisie: texte.trim() !== "",
       micFerme: vocalMicFerme,
-      // Regle 4 : une POSITION ne suffit pas, c'est le GESTE qui retient le bas
+      // Regle 3 : une POSITION ne suffit pas, c'est le GESTE qui retient le bas
       // (voir `vocalChromeGestePointeur`). Les deux faits sont donnes ensemble.
       pointeurActif: vocalChromePointeurSurLeBas(),
       pointeurGeste: vocalChromeGestePointeur === true,
@@ -6028,14 +6033,14 @@ let vocalDicteeParGeste = false;
     vocalChromePointeur = position;
     if (!vocalChromeMoved(position, vocalChromeRepere)) return;
     vocalChromeRepere = position;
-    // C'est un GESTE : il retient le bas jusqu'a la fin du decompte (regle 4).
+    // C'est un GESTE : il retient le bas jusqu'a la fin du decompte (regle 3).
     vocalChromeGestePointeur = true;
     vocalWakeChrome();
   };
   const onVocalChromePointerDown = (e) => {
     vocalChromePointeur = { x: e.clientX, y: e.clientY };
     vocalChromeRepere = vocalChromePointeur;
-    // Un clic est le geste le plus net : il retient le bas (regle 4).
+    // Un clic est le geste le plus net : il retient le bas (regle 3).
     vocalChromeGestePointeur = true;
     vocalWakeChrome();
   };
@@ -6601,6 +6606,13 @@ let vocalDicteeParGeste = false;
     // L'objet repasse en « ecoute » (le micro capte deja, l'etat suit) et la
     // saisie reprend la main : le curseur y retourne pour dicter ou corriger
     // tout de suite. Aucune modale ouverte ne se fait voler le curseur.
+    //
+    // LA BARRE REVIENT AUSSI QUAND ON PARLE (decision du proprietaire du
+    // 2026-11-13 : « elle reapparait quand je bouge la souris, que je tape au
+    // clavier ou que je PARLE »). Parler ne passe par aucun des quatre
+    // ecouteurs (deplacement, clic, molette, touche) : c'est donc le reveil
+    // EXISTANT qui est appele ici, sans second minuteur ni nouvelle regle.
+    vocalWakeChrome();
     applyVocalState();
     if (inputEl && !document.querySelector(".modal:not(.hidden)")) {
       try {

@@ -13,7 +13,7 @@
  * (bouton des trois modes) et l'entree « Travail » ne sont JAMAIS masques : le
  * CSS ne les nomme pas, et un test le verifie. La rangee des questions en
  * attente n'est pas masquee non plus : elle vit DANS la zone de saisie, et la
- * regle 5 ci-dessous interdit de l'effacer tant qu'une question attend.
+ * regle 4 ci-dessous interdit de l'effacer tant qu'une question attend.
  */
 
 /** Delai avant le REMASQUAGE, quand aucun geste ne vient : 2 500 ms. */
@@ -30,19 +30,19 @@ export const VOCAL_CHROME_MOVE_PX = 4;
 export const VOCAL_CHROME_HIDDEN_CLASS = "vocal-chrome-hidden";
 
 /**
- * PEUT-ON effacer le bas ? PURE — l'ORDRE de ces cinq regles EST la spec.
+ * PEUT-ON effacer le bas ? PURE — l'ORDRE de ces QUATRE regles EST la spec.
  *
- * Rend `true` quand au moins une des cinq circonstances INTERDIT le
+ * Rend `true` quand au moins une des quatre circonstances INTERDIT le
  * masquage — c'est-a-dire quand le bas doit rester a l'ecran :
  *
  *  1. **Le micro est ferme** (refus, absence, occupation, panne) : le bouton
  *     « Autoriser le micro » est le seul recours, il ne s'efface jamais.
- *  2. **Le champ de saisie est occupe** : il contient du texte (brouillon, ou
- *     dictee en cours de transcription) ou il a le focus.
- *  3. **Pilot ecoute ou parle** : pendant l'ecoute, la ligne d'etat est la seule
- *     chose qui dit que le micro est ouvert ; pendant la lecture, c'est elle qui
- *     dit que Pilot repond. Aucun des deux ne peut etre efface.
- *  4. **Le pointeur vise la zone du bas** — mais par le GESTE, jamais par la
+ *  2. **Le champ de saisie CONTIENT DU TEXTE** : brouillon, ou dictee en cours de
+ *     transcription. Un champ VIDE ne retient rien, meme avec le curseur dedans :
+ *     le focus n'est pas du texte (decision du proprietaire du 2026-11-13 — un
+ *     champ vide qui gardait le curseur apres un envoi retenait le bas pour
+ *     toute la session, et la barre ne s'effacait plus).
+ *  3. **Le pointeur vise la zone du bas** — mais par le GESTE, jamais par la
  *     seule position : on ne cache pas ce que la souris vient de viser.
  *     C'est ce que dit le fait `pointeurGeste` (remarque du proprietaire du
  *     2026-10-03 : « la barre doit disparaitre quand on ne fait rien »). Une
@@ -53,7 +53,7 @@ export const VOCAL_CHROME_HIDDEN_CLASS = "vocal-chrome-hidden";
  *     reste qu'une position », et le masquage est permis. Le fait absent
  *     (`undefined`) vaut geste recent : un appelant qui ne le fournit pas garde
  *     le comportement d'avant.
- *  5. **Une question de l'assistant attend une reponse** : la rangee de
+ *  4. **Une question de l'assistant attend une reponse** : la rangee de
  *     boutons vit au-dessus de la ligne de saisie, donc DANS le bas. L'effacer
  *     rendrait la question invisible et le travail resterait bloque sans que
  *     l'utilisateur puisse savoir pourquoi. Une question humaine ne s'efface
@@ -64,65 +64,34 @@ export const VOCAL_CHROME_HIDDEN_CLASS = "vocal-chrome-hidden";
  * dictee armee mais encore muette n'y change rien — c'est le cas particulier
  * voulu : l'ecran reste nu).
  *
- * @param {{etat?: string, saisie?: boolean, micFerme?: string|boolean, pointeurActif?: boolean, pointeurGeste?: boolean, question?: boolean}} [faits]
+ * LA PAROLE N'EST PLUS UNE RAISON (decision ferme du proprietaire du
+ * 2026-11-13) : ni « Pilot parle », ni « l'utilisateur parle », ni « le micro
+ * ecoute » ne retiennent le bas. La barre s'efface apres 2 500 ms de repos QUOI
+ * QU'IL ARRIVE, et elle revient au geste — souris, clavier, ou parole. L'ancienne
+ * regle 3 a donc ete SUPPRIMEE, avec le fait d'usage qui la nourrissait (voir
+ * `docs/rapports/RAPPORT-barre-du-bas-ne-s-efface-pas.md`) : il n'existe plus
+ * aucun chemin par lequel un etat de conversation peut retenir le bas.
+ *
+ * @param {{saisie?: boolean, micFerme?: string|boolean, pointeurActif?: boolean, pointeurGeste?: boolean, question?: boolean}} [faits]
  * @returns {boolean} true = le bas reste visible (masquage interdit)
  */
 export function vocalChromeVisible(faits = {}) {
   const f = faits || {};
   // 1. Micro ferme : le bouton de depannage ne s'efface jamais.
   if (String(f.micFerme == null ? "" : f.micFerme).trim() !== "") return true;
-  // 2. Champ occupe (texte present ou focus dedans).
+  // 2. Champ REMPLI : du texte dedans (un champ vide ne retient rien).
   if (f.saisie === true) return true;
-  // 3. Pilot ecoute ou parle.
-  if (f.etat === "listening" || f.etat === "speaking") return true;
-  // 4. Pointeur sur la zone du bas : un GESTE la retient, une simple position non
+  // 3. Pointeur sur la zone du bas : un GESTE la retient, une simple position non
   // (`pointeurGeste === false` = le decompte est alle au bout).
   if (f.pointeurActif === true && f.pointeurGeste !== false) return true;
-  // 5. Une question de l'assistant attend une reponse (regle ajoutee avec le
+  // 4. Une question de l'assistant attend une reponse (regle ajoutee avec le
   // correctif « les questions ne sont pas visibles dans l'ecran Vocal ») : le
   // bas porte la rangee de boutons, il ne s'efface donc jamais tant qu'une
   // question est en file. Rien n'expire ici : c'est l'utilisateur qui repond.
   if (f.question === true) return true;
-  // Rien ne retient le bas : le masquage est permis.
+  // Rien ne retient le bas : le masquage est permis, y compris pendant la
+  // lecture de Pilot et pendant que le micro capte (plus lues ici).
   return false;
-}
-
-/**
- * L'ETAT QUI RETIENT LE BAS (§2.6, regle 3 de `vocal-chrome.js`) — et pourquoi ce
- * n'est PAS l'etat de l'ecran tel quel.
- *
- * LE DEFAUT CORRIGE (remarque du proprietaire du 2026-11-03 : « la barre ne
- * s'efface plus du tout »). Le mecanisme d'effacement n'etait pas casse : la
- * regle 3 interdit le masquage des que l'etat vaut « ecoute » ou « parole ».
- * Mais depuis que l'etat « ecoute » se calcule sur une MESURE de niveau (lot 3,
- * `9a8c2cf`), ce fait n'est plus un fait d'usage : la mesure du micro est
- * ouverte A L'ENTREE du mode et jamais refermee (`requestVocalMeasure(
- * "entree")`), la descente de l'hysteresis (`VOCAL_VOICE_OFF = 0,03`) est SOUS le
- * plancher de voix du projet (`BARGE_IN_MIN_LEVEL = 0,05`, vocal-mic.js), et le
- * micro demande `autoGainControl` : le plancher de bruit d'une piece silencieuse
- * passe donc au-dessus du seuil de sortie, l'etat ne revient jamais au repos, et
- * la regle 3 retient le bas pendant toute la session. Le decompte de 2 500 ms
- * sonnait, `vocalSyncChrome` recalculait, et repondait encore « visible ».
- *
- * LE FAIT RETENU EST DONC UN FAIT D'USAGE, JAMAIS UNE MESURE :
- *  - « parole » retient toujours (Pilot lit une reponse, on doit pouvoir couper) ;
- *  - « ecoute » ne retient que si la dictee ouverte a REELLEMENT transcrit un mot
- *    (`vocalMotRecu`) : c'est la seule preuve que l'utilisateur se sert du bas ;
- *  - tout le reste vaut repos.
- * Une piece silencieuse, un souffle, un gain automatique : plus rien de cela ne
- * peut retenir le bas. Aucun second mecanisme n'est ajoute, aucune duree ne
- * change, aucune autre regle n'est touchee.
- *
- * @param {{etat?: string, dicteeOuverte?: boolean, motRecu?: boolean}} [faits]
- * @returns {"idle"|"listening"|"speaking"} l'etat que la regle 3 a le droit de voir
- */
-export function vocalEtatQuiRetientLeBas(faits = {}) {
-  const f = faits || {};
-  if (f.etat === "speaking") return "speaking";
-  if (f.etat === "listening" && f.dicteeOuverte === true && f.motRecu === true) {
-    return "listening";
-  }
-  return "idle";
 }
 
 /**

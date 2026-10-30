@@ -510,15 +510,19 @@ En mode **Vocal** :
   pour que sa lumière ne soit jamais rognée sur une fenêtre courte.
 - **Le bas de l'écran s'efface quand vous ne faites rien.** Au repos, la phrase
   d'état et la zone de saisie disparaissent après **deux secondes et demie** :
-  l'écran ne garde que le cercle. **Bougez la souris, cliquez, tournez la molette
-  ou tapez une touche** : le bas revient aussitôt (`Échap`, lui, sort du mode).
-  Il **reste affiché** tant que Pilot vous répond (pour pouvoir le couper), tant
-  qu'une **phrase que vous venez de dire est en cours de transcription**, tant
-  que le champ contient du texte, et tant qu'une panne de micro est annoncée. Un
-  simple **bruit de fond** — un ventilateur, une pièce silencieuse — ne suffit
-  plus à le retenir : c'est votre usage qui compte, pas le niveau sonore. Le cercle, le bouton « Réveiller … », le logo et
-  le bouton « Travail », eux, **ne disparaissent jamais**, et le cercle **ne
-  bouge pas d'un pixel** quand le bas s'efface.
+  l'écran ne garde que le cercle. **Bougez la souris, cliquez, tournez la molette,
+  tapez une touche ou parlez** : le bas revient aussitôt (`Échap`, lui, sort du
+  mode). Il **reste affiché** dans deux cas seulement : tant que le **champ
+  contient du texte** (un brouillon, une dictée en cours de transcription), et
+  tant que le **pointeur vient de bouger ou de cliquer dans le bas**. Ni le fait
+  que Pilot vous parle, ni celui qu'il vous écoute ne le retiennent : il
+  **s'efface pendant une réponse lue** comme pendant une écoute, et seule une
+  **panne de micro** (son bouton « Autoriser le micro ») ou une **question qui
+  attend votre réponse** le garde à l'écran. Un simple **bruit de fond** — un
+  ventilateur, une pièce silencieuse — ne le retient pas davantage. Le cercle, le
+  bouton « Réveiller … », le logo et le bouton « Travail », eux, **ne
+  disparaissent jamais**, et le cercle **ne bouge pas d'un pixel** quand le bas
+  s'efface.
 - **Si vous avez réduit les animations**, cette lueur reste **allumée et fixe**,
   à sa taille pleine — elle ne clignote pas et ne disparaît pas ; le bas, lui,
   apparaît et disparaît **d'un coup**, sans fondu.

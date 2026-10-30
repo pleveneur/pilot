@@ -1,29 +1,33 @@
 /**
  * Verrou de la remarque n° 5 du proprietaire (2026-11-03) : « la barre du bas ne
- * s'efface plus du tout, alors que c'etait le comportement attendu ».
+ * s'efface plus du tout, alors que c'etait le comportement attendu » — et de sa
+ * decision ferme du 2026-11-13 : « elle doit s'effacer apres 2,5 s de repos, QUOI
+ * QU'IL ARRIVE ; seules deux raisons la retiennent : du texte dans le champ, le
+ * pointeur sur la zone du bas ».
  *
- * LE DEFAUT, et pourquoi il echoue ici s'il revient :
+ * LES DEUX DEFAUTS EMPILES, et pourquoi ils echouent ici s'ils reviennent :
  *
- * Le mecanisme d'effacement n'a jamais ete casse — un seul minuteur, un seul
- * point d'ecriture de la classe, 2 500 ms. Ce qui bloquait le masquage, c'est la
- * REGLE 3 de `vocal-chrome.js` : l'etat « ecoute » ou « parole » interdit
- * l'effacement. Or, depuis le lot 3 (`9a8c2cf`), « ecoute » ne veut plus dire
- * « le micro est ouvert » mais « le micro CAPTE » — une MESURE de niveau ambiant.
- * La mesure est ouverte a l'entree du mode et jamais refermee
- * (`requestVocalMeasure("entree")`), sa descente d'hysteresis (0,03) est sous le
- * plancher de voix du projet (0,05) et le micro demande `autoGainControl` : le
- * plancher de bruit d'une piece silencieuse depasse donc le seuil de sortie,
- * l'etat ne revient jamais au repos, et la regle 3 retient le bas pendant toute
- * la session. Le decompte sonnait : il ne servait plus a rien.
- *
- * Le fait donne a la regle 3 est donc un FAIT D'USAGE (`vocalEtatQuiRetientLeBas`) :
- * « parole » retient toujours, « ecoute » seulement si la dictee ouverte a
- * reellement transcrit un mot, tout le reste vaut repos.
+ * 1. Le mecanisme d'effacement n'a jamais ete casse — un seul minuteur, un seul
+ *    point d'ecriture de la classe, 2 500 ms. Ce qui bloquait le masquage, c'est la
+ *    REGLE 3 de `vocal-chrome.js` : l'etat « ecoute » ou « parole » interdisait
+ *    l'effacement. Or, depuis le lot 3 (`9a8c2cf`), « ecoute » ne veut plus dire
+ *    « le micro est ouvert » mais « le micro CAPTE » — une MESURE de niveau
+ *    ambiant. La mesure est ouverte a l'entree du mode et jamais refermee
+ *    (`requestVocalMeasure("entree")`), sa descente d'hysteresis (0,03) est sous
+ *    le plancher de voix du projet (0,05) et le micro demande `autoGainControl` :
+ *    le plancher de bruit d'une piece silencieuse depasse donc le seuil de
+ *    sortie, l'etat ne revient jamais au repos, et la regle 3 retenait le bas
+ *    pendant toute la session. Le premier correctif a remplace la mesure par un
+ *    fait d'usage (`vocalEtatQuiRetientLeBas`) ; la decision du 2026-11-13 est
+ *    allee au bout : la regle 3 est SUPPRIMEE, avec son fait d'usage.
+ * 2. Pendant que Pilot lit une reponse — cas nominal et long —, la barre restait
+ *    de nouveau allumee « parce qu'il parle ». Meme cause, meme remede : la
+ *    parole n'est pas une raison.
  *
  * Ce fichier echoue si :
- *  1. une mesure peut de nouveau retenir le bas (comportement de la fonction pure) ;
- *  2. `vocalSyncChrome` redonne l'etat BRUT au lieu du fait d'usage (mutation
- *     rejouee : `etat: vocalChromeEtat` fait echouer le test) ;
+ *  1. un etat de conversation ou une MESURE peut retenir le bas (decision pure) ;
+ *  2. `vocalSyncChrome` redonne un etat a la decision (mutation rejouee :
+ *     `etat: vocalChromeEtat` fait echouer le test) ;
  *  3. un SECOND mecanisme apparait (deuxieme minuteur, deuxieme point d'ecriture
  *     de la classe, `localStorage`, nouveau reglage) ;
  *  4. les valeurs du mecanisme existant bougent (2 500 ms, 4 px, quatre gestes).
@@ -38,7 +42,6 @@ import {
   VOCAL_CHROME_MOVE_PX,
   VOCAL_CHROME_HIDDEN_CLASS,
   vocalChromeVisible,
-  vocalEtatQuiRetientLeBas,
 } from "./vocal-chrome.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -52,38 +55,38 @@ const SYNC = sliceSource(
   400
 );
 
-describe("1. une MESURE ne peut plus retenir le bas (le defaut corrige)", () => {
-  it("« ecoute » sans un seul mot transcrit vaut REPOS", () => {
-    // Le cas exact du defaut : le micro mesure du bruit, aucun mot n'arrive.
+describe("1. NI une MESURE ni un etat de conversation ne retiennent le bas", () => {
+  it("« ecoute » ne retient plus le bas, MEME quand la dictee a transcrit un mot", () => {
+    // Le cas exact du premier defaut : le micro mesure du bruit, aucun mot
+    // n'arrive. Puis le cas extreme : la dictee fonctionne vraiment. Dans les
+    // deux cas la barre doit s'effacer — la decision ne lit plus aucun etat.
+    const repos = { saisie: false, micFerme: "", pointeurActif: false, pointeurGeste: false, question: false };
+    expect(vocalChromeVisible({ ...repos, etat: "listening" })).toBe(false);
     expect(
-      vocalEtatQuiRetientLeBas({ etat: "listening", dicteeOuverte: true, motRecu: false })
-    ).toBe("idle");
-    // Dictee fermee et etat « ecoute » : incoherent, donc repos.
+      vocalChromeVisible({ ...repos, etat: "listening", dicteeOuverte: true, motRecu: false })
+    ).toBe(false);
     expect(
-      vocalEtatQuiRetientLeBas({ etat: "listening", dicteeOuverte: false, motRecu: true })
-    ).toBe("idle");
-    expect(vocalEtatQuiRetientLeBas({ etat: "listening" })).toBe("idle");
-    expect(vocalEtatQuiRetientLeBas({})).toBe("idle");
+      vocalChromeVisible({ ...repos, etat: "listening", dicteeOuverte: true, motRecu: true })
+    ).toBe(false);
   });
 
-  it("« ecoute » AVEC un mot reellement transcrit retient le bas (usage reel)", () => {
-    expect(
-      vocalEtatQuiRetientLeBas({ etat: "listening", dicteeOuverte: true, motRecu: true })
-    ).toBe("listening");
+  it("« parole » ne retient plus le bas : on peut lire sans que la barre reste a l'ecran", () => {
+    // Deuxieme defaut : une lecture longue laissait la barre allumee sans fin.
+    expect(vocalChromeVisible({ etat: "speaking" })).toBe(false);
+    expect(vocalChromeVisible({ etat: "speaking", saisie: false, micFerme: "", pointeurActif: false })).toBe(
+      false
+    );
   });
 
-  it("« parole » retient toujours : on doit pouvoir couper Pilot en pleine phrase", () => {
-    expect(vocalEtatQuiRetientLeBas({ etat: "speaking" })).toBe("speaking");
-    expect(vocalEtatQuiRetientLeBas({ etat: "speaking", motRecu: false })).toBe("speaking");
+  it("la fonction `vocalEtatQuiRetientLeBas` n'existe plus (elle ne servait qu'a la regle 3)", () => {
+    // La garder aurait laisse un chemin par lequel un etat peut revenir dans la
+    // decision « pour la lisibilite ». Le module ne l'exporte plus.
+    const module = readFileSync(resolve(ROOT, "src/js/vocal-chrome.js"), "utf8");
+    expect(module).not.toContain("vocalEtatQuiRetientLeBas");
   });
 
-  it("« reflexion » et « repos » ne retiennent rien", () => {
-    expect(vocalEtatQuiRetientLeBas({ etat: "thinking" })).toBe("idle");
-    expect(vocalEtatQuiRetientLeBas({ etat: "idle" })).toBe("idle");
-  });
-
-  it("un etat de repos laisse la decision pure effacer le bas", () => {
-    // La regle 3 ne se declenche pas ; les quatre autres faits sont au repos.
+  it("le repos, champ vide et pointeur ailleurs : la decision pure efface le bas", () => {
+    // Aucune des deux raisons d'usage n'est la : le masquage est permis.
     expect(
       vocalChromeVisible({
         etat: "idle",
@@ -97,20 +100,22 @@ describe("1. une MESURE ne peut plus retenir le bas (le defaut corrige)", () => 
   });
 });
 
-describe("2. le fait donne a la regle 3 est le fait d'usage, jamais l'etat brut", () => {
-  it("`vocalSyncChrome` passe par `vocalEtatQuiRetientLeBas`", () => {
-    expect(SYNC).toContain("etat: vocalEtatQuiRetientLeBas({");
-    expect(SYNC).toContain("dicteeOuverte: voiceActive === true");
-    expect(SYNC).toContain("motRecu: vocalMotRecu === true");
+describe("2. `vocalSyncChrome` ne donne plus AUCUN etat a la decision", () => {
+  it("aucun fait `etat` n'est transmis (c'est CE motif qui ramenait le defaut)", () => {
+    // Mutation rejouee : rajouter `etat: vocalChromeEtat,` (ou le fait d'usage
+    // `vocalEtatQuiRetientLeBas(...)`) fait echouer cette assertion.
+    expect(SYNC).not.toMatch(/\betat:/);
+    expect(SYNC).not.toContain("vocalEtatQuiRetientLeBas");
+    // `vocalChromeEtat` reste la MEMOIRE du dernier etat applique (l'appel
+    // `vocalSyncChrome(state)` vient de `applyVocalState`, et d'autres appels le
+    // font sans argument) : ce n'est pas un probleme tant qu'il n'entre pas dans
+    // `faits` — c'est exactement ce que verifie la premiere assertion.
   });
 
-  it("l'etat de l'ecran n'est plus donne tel quel (c'est CE motif qui ramenait le defaut)", () => {
-    // Le fait EXTERIEUR (indente de six espaces, au premier niveau de `faits`).
-    const ligne = SYNC.match(/^ {6}etat: (.+)$/m);
-    expect(ligne, "aucun fait `etat` au premier niveau de `faits`").not.toBeNull();
-    // Mutation rejouee : `etat: vocalChromeEtat,` a la place du fait d'usage
-    // => cette assertion echoue, et le defaut est signale.
-    expect(ligne[1].trim()).toBe("vocalEtatQuiRetientLeBas({");
+  it("les deux raisons d'usage, elles, sont bien transmises", () => {
+    expect(SYNC).toMatch(/saisie:\s*texte\.trim\(\) !== ""/);
+    expect(SYNC).toMatch(/pointeurActif:\s*vocalChromePointeurSurLeBas\(\)/);
+    expect(SYNC).toMatch(/pointeurGeste:\s*vocalChromeGestePointeur === true/);
   });
 });
 

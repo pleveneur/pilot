@@ -12836,7 +12836,7 @@ body.pilot-vocal-active #agent-activity {
    puisse pas manger le disque (`overflow-y: auto`) ; au repos, sans question,
    il est vide et ne peint rien (aucun filet residuel : le filet du conteneur
    d'origine est retire ici).
-   JAMAIS MASQUEE : la regle 5 de `vocal-chrome.js` interdit l'effacement du
+   JAMAIS MASQUEE : la regle 4 de `vocal-chrome.js` interdit l'effacement du
    bas tant qu'une question attend, et un test le verifie.
    HAUTEUR BORNEE, ET CALCULEE POUR NE RIEN ROGNER : la place reservee au reste
    de l'ecran vaut 289 px (§1.5, formule unique du disque). Une question ne peut

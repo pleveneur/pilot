@@ -23,7 +23,7 @@
 //      AU-DESSUS de la ligne de saisie — meme noeud, memes boutons, memes
 //      reponses — et `exitVocal` la restitue a sa place d'origine avant le
 //      retrait du calque (sinon elle serait detruite avec lui).
-//   3. Elle n'est JAMAIS masquee : la regle 5 de `vocal-chrome.js` retient le bas
+//   3. Elle n'est JAMAIS masquee : la regle 4 de `vocal-chrome.js` retient le bas
 //      tant qu'une question attend, `vocalSyncChrome` lit ce fait, et la decision
 //      est RÉAPPLIQUEE a chaque changement de la file.
 //   4. UNE SEULE question a la fois, file FIFO sans perte, et aucune question ne

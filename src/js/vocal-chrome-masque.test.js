@@ -63,7 +63,7 @@ const BLOC_MASQUE = sliceSource(
 );
 
 // ---------------------------------------------------------------------------
-describe("1. la decision pure : quatre circonstances retiennent le bas", () => {
+describe("1. la decision pure : les circonstances qui retiennent le bas", () => {
   it("le repos, champ vide et pointeur ailleurs : le bas S'EFFACE", () => {
     // C'est la demande du proprietaire : l'ecran nu au repos. Et la dictee
     // armee mais encore muette ne change RIEN (cas particulier du §2.3) : aucun
@@ -88,28 +88,34 @@ describe("1. la decision pure : quatre circonstances retiennent le bas", () => {
     expect(vocalChromeVisible({ etat: "idle", micFerme: "   " })).toBe(false);
   });
 
-  it("regle 2 — le CHAMP occupe retient le bas (texte dicte, brouillon, focus)", () => {
+  it("regle 2 — le CHAMP REMPLI retient le bas (texte dicte, brouillon)", () => {
     // Dictee en cours de transcription ou brouillon : le texte est la.
     expect(vocalChromeVisible({ etat: "idle", saisie: true })).toBe(true);
-    // Et le focus dans le champ suffit (un utilisateur au clavier ne se
-    // retrouve jamais devant un ecran sans zone de saisie).
     expect(vocalChromeVisible({ etat: "thinking", saisie: true })).toBe(true);
   });
 
-  it("regle 3 — ECOUTE et PAROLE retiennent le bas, jamais masquees", () => {
-    // LE DEFAUT A EMPECHER : un bas qui s'effacerait pendant que Pilot ecoute
-    // cacherait la seule ligne qui dit que le micro est ouvert, et pendant la
-    // lecture la seule qui dit que Pilot repond.
-    expect(vocalChromeVisible({ etat: "listening", saisie: false })).toBe(true);
-    expect(vocalChromeVisible({ etat: "speaking", saisie: false })).toBe(true);
-    // Meme sans texte, sans panne et pointeur ailleurs : ce sont bien les etats
-    // qui retiennent le bas, pas autre chose.
+  it("regle 3 — ECOUTE et PAROLE ne retiennent PLUS le bas (la barre s'efface quand meme)", () => {
+    // DECISION FERME DU PROPRIETAIRE (2026-11-13) : « la barre doit s'effacer
+    // apres 2,5 s de repos, QUOI QU'IL ARRIVE ; seules deux raisons la
+    // retiennent : du texte dans le champ, le pointeur sur la zone du bas ».
+    // Ces deux assertions etaient ecrites dans l'AUTRE sens : elles figeaient
+    // le defaut (« la barre ne s'efface pas ») au lieu de l'empecher. Elles sont
+    // renversees, pas supprimees, et le cas s'ajoute a celui du fichier
+    // `vocal-barre-effacee-pendant-la-parole.test.js`.
+    expect(vocalChromeVisible({ etat: "listening", saisie: false })).toBe(false);
+    expect(vocalChromeVisible({ etat: "speaking", saisie: false })).toBe(false);
+    // Meme sans texte, sans panne et pointeur ailleurs : aucun etat de
+    // conversation ne retient le bas, ni pendant l'ecoute ni pendant la lecture.
     expect(
       vocalChromeVisible({ etat: "listening", saisie: false, micFerme: "", pointeurActif: false }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       vocalChromeVisible({ etat: "speaking", saisie: false, micFerme: "", pointeurActif: false }),
-    ).toBe(true);
+    ).toBe(false);
+    // Et ce qui reste au-dessus dans l'echelle retient toujours : une panne ou
+    // une question passent avant l'absence de raison.
+    expect(vocalChromeVisible({ etat: "speaking", micFerme: "Micro absent." })).toBe(true);
+    expect(vocalChromeVisible({ etat: "listening", question: true })).toBe(true);
   });
 
   it("regle 4 — le POINTEUR sur la zone du bas le retient", () => {
@@ -132,16 +138,17 @@ describe("1. la decision pure : quatre circonstances retiennent le bas", () => {
     ).toBe(true);
   });
 
-  it("l'ORDRE des cinq regles est celui du document (1 -> 5)", () => {
+  it("l'ORDRE des QUATRE regles est celui du document (1 -> 4)", () => {
     // Il se lit dans le source : chaque regle garde son numero, et la premiere
     // est bien le micro ferme. Un ordre change serait un changement de spec.
+    // La regle « Pilot ecoute ou parle » n'existe plus (2026-11-13) : le fait
+    // `etat` n'est plus lu par la decision, il n'a donc plus de place ici.
     const src = readFileSync(join(ICI, "vocal-chrome.js"), "utf8").replace(/\r\n/g, "\n");
     const paires = [
       ["1. Micro ferme", "micFerme"],
-      ["2. Champ occupe", "saisie"],
-      ["3. Pilot ecoute ou parle", "etat"],
-      ["4. Pointeur sur la zone du bas", "pointeurActif"],
-      ["5. Une question", "question"],
+      ["2. Champ REMPLI", "saisie"],
+      ["3. Pointeur sur la zone du bas", "pointeurActif"],
+      ["4. Une question", "question"],
     ];
     let precedent = -1;
     for (const [commentaire, champ] of paires) {
@@ -209,15 +216,21 @@ describe("3. le branchement : un minuteur, un point d'ecriture, quatre ecouteurs
     expect(corps).toMatch(/vocalSyncRestartButton\(state\);\s*$/m);
   });
 
-  it("`vocalSyncChrome` lit les CINQ faits et n'ecrit la classe qu'a un seul endroit", () => {
+  it("`vocalSyncChrome` lit les faits d'USAGE et n'ecrit la classe qu'a un seul endroit", () => {
     const corps = corpsFonction(SUPER, "function vocalSyncChrome(");
-    // Les faits : l'etat, le champ (texte ou focus), la panne du micro, le
-    // pointeur, la question en attente. S'il en manque un, la regle
-    // correspondante ne s'applique jamais.
-    expect(corps).toMatch(/etat:\s*vocalChromeEtat/);
+    // Les faits : le champ REMPLI, la panne du micro, le pointeur, la question
+    // en attente. S'il en manque un, la regle correspondante ne s'applique
+    // jamais.
+    //
+    // Plus AUCUN etat : depuis la decision du 2026-11-13, ni la parole de Pilot,
+    // ni celle de l'utilisateur, ni l'ecoute du micro ne retiennent le bas (voir
+    // `vocal-barre-effacee-pendant-la-parole.test.js`).
+    expect(corps).not.toMatch(/\betat:/);
     expect(corps).toMatch(/saisie:/);
     expect(corps).toMatch(/champ\.value/);
-    expect(corps).toMatch(/document\.activeElement === champ/);
+    // Le FOCUS n'est plus une raison : un champ vide qui garde le curseur
+    // retenait le bas pour toute la session (cause du 2026-11-13).
+    expect(corps).not.toMatch(/document\.activeElement/);
     expect(corps).toMatch(/micFerme:\s*vocalMicFerme/);
     expect(corps).toMatch(/pointeurActif:\s*vocalChromePointeurSurLeBas\(\)/);
     // La question vient de la FILE (source unique), pas d'un drapeau local.

@@ -316,7 +316,7 @@ describe("4. la saisie et ses boutons sont DEVANT la scene (aucun clic avale)", 
     expect(surSaisie).toHaveLength(1);
     expect(surSaisie[0]).toContain("vocal-chrome-hidden");
     // Et cet effacement-la ne peut pas s'appliquer tant qu'une question attend
-    // (regle 5 de `vocal-chrome.js`, verrouillee par
+    // (regle 4 de `vocal-chrome.js`, verrouillee par
     // `ecran-vocal-question-visible.test.js`).
   });
 
