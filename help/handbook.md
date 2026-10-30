@@ -1386,7 +1386,10 @@ jamais écrasé, jamais décalé.
 La colonne de **gauche** montre **ce qui vient d'être dit**, sous le titre
 **« DISCUSSION »** : vos **questions** en petit et en gris (deux lignes au plus), les
 **réponses** en plus grand (huit lignes au plus), du plus ancien en haut au plus récent
-en bas, **collés au bas** de la colonne. C'est un **aperçu**, pas la conversation : elle
+en bas, **collés au bas** de la colonne. **On distingue les deux voix d'un coup d'œil** :
+vos questions sont **à droite**, dans une **bulle légèrement teintée** qui suit les
+couleurs de votre thème, et les réponses de **Pilot** sont **à gauche**, en pleine largeur
+et sans fond. C'est un **aperçu**, pas la conversation : elle
 reste **entière dans l'onglet de l'agent**, prête à être relue en quittant le mode. Le
 texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que ce qui
 tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
@@ -1402,7 +1405,8 @@ cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne l
 jamais, même avec un titre très long.
 
 Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
-de la liste : un médaillon rond de **72 px**, et son **nom** est écrit **juste en dessous**, sur
+de la liste et **détaché d'elle** : un médaillon rond de **96 px**, et son **nom** est écrit **juste
+dessous**, sur
 une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
 voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
 Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la zone laisse alors la
@@ -1410,9 +1414,12 @@ place à la fenêtre du visage de l'avatar, ou à rien du tout. Le portrait suit
 changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni image ni nom.**
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
-au moindre mouvement de la souris : on parle à Pilot sans qu'une barre reste sous les yeux.
+au moindre mouvement de la souris, puis **s'efface de nouveau après quelques secondes**
+d'immobilité — **même si le pointeur est resté posé dans le bas de l'écran** : c'est le
+geste qui le rappelle, pas la position du curseur, sinon la barre ne partirait plus jamais.
 Elle ne s'efface **jamais** pendant que tout est masqué : ce qui reste à l'écran doit rester
-utilisable.
+utilisable, ni pendant que vous écrivez ou dictez, ni pendant que Pilot vous écoute ou vous
+répond, ni tant qu'une question attend votre réponse.
 
 Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les

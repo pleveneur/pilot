@@ -81,13 +81,13 @@ function corpsFonctionEntete(debut) {
  * avatar, ce qui est verifie plus bas.
  */
 const TABLE_7BIS_4 = [
-  [720, 520, 151.6, 231, [180, 3], [82, 1], null],
-  [768, 576, 188.3, 287, [236, 4], [138, 2], [56, 1]],
-  [820, 620, 217.2, 331, [280, 5], [182, 3], [100, 1]],
-  [896, 672, 251.3, 383, [332, 6], [234, 4], [152, 2]],
-  [1024, 768, 314.3, 479, [428, 8], [330, 6], [248, 4]],
-  [1280, 800, 335.3, 511, [460, 8], [362, 7], [280, 5]],
-  [1440, 900, 336, 512, [461, 8], [363, 7], [281, 5]],
+  [720, 520, 151.6, 231, [180, 3], [44, 1], null],
+  [768, 576, 188.3, 287, [236, 4], [100, 1], [56, 1]],
+  [820, 620, 217.2, 331, [280, 5], [144, 2], [100, 1]],
+  [896, 672, 251.3, 383, [332, 6], [196, 3], [152, 2]],
+  [1024, 768, 314.3, 479, [428, 8], [292, 5], [248, 4]],
+  [1280, 800, 335.3, 511, [460, 8], [324, 6], [280, 5]],
+  [1440, 900, 336, 512, [461, 8], [325, 6], [281, 5]],
 ];
 
 // ---------------------------------------------------------------------------
@@ -120,11 +120,11 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     // PLface (`minWidth: 160`, `minHeight: 180`), la plus petite place possible.
     expect(VOCAL_AVATAR_W_PX).toBe(160);
     expect(VOCAL_AVATAR_H_PX).toBe(180);
-    // Le bloc du personnage, lui, est un vrai bloc : 72 px de medaillon, 6 px
-    // d'ecart, 20 px de nom — il se lit dans le haut fixe de la colonne, pas
-    // dans la zone d'image (qui reste alors a 0 px).
+    // Le bloc du personnage, lui, est un vrai bloc : 96 px de medaillon, 8 px
+    // d'ecart, 20 px de nom et 12 px d'air — il se lit dans le haut fixe de la
+    // colonne, pas dans la zone d'image (qui reste alors a 0 px).
     expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
-    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(72 + 6 + 20);
+    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(96 + 8 + 20 + 12);
   });
 
   it("le personnage l'emporte TOUJOURS sur la fenetre du visage", () => {
@@ -136,8 +136,8 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     expect(portrait.imageZone.kind).toBe(VOCAL_IMAGE_PORTRAIT);
     expect(deux).toEqual(portrait);
     // L'avatar ne pese donc jamais sur la hauteur de liste quand un personnage
-    // est la : 512 - 51 - 98 = 363 px, avec ou sans visage.
-    expect(deux.listHeight).toBe(363);
+    // est la : 512 - 51 - 136 = 325 px, avec ou sans visage.
+    expect(deux.listHeight).toBe(325);
     // Une entree absente n'est pas « vrai » : sans personnage, l'avatar decide.
     expect(planVocalSides({ ...cas, hasAvatar: true }).imageZone.kind).toBe(
       VOCAL_IMAGE_AVATAR,

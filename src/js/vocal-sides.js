@@ -60,10 +60,12 @@ export const VOCAL_TASK_HEADER_PX = 20;
  */
 export const VOCAL_CROWN_PX = 88;
 /**
- * De combien la colonne des taches se decale vers la droite, en px : la
- * couronne (88) moins le jour deja compte par la grille (24). La colonne
- * s'arrete ainsi EXACTEMENT au bord de la couronne : elle ne peut plus passer
- * sous la lueur, quel que soit le titre de ses taches.
+ * De combien le CONTENU d'une colonne se decale vers l'exterieur, en px : la
+ * couronne (88) moins le jour deja compte par la grille (24). Les DEUX colonnes
+ * s'arretent ainsi EXACTEMENT au bord de la couronne : aucune ne passe sous la
+ * lueur, quel que soit le texte qu'elle porte (remarque du proprietaire du
+ * 2026-10-03 : la colonne de gauche mordait de 64 px dans le halo, faute de
+ * porter cette largeur).
  */
 export const VOCAL_SIDE_CLEARANCE_PX = VOCAL_CROWN_PX - VOCAL_SIDE_GAP_PX;
 /**
@@ -78,24 +80,39 @@ export const VOCAL_SIDE_FIXED_PX = 39 + 12;
 // d'image) et correction du 2026-10-31 : la zone est EN HAUT A DROITE, la
 // liste des taches DESSOUS, et le DISQUE ne porte RIEN (ni image, ni nom).
 //
-//   1. le PERSONNAGE (un portrait affichable existe) : medaillon 72 px, son
-//      nom dessous (6 + 20 px)                            -> 98 px
+//   1. le PERSONNAGE (un portrait affichable existe) : medaillon 96 px, son
+//      nom dessous (8 + 20 px) et l'air qui le detache de la suite
+//      (12 px)                                            -> 136 px
 //   2. sinon l'AVATAR DU VISAGE (PLface), s'il tourne et si sa TAILLE est
 //      connue et s'il reste au moins une tache            -> 180 px
 //   3. sinon rien du tout : AUCUNE place reservee          -> 0 px
 
-/** Hauteur du medaillon du personnage, en px (la meme depuis le lot 2). */
-export const VOCAL_PORTRAIT_PX = 72;
+/**
+ * Hauteur du medaillon du personnage, en px. 96 px (remarque du proprietaire du
+ * 2026-10-03 : « le portrait est trop petit ») — un medaillon plus large que
+ * deux lignes de liste, il ne se lit donc plus comme un element de la liste.
+ */
+export const VOCAL_PORTRAIT_PX = 96;
 /** Ecart entre le medaillon et son nom, en px. */
-export const VOCAL_PORTRAIT_GAP_PX = 6;
+export const VOCAL_PORTRAIT_GAP_PX = 8;
 /** Hauteur de la ligne du nom, en px (la meme que la pastille du bouton). */
 export const VOCAL_PORTRAIT_NAME_PX = 20;
 /**
- * Le bloc du personnage quand il est la : le medaillon (72), son ecart (6) et
- * son nom (20) = 98 px. Sans personnage, ces 98 px reviennent a la liste.
+ * L'AIR sous le nom, en px : c'est lui qui DETACHE le personnage de ce qui suit
+ * (le titre « TACHES » et sa liste), et non un filet ou un cadre — l'ecran n'en
+ * porte aucun (remarque du proprietaire du 2026-10-03).
+ */
+export const VOCAL_PORTRAIT_AIR_PX = 12;
+/**
+ * Le bloc du personnage quand il est la : le medaillon (96), son ecart (8), son
+ * nom (20) et l'air qui le detache (12) = 136 px. Sans personnage, ces 136 px
+ * reviennent a la liste.
  */
 export const VOCAL_PORTRAIT_BLOCK_PX =
-  VOCAL_PORTRAIT_PX + VOCAL_PORTRAIT_GAP_PX + VOCAL_PORTRAIT_NAME_PX;
+  VOCAL_PORTRAIT_PX +
+  VOCAL_PORTRAIT_GAP_PX +
+  VOCAL_PORTRAIT_NAME_PX +
+  VOCAL_PORTRAIT_AIR_PX;
 /** Largeur du plancher de la fenetre du visage (PLface), en px (§ 7bis.7). */
 export const VOCAL_AVATAR_W_PX = 160;
 /** Hauteur du plancher de la fenetre du visage (PLface), en px (§ 7bis.7). */
@@ -251,7 +268,7 @@ export function planVocalSides({ width, height, orbSize, hasPortrait, hasAvatar 
   const imageZone = planVocalImageZone({ hasPortrait, hasAvatar, columnHeight });
 
   // Haut fixe de la colonne : le titre et l'air du bas (51 px), PLUS le bloc du
-  // personnage quand il s'affiche (98 px), PLUS la place de la fenetre du
+  // personnage quand il s'affiche (136 px), PLUS la place de la fenetre du
   // visage quand c'est elle qui occupe la zone (180 px). Le reste va a la liste.
   const fixe =
     VOCAL_SIDE_FIXED_PX +
@@ -291,7 +308,7 @@ export function planVocalSides({ width, height, orbSize, hasPortrait, hasAvatar 
  * leurs 98 px sont comptes par `planVocalSides`, jamais deux fois).
  *
  * Les totaux du § 7bis.4 deviennent donc, avec H la hauteur de la colonne :
- *   cas 3 : liste = H - 51     cas 1 : liste = H - 149
+ *   cas 3 : liste = H - 51     cas 1 : liste = H - 187
  *   cas 2 : liste = H - 231
  *
  * @param {object} entrees

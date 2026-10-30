@@ -11633,10 +11633,13 @@ summary:focus-visible {
      seule ecrivaine est `vocalSyncSides()` (super-agent.js), qui la pose a
      chaque entree dans le mode et a chaque changement de taille de fenetre. */
   --vocal-side: 0px;
-  /* Largeur de la COLONNE DES TACHES, elle aussi posee par `vocalSyncSides()` :
-     c'est `--vocal-side` MOINS la couronne du disque, pour qu'elle s'arrete au
-     bord de la lueur et ne passe jamais sous le cercle. La colonne de gauche
-     garde `--vocal-side` : rien ne la menace de son cote. */
+  /* Largeur du CONTENU DES DEUX COLONNES, elle aussi posee par
+     `vocalSyncSides()` : c'est `--vocal-side` MOINS la couronne du disque, pour
+     qu'elles s'arretent au bord de la lueur et ne passent jamais sous le cercle.
+     LES DEUX — gauche et droite — lisent ce jeton unique (remarque du
+     proprietaire du 2026-10-03 : la colonne de gauche, qui gardait
+     `--vocal-side`, mordait de 64 px dans le halo). Une seule verite, deux
+     colonnes : elles ne peuvent pas deriver l'une de l'autre. */
   --vocal-side-tasks: 0px;
   /* LE GRIS DES COLONNES (§ 5.3 de la conception, lot 3) : les questions de
      l'utilisateur, et rien de plus pour l'instant. Aucune couleur en dur : il
@@ -11820,6 +11823,22 @@ body.pilot-vocal-active #agent-activity {
   /* Le titre reste en haut, la discussion tombe au BAS (lot 3) : un apercu
      court ne flotte pas au milieu. */
   justify-content: space-between;
+  /* LA MEME LARGEUR DE CONTENU QUE LA COLONNE DES TACHES, ET RIEN DE PLUS
+     (remarque du proprietaire du 2026-10-03 : « la colonne de gauche est trop
+     proche du cercle »). Sans elle, la colonne s'etirait sur toute la piste
+     (`--vocal-side`, 320 px) et son bord interieur tombait a 24 px du disque,
+     donc 64 px SOUS la couronne du halo : le texte passait dans la lueur. Avec
+     elle, les deux colonnes s'arretent EXACTEMENT au bord de la couronne
+     (88 px du disque) : l'espace libre autour du cercle est le meme des deux
+     cotes, et il est double. La valeur est le jeton unique ecrit par
+     `vocalSyncSides()` pour la colonne des taches : une seule verite, deux
+     colonnes — elles ne peuvent pas deriver l'une de l'autre.
+     `justify-self: start` : la boite se colle vers l'EXTERIEUR de l'ecran, donc
+     s'eloigne du disque (la colonne des taches, elle, est en `end` : elle
+     s'arrete au meme bord, vu de l'autre cote). */
+  width: var(--vocal-side-tasks, 100%);
+  min-width: 0;
+  justify-self: start;
 }
 /* --- LOT 3 (§ 1.3 et § 4.2) : CE QUE LA COLONNE DE GAUCHE MONTRE ---
    Le titre en haut, l'apercu des derniers echanges colle au BAS : le dernier
@@ -11873,17 +11892,44 @@ body.pilot-vocal-active #agent-activity {
   margin-block-start: 14px;
 }
 /* LA QUESTION DE L'UTILISATEUR : plus petite (13 px) et en gris, deux lignes au
-   plus. Indentee de 12 px : elle se distingue de la reponse sans couleur vive. */
+   plus. Indentee de 12 px : elle se distingue de la reponse sans couleur vive.
+   A DROITE, DANS SA BULLE (remarque du proprietaire du 2026-10-03 : « on ne
+   distingue pas les deux voix ») : le proprietaire parle a DROITE, l'assistant
+   repond a GAUCHE — c'est le sens de lecture de toutes les messageries, il ne
+   s'apprend pas. Trois reperes, aucun decor :
+     - le COTE et l'alignement du texte (`align-self: flex-end`, `text-align:
+       end`) ;
+     - une TEINTE de fond, melangee a `--text-primary` : elle suit donc les dix
+       palettes, et AUCUNE couleur n'est ecrite en dur ;
+     - un rayon dissymetrique (14 14 3 14) : la pointe designe la reponse, en
+       dessous ;
+   et la taille (13 px) et le gris (`--vocal-ink-soft`) sont deja la.
+   AUCUN `padding-block` : la hauteur de ligne (23 px) et l'ecart (14 px) sont le
+   budget de `vocalDiscussionView`. Une marge verticale ferait mentir le nombre
+   de lignes calcule. Le `padding-inline-start: 12px` d'origine est conserve et
+   EQUILIBRE par `padding-inline-end` (la bulle ne colle pas a son bord). */
 .vocal-msg-user {
   font-size: var(--font-base);
   line-height: 23px;
   color: var(--vocal-ink-soft);
   padding-inline-start: 12px;
+  padding-inline-end: 12px;
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border-radius: 14px 14px 3px 14px;
+  align-self: flex-end;
+  max-width: 92%;
+  text-align: end;
   -webkit-line-clamp: 2;
 }
-/* LA REPONSE : 15 px, texte plein, huit lignes au plus, sans indentation. */
+/* LA REPONSE : 15 px, texte plein, huit lignes au plus, sans indentation.
+   A GAUCHE, SANS FOND : la voix de l'assistant est le texte de l'ecran, elle
+   n'a pas de bulle — c'est la difference la plus lisible avec la question, et
+   la moins chargee. */
 .vocal-msg-assistant {
   padding-inline-start: 0;
+  align-self: flex-start;
+  max-width: 100%;
+  text-align: start;
   -webkit-line-clamp: 8;
 }
 /* La phrase du surplus, au-dessus du plus ancien message montre. Sa hauteur
@@ -11911,11 +11957,12 @@ body.pilot-vocal-active #agent-activity {
   width: var(--vocal-side-tasks, 100%);
   min-width: 0;
   justify-self: end;
-  /* LOT 2 (budget du §2.5 revisé, correction du 2026-10-31) : 39 px de titre + 12
-     px d'air = 51 px de haut fixe, PLUS le bloc du personnage quand il est la
-     (72 + 6 + 20 = 98 px) et PLUS la fenetre du visage quand c'est elle qui
-     occupe la zone (180 px). La ligne d'activite n'existe plus : la place
-     qu'elle prenait revient a la liste. */
+  /* LOT 2 (budget du §2.5 revisé, correction du 2026-10-31 ; portrait agrandi et
+     detache le 2026-10-03) : 39 px de titre + 12 px d'air = 51 px de haut fixe,
+     PLUS le bloc du personnage quand il est la (96 + 8 + 20 + 12 = 136 px) et
+     PLUS la fenetre du visage quand c'est elle qui occupe la zone (180 px). La
+     ligne d'activite n'existe plus : la place qu'elle prenait revient a la
+     liste. */
   padding-block-end: 12px;
 }
 /* LA ZONE D'IMAGE, SOUS LE PORTRAIT (complement du 2026-10-29, § 7bis ;
@@ -11940,17 +11987,31 @@ body.pilot-vocal-active #agent-activity {
 }
 /* LE PORTRAIT DU PERSONNAGE, EN HAUT A DROITE DE L'ECRAN (correction du
    2026-10-31, sur decision du proprietaire : l'image QUITTE le disque et
-   revient en tete de la colonne de droite, la liste des taches DESSOUS) : un
-   medaillon rond de 72 px, jamais dans le disque. `hidden` quand il n'y a pas de
-   personnage — AUCUN repli sur le logo dans la colonne. Il ne prend jamais le
-   clic : la colonne entiere est traversante. */
+   revient en tete de la colonne de droite) : un medaillon rond de 96 px, jamais
+   dans le disque. `hidden` quand il n'y a pas de personnage — AUCUN repli sur le
+   logo dans la colonne. Il ne prend jamais le clic : la colonne entiere est
+   traversante.
+   IL N'APPARTIENT PLUS A LA SECTION DES TACHES (remarque du proprietaire du
+   2026-10-03) : le titre « TACHES » n'est plus le premier noeud de la colonne, il
+   OUVRE la section des taches, juste au-dessus de la liste. L'ordre du document
+   est donc : portrait, son nom, l'air, « TACHES », la zone d'image, la liste. Le
+   personnage est en tete de colonne, il surplombe la section au lieu d'y
+   figurer. */
 .vocal-portrait {
-  width: 72px;
-  height: 72px;
+  /* 96 px (remarque du proprietaire du 2026-10-03 : « le portrait est trop
+     petit, on dirait qu'il appartient a la liste »). Un medaillon plus large que
+     deux lignes de liste : il se lit comme le personnage, plus comme une entree
+     de la liste. La valeur est celle de `VOCAL_PORTRAIT_PX`
+     (`vocal-sides.js`) : le budget de la colonne et la feuille de style lisent
+     le meme chiffre. */
+  width: 96px;
+  height: 96px;
   border-radius: 50%;
   object-fit: cover;
   align-self: center;
   flex: 0 0 auto;
+  /* AUCUN filet, aucun cadre, aucune ombre de separation : le detachement se fait
+     par la TAILLE et par l'AIR sous le nom (12 px), pas par un trait. */
   pointer-events: none;
 }
 /* LE NOM DU PERSONNAGE, JUSTE SOUS SON IMAGE (meme correction) : une legende de
@@ -11966,7 +12027,10 @@ body.pilot-vocal-active #agent-activity {
   align-self: center;
   height: 20px;
   line-height: 20px;
-  margin-block: 6px 0;
+  /* 8 px sous l'image, 12 px d'AIR sous le nom : ce sont les chiffres de
+     `vocal-sides.js` (`VOCAL_PORTRAIT_GAP_PX`, `VOCAL_PORTRAIT_AIR_PX`). L'air
+     est ce qui DETACHE le personnage du titre « TACHES » et de sa liste. */
+  margin-block: 8px 12px;
   max-width: 100%;
   text-align: center;
   font-size: var(--font-sm);

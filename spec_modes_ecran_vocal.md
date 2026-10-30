@@ -277,9 +277,14 @@ non-recouvrement, mouvement réduit).
 > appliquée par `vocalSyncSides()` à l'entrée, à chaque changement de taille de fenêtre et
 > à chaque tic de **900 ms** (`VOCAL_SIDES_TICK_MS`) ; sous 240 px de place disponible, les
 > deux colonnes sont **absentes** (`hidden` + `.vocal-sides-off`). Le même appel écrit la
-> **largeur de la colonne des tâches** (`--vocal-side-tasks`), qui la fait s'arrêter
-> **avant la couronne** du disque : elle ne le chevauche jamais, quel que soit le titre (un
-> titre trop long est coupé par sa boîte, jamais par-dessus le cercle).
+> **largeur de CONTENU des deux colonnes** (`--vocal-side-tasks`, un seul jeton) : chacune
+> s'arrête **exactement au bord de la couronne** du disque (`VOCAL_SIDE_CLEARANCE_PX` =
+> 88 − 24 = 64 px de moins que sa piste), et la colonne de gauche est alignée vers
+> l'**extérieur** (`justify-self: start`) comme celle de droite vers l'intérieur
+> (`end`). Les deux colonnes sont donc **symétriques** : elles ne chevauchent jamais le
+> halo, quel que soit le titre (un titre trop long est coupé par sa boîte, jamais
+> par-dessus le cercle), et la gauche ne mord plus sur la lueur (elle le faisait de
+> **64 px** avant le correctif du 2026-10-03).
 > La décision des tâches et celle de l'aperçu vivent dans le même module pur
 > (`planVocalTasks`, `vocalTaskRows`, `planVocalImageZone` ; `planVocalDiscussion`,
 > `vocalExcerpt`, `vocalDiscussionView`), la liste des missions vient d'une **source
@@ -290,9 +295,12 @@ non-recouvrement, mouvement réduit).
 > ses deux cas sont au **§ 7bis**).
 
 Quand la place le permet (seuil d'affichage des colonnes), l'écran Vocal montre à droite
-**une** colonne qui parle du **travail**, dans cet ordre de haut en bas : le titre
-« TÂCHES », **le portrait du personnage et son nom**, **la zone d'image**, puis **la liste
- des tâches**. **Rien n'est écrit sous
+**une** colonne qui parle du **travail**, dans cet ordre de haut en bas : **le portrait du
+personnage, son nom et 12 px d'air** (le personnage, en tête de colonne), puis le titre
+**« TÂCHES »**, **la zone d'image**, puis **la liste des tâches**. Le titre **ouvre la
+section des tâches** (`vocalColumnNode(…, "above-list")`) au lieu d'être le premier nœud de
+la colonne : le portrait **surplombe** la section, il ne lui appartient pas (remarque du
+propriétaire du 2026-10-03). **Rien n'est écrit sous
 la liste** : la **ligne d'activité** d'autrefois (« *X* réfléchit », « *X* exécute une
 opération ») a été **retirée** — la fonction pure qui la calculait
 et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
@@ -300,8 +308,10 @@ et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
 **La zone d'image a TROIS cas, examinés dans cet ordre** — ce sont des faits, pas des réglages :
 
 - **1. Le portrait du personnage actif, d'abord, toujours** : le médaillon rond de
-  **72 px** et son nom juste sous lui (6 px d'écart, 20 px de ligne) — un bloc de **98 px**
-  pris en haut de la colonne, donc **en haut à droite de l'écran**. Il **l'emporte toujours
+  **96 px** et son nom juste sous lui (8 px d'écart, 20 px de ligne), plus **12 px d'air**
+  avant ce qui suit — un bloc de **136 px** (`VOCAL_PORTRAIT_BLOCK_PX`), pris en haut de la
+  colonne, donc **en haut à droite de l'écran**, **détaché de la liste** par cet air (aucun
+  filet, aucun cadre : l'écran n'en porte aucun). Il **l'emporte toujours
   sur la fenêtre du visage** : si le personnage existe, c'est lui qu'on voit, et la zone
   d'image ne prend plus rien.
 - **2. Sinon, l'avatar du visage (PLface)**, s'il tourne, s'il répond
@@ -314,9 +324,9 @@ et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
 - **3. Sinon** : le bloc d'image **n'existe pas** — pas d'image de remplacement, pas de
   cadre, pas de logo, **aucune zone réservée** — et la liste prend toute la hauteur.
 - **La colonne ne réserve, en plus de la liste, que le titre et l'air du bas : 51 px**
-  (14 de marge + 11 de titre + 14 de marge + 12 d'air), plus **98 px** quand le portrait du
+  (14 de marge + 11 de titre + 14 de marge + 12 d'air), plus **136 px** quand le portrait du
   personnage est là, plus **180 px** quand la fenêtre du visage est posée. La liste dispose
-  donc de **`H − 51` px**, de **`H − 51 − 98`** avec le personnage, ou de
+  donc de **`H − 51` px**, de **`H − 51 − 136`** avec le personnage, ou de
   **`H − 51 − 180`** avec la fenêtre du visage, ce qui lui laisse de **3 à 8** lignes selon
   la fenêtre (`vocalTaskRows`).
 - **La zone n'existe que si la liste garde au moins une ligne** : sous `H = 277` px de
@@ -341,7 +351,7 @@ et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
 - **Le nom est SOUS le portrait, en haut à droite** (correction du 2026-10-31, décision du
   propriétaire ; elle rétablit celle du 2026-10-29 et **annule** celle du 2026-10-30 qui
   mettait l'image au centre du cercle) : le portrait du **personnage actif** est le premier
-  contenu de la colonne de droite, **72 px** de médaillon rond, et le nom est écrit **juste
+  contenu de la colonne de droite, **96 px** de médaillon rond, et le nom est écrit **juste
   sous lui**, **sur une seule ligne** — le nom du personnage, à défaut celui que vous avez
   donné à l'assistant, jamais les deux. On voit donc toujours à qui l'on parle. Il n'y a
   **qu'un nom** à l'écran : ni pastille sous le bouton-cercle, ni nom dans le disque, et
@@ -368,9 +378,18 @@ largeur) montre **ce qui vient d'être dit** :
 - les **questions** de l'utilisateur en **13 px** (`--font-base`) et en **gris**
   (`--vocal-ink-soft` : le texte principal mêlé au fond de l'application à 85 %, donc
   aucune couleur en dur et une teinte qui suit les **dix** palettes), **deux lignes
-  au plus**, décalées de **12 px** ;
+  au plus**, décalées de **12 px**, **alignées à droite** (`align-self: flex-end`,
+  `text-align: end`, 92 % de large au plus) dans une **bulle légèrement teintée**
+  (`color-mix(in srgb, var(--text-primary) 8%, transparent)`, rayon dissymétrique
+  `14px 14px 3px 14px` qui pointe vers la réponse) — aucune couleur en dur, la teinte
+  suit les palettes comme le texte ;
 - les **réponses** en **15 px** (`--font-zone`), en `--text-primary`, **huit lignes
-  au plus**, sans décalage ;
+  au plus**, **alignées à gauche** (`flex-start`), **sans fond ni rayon**, sur toute
+  la largeur ; les deux voix se lisent donc au premier regard — le **côté**, la
+  **teinte** et la **taille** disent la même chose (remarque du propriétaire du
+  2026-10-03) ; aucun `padding-block` n'est ajouté : la hauteur de ligne (23 px) et
+  l'écart (14 px) sont le budget du module pur (`VOCAL_DISCUSSION_LINE_H`,
+  `VOCAL_DISCUSSION_GAP`), une marge verticale ferait mentir le nombre de lignes ;
 - l'ordre est **chronologique**, du plus ancien (haut) au plus récent (bas) ;
 - le **dégradé d'effacement est en HAUT**, vers le titre, **jamais en bas** : c'est
   par là que le contenu déborde, puisqu'il remonte du bas. Il ne s'arme que s'il y a
@@ -438,7 +457,10 @@ jamais écrasé, jamais décalé.
 La colonne de **gauche** montre **ce qui vient d'être dit**, sous le titre
 **« DISCUSSION »** : vos **questions** en petit et en gris (deux lignes au plus), les
 **réponses** en plus grand (huit lignes au plus), du plus ancien en haut au plus récent
-en bas, **collés au bas** de la colonne. C'est un **aperçu**, pas la conversation : elle
+en bas, **collés au bas** de la colonne. **On distingue les deux voix d'un coup d'œil** :
+vos questions sont **à droite**, dans une **bulle légèrement teintée** qui suit les
+couleurs de votre thème, et les réponses de **Pilot** sont **à gauche**, en pleine largeur
+et sans fond. C'est un **aperçu**, pas la conversation : elle
 reste **entière dans l'onglet de l'agent**, prête à être relue en quittant le mode. Le
 texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que ce qui
 tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
@@ -454,7 +476,8 @@ cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne l
 jamais, même avec un titre très long.
 
 Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
-de la liste : un médaillon rond de **72 px**, et son **nom** est écrit **juste en dessous**, sur
+de la liste et **détaché d'elle** : un médaillon rond de **96 px**, et son **nom** est écrit **juste
+dessous**, sur
 une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
 voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
 Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la zone laisse alors la
@@ -462,9 +485,12 @@ place à la fenêtre du visage de l'avatar, ou à rien du tout. Le portrait suit
 changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni image ni nom.**
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
-au moindre mouvement de la souris : on parle à Pilot sans qu'une barre reste sous les yeux.
+au moindre mouvement de la souris, puis **s'efface de nouveau après quelques secondes**
+d'immobilité — **même si le pointeur est resté posé dans le bas de l'écran** : c'est le
+geste qui le rappelle, pas la position du curseur, sinon la barre ne partirait plus jamais.
 Elle ne s'efface **jamais** pendant que tout est masqué : ce qui reste à l'écran doit rester
-utilisable.
+utilisable, ni pendant que vous écrivez ou dictez, ni pendant que Pilot vous écoute ou vous
+répond, ni tant qu'une question attend votre réponse.
 
 Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les
@@ -659,7 +685,7 @@ la spec** :
 | 1 | un **message du micro fermé** est affiché | une panne reste lisible, et son bouton « Autoriser le micro » cliquable |
 | 2 | le **champ contient du texte**, ou il a le **focus** | on ne cache jamais ce que l'on écrit, ni le champ où l'on tape (dictée en cours de transcription) |
 | 3 | l'état est **écoute** ou **parole** | la ligne d'état dit alors que le micro est ouvert, ou que Pilot répond : on ne l'efface pas |
-| 4 | le **pointeur est sur la zone du bas** | on ne fait pas disparaître sous le curseur ce qu'il désigne |
+| 4 | le pointeur vient de **bouger** (4 px cumulés) ou de **cliquer** sur la zone du bas, **pendant le décompte** | on ne fait pas disparaître sous le curseur ce qu'il désigne — mais un pointeur **posé** sur la bande du bas (toute la largeur de l'écran) ne retient **rien** : sans cela le bas ne s'effaçait plus jamais, et c'était le défaut du 2026-10-03 |
 | 5 | **une question de l'assistant attend une réponse** | la rangée de boutons qui la porte vit dans le bas : l'effacer rendrait la question invisible et bloquerait le travail sans un mot |
 
 **Une question de l'assistant est visible et répondable dans cet écran
@@ -735,9 +761,11 @@ translation : `transition: none`.
 
 **Où la décision vit** : un module **pur** `src/js/vocal-chrome.js` (aucun DOM,
 aucune minuterie) — `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4),
-`vocalChromeVisible({ etat, saisie, micFerme, pointeurActif, question })`,
+`vocalChromeVisible({ etat, saisie, micFerme, pointeurActif, pointeurGeste, question })`,
 `vocalChromeClass(visible)`, `vocalChromeWakeKey(touche)` et
-`vocalChromeMoved(courant, repere)`. Son **seul point d'écriture** est
+`vocalChromeMoved(courant, repere)`. Les **deux** faits de pointeur sont distincts et
+viennent du même module : `pointeurActif` (position, calculée) et `pointeurGeste`
+(geste récent, `false` seulement quand le décompte a expiré — absent = geste récent). Son **seul point d'écriture** est
 `vocalSyncChrome(state)`, en **dernière ligne** de `applyVocalState` (après
 `vocalSyncRestartButton`) : il lit le DOM, appelle la décision pure et pose ou
 retire la classe `vocal-chrome-hidden`. Aucun autre endroit ne l'écrit. Quatre
@@ -1548,6 +1576,26 @@ classe écrite à **un seul** endroit, les quatre écouteurs posés puis **retir
 la dictée et la frappe qui font revenir le bas, le masquage qui **ne nomme que
 les trois nœuds du bas** — jamais le disque, le bouton de relance, le logo ni
 « Travail » — et qui **ne change pas la mise en page**),
+`vocal-saisie-declenchement.test.js` (**le déclenchement** du même mécanisme,
+remarque du propriétaire du 2026-10-03 : une **position** ne retient plus le bas,
+seul un **geste** le retient, le geste **expire avec le décompte** (remis à zéro
+**avant** la repeinture), il est armé par les **deux seuls** écouteurs de pointeur
+(après le seuil de 4 px, et par le clic), remis à zéro à l'entrée et à la sortie du
+mode, le réveil reste **immédiat** (`vocalBare || vocalChromeTimer !== 0`), la
+liste des trois nœuds masquables ne grandit pas, et **aucun second mécanisme** :
+ni mémoire, ni réglage, ni second minuteur, ni transition nouvelle),
+`vocal-colonnes-degagees.test.js` (**les deux colonnes s'arrêtent au bord de la
+couronne**, remarque du 2026-10-03 : même largeur de contenu pour les deux, un seul
+jeton `--vocal-side-tasks`, `justify-self: start` / `end`, la décision pure sur les
+sept fenêtres, `VOCAL_SIDE_CLEARANCE_PX`, et le disque qui garde sa taille et son
+ratio), `vocal-deux-voix.test.js` (**les deux voix se distinguent** : côté,
+alignement, bulle teintée présente d'un côté et absente de l'autre, **aucune couleur
+en dur**, question bornée entre 60 % et 100 %, aucun `padding-block` ajouté, une
+seule source de classes), `vocal-portrait-detache.test.js` (**le portrait agrandi et
+détaché** : 96 px dans le CSS **et** dans le budget, 136 px de bloc, aucun filet ni
+ombre, le titre « TÂCHES » créé **au-dessus de la liste**, le portrait resté affiché
+en état nu et jamais cliquable, la place prise **sur la liste** et non sur la
+colonne),
 `vocal-restart.test.js` + `ecran-vocal-bouton-relance.test.js` (bouton de relance
 §3bis : visible hors dictée, absent pendant l'écoute et pendant la parole / la
 réflexion, absent sans transcription, aucun état incohérent, libellé
@@ -1560,9 +1608,10 @@ d'état, aucune animation et mouvement réduit respecté).
 
 `ecran-vocal-zone-image.test.js` tient la **zone d'image** (§7bis) : **T20** les trois
 cas **dans l'ordre** (le personnage, sinon l'avatar du visage, sinon rien), rejoués sur
-les **sept** fenêtres du tableau §7bis.4 — les quatre totaux de liste `H − 72` /
-`H − 170` / `H − 252` / `H − 356` et le nombre de lignes qui en découle —, le cas 2
-**absent sous `H = 298`** et un avatar refusé qui **ne déplace rien** ; **T21** l'avatar
+les **sept** fenêtres du tableau §7bis.4 — les trois totaux de liste `H − 51` /
+`H − 187` (personnage) / `H − 231` (fenêtre du visage) et le nombre de lignes qui en
+découle —, le cas 2
+**absent sous `H = 277`** et un avatar refusé qui **ne déplace rien** ; **T21** l'avatar
 **n'est jamais un nœud** (la zone ne porte ni `img`, ni `src`, ni logo, ni texte, ni
 `innerHTML`, et sa règle CSS ne dessine **ni cadre, ni fond, ni ombre, ni rond**) ;
 **T22** la **pose** (conversion CSS → physique **arrondie**, **aucune** demande sans

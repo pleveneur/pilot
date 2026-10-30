@@ -42,8 +42,17 @@ export const VOCAL_CHROME_HIDDEN_CLASS = "vocal-chrome-hidden";
  *  3. **Pilot ecoute ou parle** : pendant l'ecoute, la ligne d'etat est la seule
  *     chose qui dit que le micro est ouvert ; pendant la lecture, c'est elle qui
  *     dit que Pilot repond. Aucun des deux ne peut etre efface.
- *  4. **Le pointeur est sur la zone du bas** : on ne cache pas ce que la souris
- *     vise.
+ *  4. **Le pointeur vise la zone du bas** — mais par le GESTE, jamais par la
+ *     seule position : on ne cache pas ce que la souris vient de viser.
+ *     C'est ce que dit le fait `pointeurGeste` (remarque du proprietaire du
+ *     2026-10-03 : « la barre doit disparaitre quand on ne fait rien »). Une
+ *     souris simplement POSEE sur la bande du bas — qui couvre toute la largeur
+ *     de l'ecran — ne retenait le bas qu'aucun reglage ne pouvait plus effacer :
+ *     il fallait en sortir pour que le decompte reprenne. Desormais
+ *     `pointeurGeste === false` signifie « le decompte est alle au bout, il ne
+ *     reste qu'une position », et le masquage est permis. Le fait absent
+ *     (`undefined`) vaut geste recent : un appelant qui ne le fournit pas garde
+ *     le comportement d'avant.
  *  5. **Une question de l'assistant attend une reponse** : la rangee de
  *     boutons vit au-dessus de la ligne de saisie, donc DANS le bas. L'effacer
  *     rendrait la question invisible et le travail resterait bloque sans que
@@ -55,7 +64,7 @@ export const VOCAL_CHROME_HIDDEN_CLASS = "vocal-chrome-hidden";
  * dictee armee mais encore muette n'y change rien — c'est le cas particulier
  * voulu : l'ecran reste nu).
  *
- * @param {{etat?: string, saisie?: boolean, micFerme?: string|boolean, pointeurActif?: boolean, question?: boolean}} [faits]
+ * @param {{etat?: string, saisie?: boolean, micFerme?: string|boolean, pointeurActif?: boolean, pointeurGeste?: boolean, question?: boolean}} [faits]
  * @returns {boolean} true = le bas reste visible (masquage interdit)
  */
 export function vocalChromeVisible(faits = {}) {
@@ -66,8 +75,9 @@ export function vocalChromeVisible(faits = {}) {
   if (f.saisie === true) return true;
   // 3. Pilot ecoute ou parle.
   if (f.etat === "listening" || f.etat === "speaking") return true;
-  // 4. Pointeur sur la zone du bas.
-  if (f.pointeurActif === true) return true;
+  // 4. Pointeur sur la zone du bas : un GESTE la retient, une simple position non
+  // (`pointeurGeste === false` = le decompte est alle au bout).
+  if (f.pointeurActif === true && f.pointeurGeste !== false) return true;
   // 5. Une question de l'assistant attend une reponse (regle ajoutee avec le
   // correctif « les questions ne sont pas visibles dans l'ecran Vocal ») : le
   // bas porte la rangee de boutons, il ne s'efface donc jamais tant qu'une

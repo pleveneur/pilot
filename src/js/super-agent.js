@@ -2294,7 +2294,8 @@ function buildVocalTasksHtml(plan) {
  *
  * @param {Element} colonne la colonne de droite
  * @param {string} selecteur selecteur de l'element (sa classe)
- * @param {"first"|"last"} place ou le poser
+ * @param {"first"|"above-list"|"last"} place ou le poser : en tete de colonne,
+ *   juste AU-DESSUS de la liste (`.vocal-side-body`), ou a la fin
  * @returns {Element|null} le noeud, jamais un doublon
  */
 function vocalColumnNode(colonne, selecteur, place) {
@@ -2303,7 +2304,14 @@ function vocalColumnNode(colonne, selecteur, place) {
   const noeud = document.createElement("div");
   noeud.className = selecteur.replace(/^\./, "");
   if (place === "first") colonne.insertBefore(noeud, colonne.firstChild);
-  else colonne.appendChild(noeud);
+  else if (place === "above-list") {
+    // Juste au-dessus de la LISTE, pas en tete de colonne : c'est ce qui met le
+    // portrait du personnage HORS de la section des taches (remarque du
+    // proprietaire du 2026-10-03 : « le portrait semble appartenir a la liste »).
+    const liste = colonne.querySelector(".vocal-side-body");
+    if (liste) colonne.insertBefore(noeud, liste);
+    else colonne.appendChild(noeud);
+  } else colonne.appendChild(noeud);
   return noeud;
 }
 
@@ -2335,8 +2343,9 @@ function vocalImageZoneNode(colonne) {
 /**
  * Repeint le CONTENU de la colonne de droite (CONCEPTION-ecran-vocal-taches-en-
  * haut-portrait-en-bas.md §2.2 a §2.4 ; correction du 2026-10-31 : le portrait
- * est REVENU en haut a droite, la liste des taches est DESSOUS) : titre,
- * PORTRAIT du personnage et son nom, ZONE D'IMAGE (fenetre du visage), liste des
+ * est REVENU en haut a droite ; remarque du proprietaire du 2026-10-03 : il est
+ * AGRANDI, DETACHE, et le titre « TACHES » passe SOUS lui) : PORTRAIT du
+ * personnage et son nom, air, titre, ZONE D'IMAGE (fenetre du visage), liste des
  * taches. La ligne d'activite du bas de la colonne N'EXISTE PLUS (retiree avec
  * son test) : la place qu'elle occupait n'est pas reoccupee, la liste reprend
  * ses 21 px.
@@ -2356,7 +2365,12 @@ function vocalRenderColumn(plan) {
   if (!colonne) return;
   const missions = collectSuperMissions();
   const vu = planVocalTasks(missions, { listHeight: plan.listHeight });
-  const titre = vocalColumnNode(colonne, ".vocal-tasks-title", "first");
+  // LE TITRE OUVRE LA SECTION DES TACHES, il n'est plus en tete de colonne
+  // (remarque du proprietaire du 2026-10-03) : le PORTRAIT du personnage, qui
+  // vient d'abord, n'appartient donc plus a la section des taches — il est en
+  // tete de colonne, detache, et le titre annonce ce qui le suit. L'ordre du
+  // document devient : portrait, son nom, air, « TACHES », zone d'image, liste.
+  const titre = vocalColumnNode(colonne, ".vocal-tasks-title", "above-list");
   if (titre && titre.textContent !== VOCAL_TASKS_TITLE) titre.textContent = VOCAL_TASKS_TITLE;
   // LA ZONE D'IMAGE : une hauteur, et `hidden` quand elle ne reserve rien.
   // Aucun contenu, aucune image, aucun cadre — une zone qui ne dessine rien ne
@@ -2500,7 +2514,13 @@ function vocalRenderDiscussion(plan) {
   const lu = collectVocalDiscussion();
   const vue = vocalDiscussionView(lu.messages, {
     columnHeight: plan.columnHeight,
-    track: plan.track,
+    // LA LARGEUR DU CONTENU, PAS CELLE DE LA PISTE (remarque du proprietaire du
+    // 2026-10-03) : la feuille de style donne a cette colonne la meme largeur de
+    // contenu qu'a celle des taches (`--vocal-side-tasks`), donc son bord
+    // interieur s'arrete au bord de la couronne et non sous la lueur. Compter les
+    // caracteres sur `plan.track` aurait promis plus de place que le texte
+    // reellement peint : un message aurait ete coupe sans le dire.
+    track: plan.taskTrack,
     total: lu.total,
   });
   const titre = vocalColumnNode(colonne, ".vocal-discussion-title", "first");
@@ -2681,10 +2701,11 @@ function vocalSyncSides() {
     hasAvatar: vocalAvatarFrame() !== null,
   });
   ov.style.setProperty("--vocal-side", `${plan.track}px`);
-  // LA COLONNE DES TACHES s'arrete au bord de la couronne du disque : sa largeur
-  // est `taskTrack` (colonne moins couronne), ecrite comme une LARGEUR. Un titre
-  // long est donc coupe par sa propre boite, jamais pose sur le cercle — la
-  // colonne de gauche, elle, garde `--vocal-side` (rien ne la menace de ce cote).
+  // LA CONTENU DES DEUX COLONNES s'arrete au bord de la couronne du disque : leur
+  // largeur est `taskTrack` (colonne moins couronne), ecrite comme une LARGEUR. Un
+  // titre long est donc coupe par sa propre boite, jamais pose sur le cercle. La
+  // colonne de GAUCHE lit le MEME jeton (remarque du proprietaire du 2026-10-03 :
+  // elle mordait de 64 px dans le halo, son bord interieur a 24 px du disque).
   ov.style.setProperty("--vocal-side-tasks", `${plan.taskTrack}px`);
   ov.classList.toggle("vocal-sides-off", !plan.shown);
   // `track = 0` = colonnes ABSENTES : sans `hidden`, les deux `<aside>` vides
@@ -4373,10 +4394,16 @@ export async function createSuperAgent(container) {
   //  - `vocalChromeRepere` : derniere position qui a REVEILLE le bas. C'est le
   //    point de depart du seuil de 4 px — le tremblement d'une main posee ne
   //    reveille donc jamais l'ecran.
+  //  - `vocalChromeGestePointeur` : le dernier geste de pointeur n'a pas EXPIRE.
+  //    Pose par les deux gestes (deplacement au-dela de 4 px, clic), remis a zero
+  //    quand le decompte sonne : une souris seulement POSEE sur la bande du bas
+  //    ne retient donc pas le bas indefiniment (remarque du proprietaire du
+  //    2026-10-03). C'est le fait `pointeurGeste` de la decision pure.
   let vocalChromeTimer = 0;
   let vocalChromeEtat = "idle";
   let vocalChromePointeur = null;
   let vocalChromeRepere = null;
+  let vocalChromeGestePointeur = false;
   // ── L'ETAT NU : TOUT MASQUER SAUF LE PORTRAIT (section 6 de la conception) ──
   // Un SEUL booleen, en MEMOIRE seulement : ni `localStorage`, ni fichier, ni
   // entree de configuration (section 6.6). Il repart a « tout visible » a chaque
@@ -5746,6 +5773,12 @@ let vocalDicteeParGeste = false;
     clearVocalChromeTimer();
     vocalChromeTimer = setTimeout(() => {
       vocalChromeTimer = 0;
+      // LE GESTE DE POINTEUR EXPIRE AVEC LE DECOMPTE : a partir d'ici, la seule
+      // presence de la souris sur la bande du bas ne retient plus rien (regle 4
+      // de `vocal-chrome.js`). Sans cette remise a zero, un pointeur pose sur la
+      // bande retenait le bas POUR TOUJOURS et la barre ne s'effacait plus jamais
+      // (remarque du proprietaire du 2026-10-03).
+      vocalChromeGestePointeur = false;
       // Le delai vient de sonner : c'est la SEULE chose qui puisse effacer le
       // bas, et seulement si les quatre regles ne le retiennent pas. Le minuteur
       // n'est pas repose ici (sinon il tournerait sans fin).
@@ -5820,7 +5853,10 @@ let vocalDicteeParGeste = false;
       question: hasPendingQuestion(),
       saisie: texte.trim() !== "" || (champ ? document.activeElement === champ : false),
       micFerme: vocalMicFerme,
+      // Regle 4 : une POSITION ne suffit pas, c'est le GESTE qui retient le bas
+      // (voir `vocalChromeGestePointeur`). Les deux faits sont donnes ensemble.
       pointeurActif: vocalChromePointeurSurLeBas(),
+      pointeurGeste: vocalChromeGestePointeur === true,
     };
     // LA ZONE DE SAISIE NE DEPEND PAS DE L'ETAT NU (precision du proprietaire,
     // 2026-11-01). La regle precedente exigeait l'absence d'etat nu : elle
@@ -5902,11 +5938,15 @@ let vocalDicteeParGeste = false;
     vocalChromePointeur = position;
     if (!vocalChromeMoved(position, vocalChromeRepere)) return;
     vocalChromeRepere = position;
+    // C'est un GESTE : il retient le bas jusqu'a la fin du decompte (regle 4).
+    vocalChromeGestePointeur = true;
     vocalWakeChrome();
   };
   const onVocalChromePointerDown = (e) => {
     vocalChromePointeur = { x: e.clientX, y: e.clientY };
     vocalChromeRepere = vocalChromePointeur;
+    // Un clic est le geste le plus net : il retient le bas (regle 4).
+    vocalChromeGestePointeur = true;
     vocalWakeChrome();
   };
   const onVocalChromeWheel = () => {
@@ -6618,6 +6658,9 @@ let vocalDicteeParGeste = false;
     vocalChromePointeur = null;
     vocalChromeRepere = null;
     vocalChromeEtat = "idle";
+    // Aucun geste de pointeur n'a encore eu lieu : le fait `pointeurGeste` n'est
+    // pas « vrai » par defaut (sinon une souris posee retiendrait le bas).
+    vocalChromeGestePointeur = false;
     attachVocalChromeListeners();
     // Entrer dans le mode EST un geste : le decompte part donc deja, et le bas
     // est visible a l'ouverture (on n'arrive jamais sur un ecran nu).
@@ -6684,6 +6727,7 @@ let vocalDicteeParGeste = false;
       vocalChromePointeur = null;
       vocalChromeRepere = null;
       vocalChromeEtat = "idle";
+      vocalChromeGestePointeur = false;
       if (vocalOverlay) vocalOverlay.classList.remove(VOCAL_CHROME_HIDDEN_CLASS);
       // L'ETAT NU ne survit pas a l'ecran : rien n'est memorise, la prochaine
       // entree repart de « tout visible » (section 6.6). La classe part avec

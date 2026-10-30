@@ -7,7 +7,7 @@
 //         NOMBRE DE LIGNES qui suit la hauteur : les sept lignes du tableau
 //         § 2.5 pour les sept fenetres du document, plafond 8.
 //   T18 — le haut de la colonne reserve la place du PERSONNAGE : `listH = H - 51`
-//         quand il n'y a rien, `H - 51 - 98` avec son portrait (72 + 6 + 20), la
+//         quand il n'y a rien, `H - 51 - 136` avec son portrait (96 + 8 + 20 + 12), la
 //         fenetre du visage prenant la sienne SUR ce total. Correction du
 //         2026-10-31 : le portrait est REVENU en haut a droite de la colonne, il
 //         n'est plus au centre du disque (mission « ecran Vocal » annulee).
@@ -77,12 +77,12 @@ const SEPT_LIGNES = [
 ];
 
 describe("T18 — le haut de la colonne reserve la place du personnage", () => {
-  it("`listH` vaut H - 51 sans rien, H - 51 - 98 avec le portrait", () => {
+  it("`listH` vaut H - 51 sans rien, H - 51 - 136 avec le portrait", () => {
     for (const [largeur, hauteur, disque, H] of SEPT_LIGNES) {
       const rien = planVocalSides({ width: largeur, height: hauteur, orbSize: disque });
       expect(rien.columnHeight, `${largeur} : H`).toBe(H);
       expect(rien.listHeight, `${largeur} : liste`).toBe(H - VOCAL_SIDE_FIXED_PX);
-      // Le PERSONNAGE d'abord (correction du 2026-10-31) : son bloc de 98 px sort
+      // Le PERSONNAGE d'abord (correction du 2026-10-31) : son bloc de 136 px sort
       // de la liste, en haut de la colonne.
       const portrait = planVocalSides({
         width: largeur,
@@ -98,10 +98,10 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     }
   });
 
-  it("51 px de base, 98 px de personnage, 180 px de fenetre du visage", () => {
+  it("51 px de base, 136 px de personnage, 180 px de fenetre du visage", () => {
     expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
-    // 72 px de medaillon + 6 px d'ecart + 20 px de nom.
-    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(98);
+    // 96 px de medaillon + 8 px d'ecart + 20 px de nom + 12 px d'air.
+    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(136);
     const av = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasAvatar: true });
     expect(av.columnHeight).toBe(512);
     expect(av.listHeight).toBe(512 - 231);
@@ -117,8 +117,8 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     const deux = planVocalSides({ ...cas, hasPortrait: true, hasAvatar: true });
     const portrait = planVocalSides({ ...cas, hasPortrait: true });
     expect(deux).toEqual(portrait);
-    // 512 - 51 - 98 : le personnage occupe le haut, la zone d'image ne prend rien.
-    expect(deux.listHeight).toBe(363);
+    // 512 - 51 - 136 : le personnage occupe le haut, la zone d'image ne prend rien.
+    expect(deux.listHeight).toBe(325);
   });
 
   it("le plan connait le personnage : `hasPortrait` fait partie de ce qu'il rend", () => {
@@ -135,7 +135,7 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
       "track",
     ]);
     // Une entree `hasPortrait` bien vraie CHANGE la liste : elle est lue.
-    expect(planVocalSides({ ...cas, hasPortrait: true }).listHeight).toBe(plan.listHeight - 98);
+    expect(planVocalSides({ ...cas, hasPortrait: true }).listHeight).toBe(plan.listHeight - 136);
     // Et sans personnage ni visage, aucun cas par defaut cache : 51 px, pas plus.
     expect(plan.listHeight).toBe(461);
   });
@@ -209,9 +209,11 @@ describe("T19 — la liste ne passe jamais sous le cercle", () => {
       colonne.indexOf('class="vocal-side-body"'),
     );
     // Le titre et la zone d'image sont CREES par la repeinture, a leur place
-    // imposee : le titre AVANT tout, la zone d'image ensuite, la liste apres.
+    // imposee : le titre AU-DESSUS DE LA LISTE (remarque du proprietaire du
+    // 2026-10-03 : le portrait ne doit plus appartenir a la section des taches),
+    // la zone d'image ensuite, la liste apres.
     const rendu = corps("function vocalRenderColumn(plan)", "\n}\n");
-    expect(rendu).toMatch(/vocalColumnNode\(colonne, "\.vocal-tasks-title", "first"\)/);
+    expect(rendu).toMatch(/vocalColumnNode\(colonne, "\.vocal-tasks-title", "above-list"\)/);
     expect(rendu.indexOf("vocalImageZoneNode(colonne)")).toBeGreaterThan(
       rendu.indexOf('".vocal-tasks-title"'),
     );

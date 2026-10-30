@@ -95,10 +95,12 @@ describe("T9 — le portrait est en HAUT A DROITE, le disque reste vide", () => 
     expect(relance).toBeGreaterThan(halo);
   });
 
-  it("le CSS le pose en medaillon de 72 px dans la colonne, jamais sur le disque", () => {
+  it("le CSS le pose en medaillon de 96 px dans la colonne, jamais sur le disque", () => {
     const portrait = sliceSource(CSS, ".vocal-portrait {", "}", 10);
-    expect(portrait).toMatch(/width:\s*72px/);
-    expect(portrait).toMatch(/height:\s*72px/);
+    // 96 px (remarque du proprietaire du 2026-10-03 : le portrait etait trop
+    // petit). La valeur est celle de `VOCAL_PORTRAIT_PX`.
+    expect(portrait).toMatch(/width:\s*96px/);
+    expect(portrait).toMatch(/height:\s*96px/);
     // Rond, garni, centre dans sa colonne, jamais cliquable.
     expect(portrait).toMatch(/border-radius:\s*50%/);
     expect(portrait).toMatch(/object-fit:\s*cover/);
@@ -113,9 +115,10 @@ describe("T9 — le portrait est en HAUT A DROITE, le disque reste vide", () => 
 
   it("le nom est SOUS l'image, dans la colonne, sur une seule ligne", () => {
     const nom = sliceSource(CSS, ".vocal-portrait-name {", "}", 10);
-    // Sous l'image : 6 px d'ecart, 20 px de haut — le bloc du personnage vaut
-    // donc 72 + 6 + 20 = 98 px, exactement ce que compte `vocal-sides.js`.
-    expect(nom).toMatch(/margin-block:\s*6px 0/);
+    // Sous l'image : 8 px d'ecart, 20 px de haut, 12 px d'air sous le nom — le
+    // bloc du personnage vaut donc 96 + 8 + 20 + 12 = 136 px, exactement ce que
+    // compte `vocal-sides.js`.
+    expect(nom).toMatch(/margin-block:\s*8px 12px/);
     expect(nom).toMatch(/height:\s*20px/);
     expect(nom).toMatch(/font-size:\s*var\(--font-sm\)/);
     // Une seule ligne, jamais deux noms : coupe par des points de suspension.
