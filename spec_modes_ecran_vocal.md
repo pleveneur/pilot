@@ -4,9 +4,11 @@
 > lot 4a (`174cc45`), lot 4b (couper la réflexion, voir ce fichier §6),
 > **conversation parlée** (§6bis : parler déclenche une demande, sans bouton).
 >
-> **§ 3ter : 🟡 conception écrite, non livrée** — la colonne de droite de l'écran
-> Vocal (tâches en haut, portrait au pied, aucun espace réservé sans personnage)
-> n'existe pas encore dans le code. Tout le reste de ce document décrit le code livré.
+> **§ 3ter : ✅ livré** — la colonne de droite de l'écran Vocal existe : le portrait du
+> personnage **en haut à droite**, la liste des tâches **dessous**. **Correction du
+> 2026-10-31** : la mission « écran Vocal » du 2026-10-30, qui déplaçait l'image **au centre
+> du cercle**, est **annulée** sur décision du propriétaire — le disque ne porte **rien**
+> (ni image, ni nom).
 >
 > Ce document décrit **ce que Pilot fait réellement**, relu dans le code livré.
 > Les raisons de conception (mesures de contraste, choix de placement, découpage
@@ -178,7 +180,8 @@ reste **sous** eux, la fenêtre reste fermable et déplaçable, et le panneau ne
 recouvre ni la ligne d'état ni la zone de saisie. Ni le disque, ni la ligne
 d'état, ni la barre de saisie, ni le bouton de relance ne bougent.
 
-Dans l'**état nu** (§4ter : tout masqué, portrait compris depuis qu'il est dans le cercle), il faut le dire net :
+Dans l'**état nu** (§4ter : tout masqué, sauf le portrait du personnage en haut à droite),
+il faut le dire net :
 **Rien de la conversation n'est affiché** sur cet écran — ni les messages, ni les
 outils, ni un résumé des derniers échanges. Le suivi des agents y est **joignable sur
 demande** (le bouton « Travail » ci-dessus), jamais peint en permanence. C'est le
@@ -259,13 +262,16 @@ non-recouvrement, mouvement réduit).
 
 ## 3ter. Les colonnes de l'écran Vocal (discussion à gauche ; zone d'image et tâches à droite) — ✅ **lots 1, 2, 3 et 4 livrés**
 
-> **État réel (révision du 2026-11, mission « écran Vocal »)** : la **structure** des
+> **État réel (correction du 2026-10-31)** : la **structure** des
 > colonnes existe — deux `<aside class="vocal-side">` enfants de la scène (discussion à
 > gauche, tâches à droite) et la grille à trois pistes de `.vocal-stage`. Le **personnage
-> n'est plus dans la colonne** : il est au **centre du cercle**, avec son nom juste
-> dessous, à l'intérieur du disque (voir ci-dessous). La colonne de droite ne porte donc
-> que le titre « TÂCHES », **la place de la fenêtre du visage** (PLface) quand elle peut
-> s'y tenir, et **la liste des tâches** ; celle de gauche, l'**aperçu de la discussion**.
+> est en haut à droite de l'écran**, dans la colonne de droite, **au-dessus** de la liste
+> des tâches (voir ci-dessous). Le **disque ne porte rien** : ni image, ni nom — la mission
+> « écran Vocal » du 2026-10-30, qui l'avait mis au centre du cercle, est **annulée** (décision
+> du propriétaire du 2026-10-31). La colonne de droite porte donc le titre « TÂCHES », **le
+> portrait du personnage et son nom**, **la place de la fenêtre du visage** (PLface) quand
+> elle peut s'y tenir, et **la liste des tâches** ; celle de gauche, l'**aperçu de la
+> discussion**.
 > La lecture de la largeur est unique : `planVocalSides()` (`src/js/vocal-sides.js`),
 > appliquée par `vocalSyncSides()` à l'entrée, à chaque changement de taille de fenêtre et
 > à chaque tic de **900 ms** (`VOCAL_SIDES_TICK_MS`) ; sous 240 px de place disponible, les
@@ -284,26 +290,34 @@ non-recouvrement, mouvement réduit).
 
 Quand la place le permet (seuil d'affichage des colonnes), l'écran Vocal montre à droite
 **une** colonne qui parle du **travail**, dans cet ordre de haut en bas : le titre
-« TÂCHES », puis **la zone d'image**, puis **la liste des tâches**. **Rien n'est écrit sous
+« TÂCHES », **le portrait du personnage et son nom**, **la zone d'image**, puis **la liste
+ des tâches**. **Rien n'est écrit sous
 la liste** : la **ligne d'activité** d'autrefois (« *X* réfléchit », « *X* exécute une
-opération ») a été **retirée** (mission « écran Vocal ») — la fonction pure qui la calculait
+opération ») a été **retirée** — la fonction pure qui la calculait
 et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
 
-**La zone d'image n'a plus que DEUX cas** — ce sont des faits, pas des réglages :
+**La zone d'image a TROIS cas, examinés dans cet ordre** — ce sont des faits, pas des réglages :
 
-- **1. L'avatar du visage (PLface) occupe la zone s'il tourne, s'il répond**
+- **1. Le portrait du personnage actif, d'abord, toujours** : le médaillon rond de
+  **72 px** et son nom juste sous lui (6 px d'écart, 20 px de ligne) — un bloc de **98 px**
+  pris en haut de la colonne, donc **en haut à droite de l'écran**. Il **l'emporte toujours
+  sur la fenêtre du visage** : si le personnage existe, c'est lui qu'on voit, et la zone
+  d'image ne prend plus rien.
+- **2. Sinon, l'avatar du visage (PLface)**, s'il tourne, s'il répond
   (`invoke("plface_status")`, la même sonde que l'écran Paramètres → Avatar) **et si sa
   taille est connue** : **180 px** sont réservés (son plancher : 160 × 180). Pilot **ne
   dessine rien** dans cette zone : c'est la fenêtre de l'avatar — sans cadre, transparente,
   toujours au-dessus — qui s'y tient. **Ni cadre, ni ombre, ni rond, ni logo, ni nom** :
   l'avatar n'a pas de nom, et rien ne remplace son image. L'avatar **n'est pas** une zone
   cliquable de Pilot : il n'entre pas dans les six hôtes (§8bis).
-- **2. Sinon** : le bloc d'image **n'existe pas** — pas d'image de remplacement, pas de
+- **3. Sinon** : le bloc d'image **n'existe pas** — pas d'image de remplacement, pas de
   cadre, pas de logo, **aucune zone réservée** — et la liste prend toute la hauteur.
 - **La colonne ne réserve, en plus de la liste, que le titre et l'air du bas : 51 px**
-  (14 de marge + 11 de titre + 14 de marge + 12 d'air). La liste dispose donc de
-  **`H − 51` px**, ou de **`H − 51 − 180`** quand la fenêtre du visage est posée, ce qui
-  lui laisse de **3 à 8** lignes selon la fenêtre (`vocalTaskRows`).
+  (14 de marge + 11 de titre + 14 de marge + 12 d'air), plus **98 px** quand le portrait du
+  personnage est là, plus **180 px** quand la fenêtre du visage est posée. La liste dispose
+  donc de **`H − 51` px**, de **`H − 51 − 98`** avec le personnage, ou de
+  **`H − 51 − 180`** avec la fenêtre du visage, ce qui lui laisse de **3 à 8** lignes selon
+  la fenêtre (`vocalTaskRows`).
 - **La zone n'existe que si la liste garde au moins une ligne** : sous `H = 277` px de
   colonne (51 + 180 + 46), la fenêtre du visage n'est pas dessinée et la liste garde
   **exactement** la hauteur du cas précédent. **Une zone qui ne dessine rien ne fait jamais
@@ -323,16 +337,17 @@ et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
   déplace ni le titre ni le haut de la liste. La place de l'avatar est décidée à chaque
   affichage, pas mémorisée.
 
-- **Le nom est DANS le cercle, juste sous l'image** (décision du propriétaire, mission
-  « écran Vocal » ; elle remplace celle du 2026-10-29 qui le posait sous le bouton) : le
-  portrait du **personnage actif** est au **centre du disque**, au plus la **moitié de son
-  intérieur** (168 px pour un disque de 336), et le nom est écrit **juste en dessous**, **sur
-  une seule ligne** — le nom du personnage, à défaut celui que vous avez donné à
-  l'assistant, jamais les deux. On voit donc toujours à qui l'on parle. Il n'y a **qu'un
-  nom** à l'écran : plus de pastille sous le bouton-cercle en plus de celui de l'image, et
+- **Le nom est SOUS le portrait, en haut à droite** (correction du 2026-10-31, décision du
+  propriétaire ; elle rétablit celle du 2026-10-29 et **annule** celle du 2026-10-30 qui
+  mettait l'image au centre du cercle) : le portrait du **personnage actif** est le premier
+  contenu de la colonne de droite, **72 px** de médaillon rond, et le nom est écrit **juste
+  sous lui**, **sur une seule ligne** — le nom du personnage, à défaut celui que vous avez
+  donné à l'assistant, jamais les deux. On voit donc toujours à qui l'on parle. Il n'y a
+  **qu'un nom** à l'écran : ni pastille sous le bouton-cercle, ni nom dans le disque, et
   **rien d'autre sous l'image**. Ce libellé ne déplace ni le cercle, ni le halo, ni la ligne
-  d'état, ne capte **aucun clic** et ne se règle pas. Sans personnage, l'image est absente et
-  le nom reste, seul, à la même place — aucun repli sur le logo.
+  d'état, ne capte **aucun clic** et ne se règle pas. Sans personnage, l'image et son nom
+  sont absents et la zone d'image prend la place (cas 2 ou 3 ci-dessus) — aucun repli sur le
+  logo. **Le disque, lui, ne porte ni image ni nom.**
 
 Les trois sorties (logo, Échap, fermeture de l'onglet) et les colonnes sans clic restent
 **inchangées** : **aucune** des deux colonnes n'ajoute de zone cliquable.
@@ -417,12 +432,13 @@ bouton **« Travail »**. Aucune tâche en cours ? La colonne affiche « **Aucun
 cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne le chevauche
 jamais, même avec un titre très long.
 
-Le **portrait du personnage** n'est plus dans la colonne : il est au **centre du cercle**, au
-plus la **moitié** de son intérieur, et son **nom** est écrit **juste en dessous**, sur une
-seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
+Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
+de la liste : un médaillon rond de **72 px**, et son **nom** est écrit **juste en dessous**, sur
+une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
 voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
-Il n'y a **aucune image de remplacement**, pas même le logo Pilot : le nom reste, seul, à la
-même place. Le portrait suit un éventuel changement de personnage sans redémarrer Pilot.
+Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la zone laisse alors la
+place à la fenêtre du visage de l'avatar, ou à rien du tout. Le portrait suit un éventuel
+changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni image ni nom.**
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
 au moindre mouvement de la souris : on parle à Pilot sans qu'une barre reste sous les yeux.
@@ -712,8 +728,9 @@ effacé).
 Décision du propriétaire : **tout ce que l'écran Vocal affiche peut être masqué
 puis remis** par un petit bouton discret. C'est un geste, pas un réglage : rien à
 mémoriser, rien à configurer. Le 2026-10-29, le portrait, alors dans la colonne,
-restait visible ; depuis qu'il est **au centre du disque** (mission « écran
-Vocal »), il s'éteint avec lui — voir la révision, plus bas.
+restait visible ; il est **revenu dans cette colonne le 2026-10-31** (en haut à
+droite, §3ter), donc l'exception de 2026-10-29 **vaut de nouveau, telle quelle** :
+le portrait et son nom restent seuls à l'écran, le bouton demeure.
 
 **Ce qui se masque — ensemble, d'un seul clic.** Le disque et ce qu'il porte
 (enveloppe de parole, arc de réflexion, couronne, bouton « Réveiller <Nom> »), la
@@ -724,19 +741,20 @@ colonnes seules, ni le bas seul) : deux interrupteurs voisins seraient un
 réglage déguisé, et le bas a déjà son effacement automatique (§4bis).
 
 **Ce qui reste, toujours.** Le **bouton d'affichage**, seul moyen de tout
-réafficher — et lui seul, depuis la révision ci-dessous.
+réafficher — et avec lui le **portrait du personnage et son nom** (décision du
+2026-10-29, rétablie le 2026-10-31 avec le retour du portrait dans la colonne).
 
-> **Révision (mission « écran Vocal ») — le portrait a rejoint le cercle.** Le
-> personnage n'est plus un médaillon de la colonne de droite : il est **au centre
-> du disque**, avec son nom juste dessous (§3ter). Il fait donc **partie de
-> l'objet lumineux** : le masquer séparément demanderait de démembrer le disque
-> (son anneau, sa couronne, son enveloppe et son arc sont peints par le même
-> nœud), ce qu'aucune décision ne demande. L'état nu éteint donc **le disque
-> entier**, portrait et nom compris : la seule exception du 2026-10-29 tombe
-> **parce que l'exception n'a plus d'objet**. **À confirmer par le propriétaire** :
-> si le portrait doit rester seul pendant que le disque s'éteint, c'est une
-> décision de plus, et elle change la forme du bloc d'effacement (le disque ne
-> peut plus être nommé en un seul sélecteur).
+> **Révision (correction du 2026-10-31) — le portrait a quitté le cercle.** La
+> mission « écran Vocal » du 2026-10-30 avait transporté le personnage **au centre
+> du disque** et fait tomber l'exception du 2026-10-29 (le portrait ne pouvait plus
+> rester seul, il était peint par le même nœud que l'anneau et sa couronne). Cette
+> mission est **annulée** : le portrait est de nouveau un **médaillon de la colonne
+> de droite**, en haut à droite, avec son nom dessous. Il n'appartient donc plus à
+> l'objet lumineux, et l'**exception du 2026-10-29 se réapplique** : dans l'état nu,
+> **le portrait et son nom restent visibles**, à leur place, quand tout le reste
+> s'éteint. Le bloc d'effacement ne les nomme pas — c'est **la seule façon** de les
+> laisser allumés — et un test le vérifie.
+
 Et, au-dessus de l'overlay, les **trois sorties** (le logo, `Échap`, la fermeture
 de l'onglet) et le bouton **« Travail »** : l'état nu ne les touche pas. Sans
 personnage actif (§3ter), il ne reste **que le bouton**, et le disque ne reste pas
@@ -747,15 +765,24 @@ contredirait « tout masquer » et créerait un état nu à deux vitesses.
 n'ont pas de disque à sauver : y masquer tout ne laisserait qu'un écran vide, et
 leur équivalent est déjà le logo-bouton des trois modes.
 
-**Le bouton.** Une icône seule (`œil` quand tout est visible, `œil barré` quand
-tout est masqué), 28 × 24 px, dans la **barre du haut de 44 px**, centrée,
-`pointer-events: auto` **sur lui-même** — il n'ajoute **pas** de septième hôte
-cliquable, il vit dans `.vocal-top` qui en est déjà un. L'infobulle et
+**Le bouton.** Une **icône et son texte, toujours visibles** (`œil` quand tout est
+visible, `œil barré` quand tout est masqué), dans la **barre du haut de 44 px**,
+centré, `pointer-events: auto` **par héritage de la barre** — il n'ajoute **pas**
+de septième hôte cliquable, il vit dans `.vocal-top` qui en est déjà un. Sa taille
+**ne change pas d'un état à l'autre** (`min-width: 190px`, `height: 28px`, la
+largeur du plus long des deux libellés) : le point de clic ne bouge pas sous le
+doigt. L'infobulle et
 l'`aria-label` disent **l'état d'abord, l'action ensuite** : « tout est visible —
 cliquer pour ne garder que le portrait », puis « tout est masqué — cliquer pour
 tout réafficher ». Le mot est **« le portrait »** et non « le personnage » : plus
 court dans une infobulle, et « personnage » nomme l'entité du carnet — deux mots
 pour deux choses. `aria-pressed` suit l'état.
+**Correction du 2026-10-31 : le bouton porte son texte.** Il était une icône seule
+(28 × 24 px) ; le propriétaire ne le **trouvait pas**. Il affiche donc, en clair,
+« Ne garder que le portrait » puis « Tout réafficher » — une phrase plus courte que
+l'infobulle, qui tient sur une ligne et ne dépend pas du survol. L'icône est posée
+dans son **propre nœud** (`.vocal-display-toggle-icon`), jamais sur le bouton :
+`setIcon` écrit `innerHTML` et emporterait le texte et le point de clic.
 **Jamais `hidden`, jamais `disabled`**, même quand la fenêtre est trop étroite
 pour les colonnes : ce qu'il commande existe toujours.
 
@@ -765,7 +792,8 @@ trois nœuds. Les nœuds masqués passent en `opacity: 0` puis `visibility: hidd
 (retardée de 180 ms) et `pointer-events: none` ; **jamais `display: none`** et
 **aucune règle de dimension ni de position** : le portrait et le disque restent
 à leur place, le retour ne fait rien sauter. Le portrait n'est **pas nommé** par
-le bloc : on ne peut pas masquer ce qu'on n'a pas écrit. En mouvement réduit,
+le bloc, ni par lui ni par sa légende : on ne peut pas masquer ce qu'on n'a pas
+écrit — c'est exactement ce qui le laisse seul allumé. En mouvement réduit,
 `transition: none`. Le fondu dure **180 ms**, jamais l'instantané : un écran qui
 s'éteint d'un coup se lit comme un bug, pas comme un geste — il dit qu'une chose
 vient de se ranger du regard, pas que l'affichage a sauté.
@@ -1390,7 +1418,7 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
 | `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les quatre règles **dans l'ordre**), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
-| 🟡 **à livrer** (lot 2) `super-agent.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton-œil posé **après** `buildVocalOverlay()`, dans `.vocal-top`), `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed` et l'infobulle), le terme `!vocalBare` dans `vocalSyncChrome`, la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
+| ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône ET texte visible** (« Ne garder que le portrait » / « Tout réafficher », `vocalBareText()`), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed`, l'infobulle et le texte), le terme `!vocalBare` dans `vocalSyncChrome`, la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 

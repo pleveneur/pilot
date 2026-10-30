@@ -11911,18 +11911,20 @@ body.pilot-vocal-active #agent-activity {
   width: var(--vocal-side-tasks, 100%);
   min-width: 0;
   justify-self: end;
-  /* LOT 2 : les 12 px d'air du bas (budget du §2.5 revisé : 39 px de titre + 12
-     px d'air = 51 px de haut fixe, plus la fenetre du visage quand elle
-     s'affiche). La ligne d'activite n'existe plus : la place qu'elle prenait
-     revient a la liste. */
+  /* LOT 2 (budget du §2.5 revisé, correction du 2026-10-31) : 39 px de titre + 12
+     px d'air = 51 px de haut fixe, PLUS le bloc du personnage quand il est la
+     (72 + 6 + 20 = 98 px) et PLUS la fenetre du visage quand c'est elle qui
+     occupe la zone (180 px). La ligne d'activite n'existe plus : la place
+     qu'elle prenait revient a la liste. */
   padding-block-end: 12px;
 }
-/* LA ZONE D'IMAGE, EN HAUT de la colonne de droite (complement du 2026-10-29,
-   § 7bis ; decision du proprietaire) : la place que Pilot reserve a la fenetre
-   du visage, AU-DESSUS de la liste des taches. Son noeud est INERTE : aucune
-   image, aucun cadre, aucune icone, aucun texte, jamais le logo. Sa hauteur est
-   ecrite a l'execution par `vocalRenderColumn` (0 px hors du cas 2 — il est
-   alors `hidden`, la liste prend la place). */
+/* LA ZONE D'IMAGE, SOUS LE PORTRAIT (complement du 2026-10-29, § 7bis ;
+   correction du 2026-10-31) : la place que Pilot reserve a la fenetre du visage
+   (PLface), AU-DESSUS de la liste des taches et SOUS le portrait du personnage.
+   Les deux ne s'affichent jamais ensemble : le personnage l'emporte. Son noeud
+   est INERTE : aucune image, aucun cadre, aucune icone, aucun texte, jamais le
+   logo. Sa hauteur est ecrite a l'execution par `vocalRenderColumn` (0 px hors
+   du cas 2 — il est alors `hidden`, la liste prend la place). */
 .vocal-image-zone {
   flex: 0 0 auto;
   width: 100%;
@@ -11936,50 +11938,39 @@ body.pilot-vocal-active #agent-activity {
   min-height: 0;
   overflow: hidden;
 }
-/* LE PORTRAIT DU PERSONNAGE, AU CENTRE DU DISQUE (decision du proprietaire,
-   mission « ecran Vocal ») : il n'est plus dans la colonne de droite. Il occupe
-   AU PLUS LA MOITIE de l'interieur du cercle — `--vocal-orb-size / 2`, soit
-   168 px pour un disque de 336 px — et il est CENTRE, pose en absolu sur le
-   centre du disque (aucune place prise dans la grille, le disque ne bouge pas
-   d'un pixel). `hidden` quand il n'y a pas de personnage : AUCUN repli sur le
-   logo. Sous lui, et sous lui seulement, le nom (`.vocal-orb-name`). */
+/* LE PORTRAIT DU PERSONNAGE, EN HAUT A DROITE DE L'ECRAN (correction du
+   2026-10-31, sur decision du proprietaire : l'image QUITTE le disque et
+   revient en tete de la colonne de droite, la liste des taches DESSOUS) : un
+   medaillon rond de 72 px, jamais dans le disque. `hidden` quand il n'y a pas de
+   personnage — AUCUN repli sur le logo dans la colonne. Il ne prend jamais le
+   clic : la colonne entiere est traversante. */
 .vocal-portrait {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: calc(var(--vocal-orb-size) / 2);
-  height: calc(var(--vocal-orb-size) / 2);
-  transform: translate(-50%, -50%);
+  width: 72px;
+  height: 72px;
   border-radius: 50%;
   object-fit: cover;
+  align-self: center;
+  flex: 0 0 auto;
   pointer-events: none;
 }
-/* LE NOM, DANS LE DISQUE, JUSTE SOUS L'IMAGE (decision du proprietaire,
-   mission « ecran Vocal ») : on voit toujours a qui l'on parle — le nom du
-   personnage actif, a defaut le nom de l'Assistant. Il n'y a qu'UN nom a
-   l'ecran : plus de pastille sous le bouton-cercle en plus de celui de l'image,
-   et rien d'autre sous l'image que ce seul nom.
-   POSITION : `50 % + 25 %` = le bas exact du portrait (il est centre et vaut la
-   moitie du disque), plus les 6 px d'ecart deja utilises entre l'image et son
-   nom. `inset-inline: 0` + `text-align: center` le centrent sur le disque ; il
-   ne prend aucune place dans le flux.
-   LARGEUR : 66 % du disque (222 px pour 336) — la corde du cercle a cette
-   hauteur vaut 284 px, la pastille ne touche donc jamais l'anneau. Un nom trop
-   long est coupe par des points de suspension, il ne passe jamais a la ligne
-   (une seule ligne, jamais deux noms). Une pastille lisible sur l'image suffit ;
-   JAMAIS une zone cliquable. */
-.vocal-orb-name {
-  position: absolute;
-  inset-inline: 0;
-  top: calc(75% + 6px);
-  text-align: center;
+/* LE NOM DU PERSONNAGE, JUSTE SOUS SON IMAGE (meme correction) : une legende de
+   20 px, centree sous le medaillon et AU-DESSUS des taches, sur UNE seule ligne
+   (un nom trop long finit en points de suspension, jamais sur deux lignes).
+   Il n'y a qu'UN nom a l'ecran : celui-ci. La pastille sous le bouton-cercle et
+   le nom dans le disque ont disparu avec l'image — le cercle ne porte plus rien.
+   `hidden` AVEC l'image : une legende sans image ne reste pas orpheline
+   au-dessus de la liste. Jamais cliquable (il herite du `pointer-events: none`
+   de la colonne). */
+.vocal-portrait-name {
+  flex: 0 0 auto;
+  align-self: center;
+  height: 20px;
   line-height: 20px;
+  margin-block: 6px 0;
+  max-width: 100%;
+  text-align: center;
   font-size: var(--font-sm);
-  background: color-mix(in srgb, var(--bg-app) 88%, transparent);
-  border-radius: 999px;
-  padding: 2px 10px;
-  max-width: 66%;
-  margin-inline: auto;
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -11987,13 +11978,14 @@ body.pilot-vocal-active #agent-activity {
 }
 
 /* --- LOT 2 (§2.2 a §2.7) : CE QUE LA COLONNE DE DROITE MONTRE ---
-   Ordre du document, de haut en bas (mission « ecran Vocal ») : titre, ZONE
-   D'IMAGE (la place de la fenetre du visage, sinon rien — le personnage, lui,
-   est au centre du disque), liste. Les hauteurs du budget (§2.5) sont ECRITES
-   ici : elles doivent tomber juste, sinon le nombre de lignes calcule par
-   `planVocalTasks` ne serait plus celui qu'on voit. Haut fixe : 14 + 11 + 14
-   (titre) + 12 (air du bas) = 51 px, et 51 + 180 = 231 px quand la fenetre du
-   visage s'affiche. Le reste est de l'air, jamais un debordement. */
+   Ordre du document, de haut en bas (correction du 2026-10-31) : titre,
+   PORTRAIT du personnage et son nom, ZONE D'IMAGE (la place de la fenetre du
+   visage — les deux ne s'affichent jamais ensemble), liste. Les hauteurs du
+   budget (§2.5) sont ECRITES ici : elles doivent tomber juste, sinon le nombre
+   de lignes calcule par `planVocalTasks` ne serait plus celui qu'on voit. Haut
+   fixe : 14 + 11 + 14 (titre) + 12 (air du bas) = 51 px ; 51 + 98 = 149 px avec le
+   personnage ; 51 + 180 = 231 px avec la fenetre du visage. Le reste est de
+   l'air, jamais un debordement. */
 /* LE TITRE DES DEUX COLONNES : une seule regle, deux selecteurs — les deux
    titres ne peuvent donc pas deriver l'un de l'autre. 14 px sous le bord haut de
    la colonne, 11 px de haut, 14 px sous lui : « DISCUSSION » et « TACHES » sont
@@ -12570,28 +12562,36 @@ body.pilot-vocal-active #agent-activity {
 /* --- §4bis/§6 (decision 9 du 2026-10-29) L'ETAT NU : TOUT MASQUER SAUF LE PORTRAIT ---
    Un SEUL petit bouton, dans la barre du haut (`.vocal-top`), en enfant de
    celle-ci — il n'est pas un septieme hote cliquable (issue #381) : la barre
-   l'est deja, le bouton n'a besoin que de `pointer-events: auto` sur lui-meme.
-   Il porte une ICONE SEULE (14 px) : aucun mot dans une bande qui n'en porte
-   aucun, et l'infobulle (posee par `super-agent.js`, module `vocal-bare.js`) dit
-   l'etat puis l'action. Sa TAILLE ne change jamais d'un etat a l'autre : le point
-   de clic ne bouge pas sous le doigt. Il ne prend jamais de couleur d'etat
-   `--vocal-*` : ce n'est pas un etat de la voix.
-   FORME : 28 x 24 px (la plus petite cible confortable du WCAG 2.2, 24 x 24),
-   centree dans la bande de 44 px ou elle flotte (10 px d'air au-dessus et
-   au-dessous), `z-index: 1` — sous le logo (2), donc la sortie gagne toujours. */
+   l'est deja, le bouton capte le clic par heritage.
+   CORRECTIF DU 2026-10-31 (le proprietaire ne TROUVAIT pas le bouton) : il porte
+   l'ICONE ET SON TEXTE EN CLAIR, dans les deux etats (« Ne garder que le
+   portrait » / « Tout réafficher »). Une icone d'oeil seule, en gris secondaire,
+   dans une bande vide, ne disait ni ce qu'elle fait ni ce qu'elle commande ;
+   l'infobulle (posee par `super-agent.js`, module `vocal-bare.js`) dit toujours
+   l'etat puis l'action. Sa TAILLE ne change jamais d'un etat a l'autre
+   (`min-width` couvre le plus long des deux textes) : le point de clic ne bouge
+   pas sous le doigt. Il ne prend jamais de couleur d'etat `--vocal-*` : ce n'est
+   pas un etat de la voix.
+   FORME : 28 px de haut dans la bande de 44 px (8 px d'air au-dessus et
+   au-dessous), 190 px au moins de large, `z-index: 1` — sous le logo (2), donc la
+   sortie gagne toujours. */
 .vocal-display-toggle {
   z-index: 1;
   margin-inline: auto;
-  width: 28px;
-  height: 24px;
+  min-width: 190px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  gap: 6px;
+  padding: 0 12px;
   border-radius: 999px;
   border: 1px solid var(--border-subtle);
-  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
   color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   /* PAS de `pointer-events` ici, et c'est volontaire : `pointer-events` est une
      propriete HERITEE, et la barre qui le porte (`.vocal-top`) est deja l'un des
@@ -12601,6 +12601,20 @@ body.pilot-vocal-active #agent-activity {
      par heritage, sans une regle de plus. */
   transition: background var(--transition), border-color var(--transition),
     box-shadow var(--transition);
+}
+/* L'icone a son noeud (pour que `setIcon`, qui ecrit `innerHTML`, n'emporte
+   jamais le texte ni le noeud du clic) : elle ne prend que sa taille. */
+.vocal-display-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+/* Le TEXTE, sur une seule ligne, jamais coupe en deux : c'est lui qui rend le
+   bouton trouvable. */
+.vocal-display-toggle-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .vocal-display-toggle:hover,
 .vocal-display-toggle:focus-visible {
@@ -12619,12 +12633,14 @@ body.pilot-vocal-active #agent-activity {
    position. L'ESPACE RESTE RESERVE : le disque et le portrait ne bougent pas d'un
    pixel, et le retour ne les fait pas sauter. Aucune translation non plus : le
    disque ne glisse pas, il s'eteint.
-   CE QUI N'EST PAS NOMME ICI, ET NE DOIT JAMAIS L'ETRE : le portrait et son nom
-   (`.vocal-portrait`, `.vocal-orb-name`) — ils vivent tous deux DANS le disque
-   et s'eteignent donc avec lui, une seule regle suffit — et la zone d'image
-   (`.vocal-image-zone`, dont la hauteur reservee ne doit pas bouger) — la regle
-   la plus sure est l'absence de regle ; le logo (une sortie), l'entree
-   « Travail » (un acces) et les trois boutons systeme (hors de l'overlay).
+   CE QUI N'EST PAS NOMME ICI, ET NE DOIT JAMAIS L'ETRE : le portrait du
+   personnage et son nom (`.vocal-portrait`, `.vocal-portrait-name`) — la
+   decision est « tout masquer SAUF le portrait » (2026-10-31 : l'image est
+   revenue en haut a droite de l'ecran avec son nom sous elle, et elle reste la
+   seule chose visible) — et la zone d'image (`.vocal-image-zone`, dont la
+   hauteur reservee ne doit pas bouger) — la regle la plus sure est l'absence de
+   regle ; le logo (une sortie), l'entree « Travail » (un acces) et les trois
+   boutons systeme (hors de l'overlay).
    SANS PERSONNAGE, il ne reste que le bouton : le disque s'eteint comme le
    reste, il ne demeure pas pour lui tenir compagnie. */
 .pilot-vocal.vocal-bare .vocal-orb,

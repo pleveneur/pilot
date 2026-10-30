@@ -13,6 +13,8 @@
 //      taches : elle ne bouge pas quand la largeur change.
 //   5. Rien n'est ecrit, rien n'est invente : une entree absente ne fait pas
 //      apparaitre de colonnes.
+//   6. Le budget de hauteur, dans les TROIS cas de la zone d'image (correction
+//      du 2026-10-31 : le personnage est en haut a droite, la liste dessous).
 
 import { describe, it, expect } from "vitest";
 import {
@@ -24,6 +26,7 @@ import {
   VOCAL_SIDE_GAP_PX,
   VOCAL_SIDE_PAD_PX,
   VOCAL_SIDE_FIXED_PX,
+  VOCAL_PORTRAIT_BLOCK_PX,
   VOCAL_CROWN_PX,
   VOCAL_ORB_BOX_RATIO,
   VOCAL_ORB_RESERVED_PX,
@@ -168,9 +171,8 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
   });
 
   it("la place laissee a la liste suit le haut fixe de la colonne", () => {
-    // Un SEUL total fixe depuis que le personnage a quitte la colonne pour le
-    // centre du disque : 14 + 11 + 14 (le titre) + 12 (l'air du bas) = 51 px. La
-    // ligne d'activite n'est plus comptee, elle n'existe plus.
+    // Le haut fixe : 14 + 11 + 14 (le titre) + 12 (l'air du bas) = 51 px. La ligne
+    // d'activite n'est plus comptee, elle n'existe plus.
     expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
     const plan = planVocalSides({ width: 1280, height: 900, orbSize: 336 });
     expect(plan.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX);
@@ -180,6 +182,30 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     expect(avecAvatar.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 180);
     // Jamais de valeur negative, meme quand la fenetre est minuscule.
     expect(planVocalSides({ width: 1280, height: 120, orbSize: 336 }).listHeight).toBe(0);
+  });
+
+  it("le PERSONNAGE, en haut a droite, prend 98 px a la liste (72 + 6 + 20)", () => {
+    // Correction du 2026-10-31 : l'image est revenue en tete de la colonne, donc
+    // la colonne lui reserve de nouveau sa place — medaillon (72), ecart (6) et
+    // nom sous l'image (20). Le disque, lui, ne porte rien.
+    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(72 + 6 + 20);
+    const avec = planVocalSides({
+      width: 1280,
+      height: 900,
+      orbSize: 336,
+      hasPortrait: true,
+    });
+    expect(avec.hasPortrait).toBe(true);
+    expect(avec.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 98);
+    expect(avec.listHeight).toBe(363);
+    // Le personnage l'emporte : pas de fenetre du visage en plus, et la zone
+    // d'image ne reserve alors AUCUNE place vide (le medaillon est un vrai noeud).
+    expect(avec.imageZone.kind).toBe("portrait");
+    expect(avec.imageZone.height).toBe(0);
+    expect(
+      planVocalSides({ width: 1280, height: 900, orbSize: 336, hasPortrait: true, hasAvatar: true })
+        .listHeight,
+    ).toBe(363);
   });
 
   it("aucune entree : aucune colonne, aucune erreur, aucune valeur inventee", () => {

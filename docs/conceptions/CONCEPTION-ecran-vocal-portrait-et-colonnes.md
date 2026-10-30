@@ -15,6 +15,13 @@
 > l'avatar ne s'y pose que si sa **taille** est connue — aujourd'hui elle ne l'est **pas**
 > (aucune route de taille dans PLface, § 7bis.5). Détail applicable : **§ 7bis** ci-dessous,
 > qui n'amende **aucune** ligne des § 0 à § 7.
+> **Correction du 2026-10-31** : le portrait est **en haut de la colonne de droite**, au-dessus
+> des tâches, et le **disque ne porte rien** (ni image, ni nom). La mission « écran Vocal » du
+> 2026-10-30, qui l'avait mis **au centre du cercle**, est **annulée** — voir l'encadré de tête
+> de l'**AVENANT**. Il n'y a donc **pas de portrait au centre du disque** nulle part dans ce
+> document ; lisez « pied de la colonne » partout où le texte parle du portrait comme d'un
+> élément **bas** : la seule disposition valide est **titre → portrait + nom → zone d'image →
+> liste**.
 > Révision du 2026-10-29 (après l'oral) : le portrait **quitte le cercle** et prend le
 > haut de la colonne de droite *(→ désormais le **pied** de cette colonne, voir la révision
 > ci-dessus)* ; la discussion à gauche passe du hors-périmètre au
@@ -28,6 +35,20 @@
 ---
 
 ## AVENANT (mission « écran Vocal », 2026-11) — il PRIME sur les sections qu'il cite
+
+> **⚠️ POINT 3 ET POINT 4 DE CET AVENANT : ANNULÉS LE 2026-10-31 (décision du propriétaire).**
+> Le portrait **ne vit plus dans le cercle** : il est **revenu en haut de la colonne de
+> droite**, **au-dessus** de la liste des tâches, et son **nom** est écrit **sous lui**
+> (`.vocal-portrait-name`). Le disque ne porte **rien** — ni image, ni nom. La zone d'image
+> reprend donc **trois cas, dans cet ordre** : le **personnage** (bloc de **98 px** = 72 px de
+> médaillon + 6 px d'écart + 20 px de nom) → l'**avatar du visage** (180 px) → **rien**. Le
+> budget de la colonne est donc `H − 51`, `H − 51 − 98` ou `H − 51 − 180`. Conséquence
+> rétablie : dans l'**état nu**, le **portrait et son nom restent** visibles, seuls (décision 9
+> du 2026-10-29, de nouveau applicable). Le bouton d'affichage, lui, **porte désormais son
+> texte** en clair (« Ne garder que le portrait » / « Tout réafficher ») : le propriétaire ne
+> le trouvait pas. Les points **1 et 2** de l'avenant (plus de ligne d'activité, la colonne qui
+> ne passe jamais sous le cercle) **restent valables**. Voir
+> `spec_modes_ecran_vocal.md` § 3ter et § 4ter.
 
 Quatre décisions du propriétaire, prises à l'oral après usage de l'écran. Elles **ne
 rouvrent aucune des neuf décisions** ci-dessous : elles en retirent deux objets (le
@@ -48,14 +69,18 @@ trois sorties, le halo, le micro, le disque, l'effacement du bas et l'état nu r
    (une ligne, points de suspension), il ne peut ni déborder ni pousser la boîte. La colonne
    reste alignée vers le disque (`justify-self: end`). *Amende § 2.2 et § 3.1.*
 
-3. **Le portrait est au CENTRE DU DISQUE**, plus dans la colonne. Il occupe **au plus la
+3. **Le portrait est au CENTRE DU DISQUE**, plus dans la colonne. *(**ANNULÉ le 2026-10-31** :
+   voir l'encadré de tête de cet avenant — le portrait est revenu en **haut de la colonne de
+   droite**, au-dessus de la liste, et le disque ne porte rien.)* Il occupe **au plus la
    moitié de l'intérieur du cercle** (`--vocal-orb-size / 2`, soit 168 px pour 336), il est
    centré (`position: absolute; left/top: 50%; translate(-50%, -50%)`), et il est le
    **premier enfant** de `.vocal-orb` — donc sous le halo et sous le bouton de relance, qui
    se peignent par-dessus. Le disque ne bouge pas d'un pixel : le portrait ne prend aucune
    place dans la grille. *Amende la décision 1, § 1.2, § 2.1 et § 2.4.*
 
-4. **Un seul nom, et il est DANS le cercle, juste sous l'image.** `.vocal-orb-name` passe de
+4. **Un seul nom, et il est DANS le cercle, juste sous l'image.** *(**ANNULÉ le 2026-10-31** :
+   le nom est **sous le portrait**, dans la colonne, classe `.vocal-portrait-name`.)*
+   `.vocal-orb-name` passe de
    `top: calc(100% + 6px)` (sous le bouton-cercle) à `top: calc(75% + 6px)` — le bas exact du
    portrait, qui est centré et vaut la moitié du disque. Une seule ligne, jamais deux noms :
    `max-width: 66%` (222 px pour 336, la corde du cercle à cette hauteur en vaut 284) et
@@ -65,27 +90,26 @@ trois sorties, le halo, le micro, le disque, l'effacement du bas et l'état nu r
 
 ### Ce que ces quatre points changent dans les tableaux
 
-- **La zone d'image n'a plus que DEUX cas** (au lieu de trois, § 7bis) : la **fenêtre du
-  visage** quand elle tourne et que sa taille est connue (180 px), **sinon rien**. Le
-  personnage n'y entre plus : il est dans le disque.
+- **La zone d'image a TROIS cas** (§ 7bis) — le personnage d'abord, puis la **fenêtre du
+  visage** quand elle tourne et que sa taille est connue (180 px), puis **rien**. Le
+  personnage occupe le haut de la colonne, dans son bloc de 98 px.
 - **La hauteur fixe de la colonne tombe de 170 px à 51 px** : 14 (marge) + 11 (titre) + 14
-  (marge) + 12 (air du bas). La liste dispose donc de **`H − 51` px**, ou `H − 51 − 180` avec
+  (marge) + 12 (air du bas). La liste dispose donc de **`H − 51` px**, de **`H − 51 − 98`**
+  avec le personnage, ou de `H − 51 − 180` avec
   la fenêtre du visage, ce qui va de **3 à 8** lignes, et **8 au plus** (`VOCAL_TASKS_MAX`,
   `floor((440 − 2 × 20) / 46)`).
 - **`H = 277`** est le seuil de la fenêtre du visage : `51 + 180 + 46` — en dessous, elle ne
   laisserait pas une seule tâche, donc elle n'est pas dessinée et la liste garde exactement
   la hauteur du cas « rien ».
 
-### Une conséquence à faire confirmer : l'état nu (§ 6.7)
+### L'état nu (§ 6.7) — la décision du 2026-10-29 est RÉTABLIE
 
 Le 2026-10-29, l'état nu éteignait tout **sauf le portrait**, qui vivait dans la colonne.
-Depuis qu'il vit **dans** le disque, il s'éteint avec lui : son anneau, sa couronne, son
-enveloppe et son arc sont peints par le **même** nœud, et le démembrer pour sauver l'image
-n'est demandé par aucune décision. Le bloc d'effacement reste donc **inchangé** (le disque
-est nommé en un seul sélecteur) et `§ 6.7` se lit désormais « tout se masque, le portrait
-avec ». Si le propriétaire veut au contraire le portrait seul sur fond d'écran vide, c'est
-une décision de plus : elle oblige à nommer séparément l'anneau, la couronne, l'enveloppe,
-l'arc et le bouton de relance.
+L'avenant du 2026-11, en déplaçant le portrait **dans** le disque, avait fait tomber cette
+exception. **Cet avenant est annulé le 2026-10-31** : le portrait est revenu dans la colonne,
+il n'est plus peint par le nœud du disque, et le bloc d'effacement **ne le nomme pas** — donc
+il **reste allumé**, avec son nom. `§ 6.7` se relit donc « tout se masque **sauf le portrait et
+son nom** », et le bouton d'affichage reste le seul moyen de tout réafficher.
 
 ---
 
@@ -1130,17 +1154,20 @@ remplace le `ecran-vocal-bouton-informations.test.js` du premier jet, qui n'a ja
 
 ### 7bis.1 Où est la zone, et ce que veut dire « en haut à droite »
 
-Le propriétaire nomme la zone d'image « **en haut à droite** ». Dans la disposition déjà
-tranchée, « à droite » est la **colonne du travail** (`.vocal-side-tasks`) et l'image y est
-**au pied**, sous la liste (révision du 2026-10-29,
-`CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md` § 3). Les trois phrases du
-propriétaire ne se contredisent pas : la **colonne de droite** est bien la moitié haute de
-l'écran (elle commence à la ligne du disque, elle finit au-dessus de la ligne d'état), et la
-seconde moitié de sa phrase — « la liste des tâches occupe toute la hauteur » — parle de cette
-même colonne. **Ce document ne déplace donc aucune image** : il garde le pied de la colonne,
-et il exprime toute sa règle en **hauteurs**, jamais en « en haut » / « en bas ». Si le
-propriétaire voulait réellement **remonter** l'image au-dessus de la liste, c'est **une**
-phrase à changer (§ 7bis.9, point 1) et **aucun chiffre d'ici ne bouge**.
+> **Correction du 2026-10-31 (décision du propriétaire) — « en haut à droite » se lit
+> littéralement.** Ce paragraphe disait que l'image restait **au pied** de la colonne et
+> n'exprimait « en haut à droite » qu'en hauteurs. **C'est faux aujourd'hui** : le
+> propriétaire veut voir le personnage **en haut à droite de l'écran**, la liste des tâches
+> **en dessous**, et le **disque totalement vide** (la mission « écran Vocal » du 2026-10-30,
+> qui mettait l'image **au centre du cercle**, est **annulée**). Le portrait est donc le
+> **premier contenu** de `.vocal-side-tasks`, dans le flux (`align-self: center`), suivi de son
+> nom puis de la liste — plus aucune position absolue, plus aucun `offsetBottom`.
+
+Le propriétaire nomme la zone d'image « **en haut à droite** ». « À droite » est la **colonne
+du travail** (`.vocal-side-tasks`) ; « en haut » est **le haut de cette colonne**, au-dessus
+de la liste. Les trois phrases du propriétaire ne se contredisent plus : la **colonne de
+droite** commence à la ligne du disque, et la seconde moitié de sa phrase — « la liste des
+tâches occupe toute la hauteur » — décrit le **cas 3**, quand aucune image n'est disponible.
 
 ### 7bis.2 Les trois cas, et le **fait** qui décide de chacun
 
@@ -1157,14 +1184,16 @@ phrase à changer (§ 7bis.9, point 1) et **aucun chiffre d'ici ne bouge**.
 > case à ajouter. Ce complément **n'ajoute aucune case** : la règle du projet est qu'on
 > n'invente pas de réglage.
 
-**Une seule place, un seul bas.** Les trois cas partagent le même ancrage :
+**Un seul ordre, un seul haut.** Les trois cas partagent le même ancrage :
 
-- **le bas du bloc d'image ne bouge jamais** : il est à **30 px** au-dessus du bas de la
-  colonne (12 px de respiration + 18 px de ligne d'activité) — la ligne d'activité garde donc
-  **exactement** la place que la révision du 2026-10-29 lui a donnée, dans les trois cas ;
-- **le bloc est centré** : `offsetX = (track − 160) / 2` (80 px de chaque côté dans une colonne
-  de 320 px, 120 px dans une colonne de 400 px) ;
-- seule la **hauteur** change : **0 px** (cas 3), **98 px** (cas 1), **180 px** (cas 2).
+- **l'ordre est fixé une fois pour toutes** : titre « TÂCHES » → **le portrait et son nom** →
+  **la zone d'image** → **la liste**. Le portrait est **dans le flux**, en premier ; la zone
+  d'image est inerte, sans forme, et ne prend de place que dans le cas 2 ; la liste absorbe
+  l'air qui reste ;
+- **le médaillon est centré** dans la colonne (`align-self: center`, 72 px) ; il n'y a plus
+  d'`offsetX` à calculer, puisqu'aucune position absolue n'est posée ;
+- seule la **hauteur réservée** change : **98 px** pour le bloc du personnage (72 + 6 + 20),
+  **0 px** (cas 3), **180 px** (cas 2).
 
 **Le contrat, en une ligne** — un seul endroit décide, pour qu'il n'y ait jamais deux
 vérités à synchroniser :

@@ -2,11 +2,13 @@
 // laterales, en une seule formule PURE ; LOT 2 : le contenu de la colonne de
 // droite ; la ZONE D'IMAGE (§ 7bis) et la POSE de la fenetre du visage.
 //
-// PRESENTATION (mission « ecran Vocal ») : le PERSONNAGE a quitte la colonne
-// pour le CENTRE DU DISQUE — la zone d'image n'a donc plus que DEUX cas (la
-// fenetre du visage, sinon rien) et la ligne d'activite du bas de la colonne a
-// ete retiree avec l'ecran. La colonne des taches, elle, s'arrete desormais
-// AVANT la couronne du disque : sa largeur est rendue separement (`taskTrack`).
+// PRESENTATION (correction du 2026-10-31, sur decision du proprietaire) : la
+// ZONE D'IMAGE est EN HAUT A DROITE de l'ecran et la LISTE DES TACHES vient
+// DESSOUS. Le DISQUE, lui, reste INTACT : rien dedans, ni portrait ni nom. La
+// zone d'image a donc TROIS cas (le personnage, sinon la fenetre du visage,
+// sinon rien) et la ligne d'activite du bas de la colonne n'existe plus. La
+// colonne des taches s'arrete AVANT la couronne du disque : sa largeur est
+// rendue separement (`taskTrack`).
 //
 // Source : docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md
 // (§ 2.4 pour les noms, § 3.1 pour la formule, § 3.2 pour le tableau que le
@@ -65,27 +67,42 @@ export const VOCAL_CROWN_PX = 88;
  */
 export const VOCAL_SIDE_CLEARANCE_PX = VOCAL_CROWN_PX - VOCAL_SIDE_GAP_PX;
 /**
- * Total fixe du haut de la colonne : le titre (14 + 11 + 14 = 39 px) et l'air
- * du bas (12 px) = 51 px. Ce qui reste a la suite est la place de la liste.
- * (Le personnage et la ligne d'activite ont quitte la colonne : il n'y a plus
- * deux cas, donc plus deux totaux.)
+ * Total fixe du haut de la colonne HORS zone d'image : le titre
+ * (14 + 11 + 14 = 39 px) et l'air du bas (12 px) = 51 px. Ce qui reste a la
+ * suite est la place de la zone d'image, puis celle de la liste.
  */
 export const VOCAL_SIDE_FIXED_PX = 39 + 12;
 
-// ── LA ZONE D'IMAGE, A DEUX CAS ──
+// ── LA ZONE D'IMAGE, A TROIS CAS ──
 // Source : CONCEPTION-ecran-vocal-portrait-et-colonnes.md, § 7bis (la zone
-// d'image). Le premier cas — le PERSONNAGE — a quitte la colonne : il vit au
-// CENTRE DU DISQUE (decision du proprietaire, mission « ecran Vocal »).
+// d'image) et correction du 2026-10-31 : la zone est EN HAUT A DROITE, la
+// liste des taches DESSOUS, et le DISQUE ne porte RIEN (ni image, ni nom).
 //
-//   1. l'AVATAR DU VISAGE (PLface), s'il tourne et si sa TAILLE est connue
-//      et s'il reste au moins une tache                     -> 180 px
-//   2. sinon rien du tout : AUCUNE place reservee          -> 0 px
+//   1. le PERSONNAGE (un portrait affichable existe) : medaillon 72 px, son
+//      nom dessous (6 + 20 px)                            -> 98 px
+//   2. sinon l'AVATAR DU VISAGE (PLface), s'il tourne et si sa TAILLE est
+//      connue et s'il reste au moins une tache            -> 180 px
+//   3. sinon rien du tout : AUCUNE place reservee          -> 0 px
 
+/** Hauteur du medaillon du personnage, en px (la meme depuis le lot 2). */
+export const VOCAL_PORTRAIT_PX = 72;
+/** Ecart entre le medaillon et son nom, en px. */
+export const VOCAL_PORTRAIT_GAP_PX = 6;
+/** Hauteur de la ligne du nom, en px (la meme que la pastille du bouton). */
+export const VOCAL_PORTRAIT_NAME_PX = 20;
+/**
+ * Le bloc du personnage quand il est la : le medaillon (72), son ecart (6) et
+ * son nom (20) = 98 px. Sans personnage, ces 98 px reviennent a la liste.
+ */
+export const VOCAL_PORTRAIT_BLOCK_PX =
+  VOCAL_PORTRAIT_PX + VOCAL_PORTRAIT_GAP_PX + VOCAL_PORTRAIT_NAME_PX;
 /** Largeur du plancher de la fenetre du visage (PLface), en px (§ 7bis.7). */
 export const VOCAL_AVATAR_W_PX = 160;
 /** Hauteur du plancher de la fenetre du visage (PLface), en px (§ 7bis.7). */
 export const VOCAL_AVATAR_H_PX = 180;
-/** La fenetre du visage occupe la zone, seule. */
+/** Le cas 1 : le personnage occupe la zone (medaillon + son nom). */
+export const VOCAL_IMAGE_PORTRAIT = "portrait";
+/** Le cas 2 : la fenetre du visage occupe la zone, seule. */
 export const VOCAL_IMAGE_AVATAR = "avatar";
 /** La zone n'existe pas (aucune image, aucun cadre, aucune place). */
 export const VOCAL_IMAGE_NONE = "none";
@@ -99,9 +116,9 @@ export const VOCAL_ORB_BOX_RATIO = 1 + (2 * VOCAL_CROWN_PX) / 336;
 
 /**
  * Nombre maximal de taches affichees : 8, ce que la place permet a la hauteur
- * maximale (`floor((440 - 2 x 20) / 46) = 8`). Plafond UNIQUE : la colonne n'a
- * plus deux cas depuis que le personnage a quitte son haut (decision du
- * proprietaire, mission « ecran Vocal »).
+ * maximale (`floor((440 - 2 x 20) / 46) = 8`). Plafond UNIQUE : le budget de
+ * hauteur, lui, tient deja compte de la zone d'image (personnage ou visage),
+ * donc la colonne n'a pas deux plafonds a connaitre.
  */
 export const VOCAL_TASKS_MAX = 8;
 /**
@@ -173,20 +190,24 @@ export const VOCAL_DISCUSSION_TITLE = "DISCUSSION";
  * @param {number} entrees.width    largeur de la fenetre, en px
  * @param {number} entrees.height   hauteur de la fenetre, en px
  * @param {number} entrees.orbSize  diametre du disque, en px (`--vocal-orb-size`)
+ * @param {boolean} [entrees.hasPortrait] un portrait de personnage affichable
+ *   existe-t-il (voir `planVocalImageZone`)
  * @param {boolean} [entrees.hasAvatar] une fenetre de visage (PLface) de taille
  *   connue est-elle disponible (voir `planVocalImageZone`)
  * @returns {{track:number, taskTrack:number, shown:boolean, columnHeight:number,
- *   listHeight:number, hasAvatar:boolean, imageZone:object}}
+ *   listHeight:number, hasPortrait:boolean, hasAvatar:boolean, imageZone:object}}
  *   `track` = largeur d'UNE colonne (0 = colonnes absentes), `taskTrack` =
  *   largeur de la COLONNE DES TACHES : elle s'arrete avant la couronne du
  *   disque, donc elle ne peut jamais passer sous le cercle, `shown` = les
  *   colonnes sont-elles affichees, `columnHeight` = hauteur de la colonne
- *   (`H`), `listHeight` = place laissee a la LISTE sous son haut fixe et sous
- *   la zone d'image, `hasAvatar` = l'avatar du visage s'affiche REELLEMENT (il
- *   peut etre refuse faute de place), `imageZone` = la zone d'image decidee
- *   (voir `planVocalImageZone`).
+ *   (`H`), `listHeight` = place laissee a la LISTE sous son haut fixe, sous le
+ *   bloc du personnage et sous la zone d'image, `hasPortrait` = le cas 1
+ *   (personnage) s'applique, `hasAvatar` = l'avatar du visage s'affiche
+ *   REELLEMENT (il peut etre refuse faute de place), `imageZone` = la zone
+ *   d'image decidee (voir `planVocalImageZone`) — la repeinture n'a donc pas a
+ *   relire le personnage.
  */
-export function planVocalSides({ width, height, orbSize, hasAvatar } = {}) {
+export function planVocalSides({ width, height, orbSize, hasPortrait, hasAvatar } = {}) {
   const largeur = Number(width);
   const hauteur = Number(height);
   const disque = Number(orbSize);
@@ -223,16 +244,20 @@ export function planVocalSides({ width, height, orbSize, hasAvatar } = {}) {
   const place = h - VOCAL_ORB_RESERVED_PX;
   const columnHeight = Math.max(0, Math.round(Math.min(orb * VOCAL_ORB_BOX_RATIO, place)));
 
-  // La zone d'image : l'avatar du visage, sinon rien. Le PERSONNAGE n'entre plus
-  // dans ce calcul — il vit au centre du disque. Une zone qui ne laisserait pas
-  // au moins UNE tache a la liste n'est pas dessinee : c'est le seul refus
-  // possible de l'avatar ("une zone qui ne dessine rien ne fait jamais un trou").
-  const imageZone = planVocalImageZone({ hasAvatar, columnHeight });
+  // La zone d'image, dans l'ordre : le personnage, sinon la fenetre du visage,
+  // sinon rien. Une zone qui ne laisserait pas au moins UNE tache a la liste
+  // n'est pas dessinee : c'est le seul refus possible de l'avatar (« une zone
+  // qui ne dessine rien ne fait jamais un trou »).
+  const imageZone = planVocalImageZone({ hasPortrait, hasAvatar, columnHeight });
 
-  // Haut fixe de la colonne (le titre et l'air du bas), plus la place de la
-  // fenetre du visage quand elle s'affiche. La ligne d'activite a disparu : il
-  // n'y a plus deux totaux mais un seul, et 21 px reviennent a la liste.
-  const listHeight = Math.max(0, columnHeight - VOCAL_SIDE_FIXED_PX - imageZone.height);
+  // Haut fixe de la colonne : le titre et l'air du bas (51 px), PLUS le bloc du
+  // personnage quand il s'affiche (98 px), PLUS la place de la fenetre du
+  // visage quand c'est elle qui occupe la zone (180 px). Le reste va a la liste.
+  const fixe =
+    VOCAL_SIDE_FIXED_PX +
+    (imageZone.portrait ? VOCAL_PORTRAIT_BLOCK_PX : 0) +
+    imageZone.height;
+  const listHeight = Math.max(0, columnHeight - fixe);
 
   return {
     track,
@@ -240,46 +265,60 @@ export function planVocalSides({ width, height, orbSize, hasAvatar } = {}) {
     shown: track > 0,
     columnHeight,
     listHeight,
+    hasPortrait: imageZone.portrait,
     hasAvatar: imageZone.avatar,
     imageZone,
   };
 }
 
 /**
- * LA ZONE D'IMAGE, A DEUX CAS (CONCEPTION-ecran-vocal-portrait-et-colonnes.md,
- * § 7bis.2, revu par la mission « ecran Vocal ») — decision PURE :
+ * LA ZONE D'IMAGE, A TROIS CAS (CONCEPTION-ecran-vocal-portrait-et-colonnes.md,
+ * § 7bis.2 ; correction du 2026-10-31 : elle est EN HAUT A DROITE, la liste des
+ * taches DESSOUS, le disque reste INTACT) — decision PURE, dans cet ordre :
  *
- *   1. l'AVATAR DU VISAGE, s'il tourne ET si sa taille est connue
+ *   1. le PERSONNAGE occupe la zone si et seulement si un portrait affichable
+ *      existe (`hasPortrait`) : rien d'autre n'est lu, aucun reglage, aucun
+ *      etat memorise. Il n'y a alors PAS de fenetre du visage : le personnage
+ *      l'emporte, un seul cas a la fois ;
+ *   2. SINON l'AVATAR DU VISAGE, s'il tourne ET si sa taille est connue
  *      (`hasAvatar`), et seulement s'il reste au moins UNE ligne de liste
  *      apres lui — sinon il n'est pas pose du tout et la liste garde la place ;
- *   2. SINON rien : la zone n'existe pas, la liste prend toute la hauteur.
+ *   3. SINON rien : la zone n'existe pas, la liste prend toute la hauteur.
  *
- * Le PERSONNAGE n'est plus un cas : il vit au CENTRE DU DISQUE (decision du
- * proprietaire), donc la colonne ne lui reserve plus rien et la liste part de
- * `H - 51` au lieu de `H - 72` ou `H - 170`. Aucune hauteur n'est inventee pour
- * autant : 51 px sont le titre (14 + 11 + 14) et l'air du bas (12).
+ * La HAUTEUR RENDUE ne compte que l'ESPACE VIDE que Pilot reserve a la fenetre
+ * du visage : 0 px au cas 1 et au cas 3, 180 px au cas 2 (le medaillon du
+ * personnage et son nom sont de VRAIS noeuds, ils prennent leur place eux-memes:
+ * leurs 98 px sont comptes par `planVocalSides`, jamais deux fois).
+ *
+ * Les totaux du § 7bis.4 deviennent donc, avec H la hauteur de la colonne :
+ *   cas 3 : liste = H - 51     cas 1 : liste = H - 149
+ *   cas 2 : liste = H - 231
  *
  * @param {object} entrees
+ * @param {boolean} [entrees.hasPortrait] un portrait affichable existe-t-il
  * @param {boolean} [entrees.hasAvatar] une fenetre de visage de taille connue
  *   est-elle disponible
  * @param {number} [entrees.columnHeight] hauteur de la colonne, en px (`H`)
- * @returns {{kind:string, height:number, avatar:boolean}} `kind` vaut "avatar"
- *   ou "none" ; `height` est la place VIDE reservee a la fenetre du visage ;
- *   `avatar` dit si la fenetre du visage est posee.
+ * @returns {{kind:string, height:number, avatar:boolean, portrait:boolean}}
+ *   `kind` vaut "portrait", "avatar" ou "none" ; `height` est la place VIDE
+ *   reservee a la fenetre du visage ; `avatar` et `portrait` disent lequel des
+ *   deux blocs s'affiche.
  */
-export function planVocalImageZone({ hasAvatar, columnHeight } = {}) {
+export function planVocalImageZone({ hasPortrait, hasAvatar, columnHeight } = {}) {
+  const portrait = hasPortrait === true;
   const hauteur = Number(columnHeight);
   const H = Number.isFinite(hauteur) && hauteur > 0 ? hauteur : 0;
-  // Ce qui reste a la liste quand la fenetre du visage n'est pas posee.
-  const sansAvatar = VOCAL_SIDE_FIXED_PX;
-  const reserve = VOCAL_AVATAR_H_PX;
-  // L'avatar n'est pose que s'il reste UNE ligne de liste apres lui : une zone
-  // qui ne dessine rien ne fait jamais un trou, mais elle ne mange pas non plus
-  // la derniere tache.
-  const avatar = hasAvatar === true && H - sansAvatar - reserve >= VOCAL_TASK_PX;
-  const height = avatar ? reserve : 0;
+  // Le personnage d'abord : il occupe la zone seul, sans fenetre du visage.
+  if (portrait) {
+    return { kind: VOCAL_IMAGE_PORTRAIT, height: 0, avatar: false, portrait: true };
+  }
+  // Sinon la fenetre du visage, qui n'est posee que s'il reste UNE ligne de
+  // liste apres elle : une zone qui ne dessine rien ne fait jamais un trou,
+  // mais elle ne mange pas non plus la derniere tache.
+  const avatar = hasAvatar === true && H - VOCAL_SIDE_FIXED_PX - VOCAL_AVATAR_H_PX >= VOCAL_TASK_PX;
+  const height = avatar ? VOCAL_AVATAR_H_PX : 0;
   const kind = avatar ? VOCAL_IMAGE_AVATAR : VOCAL_IMAGE_NONE;
-  return { kind, height, avatar };
+  return { kind, height, avatar, portrait: false };
 }
 
 /**
@@ -356,9 +395,9 @@ export function vocalAvatarPoseKey(pose) {
  * FAUT-IL DEMANDER LA POSE, MAINTENANT ? (decision PURE : un seul appel par
  * geste)
  *
- * La pose n'est demandee que dans les deux cas ou la zone porte l'avatar, que
- * si la taille est connue (sinon `planVocalAvatarPose` rend null), et une seule
- * fois tant que la pose calculee ne change pas (`lastKey`).
+ * La pose n'est demandee que dans le cas ou la zone porte l'avatar, que si la
+ * taille est connue (sinon `planVocalAvatarPose` rend null), et une seule fois
+ * tant que la pose calculee ne change pas (`lastKey`).
  *
  * @param {object} entrees
  * @param {object} [entrees.imageZone] resultat de `planVocalImageZone`
@@ -389,8 +428,9 @@ export function planVocalAvatarPlacement({
 /**
  * Combien de taches la liste peut-elle montrer : le nombre de lignes.
  *
- * Un seul plafond (8), parce que la colonne n'a plus deux cas : le personnage
- * a quitte son haut. Le document compte `floor((440 - 40) / 46) = 8`.
+ * Un seul plafond (8), parce que le BUDGET de hauteur tient deja compte de la
+ * zone d'image (personnage ou visage) : la liste n'a qu'un cas a connaitre.
+ * Le document compte `floor((440 - 40) / 46) = 8`.
  * Les en-tetes de groupe comptent leur hauteur : deux en-tetes (2 x 20) plus
  * une tache (46) font 86 px, sous lesquels ils disparaissent.
  *

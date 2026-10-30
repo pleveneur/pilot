@@ -1400,12 +1400,13 @@ bouton **« Travail »**. Aucune tâche en cours ? La colonne affiche « **Aucun
 cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne le chevauche
 jamais, même avec un titre très long.
 
-Le **portrait du personnage** n'est plus dans la colonne : il est au **centre du cercle**, au
-plus la **moitié** de son intérieur, et son **nom** est écrit **juste en dessous**, sur une
-seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
+Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
+de la liste : un médaillon rond de **72 px**, et son **nom** est écrit **juste en dessous**, sur
+une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
 voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
-Il n'y a **aucune image de remplacement**, pas même le logo Pilot : le nom reste, seul, à la
-même place. Le portrait suit un éventuel changement de personnage sans redémarrer Pilot.
+Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la zone laisse alors la
+place à la fenêtre du visage de l'avatar, ou à rien du tout. Le portrait suit un éventuel
+changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni image ni nom.**
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
 au moindre mouvement de la souris : on parle à Pilot sans qu'une barre reste sous les yeux.

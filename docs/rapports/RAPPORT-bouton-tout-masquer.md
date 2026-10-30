@@ -1,5 +1,16 @@
 # Rapport — le bouton unique de l'écran Vocal : tout masquer sauf le portrait
 
+> **⚠️ PÉRIMÉ SUR UN POINT — correction du 2026-10-31.** Ce rapport décrit un état du
+> code qui n'est plus le code livré : le portrait n'est **pas au centre du cercle**. Sur
+> décision du propriétaire, la mission « écran Vocal » du 2026-10-30 est **annulée** — le
+> personnage est **en haut à droite de l'écran**, dans la colonne de droite, **au-dessus**
+> de la liste, et le **disque ne porte ni image ni nom**. Fait foi :
+> `spec_modes_ecran_vocal.md` § 3ter et § 4ter, et l'encadré de tête de l'**AVENANT** de
+> `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md`. Ce qui suit reste un
+> **témoignage daté** : à lire pour l'histoire des décisions, pas pour décrire le code.
+
+
+
 Date : 2026-10-30 · Projet : `G:\IA_PL\pilot`
 Demande du propriétaire : *« tout masquer d'un geste, sauf le portrait »* —
 décision 9 du 2026-10-29, section 6 de

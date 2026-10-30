@@ -1,10 +1,19 @@
 # CONCEPTION — Écran Vocal : les tâches en haut à droite, le portrait en bas
 
-> **PÉRIMÉ SUR TROIS POINTS (mission « écran Vocal », 2026-11)** : le portrait n'est plus
-> dans la colonne (il est au **centre du cercle**, son nom juste dessous), la **ligne
+> **RÉVISION DU 2026-10-31 — le portrait est REVENU en haut de la colonne, au-dessus des
+> tâches.** Ce document reste **exact** sur son objet propre : la colonne de droite
+> (`columnHeight` / `listHeight`, budget, tableaux), la liste qui ne défile pas et les huit
+> lignes au plus. Ce qui a changé, et qui **prime ici** : le portrait n'est **pas** au centre
+> du cercle — il est le **premier contenu de la colonne de droite, en haut à droite de
+> l'écran**, dans un bloc de **98 px** (72 px de médaillon + 6 px d'écart + 20 px de nom),
+> **au-dessus** de la liste. La **ligne d'activité n'existe toujours pas** et la colonne des
+> tâches **s'arrête toujours avant la couronne** du disque. Le document qui fait foi pour
+> l'ensemble est `CONCEPTION-ecran-vocal-portrait-et-colonnes.md` (encadré de tête de son
+> **AVENANT**) et `spec_modes_ecran_vocal.md` § 3ter.
+>
+> **PÉRIMÉ SUR DEUX POINTS (mission « écran Vocal », 2026-11)** : la **ligne
 > d'activité n'existe plus**, et la colonne des tâches **s'arrête avant la couronne** du
-> disque. Le document qui fait foi est l'**AVENANT** de
-> `CONCEPTION-ecran-vocal-portrait-et-colonnes.md` ; ce qui suit reste utile pour le
+> disque. Ce qui suit reste utile pour le
 > budget de la colonne et ses tableaux, mais ne décrit plus le code.
 
 > **Nature** : conception UI/UX, écrite pour être appliquée sans interprétation.

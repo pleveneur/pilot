@@ -246,17 +246,19 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
       "vocal-top",
       "vocal-stage",
       "vocal-orb",
-      // Mission « ecran Vocal » : le portrait est au CENTRE DU DISQUE, premier
-      // enfant de `.vocal-orb` — donc avant le halo et le bouton de relance.
-      "vocal-portrait",
+      // Correction du 2026-10-31 : le portrait a QUITTE le disque, qui ne porte
+      // plus rien (ni image ni nom). Il vit en haut de la colonne de droite, et
+      // la liste des taches vient dessous.
       "vocal-halo",
       "vocal-restart",
       "vocal-mic-fix",
       // LOT 1 (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.1) : les deux
-      // colonnes laterales et leur conteneur de liste. Le personnage n'est plus
-      // ici (il est dans le disque) et le nom est cree apres le modele.
+      // colonnes laterales et leur conteneur de liste. Le portrait est le
+      // PREMIER contenu de la colonne des taches (au-dessus de la liste) et le
+      // nom du personnage est cree APRES le modele, sous son image.
       "vocal-side-discussion",
       "vocal-side-tasks",
+      "vocal-portrait",
       "vocal-side-body",
       "vocal-status",
       "vocal-input",

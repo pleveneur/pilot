@@ -1,5 +1,16 @@
 # Rapport — mission « écran Vocal » : la présentation
 
+> **⚠️ PÉRIMÉ SUR UN POINT — correction du 2026-10-31.** Ce rapport décrit un état du
+> code qui n'est plus le code livré : le portrait n'est **pas au centre du cercle**. Sur
+> décision du propriétaire, la mission « écran Vocal » du 2026-10-30 est **annulée** — le
+> personnage est **en haut à droite de l'écran**, dans la colonne de droite, **au-dessus**
+> de la liste, et le **disque ne porte ni image ni nom**. Fait foi :
+> `spec_modes_ecran_vocal.md` § 3ter et § 4ter, et l'encadré de tête de l'**AVENANT** de
+> `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md`. Ce qui suit reste un
+> **témoignage daté** : à lire pour l'histoire des décisions, pas pour décrire le code.
+
+
+
 > **Nature** : rapport de mission (code livré, tests, documentation).
 > **Périmètre** : quatre ajustements de **présentation** de l'écran Vocal, décidés par le
 > propriétaire à l'oral, exécutés après la mission « zone d'image ».

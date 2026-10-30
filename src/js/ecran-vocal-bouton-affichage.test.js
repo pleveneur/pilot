@@ -266,7 +266,17 @@ describe("4. les trois etats du bouton : libelle, icone, aria-pressed", () => {
     expect(bouton).toContain("vocalBareLabel(false)");
     expect(bouton).toContain("vocalBarePressed(false)");
     expect(bouton).toContain("vocalBareIcon(false)");
-    expect(bouton).toContain("setIcon(bouton, vocalBareIcon(false), { size: \"icon-sm\" })");
+    expect(bouton).toContain("vocalBareText(false)");
+    // L'icone est posee dans SON noeud (`.vocal-display-toggle-icon`) : `setIcon`
+    // ecrit `innerHTML`, donc jamais sur le bouton — il emporterait le texte
+    // visible et le noeud du clic avec lui.
+    expect(bouton).toContain('setIcon(icone, vocalBareIcon(false), { size: "icon-sm" })');
+    expect(bouton).toContain('icone.className = "vocal-display-toggle-icon"');
+    expect(bouton).toContain("bouton.appendChild(icone)");
+    // Le TEXTE aussi a son noeud, et il est ecrit des la construction.
+    expect(bouton).toContain('texte.className = "vocal-display-toggle-label"');
+    expect(bouton).toContain("texte.textContent = vocalBareText(false)");
+    expect(bouton).toContain("bouton.appendChild(texte)");
     // Le `title` ET l'`aria-label` portent la MEME phrase.
     expect(bouton).toContain('bouton.setAttribute("title", vocalBareLabel(false))');
     expect(bouton).toContain('bouton.setAttribute("aria-label", vocalBareLabel(false))');
@@ -299,6 +309,16 @@ describe("4. les trois etats du bouton : libelle, icone, aria-pressed", () => {
     expect(sync).toContain("bouton.dataset.vocalBareIcon !== icone");
   });
 
+  it("le TEXTE suit l'etat, lui aussi sans clignoter", () => {
+    const sync = corpsSyncBare();
+    expect(sync).toContain("vocalBareText(vocalBare)");
+    expect(sync).toContain('.vocal-display-toggle-label');
+    // Meme regle que le reste : on n'ecrit que si la phrase change.
+    expect(sync).toContain("texte.textContent !== mot");
+    // Et l'icone est peinte dans SON noeud, jamais sur le bouton.
+    expect(sync).toContain('.vocal-display-toggle-icon');
+  });
+
   it("`vocalSyncBare` rend la main au point d'ecriture du bas", () => {
     const sync = corpsSyncBare();
     expect(sync).toContain("vocalSyncChrome();");
@@ -315,14 +335,30 @@ describe("4. les trois etats du bouton : libelle, icone, aria-pressed", () => {
 });
 
 describe("5. la taille du bouton ne change pas d'un etat a l'autre", () => {
-  it("28 x 24 px, icone seule de 14 px (`icon-sm`), rayon pastille", () => {
+  it("190 x 28 px pour l'icone ET son texte, rayon pastille, largeur qui couvre les deux", () => {
     const bouton = blocBouton();
-    expect(bouton).toMatch(/width:\s*28px/);
-    expect(bouton).toMatch(/height:\s*24px/);
+    // CORRECTIF DU 2026-10-31 : le proprietaire ne TROUVAIT pas le bouton. Il
+    // porte donc son texte en clair, dans les deux etats — et sa largeur est
+    // couverte par le plus long des deux (`min-width`), pour que le point de clic
+    // ne bouge pas sous le doigt.
+    expect(bouton).toMatch(/min-width:\s*190px/);
+    expect(bouton).toMatch(/height:\s*28px/);
     expect(bouton).toMatch(/border-radius:\s*999px/);
+    expect(bouton).toMatch(/gap:\s*6px/);
+    expect(bouton).toMatch(/white-space:\s*nowrap/);
     expect(blocException()).not.toMatch(/(^|[;\s])width\s*:/);
+    expect(blocException()).not.toMatch(/(^|[;\s])min-width\s*:/);
     expect(blocException()).not.toMatch(/(^|[;\s])height\s*:/);
     expect(blocException()).not.toMatch(/(^|[;\s])padding\s*:/);
+  });
+
+  it("le texte est sur UNE ligne, et l'icone a son propre noeud", () => {
+    const label = sliceSource(CSS, ".vocal-display-toggle-label {", "}", 10);
+    expect(label).toMatch(/white-space:\s*nowrap/);
+    expect(label).toMatch(/text-overflow:\s*ellipsis/);
+    const icone = sliceSource(CSS, ".vocal-display-toggle-icon {", "}", 10);
+    expect(icone).toMatch(/display:\s*inline-flex/);
+    expect(icone).toMatch(/flex:\s*0 0 auto/);
   });
 
   it("il ne prend JAMAIS une couleur d'etat `--vocal-*` : ce n'est pas la voix", () => {
