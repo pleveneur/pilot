@@ -19,6 +19,8 @@
 //   1. aucun selecteur du masque n'atteint le portrait NI son nom, ancetres
 //      compris (le controle de l'autre sens prouve que le verificateur n'est pas
 //      complaisant : les noeuds qui DOIVENT s'eteindre sont bien atteints) ;
+//      la ZONE DE SAISIE obeit a la meme regle depuis le 2026-11-01, et son
+//      controle est pose en negatif dans le meme bloc ;
 //   2. le portrait est un enfant DIRECT de la colonne de droite — jamais du disque
 //      (defaut du 2026-10-31) et jamais de `.vocal-side-body`, dont le contenu est
 //      reecrit (`innerHTML`) a chaque tic de 900 ms : la, il serait DETRUIT, pas
@@ -41,7 +43,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 // Decoupage verifie : une ancre absente LEVE au lieu de rendre un fragment vide
 // (quality-gate §3.4 : la source est normalisee en LF avant lecture).
-import { sliceSource } from "./source-slice.js";
+// `neutraliserSource` retire commentaires et litteraux : un commentaire qui
+// CITE un selecteur n'est pas une regle, et ne doit donc pas etre compte.
+import { sliceSource, neutraliserSource } from "./source-slice.js";
 import {
   VOCAL_BARE_CLASS,
   normalizeVocalBare,
@@ -166,13 +170,31 @@ function eteintPar(selecteurs, chaine) {
 // 2. Les selecteurs du masque, lus dans la feuille de style.
 // ---------------------------------------------------------------------------
 
-/** Le bloc d'effacement de l'etat nu, selecteurs seuls (sans son corps). */
+/**
+ * Le bloc d'effacement de l'etat nu, selecteurs seuls (sans son corps).
+ *
+ * REEVISION DU 2026-11-01, avec sa raison : l'ancre de fin etait
+ * `.pilot-vocal.vocal-bare .vocal-input {` — la regle qui eteignait la ZONE DE
+ * SAISIE a part. Cette regle a ete RETIREE : le bouton de masquage ne concerne
+ * pas la zone sous le cercle (champ de texte, bouton de dictee, rangee de
+ * questions), qui reste affichee et utilisable dans les deux etats. L'ancre
+ * disparaissait avec elle. La fin du bloc est desormais la regle SUIVANTE
+ * (`.vocal-top`), qui ne peut pas disparaitre : la barre du haut porte le
+ * bouton de masquage lui-meme.
+ *
+ * Les COMMENTAIRES sont neutralises : ce fragment en contient un long, ecrit
+ * pour dire ce que le bloc ne touche PAS ; il cite donc `display: none`,
+ * « portrait » et `.vocal-input`. Ce qui compte est la REGLE, pas la phrase qui
+ * explique pourquoi il n'y en a pas.
+ */
 const blocEffacement = () =>
-  sliceSource(
-    CSS,
-    ".pilot-vocal.vocal-bare .vocal-orb,",
-    ".pilot-vocal.vocal-bare .vocal-input {",
-    200,
+  neutraliserSource(
+    sliceSource(
+      CSS,
+      ".pilot-vocal.vocal-bare .vocal-orb,",
+      ".pilot-vocal.vocal-bare .vocal-top {",
+      200,
+    ),
   );
 
 const selecteursEffacement = () =>
@@ -182,19 +204,8 @@ const selecteursEffacement = () =>
     .map((s) => s.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
-/** La regle de la saisie, ecrite a part (meme etat, meme extinction). */
-const selecteurSaisie = () =>
-  sliceSource(
-    CSS,
-    ".pilot-vocal.vocal-bare .vocal-input {",
-    ".pilot-vocal.vocal-bare .vocal-top {",
-    60,
-  )
-    .split("{")[0]
-    .replace(/\s+/g, " ")
-    .trim();
-
-const TOUS_LES_SELECTEURS = () => [...selecteursEffacement(), selecteurSaisie()];
+// Un SEUL ensemble : la zone de saisie n'a plus de regle a elle.
+const TOUS_LES_SELECTEURS = () => selecteursEffacement();
 
 // ---------------------------------------------------------------------------
 // 3. L'arbre reel de l'ecran, lu dans le modele de `buildVocalOverlay`.
@@ -273,14 +284,17 @@ describe("1. ce que le masque atteint — et ce qu'il n'atteint JAMAIS (defaut d
     // vide) ferait passer les deux tests precedents en ne verifiant rien.
     const selecteurs = TOUS_LES_SELECTEURS();
     const colonne = chaineDe("vocal-portrait").slice(0, -1); // jusqu'a la colonne
-    // Le disque, la ligne d'etat, la colonne de gauche, le titre, la liste, la
-    // saisie : tous nommes, tous atteints.
+    // Le disque, la ligne d'etat, la colonne de gauche, le titre, la liste :
+    // tous nommes, tous atteints. LA ZONE DE SAISIE N'EST PLUS DANS CETTE LISTE
+    // (revision du 2026-11-01, avec sa raison : elle y figurait parce qu'une
+    // regle dediee l'eteignait ; cette regle est retiree, le bouton ne la
+    // concerne pas). Son controle est passe en NEGATIF juste apres — il n'est
+    // donc pas supprime, il change de sens.
     const attendus = [
       noeud("div", ["vocal-orb"]),
       noeud("div", ["vocal-status"]),
       noeud("aside", ["vocal-side-discussion", "vocal-side"]),
       noeud("div", ["vocal-side-body"]),
-      noeud("div", ["vocal-input"]),
     ];
     for (const el of attendus) {
       expect(
@@ -292,6 +306,14 @@ describe("1. ce que le masque atteint — et ce qu'il n'atteint JAMAIS (defaut d
     expect(
       eteintPar(selecteurs, [...colonne, noeud("div", ["vocal-tasks-title"])]).length,
     ).toBeGreaterThan(0);
+    // LE PENDANT NEGATIF (revision du 2026-11-01) : la zone de saisie — le
+    // champ de texte, le bouton de dictee et la rangee de questions qu'elle
+    // porte — n'est atteinte par AUCUN selecteur du masque. Le verificateur
+    // continue donc de trancher dans les deux sens.
+    expect(
+      eteintPar(selecteurs, [...colonne, noeud("div", ["vocal-input"])]),
+      "l'etat nu ne doit jamais atteindre la zone de saisie",
+    ).toEqual([]);
   });
 
   it("le verificateur reproduit le defaut : portrait DANS le disque = eteint", () => {

@@ -454,15 +454,16 @@ ce qui est affiché.
 
 **Tout masquer d'un geste, tout remettre du même geste** : dans l'écran Vocal, un
 petit **bouton-œil**, au centre du bandeau du haut, efface en un clic **tout ce que
-l'écran affiche sauf le portrait** — le cercle et sa lumière, la phrase d'état, la
-barre de saisie, les deux colonnes — puis remet tout en place d'un second clic. Son
+l'écran affiche sauf le portrait du personnage et son nom** — le cercle et sa
+lumières, la phrase d'état, les deux colonnes — puis remet tout en place d'un second
+clic. La **zone de saisie sous le cercle** n'est pas concernée : le champ de texte et
+le bouton de dictée restent **affichés et utilisables** dans les deux états. Son
 infobulle dit **l'état d'abord, l'action ensuite** : « **tout est visible — cliquer
 pour ne garder que le portrait** », puis « **tout est masqué — cliquer pour tout
 réafficher** ». Masqué n'est pas perdu : **rien ne bouge**, l'espace reste réservé,
-le bouton reste le seul élément visible — donc le seul moyen de revenir —, et le
-logo, `Échap` et la fermeture de l'onglet continuent de fonctionner. Sans
-personnage, il ne reste que le bouton. Aucune mémoire : on entre **toujours** avec
-tout visible, et l'état tombe en quittant le mode.
+et le logo, `Échap` et la fermeture de l'onglet continuent de fonctionner. Sans
+personnage, il ne reste que le bouton et la zone de saisie. Aucune mémoire : on entre
+**toujours** avec tout visible, et l'état tombe en quittant le mode.
 
 Sur l'écran **Vocal**, le bouton **« Travail »** est là lui aussi : **tout en
 haut, juste à gauche des boutons de la fenêtre**. C'est **le même bouton** que

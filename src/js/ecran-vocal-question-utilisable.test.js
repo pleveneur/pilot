@@ -41,7 +41,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 // Decoupage VERIFIE : une ancre absente LEVE (quality-gate §3.4).
-import { sliceSource } from "./source-slice.js";
+import { sliceSource, neutraliserSource } from "./source-slice.js";
 import {
   decideVocalQuestionFocus,
   planVocalQuestionFocus,
@@ -302,9 +302,16 @@ describe("4. la saisie et ses boutons sont DEVANT la scene (aucun clic avale)", 
 
   it("le seul `pointer-events: none` qui touche la saisie est celui de l'effacement", () => {
     // Hors effacement du bas, rien ne desactive le clic dans la zone de saisie.
-    // Recherche par REGLE (selecteur + corps), pas par fragment de fichier : un
-    // commentaire voisin ne peut donc pas fausser le compte.
-    const regles = CSS.match(/[^{}]+\{[^}]*pointer-events:\s*none[^}]*\}/g) || [];
+    // Recherche par REGLE (selecteur + corps).
+    //
+    // CORRECTION DU 2026-11-01 : la phrase precedente affirmait qu'« un
+    // commentaire voisin ne peut donc pas fausser le compte » — c'etait faux. Le
+    // motif `[^{}]+` qui precede l'accolade ouvrante avale le commentaire place
+    // JUSTE AVANT la regle, et les commentaires n'ont pas d'accolade. Le
+    // commentaire du bloc de l'etat nu, qui explique que la zone de saisie n'y
+    // est PAS nommee, la nommait donc en clair et comptait pour une seconde
+    // regle. On neutralise les commentaires AVANT de compter.
+    const regles = neutraliserSource(CSS).match(/[^{}]+\{[^}]*pointer-events:\s*none[^}]*\}/g) || [];
     const surSaisie = regles.filter((r) => r.split("{")[0].includes(".vocal-input"));
     expect(surSaisie).toHaveLength(1);
     expect(surSaisie[0]).toContain("vocal-chrome-hidden");

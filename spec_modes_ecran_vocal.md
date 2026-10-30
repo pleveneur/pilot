@@ -115,8 +115,8 @@ retour de la conversation sur cet écran est interdit par un test dédié
 (`src/js/ecran-vocal-nu.test.js`).
 
 Depuis le 2026-10-29, l'écran peut **en plus** être réduit au seul personnage
-d'un clic : l'écran nu décrit ici est le **maximum** de ce que l'écran affiche,
-pas son minimum (voir §4ter).
+d'un clic — avec son nom, le bouton et la zone de saisie (§4ter) : l'écran nu
+décrit ici est le **maximum** de ce que l'écran affiche, pas son minimum.
 
 1. **Barre de 44 px**, juste **sous** la bande des trois boutons de fenêtre
    (`margin-top: var(--window-controls-height)`) : elle ne porte **rien** — c'est
@@ -161,7 +161,7 @@ pas son minimum (voir §4ter).
    dictée 🎙️), 720 px au plus, centrée, 16 px de marge basse, sans filet ni fond
    pleine largeur, plafonnée à **120 px** de haut (au lieu de 200 px dans l'onglet).
    Son texte d'invite y devient **« Écrivez, ou parlez. »** et il est restitué tel
-   quel à la sortie.
+   quel à la sortie. L'**état nu ne l'efface jamais** (§4ter, 2026-11-01).
 5. **Un bouton de dépannage, caché par défaut** : « Autoriser le micro »
    (`.vocal-mic-fix`), qui n'apparaît que si le micro est fermé.
 
@@ -180,7 +180,8 @@ reste **sous** eux, la fenêtre reste fermable et déplaçable, et le panneau ne
 recouvre ni la ligne d'état ni la zone de saisie. Ni le disque, ni la ligne
 d'état, ni la barre de saisie, ni le bouton de relance ne bougent.
 
-Dans l'**état nu** (§4ter : tout masqué, sauf le portrait du personnage en haut à droite),
+Dans l'**état nu** (§4ter : tout masqué, sauf le portrait du personnage en haut à droite,
+son nom, le bouton et la zone de saisie),
 il faut le dire net :
 **Rien de la conversation n'est affiché** sur cet écran — ni les messages, ni les
 outils, ni un résumé des derniers échanges. Le suivi des agents y est **joignable sur
@@ -462,6 +463,8 @@ changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni i
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
 au moindre mouvement de la souris : on parle à Pilot sans qu'une barre reste sous les yeux.
+Elle ne s'efface **jamais** pendant que tout est masqué : ce qui reste à l'écran doit rester
+utilisable.
 
 Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les
@@ -470,8 +473,10 @@ les seuls endroits cliquables de l'écran.
 
 **Tout masquer d'un geste, tout remettre du même geste.** Le **bouton-œil** décrit plus
 haut (« Trois modes d'écran ») emporte aussi **les deux colonnes** : un clic les range,
-un clic les remet, sans un pixel de déplacement — l'espace reste réservé et le portrait
-ne bouge pas. Aucune mémoire : on entre **toujours** avec tout visible.
+un clic les remet, sans un pixel de déplacement — l'espace reste réservé, et **le
+portrait et son nom ne bougent pas**. La **barre de saisie**, elle, n'est pas concernée :
+elle reste affichée et utilisable, même quand tout le reste est masqué. Aucune mémoire :
+on entre **toujours** avec tout visible.
 <!-- /HELP:vocal-colonnes-portrait -->
 
 ---
@@ -750,19 +755,22 @@ puis remis** par un petit bouton discret. C'est un geste, pas un réglage : rien
 mémoriser, rien à configurer. Le 2026-10-29, le portrait, alors dans la colonne,
 restait visible ; il est **revenu dans cette colonne le 2026-10-31** (en haut à
 droite, §3ter), donc l'exception de 2026-10-29 **vaut de nouveau, telle quelle** :
-le portrait et son nom restent seuls à l'écran, le bouton demeure.
+le portrait et son nom restent à l'écran, le bouton demeure, la zone de saisie
+aussi (2026-11-01).
 
 **Ce qui se masque — ensemble, d'un seul clic.** Le disque et ce qu'il porte
 (enveloppe de parole, arc de réflexion, couronne, bouton « Réveiller <Nom> »), la
-ligne d'état, la barre de saisie, le bouton « Autoriser le micro », les deux
-colonnes de l'écran (§3ter) — et le fond et le filet de la barre du haut, qui
-redevient une simple bande. **Un seul état, pas de masquage séparé** (ni les
-colonnes seules, ni le bas seul) : deux interrupteurs voisins seraient un
-réglage déguisé, et le bas a déjà son effacement automatique (§4bis).
+ligne d'état, le bouton « Autoriser le micro », les deux colonnes de l'écran
+(§3ter) — et le fond et le filet de la barre du haut, qui redevient une simple
+bande. **Un seul état, pas de masquage séparé** (ni les colonnes seules, ni le
+bas seul) : deux interrupteurs voisins seraient un réglage déguisé, et le bas a
+déjà son effacement automatique (§4bis).
 
 **Ce qui reste, toujours.** Le **bouton d'affichage**, seul moyen de tout
-réafficher — et avec lui le **portrait du personnage et son nom** (décision du
-2026-10-29, rétablie le 2026-10-31 avec le retour du portrait dans la colonne).
+réafficher — le **portrait du personnage et son nom** (décision du 2026-10-29,
+rétablie le 2026-10-31 avec le retour du portrait dans la colonne) — et la **zone
+de saisie sous le cercle**, champ de texte et bouton de dictée compris (précision
+du propriétaire, 2026-11-01 : le bouton ne la concerne pas).
 
 > **Révision (correction du 2026-10-31) — le portrait a quitté le cercle.** La
 > mission « écran Vocal » du 2026-10-30 avait transporté le personnage **au centre
@@ -804,6 +812,18 @@ n'atteint le portrait ni son nom (ancêtres compris), avec le contrôle inverse
 l'écran de départ, que le bouton reste atteignable dans les deux états, et que la
 garde d'entrée est présente. Le même calcul, appliqué à l'arbre du 2026-10-31 au
 matin, désigne `.vocal-orb` : le verrou sait donc reconnaître le défaut.
+`src/js/ecran-vocal-la-saisie-nest-jamais-masquee.test.js` est un **second
+vérificateur, indépendant** : il ne découpe rien dans le CSS, il lit les règles
+(sélecteur + corps, commentaires neutralisés) et les confronte à l'arbre réel,
+puis rejoue le défaut pour prouver qu'il le voit. Portée : le portrait, son nom,
+le bouton (rallumé explicitement) et la zone de saisie (§ ci-dessous).
+
+**Le disque reste UNE pièce nommée.** L'anneau, la couronne, l'enveloppe de parole
+et l'arc ne sont pas nommés séparément : le portrait n'habite plus le disque, il
+n'y a donc rien à dégager par le menu, et sept sélecteurs à la place d'un seul
+laisseraient craindre qu'une pièce oubliée reste allumée — un état nu à deux
+vitesses. Ce qui protège le portrait n'est pas la longueur de la liste, c'est sa
+**place dans l'arbre**, et c'est elle que les deux verrous mesurent.
 
 Et, au-dessus de l'overlay, les **trois sorties** (le logo, `Échap`, la fermeture
 de l'onglet) et le bouton **« Travail »** : l'état nu ne les touche pas. Sans
@@ -848,9 +868,20 @@ le bloc, ni par lui ni par sa légende : on ne peut pas masquer ce qu'on n'a pas
 s'éteint d'un coup se lit comme un bug, pas comme un geste — il dit qu'une chose
 vient de se ranger du regard, pas que l'affichage a sauté.
 
-**Le bas qui s'efface et l'état nu.** `vocalSyncChrome` ne rallume plus le bas
-quand l'état nu est posé (un seul terme ajouté, à un seul endroit) : sinon bouger
-la souris ferait revenir la saisie dans un écran qu'on vient de vider.
+**La zone de saisie n'est pas dans le périmètre** (précision du propriétaire,
+2026-11-01). Le bouton masque la mise en scène **autour** du visage ; la zone sous
+le cercle — le champ de texte, le bouton de dictée, la rangée de questions qu'elle
+porte — reste **affichée et utilisable dans les deux états**. Sa règle
+d'effacement dédiée (`.pilot-vocal.vocal-bare .vocal-input`) a donc été **retirée**
+: l'absence de règle est la plus sûre des exceptions. Corollaire tenu par le code :
+`vocalSyncChrome` **retient le bas allumé** tant que l'état nu est posé
+(`const visible = vocalBare || …`), sinon la zone tomberait au bout de 2,5 s par
+`.vocal-chrome-hidden` (§4bis) et le bouton aurait l'air de vider la saisie aussi.
+Le minuteur continue de tourner sans effet : on ne le relance pas à la main,
+sinon l'écran se rallumerait sans geste.
+
+**Le bas qui s'efface et l'état nu.** `vocalSyncChrome` ne peut plus éteindre le
+bas quand l'état nu est posé (un seul terme changé, à un seul endroit).
 `vocal-chrome.js` ne change pas d'une ligne, et son dernier appel dans
 `applyVocalState` reste `vocalSyncRestartButton`.
 
@@ -860,10 +891,11 @@ d'une réponse, lecture) et **tombe** à la sortie du mode. Ni `localStorage`, n
 fichier, ni case à cocher.
 
 **Aucun clic avalé.** `.pilot-vocal` reste `pointer-events: none` ; un nœud
-masqué ne reçoit rien ; le bouton est le seul nœud de la scène à garder un
-pointeur. Vérifié à l'œil (§8) et par deux tests
+masqué ne reçoit rien ; le bouton et la zone de saisie sont les seuls nœuds de la
+scène à garder un pointeur. Vérifié à l'œil (§8) et par trois tests
 (`src/js/ecran-vocal-bouton-affichage.test.js` pour le geste et la place,
-`src/js/ecran-vocal-masquage-garde-le-portrait.test.js` pour ce que le masque
+`src/js/ecran-vocal-masquage-garde-le-portrait.test.js` et
+`src/js/ecran-vocal-la-saisie-nest-jamais-masquee.test.js` pour ce que le masque
 n'atteint jamais).
 
 Détail complet — inventaire nœud par nœud, chiffres de la bande, tableau des
@@ -1470,7 +1502,7 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
 | `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les quatre règles **dans l'ordre**), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
-| ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône ET texte visible** (« Ne garder que le portrait » / « Tout réafficher », `vocalBareText()`), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed`, l'infobulle et le texte), le terme `!vocalBare` dans `vocalSyncChrome`, la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
+| ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône ET texte visible** (« Ne garder que le portrait » / « Tout réafficher », `vocalBareText()`), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed`, l'infobulle et le texte), le terme `vocalBare ||` dans `vocalSyncChrome` (le bas est **retenu allumé**, il n'est plus éteint par l'état nu : la zone de saisie n'est pas dans le périmètre, 2026-11-01), la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 

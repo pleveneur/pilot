@@ -12637,10 +12637,16 @@ body.pilot-vocal-active #agent-activity {
    personnage et son nom (`.vocal-portrait`, `.vocal-portrait-name`) — la
    decision est « tout masquer SAUF le portrait » (2026-10-31 : l'image est
    revenue en haut a droite de l'ecran avec son nom sous elle, et elle reste la
-   seule chose visible) — et la zone d'image (`.vocal-image-zone`, dont la
-   hauteur reservee ne doit pas bouger) — la regle la plus sure est l'absence de
-   regle ; le logo (une sortie), l'entree « Travail » (un acces) et les trois
-   boutons systeme (hors de l'overlay).
+   seule chose visible) —, LA ZONE DE SAISIE SOUS LE CERCLE (`.vocal-input`) et
+   la zone d'image (`.vocal-image-zone`, dont la hauteur reservee ne doit pas
+   bouger) — la regle la plus sure est l'absence de regle ; le logo (une sortie),
+   l'entree « Travail » (un acces) et les trois boutons systeme (hors de
+   l'overlay).
+   PERIMETRE EXACT (precision du proprietaire, 2026-11-01) : ce bouton masque les
+   panneaux lateraux et la MISE EN SCENE autour du visage (colonnes, disque et
+   halo, ceinture du haut) — JAMAIS la zone de saisie : elle reste affichee et
+   utilisable dans les deux etats, avec son texte, son bouton de dictee et la
+   rangee de questions qu'elle porte. Le bouton ne la concerne pas.
    SANS PERSONNAGE, il ne reste que le bouton : le disque s'eteint comme le
    reste, il ne demeure pas pour lui tenir compagnie. */
 .pilot-vocal.vocal-bare .vocal-orb,
@@ -12654,19 +12660,18 @@ body.pilot-vocal-active #agent-activity {
   pointer-events: none;
   transition: opacity var(--transition), visibility 0s linear 180ms;
 }
-/* LA SAISIE, ecrite a part — seule exception du bloc, et elle est MESUREE. Son
-   clic et son curseur sont deja coupes a la meme seconde par l'effacement du bas
-   (`.vocal-chrome-hidden`, que `vocalSyncChrome` pose, et qui contient desormais
-   `!vocalBare` dans sa condition). Redire ici `pointer-events: none` nommerait la
-   zone de saisie deux fois : le verrou de l'issue #381
-   (`ecran-vocal-question-utilisable.test.js`) n'admet QU'UNE regle de ce genre sur
-   la saisie, celle de l'effacement du bas. La forme ci-dessous suffit : invisible,
-   donc inerte au clic comme au clavier. */
-.pilot-vocal.vocal-bare .vocal-input {
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity var(--transition), visibility 0s linear 180ms;
-}
+/* LA ZONE DE SAISIE N'EST PAS ICI, ET N'Y ENTRE JAMAIS (precision du
+   proprietaire, 2026-11-01). Elle etait nommee a part par une regle
+   `opacity: 0 / visibility: hidden` : c'etait une erreur de perimetre. La zone
+   sous le cercle — le champ de texte, le bouton de dictee, la rangee de
+   questions qu'elle porte — est INDEPENDANTE de ce bouton : elle ne le concerne
+   pas, il ne la masque pas, ne la deplace pas, ne la recompose pas. Aucune
+   regle de ce bloc ne doit donc ecrire `.vocal-input` (ni un de ses enfants) :
+   c'est l'absence de regle qui la laisse allumee, exactement comme pour le
+   portrait. Corollaire tenu par le code : `vocalSyncChrome` ne peut plus
+   eteindre le bas quand l'etat nu est pose (`vocalBare` ALLUME le bas, il ne
+   l'eteint plus), sinon la zone tomberait par `.vocal-chrome-hidden` au bout de
+   2,5 s. Verrou : `ecran-vocal-la-saisie-nest-jamais-masquee.test.js`. */
 /* La barre garde sa place et sa hauteur (elle porte le bouton) : elle perd son
    fond et son filet, et n'est plus une barre. */
 .pilot-vocal.vocal-bare .vocal-top {

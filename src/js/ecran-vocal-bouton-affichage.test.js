@@ -18,11 +18,12 @@
 //   5. le bouton n'est JAMAIS `hidden` ni `disabled`, meme quand les colonnes ne
 //      tiennent pas dans la fenetre ;
 //   6. le bloc `vocal-bare` ne nomme NI `.vocal-portrait` NI `.vocal-portrait-name` ;
-//   7. il nomme bien le disque, le bouton du micro, la ligne d'etat, la saisie et
-//      les deux colonnes ;
+//   7. il nomme bien le disque, le bouton du micro, la ligne d'etat et les deux
+//      colonnes — et JAMAIS la zone de saisie, qui reste affichee et utilisable
+//      dans les deux etats (precision du proprietaire, 2026-11-01) ;
 //   8. il ne contient ni `display: none`, ni regle de hauteur, de marge, de
 //      padding ou de position ;
-//   9. `vocalSyncChrome` contient `!vocalBare &&` ;
+//   9. `vocalSyncChrome` RETIENT le bas allume quand l'etat nu est pose ;
 //  10. `enterVocal()` remet le booleen a « tout visible » AVANT `vocalSyncSides()` ;
 //  11. le code du bouton ne contient ni `localStorage`, ni `invoke`, ni `fetch`.
 //
@@ -91,15 +92,17 @@ const blocEffacement = () =>
   sliceSource(
     CSS,
     ".pilot-vocal.vocal-bare .vocal-orb,",
-    ".pilot-vocal.vocal-bare .vocal-input {",
+    ".pilot-vocal.vocal-bare .vocal-top {",
     200,
   );
-const blocSaisie = () =>
+// La SECTION ENTIERE de l'etat nu, du premier selecteur au bloc de mouvement
+// reduit : c'est elle qui doit rester vierge du nom de la zone de saisie.
+const sectionNue = () =>
   sliceSource(
     CSS,
-    ".pilot-vocal.vocal-bare .vocal-input {",
-    ".pilot-vocal.vocal-bare .vocal-top {",
-    60,
+    ".pilot-vocal.vocal-bare .vocal-orb,",
+    "/* --- §4.2/§4.3 Mouvement reduit",
+    500,
   );
 const blocException = () =>
   sliceSource(
@@ -394,11 +397,13 @@ describe("6. l'etat masque : une seule classe, un seul ecrivain", () => {
     expect(sync).not.toContain("requestAnimationFrame");
   });
 
-  it("`vocalSyncChrome` tient compte de l'etat nu : `!vocalBare &&`", () => {
+  it("`vocalSyncChrome` RETIENT le bas allume quand l'etat nu est pose", () => {
+    // PRECISION DU 2026-11-01 : la zone de saisie ne depend pas de ce bouton.
+    // La condition de visibilite du bas commence donc par `vocalBare ||` (l'etat
+    // nu ALLUME le bas) et n'admet plus l'ancienne garde qui l'eteignait.
     const chrome = corpsSyncChrome();
-    expect(chrome).toContain("!vocalBare &&");
-    // C'est bien la condition de VISIBILITE du bas qui est gardee.
-    expect(chrome).toContain("const visible = !vocalBare &&");
+    expect(chrome).toContain("const visible = vocalBare ||");
+    expect(chrome).not.toContain("!vocalBare");
   });
 
   it("on entre TOUJOURS avec tout visible, et rien ne survit a la sortie", () => {
@@ -431,7 +436,7 @@ describe("6. l'etat masque : une seule classe, un seul ecrivain", () => {
 });
 
 describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
-  it("le bloc nomme le disque, le micro, la ligne d'etat, la saisie, les deux colonnes", () => {
+  it("le bloc nomme le disque, le micro, la ligne d'etat et les deux colonnes", () => {
     const effacement = blocEffacement();
     for (const noeud of [
       ".vocal-orb",
@@ -442,10 +447,14 @@ describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
     ]) {
       expect(effacement).toContain(noeud);
     }
-    // La saisie est ecrite A PART (une regle a elle) : son clic et son curseur
-    // sont deja coupes par l'effacement du bas.
-    expect(blocSaisie()).toMatch(/opacity:\s*0/);
-    expect(blocSaisie()).toMatch(/visibility:\s*hidden/);
+    // LA ZONE DE SAISIE N'EST PAS LA (precision du 2026-11-01) : elle reste
+    // affichee et utilisable dans les deux etats, texte et micro compris. Une
+    // regle d'effacement qui la nomme fait echouer ce test et le verrou dedie
+    // `ecran-vocal-la-saisie-nest-jamais-masquee.test.js`. Les COMMENTAIRES sont
+    // neutralises : c'est la REGLE qui compte, pas la phrase qui explique
+    // pourquoi il n'y en a pas.
+    expect(neutraliserSource(effacement)).not.toContain(".vocal-input");
+    expect(neutraliserSource(sectionNue())).not.toContain(".vocal-input");
     // La colonne des taches se vide de son CONTENU (titre, liste) : elle ne peut
     // pas etre eteinte en bloc, la ZONE D'IMAGE y vit et sa hauteur reservee ne
     // doit pas bouger.
@@ -460,19 +469,37 @@ describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
   });
 
   it("le clic sur la saisie n'est coupe que par l'effacement du bas (verrou #381)", () => {
-    // `pointer-events: none` est deja pose sur `.vocal-input` par
-    // `.vocal-chrome-hidden`, dont la condition contient desormais `!vocalBare` :
-    // l'etat nu n'a pas besoin d'une SECONDE regle, et n'en ajoute pas.
-    const regles = CSS.match(/[^{}]+\{[^}]*pointer-events:\s*none[^}]*\}/g) || [];
+    // `pointer-events: none` sur `.vocal-input` n'existe QUE dans l'effacement du
+    // bas. L'etat nu n'ajoute aucune seconde regle de ce genre — et il ne peut
+    // plus l'eteindre non plus : `vocalSyncChrome` retient le bas allume.
+    //
+    // Les COMMENTAIRES sont neutralises AVANT le comptage (precision du
+    // 2026-11-01). Sans cela, le compte etait faux : le motif `[^{}]+` qui
+    // precede l'accolade ouvrante avale le commentaire voisin, et le commentaire
+    // du bloc de l'etat nu explique justement qu'il ne nomme PAS la zone de
+    // saisie — il la nomme donc, en clair, et passait pour une regle.
+    const regles = neutraliserSource(CSS).match(/[^{}]+\{[^}]*pointer-events:\s*none[^}]*\}/g) || [];
     const surSaisie = regles.filter((r) => r.split("{")[0].includes(".vocal-input"));
     expect(surSaisie).toHaveLength(1);
     expect(surSaisie[0]).toContain("vocal-chrome-hidden");
-    expect(blocSaisie()).not.toMatch(/pointer-events\s*:/);
+    // Aucune regle de la section nue ne nomme la saisie ; et le seul
+    // `pointer-events: none` qu'elle pose est celui du bloc des noeuds masques,
+    // dont la liste ne contient ni la zone de saisie ni la barre du haut (qui
+    // porte le bouton et doit rester cliquable).
+    const section = neutraliserSource(sectionNue());
+    expect(section).not.toContain(".vocal-input");
+    const regle = (section.match(/^[^{}]+\{[^}]*\}/) || [""])[0];
+    expect(regle).toMatch(/pointer-events\s*:\s*none/);
+    expect(regle.split("{")[0]).not.toContain(".vocal-input");
+    expect(regle.split("{")[0]).not.toContain(".vocal-top");
   });
 
   it("il ne nomme NI le portrait NI sa pastille : la seule exception du document", () => {
-    for (const bloc of [blocEffacement(), blocSaisie(), blocException(), blocBarre(), blocReduit()]) {
-      expect(bloc).not.toContain("portrait");
+    // Les COMMENTAIRES sont neutralises (precision du 2026-11-01) : le bloc de
+    // l'etat nu porte un commentaire qui NOMME le portrait et son nom pour dire
+    // qu'il ne les touche pas. Ce qui compte est la REGLE, pas la phrase.
+    for (const bloc of [blocEffacement(), blocException(), blocBarre(), blocReduit()]) {
+      expect(neutraliserSource(bloc)).not.toContain("portrait");
     }
     // Et le bloc entier de l'etat nu, du premier selecteur au bloc suivant.
     const tout = sliceSource(
@@ -481,15 +508,17 @@ describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
       "/* --- §4.2/§4.3 Mouvement reduit",
       500,
     );
-    expect(tout).not.toContain(".vocal-portrait");
+    expect(neutraliserSource(tout)).not.toContain(".vocal-portrait");
   });
 
   it("il n'eteint jamais une SORTIE ni l'acces au travail", () => {
-    const tout = sliceSource(
-      CSS,
-      ".pilot-vocal.vocal-bare .vocal-orb,",
-      "/* --- §4.2/§4.3 Mouvement reduit",
-      500,
+    const tout = neutraliserSource(
+      sliceSource(
+        CSS,
+        ".pilot-vocal.vocal-bare .vocal-orb,",
+        "/* --- §4.2/§4.3 Mouvement reduit",
+        500,
+      ),
     );
     expect(tout).not.toContain("#mode-logo");
     expect(tout).not.toContain("#agent-activity");
@@ -521,10 +550,12 @@ describe("8. la forme du masquage : un fondu de 180 ms, jamais un instantane", (
     expect(VOCAL_BARE_FADE_MS).toBe(180);
   });
 
-  it("la saisie garde elle aussi le fondu de 180 ms", () => {
-    const saisie = blocSaisie();
-    expect(saisie).toMatch(/opacity var\(--transition\)/);
-    expect(saisie).toMatch(/visibility 0s linear 180ms/);
+  it("la zone de saisie ne participe pas au fondu : elle n'a plus de regle a elle", () => {
+    // L'ancienne regle `.pilot-vocal.vocal-bare .vocal-input { opacity: 0 … }`
+    // est retiree : la saisie n'est pas dans le perimetre de ce bouton.
+    expect(neutraliserSource(CSS)).not.toMatch(
+      /\.pilot-vocal\.vocal-bare[^{]*\.vocal-input/,
+    );
     expect(VOCAL_BARE_FADE_MS).toBe(180);
   });
 

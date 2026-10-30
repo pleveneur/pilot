@@ -5791,6 +5791,8 @@ let vocalDicteeParGeste = false;
    * ceux du moment ; ce bloc les rassemble, applique la classe et c'est tout.
    *
    * Le bas est visible dans DEUX cas :
+   *  - l'ETAT NU est pose (`vocalBare`) : la zone de saisie et le micro restent
+   *    a l'ecran, parce que le bouton de masquage ne les concerne pas ;
    *  - le decompte tourne (`vocalChromeTimer` non nul) — « pendant ces 2,5 s, le
    *    bas est visible, y compris si l'on ne fait rien » (§2.3) ;
    *  - aucune des quatre circonstances ne permet le masquage (decision pure).
@@ -5820,11 +5822,16 @@ let vocalDicteeParGeste = false;
       micFerme: vocalMicFerme,
       pointeurActif: vocalChromePointeurSurLeBas(),
     };
-    // L'ETAT NU COMMANDE LE BAS (section 6.7) : quand tout est masque, le bas ne
-    // revient plus — ni le decompte, ni un geste. Le minuteur continue de tourner
-    // pour rien : on ne le touche pas, sinon une sortie de l'etat nu le
-    // relancerait a la main et l'ecran se rallumerait sans geste.
-    const visible = !vocalBare && (vocalChromeTimer !== 0 || vocalChromeVisible(faits));
+    // LA ZONE DE SAISIE NE DEPEND PAS DE L'ETAT NU (precision du proprietaire,
+    // 2026-11-01). La regle precedente exigeait l'absence d'etat nu : elle
+    // eteignait donc le bas des que tout etait masque, et la zone sous le cercle
+    // disparaissait avec le reste — erreur de perimetre. Le bouton ne concerne
+    // pas la zone de saisie : elle reste AFFICHEE et UTILISABLE dans les deux
+    // etats. Tant que l'etat nu est pose, le bas est donc retenu allume, quelle
+    // que soit l'horloge ; le minuteur continue de tourner sans effet (on ne le
+    // touche pas : le rallumer a la main ferait repartir un decompte que
+    // personne n'a demande).
+    const visible = vocalBare || vocalChromeTimer !== 0 || vocalChromeVisible(faits);
     // SEUL endroit qui ecrit la classe, et la correspondance classe/visibilite
     // est celle du module pur (`vocalChromeClass`) : aucun deuxieme juge.
     const classe = vocalChromeClass(visible);
@@ -5842,9 +5849,9 @@ let vocalDicteeParGeste = false;
    * Chaque valeur n'est ecrite que si elle change : le tic de 900 ms des colonnes
    * repasse a cote sans faire clignoter l'infobulle ni redecoder l'icone.
    *
-   * A la fin, il rend la main au point d'ecriture du bas : l'effacement du bas
-   * depend desormais de ce booleen, et deux verites sur la meme classe seraient
-   * un etat de trop.
+   * A la fin, il rend la main au point d'ecriture du bas : celui-ci lit l'etat nu
+   * (`vocalBare` y RETIENT le bas allume, il ne l'eteint plus), et deux verites
+   * sur la meme classe seraient un etat de trop.
    */
   function vocalSyncBare() {
     if (!vocalOverlay) return;
