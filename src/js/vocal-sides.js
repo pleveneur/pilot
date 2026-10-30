@@ -110,11 +110,28 @@ export const VOCAL_SIDE_CLEARANCE_PX = VOCAL_CROWN_PX - VOCAL_SIDE_GAP_PX;
  */
 export const VOCAL_SIDE_AIR_PX = 12;
 /**
- * Total fixe du haut de la colonne HORS zone d'image : le titre
- * (14 + 11 + 14 = 39 px) et l'air du bas (12 px) = 51 px. Ce qui reste a la
- * suite est la place de la zone d'image, puis celle de la liste.
+ * Les deux FILETS du cadre, en px : 1 px en haut et 1 px en bas de chaque
+ * colonne (`border: 1px solid` sur `.vocal-side-discussion` et
+ * `.vocal-side-tasks`, en `box-sizing: border-box`).
+ *
+ * Ils sont retranches du budget AVANT de compter les lignes : la hauteur d'une
+ * colonne comprend ses bordures, elle n'est donc pas de la place pour du
+ * texte. Ils manquaient, et la derniere rangee pouvait perdre 2 px sur le
+ * filet.
  */
-export const VOCAL_SIDE_FIXED_PX = 39 + VOCAL_SIDE_AIR_PX;
+export const VOCAL_SIDE_BORDER_PX = 2;
+/**
+ * Total fixe du haut de la colonne HORS zone d'image : le titre
+ * (14 + 11 + 14 = 39 px), l'air du bas (12 px) et les deux filets du cadre
+ * (2 px) = 53 px. Ce qui reste a la suite est la place de la zone d'image, puis
+ * celle de la liste.
+ *
+ * Les DEUX colonnes retranchent CE chiffre, et lui seul : la colonne de gauche
+ * par `VOCAL_DISCUSSION_HEAD_PX` (qui vaut ce total), celle de droite ici. Deux
+ * colonnes de meme hauteur ne peuvent donc pas se contredire sur ce qu'elles
+ * ont paye.
+ */
+export const VOCAL_SIDE_FIXED_PX = 39 + VOCAL_SIDE_AIR_PX + VOCAL_SIDE_BORDER_PX;
 
 // ── LA ZONE D'IMAGE, A TROIS CAS ──
 // Source : CONCEPTION-ecran-vocal-portrait-et-colonnes.md, § 7bis (la zone
@@ -146,11 +163,11 @@ export const VOCAL_PORTRAIT_PX = 96;
  * mais elle ne l'atteint que si la colonne ET la hauteur la portent. Mesure
  * reelle des sept fenetres du tableau de `spec_modes_ecran_vocal.md` § 3ter :
  * 96 px a 720 x 520 et 768 x 576 (la HAUTEUR prend le relais), 148 px a
- * 896 x 672, 208 px a 1024 x 768, 276 px a 1280 x 800, 277 px a 1440 x 900 et
- * a 1920 x 1080 — soit 2,9 fois le plancher, la cible de 288 px n'etant atteinte
- * nulle part : il faudrait 12 px de hauteur de plus dans la colonne, et la
+ * 896 x 672, 208 px a 1024 x 768, 274 px a 1280 x 800, 275 px a 1440 x 900 et
+ * a 1920 x 1080 — soit 2,86 fois le plancher, la cible de 288 px n'etant atteinte
+ * nulle part : il faudrait 13 px de hauteur de plus dans la colonne, et la
  * colonne est bornee a la boite du disque (512 px). Le chiffre REEL est donc
- * 276-277 px, pas 288 : il est ecrit ici et mesure par les tests, jamais
+ * 274-275 px, pas 288 : il est ecrit ici et mesure par les tests, jamais
  * arrondi en silence.
  */
 export const VOCAL_PORTRAIT_TARGET_PX = 3 * VOCAL_PORTRAIT_PX;
@@ -178,9 +195,9 @@ export const VOCAL_PORTRAIT_AIR_TOP_PX = VOCAL_SIDE_AIR_PX;
  * demande un medaillon « environ trois fois plus grand » ET une liste « qui
  * reste correctement affichee », en demandant de VERIFIER le nombre de lignes
  * reellement affichables apres l'agrandissement. Dans une colonne de 512 px,
- * les deux ne tiennent pas ensemble : 3 rangees + le haut fixe (51) + le bloc du
+ * les deux ne tiennent pas ensemble : 3 rangees + le haut fixe (53) + le bloc du
  * personnage (12 + taille + 8 + 20 + 12) plafonnent le medaillon a 231 px (2,4
- * fois le plancher). A 2 rangees, le plafond monte a 277 px (2,9 fois) et la
+ * fois le plancher). A 2 rangees, le plafond monte a 275 px (2,86 fois) et la
  * liste garde encore ses deux en-tetes et une tache par groupe — le reste est
  * DIT (« + N autre(s) »), jamais cache. Le chiffre affiche par la liste est donc
  * 2 rangees : c'est le compromis choisi, il est mesure par
@@ -343,16 +360,22 @@ export const VOCAL_DISCUSSION_LINE_H = 23;
 /** Ecart entre deux messages, en px (§ 4.2 : le meme 14 px que le budget). */
 export const VOCAL_DISCUSSION_GAP = 14;
 /**
- * Le haut de la colonne, en px, retire du budget d'unites : c'est le `14` de la
- * formule du § 4.2, `lignes = floor((H - 14) / 37)`.
+ * Le haut de la colonne, en px, retire du budget d'unites : la formule du § 4.2
+ * est `lignes = floor((H - haut) / 37)`.
  *
- * Depuis la remarque du proprietaire du 2026-11-02, la colonne perd AUSSI l'air
- * du bas (`VOCAL_SIDE_AIR_PX`, 12 px) : le dernier message ne touche plus le
- * cadre. La formule devient donc `floor((H - 26) / 37)` — mesure inchangee sur
- * les sept fenetres du document (13 a 512, 13 a 511, 12 a 479, 9 a 383, 8 a 331,
- * 7 a 287, 5 a 231), l'air se prenant sur la respiration deja comptee.
+ * Ce haut vaut EXACTEMENT `VOCAL_SIDE_FIXED_PX` (53 px) : le titre
+ * (14 + 11 + 14), l'air du bas (12) et les deux filets du cadre (2). Le `14`
+ * d'origine ne comptait que le `padding-block` haut du titre, et le `26` de
+ * l'avenant du 2026-11-02 (14 + l'air) oubliait la hauteur de ligne du titre et
+ * les bordures : la colonne PROMETTAIT une ligne de plus qu'elle n'en montrait,
+ * et la plus haute perdait 27 px sous le degrade. Le chiffre est maintenant
+ * celui de la colonne des taches, au pixel — les deux cadres paient la meme
+ * chose avant de peindre.
+ *
+ * Ce que cela donne sur les fenetres du document : 12 a 512 et a 511, 11 a 479,
+ * 8 a 383, 7 a 331, 6 a 287, 4 a 231.
  */
-export const VOCAL_DISCUSSION_HEAD_PX = 14 + VOCAL_SIDE_AIR_PX;
+export const VOCAL_DISCUSSION_HEAD_PX = VOCAL_SIDE_FIXED_PX;
 /** Une question tient sur DEUX lignes au plus (decision 3). */
 export const VOCAL_DISCUSSION_QUESTION_LINES = 2;
 /** Une reponse sur HUIT lignes au plus (decision 3). */
@@ -448,7 +471,9 @@ export function planVocalSides({ width, height, orbSize, hasPortrait, hasAvatar 
     : 0;
   const portraitBlock = portraitSize ? vocalPortraitBlockSize(portraitSize) : 0;
 
-  // Haut fixe de la colonne : le titre et l'air du bas (51 px), PLUS le bloc du
+
+  // Haut fixe de la colonne : le titre, l'air du bas et les deux filets du cadre
+  // (53 px, `VOCAL_SIDE_FIXED_PX`), PLUS le bloc du
   // personnage quand il s'affiche (148 px au plancher, `taille + 52`), PLUS la
   // place de la fenetre du visage quand c'est elle qui occupe la zone (180 px).
   // Le reste va a la liste.

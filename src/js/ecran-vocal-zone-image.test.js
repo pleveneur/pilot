@@ -8,14 +8,14 @@
 // donc de nouveau TROIS cas, dans cet ordre :
 //   1. le PERSONNAGE (portrait) — il occupe la place, aucun trou reserve ;
 //   2. la fenetre du VISAGE, si elle tourne et si sa taille est connue ;
-//   3. RIEN — la liste reprend la place (`H - 51` px).
+//   3. RIEN — la liste reprend la place (`H - 53` px).
 // Le DISQUE ne porte plus rien : ni image, ni nom.
 //
 // CE QUE CE FICHIER VERROUILLE :
 //   T20 « trois cas, dans cet ordre » — `planVocalSides` rend la bonne reserve et
 //         la bonne hauteur de liste pour les TROIS cas du tableau § 7bis.4, sur
 //         les SEPT fenetres, avec le bon nombre de lignes ; l'avatar n'apparait
-//         pas sous H = 277 (il ne laisserait pas une seule tache).
+//         pas sous H = 279 (il ne laisserait pas une seule tache).
 //   T21 « l'avatar n'est jamais un noeud » — la zone ne porte aucun element,
 //         aucun `img`, aucun `src`, jamais le logo ; elle ne dessine rien (ni
 //         cadre, ni fond, ni ombre, ni rond). Le SEUL portrait de l'ecran est
@@ -82,13 +82,13 @@ function corpsFonctionEntete(debut) {
  * avatar, ce qui est verifie plus bas.
  */
 const TABLE_7BIS_4 = [
-  [720, 520, 151.6, 231, [180, 3], [32, 1], null],
-  [768, 576, 188.3, 287, [236, 4], [88, 1], [56, 1]],
-  [820, 620, 217.2, 331, [280, 5], [132, 2], [100, 1]],
-  [896, 672, 251.3, 383, [332, 6], [132, 2], [152, 2]],
-  [1024, 768, 314.3, 479, [428, 8], [168, 2], [248, 4]],
-  [1280, 800, 335.3, 511, [460, 8], [132, 2], [280, 5]],
-  [1440, 900, 336, 512, [461, 8], [132, 2], [281, 5]],
+  [720, 520, 151.6, 231, [178, 3], [30, 1], null],
+  [768, 576, 188.3, 287, [234, 4], [86, 1], [54, 1]],
+  [820, 620, 217.2, 331, [278, 5], [130, 1], [98, 1]],
+  [896, 672, 251.3, 383, [330, 6], [132, 2], [150, 2]],
+  [1024, 768, 314.3, 479, [426, 8], [166, 2], [246, 4]],
+  [1280, 800, 335.3, 511, [458, 8], [132, 2], [278, 5]],
+  [1440, 900, 336, 512, [459, 8], [132, 2], [279, 5]],
 ];
 
 // ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     // reste alors a 0 px). Le medaillon, lui, GRANDIT avec la place disponible
     // (remarque du proprietaire du 2026-11-02) : `vocalPortraitSize` le mesure, et
     // le bloc vaut alors `taille + 52` (voir `vocalPortraitBlockSize`).
-    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
+    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12 + 2);
     expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(12 + 96 + 8 + 20 + 12);
     expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(148);
     expect(vocalPortraitBlockSize(277)).toBe(277 + 52);
@@ -142,10 +142,11 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     expect(portrait.imageZone.kind).toBe(VOCAL_IMAGE_PORTRAIT);
     expect(deux).toEqual(portrait);
     // L'avatar ne pese donc jamais sur la hauteur de liste quand un personnage
-    // est la : 512 - 51 - 329 = 132 px, avec ou sans visage (le bloc du
-    // personnage vaut ici 277 + 52 = 329 px : le medaillon mesure 277 px).
+    // est la : 512 - 53 - 327 = 132 px, avec ou sans visage (le bloc du
+    // personnage vaut ici 275 + 52 = 327 px : le medaillon mesure 275 px, et il
+    // rend au passage les 2 px que le cadre paie desormais).
     expect(deux.listHeight).toBe(132);
-    expect(portrait.portraitSize).toBe(277);
+    expect(portrait.portraitSize).toBe(275);
     // Une entree absente n'est pas « vrai » : sans personnage, l'avatar decide.
     expect(planVocalSides({ ...cas, hasAvatar: true }).imageZone.kind).toBe(
       VOCAL_IMAGE_AVATAR,
@@ -176,20 +177,20 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     }
   });
 
-  it("la fenetre du visage n'apparait pas sous H = 277 : elle mangerait la derniere tache", () => {
-    // `H - 51 - 180 >= 46`, le seuil de « une colonne n'est jamais un trou »
-    // (§ 2.6). 51 + 180 + 46 = 277.
+  it("la fenetre du visage n'apparait pas sous H = 279 : elle mangerait la derniere tache", () => {
+    // `H - 53 - 180 >= 46`, le seuil de « une colonne n'est jamais un trou »
+    // (§ 2.6). 53 + 180 + 46 = 279.
     expect(VOCAL_TASK_PX).toBe(46);
-    expect(VOCAL_SIDE_FIXED_PX + VOCAL_AVATAR_H_PX + VOCAL_TASK_PX).toBe(277);
-    expect(planVocalImageZone({ hasAvatar: true, columnHeight: 276 }).avatar).toBe(false);
-    expect(planVocalImageZone({ hasAvatar: true, columnHeight: 277 }).avatar).toBe(true);
+    expect(VOCAL_SIDE_FIXED_PX + VOCAL_AVATAR_H_PX + VOCAL_TASK_PX).toBe(279);
+    expect(planVocalImageZone({ hasAvatar: true, columnHeight: 278 }).avatar).toBe(false);
+    expect(planVocalImageZone({ hasAvatar: true, columnHeight: 279 }).avatar).toBe(true);
     // 820 x 620 : 331 px de colonne, donc le seuil est franchi (100 px de liste).
     expect(planVocalImageZone({ hasAvatar: true, columnHeight: 331 }).height).toBe(180);
     // Et un avatar refuse ne deplace rien : `hasAvatar` du plan dit la VERITE.
     const refuse = planVocalSides({ width: 720, height: 520, orbSize: 151.6, hasAvatar: true });
     expect(refuse.hasAvatar).toBe(false);
     expect(refuse.imageZone.kind).toBe(VOCAL_IMAGE_NONE);
-    expect(refuse.listHeight).toBe(231 - 51);
+    expect(refuse.listHeight).toBe(231 - 53);
   });
 
   it("le plan porte la zone : la repeinture n'a pas a la recalculer", () => {

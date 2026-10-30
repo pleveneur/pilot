@@ -34,6 +34,7 @@ import {
   VOCAL_DISCUSSION_GAP,
   VOCAL_DISCUSSION_HEAD_PX,
   VOCAL_SIDE_AIR_PX,
+  VOCAL_SIDE_FIXED_PX,
   VOCAL_DISCUSSION_QUESTION_LINES,
   VOCAL_DISCUSSION_ANSWER_LINES,
   VOCAL_DISCUSSION_MORE_PX,
@@ -358,21 +359,25 @@ describe("les deux titres sont sur la MEME ligne : une seule regle", () => {
 });
 
 describe("le tableau § 4.2 se rejoue : les lignes suivent la hauteur", () => {
-  it("13 a 512 et a 511, 12 a 479, 9 a 383, 8 a 331, 7 a 287, 5 a 231", () => {
-    // L'EN-TETE du budget porte le titre (14 px) ET l'air du bas
-    // (`VOCAL_SIDE_AIR_PX`, 12 px) : 26. Le tableau, lui, ne bouge pas — l'air
-    // etait deja compte dans le budget avant d'etre peint (correctif du
-    // 2026-11-02 : la feuille de style l'a recu, la decision le portait deja).
-    expect(VOCAL_DISCUSSION_HEAD_PX).toBe(14 + VOCAL_SIDE_AIR_PX);
-    expect(VOCAL_DISCUSSION_HEAD_PX).toBe(26);
+  it("12 a 512 et a 511, 11 a 479, 8 a 383, 7 a 331, 6 a 287, 4 a 231", () => {
+    // L'EN-TETE du budget porte le TITRE ENTIER (14 + 11 + 14 = 39 px), l'air du
+    // bas (`VOCAL_SIDE_AIR_PX`, 12 px) et les DEUX FILETS du cadre
+    // (`VOCAL_SIDE_BORDER_PX`, 2 px) : 53 px, exactement le haut fixe de la
+    // colonne des taches (`VOCAL_SIDE_FIXED_PX`). Le tableau, lui, perd une
+    // ligne au plus : la colonne PROMETTAIT une ligne qu'elle ne pouvait pas
+    // montrer (le titre et les bordures n'etaient pas payes), et la plus haute
+    // perdait jusqu'a 27 px sous le degrade.
+    expect(VOCAL_DISCUSSION_HEAD_PX).toBe(VOCAL_SIDE_FIXED_PX);
+    expect(VOCAL_DISCUSSION_HEAD_PX).toBe(39 + VOCAL_SIDE_AIR_PX + 2);
+    expect(VOCAL_DISCUSSION_HEAD_PX).toBe(53);
     const attendu = [
-      [512, 13],
-      [511, 13],
-      [479, 12],
-      [383, 9],
-      [331, 8],
-      [287, 7],
-      [231, 5],
+      [512, 12],
+      [511, 12],
+      [479, 11],
+      [383, 8],
+      [331, 7],
+      [287, 6],
+      [231, 4],
     ];
     for (const [hauteur, lignes] of attendu) {
       expect(planVocalDiscussion(hauteur, 320).lines).toBe(lignes);
@@ -404,7 +409,7 @@ describe("le tableau § 4.2 se rejoue : les lignes suivent la hauteur", () => {
       { columnHeight: 512, track: 320 },
     );
     expect(vue.items).toHaveLength(2);
-    expect(vue.lines).toBe(13);
+    expect(vue.lines).toBe(12);
     expect(vue.charsPerLine).toBe(39);
   });
 

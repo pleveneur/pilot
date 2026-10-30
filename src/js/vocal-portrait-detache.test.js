@@ -79,11 +79,11 @@ describe("R1 — le portrait est plus grand, et les deux sources disent le meme 
     // Trois bornes, dans cet ordre : la place dans le cadre (marge comprise), la
     // hauteur qui laisse deux rangees et leurs deux en-tetes a la liste, la cible.
     const grand = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasPortrait: true });
-    expect(grand.portraitSize).toBe(277);
+    expect(grand.portraitSize).toBe(275);
     expect(grand.portraitSize).toBeLessThan(VOCAL_PORTRAIT_TARGET_PX);
     // A 1440 x 900 ce n'est plus la LARGEUR qui borne (elle laisserait 278 px :
-    // 320 - 22 - 2 x 10) mais la HAUTEUR (277 px) : le medaillon ne touche donc
-    // jamais le cadre, et il s'en faut d'un pixel. La borne de largeur est
+    // 320 - 22 - 2 x 10) mais la HAUTEUR (275 px) : le medaillon ne touche donc
+    // jamais le cadre, et il s'en faut de trois pixels. La borne de largeur est
     // verifiee pour ce qu'elle est, une borne.
     expect(grand.taskTrack - VOCAL_SIDE_FRAME_PX - 2 * VOCAL_PORTRAIT_EDGE_PX).toBe(278);
     expect(grand.portraitSize).toBeLessThanOrEqual(
@@ -226,23 +226,23 @@ describe("R5 — la place prise est payee par la LISTE, pas par la colonne", () 
     const sans = planVocalSides(base);
     const avec = planVocalSides({ ...base, hasPortrait: true });
     // Meme colonne : seule la LISTE perd le bloc du personnage, qui mesure la
-    // taille reelle du medaillon (277 + 52 = 329 px), pas le plancher.
+    // taille reelle du medaillon (275 + 52 = 327 px), pas le plancher.
     expect(avec.columnHeight).toBe(sans.columnHeight);
     expect(avec.portraitBlock).toBe(avec.portraitSize + 52);
     expect(avec.listHeight).toBe(sans.listHeight - avec.portraitBlock);
-    expect(avec.listHeight).toBe(512 - 51 - 329);
+    expect(avec.listHeight).toBe(512 - 53 - 327);
   });
 
   it("la liste garde au moins une rangee dans la plus petite fenetre", () => {
     // Une place gagnee en ecrasant la liste serait une regression : sous une
     // rangee, la colonne n'aurait plus rien a montrer. A 720 x 520 il reste
-    // 231 - 51 - 148 = 32 px, soit UNE rangee (46 px de haut, mais 32 px de
+    // 231 - 53 - 148 = 30 px, soit UNE rangee (46 px de haut, mais 30 px de
     // place : la rangee est rognee d'autant, jamais absente) — c'est le cas
     // limite assume et documente au § 4 du rapport. Le medaillon, lui, reste au
     // plancher : c'est la HAUTEUR qui le borne, pas la place en largeur.
     const plan = planVocalSides({ width: 720, height: 520, orbSize: 151.6, hasPortrait: true });
     expect(plan.portraitSize).toBe(96);
-    expect(plan.listHeight).toBe(32);
+    expect(plan.listHeight).toBe(30);
     expect(plan.listHeight).toBeGreaterThan(0);
     // Et la colonne n'est jamais vide : le personnage occupe le haut.
     expect(plan.columnHeight).toBe(231);
@@ -253,8 +253,8 @@ describe("R5 — la place prise est payee par la LISTE, pas par la colonne", () 
 describe("R6 — « environ trois fois plus grand », et la VRAIE mesure", () => {
   // La remarque demandait 3 x 96 = 288 px. Ce chiffre n'est atteignable qu'avec
   // une colonne de 366 px, donc une fenetre de plus de 2000 px — et il ne
-  // laisserait alors qu'UNE rangee a la liste. Le plafond reel est 277 px
-  // (2,89 x), et il est atteint des 1280 px de large. Ce bloc tient le chiffre
+  // laisserait alors qu'UNE rangee a la liste. Le plafond reel est 275 px
+  // (2,86 x), et il est atteint des 1280 px de large. Ce bloc tient le chiffre
   // REEL : il echoue si le medaillon retrecit (retour a trois rangees, marge
   // rognee) comme s'il grossit au-dela de ce que la colonne peut porter.
   const CAS = [
@@ -294,10 +294,10 @@ describe("R6 — « environ trois fois plus grand », et la VRAIE mesure", () =>
       // Et jamais au-dela de la cible : le chiffre annonce est un plafond tenu.
       expect(plan.portraitSize).toBeLessThanOrEqual(VOCAL_PORTRAIT_TARGET_PX);
     }
-    // Le plus grand cas connu, nomme : 277 px, soit 2,89 x.
+    // Le plus grand cas connu, nomme : 275 px, soit 2,86 x.
     const grand = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasPortrait: true });
-    expect(grand.portraitSize).toBe(277);
-    expect(grand.portraitSize / VOCAL_PORTRAIT_PX).toBeGreaterThan(2.88);
+    expect(grand.portraitSize).toBe(275);
+    expect(grand.portraitSize / VOCAL_PORTRAIT_PX).toBeGreaterThan(2.86);
   });
 
   it("sous 1280 px la place manque : le chiffre BAISSE, il ne deborde jamais", () => {

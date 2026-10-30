@@ -238,6 +238,12 @@ import {
   VOCAL_DISCUSSION_TITLE,
   VOCAL_DISCUSSION_MAX_MESSAGES,
   VOCAL_PORTRAIT_PX,
+  // La part de la hauteur d'ecran que le reste de l'interface prend (onglets,
+  // barre du haut, ligne d'etat, barre de saisie) : UNE seule constante, ici
+  // comme dans la feuille de style (`--vocal-orb-size`). Recopiee a la main,
+  // elle avait deja diverge une fois ; le verrou
+  // `ecran-vocal-cadres-et-cercle.test.js` lit les deux.
+  VOCAL_ORB_RESERVED_PX,
 } from "./vocal-sides.js";
 // LE FILTRE DE LA COLONNE DE GAUCHE (correctif « la colonne restait vide ») :
 // ce qui a ete DIT, et rien d'autre. Ce module pur decide quels messages sont
@@ -2248,7 +2254,7 @@ function vocalOrbSizePx() {
   }
   const hauteur = typeof window !== "undefined" ? Number(window.innerHeight) : 0;
   if (!Number.isFinite(hauteur) || hauteur <= 0) return 0;
-  return Math.max(120, Math.min(336, ((hauteur - 289) * 21) / 32));
+  return Math.max(120, Math.min(336, ((hauteur - VOCAL_ORB_RESERVED_PX) * 21) / 32));
 }
 
 /**

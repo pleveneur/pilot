@@ -68,7 +68,7 @@ function corps(debut, fin) {
 /**
  * Les SEPT fenetres du tableau § 2.5, avec la colonne `H` du tableau § 3.2 de la
  * conception : [largeur, hauteur, disque, H, lignes de liste].
- * `H - 51` px de liste, en-tetes compris : le document fait foi.
+ * `H - 53` px de liste, en-tetes compris : le document fait foi.
  */
 const SEPT_LIGNES = [
   [720, 520, 151.6, 231, 3],
@@ -81,7 +81,7 @@ const SEPT_LIGNES = [
 ];
 
 describe("T18 — le haut de la colonne reserve la place du personnage", () => {
-  it("`listH` vaut H - 51 sans rien, H - 51 - 148 avec le portrait au plancher", () => {
+  it("`listH` vaut H - 53 sans rien, H - 53 - 148 avec le portrait au plancher", () => {
     for (const [largeur, hauteur, disque, H] of SEPT_LIGNES) {
       const rien = planVocalSides({ width: largeur, height: hauteur, orbSize: disque });
       expect(rien.columnHeight, `${largeur} : H`).toBe(H);
@@ -104,14 +104,15 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     }
   });
 
-  it("51 px de base, 148 px de personnage au plancher, 180 px de fenetre du visage", () => {
-    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
+  it("53 px de base, 148 px de personnage au plancher, 180 px de fenetre du visage", () => {
+    // 39 px de titre + 12 px d'air du bas + 2 px de filets = 53 px.
+    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12 + 2);
     // 12 px d'air en haut + 96 px de medaillon + 8 px d'ecart + 20 px de nom +
     // 12 px d'air en bas.
     expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(148);
     const av = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasAvatar: true });
     expect(av.columnHeight).toBe(512);
-    expect(av.listHeight).toBe(512 - 231);
+    expect(av.listHeight).toBe(512 - 233);
     expect(av.imageZone.kind).toBe(VOCAL_IMAGE_AVATAR);
     // Et les trois cas se suivent, du plus riche au plus pauvre.
     expect(planVocalSides({ width: 1440, height: 900, orbSize: 336 }).imageZone.kind).toBe(
@@ -124,8 +125,8 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     const deux = planVocalSides({ ...cas, hasPortrait: true, hasAvatar: true });
     const portrait = planVocalSides({ ...cas, hasPortrait: true });
     expect(deux).toEqual(portrait);
-    // 512 - 51 - 329 : le personnage occupe le haut (medaillon mesure 277 px, donc
-    // un bloc de 329), la zone d'image ne prend rien.
+    // 512 - 53 - 327 : le personnage occupe le haut (medaillon mesure 275 px, donc
+    // un bloc de 327), la zone d'image ne prend rien.
     expect(deux.listHeight).toBe(132);
   });
 
@@ -149,10 +150,10 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     expect(plan.portraitBlock).toBe(0);
     // Une entree `hasPortrait` bien vraie CHANGE la liste : elle est lue.
     const avec = planVocalSides({ ...cas, hasPortrait: true });
-    expect(avec.portraitSize).toBe(277);
+    expect(avec.portraitSize).toBe(275);
     expect(avec.listHeight).toBe(plan.listHeight - avec.portraitBlock);
-    // Et sans personnage ni visage, aucun cas par defaut cache : 51 px, pas plus.
-    expect(plan.listHeight).toBe(461);
+    // Et sans personnage ni visage, aucun cas par defaut cache : 53 px, pas plus.
+    expect(plan.listHeight).toBe(459);
   });
 
   it("le portrait est en HAUT A DROITE : dans la colonne, jamais dans le disque", () => {

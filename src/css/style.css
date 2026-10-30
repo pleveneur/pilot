@@ -12140,8 +12140,9 @@ body.pilot-vocal-active #agent-activity {
   min-width: 0;
   justify-self: end;
   /* LOT 2 (budget du §2.5, correction du 2026-10-31 ; portrait agrandi et
-     detache le 2026-10-03, puis 2026-11-02) : 39 px de titre + 12 px d'air =
-     51 px de haut fixe, PLUS le bloc du personnage quand il est la (12 d'air en
+     detache le 2026-10-03, puis 2026-11-02) : 39 px de titre + 12 px d'air +
+     2 px de filets = 53 px de haut fixe (`VOCAL_SIDE_FIXED_PX`), PLUS le bloc du
+     personnage quand il est la (12 d'air en
      haut + medaillon + 8 + 20 de nom + 12 d'air = `taille + 52`, soit 148 px au
      plancher de 96) et PLUS la fenetre du visage quand c'est elle qui occupe la
      zone (180 px). La ligne d'activite n'existe plus : la place qu'elle prenait
@@ -12266,10 +12267,10 @@ body.pilot-vocal-active #agent-activity {
      (moins le cadre et sa marge), plafonnee par la hauteur qui laisse trois
      rangees a la liste, et jamais plus de trois fois le plancher de 96 px.
      Valeur de repli : 96 px, le plancher du 2026-10-03 (`VOCAL_PORTRAIT_PX`).
-     Mesure des sept fenetres du document, deuxieme passe du 2026-11-02 : 96 px a
-     720 et 768, 148 a 896, 208 a 1024, 276 a 1280, 277 a 1440 et au-dela — soit
-     2,9 fois le plancher, la cible de 288 px n'etant atteinte nulle part (il
-     faudrait 12 px de colonne de plus). Voir `spec_modes_ecran_vocal.md` § 3ter,
+     Mesure des sept fenetres du document, troisieme passe du 2026-11-13 : 96 px a
+     720 et 768, 146 a 896, 208 a 1024, 274 a 1280, 275 a 1440 et au-dela — soit
+     2,86 fois le plancher, la cible de 288 px n'etant atteinte nulle part (il
+     faudrait 13 px de colonne de plus). Voir `spec_modes_ecran_vocal.md` § 3ter,
      « La taille du medaillon ». */
   width: var(--vocal-portrait-size, 96px);
   height: var(--vocal-portrait-size, 96px);
@@ -12319,10 +12320,10 @@ body.pilot-vocal-active #agent-activity {
    visage — les deux ne s'affichent jamais ensemble), liste. Les hauteurs du
    budget (§2.5) sont ECRITES ici : elles doivent tomber juste, sinon le nombre
    de lignes calcule par `planVocalTasks` ne serait plus celui qu'on voit. Haut
-   fixe : 14 + 11 + 14 (titre) + 12 (air du bas) = 51 px ; + 148 px avec le
-   personnage au plancher (air du haut 12 + medaillon 96 + 8 + nom 20 + air 12) ;
-   51 + 180 = 231 px avec la fenetre du visage. Le reste est de l'air, jamais un
-   debordement. */
+   fixe : 14 + 11 + 14 (titre) + 12 (air du bas) + 2 (filets) = 53 px ; + 148 px
+   avec le personnage au plancher (air du haut 12 + medaillon 96 + 8 + nom 20 +
+   air 12) ; 53 + 180 = 233 px avec la fenetre du visage. Le reste est de l'air,
+   jamais un debordement. */
 /* LE TITRE DES DEUX COLONNES : une seule regle, deux selecteurs — les deux
    titres ne peuvent donc pas deriver l'un de l'autre. 14 px sous le bord haut de
    la colonne, 11 px de haut, 14 px sous lui : « DISCUSSION » et « TACHES » sont
@@ -12428,6 +12429,14 @@ body.pilot-vocal-active #agent-activity {
 .vocal-orb {
   position: relative;
   flex: 0 0 auto;
+  /* LA PLACE DU DISQUE (decision B du 2026-11-13), MESUREE et non choisie : la
+     boite du disque ("disque + 2 x couronne") est centree dans la rangee par
+     `align-items: center`, et le disque lui-meme est centre dans cette boite
+     (le halo est un enfant en `inset: 0`, donc symetrique). Le disque est donc
+     deja au centre de la rangee, avec EXACTEMENT la meme couronne au-dessus et
+     en dessous : aucune remontee, ni `top`, ni `transform` ici. Le verrou
+     `src/js/ecran-vocal-cadres-et-cercle.test.js` le mesure dans les deux
+     configurations (avec et sans image) et tombe si on introduit un decalage. */
   width: var(--vocal-orb-size);
   height: var(--vocal-orb-size);
   border-radius: 50%;

@@ -60,6 +60,7 @@ import {
   VOCAL_SIDE_AIR_PX,
   VOCAL_SIDE_FRAME_PX,
   VOCAL_SIDE_FIXED_PX,
+  VOCAL_SIDE_BORDER_PX,
   planVocalDiscussion,
   planVocalSides,
   vocalPortraitBlockSize,
@@ -93,12 +94,13 @@ describe("R1 — le contenu ne touche plus le cadre", () => {
   });
 
   it("l'air est COMPTE : le titre plus l'air font l'en-tete du budget", () => {
-    // 14 px sous le titre + 12 px d'air = 26. `vocal-colonne-discussion.test.js`
-    // rejoue le tableau des six hauteurs ; ici, on tient la SOMME.
-    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + VOCAL_SIDE_AIR_PX);
-    expect(VOCAL_SIDE_FIXED_PX).toBe(51);
-    // Et l'air ne mange pas une ligne promise : a 512 px, la colonne en montre 13.
-    expect(planVocalDiscussion(512, 320).lines).toBe(13);
+    // Le titre entier (14 + 11 + 14) + l'air du bas (12) + les deux filets du
+    // cadre (2) = 53. `vocal-colonne-discussion.test.js` rejoue le tableau des
+    // sept hauteurs ; ici, on tient la SOMME.
+    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + VOCAL_SIDE_AIR_PX + VOCAL_SIDE_BORDER_PX);
+    expect(VOCAL_SIDE_FIXED_PX).toBe(53);
+    // Et l'air ne mange pas une ligne promise : a 512 px, la colonne en montre 12.
+    expect(planVocalDiscussion(512, 320).lines).toBe(12);
     expect(planVocalDiscussion(VOCAL_SIDE_FIXED_PX, 320).lines).toBe(0);
   });
 
@@ -223,7 +225,7 @@ describe("R3 — le medaillon est MESURE, plus fige", () => {
       VOCAL_PORTRAIT_GAP_PX -
       VOCAL_PORTRAIT_NAME_PX -
       VOCAL_PORTRAIT_AIR_PX;
-    expect(parHauteur).toBe(277);
+    expect(parHauteur).toBe(275);
     // Une colonne large mais une fenetre basse : c'est la HAUTEUR qui decide.
     expect(vocalPortraitSize({ taskTrack: 2000, columnHeight: 512 })).toBe(parHauteur);
     // La borne haute est la cible : jamais plus de trois fois le plancher.
@@ -245,7 +247,7 @@ describe("R3 — le medaillon est MESURE, plus fige", () => {
 
   it("le plan porte la taille ET le bloc : la liste en est deduite", () => {
     const avec = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasPortrait: true });
-    expect(avec.portraitSize).toBe(277);
+    expect(avec.portraitSize).toBe(275);
     expect(avec.portraitBlock).toBe(vocalPortraitBlockSize(avec.portraitSize));
     expect(avec.listHeight).toBe(avec.columnHeight - VOCAL_SIDE_FIXED_PX - avec.portraitBlock);
     // Sans personnage, aucune place n'est mesuree ni retiree.

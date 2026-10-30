@@ -327,15 +327,21 @@ d'air au-dessus** et **12 px d'air** avant ce qui suit — un bloc de
   cliquable de Pilot : il n'entre pas dans les six hôtes (§8bis).
 - **3. Sinon** : le bloc d'image **n'existe pas** — pas d'image de remplacement, pas de
   cadre, pas de logo, **aucune zone réservée** — et la liste prend toute la hauteur.
-- **La colonne ne réserve, en plus de la liste, que le titre et l'air du bas : 51 px**
-  (14 de marge + 11 de titre + 14 de marge + 12 d'air), plus le **bloc du personnage**
-  quand il est là (`taille + 52`, soit 148 px au plancher et 329 px dans une grande
-  fenêtre), plus **180 px** quand la fenêtre du visage est posée. La liste dispose
-  donc de **`H − 51` px**, de **`H − 51 − (taille + 52)`** avec le personnage, ou de
-  **`H − 51 − 180`** avec la fenêtre du visage, ce qui lui laisse de **3 à 8** lignes selon
+- **La colonne ne réserve, en plus de la liste, que le titre, les deux filets et l'air du bas :
+  53 px** (`VOCAL_SIDE_FIXED_PX` = 39 de titre — 14 de marge + 11 de titre + 14 de marge —
+  + 12 d'air + **2 de filets**), plus le **bloc du personnage** quand il est là
+  (`taille + 52`, soit 148 px au plancher et 327 px dans une grande fenêtre), plus
+  **180 px** quand la fenêtre du visage est posée. La liste dispose donc de
+  **`H − 53` px**, de **`H − 53 − (taille + 52)`** avec le personnage, ou de
+  **`H − 53 − 180`** avec la fenêtre du visage, ce qui lui laisse de **1 à 8** lignes selon
   la fenêtre (`vocalTaskRows`).
-- **La zone n'existe que si la liste garde au moins une ligne** : sous `H = 277` px de
-  colonne (51 + 180 + 46), la fenêtre du visage n'est pas dessinée et la liste garde
+- **Les deux cadres paient le MÊME haut fixe** (décision A du 2026-11-13). La colonne de
+  discussion retranchait 26 px (le seul remplissage haut du titre) quand celle des tâches
+  en retranchait 51 : chacune annonçait donc une ligne de plus qu'elle n'en montrait.
+  `VOCAL_DISCUSSION_HEAD_PX` **est** `VOCAL_SIDE_FIXED_PX`, et c'est un chiffre unique,
+  dérivé de ses trois termes. Verrou : `src/js/ecran-vocal-cadres-et-cercle.test.js`.
+- **La zone n'existe que si la liste garde au moins une ligne** : sous `H = 279` px de
+  colonne (53 + 180 + 46), la fenêtre du visage n'est pas dessinée et la liste garde
   **exactement** la hauteur du cas précédent. **Une zone qui ne dessine rien ne fait jamais
   un trou** : l'espace vide se lit comme de l'air, jamais comme une image manquante — aucun
   message, aucune icône cassée, jamais le logo dans la zone.
@@ -405,9 +411,10 @@ Le budget suit la hauteur et la largeur **mesurées**, jamais une constante cach
 `charsPerLine = floor((track - cadre) / 7,6)` — où `cadre = VOCAL_SIDE_FRAME_PX
 = 22 px` (1 px de bordure + 10 px de marge intérieure de chaque côté, voir le
 **cadre des panneaux** ci-dessous) : **47** caractères à 384 px (la largeur nominale
-retenue), 34 à 282, 49 à 400 — et `lignes = floor((H - 26) / 37)`, les 26 px étant le titre (14) et l'air du
-bas (12, `VOCAL_DISCUSSION_HEAD_PX`) : soit **13** à 512 px, 12 à 479, 9 à 383, 8 à
-331, 7 à 287, 5 à 231 (le tableau du § 4.2 de la conception, rejoué par un test). La
+retenue), 34 à 282, 49 à 400 — et `lignes = floor((H - 53) / 37)`, les 53 px étant le
+haut fixe entier (`VOCAL_SIDE_FIXED_PX` = 39 de titre + 12 d'air + 2 de filets, que la
+colonne des tâches paie aussi) : soit **12** à 512 px, 11 à 479, 8 à 383, 7 à
+331, 6 à 287, 4 à 231 (le tableau du § 4.2 de la conception, rejoué par un test). La
 coupe se fait **sur une frontière de mot**, jamais dans un mot, et l'ellipse le dit.
 On n'affiche que la **fin** de la conversation, sans trou : dès qu'un message ne
 tient plus, les plus anciens ne sont pas montrés, et la phrase **« … et N échange(s)
@@ -442,9 +449,10 @@ palettes, et 22 px = bordure + marge lus dans la feuille de style).
 **L'air du bas, lui, est un vrai `padding-block-end` de 12 px** sur chacune des deux
 colonnes (remarque du propriétaire du 2026-11-02 : « le contenu touche le cadre ») : le
 dernier message et la dernière tâche s'arrêtent 12 px au-dessus du filet. Il est **compté
-avant d'être peint** — `VOCAL_SIDE_AIR_PX = 12` est déjà dans les 51 px du haut fixe et
-dans l'en-tête de la colonne de gauche (26 = 14 + 12) —, donc **aucune ligne promise n'est
-rognée** par lui. Verrou : `src/js/ecran-vocal-marges-transparence-portrait.test.js`.
+avant d'être peint** — `VOCAL_SIDE_AIR_PX = 12` et les deux filets (2 px) sont déjà dans
+les 53 px du haut fixe et dans l'en-tête de la colonne de gauche (53 = 39 + 12 + 2) —,
+donc **aucune ligne promise n'est rognée** par lui. Verrou :
+`src/js/ecran-vocal-marges-transparence-portrait.test.js`.
 
 **Et la respiration qui manquait n'était pas un `padding` : c'était la PLACE.** La marge
 intérieure de 10 px existait déjà, mais à 320 px de large elle était prise sur un texte
@@ -458,7 +466,51 @@ et le seuil de 240 px ne bougent pas. Verrou : `src/js/vocal-sides.test.js` (la 
 nominale), `src/js/cadre-listes-panneaux.test.js` (le cadre retranché avant de compter),
 `src/js/vocal-colonne-discussion.test.js` (le tableau des hauteurs, rejoué).
 
+### Les deux cadres et la place du cercle (2026-11-13)
+
+Deux remarques du propriétaire, traitées ensemble parce qu'elles se mesurent de la même
+façon — au pixel, et non d'après une description.
+
+**A — les deux cadres ont exactement la même taille.** Même largeur, même hauteur, mêmes
+débuts et mêmes fins. Ce n'était pas le cas dans les budgets : la colonne de discussion
+retranchait **26 px** avant de peindre (le remplissage haut du titre seulement) quand
+celle des tâches en retranchait **51** — elle annonçait donc **une ligne de plus qu'elle
+n'en montrait**, la dernière étant rognée sous le dégradé. Les deux paient maintenant le
+**même chiffre**, `VOCAL_SIDE_FIXED_PX` = **53 px** = 39 (14 + 11 + 14, le titre entier) +
+12 (air du bas) + **2** (les deux filets du cadre, `box-sizing: border-box` : ils sont
+**pris sur** la boîte, donc ils ne sont pas de la place pour du texte).
+`VOCAL_DISCUSSION_HEAD_PX` **est** cette constante, il ne la réécrit pas. Conséquence assumée :
+la colonne de gauche montre **12** lignes à 512 px au lieu de 13 — la treizième n'existait
+que sur le papier —, et la liste des tâches ne bouge pas (le médaillon rend les 2 px
+qu'elle perd : 275 px au lieu de 277).
+
+Les deux colonnes s'opposent par leur **alignement** (`justify-self: start` / `end`),
+jamais par leur taille, et leur hauteur ne vient ni de l'une ni de l'autre : elle vient
+d'une **seule** règle commune, `.vocal-side { height: min(var(--vocal-orb-box), 100%) }`,
+c'est-à-dire la boîte du disque. Verrou : `src/js/ecran-vocal-cadres-et-cercle.test.js`
+compare **les deux mesures** (les déclarations de taille, puis les quatre bords sur les
+huit fenêtres) et **non** des valeurs figées : il tombe si l'une des deux colonnes reprend
+une largeur ou une hauteur à elle, ou si l'une oublie de payer l'en-tête que l'autre paie.
+
+**B — la place du cercle dépend de ce qu'il y a à montrer, et elle est déjà la bonne.**
+Mesuré, pas supposé : la boîte du disque porte le disque et **deux couronnes de halo**
+(`--vocal-orb-box` = disque + 2 × 88), le disque est **centré dans sa boîte** (le halo est
+un enfant en `inset: 0`, donc symétrique) et la boîte est **centrée dans la rangée**
+(`align-items: center`). L'air au-dessus du disque et l'air en dessous sont donc **égaux**
+— une couronne de chaque côté —, avec ou sans image, et le disque ne bouge **pas** quand
+une image arrive : il n'était ni remonté, ni à remonter. Aucun `top`, aucun `transform`,
+aucune marge verticale sur `.vocal-orb`, et **aucun jeton de remontée** : un décalage
+introduit plus tard ferait tomber le verrou. Le seul écart, constant et voulu, vient de
+l'écart de rangée de **32 px** réservé au bouton de dépannage du micro (rangée 2, vide au
+repos) : le disque est donc 16 px au-dessus du centre géométrique de l'étage, **dans les
+deux configurations**. Le portrait, lui, reste là où il est — **en haut de la colonne de
+droite**, au-dessus de la liste —, ce qui est la « disposition du point 7 » conservée :
+la déplacer sous le disque aurait demandé un second nœud d'image (interdit : « pas de
+second mécanisme »), réécrit les quatorze fichiers de verrou de la zone d'image, et fait
+tomber la liste à une ou deux rangées sous 1024 × 768.
+
 ### La transparence qu'on voit (2026-11-02, deux passes)
+
 
 Remarque du propriétaire du 2026-11-02 : « la transparence ne se voit pas ». **Deux
 causes, découvertes dans cet ordre, et la seconde n'était pas visible à l'œil nu dans le
@@ -530,33 +582,33 @@ La décision est **pure** et prise dans cet ordre :
    en-têtes de groupe et **deux** rangées à la liste (`VOCAL_PORTRAIT_MIN_LIST_PX` = 40 +
    2 × 46 = 132 px). C'était **178 px (trois rangées)** dans la première passe : à 178 px
    le médaillon plafonnait à 231 px, soit **2,4 fois** le plancher — la remarque n'était
-   pas tenue. À 132 px il atteint **277 px (2,89 fois)**, et la liste garde une tâche par
+   pas tenue. À 132 px il atteint **275 px (2,86 fois)**, et la liste garde une tâche par
    groupe ; ce qui dépasse est **dit** (« + N autre(s) »), jamais caché ;
 3. **jamais plus de trois fois le plancher** (cible `VOCAL_PORTRAIT_TARGET_PX` = 288 px) ;
 4. **jamais moins de 96 px** — sauf si la place elle-même est plus petite (la règle 1 passe
    avant : on ne déborde pas pour tenir un plancher). Quand la hauteur ne porte pas les
    deux rangées, la règle 2 cède : le médaillon reste au plancher et la liste garde ce qui
-   reste (`H − 51 − 148`, soit 32 px à 720 × 520 : la rangée est rognée d'autant, jamais
+   reste (`H − 53 − 148`, soit 30 px à 720 × 520 : la rangée est rognée d'autant, jamais
    absente).
 
 Mesure réelle des **huit fenêtres** du tableau § 3ter, personnage présent :
 
 | Fenêtre | Colonne | Colonne des tâches | Médaillon | Bloc (`taille + 52`) | Liste | Rangées |
 |---|---|---|---|---|---|---|
-| 720 × 520 | 244 px | 180 px | 96 px | 148 px | 32 px | 1 (rognée) |
-| 768 × 576 | 260 px | 196 px | 96 px | 148 px | 57 px | 1 |
-| 820 × 620 | 272 px | 208 px | 96 px | 148 px | 100 px | 1 |
-| 896 × 672 | 282 px | 218 px | 148 px | 200 px | 132 px | 2 |
-| 1024 × 768 | 314 px | 250 px | 208 px | 260 px | 168 px | 2 |
-| 1280 × 800 | 384 px | 320 px | 276 px | 328 px | 132 px | 2 |
-| 1440 × 900 | 384 px | 320 px | 277 px | 329 px | 132 px | 2 |
-| 1920 × 1080 | 400 px | 336 px | 277 px | 329 px | 132 px | 2 |
+| 720 × 520 | 244 px | 180 px | 96 px | 148 px | 30 px | 1 (rognée) |
+| 768 × 576 | 260 px | 196 px | 96 px | 148 px | 86 px | 1 |
+| 820 × 620 | 272 px | 208 px | 96 px | 148 px | 130 px | 1 |
+| 896 × 672 | 282 px | 218 px | 146 px | 198 px | 132 px | 2 |
+| 1024 × 768 | 314 px | 250 px | 208 px | 260 px | 166 px | 2 |
+| 1280 × 800 | 384 px | 320 px | 274 px | 326 px | 132 px | 2 |
+| 1440 × 900 | 384 px | 320 px | 275 px | 327 px | 132 px | 2 |
+| 1920 × 1080 | 400 px | 336 px | 275 px | 327 px | 132 px | 2 |
 
-**Le chiffre réel est 276-277 px, soit 2,88-2,89 fois le plancher, atteint dès 1280 px de
+**Le chiffre réel est 274-275 px, soit 2,85-2,86 fois le plancher, atteint dès 1280 px de
 large** — et **pas 288** : 288 px demanderait une colonne des tâches de 330 px, donc une
 fenêtre de plus de 2 000 px, et il ne resterait alors que **deux** rangées, que l'on a
-déjà. La cible de 288 est donc un **plafond**, pas une promesse : 277 est le plus grand
-médaillon qui tienne **avec sa marge** (1 px de chaque côté à 1440 × 900, 11 px à
+déjà. La cible de 288 est donc un **plafond**, pas une promesse : 275 est le plus grand
+médaillon qui tienne **avec sa marge** (1 px de chaque côté à 1440 × 900, 13 px à
 1280 × 800). Sous 1280 px la largeur manque (deux colonnes + le disque), et le chiffre
 baisse honnêtement : 208 px à 1024 (2,17×), 148 à 896 (1,54×).
 
@@ -635,7 +687,7 @@ jamais, même avec un titre très long.
 Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
 de la liste et **détaché d'elle** : un médaillon rond **d'au moins 96 px**, qui **grandit avec la
 place disponible** — près de trois fois sa taille de départ dès 1 280 px de large
-(**2,9 ×** ; la cible de 3 × n'est jamais atteinte, la colonne manquerait de place), jamais au
+(**2,8 ×** ; la cible de 3 × n'est jamais atteinte, la colonne manquerait de place), jamais au
 point de manger les tâches —, et son **nom** est écrit **juste
 dessous**, sur
 une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
@@ -645,10 +697,18 @@ place à la fenêtre du visage de l'avatar, ou à rien du tout. Le portrait suit
 changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni image ni nom.**
 
 Les deux colonnes sont des **panneaux de verre** : on voit la lumière de l'écran au travers, et
-eux-mêmes n'affichent jamais la conversation ni le contenu d'une autre fenêtre. Elles laissent
+elles-mêmes n'affichent jamais la conversation ni le contenu d'une autre fenêtre. Elles laissent
 **de l'air** entre leur contenu et leur bord — le dernier message et la dernière tâche
 s'arrêtent avant le trait, le médaillon ne touche pas le haut —, ce qui se lit comme une marge,
-jamais comme une ligne coupée.
+jamais comme une ligne coupée. **Les deux cadres ont exactement la même taille** : même
+largeur, même hauteur, ils commencent et finissent à la même hauteur, et ce qui est
+retranché pour le titre, l'air du bas et les traits est retranché **des deux côtés** :
+le nombre de lignes annoncé est celui qu'on voit.
+
+**Le cercle est centré en hauteur** dans la place qui lui reste, que la zone du portrait
+soit occupée ou non : il ne monte pas quand une image arrive, il ne descend pas quand
+elle part. Il garde toujours la même taille et la même apparence, et il reste **allumé**
+quand tout le reste est masqué.
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
 au moindre mouvement de la souris, puis **s'efface de nouveau après quelques secondes**
@@ -1830,7 +1890,7 @@ la liste**, le portrait resté affiché
 en état nu et jamais cliquable, la place prise **sur la liste** et non sur la
 colonne), `ecran-vocal-marges-transparence-portrait.test.js` (**les trois remarques du
 2026-11-02** : air du bas et du haut du médaillon comptés, surface de verre teintée et
-floutée devant les deux lavis du calque, médaillon mesuré jusqu'à 2,9 fois le
+floutée devant les deux lavis du calque, médaillon mesuré jusqu'à 2,86 fois le
 plancher, et cadre du panneau de droite éteint en état nu sans toucher au portrait),
 `ecran-vocal-transparence-visible.test.js` (**la lumière traverse vraiment le verre** :
 mesure au pixel sur les dix palettes — au moins 6 niveaux d'écart entre le panneau
@@ -1850,10 +1910,10 @@ d'état, aucune animation et mouvement réduit respecté).
 
 `ecran-vocal-zone-image.test.js` tient la **zone d'image** (§7bis) : **T20** les trois
 cas **dans l'ordre** (le personnage, sinon l'avatar du visage, sinon rien), rejoués sur
-les **sept** fenêtres du tableau §7bis.4 — les trois totaux de liste `H − 51` /
-`H − 187` (personnage) / `H − 231` (fenêtre du visage) et le nombre de lignes qui en
-découle —, le cas 2
-**absent sous `H = 277`** et un avatar refusé qui **ne déplace rien** ; **T21** l'avatar
+les **sept** fenêtres du tableau §7bis.4 — les trois totaux de liste `H − 53` /
+`H − 53 − 148` (personnage) / `H − 53 − 180` (fenêtre du visage) et le nombre de lignes
+qui en découle —, le cas 2
+**absent sous `H = 279`** et un avatar refusé qui **ne déplace rien** ; **T21** l'avatar
 **n'est jamais un nœud** (la zone ne porte ni `img`, ni `src`, ni logo, ni texte, ni
 `innerHTML`, et sa règle CSS ne dessine **ni cadre, ni fond, ni ombre, ni rond**) ;
 **T22** la **pose** (conversion CSS → physique **arrondie**, **aucune** demande sans

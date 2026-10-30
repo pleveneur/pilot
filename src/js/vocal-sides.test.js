@@ -95,11 +95,11 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     // 640 x 480 : avail = 217 px, sous le seuil -> aucune colonne du tout.
     expect(planVocalSides({ width: 640, height: 480, orbSize: 125.3 }).track).toBe(0);
     // 720 x 520 : avail = 244 px -> la colonne parait, et tient deja une tache
-    // (H = 231, il reste 180 px de liste sous le haut fixe de 51 px).
+    // (H = 231, il reste 178 px de liste sous le haut fixe de 53 px).
     const juste = planVocalSides({ width: 720, height: 520, orbSize: 151.6 });
     expect(juste.track).toBe(244);
     expect(juste.columnHeight).toBe(231);
-    expect(juste.listHeight).toBe(180);
+    expect(juste.listHeight).toBe(178);
   });
 
   it("la colonne des taches s'arrete AVANT la couronne du disque", () => {
@@ -171,12 +171,13 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
   });
 
   it("la place laissee a la liste suit le haut fixe de la colonne", () => {
-    // Le haut fixe : 14 + 11 + 14 (le titre) + 12 (l'air du bas) = 51 px. La ligne
-    // d'activite n'est plus comptee, elle n'existe plus.
-    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
+    // Le haut fixe : 14 + 11 + 14 (le titre) + 12 (l'air du bas) + 2 (les deux
+    // filets du cadre) = 53 px. La ligne d'activite n'est plus comptee, elle
+    // n'existe plus.
+    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12 + 2);
     const plan = planVocalSides({ width: 1280, height: 900, orbSize: 336 });
     expect(plan.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX);
-    expect(plan.listHeight).toBe(461);
+    expect(plan.listHeight).toBe(459);
     // La fenetre du visage, quand elle s'affiche, prend sa place sur ce total.
     const avecAvatar = planVocalSides({ width: 1280, height: 900, orbSize: 336, hasAvatar: true });
     expect(avecAvatar.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 180);
@@ -199,9 +200,9 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
       hasPortrait: true,
     });
     expect(avec.hasPortrait).toBe(true);
-    expect(avec.portraitSize).toBe(277);
-    expect(avec.portraitBlock).toBe(329);
-    expect(avec.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 329);
+    expect(avec.portraitSize).toBe(275);
+    expect(avec.portraitBlock).toBe(327);
+    expect(avec.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 327);
     expect(avec.listHeight).toBe(132);
     // Le personnage l'emporte : pas de fenetre du visage en plus, et la zone
     // d'image ne reserve alors AUCUNE place vide (le medaillon est un vrai noeud).
