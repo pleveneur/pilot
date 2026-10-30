@@ -238,6 +238,10 @@ import {
   VOCAL_DISCUSSION_TITLE,
   VOCAL_DISCUSSION_MAX_MESSAGES,
   VOCAL_PORTRAIT_PX,
+  // LA PLACE QUE LA RANGEE DE LA SCENE N'A PAS QUAND ELLE N'EST PAS MESURABLE
+  // (overlay pas encore pose) : `vocalStageRowHeight()` s'en sert de repli, il ne
+  // recopie donc aucune constante de la feuille de style.
+  VOCAL_STAGE_RESERVED_PX,
   // La part de la hauteur d'ecran que le reste de l'interface prend (onglets,
   // barre du haut, ligne d'etat, barre de saisie) : UNE seule constante, ici
   // comme dans la feuille de style (`--vocal-orb-size`). Recopiee a la main,
@@ -2190,19 +2194,19 @@ function applyVocalPortrait(racine) {
 }
 
 /**
- * Cree la LEGENDE du portrait (son nom), SOUS l'image, dans la colonne de
- * droite, UNE fois, a la construction de l'overlay.
+ * Cree la LEGENDE du portrait (son nom), SOUS l'image, dans la composition du
+ * milieu (`.vocal-center`), UNE fois, a la construction de l'overlay.
  *
  * Rien n'est ecrit dans le disque : le cercle ne porte ni image ni nom. La
- * legende est posee juste apres `.vocal-portrait`, donc SOUS lui et AVANT la
- * liste des taches.
+ * legende est posee juste apres `.vocal-portrait`, donc SOUS lui — elle ne peut
+ * plus se retrouver dans la colonne des taches (point 7, 2026-11-13).
  *
  * Elle est creee APRES le modele (comme le bouton de masquage,
  * `buildVocalDisplayToggle`) : la liste ordonnee des classes de
  * `buildVocalOverlay` — verrouillee par `ecran-vocal-bouton-relance.test.js` —
  * ne bouge pas d'une entree.
  *
- * @param {Element|null} portrait l'image de la colonne de droite
+ * @param {Element|null} portrait l'image posee sous le disque
  * @returns {Element|null} le noeud cree, ou null hors du navigateur
  */
 function buildVocalPortraitName(portrait) {
@@ -2348,14 +2352,12 @@ function vocalImageZoneNode(colonne) {
 }
 
 /**
- * Repeint le CONTENU de la colonne de droite (CONCEPTION-ecran-vocal-taches-en-
- * haut-portrait-en-bas.md §2.2 a §2.4 ; correction du 2026-10-31 : le portrait
- * est REVENU en haut a droite ; remarque du proprietaire du 2026-10-03 : il est
- * AGRANDI, DETACHE, et le titre « TACHES » passe SOUS lui) : PORTRAIT du
- * personnage et son nom, air, titre, ZONE D'IMAGE (fenetre du visage), liste des
- * taches. La ligne d'activite du bas de la colonne N'EXISTE PLUS (retiree avec
- * son test) : la place qu'elle occupait n'est pas reoccupee, la liste reprend
- * ses 21 px.
+ * Repeint le CONTENU de la colonne de droite : titre, ZONE D'IMAGE (fenetre du
+ * visage), liste des taches. Le PORTRAIT du personnage n'est plus ici (point 7
+ * des remarques du proprietaire, 2026-11-13) : il est SOUS LE CERCLE, dans
+ * `.vocal-center`, et la colonne garde donc toute sa hauteur. La ligne
+ * d'activite du bas de la colonne N'EXISTE PLUS (retiree avec son test) : la
+ * place qu'elle occupait n'est pas reoccupee, la liste reprend ses 21 px.
  *
  * Le DISQUE, lui, ne porte RIEN : ni image ni nom. Le portrait et sa legende
  * sont des noeuds du modele de l'overlay, remplis par `applyVocalPortrait` ; ici
@@ -2372,11 +2374,11 @@ function vocalRenderColumn(plan) {
   if (!colonne) return;
   const missions = collectSuperMissions();
   const vu = planVocalTasks(missions, { listHeight: plan.listHeight });
-  // LE TITRE OUVRE LA SECTION DES TACHES, il n'est plus en tete de colonne
-  // (remarque du proprietaire du 2026-10-03) : le PORTRAIT du personnage, qui
-  // vient d'abord, n'appartient donc plus a la section des taches — il est en
-  // tete de colonne, detache, et le titre annonce ce qui le suit. L'ordre du
-  // document devient : portrait, son nom, air, « TACHES », zone d'image, liste.
+  // LE TITRE OUVRE LA SECTION DES TACHES (remarque du proprietaire du
+  // 2026-10-03), et depuis le point 7 (2026-11-13) il n'a plus rien au-dessus de
+  // lui : le portrait du personnage est alle SOUS LE CERCLE, dans
+  // `.vocal-center`. L'ordre du document de la colonne devient donc :
+  // « TACHES », zone d'image, liste.
   const titre = vocalColumnNode(colonne, ".vocal-tasks-title", "above-list");
   if (titre && titre.textContent !== VOCAL_TASKS_TITLE) titre.textContent = VOCAL_TASKS_TITLE;
   // LA ZONE D'IMAGE : une hauteur, et `hidden` quand elle ne reserve rien.
@@ -2678,6 +2680,38 @@ function vocalPlaceAvatar(plan) {
 }
 
 /**
+ * LA HAUTEUR DE LA RANGEE DE LA SCENE, en px : c'est la place verticale que la
+ * composition (cercle, puis personnage dessous) a reellement a sa disposition.
+ *
+ * Elle est LUE, pas deduite : `gridTemplateRows` est la valeur RESOLUE par le
+ * moteur, donc la hauteur exacte de la premiere piste, `gap: 32px` et rangee du
+ * bouton de micro exclus. Aucune constante du CSS n'est recopiee ici — si la
+ * coiffe ou la barre de saisie changeait de hauteur, la mesure suivrait toute
+ * seule.
+ *
+ * Repli (overlay pas encore pose, style pas resolu) : la fenetre moins ce que
+ * l'ecran prend hors de la rangee (`VOCAL_STAGE_RESERVED_PX`).
+ *
+ * @returns {number} hauteur de la rangee, en px (0 si elle est illisible)
+ */
+function vocalStageRowHeight() {
+  try {
+    const ov = vocalOverlayNode();
+    const scene = ov ? ov.querySelector(".vocal-stage") : null;
+    if (scene && typeof getComputedStyle === "function") {
+      const pistes = String(getComputedStyle(scene).gridTemplateRows || "").trim();
+      const premiere = parseFloat(pistes.split(/\s+/)[0]);
+      if (Number.isFinite(premiere) && premiere > 0) return premiere;
+    }
+  } catch (_) {
+    /* style illisible : on rejoue le repli ci-dessous */
+  }
+  const hauteur = typeof window !== "undefined" ? Number(window.innerHeight) : 0;
+  if (!Number.isFinite(hauteur) || hauteur <= 0) return 0;
+  return Math.max(0, hauteur - VOCAL_STAGE_RESERVED_PX);
+}
+
+/**
  * SEUL point d'ecriture de la largeur des deux colonnes laterales de l'ecran
  * Vocal (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.4) : `--vocal-side`
  * et la classe `vocal-sides-off`, d'apres la decision PURE `planVocalSides` —
@@ -2697,10 +2731,14 @@ function vocalSyncSides() {
     width: typeof window !== "undefined" ? window.innerWidth : 0,
     height: typeof window !== "undefined" ? window.innerHeight : 0,
     orbSize: vocalOrbSizePx(),
-    // LE PERSONNAGE d'abord : il occupe la zone d'image en haut a droite (correction
-    // du 2026-10-31) et la liste des taches vient dessous. Un portrait
-    // affichable existe des que `getAssistantPortrait()` rend une source — la
-    // MEME source que l'image, il n'y a pas deux verites.
+    // LA HAUTEUR REELLE DE LA RANGEE : c'est elle qui porte le personnage SOUS
+    // le cercle (point 7 des remarques du proprietaire, 2026-11-13). Elle est
+    // mesuree, jamais deduite d'une constante.
+    stageHeight: vocalStageRowHeight(),
+    // LE PERSONNAGE : un portrait affichable existe des que
+    // `getAssistantPortrait()` rend une source — la MEME source que l'image, il
+    // n'y a pas deux verites. Il n'occupe plus la colonne de droite : il se pose
+    // sous le disque, et c'est `vocalPortraitSize` qui mesure sa place.
     hasPortrait: !!getAssistantPortrait(),
     // La taille du visage n'est connue que si `vocalAvatarFrame` la donne :
     // l'avatar ne s'affiche donc pas tant qu'elle est inconnue (§ 7bis.5). Il ne
@@ -2714,13 +2752,13 @@ function vocalSyncSides() {
   // colonne de GAUCHE lit le MEME jeton (remarque du proprietaire du 2026-10-03 :
   // elle mordait de 64 px dans le halo, son bord interieur a 24 px du disque).
   ov.style.setProperty("--vocal-side-tasks", `${plan.taskTrack}px`);
-  // LA TAILLE DU MEDAILLON DU PERSONNAGE (remarque du proprietaire du 2026-11-02 :
-  // « environ trois fois plus grand »). Elle est MESUREE par `vocalPortraitSize`,
-  // dans le meme plan que la place que la liste garde sous lui : les deux
-  // chiffres ne peuvent donc pas se contredire. Le budget (`listHeight`)
-  // retranche deja ce bloc — ecrire la taille ici ne decale rien, la feuille de
-  // style lit la meme valeur (`--vocal-portrait-size`).
-  ov.style.setProperty("--vocal-portrait-size", `${plan.portraitSize || VOCAL_PORTRAIT_PX}px`);
+  // LA TAILLE DU MEDAILLON DU PERSONNAGE. Elle est MESUREE par `vocalPortraitSize`
+  // sur la hauteur disponible SOUS le disque (point 7) : au plancher de 96 px,
+  // en grandissant jusqu'a 3 fois, jamais plus large que le cercle qu'il
+  // surmonte, et 0 quand la place ne porte meme pas le plancher (le medaillon ne
+  // s'affiche alors pas du tout). Le budget des colonnes ne la retranche plus :
+  // la liste des taches garde toute sa hauteur, que le medaillon soit la ou non.
+  ov.style.setProperty("--vocal-portrait-size", `${plan.portraitSize}px`);
   ov.classList.toggle("vocal-sides-off", !plan.shown);
   // `track = 0` = colonnes ABSENTES : sans `hidden`, les deux `<aside>` vides
   // resteraient dans la grille et y creeraient des pistes fantomes.
@@ -5551,6 +5589,15 @@ let vocalDicteeParGeste = false;
     ov.innerHTML = `
       <div class="vocal-top"></div>
       <div class="vocal-stage">
+        <!-- LA COMPOSITION DU MILIEU (point 7 des remarques du proprietaire,
+             2026-11-13) : le CERCLE EN HAUT, a sa taille, et le PERSONNAGE
+             DESSOUS, sur le MEME AXE VERTICAL. C'est UNE colonne flexible,
+             centree dans la rangee : avec un personnage, l'ensemble descend de
+             la moitie de sa hauteur et le cercle remonte d'autant ; sans
+             personnage, la composition se reduit au cercle, qui est donc
+             exactement au milieu. Aucun decalage n'est ecrit : ni 'top', ni
+             'transform', ni marge negative. -->
+        <div class="vocal-center">
         <div class="vocal-orb">
           <span class="vocal-halo"></span>
           <!-- LE BOUTON DE RELANCE DE L'ECOUTE (« Réveiller <Nom> »), decisions
@@ -5565,6 +5612,16 @@ let vocalDicteeParGeste = false;
                controle, il doit etre atteignable au clavier et nomme. -->
           <button type="button" class="vocal-restart hidden" title="${relance}" aria-label="${relance}">${relance}</button>
         </div>
+        <!-- LE PORTRAIT DU PERSONNAGE, SOUS LE CERCLE : pose par
+             'applyVocalPortrait'. Le DISQUE, lui, ne porte RIEN — ni image ni
+             nom. 'alt' vide : l'image est decorative. Masque tant que le
+             personnage n'est pas connu — et masque DEFINITIVEMENT s'il n'y en a
+             pas : aucun repli sur le logo.
+             Son NOM vient juste apres, sous lui ('.vocal-portrait-name', cree a
+             l'execution et masque avec l'image) : une legende sans image ne
+             reste pas orpheline sous le cercle. -->
+        <img class="vocal-portrait" alt="" hidden />
+        </div>
         <!-- LOT 3 (§2.5) : bouton de depannage, MASQUE tant que le micro capte.
              Il n'apparait que si le micro est ferme (refus, absence, panne) ;
              le mode reste utilisable sans lui. -->
@@ -5577,18 +5634,9 @@ let vocalDicteeParGeste = false;
              pas se poser au-dessus d'elle. -->
         <aside class="vocal-side-discussion vocal-side"></aside>
         <aside class="vocal-side-tasks vocal-side">
-          <!-- LE PORTRAIT DU PERSONNAGE, EN HAUT A DROITE (correction du
-               2026-10-31, sur decision du proprietaire) : pose par
-               'applyVocalPortrait'. Le DISQUE, lui, ne porte RIEN — ni image ni
-               nom. 'alt' vide : l'image est decorative. Masque tant que le
-               personnage n'est pas connu — et masque DEFINITIVEMENT s'il n'y en
-               a pas : aucun repli sur le logo.
-               Son NOM vient juste apres, sous lui ('.vocal-portrait-name', cree
-               a l'execution et masque avec l'image) : une legende sans image ne
-               reste pas orpheline au-dessus des taches. -->
-          <img class="vocal-portrait" alt="" hidden />
-          <!-- LA ZONE D'IMAGE, SOUS LE PORTRAIT (§ 7bis) : elle ne porte que la
-               fenetre du VISAGE (PLface), quand il n'y a pas de personnage. Sa
+          <!-- LA ZONE D'IMAGE, SOUS LE TITRE (§ 7bis) : elle ne porte que la
+               fenetre du VISAGE (PLface), quand il n'y a pas de personnage —
+               celui-ci est SOUS LE CERCLE, plus ici (point 7, 2026-11-13). Sa
                place est reservee par un noeud INERTE cree a l'execution
                ('.vocal-image-zone') : aucun cadre, aucune image de remplacement,
                jamais le logo. -->
@@ -5604,11 +5652,10 @@ let vocalDicteeParGeste = false;
     // que la structure de l'ecran reste lisible d'un seul coup d'oeil — meme
     // patron que le libelle du bouton de relance, pose apres coup.
     buildVocalDisplayToggle(ov.querySelector(".vocal-top"));
-    // LE NOM DU PERSONNAGE, SOUS SON IMAGE, dans la colonne de droite (correction
-    // du 2026-10-31) : le disque ne porte plus de nom. Cree APRES le modele,
-    // comme le bouton de masquage : la liste ordonnee des classes de
-    // `buildVocalOverlay` ne bouge pas.
-    buildVocalPortraitName(ov.querySelector(".vocal-side-tasks .vocal-portrait"));
+    // LE NOM DU PERSONNAGE, SOUS SON IMAGE : le disque ne porte plus de nom. Cree
+    // APRES le modele, comme le bouton de masquage : la liste ordonnee des
+    // classes de `buildVocalOverlay` ne bouge pas.
+    buildVocalPortraitName(ov.querySelector(".vocal-center .vocal-portrait"));
     return ov;
   }
 

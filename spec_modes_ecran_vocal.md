@@ -4,8 +4,11 @@
 > lot 4a (`174cc45`), lot 4b (couper la réflexion, voir ce fichier §6),
 > **conversation parlée** (§6bis : parler déclenche une demande, sans bouton).
 >
-> **§ 3ter : ✅ livré** — la colonne de droite de l'écran Vocal existe : le portrait du
-> personnage **en haut à droite**, la liste des tâches **dessous**. **Correction du
+> **§ 3ter : ✅ livré** — la colonne de droite de l'écran Vocal existe : le titre
+> « TÂCHES » puis la liste des tâches. Le **portrait du personnage** a d'abord été **en haut
+> à droite** de cette colonne (2026-10-31) ; depuis le **2026-11-13** (point 7 des remarques)
+> il est **sous le cercle**, sur le même axe vertical, et **ne prend plus aucune place à la
+> colonne**. **Correction du
 > 2026-10-31** : la mission « écran Vocal » du 2026-10-30, qui déplaçait l'image **au centre
 > du cercle**, est **annulée** sur décision du propriétaire — le disque ne porte **rien**
 > (ni image, ni nom).
@@ -181,7 +184,7 @@ recouvre ni la ligne d'état ni la zone de saisie. Ni le disque, ni la ligne
 d'état, ni la barre de saisie, ni le bouton de relance ne bougent.
 
 Dans l'**état nu** (§4ter : tout masqué, sauf le cercle, le portrait du personnage
-en haut à droite, son nom, le bouton et la zone de saisie),
+sous lui, son nom, le bouton et la zone de saisie),
 il faut le dire net :
 **Rien de la conversation n'est affiché** sur cet écran — ni les messages, ni les
 outils, ni un résumé des derniers échanges. Le suivi des agents y est **joignable sur
@@ -266,11 +269,12 @@ non-recouvrement, mouvement réduit).
 > **État réel (correction du 2026-10-31)** : la **structure** des
 > colonnes existe — deux `<aside class="vocal-side">` enfants de la scène (discussion à
 > gauche, tâches à droite) et la grille à trois pistes de `.vocal-stage`. Le **personnage
-> est en haut à droite de l'écran**, dans la colonne de droite, **au-dessus** de la liste
-> des tâches (voir ci-dessous). Le **disque ne porte rien** : ni image, ni nom — la mission
+> est SOUS le cercle**, dans la composition du milieu (`.vocal-center`, 2026-11-13) : il
+> n'est plus dans la colonne de droite, et la liste des tâches ne paie plus rien pour lui.
+> Le **disque ne porte rien** : ni image, ni nom — la mission
 > « écran Vocal » du 2026-10-30, qui l'avait mis au centre du cercle, est **annulée** (décision
-> du propriétaire du 2026-10-31). La colonne de droite porte donc le titre « TÂCHES », **le
-> portrait du personnage et son nom**, **la place de la fenêtre du visage** (PLface) quand
+> du propriétaire du 2026-10-31). La colonne de droite porte donc le titre « TÂCHES »,
+> **la place de la fenêtre du visage** (PLface) quand
 > elle peut s'y tenir, et **la liste des tâches** ; celle de gauche, l'**aperçu de la
 > discussion**.
 > La lecture de la largeur est unique : `planVocalSides()` (`src/js/vocal-sides.js`),
@@ -295,29 +299,25 @@ non-recouvrement, mouvement réduit).
 > ses deux cas sont au **§ 7bis**).
 
 Quand la place le permet (seuil d'affichage des colonnes), l'écran Vocal montre à droite
-**une** colonne qui parle du **travail**, dans cet ordre de haut en bas : **le portrait du
-personnage, son nom et 12 px d'air** (le personnage, en tête de colonne), puis le titre
+**une** colonne qui parle du **travail**, dans cet ordre de haut en bas : le titre
 **« TÂCHES »**, **la zone d'image**, puis **la liste des tâches**. Le titre **ouvre la
-section des tâches** (`vocalColumnNode(…, "above-list")`) au lieu d'être le premier nœud de
-la colonne : le portrait **surplombe** la section, il ne lui appartient pas (remarque du
-propriétaire du 2026-10-03). **Rien n'est écrit sous
+section des tâches** (`vocalColumnNode(…, "above-list")`). **Le personnage n'est plus dans
+cette colonne** (point 7 des remarques du propriétaire, 2026-11-13) : il est **sous le
+cercle**, dans la composition du milieu (`.vocal-center`), sur le **même axe vertical** que
+lui — voir « Le cercle en haut, le personnage dessous » plus bas. **Rien n'est écrit sous
 la liste** : la **ligne d'activité** d'autrefois (« *X* réfléchit », « *X* exécute une
 opération ») a été **retirée** — la fonction pure qui la calculait
 et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
 
 **La zone d'image a TROIS cas, examinés dans cet ordre** — ce sont des faits, pas des réglages :
 
-- **1. Le portrait du personnage actif, d'abord, toujours** : le médaillon rond de
-  **96 px au plancher, MESURÉ jusqu'à 288 px** (voir « la taille du médaillon »
-  ci-dessous) et son nom juste sous lui (8 px d'écart, 20 px de ligne), plus **12 px
-d'air au-dessus** et **12 px d'air** avant ce qui suit — un bloc de
-  **`taille + 52`** (148 px au plancher, `VOCAL_PORTRAIT_BLOCK_PX`), pris en haut de la
-  colonne, donc **en haut à droite de l'écran**, **détaché de la liste** par cet air (aucun
-  filet, aucun cadre : l'écran n'en porte aucun). Le médaillon **ne touche jamais le
-  cadre** : 12 px d'air au-dessus de lui, 10 px de chaque côté (remarque du propriétaire
-  du 2026-11-02 : « avec une marge autour de lui »). Il **l'emporte toujours
-  sur la fenêtre du visage** : si le personnage existe, c'est lui qu'on voit, et la zone
-  d'image ne prend plus rien.
+- **1. Le portrait du personnage actif** n'occupe plus la zone d'image : il est **sous le
+  cercle** (voir plus bas). Quand il existe, la **zone** ne dessine donc **rien** (aucune
+  place réservée) et la liste prend toute la hauteur, **comme au cas 3**. C'était l'inverse
+  avant le 2026-11-13 : le médaillon, en tête de colonne, retranchait `taille + 52` px à la
+  liste — 148 px au plancher, jusqu'à 340 px en grande fenêtre, soit **jusqu'à six rangées
+  perdues**. Il **l'emporte toujours sur la fenêtre du visage** : si le personnage existe,
+  c'est lui qu'on voit, et la zone d'image ne prend plus rien.
 - **2. Sinon, l'avatar du visage (PLface)**, s'il tourne, s'il répond
   (`invoke("plface_status")`, la même sonde que l'écran Paramètres → Avatar) **et si sa
   taille est connue** : **180 px** sont réservés (son plancher : 160 × 180). Pilot **ne
@@ -329,12 +329,12 @@ d'air au-dessus** et **12 px d'air** avant ce qui suit — un bloc de
   cadre, pas de logo, **aucune zone réservée** — et la liste prend toute la hauteur.
 - **La colonne ne réserve, en plus de la liste, que le titre, les deux filets et l'air du bas :
   53 px** (`VOCAL_SIDE_FIXED_PX` = 39 de titre — 14 de marge + 11 de titre + 14 de marge —
-  + 12 d'air + **2 de filets**), plus le **bloc du personnage** quand il est là
-  (`taille + 52`, soit 148 px au plancher et 327 px dans une grande fenêtre), plus
-  **180 px** quand la fenêtre du visage est posée. La liste dispose donc de
-  **`H − 53` px**, de **`H − 53 − (taille + 52)`** avec le personnage, ou de
-  **`H − 53 − 180`** avec la fenêtre du visage, ce qui lui laisse de **1 à 8** lignes selon
-  la fenêtre (`vocalTaskRows`).
+  + 12 d'air + **2 de filets**), plus **180 px** quand la fenêtre du visage est posée.
+  Le **personnage n'y est plus pour rien** (point 7, 2026-11-13) : le médaillon est sous
+  le cercle, il ne prend aucune place à la colonne. La liste dispose donc de
+  **`H − 53` px**, ou de **`H − 53 − 180`** avec la fenêtre du visage, ce qui lui laisse de
+  **1 à 8** lignes selon la fenêtre (`vocalTaskRows`) — **le même nombre avec et sans
+  personnage** (mesuré sur les sept fenêtres, tableau ci-dessous).
 - **Les deux cadres paient le MÊME haut fixe** (décision A du 2026-11-13). La colonne de
   discussion retranchait 26 px (le seul remplissage haut du titre) quand celle des tâches
   en retranchait 51 : chacune annonçait donc une ligne de plus qu'elle n'en montrait.
@@ -359,17 +359,19 @@ d'air au-dessus** et **12 px d'air** avant ce qui suit — un bloc de
   déplace ni le titre ni le haut de la liste. La place de l'avatar est décidée à chaque
   affichage, pas mémorisée.
 
-- **Le nom est SOUS le portrait, en haut à droite** (correction du 2026-10-31, décision du
+- **Le nom est SOUS le portrait, sous le cercle** (correction du 2026-10-31, décision du
   propriétaire ; elle rétablit celle du 2026-10-29 et **annule** celle du 2026-10-30 qui
-  mettait l'image au centre du cercle) : le portrait du **personnage actif** est le premier
-  contenu de la colonne de droite, **96 px** de médaillon rond, et le nom est écrit **juste
-  sous lui**, **sur une seule ligne** — le nom du personnage, à défaut celui que vous avez
-  donné à l'assistant, jamais les deux. On voit donc toujours à qui l'on parle. Il n'y a
+  mettait l'image au centre du cercle ; le **2026-11-13** déplace le couple sous le
+  disque) : le portrait du **personnage actif** est posé **sous le cercle**, **96 px** de
+  médaillon rond au plancher, et le nom est écrit **juste sous lui**, **sur une seule
+  ligne** — le nom du personnage, à défaut celui que vous avez donné à l'assistant,
+  jamais les deux. On voit donc toujours à qui l'on parle. Il n'y a
   **qu'un nom** à l'écran : ni pastille sous le bouton-cercle, ni nom dans le disque, et
   **rien d'autre sous l'image**. Ce libellé ne déplace ni le cercle, ni le halo, ni la ligne
   d'état, ne capte **aucun clic** et ne se règle pas. Sans personnage, l'image et son nom
-  sont absents et la zone d'image prend la place (cas 2 ou 3 ci-dessus) — aucun repli sur le
-  logo. **Le disque, lui, ne porte ni image ni nom.**
+  sont absents, la composition se réduit au seul cercle — qui est alors **exactement
+  centré** — et la zone d'image de la colonne prend le relais (cas 2 ou 3 ci-dessus) : aucun
+  repli sur le logo. **Le disque, lui, ne porte ni image ni nom.**
 
 Les trois sorties (logo, Échap, fermeture de l'onglet) et les colonnes sans clic restent
 **inchangées** : **aucune** des deux colonnes n'ajoute de zone cliquable.
@@ -568,56 +570,106 @@ aucune couleur en dur) et `src/js/vocal-panneaux-bleu-transparent.test.js` (le b
 cadres et du texte : deux jetons seulement, aucun sous-thème ne les fige, contraste des
 titres sur les dix palettes, bord ≥ 4 et **aucun voile de surface**).
 
-### La taille du médaillon : mesurée, jamais écrite (2026-11-02)
+### Le cercle en haut, le personnage dessous (point 7, 2026-11-13)
 
-Remarque du propriétaire : « le portrait doit être **environ trois fois plus grand** ».
-96 px était donc un plancher, pas une taille. Le médaillon n'est plus figé : la feuille de
-style lit `--vocal-portrait-size`, que `vocalSyncSides()` pose à la valeur rendue par
-`vocalPortraitSize()` — **un seul chiffre**, lu par le budget de la liste et par le CSS.
-La décision est **pure** et prise dans cet ordre :
+Remarque du propriétaire : « le cercle en haut, à sa taille actuelle, la photo du
+personnage **dessous**, sur le **même axe vertical**, **non rognée**, avec de **vraies
+marges** — et si grand que possible : environ **trois fois** l'ancien médaillon de 96 px,
+soit ~288 px dans une grande fenêtre ». Sans image ni avatar, **le cercle reste centré en
+hauteur** et la photo lui cède la place, **sans redémarrage**.
 
-1. **jamais plus large que la place** : la colonne des tâches moins le cadre (22 px) et
-   moins 10 px de marge de chaque côté — le médaillon ne déborde jamais du cadre ;
-2. **jamais si haut qu'il mange les tâches** : la hauteur doit encore laisser les **deux**
-   en-têtes de groupe et **deux** rangées à la liste (`VOCAL_PORTRAIT_MIN_LIST_PX` = 40 +
-   2 × 46 = 132 px). C'était **178 px (trois rangées)** dans la première passe : à 178 px
-   le médaillon plafonnait à 231 px, soit **2,4 fois** le plancher — la remarque n'était
-   pas tenue. À 132 px il atteint **275 px (2,86 fois)**, et la liste garde une tâche par
-   groupe ; ce qui dépasse est **dit** (« + N autre(s) »), jamais caché ;
-3. **jamais plus de trois fois le plancher** (cible `VOCAL_PORTRAIT_TARGET_PX` = 288 px) ;
-4. **jamais moins de 96 px** — sauf si la place elle-même est plus petite (la règle 1 passe
-   avant : on ne déborde pas pour tenir un plancher). Quand la hauteur ne porte pas les
-   deux rangées, la règle 2 cède : le médaillon reste au plancher et la liste garde ce qui
-   reste (`H − 53 − 148`, soit 30 px à 720 × 520 : la rangée est rognée d'autant, jamais
-   absente).
+**La composition du milieu est UNE seule colonne de la grille**, pas deux.** `.vocal-stage`
+garde ses **trois** pistes (discussion · milieu · tâches) ; le milieu est un conteneur
+`.vocal-center` (`grid-area: 1 / 2`) en `display: flex; flex-direction: column;
+align-items: center; justify-content: center; align-self: stretch` qui porte, **dans cet
+ordre**, le disque puis le médaillon et son nom. Le disque n'est **plus** un élément de la
+grille : il n'a plus aucune règle de placement (`flex: 0 0 auto;` et rien d'autre). C'est
+ce qui garantit la **même verticale** par construction — `cx(disque) = cx(photo) =
+cx(composition)` — et non par des `margin` calculées.
 
-Mesure réelle des **huit fenêtres** du tableau § 3ter, personnage présent :
+**Le disque ne bouge JAMAIS pour faire de la place.** Aucun décalage écrit : ni `top`, ni
+`transform`, ni marge négative, ni `position: absolute`. Quand une photo arrive, le disque
+monte **uniquement** parce que la composition entière (disque + photo + nom), plus haute,
+se recentre en bloc ; quand elle part, il redescend exactement au milieu. Quand il n'y a ni
+photo ni avatar, la composition se réduit au disque et `justify-content: center` le pose
+**au centre exact** de la rangée. Verrous : `ecran-vocal-cadres-et-cercle.test.js` (le
+disque ne descend pas, ne monte pas, ne fait que suivre le recentrage) et
+`src/js/ecran-vocal-point7-photo-sous-le-cercle.test.js` (P1 : une seule colonne de grille,
+le disque sans placement ; P2 : aucun décalage écrit, `margin-block-start: 12px` du
+médaillon intact, aucun style en ligne ; P3 : sans photo, l'image et le nom sont `hidden`,
+`portraitSize` vaut **0** ; P4 : la hauteur de rangée est **mesurée** au lieu d'être
+supposée ; P5 : la **largeur** de la fenêtre ne fait plus grandir le médaillon).
 
-| Fenêtre | Colonne | Colonne des tâches | Médaillon | Bloc (`taille + 52`) | Liste | Rangées |
-|---|---|---|---|---|---|---|
-| 720 × 520 | 244 px | 180 px | 96 px | 148 px | 30 px | 1 (rognée) |
-| 768 × 576 | 260 px | 196 px | 96 px | 148 px | 86 px | 1 |
-| 820 × 620 | 272 px | 208 px | 96 px | 148 px | 130 px | 1 |
-| 896 × 672 | 282 px | 218 px | 146 px | 198 px | 132 px | 2 |
-| 1024 × 768 | 314 px | 250 px | 208 px | 260 px | 166 px | 2 |
-| 1280 × 800 | 384 px | 320 px | 274 px | 326 px | 132 px | 2 |
-| 1440 × 900 | 384 px | 320 px | 275 px | 327 px | 132 px | 2 |
-| 1920 × 1080 | 400 px | 336 px | 275 px | 327 px | 132 px | 2 |
+**La taille du médaillon se prend désormais sur la HAUTEUR, plus sur la largeur.** Le
+budget a changé de nature : l'ancien le retranchait à la longueur de la liste des tâches, ce
+qui plafonnait le médaillon à **274-275 px** et ne pouvait jamais tenir la cible. Il se
+mesure maintenant dans la **rangée du stage** :
 
-**Le chiffre réel est 274-275 px, soit 2,85-2,86 fois le plancher, atteint dès 1280 px de
-large** — et **pas 288** : 288 px demanderait une colonne des tâches de 330 px, donc une
-fenêtre de plus de 2 000 px, et il ne resterait alors que **deux** rangées, que l'on a
-déjà. La cible de 288 est donc un **plafond**, pas une promesse : 275 est le plus grand
-médaillon qui tienne **avec sa marge** (1 px de chaque côté à 1440 × 900, 13 px à
-1280 × 800). Sous 1280 px la largeur manque (deux colonnes + le disque), et le chiffre
-baisse honnêtement : 208 px à 1024 (2,17×), 148 à 896 (1,54×).
+1. **jamais plus haut que l'air disponible sous le disque** :
+   `parHauteur = hauteurDeRangee − tailleDuDisque − VOCAL_PORTRAIT_FRAME_PX` (**64 px** =
+   12 px d'air du stage + 8 px d'écart image/nom + 20 px de nom + 12 px d'air + 12 px d'air
+   interne du bloc) ;
+2. **jamais plus de trois fois le plancher** (`VOCAL_PORTRAIT_TARGET_PX` = **288 px**) ;
+3. **plancher 96 px** (`VOCAL_PORTRAIT_PX`) tant que la place le porte, **56 px**
+   (`VOCAL_PORTRAIT_MIN_PX`) en dessous : au-delà on masque plutôt que d'afficher un timbre
+   (0 px, la composition redevient le disque seul) ;
+4. **arrondi vers le BAS, jamais vers le haut** : un débordement de 0,3 px mangerait l'air
+   du haut et ferait sortir la composition de sa rangée.
+
+**La largeur n'entre plus dans le calcul** : `vocalPortraitSize({ orbSize, stageHeight })`.
+À hauteur de rangée constante, 1024 et 1920 de large donnent **le même médaillon**
+(P5 le tient).
+
+**La hauteur de rangée est MESURÉE, pas supposée** : `vocalStageRowHeight()` lit
+`getComputedStyle(.vocal-stage).gridTemplateRows`, prend la **première piste** en px (celle
+du disque, `1fr`), et retombe sur `innerHeight − VOCAL_STAGE_RESERVED_PX` (**207** px =
+80 px de bandeau + 95 px de bas + 32 px de gouttière) seulement si la lecture échoue.
+`vocalSyncSides()` lui passe cette hauteur ; c'est le seul écrivain de
+`--vocal-portrait-size`. La feuille de style lit `var(--vocal-portrait-size, 96px)` : un seul
+chiffre, du budget au pixel.
+
+**La liste des tâches ne paie plus rien** : `listHeight = columnHeight − 53 − hauteurDeLaZone`
+(`VOCAL_SIDE_FIXED_PX` + la seule zone d'image restante, l'avatar). Le nombre de rangées est
+donc **le même avec et sans personnage** — c'est le cœur du point 7.
+
+Mesure réelle des **sept fenêtres** (composition de gauche à droite : disque, médaillon),
+personnage présent, valeurs **mesurées dans le navigateur** après convergence :
+
+| Fenêtre | Rangée | Disque | Médaillon | Bloc (`taille + 52`) | Composition | Liste | Rangées (avec / sans) |
+|---|---|---|---|---|---|---|---|
+| 720 × 520 | 313 px | 151,6 px | **97 px** | 149 px | 312,6 px | 178 px | **3 / 3** |
+| 768 × 576 | 369 px | 188,3 px | **116 px** | 168 px | 368,3 px | 234 px | **4 / 4** |
+| 896 × 672 | 465 px | 251,3 px | **149 px** | 201 px | 464,3 px | 330 px | **6 / 6** |
+| 1024 × 768 | 561 px | 314,3 px | **182 px** | 234 px | 560,3 px | 426 px | **8 / 8** |
+| 1280 × 800 | 593 px | 335,3 px | **193 px** | 245 px | 592,3 px | 458 px | **8 / 8** |
+| 1440 × 900 | 693 px | 336,0 px | **288 px** | 340 px | 688 px | 459 px | **8 / 8** |
+| 1920 × 1080 | 873 px | 336,0 px | **288 px** | 340 px | 688 px | 459 px | **8 / 8** |
+
+**La cible est tenue** : **288 px dès 1440 × 900**, soit **3,0 fois** le plancher de 96 px,
+et **182 à 193 px** aux tailles intermédiaires — contre **274-275 px** au mieux avant le
+point 7, et **jamais plus de deux rangées** de tâches. Ce qui a changé n'est pas une
+constante : c'est **ce à quoi la place est prise**.
+
+Positions réelles relevées au navigateur (largeur 720) :
+`cx(disque) = cx(photo) = cx(stage) = 360` ; avec personnage, le disque occupe
+`86,2 → 237,8` et la photo commence à `249,8`, son nom à `354,8` ; **sans** personnage, le
+disque occupe `160,7 → 312,3` dans une rangée de `313` px — **centré**. À 768 × 576 :
+disque `86,3 → 274,7`, photo à `286,7`, nom à `410,7` ; **sans** personnage,
+`170,3 → 358,7`. À 896 × 672 : disque `86,3 → 337,7`, photo à `349,7`, nom à `506,7` ;
+**sans** personnage, `186,8 → 438,2`.
 
 **Le médaillon ne touche ni le cadre, ni le bord, ni son nom** : 12 px d'air au-dessus
 (`VOCAL_PORTRAIT_AIR_TOP_PX`, comptés dans le bloc), 8 px entre l'image et le nom, 12 px
-sous le nom, et au moins 10 px de marge latérale à l'intérieur du cadre. `object-fit:
-cover` sur un carré de côté `taille` : aucun visage rogné, aucun débordement. Verrou :
-`src/js/vocal-portrait-detache.test.js` (R6 : la marge, la cible tenue, le chiffre réel,
-et la liste à deux rangées sous le médaillon).
+sous le nom, et la composition est **centrée dans la largeur de la piste du disque**
+(`width: var(--vocal-orb-size)`) : le médaillon est donc toujours sur l'axe du disque,
+quelle que soit la largeur des colonnes. `object-fit: cover` sur un carré de côté
+`taille` : aucun visage rogné. Verrou : `src/js/vocal-portrait-detache.test.js` (R6 : la
+marge, la cible tenue, le chiffre réel, et la liste qui ne perd plus aucune rangée).
+
+**L'avatar du visage, lui, n'a pas bougé** : sa fenêtre reste **dans la colonne** et paie
+toujours ses **180 px**. C'est le seul cas où la liste perd des rangées (1 à 768 × 576,
+contre 4 sans lui) — comportement inchangé, et voulu : c'est une fenêtre externe qui a
+besoin de cette place.
 
 **Rien n'est déplacé, rien n'est copié.** `collectVocalDiscussion()`
 (`super-agent.js`) ne fait que **lire** les deux familles du chat
@@ -684,17 +736,17 @@ bouton **« Travail »**. Aucune tâche en cours ? La colonne affiche « **Aucun
 cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne le chevauche
 jamais, même avec un titre très long.
 
-Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
-de la liste et **détaché d'elle** : un médaillon rond **d'au moins 96 px**, qui **grandit avec la
-place disponible** — près de trois fois sa taille de départ dès 1 280 px de large
-(**2,8 ×** ; la cible de 3 × n'est jamais atteinte, la colonne manquerait de place), jamais au
-point de manger les tâches —, et son **nom** est écrit **juste
-dessous**, sur
-une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
-voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
-Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la zone laisse alors la
-place à la fenêtre du visage de l'avatar, ou à rien du tout. Le portrait suit un éventuel
-changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni image ni nom.**
+Le **portrait du personnage** n'est plus dans la colonne : il est posé **sous le cercle**, sur
+le **même axe vertical** que lui, avec son **nom juste dessous**, sur une seule ligne — le nom
+du personnage, à défaut celui de votre assistant, jamais les deux. On voit donc toujours à qui
+l'on parle. Le médaillon est **rond**, **jamais rogné**, avec de **vraies marges** (12 px
+d'au-dessus, 12 px sous le nom), et il **grandit avec la hauteur disponible** : **96 px au
+plancher** et **288 px dès une fenêtre de 1 440 × 900** — soit **trois fois** sa taille de
+départ. Pas de personnage déposé par le projet **Présences** ? Il n'y a **aucune image de
+remplacement**, pas même le logo Pilot : la place revient à la fenêtre du visage de l'avatar,
+ou à rien. Le portrait suit un éventuel changement de personnage sans redémarrer Pilot.
+**Le cercle, lui, ne porte ni image ni nom — et la photo ne lui prend aucune place dans la
+colonne des tâches** : celle-ci affiche **autant de tâches avec que sans personnage**.
 
 Les deux colonnes sont des **panneaux de verre** : on voit la lumière de l'écran au travers, et
 elles-mêmes n'affichent jamais la conversation ni le contenu d'une autre fenêtre. Elles laissent
@@ -705,10 +757,14 @@ largeur, même hauteur, ils commencent et finissent à la même hauteur, et ce q
 retranché pour le titre, l'air du bas et les traits est retranché **des deux côtés** :
 le nombre de lignes annoncé est celui qu'on voit.
 
-**Le cercle est centré en hauteur** dans la place qui lui reste, que la zone du portrait
-soit occupée ou non : il ne monte pas quand une image arrive, il ne descend pas quand
-elle part. Il garde toujours la même taille et la même apparence, et il reste **allumé**
-quand tout le reste est masqué.
+**Le cercle est en haut, la photo dessous.** Le cercle garde **toujours** la même taille et
+la même apparence, et il reste **allumé** quand tout le reste est masqué. Quand un
+personnage existe, le couple **cercle + photo + nom** est **centré en hauteur** dans la
+place disponible, sur **un seul axe vertical** : la photo est donc toujours **sous** le
+cercle, jamais au-dessus, jamais sur le côté, jamais dans le disque. Sans image ni avatar,
+il ne reste que le cercle, et il est alors **exactement au milieu** de la hauteur. Le
+passage d'un cas à l'autre se fait **sans redémarrer** Pilot et **sans qu'aucune position
+soit écrite** : rien ne pousse le cercle, c'est l'ensemble qui se recentre.
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
 au moindre mouvement de la souris, puis **s'efface de nouveau après quelques secondes**
@@ -1040,7 +1096,7 @@ réglage déguisé, et le bas a déjà son effacement automatique (§4bis).
 
 **Ce qui reste, toujours.** Le **bouton d'affichage**, seul moyen de tout
 réafficher — le **portrait du personnage et son nom** (décision du 2026-10-29,
-rétablie le 2026-10-31 avec le retour du portrait dans la colonne) — le
+rétablie le 2026-10-31 ; **sous le cercle** depuis le 2026-11-13) — le
 **cercle** et tout ce qu'il porte (enveloppe de parole, arc de réflexion,
 bouton « Réveiller <Nom> ») : « quand on désactive l'affichage, le cercle ne doit
 pas disparaître » (propriétaire, 2026-11-02) — et la **zone de saisie sous le
@@ -1051,8 +1107,9 @@ cercle**, champ de texte et bouton de dictée compris (précision du propriétai
 > mission « écran Vocal » du 2026-10-30 avait transporté le personnage **au centre
 > du disque** et fait tomber l'exception du 2026-10-29 (le portrait ne pouvait plus
 > rester seul, il était peint par le même nœud que l'anneau et sa couronne). Cette
-> mission est **annulée** : le portrait est de nouveau un **médaillon de la colonne
-> de droite**, en haut à droite, avec son nom dessous. Il n'appartient donc plus à
+> mission est **annulée** : le portrait est de nouveau un **médaillon** avec son nom
+> dessous — dans la colonne de droite au 2026-10-31, **sous le cercle depuis le
+> 2026-11-13** (point 7). Il n'appartient donc plus à
 > l'objet lumineux, et l'**exception du 2026-10-29 se réapplique** : dans l'état nu,
 > **le portrait et son nom restent visibles**, à leur place, quand tout le reste
 > s'éteint. Le bloc d'effacement ne les nomme pas — c'est **la seule façon** de les
@@ -1066,8 +1123,9 @@ Deux façons de perdre le portrait, toutes deux fermées :
 
 1. **Le ranger dans un nœud masqué.** C'est ce qui s'est produit le 2026-10-31 au
    matin, quand le personnage avait été transporté au centre du disque
-   (`.vocal-orb` était déjà nommé). Le portrait est désormais un **enfant direct**
-   de la colonne de droite — ni dans le disque, ni dans la liste des tâches, dont
+   (`.vocal-orb` était déjà nommé). Le portrait est désormais un **enfant de la
+   composition du milieu** (`.vocal-center`), **à côté** du disque et non dedans —
+   ni dans le disque, ni dans la liste des tâches, dont
    le contenu est réécrit (`innerHTML`) toutes les 900 ms.
 2. **Ne pas l'avoir en mémoire.** L'entrée dans l'écran Vocal relisait le
    personnage *déjà* connu (`applyVocalPortrait`) sans jamais le **demander** :
@@ -1822,7 +1880,7 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
 | `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les quatre règles **dans l'ordre**), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`, et `vocalEtatQuiRetientLeBas` (**le seul fait d'usage** donné à la règle 3 : `parole` retient toujours, `écoute` seulement si un mot a été transcrit). Aucun DOM, aucune minuterie |
 | ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône seule** depuis le 2026-11-02 (le texte visible est retiré ; `title` + `aria-label` = `vocalBareLabel()`, qui dit l'état puis l'action), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed` et l'infobulle), le terme `vocalBare ||` dans `vocalSyncChrome` (le bas est **retenu allumé**, il n'est plus éteint par l'état nu : la zone de saisie n'est pas dans le périmètre, 2026-11-01), la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
-| ✅ **livré** `vocal-sides.js` | **source unique** du budget des colonnes et du personnage (§3ter) : `planVocalSides` (`track`, `taskTrack`, `columnHeight`, `listHeight`, `portraitSize`, `portraitBlock`, `imageZone`), `vocalPortraitSize` (médaillon **mesuré** : place dans le cadre, trois rangées garanties à la liste, cible 288, plancher 96), `vocalPortraitBlockSize` (`taille + 52`), `planVocalImageZone`, `planVocalTasks`, `planVocalDiscussion` — aucun DOM, aucune constante cachée |
+| ✅ **livré** `vocal-sides.js` | **source unique** du budget des colonnes et du personnage (§3ter) : `planVocalSides` (`track`, `taskTrack`, `columnHeight`, `listHeight`, `portraitSize`, `portraitBlock`, `imageZone`), `vocalPortraitSize` (médaillon **mesuré sur la HAUTEUR de la rangée** depuis le point 7 : `hauteurDeRangee − disque − 64`, cible 288, plancher 96 puis 56, arrondi vers le bas), `vocalPortraitBlockSize` (`taille + 52`), `planVocalImageZone` (le personnage n'y prend plus de place, l'avatar 180 px), `planVocalTasks`, `planVocalDiscussion` — aucun DOM, aucune constante cachée |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 
@@ -1884,14 +1942,18 @@ ratio), `vocal-deux-voix.test.js` (**les deux voix se distinguent** : côté,
 alignement, bulle teintée présente d'un côté et absente de l'autre, **aucune couleur
 en dur**, question bornée entre 60 % et 100 %, aucun `padding-block` ajouté, une
 seule source de classes), `vocal-portrait-detache.test.js` (**le portrait agrandi et
-détaché** : la taille lue par `var(--vocal-portrait-size, 96px)` **et** par le budget,
-`taille + 52` px de bloc, aucun filet ni ombre, le titre « TÂCHES » créé **au-dessus de
-la liste**, le portrait resté affiché
-en état nu et jamais cliquable, la place prise **sur la liste** et non sur la
-colonne), `ecran-vocal-marges-transparence-portrait.test.js` (**les trois remarques du
+**détaché** : la taille lue par `var(--vocal-portrait-size, 96px)` **et** par le budget,
+`taille + 52` px de bloc, aucun filet ni ombre, le portrait resté affiché
+en état nu et jamais cliquable, et **la liste des tâches qui ne perd plus aucune
+rangée** — point 7 : le médaillon est sous le cercle), `ecran-vocal-point7-photo-sous-le-cercle.test.js`
+(**la composition du milieu** : une seule colonne de grille (`grid-area: 1 / 2`), le
+disque sans aucun placement, `flex-direction: column` + `justify-content: center`, aucun
+décalage écrit, l'image et le nom `hidden` sans personnage, `portraitSize` à **0**, la
+hauteur de rangée **mesurée** (`gridTemplateRows`), et la largeur qui ne fait plus
+grandir le médaillon), `ecran-vocal-marges-transparence-portrait.test.js` (**les trois remarques du
 2026-11-02** : air du bas et du haut du médaillon comptés, surface de verre teintée et
-floutée devant les deux lavis du calque, médaillon mesuré jusqu'à 2,86 fois le
-plancher, et cadre du panneau de droite éteint en état nu sans toucher au portrait),
+floutée devant les deux lavis du calque, médaillon mesuré jusqu'à **trois fois** le
+plancher (288 px), et cadre du panneau de droite éteint en état nu sans toucher au portrait),
 `ecran-vocal-transparence-visible.test.js` (**la lumière traverse vraiment le verre** :
 mesure au pixel sur les dix palettes — au moins 6 niveaux d'écart entre le panneau
 éclairé et le même panneau à nu, au moins 4 niveaux de bord, contraste du texte tenu),

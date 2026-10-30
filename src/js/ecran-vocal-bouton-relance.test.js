@@ -127,18 +127,20 @@ describe("1. l'objet pose dans l'ecran : un rond DANS le disque", () => {
     expect(ordre).toEqual([
       "vocal-top",
       "vocal-stage",
+      // LA COMPOSITION DU MILIEU (point 7 des remarques du proprietaire,
+      // 2026-11-13) : le cercle, et le portrait SOUS lui, dans le meme bloc.
+      "vocal-center",
       "vocal-orb",
-      // Correction du 2026-10-31 : le portrait a QUITTE le disque, qui ne porte
-      // plus rien. Il est en haut de la colonne de droite (voir ci-dessous).
+      // Le disque ne porte plus rien : ni image, ni nom.
       "vocal-halo",
       "vocal-restart",
+      "vocal-portrait",
       "vocal-mic-fix",
-      // Les deux colonnes laterales gardent leur place ; le portrait est le
-      // PREMIER contenu de la colonne des taches, donc au-dessus de la liste, et
-      // le nom du personnage est cree apres le modele (aucune entree de plus).
+      // Les deux colonnes laterales gardent leur place ; la colonne des taches
+      // commence par sa liste (le titre et la zone d'image sont crees apres le
+      // modele), et le nom du personnage aussi (aucune entree de plus).
       "vocal-side-discussion",
       "vocal-side-tasks",
-      "vocal-portrait",
       "vocal-side-body",
       "vocal-status",
       "vocal-input",

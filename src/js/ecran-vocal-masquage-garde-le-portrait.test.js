@@ -288,7 +288,9 @@ describe("1. ce que le masque atteint — et ce qu'il n'atteint JAMAIS (defaut d
     // Sans ce controle, une erreur de lecture (liste de selecteurs vide, chaine
     // vide) ferait passer les deux tests precedents en ne verifiant rien.
     const selecteurs = TOUS_LES_SELECTEURS();
-    const colonne = chaineDe("vocal-portrait").slice(0, -1); // jusqu'a la colonne
+    // La COLONNE DES TACHES (et non les ancetres du portrait, qui vit maintenant
+    // sous le cercle) : le masque doit toujours l'atteindre.
+    const colonne = chaineDe("vocal-side-body").slice(0, -1); // jusqu'a la colonne
     // La ligne d'etat, la colonne de gauche, le titre, la liste : tous nommes,
     // tous atteints. LE DISQUE N'EST PLUS DANS CETTE LISTE, et son controle est
     // passe en NEGATIF juste apres (regle du proprietaire, 2026-11-02 : « quand
@@ -353,12 +355,16 @@ describe("1. ce que le masque atteint — et ce qu'il n'atteint JAMAIS (defaut d
 describe("2. l'endroit du portrait : jamais dans le disque, jamais dans la liste", () => {
   const chaine = () => chaineDe("vocal-portrait");
 
-  it("il est un enfant DIRECT de la colonne de droite", () => {
+  it("il est un enfant DIRECT de la composition du milieu, SOUS le cercle", () => {
+    // Point 7 des remarques du proprietaire (2026-11-13) : le personnage n'est
+    // plus dans une colonne, il est SOUS le cercle, sur le meme axe. Ses deux
+    // ancetres sont donc la COMPOSITION et la scene — et la colonne des taches
+    // n'est plus dans sa chaine du tout.
     const ch = chaine();
     expect(ch[ch.length - 1].classes).toContain("vocal-portrait");
-    expect(ch[ch.length - 2].classes).toContain("vocal-side-tasks");
-    // Et la colonne est bien dans la scene, a cote de la discussion.
+    expect(ch[ch.length - 2].classes).toContain("vocal-center");
     expect(ch[ch.length - 3].classes).toContain("vocal-stage");
+    expect(ch.some((el) => el.classes.includes("vocal-side-tasks"))).toBe(false);
   });
 
   it("il n'est PAS dans le disque : le cercle ne porte ni image ni nom", () => {

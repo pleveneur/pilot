@@ -51,9 +51,10 @@ import {
   VOCAL_PORTRAIT_AIR_PX,
   VOCAL_PORTRAIT_AIR_TOP_PX,
   VOCAL_PORTRAIT_BLOCK_PX,
-  VOCAL_PORTRAIT_EDGE_PX,
+  VOCAL_PORTRAIT_FRAME_PX,
   VOCAL_PORTRAIT_GAP_PX,
-  VOCAL_PORTRAIT_MIN_LIST_PX,
+  // Le plancher du VISIBLE (56 px) : sous lui, aucun medaillon.
+  VOCAL_PORTRAIT_MIN_PX,
   VOCAL_PORTRAIT_NAME_PX,
   VOCAL_PORTRAIT_PX,
   VOCAL_PORTRAIT_TARGET_PX,
@@ -209,31 +210,37 @@ describe("R3 — le medaillon est MESURE, plus fige", () => {
     expect(portrait).toMatch(/height:\s*var\(--vocal-portrait-size,\s*96px\)/);
   });
 
-  it("la mesure tient dans le cadre, garde deux rangees et leurs en-tetes, et ne depasse pas la cible", () => {
-    // Place : la colonne moins le cadre, moins une marge de chaque cote.
-    const place = 256 - VOCAL_SIDE_FRAME_PX - 2 * VOCAL_PORTRAIT_EDGE_PX;
-    expect(vocalPortraitSize({ taskTrack: 256, columnHeight: 512 })).toBe(place);
-    expect(place).toBe(214);
-    // Hauteur : ce qui reste quand on a paye le haut fixe, les DEUX rangees et
-    // leurs deux en-tetes promises a la liste, et le reste du bloc du
-    // personnage.
-    const parHauteur =
-      512 -
-      VOCAL_SIDE_FIXED_PX -
-      VOCAL_PORTRAIT_MIN_LIST_PX -
-      VOCAL_PORTRAIT_AIR_TOP_PX -
-      VOCAL_PORTRAIT_GAP_PX -
-      VOCAL_PORTRAIT_NAME_PX -
-      VOCAL_PORTRAIT_AIR_PX;
-    expect(parHauteur).toBe(275);
-    // Une colonne large mais une fenetre basse : c'est la HAUTEUR qui decide.
-    expect(vocalPortraitSize({ taskTrack: 2000, columnHeight: 512 })).toBe(parHauteur);
-    // La borne haute est la cible : jamais plus de trois fois le plancher.
-    expect(vocalPortraitSize({ taskTrack: 2000, columnHeight: 4000 })).toBe(
+  it("la mesure se prend en HAUTEUR, sous le disque — jamais dans une colonne", () => {
+    // Point 7 (2026-11-13) : le personnage est SOUS le cercle. Le budget n'est
+    // donc plus la largeur d'une colonne mais ce que la rangee de la scene
+    // laisse libre sous le disque : rangee - disque - cadre (64 px).
+    expect(VOCAL_PORTRAIT_FRAME_PX).toBe(64);
+    // Une rangee haute : la cible de 288 px (3 x 96) est atteinte, et bornee.
+    expect(vocalPortraitSize({ orbSize: 336, stageHeight: 693 })).toBe(
       VOCAL_PORTRAIT_TARGET_PX,
     );
-    // Et jamais un medaillon dans une colonne qui n'en porte pas.
-    expect(vocalPortraitSize({ taskTrack: 40, columnHeight: 512 })).toBe(0);
+    // Une rangee courte : c'est la HAUTEUR qui decide, au pixel.
+    expect(vocalPortraitSize({ orbSize: 336, stageHeight: 500 })).toBe(100);
+    // Jamais plus large que le disque qu'il surmonte (regle 2).
+    expect(vocalPortraitSize({ orbSize: 120, stageHeight: 4000 })).toBe(120);
+    // Jamais plus que la cible (regle 3).
+    expect(vocalPortraitSize({ orbSize: 400, stageHeight: 4000 })).toBe(
+      VOCAL_PORTRAIT_TARGET_PX,
+    );
+  });
+
+  it("sous 56 px de place, aucun medaillon — jamais un timbre-poste", () => {
+    // Entre 56 et 96 px la place est courte : le medaillon prend ce qu'elle
+    // donne et reste visible. En dessous de 56 px, il ne s'affiche pas : un
+    // timbre-poste sous un grand cercle ne serait plus un personnage.
+    expect(vocalPortraitSize({ orbSize: 336, stageHeight: 456 })).toBe(
+      VOCAL_PORTRAIT_MIN_PX,
+    );
+    expect(vocalPortraitSize({ orbSize: 336, stageHeight: 455 })).toBe(0);
+    // Rien a mesurer (entrees absentes ou absurdes) : aucun medaillon.
+    expect(vocalPortraitSize({})).toBe(0);
+    expect(vocalPortraitSize({ orbSize: 0, stageHeight: 693 })).toBe(0);
+    expect(vocalPortraitSize({ orbSize: 336, stageHeight: 0 })).toBe(0);
   });
 
   it("`vocalSyncSides` est le SEUL ecrivain du jeton, et il lit le plan", () => {
@@ -245,15 +252,19 @@ describe("R3 — le medaillon est MESURE, plus fige", () => {
     expect(ecritures).toHaveLength(1);
   });
 
-  it("le plan porte la taille ET le bloc : la liste en est deduite", () => {
-    const avec = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasPortrait: true });
-    expect(avec.portraitSize).toBe(275);
+  it("le plan porte la taille ET le bloc, et la LISTE ne paie plus rien", () => {
+    const entrees = { width: 1440, height: 900, orbSize: 336, stageHeight: 693 };
+    const avec = planVocalSides({ ...entrees, hasPortrait: true });
+    expect(avec.portraitSize).toBe(VOCAL_PORTRAIT_TARGET_PX);
     expect(avec.portraitBlock).toBe(vocalPortraitBlockSize(avec.portraitSize));
-    expect(avec.listHeight).toBe(avec.columnHeight - VOCAL_SIDE_FIXED_PX - avec.portraitBlock);
-    // Sans personnage, aucune place n'est mesuree ni retiree.
-    const sans = planVocalSides({ width: 1440, height: 900, orbSize: 336 });
+    // LE POINT 7 TIENT DANS CETTE LIGNE : la liste garde toute sa hauteur, le
+    // bloc du personnage ne lui est plus retranche (avant, elle tombait a UNE
+    // rangee des que le personnage etait la).
+    expect(avec.listHeight).toBe(avec.columnHeight - VOCAL_SIDE_FIXED_PX);
+    const sans = planVocalSides(entrees);
     expect(sans.portraitSize).toBe(0);
     expect(sans.portraitBlock).toBe(0);
+    expect(avec.listHeight).toBe(sans.listHeight);
   });
 });
 

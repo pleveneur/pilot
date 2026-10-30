@@ -1361,6 +1361,35 @@ connue » est remplie ; **tant qu'elle ne l'est pas, le cas 2 ne s'affiche pas**
 et l'avatar n'est **pas** déplacé). C'est le choix qui ne peut pas se retourner contre
 l'utilisateur : il ne voit jamais un avatar mal posé, et il ne voit jamais un trou.
 
+### 7bis.0 RÉVISION DU 2026-11-13 (point 7) — le personnage a QUITTÉ la zone
+
+> **Décision du propriétaire, mot pour mot** : « le cercle en haut, à sa taille actuelle,
+> la photo **dessous**, sur le **même axe vertical**, non rognée, avec de vraies marges —
+> environ **trois fois** plus grande ». Le personnage n'est donc **plus dans la colonne** :
+> il est **sous le disque**, dans la composition du milieu (`.vocal-center`), et son nom
+> reste juste sous lui.
+>
+> Conséquences, toutes mesurées (voir `docs/rapports/RAPPORT-ecran-vocal-point7-cercle-photo.md`) :
+>
+> - **Le cas 1 ne réserve plus rien dans la colonne.** Avec un personnage, la liste des
+>   tâches garde **toute** la hauteur (`H − 53`), exactement comme au cas 3 : elle ne perd
+>   plus 148 à 340 px, donc plus **jusqu'à six rangées**.
+> - **La taille du médaillon se prend sur la HAUTEUR de la rangée**, plus sur la largeur de
+>   la colonne : `vocalPortraitSize({ orbSize, stageHeight })` = `hauteurDeRangee −
+>   tailleDuDisque − 64`, plafonnée à **288 px** (trois fois le plancher de 96), plancher
+>   **96 px** puis **56 px**, arrondi **vers le bas**. La cible de 3 × est **atteinte** dès
+>   1 440 × 900 (288 px) ; elle ne dépend plus de la largeur.
+> - **Le disque n'a plus aucun placement propre** : il est le premier enfant de
+>   `.vocal-center` (`flex: 0 0 auto`), et c'est le **centrage de l'ensemble** qui le fait
+>   monter ou descendre. Aucun décalage écrit. Sans image ni avatar, la composition se
+>   réduit au disque, qui est alors **exactement centré**.
+> - **Rien d'autre ne change** : trois pistes, l'avatar toujours dans la colonne avec ses
+>   180 px, trois sorties, six hôtes cliquables, aucun réglage, aucune persistance.
+>
+> Verrous : `src/js/ecran-vocal-point7-photo-sous-le-cercle.test.js` (P1 à P5),
+> `src/js/vocal-portrait-detache.test.js`, `src/js/vocal-sides.test.js` (T10),
+> `src/js/ecran-vocal-cadres-et-cercle.test.js`.
+
 ### 7bis.7 Le repli : jamais un trou, jamais un message
 
 | Situation | Ce que l'utilisateur voit | Ce que Pilot fait |

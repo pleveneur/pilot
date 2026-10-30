@@ -81,14 +81,19 @@ function corpsFonctionEntete(debut) {
  * ecrit ici `null` : la liste garde alors EXACTEMENT la hauteur du cas sans
  * avatar, ce qui est verifie plus bas.
  */
+// LES SEPT FENETRES DU TABLEAU § 7bis.4, dans sa version du 2026-11-13 (point 7
+// des remarques du proprietaire) : la colonne `personnage` du tableau a DISPARU,
+// parce que le personnage ne prend plus rien a la colonne — il est sous le
+// disque. Restent les deux cas qui, eux, changent la hauteur de liste :
+// « rien » et « la fenetre du visage ».
 const TABLE_7BIS_4 = [
-  [720, 520, 151.6, 231, [178, 3], [30, 1], null],
-  [768, 576, 188.3, 287, [234, 4], [86, 1], [54, 1]],
-  [820, 620, 217.2, 331, [278, 5], [130, 1], [98, 1]],
-  [896, 672, 251.3, 383, [330, 6], [132, 2], [150, 2]],
-  [1024, 768, 314.3, 479, [426, 8], [166, 2], [246, 4]],
-  [1280, 800, 335.3, 511, [458, 8], [132, 2], [278, 5]],
-  [1440, 900, 336, 512, [459, 8], [132, 2], [279, 5]],
+  [720, 520, 151.6, 231, [178, 3], null],
+  [768, 576, 188.3, 287, [234, 4], [54, 1]],
+  [820, 620, 217.2, 331, [278, 5], [98, 1]],
+  [896, 672, 251.3, 383, [330, 6], [150, 2]],
+  [1024, 768, 314.3, 479, [426, 8], [246, 4]],
+  [1280, 800, 335.3, 511, [458, 8], [278, 5]],
+  [1440, 900, 336, 512, [459, 8], [279, 5]],
 ];
 
 // ---------------------------------------------------------------------------
@@ -142,11 +147,12 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     expect(portrait.imageZone.kind).toBe(VOCAL_IMAGE_PORTRAIT);
     expect(deux).toEqual(portrait);
     // L'avatar ne pese donc jamais sur la hauteur de liste quand un personnage
-    // est la : 512 - 53 - 327 = 132 px, avec ou sans visage (le bloc du
-    // personnage vaut ici 275 + 52 = 327 px : le medaillon mesure 275 px, et il
-    // rend au passage les 2 px que le cadre paie desormais).
-    expect(deux.listHeight).toBe(132);
-    expect(portrait.portraitSize).toBe(275);
+    // est la — et le personnage lui-meme ne pese plus rien non plus depuis le
+    // point 7 : sa place est sous le disque, pas dans la colonne. 512 - 53 = 459,
+    // comme s'il n'y avait personne (contre 132 px avant le deplacement, quand
+    // son bloc de 327 px sortait de la liste).
+    expect(deux.listHeight).toBe(459);
+    expect(portrait.portraitSize).toBe(288);
     // Une entree absente n'est pas « vrai » : sans personnage, l'avatar decide.
     expect(planVocalSides({ ...cas, hasAvatar: true }).imageZone.kind).toBe(
       VOCAL_IMAGE_AVATAR,
@@ -154,8 +160,8 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     expect(planVocalSides(cas).imageZone.kind).toBe(VOCAL_IMAGE_NONE);
   });
 
-  it("le tableau § 7bis.4, les SEPT fenetres et les TROIS cas, au pixel pres", () => {
-    for (const [largeur, hauteur, disque, H, casRien, casPortrait, casAvatar] of TABLE_7BIS_4) {
+  it("le tableau § 7bis.4, les SEPT fenetres et les DEUX cas restants, au pixel pres", () => {
+    for (const [largeur, hauteur, disque, H, casRien, casAvatar] of TABLE_7BIS_4) {
       const base = { width: largeur, height: hauteur, orbSize: disque };
       const lireCas = (entrees) => {
         const plan = planVocalSides({ ...base, ...entrees });
@@ -166,7 +172,12 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
       const portrait = lireCas({ hasPortrait: true });
       const avatar = lireCas({ hasAvatar: true });
       expect(rien, `${largeur} x ${hauteur} : sans image`).toEqual(casRien);
-      expect(portrait, `${largeur} x ${hauteur} : personnage`).toEqual(casPortrait);
+      // Le personnage ne prend PLUS de place a la liste : sa ligne de tableau est
+      // celle du cas « sans image », au pixel pres. C'est le verrou du point 7.
+      expect(portrait, `${largeur} x ${hauteur} : personnage`).toEqual(casRien);
+      // Et il est bien mesure : le plan ne le confond pas avec l'absence.
+      const mesure = planVocalSides({ ...base, hasPortrait: true });
+      expect(mesure.portraitSize, `${largeur} x ${hauteur} : medaillon`).toBeGreaterThan(0);
       // « — » : la zone n'existe pas, et la liste garde la hauteur du cas sans
       // avatar — aucun trou, aucune place perdue.
       if (casAvatar === null) {

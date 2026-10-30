@@ -1411,17 +1411,17 @@ bouton **« Travail »**. Aucune tâche en cours ? La colonne affiche « **Aucun
 cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne le chevauche
 jamais, même avec un titre très long.
 
-Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
-de la liste et **détaché d'elle** : un médaillon rond **d'au moins 96 px**, qui **grandit avec la
-place disponible** — près de trois fois sa taille de départ dès 1 280 px de large
-(**2,8 ×** ; la cible de 3 × n'est jamais atteinte, la colonne manquerait de place), jamais au
-point de manger les tâches —, et son **nom** est écrit **juste
-dessous**, sur
-une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
-voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
-Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la zone laisse alors la
-place à la fenêtre du visage de l'avatar, ou à rien du tout. Le portrait suit un éventuel
-changement de personnage sans redémarrer Pilot. **Le cercle, lui, ne porte ni image ni nom.**
+Le **portrait du personnage** n'est plus dans la colonne : il est posé **sous le cercle**, sur
+le **même axe vertical** que lui, avec son **nom juste dessous**, sur une seule ligne — le nom
+du personnage, à défaut celui de votre assistant, jamais les deux. On voit donc toujours à qui
+l'on parle. Le médaillon est **rond**, **jamais rogné**, avec de **vraies marges** (12 px
+d'au-dessus, 12 px sous le nom), et il **grandit avec la hauteur disponible** : **96 px au
+plancher** et **288 px dès une fenêtre de 1 440 × 900** — soit **trois fois** sa taille de
+départ. Pas de personnage déposé par le projet **Présences** ? Il n'y a **aucune image de
+remplacement**, pas même le logo Pilot : la place revient à la fenêtre du visage de l'avatar,
+ou à rien. Le portrait suit un éventuel changement de personnage sans redémarrer Pilot.
+**Le cercle, lui, ne porte ni image ni nom — et la photo ne lui prend aucune place dans la
+colonne des tâches** : celle-ci affiche **autant de tâches avec que sans personnage**.
 
 Les deux colonnes sont des **panneaux de verre** : on voit la lumière de l'écran au travers, et
 elles-mêmes n'affichent jamais la conversation ni le contenu d'une autre fenêtre. Elles laissent
@@ -1432,10 +1432,14 @@ largeur, même hauteur, ils commencent et finissent à la même hauteur, et ce q
 retranché pour le titre, l'air du bas et les traits est retranché **des deux côtés** :
 le nombre de lignes annoncé est celui qu'on voit.
 
-**Le cercle est centré en hauteur** dans la place qui lui reste, que la zone du portrait
-soit occupée ou non : il ne monte pas quand une image arrive, il ne descend pas quand
-elle part. Il garde toujours la même taille et la même apparence, et il reste **allumé**
-quand tout le reste est masqué.
+**Le cercle est en haut, la photo dessous.** Le cercle garde **toujours** la même taille et
+la même apparence, et il reste **allumé** quand tout le reste est masqué. Quand un
+personnage existe, le couple **cercle + photo + nom** est **centré en hauteur** dans la
+place disponible, sur **un seul axe vertical** : la photo est donc toujours **sous** le
+cercle, jamais au-dessus, jamais sur le côté, jamais dans le disque. Sans image ni avatar,
+il ne reste que le cercle, et il est alors **exactement au milieu** de la hauteur. Le
+passage d'un cas à l'autre se fait **sans redémarrer** Pilot et **sans qu'aucune position
+soit écrite** : rien ne pousse le cercle, c'est l'ensemble qui se recentre.
 
 Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
 au moindre mouvement de la souris, puis **s'efface de nouveau après quelques secondes**

@@ -12247,37 +12247,34 @@ body.pilot-vocal-active #agent-activity {
   min-height: 0;
   overflow: hidden;
 }
-/* LE PORTRAIT DU PERSONNAGE, EN HAUT A DROITE DE L'ECRAN (correction du
-   2026-10-31, sur decision du proprietaire : l'image QUITTE le disque et
-   revient en tete de la colonne de droite) : un medaillon rond de 96 px, jamais
-   dans le disque. `hidden` quand il n'y a pas de personnage — AUCUN repli sur le
-   logo dans la colonne. Il ne prend jamais le clic : la colonne entiere est
-   traversante.
-   IL N'APPARTIENT PLUS A LA SECTION DES TACHES (remarque du proprietaire du
-   2026-10-03) : le titre « TACHES » n'est plus le premier noeud de la colonne, il
-   OUVRE la section des taches, juste au-dessus de la liste. L'ordre du document
-   est donc : portrait, son nom, l'air, « TACHES », la zone d'image, la liste. Le
-   personnage est en tete de colonne, il surplombe la section au lieu d'y
-   figurer. */
+/* LE PORTRAIT DU PERSONNAGE, SOUS LE CERCLE (point 7 des remarques du
+   proprietaire, 2026-11-13 : « le cercle en haut a sa taille actuelle, le
+   personnage en dessous, sur le meme axe vertical »). Il a QUITTE la colonne de
+   droite : il n'appartient ni au panneau des taches ni a celui de la discussion.
+   `hidden` quand il n'y a pas de personnage — AUCUN repli sur le logo. Il ne
+   prend jamais le clic : la scene est traversante.
+   L'ORDRE DE LA SCENE est donc : cercle, ecart de 12 px, medaillon, 8 px, nom —
+   le tout dans `.vocal-center`, sur l'axe du cercle. La composition est centree
+   en hauteur : quand il n'y a pas de personnage, elle se reduit au cercle, qui
+   est donc centre ; quand il y en a un, c'est l'ensemble qui est centre, donc le
+   cercle remonte de la moitie du medaillon. Aucun reglage, aucun redemarrage. */
 .vocal-portrait {
-  /* LA TAILLE EST UNE MESURE, PAS UN CHIFFRE (remarque du proprietaire du
-     2026-11-02 : « environ trois fois plus grand »). Le medaillon vaut
+  /* LA TAILLE EST UNE MESURE, PAS UN CHIFFRE. Le medaillon vaut
      `--vocal-portrait-size`, que `vocalSyncSides()` (super-agent.js) pose a la
-     valeur rendue par `vocalPortraitSize` : la place disponible dans la colonne
-     (moins le cadre et sa marge), plafonnee par la hauteur qui laisse trois
-     rangees a la liste, et jamais plus de trois fois le plancher de 96 px.
-     Valeur de repli : 96 px, le plancher du 2026-10-03 (`VOCAL_PORTRAIT_PX`).
-     Mesure des sept fenetres du document, troisieme passe du 2026-11-13 : 96 px a
-     720 et 768, 146 a 896, 208 a 1024, 274 a 1280, 275 a 1440 et au-dela — soit
-     2,86 fois le plancher, la cible de 288 px n'etant atteinte nulle part (il
-     faudrait 13 px de colonne de plus). Voir `spec_modes_ecran_vocal.md` § 3ter,
-     « La taille du medaillon ». */
+     valeur rendue par `vocalPortraitSize` : la hauteur laissee libre SOUS le
+     disque (moins les 64 px du cadre de la composition), plafonnee par la
+     largeur du disque et par trois fois le plancher de 96 px. Valeur de repli :
+     96 px, le plancher du 2026-10-03 (`VOCAL_PORTRAIT_PX`).
+     Mesure des fenetres du document, medaillon sous le disque (2026-11-13) :
+     97 px a 720 x 520, 116 a 768 x 576, 149 a 896 x 672, 182 a 1024 x 768,
+     193 a 1280 x 800, et la CIBLE de 288 px (3 x) atteinte a 1440 x 900 comme a
+     1920 x 1080. Voir `spec_modes_ecran_vocal.md` § 3ter. */
   width: var(--vocal-portrait-size, 96px);
   height: var(--vocal-portrait-size, 96px);
-  /* L'AIR AU-DESSUS DU MEDAILLON (meme remarque : il ne touche pas le cadre).
-     12 px, la meme valeur que l'air du bas des colonnes, et c'est
-     `VOCAL_PORTRAIT_AIR_TOP_PX` dans le budget : la place est comptee, pas
-     ajoutee. */
+  /* L'ECART AU DISQUE (12 px, `VOCAL_PORTRAIT_AIR_TOP_PX`) : le medaillon se
+     detache du cercle sans s'en eloigner. Il ne touche jamais le cercle, et il
+     ne s'en va pas non plus de l'autre cote de l'ecran : c'est un ecart fixe,
+     pas une respiration automatique. */
   margin-block-start: 12px;
   border-radius: 50%;
   object-fit: cover;
@@ -12288,13 +12285,13 @@ body.pilot-vocal-active #agent-activity {
   pointer-events: none;
 }
 /* LE NOM DU PERSONNAGE, JUSTE SOUS SON IMAGE (meme correction) : une legende de
-   20 px, centree sous le medaillon et AU-DESSUS des taches, sur UNE seule ligne
-   (un nom trop long finit en points de suspension, jamais sur deux lignes).
-   Il n'y a qu'UN nom a l'ecran : celui-ci. La pastille sous le bouton-cercle et
-   le nom dans le disque ont disparu avec l'image — le cercle ne porte plus rien.
-   `hidden` AVEC l'image : une legende sans image ne reste pas orpheline
-   au-dessus de la liste. Jamais cliquable (il herite du `pointer-events: none`
-   de la colonne). */
+   20 px, centree sous le medaillon et AU-DESSUS du bas de la scene, sur UNE
+   seule ligne (un nom trop long finit en points de suspension, jamais sur deux
+   lignes). Il n'y a qu'UN nom a l'ecran : celui-ci. La pastille sous le
+   bouton-cercle et le nom dans le disque ont disparu avec l'image — le cercle ne
+   porte plus rien.
+   `hidden` AVEC l'image : une legende sans image ne reste pas orpheline sous le
+   cercle. Jamais cliquable (il herite du `pointer-events: none` de la scene). */
 .vocal-portrait-name {
   flex: 0 0 auto;
   align-self: center;
@@ -12302,7 +12299,8 @@ body.pilot-vocal-active #agent-activity {
   line-height: 20px;
   /* 8 px sous l'image, 12 px d'AIR sous le nom : ce sont les chiffres de
      `vocal-sides.js` (`VOCAL_PORTRAIT_GAP_PX`, `VOCAL_PORTRAIT_AIR_PX`). L'air
-     est ce qui DETACHE le personnage du titre « TACHES » et de sa liste. */
+     du bas est aussi celui du haut de la composition (`VOCAL_STAGE_AIR_PX`) :
+     c'est ce qui la centre dans la scene. */
   margin-block: 8px 12px;
   max-width: 100%;
   text-align: center;
@@ -12315,15 +12313,14 @@ body.pilot-vocal-active #agent-activity {
 }
 
 /* --- LOT 2 (§2.2 a §2.7) : CE QUE LA COLONNE DE DROITE MONTRE ---
-   Ordre du document, de haut en bas (correction du 2026-10-31) : titre,
-   PORTRAIT du personnage et son nom, ZONE D'IMAGE (la place de la fenetre du
-   visage — les deux ne s'affichent jamais ensemble), liste. Les hauteurs du
-   budget (§2.5) sont ECRITES ici : elles doivent tomber juste, sinon le nombre
-   de lignes calcule par `planVocalTasks` ne serait plus celui qu'on voit. Haut
-   fixe : 14 + 11 + 14 (titre) + 12 (air du bas) + 2 (filets) = 53 px ; + 148 px
-   avec le personnage au plancher (air du haut 12 + medaillon 96 + 8 + nom 20 +
-   air 12) ; 53 + 180 = 233 px avec la fenetre du visage. Le reste est de l'air,
-   jamais un debordement. */
+   Ordre du document, de haut en bas : titre, ZONE D'IMAGE (la place de la fenetre
+   du visage), liste. Le medaillon du personnage n'est plus ici (point 7) : il est
+   sous le cercle, dans `.vocal-center`. Les hauteurs du budget (§2.5) sont
+   ECRITES ici : elles doivent tomber juste, sinon le nombre de lignes calcule par
+   `planVocalTasks` ne serait plus celui qu'on voit. Haut fixe : 14 + 11 + 14
+   (titre) + 12 (air du bas) + 2 (filets) = 53 px ; + 180 px quand la fenetre du
+   visage occupe la zone (53 + 180 = 233). Le reste est de l'air, jamais un
+   debordement. */
 /* LE TITRE DES DEUX COLONNES : une seule regle, deux selecteurs — les deux
    titres ne peuvent donc pas deriver l'un de l'autre. 14 px sous le bord haut de
    la colonne, 11 px de haut, 14 px sous lui : « DISCUSSION » et « TACHES » sont
@@ -12429,14 +12426,17 @@ body.pilot-vocal-active #agent-activity {
 .vocal-orb {
   position: relative;
   flex: 0 0 auto;
-  /* LA PLACE DU DISQUE (decision B du 2026-11-13), MESUREE et non choisie : la
-     boite du disque ("disque + 2 x couronne") est centree dans la rangee par
-     `align-items: center`, et le disque lui-meme est centre dans cette boite
-     (le halo est un enfant en `inset: 0`, donc symetrique). Le disque est donc
-     deja au centre de la rangee, avec EXACTEMENT la meme couronne au-dessus et
-     en dessous : aucune remontee, ni `top`, ni `transform` ici. Le verrou
-     `src/js/ecran-vocal-cadres-et-cercle.test.js` le mesure dans les deux
-     configurations (avec et sans image) et tombe si on introduit un decalage. */
+  /* LA PLACE DU DISQUE (decision B du 2026-11-13), MESUREE et non choisie : le
+     disque est le premier enfant de la COMPOSITION `.vocal-center` (cercle, puis
+     medaillon du personnage sous lui), et c'est la COMPOSITION qui est centree
+     dans la rangee par `justify-content: center`. Aucun decalage n'est ecrit ici :
+     ni `top`, ni `transform`, ni marge verticale — le disque monte UNIQUEMENT
+     parce que la composition grandit sous lui, et il ne monte donc jamais de
+     lui-meme. Sans personnage, la composition se reduit au disque, qui est donc
+     exactement au centre de la rangee, avec la meme couronne au-dessus et en
+     dessous. Le verrou `src/js/ecran-vocal-cadres-et-cercle.test.js` le mesure
+     dans les deux configurations (avec et sans image) et tombe si on introduit
+     un decalage. */
   width: var(--vocal-orb-size);
   height: var(--vocal-orb-size);
   border-radius: 50%;
@@ -12981,8 +12981,9 @@ body.pilot-vocal-active #agent-activity {
    reste allume (voir plus bas).
    CE QUI N'EST PAS NOMME ICI, ET NE DOIT JAMAIS L'ETRE : le portrait du
    personnage et son nom (`.vocal-portrait`, `.vocal-portrait-name`) — la
-   decision est « tout masquer SAUF le portrait » (2026-10-31 : l'image est
-   revenue en haut a droite de l'ecran avec son nom sous elle) —, LE DISQUE ET
+   decision est « tout masquer SAUF le portrait » (depuis le point 7 des
+   remarques du proprietaire, 2026-11-13, l'image est SOUS le cercle, sur son axe)
+   —, LE DISQUE ET
    TOUT CE QU'IL PORTE (`.vocal-orb`, son enveloppe, son arc, son halo, le
    bouton « Réveiller ») — c'est l'objet qui dit encore l'etat de la voix, et
    le proprietaire l'a demande visible dans les deux etats (2026-11-02) —, LA
@@ -13072,9 +13073,10 @@ body.pilot-vocal-active #agent-activity {
    c'est donc la COLONNE qu'il faut eteindre, et pas ses enfants.
 
    CE QUI SURVIT, et que cette regle ne nomme donc jamais : le portrait
-   (`.vocal-portrait`) et son nom (`.vocal-portrait-name`), qui sont ses enfants
-   — ils restent en place, au-dessus et sous le medaillon, sans cadre autour
-   d'eux. Le bouton de masquage (dans la barre du haut) et la zone de saisie
+   (`.vocal-portrait`) et son nom (`.vocal-portrait-name`) — depuis le point 7
+   (2026-11-13) ils ne sont PLUS ses enfants : ils vivent sous le cercle, dans
+   `.vocal-center`, et ne sont donc meme pas concernes par l'extinction de cette
+   colonne. Le bouton de masquage (dans la barre du haut) et la zone de saisie
    (sous le cercle) ne sont pas concernes non plus.
 
    On ne touche NI a `opacity` NI a `visibility` : la colonne reste dans le
@@ -13160,9 +13162,34 @@ body.pilot-vocal-active #agent-activity {
    du balisage. Regles posees APRES les blocs du disque et du bouton : aucun
    test qui decoupe la feuille a partir de ces selecteurs ne lit le mauvais
    fragment. */
-/* Le disque reste dans la piste du MILIEU. */
-.vocal-stage > .vocal-orb {
+/* LA COMPOSITION DU MILIEU : le cercle, et sous lui le medaillon du personnage
+   (point 7 des remarques du proprietaire, 2026-11-13). C'est UNE colonne
+   flexible, centree dans la piste du milieu, qui prend la place de sa rangee.
+   `justify-content: center` centre la composition en HAUTEUR : avec le
+   medaillon, l'ensemble descend de la moitie de sa hauteur et le cercle remonte
+   d'autant ; sans medaillon, la composition n'est plus que le cercle, qui est
+   donc exactement centre. C'est ce qui fait que « sans image, le cercle reste
+   au milieu » sans aucun code conditionnel.
+   Elle ne peint RIEN : ni fond, ni cadre, ni ombre — c'est la scene, pas une
+   carte. Et elle ne capte aucun clic (le decor du milieu est traversant). */
+.vocal-center {
   grid-area: 1 / 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  width: var(--vocal-orb-size);
+  pointer-events: none;
+}
+/* Le disque est le PREMIER enfant de la composition. Il ne porte plus son
+   placement de grille (il n'est plus enfant direct de la scene) : c'est
+   `.vocal-center` qui occupe la piste du milieu. Il ne recoit AUCUNE valeur
+   propre de taille ou de position — il garde la sienne (`--vocal-orb-size`). */
+.vocal-center > .vocal-orb {
+  flex: 0 0 auto;
 }
 /* Le bouton de depannage du micro ne change pas de camp : rangee 2, MEME
    colonne que le disque (sans cela il tomberait sous la colonne de gauche).
@@ -13176,7 +13203,7 @@ body.pilot-vocal-active #agent-activity {
 .vocal-stage.vocal-sides-off {
   grid-template-columns: var(--vocal-orb-size);
 }
-.vocal-stage.vocal-sides-off > .vocal-orb,
+.vocal-stage.vocal-sides-off > .vocal-center,
 .vocal-stage.vocal-sides-off > .vocal-mic-fix {
   grid-column: 1;
 }

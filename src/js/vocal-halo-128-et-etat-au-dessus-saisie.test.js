@@ -303,18 +303,19 @@ describe("5. la phrase d'etat est AU-DESSUS de la barre de saisie", () => {
     expect(ordre).toEqual([
       "vocal-top",
       "vocal-stage",
+      // LA COMPOSITION DU MILIEU : cercle, puis portrait SOUS lui (point 7 des
+      // remarques du proprietaire, 2026-11-13).
+      "vocal-center",
       "vocal-orb",
-      // Correction du 2026-10-31 : le portrait a QUITTE le disque, qui ne porte
-      // plus rien (ni image ni nom).
+      // Le disque ne porte plus rien (ni image ni nom).
       "vocal-halo",
       "vocal-restart",
+      "vocal-portrait",
       "vocal-mic-fix",
-      // LOT 1 : les deux colonnes laterales et leur conteneur de liste. Le
-      // portrait est le PREMIER contenu de la colonne des taches (au-dessus de
-      // la liste), et le nom est cree apres le modele.
+      // LOT 1 : les deux colonnes laterales et leur conteneur de liste ; le
+      // titre et le nom du personnage sont crees apres le modele.
       "vocal-side-discussion",
       "vocal-side-tasks",
-      "vocal-portrait",
       "vocal-side-body",
       "vocal-status",
       "vocal-input",
@@ -331,10 +332,11 @@ describe("5. la phrase d'etat est AU-DESSUS de la barre de saisie", () => {
       '<div class="vocal-status"',
       20,
     );
-    // Trois `</div>` : l'objet lumineux, le conteneur de liste de la colonne de
-    // droite, puis la scene. Les deux colonnes sont des `<aside>`, qui se
-    // ferment autrement et ne comptent donc pas.
-    expect(scene.match(/<\/div>/g)?.length).toBe(3);
+    // Quatre `</div>` : l'objet lumineux, la composition du milieu (`.vocal-center`,
+    // qui porte le cercle et le portrait dessous), le conteneur de liste de la
+    // colonne de droite, puis la scene. Les deux colonnes sont des `<aside>`, qui
+    // se ferment autrement et ne comptent donc pas.
+    expect(scene.match(/<\/div>/g)?.length).toBe(4);
     expect(scene.match(/<\/aside>/g)?.length).toBe(2);
     expect(scene).not.toMatch(/vocal-status/);
   });

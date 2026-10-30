@@ -6,18 +6,15 @@
 //   T12 — les deux groupes, dans l'ordre « En cours » puis « En attente », et le
 //         NOMBRE DE LIGNES qui suit la hauteur : les sept lignes du tableau
 //         § 2.5 pour les sept fenetres du document, plafond 8.
-//   T18 — le haut de la colonne reserve la place du PERSONNAGE : `listH = H - 51`
-//         quand il n'y a rien, `H - 51 - 148` avec son portrait au plancher et
-//         `H - 51 - (taille + 52)` des que le medaillon grandit (12 + 96 + 8 + 20 +
-//         12), la
-//         fenetre du visage prenant la sienne SUR ce total. Correction du
-//         2026-10-31 : le portrait est REVENU en haut a droite de la colonne, il
-//         n'est plus au centre du disque (mission « ecran Vocal » annulee).
-//         Remarque du proprietaire du 2026-11-02 : le medaillon est MESURE par
-//         `vocalPortraitSize`, donc le bloc n'est plus un chiffre fixe.
+//   T18 — le haut de la colonne NE RESERVE PLUS RIEN au personnage : `listH`
+//         vaut `H - 53`, AVEC comme SANS medaillon. Le point 7 des remarques du
+//         proprietaire (2026-11-13) a sorti le portrait de la colonne : il est
+//         SOUS LE DISQUE, dans la composition du milieu, donc la liste des
+//         taches n'en paie plus la place. Le medaillon reste MESURE par
+//         `vocalPortraitSize` (remarque du 2026-11-02).
 //   T19 — la colonne ne passe JAMAIS sous le cercle (`--vocal-side-tasks`,
 //         une largeur, pas une marge) et l'ordre du document est
-//         titre -> portrait -> zone d'image -> liste, sans ligne d'activite.
+//         titre -> zone d'image -> liste, sans ligne d'activite.
 //
 // Plus les verrous de coherence : une SEULE source de missions
 // (`collectSuperMissions`), un SEUL point de peinture (`vocalSyncSides`), un tic
@@ -80,15 +77,16 @@ const SEPT_LIGNES = [
   [1440, 900, 336, 512, 8],
 ];
 
-describe("T18 — le haut de la colonne reserve la place du personnage", () => {
-  it("`listH` vaut H - 53 sans rien, H - 53 - 148 avec le portrait au plancher", () => {
+describe("T18 — le personnage ne prend plus de place a la colonne", () => {
+  it("`listH` vaut H - 53 AVEC comme SANS personnage : la liste ne paie plus rien", () => {
     for (const [largeur, hauteur, disque, H] of SEPT_LIGNES) {
       const rien = planVocalSides({ width: largeur, height: hauteur, orbSize: disque });
       expect(rien.columnHeight, `${largeur} : H`).toBe(H);
       expect(rien.listHeight, `${largeur} : liste`).toBe(H - VOCAL_SIDE_FIXED_PX);
-      // Le PERSONNAGE d'abord (correction du 2026-10-31) : son bloc sort de la
-      // liste, en haut de la colonne — et ce bloc suit la taille MESUREE du
-      // medaillon (`portraitBlock`), jamais un chiffre fixe.
+      // Le medaillon vit SOUS LE DISQUE depuis le point 7 (2026-11-13) : sa
+      // place n'est plus prise a la colonne de droite, elle est prise dans la
+      // rangee de la scene. La liste des taches garde donc TOUTE sa hauteur —
+      // c'est exactement ce que le proprietaire demandait.
       const portrait = planVocalSides({
         width: largeur,
         height: hauteur,
@@ -96,9 +94,16 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
         hasPortrait: true,
       });
       expect(portrait.listHeight, `${largeur} : liste avec portrait`).toBe(
-        H - VOCAL_SIDE_FIXED_PX - portrait.portraitBlock,
+        H - VOCAL_SIDE_FIXED_PX,
       );
+      expect(portrait.listHeight, `${largeur} : la liste a perdu des rangees`).toBe(
+        rien.listHeight,
+      );
+      // Le medaillon, lui, EXISTE : il est mesure, et son bloc suit sa taille.
+      expect(portrait.portraitSize, `${largeur} : medaillon`).toBeGreaterThanOrEqual(96);
       expect(portrait.portraitBlock).toBe(portrait.portraitSize + 52);
+      // L'image du personnage ne prend aucune place DANS la colonne : la zone
+      // d'image reste vide, son role est desormais unique (la fenetre du visage).
       expect(portrait.imageZone.kind).toBe(VOCAL_IMAGE_PORTRAIT);
       expect(portrait.imageZone.height).toBe(0);
     }
@@ -125,9 +130,11 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     const deux = planVocalSides({ ...cas, hasPortrait: true, hasAvatar: true });
     const portrait = planVocalSides({ ...cas, hasPortrait: true });
     expect(deux).toEqual(portrait);
-    // 512 - 53 - 327 : le personnage occupe le haut (medaillon mesure 275 px, donc
-    // un bloc de 327), la zone d'image ne prend rien.
-    expect(deux.listHeight).toBe(132);
+    // 512 - 53 = 459 : la colonne ne paie plus le personnage, donc la fenetre du
+    // visage ne lui prend pas non plus la place qu'elle aurait pu reclamer. Le
+    // personnage l'emporte — et il ne coute plus une rangee.
+    expect(deux.listHeight).toBe(459);
+    expect(deux.portraitSize).toBe(288);
   });
 
   it("le plan connait le personnage : `hasPortrait` et la taille du medaillon en font partie", () => {
@@ -142,6 +149,7 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
       "portraitBlock",
       "portraitSize",
       "shown",
+      "stageHeight",
       "taskTrack",
       "track",
     ]);
@@ -150,32 +158,41 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     expect(plan.portraitBlock).toBe(0);
     // Une entree `hasPortrait` bien vraie CHANGE la liste : elle est lue.
     const avec = planVocalSides({ ...cas, hasPortrait: true });
-    expect(avec.portraitSize).toBe(275);
-    expect(avec.listHeight).toBe(plan.listHeight - avec.portraitBlock);
+    expect(avec.portraitSize).toBe(288);
+    // Une entree `hasPortrait` vraie CHANGE le plan (le medaillon est mesure)…
+    expect(avec.portraitBlock).toBeGreaterThan(0);
+    // …mais PLUS la liste : sa place est ailleurs (sous le disque).
+    expect(avec.listHeight).toBe(plan.listHeight);
     // Et sans personnage ni visage, aucun cas par defaut cache : 53 px, pas plus.
     expect(plan.listHeight).toBe(459);
   });
 
-  it("le portrait est en HAUT A DROITE : dans la colonne, jamais dans le disque", () => {
+  it("le portrait est SOUS LE DISQUE, dans la composition du milieu — plus dans la colonne", () => {
     const build = corps("function buildVocalOverlay()", "function vocalStatusLine");
-    // Le seul portrait de l'ecran est dans la colonne de droite, et c'est son
-    // PREMIER contenu : la liste des taches vient dessous.
+    // La colonne des taches ne cite plus le personnage : ni l'image, ni le nom.
+    // C'est ce qui lui rend ses rangees (T18 ci-dessus).
     const colonne = sliceSource(
       build,
       '<aside class="vocal-side-tasks vocal-side">',
       "</aside>",
       20,
     );
-    expect(colonne).toMatch(/<img class="vocal-portrait"[^>]*hidden/);
-    expect(colonne.indexOf('class="vocal-portrait"')).toBeLessThan(
-      colonne.indexOf('class="vocal-side-body"'),
+    expect(colonne).not.toMatch(/vocal-portrait/);
+    // Il est dans `.vocal-center`, APRES le disque dans l'ordre du document : le
+    // cercle reste en haut, le personnage dessous (point 7 des remarques).
+    const centre = sliceSource(build, '<div class="vocal-center">', 'class="vocal-mic-fix', 20);
+    expect(centre).toMatch(/<img class="vocal-portrait"[^>]*hidden/);
+    expect(centre.indexOf('class="vocal-orb"')).toBeLessThan(
+      centre.indexOf('class="vocal-portrait"'),
     );
-    // Le disque, lui, ne porte RIEN : ni image, ni nom.
-    const disque = sliceSource(build, '<div class="vocal-orb">', '<button type="button" class="vocal-mic-fix', 20);
+    // Le disque ne porte toujours RIEN : ni image, ni nom.
+    const disque = sliceSource(centre, '<div class="vocal-orb">', "</div>", 20);
     expect(disque).not.toMatch(/vocal-portrait/);
     expect(disque).not.toMatch(/-name/);
     // Le nom est cree a l'execution, SOUS l'image (`buildVocalPortraitName`).
-    expect(build).toMatch(/buildVocalPortraitName\(ov\.querySelector\("\.vocal-side-tasks \.vocal-portrait"\)\)/);
+    expect(build).toMatch(
+      /buildVocalPortraitName\(ov\.querySelector\("\.vocal-center \.vocal-portrait"\)\)/,
+    );
   });
 });
 
@@ -209,9 +226,9 @@ describe("T19 — la liste ne passe jamais sous le cercle", () => {
     expect(CSS).toMatch(/\.vocal-task-who\s*\{[^}]*text-overflow:\s*ellipsis/);
   });
 
-  it("l'ordre du document est titre -> portrait -> zone d'image -> liste, sans activite", () => {
-    // Le balisage statique : le portrait (masque), la zone d'image (vide), puis
-    // le conteneur de liste.
+  it("l'ordre du document est titre -> zone d'image -> liste, sans activite", () => {
+    // Le balisage statique de la colonne : la zone d'image (vide), puis le
+    // conteneur de liste. Le portrait n'y figure plus du tout (point 7).
     const build = corps("function buildVocalOverlay()", "function vocalStatusLine");
     const colonne = sliceSource(
       build,
@@ -219,11 +236,8 @@ describe("T19 — la liste ne passe jamais sous le cercle", () => {
       "</aside>",
       20,
     );
-    expect(colonne).toMatch(/class="vocal-portrait"/);
+    expect(colonne).not.toMatch(/vocal-portrait/);
     expect(colonne).toMatch(/vocal-side-body/);
-    expect(colonne.indexOf('class="vocal-portrait"')).toBeLessThan(
-      colonne.indexOf('class="vocal-side-body"'),
-    );
     // Le titre et la zone d'image sont CREES par la repeinture, a leur place
     // imposee : le titre AU-DESSUS DE LA LISTE (remarque du proprietaire du
     // 2026-10-03 : le portrait ne doit plus appartenir a la section des taches),

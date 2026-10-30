@@ -41,9 +41,17 @@ import {
   VOCAL_SIDE_BORDER_PX,
   VOCAL_SIDE_FIXED_PX,
   VOCAL_SIDE_FRAME_PX,
+  // La place que l'ecran prend hors de la rangee, quand elle n'est pas mesuree
+  // (repli de `vocalStageRowHeight`) : B s'en sert pour decrire la rangee.
+  VOCAL_STAGE_RESERVED_PX,
   planVocalDiscussion,
   planVocalSides,
   planVocalTasks,
+  // La COMPOSITION du milieu (point 7) : la taille du medaillon sous le disque
+  // et le bloc qu'il occupe avec son nom. La place du cercle en hauteur en
+  // depend, donc ces deux fonctions entrent dans la mesure de B.
+  vocalPortraitSize,
+  vocalPortraitBlockSize,
 } from "./vocal-sides.js";
 
 const ICI = dirname(fileURLToPath(import.meta.url));
@@ -279,19 +287,22 @@ describe("B — la place du cercle en hauteur", () => {
     expect(orb).not.toMatch(/margin-block/);
     expect(orb).not.toMatch(/align-self/);
     // Aucun jeton de remontee n'existe dans tout le fichier : une remontee
-    // écrite ailleurs serait aussi une remontee.
+    // ecrite ailleurs serait aussi une remontee.
     expect(CSS).not.toMatch(/--vocal-raise/);
     expect(SUPER).not.toMatch(/--vocal-raise/);
-    // Le disque est place dans la rangee 1, colonne du milieu : sa place
-    // verticale est celle de la rangee, pas une valeur choisie.
-    expect(CSS).toMatch(/\.vocal-stage > \.vocal-orb \{\s*grid-area: 1 \/ 2;/);
+    // Le disque n'est PLUS l'item de grille : la piste du milieu est occupee par
+    // la COMPOSITION `.vocal-center`, centree en hauteur (`justify-content`), et
+    // le disque est son premier enfant. Il ne porte donc aucun placement propre
+    // — un `grid-area` sur le disque le sortirait de la composition.
+    expect(corpsDeRegles(".vocal-center").join("\n")).toMatch(/grid-area:\s*1 \/ 2;/);
+    expect(corpsDeRegles(".vocal-center").join("\n")).toMatch(/justify-content:\s*center/);
+    expect(orb).not.toMatch(/grid-area/);
   });
 
-  it("une image qui arrive ne deplace pas le disque d'un pixel", () => {
-    // Le signal du « ce qu'il y a a montrer » est la zone d'image, et elle ne
-    // touche que la HAUTEUR DE LA LISTE : ni `columnHeight` (la rangee), ni la
-    // taille du disque ne dependent d'elle. Le disque ne peut donc pas rester
-    // remonte comme s'il y avait une image, ni remonter quand il y en a une.
+  it("le medaillon du personnage ne prend rien a la LISTE : la hauteur ne bouge pas", () => {
+    // Point 7 des remarques du proprietaire (2026-11-13) : le personnage est
+    // passe SOUS le cercle. La liste des taches ne paie donc plus son bloc —
+    // elle garde exactement la hauteur qu'elle a quand il n'y a rien a montrer.
     for (const [width, height] of FENETRES) {
       const orbSize = disque(height);
       const base = { width, height, orbSize };
@@ -300,8 +311,57 @@ describe("B — la place du cercle en hauteur", () => {
       const visage = planVocalSides({ ...base, hasAvatar: true });
       expect(personnage.columnHeight, `${width} x ${height}`).toBe(sans.columnHeight);
       expect(visage.columnHeight, `${width} x ${height}`).toBe(sans.columnHeight);
-      // Et la seule chose que l'image deplace est la place laissee a la liste.
-      expect(personnage.listHeight).toBeLessThanOrEqual(sans.listHeight);
+      // La liste ne perd plus une seule rangee (avant le point 7 elle tombait a
+      // UNE rangee des que le personnage etait la) ; la fenetre du visage, elle,
+      // occupe toujours la zone d'image en haut de la colonne, donc elle paie.
+      expect(personnage.listHeight, `${width} x ${height} : personnage`).toBe(sans.listHeight);
+      // La fenetre du visage, elle, occupe toujours la zone d'image en haut de
+      // la colonne : quand elle tient (assez de place), c'est la LISTE qui paie —
+      // jamais la colonne, jamais la composition.
+      expect(visage.listHeight, `${width} x ${height} : fenetre`).toBeLessThanOrEqual(sans.listHeight);
+      if (visage.imageZone.kind === "avatar") {
+        expect(visage.listHeight, `${width} x ${height} : fenetre payee`).toBeLessThan(sans.listHeight);
+      }
+    }
+  });
+
+  it("la composition est centree : l'air du haut egale l'air du bas, avec ET sans personnage", () => {
+    // Ce que la feuille de style fait (`.vocal-center` en `justify-content:
+    // center`, `align-self: stretch` sur la rangee), le plan le dit en chiffres :
+    // la composition (disque + bloc du medaillon) laisse le MEME jour au-dessus
+    // et en dessous. Avec un personnage elle grandit vers le bas, donc le disque
+    // monte d'exactement la moitie de ce qui s'ajoute — et sans personnage, air
+    // haut = air bas = ce qui reste autour du seul disque.
+    for (const [width, height] of FENETRES) {
+      const orbSize = disque(height);
+      const rangee = height - VOCAL_STAGE_RESERVED_PX;
+      for (const personnage of [false, true]) {
+        const medaillon = personnage
+          ? vocalPortraitSize({ orbSize, stageHeight: rangee })
+          : 0;
+        const bloc = medaillon ? vocalPortraitBlockSize(medaillon) : 0;
+        const air = (rangee - orbSize - bloc) / 2;
+        // Jamais negatif : la composition ne deborde pas de sa rangee.
+        expect(air, `${width} x ${height}, personnage=${personnage}`).toBeGreaterThanOrEqual(0);
+      }
+      // Et sans personnage, la composition n'est que le disque : il est centre.
+      const medaillon = vocalPortraitSize({ orbSize, stageHeight: rangee });
+      expect(medaillon, `${width} x ${height} : medaillon mesurable`).toBeGreaterThan(0);
+    }
+  });
+
+  it("un personnage qui arrive ne change pas la TAILLE du disque, seulement sa place", () => {
+    // Le disque ne depend que de la hauteur de la fenetre (`--vocal-orb-size`), et
+    // le medaillon ne peut pas lui prendre sa place : sa taille est bornee par le
+    // disque lui-meme. Ce que le personnage deplace, c'est le CENTRE de la
+    // composition — le disque monte, il ne rapetisse pas.
+    for (const [width, height] of FENETRES) {
+      const orbSize = disque(height);
+      const rangee = height - VOCAL_STAGE_RESERVED_PX;
+      const medaillon = vocalPortraitSize({ orbSize, stageHeight: rangee });
+      expect(medaillon, `${width} x ${height} : jamais plus large que le disque`).toBeLessThanOrEqual(
+        Math.round(orbSize),
+      );
     }
   });
 

@@ -191,14 +191,16 @@ function chaineDe(classe) {
 const overlay = () => noeud("div", ["pilot-vocal", "vocal-bare"]);
 
 describe("1. le portrait et son nom ne sont JAMAIS atteints par l'etat nu", () => {
-  it("le portrait est un enfant direct de la colonne de droite, hors du disque", () => {
+  it("le portrait est SOUS le cercle, dans la composition du milieu — jamais dans le disque", () => {
     const chaine = chaineDe("vocal-portrait");
     expect(chaine, "le modele doit contenir .vocal-portrait").toBeTruthy();
-    // On nomme ses ancetres : s'il repart dans le disque, ce test le dit.
+    // On nomme ses ancetres : s'il repart dans le DISQUE, ce test le dit — et
+    // s'il retourne dans une colonne (au-dessus de la liste, donc a cote du
+    // cercle au lieu d'etre dessous), il le dit aussi.
     expect(chaine.map((n) => n.classes.join("."))).toEqual([
       "pilot-vocal.vocal-bare",
       "vocal-stage",
-      "vocal-side-tasks.vocal-side",
+      "vocal-center",
       "vocal-portrait",
     ]);
   });

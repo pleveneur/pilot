@@ -1,4 +1,4 @@
-// Tests — LE PORTRAIT DU PERSONNAGE ET SON NOM, EN HAUT A DROITE DE L'ECRAN
+// Tests — LE PORTRAIT DU PERSONNAGE ET SON NOM, SOUS LE CERCLE
 // (docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md § 2.4, § 2.5
 // et § 7bis ; numerotation du premier jet conservee : T9, T16, T17).
 //
@@ -8,9 +8,10 @@
 // taches DESSOUS. Le disque ne porte plus RIEN : ni image, ni nom.
 //
 // CE QUE CE FICHIER VERROUILLE :
-//   T9  — le portrait est en HAUT A DROITE (premier contenu de la colonne de
-//         droite, au-dessus de la liste), le disque reste vide, et le nom est
-//         SOUS l'image, sur une seule ligne — c'est le SEUL nom de l'ecran.
+//   T9  — le portrait est SOUS LE CERCLE (point 7 des remarques du proprietaire,
+//         2026-11-13 : le personnage est dessous, sur le meme axe vertical ; il
+//         n'est plus dans la colonne de droite), le disque reste vide, et le nom
+//         est SOUS l'image, sur une seule ligne — c'est le SEUL nom de l'ecran.
 //   T16 — le lot n'ecrit RIEN : ni fichier, ni `localStorage`, ni config. L'etat
 //         des colonnes ne survit pas a la sortie de l'ecran.
 //   T17 — la sortie de l'ecran reste cliquable : les colonnes ne captent aucun
@@ -51,7 +52,7 @@ function corpsFonctionEntete(debut) {
 }
 
 // ---------------------------------------------------------------------------
-describe("T9 — le portrait est en HAUT A DROITE, le disque reste vide", () => {
+describe("T9 — le portrait est SOUS LE CERCLE, le disque reste vide", () => {
   const build = corps("function buildVocalOverlay()", "function vocalStatusLine");
   // La colonne de droite, du debut de son balisage a sa fermeture.
   const colonne = sliceSource(
@@ -60,18 +61,28 @@ describe("T9 — le portrait est en HAUT A DROITE, le disque reste vide", () => 
     "</aside>",
     20,
   );
-  // Le disque : de son ouverture au bouton de depannage du micro, qui le suit.
-  const disque = sliceSource(
+  // La COMPOSITION du milieu : le cercle, puis le personnage dessous.
+  const composition = sliceSource(
     build,
-    '<div class="vocal-orb">',
+    '<div class="vocal-center">',
     '<button type="button" class="vocal-mic-fix',
     20,
   );
+  // Le disque SEUL : de son ouverture a l'image du personnage, qui le suit.
+  const disque = sliceSource(
+    build,
+    '<div class="vocal-orb">',
+    '<!-- LE PORTRAIT DU PERSONNAGE, SOUS LE CERCLE',
+    20,
+  );
 
-  it("il VIT dans la colonne de droite, et plus dans le disque", () => {
-    // Decision du proprietaire (2026-10-31) : le personnage est en haut a droite
-    // de l'ecran, la liste des taches vient dessous. Le cercle ne porte RIEN.
-    expect(colonne).toMatch(/class="vocal-portrait"/);
+  it("il VIT sous le cercle, et plus dans la colonne ni dans le disque", () => {
+    // Point 7 des remarques du proprietaire (2026-11-13) : le personnage est
+    // SOUS le cercle, sur le meme axe vertical. Il a donc quitte la colonne de
+    // droite — ou il vivait depuis le 2026-10-31 — et le cercle ne porte
+    // toujours RIEN.
+    expect(composition).toMatch(/class="vocal-portrait"/);
+    expect(colonne).not.toMatch(/class="vocal-portrait"/);
     expect(disque).not.toMatch(/vocal-portrait/);
     // Et aucun nom dans le disque : la seule legende de l'ecran est celle de
     // l'image, creee a l'execution sous elle (`buildVocalPortraitName`).
@@ -79,15 +90,19 @@ describe("T9 — le portrait est en HAUT A DROITE, le disque reste vide", () => 
     expect(disque).not.toMatch(/-name/);
   });
 
-  it("il vient AVANT la liste des taches, qui commence SOUS lui", () => {
-    const image = colonne.indexOf('class="vocal-portrait"');
-    const liste = colonne.indexOf('class="vocal-side-body"');
+  it("il vient APRES le disque, sur le meme axe vertical", () => {
+    const cercle = composition.indexOf('class="vocal-orb"');
+    const image = composition.indexOf('class="vocal-portrait"');
+    const liste = build.indexOf('class="vocal-side-body"');
+    expect(cercle).toBeGreaterThan(-1);
     expect(image).toBeGreaterThan(-1);
     expect(liste).toBeGreaterThan(-1);
-    // Le portrait est le PREMIER contenu de la colonne : la liste vient apres,
-    // donc dessous. (Le titre des taches, lui, est cree a l'execution en tete de
-    // la colonne par `vocalRenderColumn` : il est au-dessus de l'image.)
-    expect(image).toBeLessThan(liste);
+    // L'ORDRE EST LA REGLE : le cercle d'abord, le personnage ensuite, dans le
+    // meme bloc centre. Les inverser le remettrait AU-DESSUS du cercle — c'est
+    // exactement ce que le point 7 interdit.
+    expect(cercle).toBeLessThan(image);
+    // Et la composition entiere precede la colonne des taches dans le document.
+    expect(build.indexOf('<div class="vocal-center">')).toBeLessThan(liste);
     // Le disque, lui, garde son ordre interne : halo puis bouton de relance.
     const halo = disque.indexOf('class="vocal-halo"');
     const relance = disque.indexOf('class="vocal-restart');
@@ -143,9 +158,10 @@ describe("T9 — le portrait est en HAUT A DROITE, le disque reste vide", () => 
     expect(cree).toMatch(/"vocal-portrait-name"/);
     // Pose JUSTE APRES l'image (`afterend`), donc sous elle dans la colonne.
     expect(cree).toMatch(/insertAdjacentElement\("afterend"/);
-    // Il est pose sur le portrait de la COLONNE, jamais sur le disque.
+    // Il est pose sur le portrait de la COMPOSITION (sous le cercle), jamais sur
+    // le disque ni dans la liste des taches, dont le contenu est reecrit.
     expect(build).toMatch(
-      /buildVocalPortraitName\(ov\.querySelector\("\.vocal-side-tasks \.vocal-portrait"\)\)/,
+      /buildVocalPortraitName\(ov\.querySelector\("\.vocal-center \.vocal-portrait"\)\)/,
     );
     // UN seul nom a l'ecran : la classe du nom est creee a UN seul endroit, et le
     // balisage statique n'en porte aucune.
