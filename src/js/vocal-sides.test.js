@@ -34,7 +34,7 @@ import {
 
 /** Les constantes du document, ecrites une fois, telles quelles. */
 const MIN = 240;
-const NOMINAL = 320;
+const NOMINAL = 384;
 const PLAFOND = 400;
 const LARGE = 1600;
 const JOUR = 24;
@@ -129,7 +129,7 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
 
   it("la colonne ne depasse jamais la place disponible (`avail`)", () => {
     // 768 x 576 : avail = 249 px, donc la colonne est ECRASEE a 249 px et non
-    // laissee a sa valeur nominale de 320.
+    // laissee a sa valeur nominale de 384.
     const etroit = planVocalSides({ width: 768, height: 576, orbSize: 188.3 });
     expect(etroit.track).toBe(249);
     expect(etroit.track).toBeLessThan(NOMINAL);
@@ -199,10 +199,10 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
       hasPortrait: true,
     });
     expect(avec.hasPortrait).toBe(true);
-    expect(avec.portraitSize).toBe(214);
-    expect(avec.portraitBlock).toBe(266);
-    expect(avec.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 266);
-    expect(avec.listHeight).toBe(195);
+    expect(avec.portraitSize).toBe(277);
+    expect(avec.portraitBlock).toBe(329);
+    expect(avec.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 329);
+    expect(avec.listHeight).toBe(132);
     // Le personnage l'emporte : pas de fenetre du visage en plus, et la zone
     // d'image ne reserve alors AUCUNE place vide (le medaillon est un vrai noeud).
     expect(avec.imageZone.kind).toBe("portrait");
@@ -210,7 +210,7 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     expect(
       planVocalSides({ width: 1280, height: 900, orbSize: 336, hasPortrait: true, hasAvatar: true })
         .listHeight,
-    ).toBe(195);
+    ).toBe(132);
   });
 
   it("aucune entree : aucune colonne, aucune erreur, aucune valeur inventee", () => {

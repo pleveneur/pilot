@@ -15,14 +15,19 @@
  *      fond : un filet de 1 px devant un `--bg-app` uni ne laisse rien voir a
  *      travers. Elles portent maintenant une surface de VERRE, teintee par le
  *      theme actif (`--vocal-glass`, un melange de `--glass-tint`) et floutee,
- *      avec les deux lavis du calque derriere.
+ *      avec les deux lavis du calque derriere. DEUXIEME PASSE du meme jour : le
+ *      lavis etait fait de `--surface-floating`, la MEME famille que la teinte
+ *      du panneau — les deux se compensaient et le verre se lisait comme le
+ *      fond. Il vient desormais du TEXTE du theme (voir
+ *      `ecran-vocal-transparence-visible.test.js`, qui mesure au pixel que la
+ *      lumiere traverse reellement le panneau).
  *
  *   3. « le portrait doit etre environ trois fois plus grand » — le medaillon
  *      n'est plus fige a 96 px : `vocalPortraitSize` le MESURE (la place dans le
- *      cadre, la hauteur qui laisse trois rangees a la liste, la cible de trois
- *      fois le plancher) et `vocalSyncSides` ecrit le resultat dans
- *      `--vocal-portrait-size`. Un seul chiffre, lu par la feuille de style et
- *      par le budget.
+ *      cadre, la hauteur qui laisse deux rangees et leurs deux en-tetes a la
+ *      liste, la cible de trois fois le plancher) et `vocalSyncSides` ecrit le
+ *      resultat dans `--vocal-portrait-size`. Un seul chiffre, lu par la feuille
+ *      de style et par le budget.
  *
  * Plus la consequence des trois : DANS L'ETAT NU, le cadre et la surface de la
  * colonne de droite s'effacent aussi (il ne restait qu'un rectangle de verre vide
@@ -129,8 +134,8 @@ describe("R2 — les colonnes sont du VERRE, pas un filet devant du vide", () =>
   it("une teinte, un flou, et rien d'autre", () => {
     const bloc = surface();
     expect(bloc).toMatch(/background-color:\s*var\(--vocal-glass\)/);
-    expect(bloc).toMatch(/-webkit-backdrop-filter:\s*blur\(8px\)/);
-    expect(bloc).toMatch(/backdrop-filter:\s*blur\(8px\)/);
+    expect(bloc).toMatch(/-webkit-backdrop-filter:\s*blur\(12px\)/);
+    expect(bloc).toMatch(/backdrop-filter:\s*blur\(12px\)/);
     // `background-color` et non `background` : le raccourci effacerait l'image
     // de fond du calque, que les deux lavis peignent.
     expect(bloc).not.toMatch(/[^-]background\s*:/);
@@ -146,8 +151,10 @@ describe("R2 — les colonnes sont du VERRE, pas un filet devant du vide", () =>
     expect(jeton).toMatch(/color-mix\(/);
     expect(jeton).toMatch(/transparent/);
     expect(jeton).not.toMatch(/#[0-9a-fA-F]{3,8}\b|\brgba?\s*\(|\bhsla?\s*\(/);
-    // 62 % : assez pour lire, assez peu pour voir au travers.
-    expect(jeton).toContain("62%");
+    // 55 % : assez pour lire, assez peu pour voir au travers. (Le plancher
+    // mesure est verifie dans `ecran-vocal-transparence-visible.test.js` :
+    // au-dela, la lumiere du fond ne traverse plus assez pour se voir.)
+    expect(jeton).toContain("55%");
   });
 
   it("il y a quelque chose DERRIERE : les deux lavis du calque", () => {
@@ -158,9 +165,11 @@ describe("R2 — les colonnes sont du VERRE, pas un filet devant du vide", () =>
     expect(calque).toMatch(/--vocal-wash:/);
     const lavis = calque.match(/radial-gradient\(/g) || [];
     expect(lavis.length).toBe(2);
-    // Le lavis est un melange du theme, jamais une couleur en dur.
+    // Le lavis est un melange du theme, jamais une couleur en dur — et il vient
+    // du TEXTE, pas de la surface : une teinte de verre eclairee par sa propre
+    // famille ne se voit pas (c'etait le defaut de la premiere passe).
     const jeton = (calque.match(/--vocal-wash:\s*([^;]+);/) || [])[1] || "";
-    expect(jeton).toContain("var(--surface-floating)");
+    expect(jeton).toContain("var(--text-primary)");
     expect(jeton).not.toMatch(/#[0-9a-fA-F]{3,8}\b|\brgba?\s*\(|\bhsla?\s*\(/);
     // Le calque lui-meme reste peint (il ne floute pas : ce sont les colonnes).
     expect(calque).toMatch(/background:/);
@@ -189,13 +198,14 @@ describe("R3 — le medaillon est MESURE, plus fige", () => {
     expect(portrait).toMatch(/height:\s*var\(--vocal-portrait-size,\s*96px\)/);
   });
 
-  it("la mesure tient dans le cadre, garde trois rangees, et ne depasse pas la cible", () => {
+  it("la mesure tient dans le cadre, garde deux rangees et leurs en-tetes, et ne depasse pas la cible", () => {
     // Place : la colonne moins le cadre, moins une marge de chaque cote.
     const place = 256 - VOCAL_SIDE_FRAME_PX - 2 * VOCAL_PORTRAIT_EDGE_PX;
     expect(vocalPortraitSize({ taskTrack: 256, columnHeight: 512 })).toBe(place);
     expect(place).toBe(214);
-    // Hauteur : ce qui reste quand on a paye le haut fixe, les trois rangees
-    // promises a la liste et le reste du bloc du personnage.
+    // Hauteur : ce qui reste quand on a paye le haut fixe, les DEUX rangees et
+    // leurs deux en-tetes promises a la liste, et le reste du bloc du
+    // personnage.
     const parHauteur =
       512 -
       VOCAL_SIDE_FIXED_PX -
@@ -204,7 +214,7 @@ describe("R3 — le medaillon est MESURE, plus fige", () => {
       VOCAL_PORTRAIT_GAP_PX -
       VOCAL_PORTRAIT_NAME_PX -
       VOCAL_PORTRAIT_AIR_PX;
-    expect(parHauteur).toBe(231);
+    expect(parHauteur).toBe(277);
     // Une colonne large mais une fenetre basse : c'est la HAUTEUR qui decide.
     expect(vocalPortraitSize({ taskTrack: 2000, columnHeight: 512 })).toBe(parHauteur);
     // La borne haute est la cible : jamais plus de trois fois le plancher.
@@ -226,7 +236,7 @@ describe("R3 — le medaillon est MESURE, plus fige", () => {
 
   it("le plan porte la taille ET le bloc : la liste en est deduite", () => {
     const avec = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasPortrait: true });
-    expect(avec.portraitSize).toBe(214);
+    expect(avec.portraitSize).toBe(277);
     expect(avec.portraitBlock).toBe(vocalPortraitBlockSize(avec.portraitSize));
     expect(avec.listHeight).toBe(avec.columnHeight - VOCAL_SIDE_FIXED_PX - avec.portraitBlock);
     // Sans personnage, aucune place n'est mesuree ni retiree.
@@ -247,6 +257,10 @@ describe("R4 — dans l'etat nu, le panneau de droite cesse d'etre un panneau", 
     expect(bloc).toMatch(/border-color:\s*transparent/);
     expect(bloc).toMatch(/-webkit-backdrop-filter:\s*none/);
     expect(bloc).toMatch(/backdrop-filter:\s*none/);
+    // Le filet LUMINEUX du haut (la deuxieme passe de la transparence, voir
+    // `ecran-vocal-transparence-visible.test.js`) tombe avec le reste : un
+    // panneau eteint ne garde pas un lisere qui le dessinerait encore.
+    expect(bloc).toMatch(/box-shadow:\s*none/);
     // Ni opacite, ni visibilite, ni flux : la colonne garde sa place et sa
     // hauteur, et le portrait qui vit dedans ne bouge pas d'un pixel.
     expect(bloc).not.toMatch(/(^|[^-])opacity\s*:/);
@@ -254,6 +268,31 @@ describe("R4 — dans l'etat nu, le panneau de droite cesse d'etre un panneau", 
     expect(bloc).not.toMatch(/display\s*:/);
     expect(bloc).not.toMatch(/pointer-events\s*:/);
     expect(bloc).not.toMatch(/\b(width|height|padding|margin|position|top|right)\s*:/);
+  });
+
+  it("le portrait, son nom, le bouton de masquage et la saisie SURVIVENT", () => {
+    // La demande du proprietaire du 2026-11-02 : « quand tout est masque, le
+    // cadre du panneau de droite doit disparaitre » — le CADRE, pas le
+    // personnage. On l'ecrit ici comme une liste de quatre survivants, pour que
+    // le jour ou quelqu'un eteindra « aussi » le portrait, ce soit ce test qui
+    // tombe, et pas l'ecran.
+    const eteinte = sansCommentaires(
+      sliceSource(CSS, ".pilot-vocal.vocal-bare .vocal-side-tasks {", "\n}", 60) +
+        sliceSource(CSS, ".pilot-vocal.vocal-bare .vocal-mic-fix,", "\n}", 300),
+    );
+    for (const survivant of [
+      ".vocal-portrait",
+      ".vocal-portrait-name",
+      ".vocal-display-toggle",
+      ".vocal-input",
+    ]) {
+      expect(eteinte, `${survivant} est eteint par l'etat nu`).not.toContain(survivant);
+    }
+    // Et les deux seules regles qui rallument quelque chose dans l'etat nu sont
+    // le bouton de masquage et... le bouton de masquage.
+    const rallumees = CSS.match(/\.pilot-vocal\.vocal-bare[^{]*\{[^}]*opacity:\s*1/g) || [];
+    expect(rallumees.length).toBeLessThanOrEqual(1);
+    expect(CSS).toMatch(/\.pilot-vocal\.vocal-bare \.vocal-top \.vocal-display-toggle \{/);
   });
 
   it("il ne nomme NI le portrait, NI son nom, NI la zone de saisie", () => {

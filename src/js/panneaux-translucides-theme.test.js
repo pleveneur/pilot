@@ -550,7 +550,7 @@ describe("panneaux translucides : rien d'autre ne bouge", () => {
     expect(verre, "la surface des deux colonnes est introuvable").toBeTruthy();
     expect(declaration(verre[0], "background-color")).toBe("var(--vocal-glass)");
     expect(verre[0]).not.toMatch(COULEUR_EN_DUR);
-    expect(declaration(verre[0], "backdrop-filter")).toBe("blur(8px)");
+    expect(declaration(verre[0], "backdrop-filter")).toBe("blur(12px)");
     // Le jeton n'est pas une couleur : c'est un melange du theme actif.
     const jeton = declaration(blockOf(".pilot-vocal"), "--vocal-glass");
     expect(jeton).toContain("var(--glass-tint)");

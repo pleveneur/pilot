@@ -138,7 +138,7 @@ Un lot qui ne peut pas passer T17 ne se livre pas.
 | 3 | La **colonne de gauche** : la discussion — les questions de l'utilisateur y figurent **aussi**, en plus petit et en gris. | § 1.3, § 4 |
 | 4 | **Halo / voix : on garde 60 %.** La question du contraste portrait ↔ halo tombe : plus de portrait dans le halo. | § 1.4 (et le tableau « ce que ces lots ne font pas » ci-dessous) |
 | 5 | Le **nom** garde sa petite pastille, mais elle est **rattachée au portrait** (elle vit sous lui, plus dans le bouton de relance). | § 2.3 |
-| 6 | **Largeur des colonnes : 320 px**, avec **élargissement au-delà de 1600 px** de fenêtre. | § 3.1, § 3.2 (table) |
+| 6 | **Largeur des colonnes : 384 px** (320 px dans la première conception ; élargies de 64 px le 2026-11-02, cf. `spec_modes_ecran_vocal.md` § 3ter), avec **élargissement au-delà de 1600 px** de fenêtre. | § 3.1, § 3.2 (table) |
 | 7 | **Seuil d'affichage : dès `avail ≥ 240`.** Rien n'est caché sur un petit portable. | § 3.2 |
 | 8 | **Trois lots**, livrables seuls et dans cet ordre : **lot 1** portrait ; **lot 2** tâches + ligne d'activité (+ le bouton d'affichage, qui n'a de sens qu'une fois les colonnes remplies, § 6) ; **lot 3** discussion **et** levée de l'interdit — la doctrine de l'écran nu est isolée dans son lot, avec ses mises à jour de spec et d'aide. | § 2, § 3, § 4, § 6 |
 | 9 | **Tout ce que l'écran affiche se masque d'un seul geste, sauf le portrait.** Un petit bouton discret (une icône d'œil, dans la barre du haut) retire **ensemble** le disque, la couronne, la ligne d'état, la saisie, les colonnes et le fond de la barre ; **le personnage reste**, et le même bouton remet tout. **Rien n'est mémorisé** : on entre toujours avec tout visible. *(décision du 2026-10-29, postérieure aux huit premières — elle ne rouvre aucune d'elles : les trois sorties, le logo-bouton et l'effacement du bas sont intacts.)* | § 6 (entier) |
@@ -474,7 +474,7 @@ sur les tests : `ecran-vocal-bouton-relance.test.js` ne change pas d'une ligne.*
 | # | Nom | Ce qu'il vérifie | Il échoue si… |
 |---|---|---|---|
 | **9** | « le portrait est un médaillon **au pied** de la colonne de droite, pas du disque » | `.vocal-portrait` existe, il est **dans** `.vocal-side-tasks`, **après** `vocal-side-body`, il n'est **pas** dans `.vocal-orb` ; le CSS pose `72px` et `border-radius: 50%` ; la source est `getAssistantPortrait()` **sans repli** (`src` n'est jamais `/logo_pilot_vector.svg`) ; le nom est écrit par `superAgentDisplayLabel()` ; la pastille suit le portrait | le portrait revient dans le cercle, remonte en haut, se replie sur le logo, ou un second mécanisme de nom apparaît |
-| **10** | « la largeur des colonnes » | `planVocalSides` : 320 px jusqu'à 1600, 400 px à 1920 et au-delà, 0 en dessous de 240 d'`avail`, jamais plus grand qu'`avail`, 24 px de jour, 16 px de marge ; `columnHeight = min(orbSize × 1,5238, height − 289)` et `shown` conformes aux colonnes « `H` » et « Colonnes » du tableau § 3.2 — **les onze lignes** | une des lignes du tableau § 3.2 dévie d'un pixel, ou une colonne de 512 px est posée sur une fenêtre de 480 px de haut |
+| **10** | « la largeur des colonnes » | `planVocalSides` : 384 px jusqu'à 1600, 400 px à 1920 et au-delà, 0 en dessous de 240 d'`avail`, jamais plus grand qu'`avail`, 24 px de jour, 16 px de marge ; `columnHeight = min(orbSize × 1,5238, height − 289)` et `shown` conformes aux colonnes « `H` » et « Colonnes » du tableau § 3.2 — **les onze lignes** | une des lignes du tableau § 3.2 dévie d'un pixel, ou une colonne de 512 px est posée sur une fenêtre de 480 px de haut |
 | **16** | « aucune écriture, aucune trace » | le lot n'écrit ni fichier, ni `localStorage`, ni config : `vocal-sides.js` ne contient ni `invoke`, ni `localStorage`, ni `fetch` ; `super-agent.js` n'écrit l'état des colonnes nulle part | un état persiste après la sortie |
 | **17** | « la sortie de l'écran reste cliquable » | `.vocal-side` porte `pointer-events: none` et ne contient **aucun** nœud focusable (`button`, `a`, `[tabindex]`) ; `.vocal-top`, `.vocal-stage`, `.vocal-status`, `.vocal-input`, `#mode-logo`, `#agent-activity` portent `pointer-events: auto` et sont **exactement six** ; `onVocalKeydown` gère toujours Échap | un seul des trois chemins de sortie cesse d'être joignable |
 
@@ -594,8 +594,8 @@ donc les groupes « En cours (n) » / « En attente (n) » et l'ordre de la file
     en-têtes retirés, `floor(61 / 46) = 1` → **1** ; **B** `listeH = 159`, en-têtes retirés,
     `floor(159 / 46) = 3` mais plafond sans en-tête de **2** → **2**. Jamais zéro : une colonne qui n'affiche
     aucune tâche alors que des missions tournent serait un mensonge silencieux.
-  - Le nombre de **caractères** par ligne suit la largeur : `floor(track / 7,6)` → **42** car.
-    à 320 px, **52** à 400 px, **33** à 249 px.
+  - Le nombre de **caractères** par ligne suit la largeur : `floor((track − 22) / 7,6)` → **47** car.
+    à 384 px (largeur nominale depuis le 2026-11-02), **52** à 400 px, **34** à 282 px, **29** à 249 px.
 - **Liste vide** : la colonne garde son titre en haut et, **s'il y a un personnage**, le portrait
   **au pied** ; **entre les deux**, à la place de la liste, une
   ligne « Aucune tâche en cours » (11 px, gris). La colonne n'est donc jamais vide — ce qui
@@ -715,7 +715,8 @@ devienne fausse.
   (même règle que `cutTextAtBoundary` de `speech-text.js`, qui est le précédent du projet).
 - L'excédent est dit : `.vocal-side-more` → « … et N échange(s) plus haut » (11 px). Une
   coupe muette serait un mensonge.
-- `charsPerLine = floor(track / 7,6)` : 42 caractères à 320 px, 37 à 282 px, 52 à 400 px.
+- `charsPerLine = floor((track − 22) / 7,6)` : 47 caractères à 384 px (largeur nominale
+depuis le 2026-11-02), 34 à 282 px, 52 à 400 px.
   C'est ce chiffre qui **fixe** le nombre de lignes coupées, pas une constante cachée.
 - **Une seule famille de messages** est lue : `.agent-message-user` / `.agent-message-assistant`
   de l'onglet (les classes existantes, `agent-pi.js`) ; les messages système, les blocs
@@ -1229,8 +1230,9 @@ portrait (aucun repli sur le logo), et la même règle vaut ici.
 >
 > - **le médaillon est mesuré, plus figé** : `vocalPortraitSize` le choisit entre un plancher de
 >   **96 px** et une cible de **288 px** (trois fois le plancher), en respectant la place dans le
->   cadre et trois rangées garanties à la liste. Le bloc du personnage vaut **`taille + 52`**
->   (148 px au plancher, 266 px dans une grande fenêtre) ;
+>   cadre et **deux en-têtes + deux rangées** garantis à la liste (132 px). Le bloc du personnage
+>   vaut **`taille + 52`** (148 px au plancher, **329 px** dans une grande fenêtre, médaillon
+>   **277 px** = 2,89 × le plancher ; 288 n'est jamais atteint, voir la spec) ;
 > - **le contenu ne touche plus le cadre** : **12 px d'air** en bas des deux colonnes
 >   (`padding-block-end`) et **12 px** au-dessus du médaillon (`margin-block-start`), tous deux
 >   **comptés** dans le budget — l'en-tête de la colonne de gauche passe de 14 à **26 px** ;

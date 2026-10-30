@@ -85,10 +85,10 @@ const TABLE_7BIS_4 = [
   [720, 520, 151.6, 231, [180, 3], [32, 1], null],
   [768, 576, 188.3, 287, [236, 4], [88, 1], [56, 1]],
   [820, 620, 217.2, 331, [280, 5], [132, 2], [100, 1]],
-  [896, 672, 251.3, 383, [332, 6], [178, 3], [152, 2]],
-  [1024, 768, 314.3, 479, [428, 8], [178, 3], [248, 4]],
-  [1280, 800, 335.3, 511, [460, 8], [194, 3], [280, 5]],
-  [1440, 900, 336, 512, [461, 8], [195, 3], [281, 5]],
+  [896, 672, 251.3, 383, [332, 6], [132, 2], [152, 2]],
+  [1024, 768, 314.3, 479, [428, 8], [168, 2], [248, 4]],
+  [1280, 800, 335.3, 511, [460, 8], [132, 2], [280, 5]],
+  [1440, 900, 336, 512, [461, 8], [132, 2], [281, 5]],
 ];
 
 // ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
     expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(12 + 96 + 8 + 20 + 12);
     expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(148);
-    expect(vocalPortraitBlockSize(214)).toBe(214 + 52);
+    expect(vocalPortraitBlockSize(277)).toBe(277 + 52);
   });
 
   it("le personnage l'emporte TOUJOURS sur la fenetre du visage", () => {
@@ -142,10 +142,10 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     expect(portrait.imageZone.kind).toBe(VOCAL_IMAGE_PORTRAIT);
     expect(deux).toEqual(portrait);
     // L'avatar ne pese donc jamais sur la hauteur de liste quand un personnage
-    // est la : 512 - 51 - 266 = 195 px, avec ou sans visage (le bloc du
-    // personnage vaut ici 214 + 52 = 266 px : le medaillon mesure 214 px).
-    expect(deux.listHeight).toBe(195);
-    expect(portrait.portraitSize).toBe(214);
+    // est la : 512 - 51 - 329 = 132 px, avec ou sans visage (le bloc du
+    // personnage vaut ici 277 + 52 = 329 px : le medaillon mesure 277 px).
+    expect(deux.listHeight).toBe(132);
+    expect(portrait.portraitSize).toBe(277);
     // Une entree absente n'est pas « vrai » : sans personnage, l'avatar decide.
     expect(planVocalSides({ ...cas, hasAvatar: true }).imageZone.kind).toBe(
       VOCAL_IMAGE_AVATAR,

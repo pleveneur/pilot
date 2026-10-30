@@ -11744,32 +11744,36 @@ summary:focus-visible {
      couronne), 7,32:1 en Pilot sombre, 7,97:1 en Pilot clair ; a 80 % la marge
      tombait a 0,02 au-dessus de 4,5:1 dans One Dark, soit le bruit d'arrondi. */
   --vocal-ink-soft: color-mix(in srgb, var(--text-primary) 85%, var(--bg-app));
-  /* ── LA TRANSPARENCE QU'ON PEUT VOIR (remarque du proprietaire, 2026-11-02) ──
-     Diagnostic, avant de changer une seule valeur : les deux colonnes
-     n'avaient AUCUN fond (seulement un cadre de 1 px), et derriere elles
-     l'overlay peint un `background: var(--bg-app)` UNI. Un panneau transparent
-     sur un fond uni est invisible : il n'y avait rien a voir a travers, et le
-     « verre » se lisait donc comme une plaque opaque. Trois jetons ci-dessous,
-     tous derives de variables du theme ACTIF (aucune couleur en dur, aucun
-     `rgba()`), repondent aux trois exigences a la fois — voir
-     `spec_modes_ecran_vocal.md` § 3ter, « La transparence qu'on voit ».
+  /* ── LA TRANSPARENCE QU'ON PEUT VOIR (remarque du proprietaire, 2026-11-02 ;
+     deuxieme passe du meme jour, la premiere ne se voyait toujours pas) ──
+     Diagnostic, au pixel : les deux colonnes n'avaient AUCUN fond (un filet de
+     1 px), et derriere elles le calque peint un `background: var(--bg-app)`
+     UNI. La premiere passe a ajoute une surface de verre et deux lavis — mais
+     le lavis etait fait de `--surface-floating`, c'est-a-dire de la MEME famille
+     que la teinte du panneau : le verre etait eclaire par sa propre couleur, les
+     deux se compensaient, et le panneau se lisait exactement comme le fond
+     (mesure : la lumiere qui traverse valait 0,7 a 4,0 niveaux sur 255, et
+     0,0 en `solarized` — un panneau litteralement invisible).
+     La lumiere derriere les colonnes vient donc maintenant du TEXTE du theme
+     (`--text-primary`), qui est par construction a l'oppose du fond de
+     l'application dans les deux modes : le panneau, teinte et floute, laisse
+     voir une lumiere qui n'a pas sa couleur, et l'ecart au bord se lit.
 
      (1) LE FOND DU CALQUE PORTE UNE LUMIERE. Deux voiles radiaux, un par
-     colonne, dans la couleur des surfaces flottantes du theme (32 % : un
-     lavis, pas une plaque). Le rayon vaut la moitie de la fenetre moins la
-     boite du disque et son jour : le lavis s'arrete avant le cercle et ne
-     touche jamais le texte de l'etat. Sans ce fond, les colonnes translucides
-     n'auraient, encore une fois, rien a laisser voir. */
-  --vocal-wash: color-mix(in srgb, var(--surface-floating) 32%, transparent);
+     colonne (12 % : un lavis, pas une plaque). Le rayon vaut la moitie de la
+     fenetre moins la boite du disque et son jour : le lavis s'arrete avant le
+     cercle et ne touche jamais le texte de l'etat. */
+  --vocal-wash: color-mix(in srgb, var(--text-primary) 12%, transparent);
   --vocal-wash-w: calc(50vw - var(--vocal-orb-box) / 2 - 24px);
   /* (2) LA SURFACE DES COLONNES : le jeton de verre des panneaux flottants
      (`--glass-tint`, 94 % — deja defini par les deux themes et herite par les
-     huit sous-themes), ramene a 62 % pour que la transparence se voie. Melange
+     huit sous-themes), ramene a 55 % pour que la transparence se voie. Melange
      au FOND DU CALQUE, et non au texte : le contraste du texte ne bouge donc
-     pas d'un iota (mesure des dix palettes, `panneaux-translucides-theme.test.js`).
+     pas d'un iota (mesure des dix palettes, `panneaux-translucides-theme.test.js`
+     et `ecran-vocal-marges-transparence-portrait.test.js`).
      La teinte reste une variable : changer de theme la change sans redemarrage
      (`glass-theme.js` rafraichit le flou, voir `body.glass-refresh`). */
-  --vocal-glass: color-mix(in srgb, var(--glass-tint) 62%, transparent);
+  --vocal-glass: color-mix(in srgb, var(--glass-tint) 55%, transparent);
   /* (3) LA TAILLE DU MEDAILLON. Valeur de depart (le plancher de 96 px) ; la
      seule ecrivaine est `vocalSyncSides()` (super-agent.js), qui pose la valeur
      MESUREE par `vocalPortraitSize` — le budget de la liste et la feuille de
@@ -12153,11 +12157,16 @@ body.pilot-vocal-active #agent-activity {
    l'impression de plaque opaque. Trois pieces, donc, et pas une de plus :
 
      la TEINTE  `--vocal-glass` : `--glass-tint` (le jeton de verre des panneaux
-                flottants) ramene a 62 %. Elle vient du theme ACTIF par
+                flottants) ramene a 55 %. Elle vient du theme ACTIF par
                 construction — aucune couleur, aucun `rgba()` ecrit ici, et un
                 changement de theme la change sans redemarrage.
-     le FLOU    8 px : il ne sert que s'il y a quelque chose derriere, et c'est
-                desormais le cas (les deux lavis du fond de l'overlay).
+     le FLOU    12 px : il ne sert que s'il y a quelque chose derriere, et c'est
+                desormais le cas (les deux lavis du fond de l'overlay). 8 px ne
+                suffisaient pas a effacer la structure d'un degrade large :
+                le panneau paraissait aussi net que le fond.
+     le FILET   `box-shadow: inset 0 1px 0` a 10 % du texte : l'arete haute du
+                verre, celle qui accroche la lumiere. Il vient du theme, il ne
+                prend aucun pixel, et l'etat nu l'eteint avec le reste.
      le FOND    les lavis radiaux de `.pilot-vocal` (voir ses jetons).
 
    `background-color` et non `background` : le raccourci effacerait l'image de
@@ -12170,8 +12179,9 @@ body.pilot-vocal-active #agent-activity {
 .vocal-side-discussion,
 .vocal-side-tasks {
   background-color: var(--vocal-glass);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 10%, transparent);
 }
 /* LA ZONE D'IMAGE, SOUS LE PORTRAIT (complement du 2026-10-29, § 7bis ;
    correction du 2026-10-31) : la place que Pilot reserve a la fenetre du visage
@@ -12213,9 +12223,11 @@ body.pilot-vocal-active #agent-activity {
      (moins le cadre et sa marge), plafonnee par la hauteur qui laisse trois
      rangees a la liste, et jamais plus de trois fois le plancher de 96 px.
      Valeur de repli : 96 px, le plancher du 2026-10-03 (`VOCAL_PORTRAIT_PX`).
-     Mesure des sept fenetres du document : 102 px a 896, 198 a 1024, 214 a 1280
-     et 1440, 231 a 1920 — voir `spec_modes_ecran_vocal.md` § 3ter, « La taille du
-     medaillon ». */
+     Mesure des sept fenetres du document, deuxieme passe du 2026-11-02 : 96 px a
+     720 et 768, 148 a 896, 208 a 1024, 276 a 1280, 277 a 1440 et au-dela — soit
+     2,9 fois le plancher, la cible de 288 px n'etant atteinte nulle part (il
+     faudrait 12 px de colonne de plus). Voir `spec_modes_ecran_vocal.md` § 3ter,
+     « La taille du medaillon ». */
   width: var(--vocal-portrait-size, 96px);
   height: var(--vocal-portrait-size, 96px);
   /* L'AIR AU-DESSUS DU MEDAILLON (meme remarque : il ne touche pas le cadre).
@@ -13022,6 +13034,7 @@ body.pilot-vocal-active #agent-activity {
 .pilot-vocal.vocal-bare .vocal-side-tasks {
   background-color: transparent;
   border-color: transparent;
+  box-shadow: none;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

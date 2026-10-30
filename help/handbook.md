@@ -1411,7 +1411,8 @@ jamais, même avec un titre très long.
 
 Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
 de la liste et **détaché d'elle** : un médaillon rond **d'au moins 96 px**, qui **grandit avec la
-place disponible** — jusqu'à trois fois sa taille de départ dans une grande fenêtre, jamais au
+place disponible** — près de trois fois sa taille de départ dès 1 280 px de large
+(**2,9 ×** ; la cible de 3 × n'est jamais atteinte, la colonne manquerait de place), jamais au
 point de manger les tâches —, et son **nom** est écrit **juste
 dessous**, sur
 une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On

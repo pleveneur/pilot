@@ -19,8 +19,11 @@
 // (super-agent.js), qui la pose en `--vocal-side` sur l'overlay.
 //
 // LES NOMBRES, ET D'OU ILS VIENNENT (aucune valeur inventee) :
-//   320 px   largeur d'une colonne sous 1600 px de fenetre — 42 caracteres a
-//            13 px, une ligne de texte lisible et pas un mot par ligne ;
+//   384 px   largeur d'une colonne sous 1600 px de fenetre — 47 caracteres a
+//            13 px, une ligne de texte lisible et pas un mot par ligne. Elle
+//            etait de 320 px (39 caracteres) avant la remarque du proprietaire
+//            du 2026-11-02 : « ajoute une respiration a l'interieur des
+//            panneaux... tu peux aussi agrandir un peu les deux cadres » ;
 //   400 px   plafond, atteint a 1920 px (0,25 px de plus par pixel de fenetre
 //            au-dela de 1600) — 52 caracteres ;
 //   240 px   seuil de presence : en dessous, une tache ne tient plus sur une
@@ -38,8 +41,22 @@
 
 /** Largeur minimale d'une colonne pour qu'elle apparaisse (seuil de decision 7). */
 export const VOCAL_SIDE_MIN_PX = 240;
-/** Largeur nominale d'une colonne tant que la fenetre fait 1600 px ou moins. */
-export const VOCAL_SIDE_MAX_PX = 320;
+/**
+ * Largeur nominale d'une colonne tant que la fenetre fait 1600 px ou moins.
+ *
+ * 384 px, et non plus 320 : la remarque du proprietaire du 2026-11-02 demande
+ * une respiration INTERIEURE (« le contenu touche le cadre ») et autorise a
+ * « agrandir un peu les cadres ». L'air lui-meme est pose par la feuille de
+ * style (`padding-inline: 10px`, `padding-block-end: 12px`, voir
+ * `VOCAL_SIDE_FRAME_PX` et `VOCAL_SIDE_AIR_PX`) ; ce qui manquait vraiment,
+ * c'etait la PLACE : a 320 px de piste il ne restait que 39 caracteres par
+ * ligne, une respiration coupee en deux. Les deux colonnes prennent donc 64 px
+ * de plus, symetriquement (une seule constante, les deux lisent la meme
+ * valeur), sans jamais depasser la place disponible (`avail`, § 3.1) : sous
+ * 1024 px de fenetre la colonne est toujours ecrasee a ce qui reste, et rien
+ * ne deborde.
+ */
+export const VOCAL_SIDE_MAX_PX = 384;
 /** Plafond de largeur, atteint a 1920 px de fenetre. */
 export const VOCAL_SIDE_WIDE_MAX_PX = 400;
 /** Largeur de fenetre a partir de laquelle les colonnes commencent a s'elargir. */
@@ -128,11 +145,13 @@ export const VOCAL_PORTRAIT_PX = 96;
  * C'est une CIBLE, pas une promesse : `vocalPortraitSize` ne la depasse jamais,
  * mais elle ne l'atteint que si la colonne ET la hauteur la portent. Mesure
  * reelle des sept fenetres du tableau de `spec_modes_ecran_vocal.md` § 3ter :
- * 96 px a 720 x 520 et 768 x 576, 102 px a 896 x 672, 198 px a 1024 x 768,
- * 214 px a 1280 x 800 et 1440 x 900, 231 px au mieux (1920 x 1080, ou la HAUTEUR
- * prend le relais). 288 px demanderait une colonne de taches de 366 px, que
- * seule une fenetre de plus de 2000 px de large donne — et il ne resterait alors
- * que deux rangees de taches.
+ * 96 px a 720 x 520 et 768 x 576 (la HAUTEUR prend le relais), 148 px a
+ * 896 x 672, 208 px a 1024 x 768, 276 px a 1280 x 800, 277 px a 1440 x 900 et
+ * a 1920 x 1080 — soit 2,9 fois le plancher, la cible de 288 px n'etant atteinte
+ * nulle part : il faudrait 12 px de hauteur de plus dans la colonne, et la
+ * colonne est bornee a la boite du disque (512 px). Le chiffre REEL est donc
+ * 276-277 px, pas 288 : il est ecrit ici et mesure par les tests, jamais
+ * arrondi en silence.
  */
 export const VOCAL_PORTRAIT_TARGET_PX = 3 * VOCAL_PORTRAIT_PX;
 /**
@@ -150,12 +169,26 @@ export const VOCAL_PORTRAIT_EDGE_PX = 10;
  */
 export const VOCAL_PORTRAIT_AIR_TOP_PX = VOCAL_SIDE_AIR_PX;
 /**
- * La place que la liste garde TOUJOURS sous le personnage : son en-tete et TROIS
- * rangees (40 + 3 x 46 = 178 px). C'est ce qui borne la hauteur du medaillon :
- * un portrait qui ne laisserait qu'une rangee couterait plus qu'il ne rapporte.
+ * La place que la liste garde TOUJOURS sous le personnage : ses DEUX en-tetes et
+ * DEUX rangees (2 x 20 + 2 x 46 = 132 px). C'est ce qui borne la hauteur du
+ * medaillon : un portrait qui ne laisserait qu'une rangee couterait plus qu'il
+ * ne rapporte.
+ *
+ * POURQUOI DEUX RANGEES ET NON TROIS (2026-11-02) : la remarque du proprietaire
+ * demande un medaillon « environ trois fois plus grand » ET une liste « qui
+ * reste correctement affichee », en demandant de VERIFIER le nombre de lignes
+ * reellement affichables apres l'agrandissement. Dans une colonne de 512 px,
+ * les deux ne tiennent pas ensemble : 3 rangees + le haut fixe (51) + le bloc du
+ * personnage (12 + taille + 8 + 20 + 12) plafonnent le medaillon a 231 px (2,4
+ * fois le plancher). A 2 rangees, le plafond monte a 277 px (2,9 fois) et la
+ * liste garde encore ses deux en-tetes et une tache par groupe — le reste est
+ * DIT (« + N autre(s) »), jamais cache. Le chiffre affiche par la liste est donc
+ * 2 rangees : c'est le compromis choisi, il est mesure par
+ * `vocalTaskRows` et verrouille par
+ * `src/js/ecran-vocal-marges-transparence-portrait.test.js`.
  */
 export const VOCAL_PORTRAIT_MIN_LIST_PX =
-  2 * VOCAL_TASK_HEADER_PX + 3 * VOCAL_TASK_PX;
+  2 * VOCAL_TASK_HEADER_PX + 2 * VOCAL_TASK_PX;
 /** Ecart entre le medaillon et son nom, en px. */
 export const VOCAL_PORTRAIT_GAP_PX = 8;
 /** Hauteur de la ligne du nom, en px (la meme que la pastille du bouton). */
@@ -202,14 +235,15 @@ export const VOCAL_PORTRAIT_BLOCK_PX = vocalPortraitBlockSize(VOCAL_PORTRAIT_PX)
  *      moins le cadre (`VOCAL_SIDE_FRAME_PX`) et moins la marge de chaque cote
  *      (`VOCAL_PORTRAIT_EDGE_PX`) — le medaillon ne deborde donc jamais du
  *      cadre, meme dans la plus petite fenetre ;
- *   2. jamais plus haut que ce qui laisse TROIS rangees a la liste
- *      (`VOCAL_PORTRAIT_MIN_LIST_PX`) : le portrait ne mange pas les taches ;
+ *   2. jamais plus haut que ce qui laisse DEUX rangees (et leurs deux en-tetes)
+ *      a la liste (`VOCAL_PORTRAIT_MIN_LIST_PX`) : le portrait ne mange pas les
+ *      taches ;
  *   3. jamais plus que la cible (`VOCAL_PORTRAIT_TARGET_PX`, 288 px) ;
  *   4. jamais moins que le plancher (`VOCAL_PORTRAIT_PX`, 96 px) — sauf si la
  *      place elle-meme est plus petite (la regle 1 passe avant : on ne deborde
  *      pas pour tenir un plancher).
  *
- * Quand la hauteur ne porte pas les trois rangees, la regle 2 cede la premiere
+ * Quand la hauteur ne porte pas ces deux rangees, la regle 2 cede la premiere
  * (elle n'est pas une condition de correction, seulement un confort) : le
  * medaillon reste au plancher et la liste garde ce qui reste — a 720 x 520,
  * 32 px, soit la rangee rognee d'avant.

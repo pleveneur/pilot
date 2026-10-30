@@ -124,9 +124,9 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     const deux = planVocalSides({ ...cas, hasPortrait: true, hasAvatar: true });
     const portrait = planVocalSides({ ...cas, hasPortrait: true });
     expect(deux).toEqual(portrait);
-    // 512 - 51 - 266 : le personnage occupe le haut (medaillon mesure 214 px, donc
-    // un bloc de 266), la zone d'image ne prend rien.
-    expect(deux.listHeight).toBe(195);
+    // 512 - 51 - 329 : le personnage occupe le haut (medaillon mesure 277 px, donc
+    // un bloc de 329), la zone d'image ne prend rien.
+    expect(deux.listHeight).toBe(132);
   });
 
   it("le plan connait le personnage : `hasPortrait` et la taille du medaillon en font partie", () => {
@@ -149,7 +149,7 @@ describe("T18 — le haut de la colonne reserve la place du personnage", () => {
     expect(plan.portraitBlock).toBe(0);
     // Une entree `hasPortrait` bien vraie CHANGE la liste : elle est lue.
     const avec = planVocalSides({ ...cas, hasPortrait: true });
-    expect(avec.portraitSize).toBe(214);
+    expect(avec.portraitSize).toBe(277);
     expect(avec.listHeight).toBe(plan.listHeight - avec.portraitBlock);
     // Et sans personnage ni visage, aucun cas par defaut cache : 51 px, pas plus.
     expect(plan.listHeight).toBe(461);
@@ -183,8 +183,8 @@ describe("T19 — la liste ne passe jamais sous le cercle", () => {
     expect(VOCAL_CROWN_PX).toBe(88);
     expect(VOCAL_SIDE_GAP_PX).toBe(24);
     const plan = planVocalSides({ width: 1440, height: 900, orbSize: 336 });
-    expect(plan.track).toBe(320);
-    expect(plan.taskTrack).toBe(320 - 64);
+    expect(plan.track).toBe(384);
+    expect(plan.taskTrack).toBe(384 - 64);
     // Aucune colonne : aucune largeur de taches non plus.
     expect(planVocalSides({ width: 640, height: 480, orbSize: 125.3 }).taskTrack).toBe(0);
   });

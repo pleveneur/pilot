@@ -329,7 +329,7 @@ d'air au-dessus** et **12 px d'air** avant ce qui suit — un bloc de
   cadre, pas de logo, **aucune zone réservée** — et la liste prend toute la hauteur.
 - **La colonne ne réserve, en plus de la liste, que le titre et l'air du bas : 51 px**
   (14 de marge + 11 de titre + 14 de marge + 12 d'air), plus le **bloc du personnage**
-  quand il est là (`taille + 52`, soit 148 px au plancher et 266 px dans une grande
+  quand il est là (`taille + 52`, soit 148 px au plancher et 329 px dans une grande
   fenêtre), plus **180 px** quand la fenêtre du visage est posée. La liste dispose
   donc de **`H − 51` px**, de **`H − 51 − (taille + 52)`** avec le personnage, ou de
   **`H − 51 − 180`** avec la fenêtre du visage, ce qui lui laisse de **3 à 8** lignes selon
@@ -404,8 +404,8 @@ largeur) montre **ce qui vient d'être dit** :
 Le budget suit la hauteur et la largeur **mesurées**, jamais une constante cachée :
 `charsPerLine = floor((track - cadre) / 7,6)` — où `cadre = VOCAL_SIDE_FRAME_PX
 = 22 px` (1 px de bordure + 10 px de marge intérieure de chaque côté, voir le
-**cadre des panneaux** ci-dessous) : **39** caractères à 320 px, 34 à 282, 49 à
-400 — et `lignes = floor((H - 26) / 37)`, les 26 px étant le titre (14) et l'air du
+**cadre des panneaux** ci-dessous) : **47** caractères à 384 px (la largeur nominale
+retenue), 34 à 282, 49 à 400 — et `lignes = floor((H - 26) / 37)`, les 26 px étant le titre (14) et l'air du
 bas (12, `VOCAL_DISCUSSION_HEAD_PX`) : soit **13** à 512 px, 12 à 479, 9 à 383, 8 à
 331, 7 à 287, 5 à 231 (le tableau du § 4.2 de la conception, rejoué par un test). La
 coupe se fait **sur une frontière de mot**, jamais dans un mot, et l'ellipse le dit.
@@ -446,27 +446,62 @@ avant d'être peint** — `VOCAL_SIDE_AIR_PX = 12` est déjà dans les 51 px du 
 dans l'en-tête de la colonne de gauche (26 = 14 + 12) —, donc **aucune ligne promise n'est
 rognée** par lui. Verrou : `src/js/ecran-vocal-marges-transparence-portrait.test.js`.
 
-### La transparence qu'on voit (2026-11-02)
+**Et la respiration qui manquait n'était pas un `padding` : c'était la PLACE.** La marge
+intérieure de 10 px existait déjà, mais à 320 px de large elle était prise sur un texte
+déjà court — **39 caractères par ligne**, soit deux fois moins qu'un paragraphe lisible.
+La largeur nominale d'une colonne passe donc de **320 à 384 px** (`VOCAL_SIDE_MAX_PX`,
+soit **+64 px symétriques**, et jamais au-delà de la place mesurée : sous 1 024 px de
+fenêtre les colonnes restent écrasées, et sous 240 px de place elles s'effacent). Le
+budget de caractères suit sans être retouché : `floor((384 − 22) / 7,6)` = **47
+caractères** par ligne, contre 39 avant. Le plafond de 400 px (atteint à 1920 px de large)
+et le seuil de 240 px ne bougent pas. Verrou : `src/js/vocal-sides.test.js` (la valeur
+nominale), `src/js/cadre-listes-panneaux.test.js` (le cadre retranché avant de compter),
+`src/js/vocal-colonne-discussion.test.js` (le tableau des hauteurs, rejoué).
 
-Remarque du propriétaire du 2026-11-02 : « la transparence ne se voit pas ». Le
-diagnostic n'était pas là où on l'attendait — **les deux colonnes n'avaient aucun fond** :
-le « panneau » n'était qu'un filet de 1 px, et derrière lui le calque peint un
-`background: var(--bg-app)` **uni**. Un panneau transparent devant un fond uni est
-invisible : il n'y avait rien à voir au travers, d'où l'impression de plaque opaque. Trois
-pièces, toutes dérivées du **thème actif** (aucune couleur en dur, aucun `rgba()`),
+### La transparence qu'on voit (2026-11-02, deux passes)
+
+Remarque du propriétaire du 2026-11-02 : « la transparence ne se voit pas ». **Deux
+causes, découvertes dans cet ordre, et la seconde n'était pas visible à l'œil nu dans le
+code** :
+
+1. **les deux colonnes n'avaient aucun fond** : le « panneau » n'était qu'un filet de
+   1 px, et derrière lui le calque peint un `background: var(--bg-app)` **uni**. Un
+   panneau transparent devant un fond uni est invisible : il n'y avait rien à voir au
+   travers ;
+2. le fond ajouté ensuite était un lavis de **`--surface-floating`** — la **même famille
+   de couleur que la teinte du panneau** (`--glass-tint` dérive lui aussi de
+   `--surface-floating`). Le verre était donc éclairé par sa propre couleur : les deux se
+   compensaient, et le panneau se lisait **exactement comme le fond**. Mesuré : **0,7 à
+   4,0 niveau** (sur 255) de lumière qui traverse, et **0** en `solarized`, où
+   `--surface-floating` **est** `--bg-app` — un panneau littéralement invisible.
+
+La règle qui en sort : **le verre doit être éclairé par une couleur opposée au fond**, et
+la seule que le thème garantit opposée au fond dans les deux modes est son **texte**.
+Trois pièces, toutes dérivées du **thème actif** (aucune couleur en dur, aucun `rgba()`),
 répondent aux trois exigences à la fois :
 
 | Pièce | Valeur | Rôle |
 |---|---|---|
-| La lumière du calque | `--vocal-wash` = `color-mix(in srgb, var(--surface-floating) 32%, transparent)`, peint en **deux** `radial-gradient` (un par colonne, rayon `--vocal-wash-w` = moitié de la fenêtre moins la boîte du disque et son jour) | Donne **quelque chose à voir au travers** : le lavis s'arrête avant le cercle et ne touche jamais le texte de l'état. Le calque, lui, **reste opaque** (`background: var(--bg-app)`) — on n'y voit jamais la conversation |
-| La surface des colonnes | `--vocal-glass` = `color-mix(in srgb, var(--glass-tint) 62%, transparent)` en `background-color` + `backdrop-filter: blur(8px)` | Le jeton de verre **des panneaux flottants**, ramené à 62 %. Mélange au **fond du calque**, jamais au texte : le contraste du texte ne bouge pas d'un iota. `background-color` et non `background` : le raccourci effacerait l'image de fond du calque |
+| La lumière du calque | `--vocal-wash` = `color-mix(in srgb, var(--text-primary) 12%, transparent)`, peint en **deux** `radial-gradient` (un par colonne, rayon `--vocal-wash-w` = moitié de la fenêtre moins la boîte du disque et son jour) | Donne **quelque chose à voir au travers** : le lavis s'arrête avant le cercle et ne touche jamais le texte de l'état. Le calque, lui, **reste opaque** (`background: var(--bg-app)`) — on n'y voit jamais la conversation |
+| La surface des colonnes | `--vocal-glass` = `color-mix(in srgb, var(--glass-tint) 55%, transparent)` en `background-color` + `backdrop-filter: blur(12px)` + un **filet lumineux** de 0 px (`box-shadow: inset 0 1px 0` à 10 % du texte du thème) | Le jeton de verre **des panneaux flottants**, ramené à 55 %. Mélange au **fond du calque**, jamais au texte : le contraste du texte ne bouge pas d'un iota. `background-color` et non `background` : le raccourci effacerait l'image de fond du calque. Le flou passe de 8 à 12 px parce qu'à 8 px il ne dissolvait pas la structure d'un lavis large ; le filet lumineux dessine le **bord** du verre sans une seule couleur nouvelle (0 px : il ne prend aucune place, donc rien à retrancher du budget) |
 | Le rafraîchissement | `body.glass-refresh` (`glass-theme.js`) inclut les **deux colonnes** | Une surface qui floute garde l'instantané de l'arrière-plan : sans cela, elle garderait la teinte **précédente** jusqu'au redémarrage (même correctif que les panneaux flottants) |
+
+**Mesure, sur les dix palettes, avec le calcul du compositeur** (lavis → teinte du verre →
+verre ; deux compositions, pas une) : lumière qui traverse **8,1 à 12,6 niveaux**, écart
+panneau/fond **5,1 à 26,1**. Le texte courant garde **12,57:1** en sombre et **14,49:1** en
+clair, et **4,84:1** au pire (`tokyo-day`) ; **`solarized` reste à 3,87:1** parce que sa
+propre palette plafonne à **4,13:1** sur son fond — la transparence ne peut pas rendre un
+texte plus lisible que la palette qui le porte, et **la lisibilité gagne** : on ne
+compense pas en assombrissant la teinte. Les titres (texte secondaire) restent au-dessus
+de **3,81:1** partout.
 
 Aucun réglage n'est ajouté, rien n'est mémorisé, et **rien n'est peint sur le disque** :
 la teinte et le flou ne concernent que les deux colonnes. Verrous :
-`src/js/ecran-vocal-marges-transparence-portrait.test.js` (surface, jeton, lavis,
-rafraîchissement) et `src/js/panneaux-translucides-theme.test.js` (dix palettes, aucune
-couleur en dur).
+`src/js/ecran-vocal-transparence-visible.test.js` (les dix palettes, la lumière qui
+traverse, le bord, le contraste, le changement de thème à chaud) et
+`src/js/ecran-vocal-marges-transparence-portrait.test.js` (surface, jetons, lavis,
+rafraîchissement, état nu), et `src/js/panneaux-translucides-theme.test.js` (dix palettes,
+aucune couleur en dur).
 
 ### La taille du médaillon : mesurée, jamais écrite (2026-11-02)
 
@@ -478,31 +513,46 @@ La décision est **pure** et prise dans cet ordre :
 
 1. **jamais plus large que la place** : la colonne des tâches moins le cadre (22 px) et
    moins 10 px de marge de chaque côté — le médaillon ne déborde jamais du cadre ;
-2. **jamais si haut qu'il mange les tâches** : la hauteur doit encore laisser l'en-tête et
-   **trois** rangées à la liste (`VOCAL_PORTRAIT_MIN_LIST_PX` = 40 + 3 × 46 = 178 px) ;
+2. **jamais si haut qu'il mange les tâches** : la hauteur doit encore laisser les **deux**
+   en-têtes de groupe et **deux** rangées à la liste (`VOCAL_PORTRAIT_MIN_LIST_PX` = 40 +
+   2 × 46 = 132 px). C'était **178 px (trois rangées)** dans la première passe : à 178 px
+   le médaillon plafonnait à 231 px, soit **2,4 fois** le plancher — la remarque n'était
+   pas tenue. À 132 px il atteint **277 px (2,89 fois)**, et la liste garde une tâche par
+   groupe ; ce qui dépasse est **dit** (« + N autre(s) »), jamais caché ;
 3. **jamais plus de trois fois le plancher** (cible `VOCAL_PORTRAIT_TARGET_PX` = 288 px) ;
 4. **jamais moins de 96 px** — sauf si la place elle-même est plus petite (la règle 1 passe
    avant : on ne déborde pas pour tenir un plancher). Quand la hauteur ne porte pas les
-   trois rangées, la règle 2 cède : le médaillon reste au plancher et la liste garde ce qui
+   deux rangées, la règle 2 cède : le médaillon reste au plancher et la liste garde ce qui
    reste (`H − 51 − 148`, soit 32 px à 720 × 520 : la rangée est rognée d'autant, jamais
    absente).
 
-Mesure réelle des **sept fenêtres** du tableau § 3ter, personnage présent :
+Mesure réelle des **huit fenêtres** du tableau § 3ter, personnage présent :
 
-| Fenêtre | Médaillon | Bloc (`taille + 52`) | Liste (`H − 51 − bloc`) | Rangées |
-|---|---|---|---|---|
-| 720 × 520 | 96 px | 148 px | 32 px | 1 (rognée) |
-| 768 × 576 | 96 px | 148 px | 88 px | 1 |
-| 820 × 620 | 96 px | 148 px | 132 px | 2 |
-| 896 × 672 | 102 px | 154 px | 178 px | 3 |
-| 1024 × 768 | 198 px | 250 px | 178 px | 3 |
-| 1280 × 800 | 214 px | 266 px | 194 px | 3 |
-| 1440 × 900 | 214 px | 266 px | 195 px | 3 |
+| Fenêtre | Colonne | Colonne des tâches | Médaillon | Bloc (`taille + 52`) | Liste | Rangées |
+|---|---|---|---|---|---|---|
+| 720 × 520 | 244 px | 180 px | 96 px | 148 px | 32 px | 1 (rognée) |
+| 768 × 576 | 260 px | 196 px | 96 px | 148 px | 57 px | 1 |
+| 820 × 620 | 272 px | 208 px | 96 px | 148 px | 100 px | 1 |
+| 896 × 672 | 282 px | 218 px | 148 px | 200 px | 132 px | 2 |
+| 1024 × 768 | 314 px | 250 px | 208 px | 260 px | 168 px | 2 |
+| 1280 × 800 | 384 px | 320 px | 276 px | 328 px | 132 px | 2 |
+| 1440 × 900 | 384 px | 320 px | 277 px | 329 px | 132 px | 2 |
+| 1920 × 1080 | 400 px | 336 px | 277 px | 329 px | 132 px | 2 |
 
-Au-delà (1920 × 1080), la hauteur prend le relais et le médaillon atteint **231 px** —
-**288 px** demanderait une colonne de 366 px, qu'une fenêtre de plus de 2 000 px de large
-donne seulement, et il ne resterait alors que deux rangées : la cible est un plafond, pas
-une promesse.
+**Le chiffre réel est 276-277 px, soit 2,88-2,89 fois le plancher, atteint dès 1280 px de
+large** — et **pas 288** : 288 px demanderait une colonne des tâches de 330 px, donc une
+fenêtre de plus de 2 000 px, et il ne resterait alors que **deux** rangées, que l'on a
+déjà. La cible de 288 est donc un **plafond**, pas une promesse : 277 est le plus grand
+médaillon qui tienne **avec sa marge** (1 px de chaque côté à 1440 × 900, 11 px à
+1280 × 800). Sous 1280 px la largeur manque (deux colonnes + le disque), et le chiffre
+baisse honnêtement : 208 px à 1024 (2,17×), 148 à 896 (1,54×).
+
+**Le médaillon ne touche ni le cadre, ni le bord, ni son nom** : 12 px d'air au-dessus
+(`VOCAL_PORTRAIT_AIR_TOP_PX`, comptés dans le bloc), 8 px entre l'image et le nom, 12 px
+sous le nom, et au moins 10 px de marge latérale à l'intérieur du cadre. `object-fit:
+cover` sur un carré de côté `taille` : aucun visage rogné, aucun débordement. Verrou :
+`src/js/vocal-portrait-detache.test.js` (R6 : la marge, la cible tenue, le chiffre réel,
+et la liste à deux rangées sous le médaillon).
 
 **Rien n'est déplacé, rien n'est copié.** `collectVocalDiscussion()`
 (`super-agent.js`) ne fait que **lire** les deux familles du chat
@@ -571,7 +621,8 @@ jamais, même avec un titre très long.
 
 Le **portrait du personnage** est **en haut à droite de l'écran**, dans cette colonne, **au-dessus**
 de la liste et **détaché d'elle** : un médaillon rond **d'au moins 96 px**, qui **grandit avec la
-place disponible** — jusqu'à trois fois sa taille de départ dans une grande fenêtre, jamais au
+place disponible** — près de trois fois sa taille de départ dès 1 280 px de large
+(**2,9 ×** ; la cible de 3 × n'est jamais atteinte, la colonne manquerait de place), jamais au
 point de manger les tâches —, et son **nom** est écrit **juste
 dessous**, sur
 une seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
@@ -1750,8 +1801,11 @@ la liste**, le portrait resté affiché
 en état nu et jamais cliquable, la place prise **sur la liste** et non sur la
 colonne), `ecran-vocal-marges-transparence-portrait.test.js` (**les trois remarques du
 2026-11-02** : air du bas et du haut du médaillon comptés, surface de verre teintée et
-floutée devant les deux lavis du calque, médaillon mesuré jusqu'à trois fois le
+floutée devant les deux lavis du calque, médaillon mesuré jusqu'à 2,9 fois le
 plancher, et cadre du panneau de droite éteint en état nu sans toucher au portrait),
+`ecran-vocal-transparence-visible.test.js` (**la lumière traverse vraiment le verre** :
+mesure au pixel sur les dix palettes — au moins 6 niveaux d'écart entre le panneau
+éclairé et le même panneau à nu, au moins 4 niveaux de bord, contraste du texte tenu),
 `panneaux-translucides-theme.test.js` (**la transparence se voit, sur les dix
 palettes** : surface teintée par le thème, aucun `rgba()` ni couleur en dur,
 `backdrop-filter` présent, jeton en `color-mix`),
