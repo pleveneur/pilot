@@ -27,6 +27,68 @@
 
 ---
 
+## AVENANT (mission « écran Vocal », 2026-11) — il PRIME sur les sections qu'il cite
+
+Quatre décisions du propriétaire, prises à l'oral après usage de l'écran. Elles **ne
+rouvrent aucune des neuf décisions** ci-dessous : elles en retirent deux objets (le
+portrait de la colonne, la ligne d'activité) et déplacent un troisième (le nom). Les
+trois sorties, le halo, le micro, le disque, l'effacement du bas et l'état nu restent
+**intacts**.
+
+1. **Plus aucune ligne d'activité.** Le texte du bas de la colonne de droite (« *X*
+   réfléchit », « *X* exécute une opération », « *N* missions en attente ») **disparaît**.
+   La place n'est pas réoccupée : la liste prend les 21 px qu'il occupait. La fonction pure
+   qui le calculait (`vocalNowLine`) et son nœud (`.vocal-now`) sont retirés **ensemble**,
+   et le test qui les décrivait part avec eux. *Amende § 3.3 et § 3.4 (entier).*
+
+2. **La colonne des tâches ne passe jamais sous le cercle.** Sa largeur n'est plus celle de
+   la piste de la grille : `vocalSyncSides()` écrit `--vocal-side-tasks`, qui vaut
+   `--vocal-side` **moins la couronne** du disque (`VOCAL_CROWN_PX` 88 − 24 px, soit 64 px).
+   C'est une **largeur**, pas une marge : un titre trop long est coupé **par sa boîte**
+   (une ligne, points de suspension), il ne peut ni déborder ni pousser la boîte. La colonne
+   reste alignée vers le disque (`justify-self: end`). *Amende § 2.2 et § 3.1.*
+
+3. **Le portrait est au CENTRE DU DISQUE**, plus dans la colonne. Il occupe **au plus la
+   moitié de l'intérieur du cercle** (`--vocal-orb-size / 2`, soit 168 px pour 336), il est
+   centré (`position: absolute; left/top: 50%; translate(-50%, -50%)`), et il est le
+   **premier enfant** de `.vocal-orb` — donc sous le halo et sous le bouton de relance, qui
+   se peignent par-dessus. Le disque ne bouge pas d'un pixel : le portrait ne prend aucune
+   place dans la grille. *Amende la décision 1, § 1.2, § 2.1 et § 2.4.*
+
+4. **Un seul nom, et il est DANS le cercle, juste sous l'image.** `.vocal-orb-name` passe de
+   `top: calc(100% + 6px)` (sous le bouton-cercle) à `top: calc(75% + 6px)` — le bas exact du
+   portrait, qui est centré et vaut la moitié du disque. Une seule ligne, jamais deux noms :
+   `max-width: 66%` (222 px pour 336, la corde du cercle à cette hauteur en vaut 284) et
+   `text-overflow: ellipsis`. Le nom est le nom du personnage, à défaut celui de l'assistant,
+   par la **seule** règle `superAgentDisplayLabel()`. **Rien d'autre sous l'image.** La
+   pastille sous le bouton-cercle n'existe plus. *Amende la décision 5, § 2.3 et § 2.5.*
+
+### Ce que ces quatre points changent dans les tableaux
+
+- **La zone d'image n'a plus que DEUX cas** (au lieu de trois, § 7bis) : la **fenêtre du
+  visage** quand elle tourne et que sa taille est connue (180 px), **sinon rien**. Le
+  personnage n'y entre plus : il est dans le disque.
+- **La hauteur fixe de la colonne tombe de 170 px à 51 px** : 14 (marge) + 11 (titre) + 14
+  (marge) + 12 (air du bas). La liste dispose donc de **`H − 51` px**, ou `H − 51 − 180` avec
+  la fenêtre du visage, ce qui va de **3 à 8** lignes, et **8 au plus** (`VOCAL_TASKS_MAX`,
+  `floor((440 − 2 × 20) / 46)`).
+- **`H = 277`** est le seuil de la fenêtre du visage : `51 + 180 + 46` — en dessous, elle ne
+  laisserait pas une seule tâche, donc elle n'est pas dessinée et la liste garde exactement
+  la hauteur du cas « rien ».
+
+### Une conséquence à faire confirmer : l'état nu (§ 6.7)
+
+Le 2026-10-29, l'état nu éteignait tout **sauf le portrait**, qui vivait dans la colonne.
+Depuis qu'il vit **dans** le disque, il s'éteint avec lui : son anneau, sa couronne, son
+enveloppe et son arc sont peints par le **même** nœud, et le démembrer pour sauver l'image
+n'est demandé par aucune décision. Le bloc d'effacement reste donc **inchangé** (le disque
+est nommé en un seul sélecteur) et `§ 6.7` se lit désormais « tout se masque, le portrait
+avec ». Si le propriétaire veut au contraire le portrait seul sur fond d'écran vide, c'est
+une décision de plus : elle oblige à nommer séparément l'anneau, la couronne, l'enveloppe,
+l'arc et le bouton de relance.
+
+---
+
 ## La contrainte qui prime sur tout ce document
 
 **La sortie de l'écran Vocal reste toujours cliquable.** Le 29/10, une projection a posé

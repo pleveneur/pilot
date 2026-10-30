@@ -222,15 +222,15 @@ import {
 // LOT 1 (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.4) : la largeur des
 // deux colonnes laterales de l'ecran Vocal — decision PURE, une seule formule.
 // LOT 2 (CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md §2.2 a §2.4) :
-// le CONTENU de la colonne de droite — nombre de lignes, groupes, ligne
-// d'activite — reste dans le meme module pur ; ici on ne fait que peindre.
+// le CONTENU de la colonne de droite — nombre de lignes, groupes — reste dans
+// le meme module pur ; ici on ne fait que peindre. La ligne d'activite du bas
+// de la colonne a ete retiree avec son test (mission « ecran Vocal »).
 import {
   planVocalSides,
   planVocalAvatarPlacement,
   planVocalTasks,
   vocalDiscussionView,
   vocalDiscussionMoreText,
-  vocalNowLine,
   VOCAL_SIDES_TICK_MS,
   VOCAL_TASKS_TITLE,
   VOCAL_TASKS_EMPTY_TEXT,
@@ -2126,18 +2126,19 @@ function applyVocalRestartLabel(bouton) {
 }
 
 /**
- * Pose le PORTRAIT du personnage actif dans la ZONE D'IMAGE, EN HAUT de la
- * colonne de droite de l'ecran Vocal (CONCEPTION-ecran-vocal-portrait-et-
- * colonnes.md §2.3 et complement du 2026-10-29 § 7bis) : un medaillon rond de
- * 72 px, au-dessus de la liste des taches.
+ * Pose le PORTRAIT du personnage actif AU CENTRE DU CERCLE de l'ecran Vocal
+ * (decision du proprietaire, mission « ecran Vocal » : l'image n'est plus en
+ * haut a droite, elle est dans le disque) : un medaillon rond qui occupe AU PLUS
+ * la moitie interieure du disque, centre, avec le nom juste en dessous.
  *
  * Trois regles, et rien d'autre :
  *   1. `src` est ecrit SEULEMENT s'il change (reaffecter le meme `src` relance le
  *      chargement de l'image) ;
- *   2. AUCUN NOM SOUS L'IMAGE (decision du proprietaire, 2026-10-29) : le nom
- *      est ecrit une seule fois, SOUS LE BOUTON-CERCLE, par `applyVocalOrbName` ;
- *   3. sans portrait, l'image est `hidden`. AUCUN repli sur le logo dans la
- *      colonne : sans personnage, il n'y a pas d'image, et rien ne le dit.
+ *   2. UN SEUL nom, celui de `applyVocalOrbName`, ecrit une seule fois, JUSTE
+ *      SOUS L'IMAGE : il n'y a plus de nom sous le bouton-cercle, et rien
+ *      d'autre n'est ecrit sous l'image ;
+ *   3. sans portrait, l'image est `hidden` (le nom reste : c'est celui de
+ *      l'Assistant). AUCUN repli sur le logo.
  *
  * Ne lit rien du disque (la lecture est faite par `refreshAssistantPersona`) et
  * n'appelle jamais `invoke` : l'etat du personnage vit en memoire.
@@ -2165,14 +2166,16 @@ function applyVocalPortrait(racine) {
 }
 
 /**
- * LE NOM, SOUS LE BOUTON-CERCLE, EN PERMANENCE (decision du proprietaire,
- * 2026-10-29) : on voit TOUJOURS a qui l'on parle — le nom du personnage actif,
- * a defaut le nom regle, a defaut le nom habituel, par la SEULE regle de nom
- * `superAgentDisplayLabel()`.
+ * LE NOM, JUSTE SOUS LE PORTRAIT, DANS LE CERCLE (decision du proprietaire,
+ * mission « ecran Vocal ») : on voit TOUJOURS a qui l'on parle — le nom du
+ * personnage actif, a defaut le nom regle, a defaut le nom habituel, par la
+ * SEULE regle de nom `superAgentDisplayLabel()`. Il n'y a qu'UN nom : plus de
+ * pastille sous le bouton-cercle en plus de celui de l'image.
  *
  * Il ne depend d'AUCUNE image : sans personnage, le nom est celui de
- * l'Assistant et il reste ecrit. Il n'est jamais `hidden`, jamais vide, jamais
- * cliquable (il herite du `pointer-events: none` du calque).
+ * l'Assistant et il reste ecrit, a la meme place (celle du visage). Il n'est
+ * jamais `hidden`, jamais vide, jamais cliquable (il herite du
+ * `pointer-events: none` du calque).
  *
  * @param {Element|null} [racine] overlay vocal (par defaut : celui de l'ecran)
  */
@@ -2188,7 +2191,8 @@ function applyVocalOrbName(racine) {
 }
 
 /**
- * Cree le nom sous le bouton-cercle, UNE fois, a la construction de l'overlay.
+ * Cree le nom DU personnage DANS le disque, sous l'image, UNE fois, a la
+ * construction de l'overlay.
  *
  * Il est cree APRES le modele (comme le bouton de masquage,
  * `buildVocalDisplayToggle`) : la liste ordonnee des classes de
@@ -2332,13 +2336,15 @@ function vocalImageZoneNode(colonne) {
 
 /**
  * Repeint le CONTENU de la colonne de droite (CONCEPTION-ecran-vocal-taches-en-
- * haut-portrait-en-bas.md §2.2 a §2.4, ordre revu le 2026-10-29) : titre, ZONE
- * D'IMAGE, liste des taches, ligne d'activite.
+ * haut-portrait-en-bas.md §2.2 a §2.4, ordre revu par la mission « ecran
+ * Vocal ») : titre, ZONE D'IMAGE, liste des taches. La ligne d'activite du bas
+ * de la colonne N'EXISTE PLUS (retiree avec son test) : la place qu'elle
+ * occupait n'est pas reoccupee, la liste reprend ses 21 px.
  *
- * L'image (le medaillon du personnage) appartient a `applyVocalPortrait` ; ici
- * on ne fait que lui DONNER SA PLACE, en haut, en reservant la place de la
- * fenetre du visage quand le cas 2 s'applique. Une ecriture n'a lieu que si la
- * valeur change : le tic de 900 ms repasse ici sans faire clignoter la colonne.
+ * Le PORTRAIT du personnage n'est plus ici : il est au centre du disque
+ * (`applyVocalPortrait`). La zone d'image ne sert donc plus qu'a la fenetre du
+ * visage (PLface). Une ecriture n'a lieu que si la valeur change : le tic de
+ * 900 ms repasse ici sans faire clignoter la colonne.
  *
  * @param {object} plan resultat de `planVocalSides`
  */
@@ -2348,10 +2354,7 @@ function vocalRenderColumn(plan) {
   const colonne = ov.querySelector(".vocal-side-tasks");
   if (!colonne) return;
   const missions = collectSuperMissions();
-  const vu = planVocalTasks(missions, {
-    listHeight: plan.listHeight,
-    hasPortrait: plan.hasPortrait,
-  });
+  const vu = planVocalTasks(missions, { listHeight: plan.listHeight });
   const titre = vocalColumnNode(colonne, ".vocal-tasks-title", "first");
   if (titre && titre.textContent !== VOCAL_TASKS_TITLE) titre.textContent = VOCAL_TASKS_TITLE;
   // LA ZONE D'IMAGE : une hauteur, et `hidden` quand elle ne reserve rien.
@@ -2372,11 +2375,6 @@ function vocalRenderColumn(plan) {
       liste.setAttribute("data-vocal-list", html);
     }
   }
-  // Variable nommee `activiteEl`, jamais `ligne` : `ligne` est le nom reserve a la
-  // ligne d'ETAT du bas de l'ecran (un seul point d'ecriture, verrouille par test).
-  const activiteEl = vocalColumnNode(colonne, ".vocal-now", "last");
-  const activite = vocalNowLine(missions);
-  if (activiteEl && activiteEl.textContent !== activite) activiteEl.textContent = activite;
 }
 
 /**
@@ -2625,12 +2623,17 @@ function vocalSyncSides() {
     width: typeof window !== "undefined" ? window.innerWidth : 0,
     height: typeof window !== "undefined" ? window.innerHeight : 0,
     orbSize: vocalOrbSizePx(),
-    hasPortrait: getAssistantPortrait() !== "",
-    // La taille du visage n'est connue que si `vocalAvatarFrame` la donne : le
-    // cas 2 ne s'affiche donc pas tant qu'elle est inconnue (§ 7bis.5).
+    // Le personnage n'entre plus dans la decision : il vit au centre du disque.
+    // La taille du visage n'est connue que si `vocalAvatarFrame` la donne :
+    // l'avatar ne s'affiche donc pas tant qu'elle est inconnue (§ 7bis.5).
     hasAvatar: vocalAvatarFrame() !== null,
   });
   ov.style.setProperty("--vocal-side", `${plan.track}px`);
+  // LA COLONNE DES TACHES s'arrete au bord de la couronne du disque : sa largeur
+  // est `taskTrack` (colonne moins couronne), ecrite comme une LARGEUR. Un titre
+  // long est donc coupe par sa propre boite, jamais pose sur le cercle — la
+  // colonne de gauche, elle, garde `--vocal-side` (rien ne la menace de ce cote).
+  ov.style.setProperty("--vocal-side-tasks", `${plan.taskTrack}px`);
   ov.classList.toggle("vocal-sides-off", !plan.shown);
   // `track = 0` = colonnes ABSENTES : sans `hidden`, les deux `<aside>` vides
   // resteraient dans la grille et y creeraient des pistes fantomes.
@@ -2674,17 +2677,17 @@ export function applyAssistantPersonaUi() {
     // mis a jour — la VISIBILITE appartient a `applyVocalState`
     // (`vocalSyncRestartButton`), point d'ecriture unique des deux.
     applyVocalRestartLabel();
-    // LOT 1 : le portrait de la colonne de droite et le nom sous le
-    // bouton-cercle suivent le MEME point d'application — un changement de
-    // personnage les met a jour sans aucun mecanisme nouveau. Aucun des deux ne
-    // lit le disque : l'etat du personnage vit en memoire,
-    // `refreshAssistantPersona` fait la seule lecture.
+    // Le portrait DU DISQUE et le nom qui le suit sous lui suivent le MEME
+    // point d'application — un changement de personnage les met a jour sans
+    // aucun mecanisme nouveau. Aucun des deux ne lit le disque : l'etat du
+    // personnage vit en memoire, `refreshAssistantPersona` fait la seule
+    // lecture.
     applyVocalOrbName();
     applyVocalPortrait();
-    // LOT 2 : le personnage qui vient d'apparaitre (ou de disparaitre) change le
-    // CAS de la colonne de droite — et avec lui le nombre de lignes de la liste.
-    // Le meme point d'application reapplique donc la decision des colonnes :
-    // une seule peinture, aucun etat intermediaire, aucun second mecanisme.
+    // Le personnage qui vient d'apparaitre (ou de disparaitre) change l'image
+    // du disque, donc la place du nom dessous ; les mesures des colonnes sont
+    // reappliquees au meme point — une seule peinture, aucun etat intermediaire,
+    // aucun second mecanisme.
     vocalSyncSides();
   } catch (_) {
     /* overlay vocal absent : rien a faire */
@@ -5457,6 +5460,16 @@ let vocalDicteeParGeste = false;
       <div class="vocal-top"></div>
       <div class="vocal-stage">
         <div class="vocal-orb">
+          <!-- LE PORTRAIT DU PERSONNAGE, AU CENTRE DU DISQUE (decision du
+               proprietaire, mission « ecran Vocal ») : pose par
+               'applyVocalPortrait'. 'alt' vide : l'image est decorative, et rien
+               n'est ecrit sous elle sinon le SEUL nom de l'ecran
+               ('.vocal-orb-name', cree juste apres). Il est le PREMIER enfant du
+               disque : le halo d'ecoute et le bouton de relance se peignent
+               par-dessus, comme avant. Masque tant que le personnage n'est pas
+               connu — et masque DEFINITIVEMENT s'il n'y en a pas : aucun repli
+               sur le logo. -->
+          <img class="vocal-portrait" alt="" hidden />
           <span class="vocal-halo"></span>
           <!-- LE BOUTON DE RELANCE DE L'ECOUTE (« Réveiller <Nom> »), decisions
                401 / 402 et retouches du 2026-10-29 : ROND, il OCCUPE TOUTE LA
@@ -5482,18 +5495,11 @@ let vocalDicteeParGeste = false;
              pas se poser au-dessus d'elle. -->
         <aside class="vocal-side-discussion vocal-side"></aside>
         <aside class="vocal-side-tasks vocal-side">
-          <!-- LA ZONE D'IMAGE, EN HAUT DE LA COLONNE (complement du 2026-10-29,
-               § 7bis ; decision du proprietaire) : LE PERSONNAGE d'abord, la
-               liste des taches DESSOUS. La place de la fenetre du visage est
-               reservee par un noeud INERTE cree a l'execution
-               ('.vocal-image-zone') : aucun cadre, aucune image de
-               remplacement, jamais le logo. -->
-          <!-- LE PORTRAIT DU PERSONNAGE : pose par 'applyVocalPortrait'. 'alt'
-               vide : l'image est decorative, et AUCUN nom n'est ecrit dessous
-               (le nom est sous le bouton-cercle). Masque tant que le
-               personnage n'est pas connu — et masque DEFINITIVEMENT s'il n'y
-               en a pas : aucun repli sur le logo dans la colonne. -->
-          <img class="vocal-portrait" alt="" hidden />
+          <!-- LA ZONE D'IMAGE, EN HAUT DE LA COLONNE (§ 7bis) : elle ne porte
+               plus que la fenetre du VISAGE (PLface), le personnage ayant
+               rejoint le centre du disque. Sa place est reservee par un noeud
+               INERTE cree a l'execution ('.vocal-image-zone') : aucun cadre,
+               aucune image de remplacement, jamais le logo. -->
           <!-- Conteneur DYNAMIQUE de la liste des taches (lot 2) : vide ici. Il
                vient APRES la zone d'image, donc SOUS elle. -->
           <div class="vocal-side-body"></div>
@@ -5506,9 +5512,10 @@ let vocalDicteeParGeste = false;
     // que la structure de l'ecran reste lisible d'un seul coup d'oeil — meme
     // patron que le libelle du bouton de relance, pose apres coup.
     buildVocalDisplayToggle(ov.querySelector(".vocal-top"));
-    // LE NOM, SOUS LE BOUTON-CERCLE, EN PERMANENCE (decision du proprietaire,
-    // 2026-10-29) : on voit toujours a qui l'on parle. Cree APRES le modele,
-    // comme le bouton de masquage : la structure de l'ecran ne bouge pas.
+    // LE NOM, DANS LE DISQUE, JUSTE SOUS LE PORTRAIT (decision du proprietaire,
+    // mission « ecran Vocal ») : on voit toujours a qui l'on parle, et il n'y a
+    // qu'UN nom a l'ecran. Cree APRES le modele, comme le bouton de masquage :
+    // la liste ordonnee des classes de `buildVocalOverlay` ne bouge pas.
     buildVocalOrbName(ov.querySelector(".vocal-orb"));
     return ov;
   }

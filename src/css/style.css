@@ -11633,6 +11633,11 @@ summary:focus-visible {
      seule ecrivaine est `vocalSyncSides()` (super-agent.js), qui la pose a
      chaque entree dans le mode et a chaque changement de taille de fenetre. */
   --vocal-side: 0px;
+  /* Largeur de la COLONNE DES TACHES, elle aussi posee par `vocalSyncSides()` :
+     c'est `--vocal-side` MOINS la couronne du disque, pour qu'elle s'arrete au
+     bord de la lueur et ne passe jamais sous le cercle. La colonne de gauche
+     garde `--vocal-side` : rien ne la menace de son cote. */
+  --vocal-side-tasks: 0px;
   /* LE GRIS DES COLONNES (§ 5.3 de la conception, lot 3) : les questions de
      l'utilisateur, et rien de plus pour l'instant. Aucune couleur en dur : il
      suit les dix palettes, etant melange au fond de l'application. 85 % du
@@ -11891,14 +11896,25 @@ body.pilot-vocal-active #agent-activity {
   grid-column: 3;
   display: flex;
   flex-direction: column;
-  /* Le HAUT de la colonne ne bouge pas : titre et zone d'image a la meme place,
-     avec ou sans personnage. */
+  /* Le HAUT de la colonne ne bouge pas : le titre et la zone d'image a la meme
+     place, avec ou sans fenetre du visage. */
   justify-content: flex-start;
   overflow: hidden;
-  /* LOT 2 : les 12 px d'air sous la ligne d'activite (budget du §2.5). Les
-     72 px du medaillon, les 6 px de l'ecart et les 20 px du nom n'existent que
-     si le portrait existe : quand il est `hidden`, ils disparaissent avec lui et
-     la liste prend TOUTE la hauteur (0 px reserve, cas B). */
+  /* LA LISTE NE PASSE JAMAIS SOUS LE CERCLE. Sa largeur n'est pas celle de la
+     piste de la grille (`--vocal-side`) mais `--vocal-side-tasks`, qui vaut
+     exactement la colonne MOINS la couronne du disque : la lueur du halo
+     occupe `--vocal-crown` au-dela du disque, la colonne s'arrete donc a son
+     bord. C'est une LARGEUR, pas une marge : un titre long est coupe par sa
+     propre boite (`text-overflow: ellipsis` sur le titre et sur chaque tache),
+     il ne peut ni deborder ni pousser la boite. Alignee vers le disque
+     (`justify-self: end`), donc elle ne s'eloigne pas de lui. */
+  width: var(--vocal-side-tasks, 100%);
+  min-width: 0;
+  justify-self: end;
+  /* LOT 2 : les 12 px d'air du bas (budget du §2.5 revisé : 39 px de titre + 12
+     px d'air = 51 px de haut fixe, plus la fenetre du visage quand elle
+     s'affiche). La ligne d'activite n'existe plus : la place qu'elle prenait
+     revient a la liste. */
   padding-block-end: 12px;
 }
 /* LA ZONE D'IMAGE, EN HAUT de la colonne de droite (complement du 2026-10-29,
@@ -11920,37 +11936,50 @@ body.pilot-vocal-active #agent-activity {
   min-height: 0;
   overflow: hidden;
 }
-/* LE PORTRAIT DU PERSONNAGE, EN HAUT de la colonne de droite (revision du
-   2026-10-29 : le personnage d'abord, la liste dessous) : un medaillon de
-   72 px, jamais dans le disque. `hidden` quand il n'y a pas de personnage —
-   AUCUN repli sur le logo dans la colonne. AUCUN NOM DESSOUS : le nom est sous
-   le bouton-cercle (`.vocal-orb-name`). */
+/* LE PORTRAIT DU PERSONNAGE, AU CENTRE DU DISQUE (decision du proprietaire,
+   mission « ecran Vocal ») : il n'est plus dans la colonne de droite. Il occupe
+   AU PLUS LA MOITIE de l'interieur du cercle — `--vocal-orb-size / 2`, soit
+   168 px pour un disque de 336 px — et il est CENTRE, pose en absolu sur le
+   centre du disque (aucune place prise dans la grille, le disque ne bouge pas
+   d'un pixel). `hidden` quand il n'y a pas de personnage : AUCUN repli sur le
+   logo. Sous lui, et sous lui seulement, le nom (`.vocal-orb-name`). */
 .vocal-portrait {
-  width: 72px;
-  height: 72px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--vocal-orb-size) / 2);
+  height: calc(var(--vocal-orb-size) / 2);
+  transform: translate(-50%, -50%);
   border-radius: 50%;
   object-fit: cover;
-  align-self: center;
-  flex: 0 0 auto;
   pointer-events: none;
 }
-/* LE NOM DU PERSONNAGE, SOUS LE BOUTON-CERCLE, EN PERMANENCE (decision du
-   proprietaire, 2026-10-29) : on voit toujours a qui l'on parle — le nom du
-   personnage actif, a defaut le nom de l'Assistant. Il ne depend d'AUCUNE
-   image. Pose en absolu sous le disque (`top: 100%` + 6 px) : il ne prend aucune
-   place dans la grille et ne peut donc pas deplacer le disque. Une pastille
-   lisible sur le voile suffit ; JAMAIS une zone cliquable. */
+/* LE NOM, DANS LE DISQUE, JUSTE SOUS L'IMAGE (decision du proprietaire,
+   mission « ecran Vocal ») : on voit toujours a qui l'on parle — le nom du
+   personnage actif, a defaut le nom de l'Assistant. Il n'y a qu'UN nom a
+   l'ecran : plus de pastille sous le bouton-cercle en plus de celui de l'image,
+   et rien d'autre sous l'image que ce seul nom.
+   POSITION : `50 % + 25 %` = le bas exact du portrait (il est centre et vaut la
+   moitie du disque), plus les 6 px d'ecart deja utilises entre l'image et son
+   nom. `inset-inline: 0` + `text-align: center` le centrent sur le disque ; il
+   ne prend aucune place dans le flux.
+   LARGEUR : 66 % du disque (222 px pour 336) — la corde du cercle a cette
+   hauteur vaut 284 px, la pastille ne touche donc jamais l'anneau. Un nom trop
+   long est coupe par des points de suspension, il ne passe jamais a la ligne
+   (une seule ligne, jamais deux noms). Une pastille lisible sur l'image suffit ;
+   JAMAIS une zone cliquable. */
 .vocal-orb-name {
   position: absolute;
   inset-inline: 0;
-  top: calc(100% + 6px);
+  top: calc(75% + 6px);
   text-align: center;
   line-height: 20px;
   font-size: var(--font-sm);
   background: color-mix(in srgb, var(--bg-app) 88%, transparent);
   border-radius: 999px;
   padding: 2px 10px;
-  max-width: 100%;
+  max-width: 66%;
+  margin-inline: auto;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -11958,13 +11987,13 @@ body.pilot-vocal-active #agent-activity {
 }
 
 /* --- LOT 2 (§2.2 a §2.7) : CE QUE LA COLONNE DE DROITE MONTRE ---
-   Ordre du document, de haut en bas (revise le 2026-10-29) : titre, ZONE
-   D'IMAGE (personnage, sinon la place du visage, sinon rien), liste, ligne
-   d'activite. Les hauteurs du budget (§2.5) sont ECRITES ici : elles doivent
-   tomber juste, sinon le nombre de lignes calcule par `planVocalTasks` ne
-   serait plus celui qu'on voit. Cas A : 39 + 72 + 6 + 20 + 18 + 12 = 167 px de
-   fixe pour 170 px prevus ; cas B : 69 px pour 72 px prevus. Le reste est de
-   l'air, jamais un debordement. */
+   Ordre du document, de haut en bas (mission « ecran Vocal ») : titre, ZONE
+   D'IMAGE (la place de la fenetre du visage, sinon rien — le personnage, lui,
+   est au centre du disque), liste. Les hauteurs du budget (§2.5) sont ECRITES
+   ici : elles doivent tomber juste, sinon le nombre de lignes calcule par
+   `planVocalTasks` ne serait plus celui qu'on voit. Haut fixe : 14 + 11 + 14
+   (titre) + 12 (air du bas) = 51 px, et 51 + 180 = 231 px quand la fenetre du
+   visage s'affiche. Le reste est de l'air, jamais un debordement. */
 /* LE TITRE DES DEUX COLONNES : une seule regle, deux selecteurs — les deux
    titres ne peuvent donc pas deriver l'un de l'autre. 14 px sous le bord haut de
    la colonne, 11 px de haut, 14 px sous lui : « DISCUSSION » et « TACHES » sont
@@ -12048,18 +12077,10 @@ body.pilot-vocal-active #agent-activity {
   line-height: 15px;
   color: var(--text-secondary);
 }
-/* La ligne d'activite, tout en bas : 12 px au-dessus, 18 px de haut, MEME place
-   dans les deux cas. Une seule ligne, jamais deux. */
-.vocal-now {
-  flex: 0 0 auto;
-  margin-block-start: 12px;
-  line-height: 18px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* LA LIGNE D'ACTIVITE DU BAS DE LA COLONNE N'EXISTE PLUS (mission « ecran
+   Vocal » : plus aucun texte a cet endroit, la place n'est pas reoccupee). Sa
+   regle et son noeud ont ete retires ensemble : aucune trace, aucun `display:
+   none`, la liste prend simplement les 21 px qu'elle occupait. */
 /* Teinte de l'etat : UNE seule variables, posee par UNE seule classe d'etat
    sur l'overlay (deux etats simultanes sont impossibles par construction). */
 .pilot-vocal.vocal-state-idle { --vocal-state: var(--vocal-rest); }
@@ -12599,11 +12620,11 @@ body.pilot-vocal-active #agent-activity {
    pixel, et le retour ne les fait pas sauter. Aucune translation non plus : le
    disque ne glisse pas, il s'eteint.
    CE QUI N'EST PAS NOMME ICI, ET NE DOIT JAMAIS L'ETRE : le portrait et son nom
-   (`.vocal-portrait`, `.vocal-orb-name` — ce dernier vit DANS le disque, il
-   s'eteint donc avec lui) et la zone d'image (`.vocal-image-zone`, dont la
-   hauteur reservee ne doit pas bouger, sinon le portrait saute) — la regle la
-   plus sure est l'absence de regle ; le logo (une sortie), l'entree « Travail » (un acces) et
-   les trois boutons systeme (hors de l'overlay).
+   (`.vocal-portrait`, `.vocal-orb-name`) — ils vivent tous deux DANS le disque
+   et s'eteignent donc avec lui, une seule regle suffit — et la zone d'image
+   (`.vocal-image-zone`, dont la hauteur reservee ne doit pas bouger) — la regle
+   la plus sure est l'absence de regle ; le logo (une sortie), l'entree
+   « Travail » (un acces) et les trois boutons systeme (hors de l'overlay).
    SANS PERSONNAGE, il ne reste que le bouton : le disque s'eteint comme le
    reste, il ne demeure pas pour lui tenir compagnie. */
 .pilot-vocal.vocal-bare .vocal-orb,
@@ -12611,8 +12632,7 @@ body.pilot-vocal-active #agent-activity {
 .pilot-vocal.vocal-bare .vocal-status,
 .pilot-vocal.vocal-bare .vocal-side-discussion,
 .pilot-vocal.vocal-bare .vocal-side-tasks > .vocal-tasks-title,
-.pilot-vocal.vocal-bare .vocal-side-tasks > .vocal-side-body,
-.pilot-vocal.vocal-bare .vocal-side-tasks > .vocal-now {
+.pilot-vocal.vocal-bare .vocal-side-tasks > .vocal-side-body {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -12652,8 +12672,7 @@ body.pilot-vocal-active #agent-activity {
    reserve et le bouton reste le seul moyen de tout remettre. */
 .pilot-vocal.vocal-reduced.vocal-bare .vocal-side-discussion,
 .pilot-vocal.vocal-reduced.vocal-bare .vocal-side-tasks > .vocal-tasks-title,
-.pilot-vocal.vocal-reduced.vocal-bare .vocal-side-tasks > .vocal-side-body,
-.pilot-vocal.vocal-reduced.vocal-bare .vocal-side-tasks > .vocal-now {
+.pilot-vocal.vocal-reduced.vocal-bare .vocal-side-tasks > .vocal-side-body {
   transition: none;
 }
 

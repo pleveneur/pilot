@@ -128,16 +128,18 @@ describe("1. l'objet pose dans l'ecran : un rond DANS le disque", () => {
       "vocal-top",
       "vocal-stage",
       "vocal-orb",
+      "vocal-portrait",
       "vocal-halo",
       "vocal-restart",
       "vocal-mic-fix",
-      // LOT 1 : les deux colonnes laterales et le portrait de la colonne droite.
-      // Revision du 2026-10-29 : le portrait est EN HAUT, AU-DESSUS de la liste
-      // (l'ordre du balisage suit l'ordre de l'ecran), et le nom n'est plus une
-      // pastille sous l'image : il est sous le bouton-cercle.
+      // Mission « ecran Vocal » (decision du proprietaire) : le portrait a
+      // quitte la colonne de droite pour le CENTRE DU DISQUE. Il est le PREMIER
+      // enfant du disque, donc AVANT le halo et le bouton de relance : leur
+      // peinture passe par-dessus l'image, comme avant. Les deux colonnes
+      // laterales gardent leur place, et le nom du personnage est cree apres le
+      // modele (il n'ajoute donc aucune entree a cette liste).
       "vocal-side-discussion",
       "vocal-side-tasks",
-      "vocal-portrait",
       "vocal-side-body",
       "vocal-status",
       "vocal-input",

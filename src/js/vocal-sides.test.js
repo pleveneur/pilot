@@ -24,7 +24,7 @@ import {
   VOCAL_SIDE_GAP_PX,
   VOCAL_SIDE_PAD_PX,
   VOCAL_SIDE_FIXED_PX,
-  VOCAL_PORTRAIT_PX,
+  VOCAL_CROWN_PX,
   VOCAL_ORB_BOX_RATIO,
   VOCAL_ORB_RESERVED_PX,
 } from "./vocal-sides.js";
@@ -92,11 +92,36 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     // 640 x 480 : avail = 217 px, sous le seuil -> aucune colonne du tout.
     expect(planVocalSides({ width: 640, height: 480, orbSize: 125.3 }).track).toBe(0);
     // 720 x 520 : avail = 244 px -> la colonne parait, et tient deja une tache
-    // (H = 231, il reste 61 px de liste sous le haut fixe de 170 px).
-    const juste = planVocalSides({ width: 720, height: 520, orbSize: 151.6, hasPortrait: true });
+    // (H = 231, il reste 180 px de liste sous le haut fixe de 51 px).
+    const juste = planVocalSides({ width: 720, height: 520, orbSize: 151.6 });
     expect(juste.track).toBe(244);
     expect(juste.columnHeight).toBe(231);
-    expect(juste.listHeight).toBe(61);
+    expect(juste.listHeight).toBe(180);
+  });
+
+  it("la colonne des taches s'arrete AVANT la couronne du disque", () => {
+    // La largeur de la colonne des taches n'est pas celle de la piste : elle
+    // vaut la piste MOINS la couronne du halo, plus le jour que la grille compte
+    // deja. 88 - 24 = 64 px en moins, quel que soit le disque.
+    expect(VOCAL_CROWN_PX).toBe(88);
+    for (const [largeur, disque] of [
+      [1440, 336],
+      [1280, 335.3],
+      [1024, 314.3],
+      [2560, 336],
+    ]) {
+      const plan = planVocalSides({ width: largeur, height: 900, orbSize: disque });
+      expect(plan.taskTrack, `largeur ${largeur}`).toBe(plan.track - (88 - JOUR));
+    }
+    // Aucune colonne : aucune largeur de taches non plus (jamais de valeur
+    // negative, meme quand la place manque).
+    const aucune = planVocalSides({ width: 640, height: 480, orbSize: 125.3 });
+    expect(aucune.track).toBe(0);
+    expect(aucune.taskTrack).toBe(0);
+    // Une piste plus etroite que la couronne ne rend jamais un nombre negatif.
+    const etroite = planVocalSides({ width: 720, height: 520, orbSize: 151.6 });
+    expect(etroite.track).toBe(244);
+    expect(etroite.taskTrack).toBe(180);
   });
 
   it("la colonne ne depasse jamais la place disponible (`avail`)", () => {
@@ -126,9 +151,10 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
     expect(etroit.columnHeight).toBe(large.columnHeight);
     // 336 + 2 x 88 = 512 px : la boite du disque, entierement disponible.
     expect(etroit.columnHeight).toBe(512);
-    // La meme hauteur, que le personnage existe ou non.
+    // La meme hauteur, que la fenetre du visage s'affiche ou non : la zone
+    // d'image prend sa place DANS la colonne, elle ne l'allonge pas.
     expect(
-      planVocalSides({ width: 1200, height: 900, orbSize: 336, hasPortrait: true })
+      planVocalSides({ width: 1200, height: 900, orbSize: 336, hasAvatar: true })
         .columnHeight,
     ).toBe(etroit.columnHeight);
   });
@@ -142,13 +168,16 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
   });
 
   it("la place laissee a la liste suit le haut fixe de la colonne", () => {
-    const avec = planVocalSides({ width: 1280, height: 900, orbSize: 336, hasPortrait: true });
-    const sans = planVocalSides({ width: 1280, height: 900, orbSize: 336, hasPortrait: false });
-    // 170 px quand un personnage occupe le haut de la colonne, 72 px sans lui.
-    expect(VOCAL_SIDE_FIXED_PX).toBe(170);
-    expect(VOCAL_PORTRAIT_PX).toBe(72);
-    expect(avec.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX);
-    expect(sans.listHeight).toBe(512 - VOCAL_PORTRAIT_PX);
+    // Un SEUL total fixe depuis que le personnage a quitte la colonne pour le
+    // centre du disque : 14 + 11 + 14 (le titre) + 12 (l'air du bas) = 51 px. La
+    // ligne d'activite n'est plus comptee, elle n'existe plus.
+    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
+    const plan = planVocalSides({ width: 1280, height: 900, orbSize: 336 });
+    expect(plan.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX);
+    expect(plan.listHeight).toBe(461);
+    // La fenetre du visage, quand elle s'affiche, prend sa place sur ce total.
+    const avecAvatar = planVocalSides({ width: 1280, height: 900, orbSize: 336, hasAvatar: true });
+    expect(avecAvatar.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX - 180);
     // Jamais de valeur negative, meme quand la fenetre est minuscule.
     expect(planVocalSides({ width: 1280, height: 120, orbSize: 336 }).listHeight).toBe(0);
   });

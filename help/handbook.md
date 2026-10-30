@@ -1391,22 +1391,24 @@ texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que c
 tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
 cliquable dans la colonne : on la lit, on ne la manipule pas.
 
-La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis, **en haut**, la
-place de l'**image** (voir plus bas), puis la **liste des tâches en cours** — l'agent et le
-projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui se passe à cet instant. Les tâches sont rangées en **« En cours »** d'abord, **« En
-attente »** ensuite. La liste **ne défile pas** : elle montre ce que la hauteur permet
-(jusqu'à **6** tâches quand un personnage est présent, **8** sans) et, s'il y en a plus, la
-ligne **« + N autre(s) »** le dit — la liste complète reste dans le bouton **« Travail »**.
-Aucune tâche en cours ? La colonne affiche « **Aucune tâche en cours** », jamais du vide.
+La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis la **liste des
+tâches en cours** — l'agent et le projet, puis ce qu'il fait. Rien n'est écrit sous la
+liste. Les tâches sont rangées en **« En cours »** d'abord, **« En attente »** ensuite. La
+liste **ne défile pas** : elle montre ce que la hauteur permet (jusqu'à **8** tâches) et,
+s'il y en a plus, la ligne **« + N autre(s) »** le dit — la liste complète reste dans le
+bouton **« Travail »**. Aucune tâche en cours ? La colonne affiche « **Aucune tâche en
+cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne le chevauche
+jamais, même avec un titre très long.
 
-Dans cette même colonne, **tout en haut**, le **portrait du personnage** apparaît en
-médaillon rond. **Aucun nom n'est écrit sous cette image** : le nom est **sous le cercle**,
-au centre de l'écran, et il y reste même quand il n'y a aucune image. Pas de personnage
-déposé par le projet **Présences** ? Il n'y a **aucune image de remplacement**, pas même le
-logo Pilot : la zone est simplement absente, la liste remonte et occupe alors **toute la
-hauteur**. Le
-portrait suit un éventuel changement de personnage sans redémarrer Pilot, et le haut de la
-colonne ne bouge pas quand il apparaît ou disparaît.
+Le **portrait du personnage** n'est plus dans la colonne : il est au **centre du cercle**, au
+plus la **moitié** de son intérieur, et son **nom** est écrit **juste en dessous**, sur une
+seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
+voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
+Il n'y a **aucune image de remplacement**, pas même le logo Pilot : le nom reste, seul, à la
+même place. Le portrait suit un éventuel changement de personnage sans redémarrer Pilot.
+
+Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
+au moindre mouvement de la souris : on parle à Pilot sans qu'une barre reste sous les yeux.
 
 Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les

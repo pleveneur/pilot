@@ -1,15 +1,21 @@
-// Tests — LA ZONE D'IMAGE DE L'ECRAN VOCAL : TROIS CAS, DANS CET ORDRE
-// (docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md, complement
-// du 2026-10-29, § 7bis ; les trois tests sont nommes au § 7bis.10).
+// Tests — LA ZONE D'IMAGE DE L'ECRAN VOCAL : DEUX CAS, DANS CET ORDRE
+// (docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md, § 7bis ;
+// les trois tests sont nommes au § 7bis.10).
+//
+// REVISION (mission « ecran Vocal ») : le PERSONNAGE a quitte la colonne pour le
+// CENTRE DU DISQUE. La zone d'image n'a donc plus que DEUX cas — la fenetre du
+// VISAGE si elle tourne et si sa taille est connue, sinon rien — et la colonne
+// ne reserve plus rien pour le personnage : `H - 51` px de liste au lieu de
+// `H - 72` ou `H - 170`.
 //
 // CE QUE CE FICHIER VERROUILLE :
-//   T20 « trois cas, dans cet ordre » — `planVocalSides` rend la bonne reserve et
-//         la bonne hauteur de liste pour les QUATRE combinaisons du tableau
-//         § 7bis.4, sur les SEPT fenetres, avec le bon nombre de lignes ; le cas 2
-//         n'apparait pas sous H = 298 (il ne laisserait pas une seule tache).
-//   T21 « l'avatar n'est jamais un noeud » — la zone du cas 2 ne porte aucun
-//         element, aucun `img`, aucun `src`, jamais le logo ; elle ne dessine
-//         rien (ni cadre, ni fond, ni ombre, ni rond).
+//   T20 « deux cas, dans cet ordre » — `planVocalSides` rend la bonne reserve et
+//         la bonne hauteur de liste pour les DEUX cas du tableau § 7bis.4, sur
+//         les SEPT fenetres, avec le bon nombre de lignes ; l'avatar n'apparait
+//         pas sous H = 277 (il ne laisserait pas une seule tache).
+//   T21 « l'avatar n'est jamais un noeud » — la zone ne porte aucun element,
+//         aucun `img`, aucun `src`, jamais le logo ; elle ne dessine rien (ni
+//         cadre, ni fond, ni ombre, ni rond).
 //   T22 « la pose » — la conversion CSS -> physique ARRONDIT, `/set_position`
 //         n'est demande QUE si une taille est confirmee, et UNE SEULE FOIS par
 //         geste (aucune minuterie nouvelle).
@@ -33,12 +39,9 @@ import {
   vocalTaskRows,
   VOCAL_AVATAR_W_PX,
   VOCAL_AVATAR_H_PX,
-  VOCAL_IMAGE_GAP_PX,
-  VOCAL_PORTRAIT_BLOCK_PX,
+  VOCAL_SIDE_FIXED_PX,
   VOCAL_TASK_PX,
-  VOCAL_IMAGE_PORTRAIT,
   VOCAL_IMAGE_AVATAR,
-  VOCAL_IMAGE_AVATAR_PORTRAIT,
   VOCAL_IMAGE_NONE,
 } from "./vocal-sides.js";
 import { buildFaceRequest } from "./face-gateway.js";
@@ -60,150 +63,117 @@ function corpsFonctionEntete(debut) {
   return corps(debut, "\n}\n");
 }
 
-// Les SEPT fenetres du tableau § 2.5, avec le disque et `H` du tableau § 3.2.
-const SEPT_LIGNES = [
-  [720, 520, 151.6, 231],
-  [768, 576, 188.3, 287],
-  [820, 620, 217.2, 331],
-  [896, 672, 251.3, 383],
-  [1024, 768, 314.3, 479],
-  [1280, 800, 335.3, 511],
-  [1440, 900, 336, 512],
-];
-
 /**
- * Le tableau § 7bis.4, ligne par ligne, recopiee telle quelle :
- * [largeur, hauteur, disque, H,
- *  cas 1 (listH, lignes), cas 2 (listH, lignes), cas 3 (listH, lignes),
- *  cas 1+2 (listH, lignes)].
+ * Le tableau § 7bis.4, revise — ligne par ligne, recopiee telle quelle :
+ * [largeur, hauteur, disque, H, cas « rien » (listH, lignes),
+ *  cas « fenetre du visage » (listH, lignes)].
  *
- * Le « — » du document (la zone n'existe pas) est ecrit ici `null` : la liste
- * garde alors EXACTEMENT la hauteur du cas 3, ce qui est verifie plus bas.
+ * Le « — » du document (l'avatar refuse, il ne laisserait pas une tache) est
+ * ecrit ici `null` : la liste garde alors EXACTEMENT la hauteur du cas sans
+ * avatar, ce qui est verifie plus bas.
  */
 const TABLE_7BIS_4 = [
-  [720, 520, 151.6, 231, [61, 1], null, [159, 2], null],
-  [768, 576, 188.3, 287, [117, 1], null, [215, 3], null],
-  [820, 620, 217.2, 331, [161, 2], [79, 1], [259, 4], null],
-  [896, 672, 251.3, 383, [213, 3], [131, 1], [311, 5], null],
-  [1024, 768, 314.3, 479, [309, 5], [227, 4], [407, 7], [123, 1]],
-  [1280, 800, 335.3, 511, [341, 6], [259, 4], [439, 8], [155, 2]],
-  [1440, 900, 336, 512, [342, 6], [260, 4], [440, 8], [156, 2]],
+  [720, 520, 151.6, 231, [180, 3], null],
+  [768, 576, 188.3, 287, [236, 4], [56, 1]],
+  [820, 620, 217.2, 331, [280, 5], [100, 1]],
+  [896, 672, 251.3, 383, [332, 6], [152, 2]],
+  [1024, 768, 314.3, 479, [428, 8], [248, 4]],
+  [1280, 800, 335.3, 511, [460, 8], [280, 5]],
+  [1440, 900, 336, 512, [461, 8], [281, 5]],
 ];
 
 // ---------------------------------------------------------------------------
-describe("T20 — trois cas, dans cet ordre : le personnage, sinon l'avatar, sinon rien", () => {
-  it("les trois cas portent les hauteurs du document, et rien d'autre", () => {
-    // Les hauteurs du bloc d'image, en une seule lecture : 0 px (cas 3), le
-    // medaillon n'est pas une place reservee (cas 1), 180 px (cas 2), et la
-    // fenetre du visage plus son ecart au-dessus du medaillon (cas 1 + 2).
+describe("T20 — deux cas, dans cet ordre : la fenetre du visage, sinon rien", () => {
+  it("les deux cas portent les hauteurs du document, et rien d'autre", () => {
+    // Les hauteurs du bloc d'image, en une seule lecture : 0 px quand rien ne
+    // s'affiche, 180 px quand la fenetre du visage est posee.
     const H = 512;
-    expect(planVocalImageZone({ hasPortrait: false, hasAvatar: false, columnHeight: H })).toEqual({
+    expect(planVocalImageZone({ hasAvatar: false, columnHeight: H })).toEqual({
       kind: VOCAL_IMAGE_NONE,
       height: 0,
       avatar: false,
-      portrait: false,
     });
-    expect(planVocalImageZone({ hasPortrait: true, hasAvatar: false, columnHeight: H })).toEqual({
-      kind: VOCAL_IMAGE_PORTRAIT,
-      height: 0,
-      avatar: false,
-      portrait: true,
-    });
-    expect(planVocalImageZone({ hasPortrait: false, hasAvatar: true, columnHeight: H })).toEqual({
+    expect(planVocalImageZone({ hasAvatar: true, columnHeight: H })).toEqual({
       kind: VOCAL_IMAGE_AVATAR,
       height: VOCAL_AVATAR_H_PX,
       avatar: true,
-      portrait: false,
-    });
-    expect(planVocalImageZone({ hasPortrait: true, hasAvatar: true, columnHeight: H })).toEqual({
-      kind: VOCAL_IMAGE_AVATAR_PORTRAIT,
-      height: VOCAL_AVATAR_H_PX + VOCAL_IMAGE_GAP_PX,
-      avatar: true,
-      portrait: true,
     });
     // 180 px n'est pas un chiffre choisi : c'est le plancher de la fenetre de
     // PLface (`minWidth: 160`, `minHeight: 180`), la plus petite place possible.
     expect(VOCAL_AVATAR_W_PX).toBe(160);
     expect(VOCAL_AVATAR_H_PX).toBe(180);
-    // Le bloc du personnage, lui, n'a pas bouge : 72 + 6 + 20 (aucun nom sous
-    // l'image — decision du proprietaire du 2026-10-29).
-    expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(98);
+    // Le personnage n'a plus de bloc du tout : la colonne ne reserve que le
+    // titre et l'air du bas (51 px), jamais 98 ni 72.
+    expect(VOCAL_SIDE_FIXED_PX).toBe(39 + 12);
   });
 
-  it("le personnage l'emporte TOUJOURS sur l'avatar (l'ordre des trois cas)", () => {
-    // Un personnage et un avatar disponibles : c'est le personnage qui decide des
-    // quatre premieres valeurs, l'avatar n'ajoute que sa place.
+  it("le personnage n'entre PLUS dans les deux cas : le plan ne le lit pas", () => {
+    // Le personnage et un avatar disponibles : seule la fenetre du visage decide
+    // de la zone. Une entree `hasPortrait` d'un appelant ancien ne change RIEN.
     const cas = { width: 1440, height: 900, orbSize: 336 };
-    const avec = planVocalSides({ ...cas, hasPortrait: true, hasAvatar: true });
-    expect(avec.hasPortrait).toBe(true);
-    expect(avec.imageZone.kind).toBe(VOCAL_IMAGE_AVATAR_PORTRAIT);
-    expect(avec.imageZone.portrait).toBe(true);
-    // Sans avatar, les quatre premieres valeurs ne changent pas d'un pixel.
-    const sans = planVocalSides({ ...cas, hasPortrait: true, hasAvatar: false });
-    expect([sans.track, sans.columnHeight]).toEqual([avec.track, avec.columnHeight]);
+    const avec = planVocalSides({ ...cas, hasAvatar: true });
+    const ancien = planVocalSides({ ...cas, hasAvatar: true, hasPortrait: true });
+    expect(avec.imageZone.kind).toBe(VOCAL_IMAGE_AVATAR);
+    expect(ancien).toEqual(avec);
+    // Et sans avatar, les valeurs de la colonne ne dependent que de la fenetre.
+    const sans = planVocalSides({ ...cas, hasAvatar: false });
+    expect([sans.track, sans.columnHeight, sans.taskTrack]).toEqual([
+      avec.track,
+      avec.columnHeight,
+      avec.taskTrack,
+    ]);
   });
 
-  it("le tableau § 7bis.4, les SEPT fenetres et les QUATRE colonnes, au pixel pres", () => {
-    for (const [largeur, hauteur, disque, H, cas1, cas2, cas3, cas12] of TABLE_7BIS_4) {
+  it("le tableau § 7bis.4 revise, les SEPT fenetres et les DEUX cas, au pixel pres", () => {
+    for (const [largeur, hauteur, disque, H, casRien, casAvatar] of TABLE_7BIS_4) {
       const base = { width: largeur, height: hauteur, orbSize: disque };
-      const lireCas = (hasPortrait, hasAvatar) => {
-        const plan = planVocalSides({ ...base, hasPortrait, hasAvatar });
+      const lireCas = (hasAvatar) => {
+        const plan = planVocalSides({ ...base, hasAvatar });
         expect(plan.columnHeight, `${largeur} : H`).toBe(H);
-        const lignes = vocalTaskRows(plan.listHeight, plan.hasPortrait).rows;
-        return [plan.listHeight, lignes];
+        return [plan.listHeight, vocalTaskRows(plan.listHeight).rows];
       };
-      const c1 = lireCas(true, false);
-      const c2 = lireCas(false, true);
-      const c3 = lireCas(false, false);
-      const c12 = lireCas(true, true);
-
-      expect(c1, `${largeur} x ${hauteur} : cas 1`).toEqual(cas1);
-      expect(c3, `${largeur} x ${hauteur} : cas 3`).toEqual(cas3);
-      // « — » : la zone n'existe pas, et la liste garde la hauteur du cas 3.
-      if (cas2 === null) {
-        expect(c2, `${largeur} x ${hauteur} : cas 2 refuse`).toEqual(c3);
+      const rien = lireCas(false);
+      const avatar = lireCas(true);
+      expect(rien, `${largeur} x ${hauteur} : sans avatar`).toEqual(casRien);
+      // « — » : la zone n'existe pas, et la liste garde la hauteur du cas sans
+      // avatar — aucun trou, aucune place perdue.
+      if (casAvatar === null) {
+        expect(avatar, `${largeur} x ${hauteur} : avatar refuse`).toEqual(casRien);
       } else {
-        expect(c2, `${largeur} x ${hauteur} : cas 2`).toEqual(cas2);
-      }
-      if (cas12 === null) {
-        expect(c12, `${largeur} x ${hauteur} : cas 1 + 2 refuse`).toEqual(c1);
-      } else {
-        expect(c12, `${largeur} x ${hauteur} : cas 1 + 2`).toEqual(cas12);
+        expect(avatar, `${largeur} x ${hauteur} : fenetre du visage`).toEqual(casAvatar);
       }
     }
   });
 
-  it("le cas 2 n'apparait pas sous H = 298 : il ne laisserait pas UNE tache", () => {
-    // `H - 252 >= 46`, le seuil de « une colonne n'est jamais un trou » (§ 2.6).
+  it("la fenetre du visage n'apparait pas sous H = 277 : elle mangerait la derniere tache", () => {
+    // `H - 51 - 180 >= 46`, le seuil de « une colonne n'est jamais un trou »
+    // (§ 2.6). 51 + 180 + 46 = 277.
     expect(VOCAL_TASK_PX).toBe(46);
-    expect(
-      planVocalImageZone({ hasPortrait: false, hasAvatar: true, columnHeight: 297 }).avatar,
-    ).toBe(false);
-    expect(
-      planVocalImageZone({ hasPortrait: false, hasAvatar: true, columnHeight: 298 }).avatar,
-    ).toBe(true);
-    // 820 x 620 : 331 px de colonne, donc le seuil est franchi (79 px de liste).
-    expect(
-      planVocalImageZone({ hasPortrait: false, hasAvatar: true, columnHeight: 331 }).height,
-    ).toBe(180);
+    expect(VOCAL_SIDE_FIXED_PX + VOCAL_AVATAR_H_PX + VOCAL_TASK_PX).toBe(277);
+    expect(planVocalImageZone({ hasAvatar: true, columnHeight: 276 }).avatar).toBe(false);
+    expect(planVocalImageZone({ hasAvatar: true, columnHeight: 277 }).avatar).toBe(true);
+    // 820 x 620 : 331 px de colonne, donc le seuil est franchi (100 px de liste).
+    expect(planVocalImageZone({ hasAvatar: true, columnHeight: 331 }).height).toBe(180);
     // Et un avatar refuse ne deplace rien : `hasAvatar` du plan dit la VERITE.
-    const refuse = planVocalSides({ width: 768, height: 576, orbSize: 188.3, hasAvatar: true });
+    const refuse = planVocalSides({ width: 720, height: 520, orbSize: 151.6, hasAvatar: true });
     expect(refuse.hasAvatar).toBe(false);
     expect(refuse.imageZone.kind).toBe(VOCAL_IMAGE_NONE);
-    expect(refuse.listHeight).toBe(287 - 72);
+    expect(refuse.listHeight).toBe(231 - 51);
   });
 
-  it("le plan porte la zone : la repeinture n'a pas a relire le personnage", () => {
-    const plan = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasPortrait: true });
-    expect(Object.keys(plan.imageZone).sort()).toEqual(["avatar", "height", "kind", "portrait"]);
+  it("le plan porte la zone : la repeinture n'a pas a la recalculer", () => {
+    const plan = planVocalSides({ width: 1440, height: 900, orbSize: 336, hasAvatar: true });
+    expect(Object.keys(plan.imageZone).sort()).toEqual(["avatar", "height", "kind"]);
     expect(plan.imageZone).toEqual({
-      kind: VOCAL_IMAGE_PORTRAIT,
-      height: 0,
-      avatar: false,
-      portrait: true,
+      kind: VOCAL_IMAGE_AVATAR,
+      height: VOCAL_AVATAR_H_PX,
+      avatar: true,
     });
-    // Aucune entree ne vient d'ailleurs : la seule chose lue est `hasPortrait`.
-    expect(plan.hasAvatar).toBe(false);
+    expect(plan.hasAvatar).toBe(true);
+    // Aucune entree ne vient d'ailleurs : la seule chose lue est `hasAvatar`.
+    expect(
+      planVocalSides({ width: 1440, height: 900, orbSize: 336, hasAvatar: false }).imageZone,
+    ).toEqual({ kind: VOCAL_IMAGE_NONE, height: 0, avatar: false });
   });
 });
 
@@ -228,7 +198,7 @@ describe("T21 — l'avatar n'est jamais un noeud : Pilot ne dessine rien", () =>
     expect(rendu).toMatch(/zone\.hidden = hauteur <= 0/);
     // Aucun contenu, jamais : la zone est une PLACE, pas un element a remplir.
     // (Le fragment est borne aux lignes de la zone : la meme fonction ecrit le
-    // titre, la liste et la ligne d'activite, qui sont d'autres noeuds.)
+    // titre et la liste, qui sont d'autres noeuds.)
     const zoneSeule = sliceSource(rendu, "const zone = vocalImageZoneNode", "const liste =", 20);
     expect(zoneSeule).toContain("plan.imageZone.height");
     for (const interdit of ["innerHTML", "<img", "logo_pilot_vector", "appendChild", "textContent"]) {
@@ -246,7 +216,8 @@ describe("T21 — l'avatar n'est jamais un noeud : Pilot ne dessine rien", () =>
 
   it("ni le balisage statique ni la feuille de style ne portent d'image de remplacement", () => {
     const build = corps("function buildVocalOverlay()", "function vocalStatusLine");
-    // Le seul portrait est celui du personnage, dans la colonne de droite.
+    // Le SEUL portrait de l'ecran est celui du personnage — et il est dans le
+    // disque, pas dans une zone qui ne dessine rien.
     expect(build.match(/<img /g) || []).toHaveLength(1);
     expect(build).not.toMatch(/logo_pilot_vector\.svg/);
     // Aucune image de l'avatar : Pilot n'a pas de moteur 3D, et n'en aura pas
@@ -280,26 +251,22 @@ describe("T22 — la pose : arrondir, une taille confirmee, un seul appel par ge
     expect(planVocalAvatarPose({ rect, windowOrigin, avatar: { width: 160 } })).toBeNull();
   });
 
-  it("elle n'est demandee que dans les deux cas ou la zone porte l'avatar", () => {
+  it("elle n'est demandee que dans le SEUL cas ou la zone porte la fenetre", () => {
     const commun = {
       rect: { left: 0, top: 0, width: 320 },
       windowOrigin: { x: 0, y: 0, scaleFactor: 1 },
       avatar: { width: 160, height: 180 },
     };
-    for (const kind of [VOCAL_IMAGE_NONE, VOCAL_IMAGE_PORTRAIT]) {
-      const placement = planVocalAvatarPlacement({ ...commun, imageZone: { kind, height: 0 } });
-      expect(placement.send, `cas ${kind}`).toBe(false);
-      expect(placement.pose).toBeNull();
-    }
-    for (const kind of [VOCAL_IMAGE_AVATAR, VOCAL_IMAGE_AVATAR_PORTRAIT]) {
-      const placement = planVocalAvatarPlacement({
-        ...commun,
-        imageZone: { kind, height: VOCAL_AVATAR_H_PX },
-      });
-      expect(placement.send, `cas ${kind}`).toBe(true);
-      // Centre dans une colonne de 320 px : 80 px de chaque cote.
-      expect(placement.key).toBe("80,0,160,180");
-    }
+    const aucun = planVocalAvatarPlacement({ ...commun, imageZone: { kind: VOCAL_IMAGE_NONE, height: 0 } });
+    expect(aucun.send).toBe(false);
+    expect(aucun.pose).toBeNull();
+    const pose = planVocalAvatarPlacement({
+      ...commun,
+      imageZone: { kind: VOCAL_IMAGE_AVATAR, height: VOCAL_AVATAR_H_PX },
+    });
+    expect(pose.send).toBe(true);
+    // Centre dans une colonne de 320 px : 80 px de chaque cote.
+    expect(pose.key).toBe("80,0,160,180");
   });
 
   it("UNE SEULE FOIS par geste : une pose identique n'est pas redemandee", () => {

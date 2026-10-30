@@ -178,7 +178,7 @@ reste **sous** eux, la fenêtre reste fermable et déplaçable, et le panneau ne
 recouvre ni la ligne d'état ni la zone de saisie. Ni le disque, ni la ligne
 d'état, ni la barre de saisie, ni le bouton de relance ne bougent.
 
-Dans l'**état nu** (§4ter : tout masqué sauf le portrait), il faut le dire net :
+Dans l'**état nu** (§4ter : tout masqué, portrait compris depuis qu'il est dans le cercle), il faut le dire net :
 **Rien de la conversation n'est affiché** sur cet écran — ni les messages, ni les
 outils, ni un résumé des derniers échanges. Le suivi des agents y est **joignable sur
 demande** (le bouton « Travail » ci-dessus), jamais peint en permanence. C'est le
@@ -259,86 +259,80 @@ non-recouvrement, mouvement réduit).
 
 ## 3ter. Les colonnes de l'écran Vocal (discussion à gauche ; zone d'image et tâches à droite) — ✅ **lots 1, 2, 3 et 4 livrés**
 
-> **État réel (lots 1 à 3, appliqués)** : la **structure** des colonnes existe — deux
-> `<aside class="vocal-side">` enfants de la scène (discussion à gauche, tâches à
-> droite), la grille à trois pistes de `.vocal-stage`, dans la colonne de droite la
-> **zone d'image EN HAUT** — le portrait du personnage (médaillon rond de 72 px), ou la
-> place de la fenêtre du visage, ou rien — suivie de la **liste des tâches**, et dans
-> celle de gauche l'**aperçu de la discussion**. **Aucun nom n'est écrit sous l'image** :
-> le nom est **sous le cercle**, en permanence (voir le dernier point de cette section). La lecture de la largeur est unique :
-> `planVocalSides()` (`src/js/vocal-sides.js`), appliquée par
-> `vocalSyncSides()` à l'entrée, à chaque changement de taille de fenêtre et à chaque tic de
-> **900 ms** (`VOCAL_SIDES_TICK_MS`) ; sous 240 px de place disponible, les deux colonnes
-> sont **absentes** (`hidden` + `.vocal-sides-off`).
-> Les deux colonnes sont **remplies** : titre puis contenu. Cote **droite** (lot 2),
-> « TÂCHES », la liste des tâches (groupes « En cours » puis « En attente », identité puis
-> résumé, **6** lignes au cas A et **8** au cas B, l'excédent écrit « + N autre(s) »,
-> « Aucune tâche en cours » si la liste est vide) et **une** ligne d'activité en bas. Cote
-> **gauche** (lot 3), « DISCUSSION » et l'aperçu des derniers echanges (dernier point de
-> cette section). La décision des tâches et celle de l'aperçu vivent dans le même module
-> pur (`planVocalTasks`, `vocalTaskRows`, `vocalNowLine` ; `planVocalDiscussion`,
+> **État réel (révision du 2026-11, mission « écran Vocal »)** : la **structure** des
+> colonnes existe — deux `<aside class="vocal-side">` enfants de la scène (discussion à
+> gauche, tâches à droite) et la grille à trois pistes de `.vocal-stage`. Le **personnage
+> n'est plus dans la colonne** : il est au **centre du cercle**, avec son nom juste
+> dessous, à l'intérieur du disque (voir ci-dessous). La colonne de droite ne porte donc
+> que le titre « TÂCHES », **la place de la fenêtre du visage** (PLface) quand elle peut
+> s'y tenir, et **la liste des tâches** ; celle de gauche, l'**aperçu de la discussion**.
+> La lecture de la largeur est unique : `planVocalSides()` (`src/js/vocal-sides.js`),
+> appliquée par `vocalSyncSides()` à l'entrée, à chaque changement de taille de fenêtre et
+> à chaque tic de **900 ms** (`VOCAL_SIDES_TICK_MS`) ; sous 240 px de place disponible, les
+> deux colonnes sont **absentes** (`hidden` + `.vocal-sides-off`). Le même appel écrit la
+> **largeur de la colonne des tâches** (`--vocal-side-tasks`), qui la fait s'arrêter
+> **avant la couronne** du disque : elle ne le chevauche jamais, quel que soit le titre (un
+> titre trop long est coupé par sa boîte, jamais par-dessus le cercle).
+> La décision des tâches et celle de l'aperçu vivent dans le même module pur
+> (`planVocalTasks`, `vocalTaskRows`, `planVocalImageZone` ; `planVocalDiscussion`,
 > `vocalExcerpt`, `vocalDiscussionView`), la liste des missions vient d'une **source
 > unique** (`collectSuperMissions()`) — celle du bouton « Travail » — et la conversation
 > d'une **lecture unique** (`collectVocalDiscussion()`), si bien qu'aucun affichage ne peut
 > contredire l'autre. Ce qui suit décrit le code d'aujourd'hui. Conception complète :
-> `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md` et son amendement
-> `docs/conceptions/CONCEPTION-ecran-vocal-taches-en-haut-portrait-en-bas.md` — la **zone
-> d'image** et ses trois cas sont au **§ 7bis** du premier.
+> `docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md` (la **zone d'image** et
+> ses deux cas sont au **§ 7bis**).
 
 Quand la place le permet (seuil d'affichage des colonnes), l'écran Vocal montre à droite
 **une** colonne qui parle du **travail**, dans cet ordre de haut en bas : le titre
-« TÂCHES », puis **la zone d'image** — le portrait du personnage, ou à défaut la place de la
-fenêtre du visage, ou rien —, puis **la liste des tâches**, puis **une** ligne disant ce que
-fait l'agent à cet instant. **L'image est en haut, les tâches en dessous** (décision du
-propriétaire du 2026-10-29) : la ligne d'activité et le haut de la colonne ne bougent pas
-d'un pixel d'un cas à l'autre, seule la hauteur de la liste change. **Trois cas, et deux critères qui sont des faits** (complément du
-2026-10-29), **dans cet ordre de priorité** :
+« TÂCHES », puis **la zone d'image**, puis **la liste des tâches**. **Rien n'est écrit sous
+la liste** : la **ligne d'activité** d'autrefois (« *X* réfléchit », « *X* exécute une
+opération ») a été **retirée** (mission « écran Vocal ») — la fonction pure qui la calculait
+et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
 
-- **1. Un personnage occupe la zone d'image si et seulement si un portrait affichable
-  existe** (`getAssistantPortrait() !== ""`). Rien d'autre n'est lu : aucun réglage, aucun
-  état mémorisé, aucun redémarrage — le personnage est déjà relu à l'ouverture de l'onglet et
-  à chaque retour de focus de la fenêtre. Le portrait est **en haut** de la colonne et la
-  liste vient **en dessous** ; **98 px** sont réservés à son bloc (72 px de médaillon + 6
-  d'écart + 20 d'air), et **aucun nom n'est écrit dessous**. La liste affiche jusqu'à **6**
-  tâches.
-- **2. Sinon, l'avatar du visage (PLface) occupe la zone s'il tourne et répond**
+**La zone d'image n'a plus que DEUX cas** — ce sont des faits, pas des réglages :
+
+- **1. L'avatar du visage (PLface) occupe la zone s'il tourne, s'il répond**
   (`invoke("plface_status")`, la même sonde que l'écran Paramètres → Avatar) **et si sa
-  taille est connue** ; **180 px** sont réservés (son plancher : 160 × 180) et la liste
-  affiche jusqu'à **4** tâches. Pilot **ne dessine rien** dans cette zone : c'est la fenêtre
-  de l'avatar — sans cadre, transparente, toujours au-dessus — qui s'y tient. **Ni cadre, ni
-  ombre, ni rond, ni logo, ni nom** : l'avatar n'a pas de nom, et rien ne remplace son image.
-  L'avatar **n'est pas** une zone cliquable de Pilot : il n'entre pas dans les six hôtes.
-- **3. Sinon** : le bloc d'image **n'existe pas** — pas d'image de remplacement, pas de cadre,
-  pas de logo —, la liste **prend toute la hauteur** (elle gagne exactement les **98 px** du
-  portrait, ou les **180 px** de l'avatar) et affiche jusqu'à **8** tâches. **Aucune zone
-  réservée.** Le nom du personnage reste lisible sur le bouton de relance du cercle
-  (« Réveiller *Nom* »), donc rien n'est perdu.
-- **La zone n'existe que si la liste garde au moins une ligne** : sous la plus petite fenêtre
-  qui la permet, elle n'est pas dessinée (cas 3), l'avatar reste où il est et n'est **pas**
-  déplacé. **Une zone qui ne dessine rien ne fait jamais un trou** : dans tous les cas,
-  l'espace vide se lit comme de l'air, jamais comme une image manquante — aucun message,
-  aucune icône cassée, jamais le logo dans la zone.
+  taille est connue** : **180 px** sont réservés (son plancher : 160 × 180). Pilot **ne
+  dessine rien** dans cette zone : c'est la fenêtre de l'avatar — sans cadre, transparente,
+  toujours au-dessus — qui s'y tient. **Ni cadre, ni ombre, ni rond, ni logo, ni nom** :
+  l'avatar n'a pas de nom, et rien ne remplace son image. L'avatar **n'est pas** une zone
+  cliquable de Pilot : il n'entre pas dans les six hôtes (§8bis).
+- **2. Sinon** : le bloc d'image **n'existe pas** — pas d'image de remplacement, pas de
+  cadre, pas de logo, **aucune zone réservée** — et la liste prend toute la hauteur.
+- **La colonne ne réserve, en plus de la liste, que le titre et l'air du bas : 51 px**
+  (14 de marge + 11 de titre + 14 de marge + 12 d'air). La liste dispose donc de
+  **`H − 51` px**, ou de **`H − 51 − 180`** quand la fenêtre du visage est posée, ce qui
+  lui laisse de **3 à 8** lignes selon la fenêtre (`vocalTaskRows`).
+- **La zone n'existe que si la liste garde au moins une ligne** : sous `H = 277` px de
+  colonne (51 + 180 + 46), la fenêtre du visage n'est pas dessinée et la liste garde
+  **exactement** la hauteur du cas précédent. **Une zone qui ne dessine rien ne fait jamais
+  un trou** : l'espace vide se lit comme de l'air, jamais comme une image manquante — aucun
+  message, aucune icône cassée, jamais le logo dans la zone.
 - **Déplacer l'avatar, poser sa taille** : Pilot sait **déplacer** la fenêtre de l'avatar
-  (`/set_position`, en pixels physiques, déjà branché) mais **pas** lui imposer une taille
-  (PLface n'expose aucune route de taille). C'est pourquoi le cas 2 exige que la taille soit
-  connue : sans elle il ne s'affiche pas, et rien n'est déplacé — un avatar trop grand pourrait
-  recouvrir le logo, donc **une sortie**. Ce n'est pas une commodité, c'est la contrainte qui
-  prime.
+  (`/set_position`, en pixels physiques) mais **pas** lui imposer une taille (PLface
+  n'expose aucune route de taille). C'est pourquoi le cas 1 exige que la taille soit
+  connue : sans elle, rien n'est dessiné et rien n'est déplacé — un avatar trop grand
+  pourrait recouvrir le logo, donc **une sortie**. Ce n'est pas une commodité, c'est la
+  contrainte qui prime.
 - La liste **ne défile pas** (la colonne ne reçoit aucun clic) : le nombre de lignes suit la
   hauteur, l'excédent est écrit « + N autre(s) » et la liste complète reste dans le bouton
   **« Travail »**. Une colonne sans mission affiche « Aucune tâche en cours », jamais du vide.
 - **Aucun réglage nouveau, aucune persistance** : l'écran ne mémorise rien du personnage ni de
   l'avatar ; le passage d'un cas à l'autre se fait en **une peinture**, sans animation, et ne
-  déplace ni le haut de la colonne ni la ligne d'activité. Le complément du 2026-10-29
-  n'ajoute **ni minuterie, ni nœud, ni case à cocher** : la place de l'avatar est décidée à
-  chaque affichage, pas mémorisée.
+  déplace ni le titre ni le haut de la liste. La place de l'avatar est décidée à chaque
+  affichage, pas mémorisée.
 
-- **Le nom est sous le cercle, et il y reste** (décision du 2026-10-29) : l'écran affiche en
-  permanence, **sous le bouton du cercle**, le nom du **personnage actif** ; sans personnage,
-  le nom que vous avez donné à l'assistant. On voit donc **toujours** à qui l'on parle, même
-  quand la zone d'image est vide, et **aucun nom n'est écrit sous une image**. Ce libellé est
-  **une** ligne de texte posée **sous** le disque, hors de lui : il ne déplace ni le cercle,
-  ni le halo, ni la ligne d'état, ne capte **aucun clic** et ne se règle pas.
+- **Le nom est DANS le cercle, juste sous l'image** (décision du propriétaire, mission
+  « écran Vocal » ; elle remplace celle du 2026-10-29 qui le posait sous le bouton) : le
+  portrait du **personnage actif** est au **centre du disque**, au plus la **moitié de son
+  intérieur** (168 px pour un disque de 336), et le nom est écrit **juste en dessous**, **sur
+  une seule ligne** — le nom du personnage, à défaut celui que vous avez donné à
+  l'assistant, jamais les deux. On voit donc toujours à qui l'on parle. Il n'y a **qu'un
+  nom** à l'écran : plus de pastille sous le bouton-cercle en plus de celui de l'image, et
+  **rien d'autre sous l'image**. Ce libellé ne déplace ni le cercle, ni le halo, ni la ligne
+  d'état, ne capte **aucun clic** et ne se règle pas. Sans personnage, l'image est absente et
+  le nom reste, seul, à la même place — aucun repli sur le logo.
 
 Les trois sorties (logo, Échap, fermeture de l'onglet) et les colonnes sans clic restent
 **inchangées** : **aucune** des deux colonnes n'ajoute de zone cliquable.
@@ -414,22 +408,24 @@ texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que c
 tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
 cliquable dans la colonne : on la lit, on ne la manipule pas.
 
-La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis, **en haut**, la
-place de l'**image** (voir plus bas), puis la **liste des tâches en cours** — l'agent et le
-projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui se passe à cet instant. Les tâches sont rangées en **« En cours »** d'abord, **« En
-attente »** ensuite. La liste **ne défile pas** : elle montre ce que la hauteur permet
-(jusqu'à **6** tâches quand un personnage est présent, **8** sans) et, s'il y en a plus, la
-ligne **« + N autre(s) »** le dit — la liste complète reste dans le bouton **« Travail »**.
-Aucune tâche en cours ? La colonne affiche « **Aucune tâche en cours** », jamais du vide.
+La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis la **liste des
+tâches en cours** — l'agent et le projet, puis ce qu'il fait. Rien n'est écrit sous la
+liste. Les tâches sont rangées en **« En cours »** d'abord, **« En attente »** ensuite. La
+liste **ne défile pas** : elle montre ce que la hauteur permet (jusqu'à **8** tâches) et,
+s'il y en a plus, la ligne **« + N autre(s) »** le dit — la liste complète reste dans le
+bouton **« Travail »**. Aucune tâche en cours ? La colonne affiche « **Aucune tâche en
+cours** », jamais du vide. La colonne s'arrête **avant le cercle** : elle ne le chevauche
+jamais, même avec un titre très long.
 
-Dans cette même colonne, **tout en haut**, le **portrait du personnage** apparaît en
-médaillon rond. **Aucun nom n'est écrit sous cette image** : le nom est **sous le cercle**,
-au centre de l'écran, et il y reste même quand il n'y a aucune image. Pas de personnage
-déposé par le projet **Présences** ? Il n'y a **aucune image de remplacement**, pas même le
-logo Pilot : la zone est simplement absente, la liste remonte et occupe alors **toute la
-hauteur**. Le
-portrait suit un éventuel changement de personnage sans redémarrer Pilot, et le haut de la
-colonne ne bouge pas quand il apparaît ou disparaît.
+Le **portrait du personnage** n'est plus dans la colonne : il est au **centre du cercle**, au
+plus la **moitié** de son intérieur, et son **nom** est écrit **juste en dessous**, sur une
+seule ligne — le nom du personnage, à défaut celui de votre assistant, jamais les deux. On
+voit donc toujours à qui l'on parle. Pas de personnage déposé par le projet **Présences** ?
+Il n'y a **aucune image de remplacement**, pas même le logo Pilot : le nom reste, seul, à la
+même place. Le portrait suit un éventuel changement de personnage sans redémarrer Pilot.
+
+Le bas de l'écran — la **barre de saisie** et ses boutons — **s'efface au repos** et revient
+au moindre mouvement de la souris : on parle à Pilot sans qu'une barre reste sous les yeux.
 
 Rien de tout cela ne se règle et rien n'est mémorisé : la largeur des colonnes est
 recalculée à chaque ouverture de l'écran et à chaque redimensionnement de la fenêtre. Les
@@ -711,11 +707,13 @@ rappel `pendingQuestionChromeSync` (appelé à chaque changement de la file des
 questions, pour que le bas revienne si une question arrive alors qu'il est
 effacé).
 
-## 4ter. L'état nu : tout masquer sauf le portrait (décision du 2026-10-29) — ✅ **livré**
+## 4ter. L'état nu : tout masquer d'un seul geste (décision du 2026-10-29, révisée) — ✅ **livré**
 
-Décision du propriétaire : **tout ce que l'écran Vocal affiche, sauf le portrait
-lui-même, peut être masqué puis remis** par un petit bouton discret. C'est un
-geste, pas un réglage : rien à mémoriser, rien à configurer.
+Décision du propriétaire : **tout ce que l'écran Vocal affiche peut être masqué
+puis remis** par un petit bouton discret. C'est un geste, pas un réglage : rien à
+mémoriser, rien à configurer. Le 2026-10-29, le portrait, alors dans la colonne,
+restait visible ; depuis qu'il est **au centre du disque** (mission « écran
+Vocal »), il s'éteint avec lui — voir la révision, plus bas.
 
 **Ce qui se masque — ensemble, d'un seul clic.** Le disque et ce qu'il porte
 (enveloppe de parole, arc de réflexion, couronne, bouton « Réveiller <Nom> »), la
@@ -725,9 +723,20 @@ redevient une simple bande. **Un seul état, pas de masquage séparé** (ni les
 colonnes seules, ni le bas seul) : deux interrupteurs voisins seraient un
 réglage déguisé, et le bas a déjà son effacement automatique (§4bis).
 
-**Ce qui reste, toujours.** Le **portrait** et la pastille de son nom — il ne
-bouge pas d'un pixel, sa place est conservée : c'est la seule exception, décidée
-par le propriétaire. Le **bouton d'affichage**, seul moyen de tout réafficher.
+**Ce qui reste, toujours.** Le **bouton d'affichage**, seul moyen de tout
+réafficher — et lui seul, depuis la révision ci-dessous.
+
+> **Révision (mission « écran Vocal ») — le portrait a rejoint le cercle.** Le
+> personnage n'est plus un médaillon de la colonne de droite : il est **au centre
+> du disque**, avec son nom juste dessous (§3ter). Il fait donc **partie de
+> l'objet lumineux** : le masquer séparément demanderait de démembrer le disque
+> (son anneau, sa couronne, son enveloppe et son arc sont peints par le même
+> nœud), ce qu'aucune décision ne demande. L'état nu éteint donc **le disque
+> entier**, portrait et nom compris : la seule exception du 2026-10-29 tombe
+> **parce que l'exception n'a plus d'objet**. **À confirmer par le propriétaire** :
+> si le portrait doit rester seul pendant que le disque s'éteint, c'est une
+> décision de plus, et elle change la forme du bloc d'effacement (le disque ne
+> peut plus être nommé en un seul sélecteur).
 Et, au-dessus de l'overlay, les **trois sorties** (le logo, `Échap`, la fermeture
 de l'onglet) et le bouton **« Travail »** : l'état nu ne les touche pas. Sans
 personnage actif (§3ter), il ne reste **que le bouton**, et le disque ne reste pas

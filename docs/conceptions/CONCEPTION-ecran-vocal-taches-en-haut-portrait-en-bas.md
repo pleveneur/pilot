@@ -1,5 +1,12 @@
 # CONCEPTION — Écran Vocal : les tâches en haut à droite, le portrait en bas
 
+> **PÉRIMÉ SUR TROIS POINTS (mission « écran Vocal », 2026-11)** : le portrait n'est plus
+> dans la colonne (il est au **centre du cercle**, son nom juste dessous), la **ligne
+> d'activité n'existe plus**, et la colonne des tâches **s'arrête avant la couronne** du
+> disque. Le document qui fait foi est l'**AVENANT** de
+> `CONCEPTION-ecran-vocal-portrait-et-colonnes.md` ; ce qui suit reste utile pour le
+> budget de la colonne et ses tableaux, mais ne décrit plus le code.
+
 > **Nature** : conception UI/UX, écrite pour être appliquée sans interprétation.
 > **Aucun fichier de code n'est modifié par ce document.**
 > **Précision du propriétaire, 2026-10-29** (à l'oral, après la version du même jour de

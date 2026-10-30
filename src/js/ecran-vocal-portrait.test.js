@@ -1,13 +1,13 @@
-// Tests — LOT 1 de l'ecran Vocal : LE PORTRAIT ET SON NOM
+// Tests — LE PORTRAIT DU PERSONNAGE ET SON NOM, DANS LE CERCLE
 // (docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md § 2.4 et
 // § 2.5 ; numerotation du premier jet conservee : T9, T16, T17).
 //
 // CE QUE CE FICHIER VERROUILLE :
-//   T9  — le portrait est un medaillon EN HAUT de la colonne de droite, pas du
-//         disque : dans `.vocal-side-tasks`, AVANT le conteneur de liste, 72 px,
-//         rond, sans repli sur le logo (revision du 2026-10-29 : le personnage
-//         d'abord, la liste dessous). AUCUN nom sous l'image : le nom est ecrit
-//         sous le bouton-cercle par la SEULE regle de nom du projet.
+//   T9  — le portrait est au CENTRE DU CERCLE (decision du proprietaire, mission
+//         « ecran Vocal ») : premier enfant de `.vocal-orb`, donc AVANT le halo
+//         et le bouton de relance, au plus la moitie de l'interieur du disque,
+//         centre, sans repli sur le logo. Le nom est DANS le disque, juste sous
+//         l'image, sur une seule ligne — c'est le SEUL nom de l'ecran.
 //   T16 — le lot n'ecrit RIEN : ni fichier, ni `localStorage`, ni config. L'etat
 //         des colonnes ne survit pas a la sortie de l'ecran.
 //   T17 — la sortie de l'ecran reste cliquable : les colonnes ne captent aucun
@@ -48,7 +48,7 @@ function corpsFonctionEntete(debut) {
 }
 
 // ---------------------------------------------------------------------------
-describe("T9 — le portrait est un medaillon EN HAUT de la colonne de droite", () => {
+describe("T9 — le portrait est au CENTRE DU CERCLE", () => {
   const build = corps("function buildVocalOverlay()", "function vocalStatusLine");
   // La colonne de droite, du debut de son balisage a sa fermeture.
   const colonne = sliceSource(
@@ -57,51 +57,76 @@ describe("T9 — le portrait est un medaillon EN HAUT de la colonne de droite", 
     "</aside>",
     20,
   );
-  // Le disque : du debut de son balisage a l'accolade… de son dernier enfant.
-  const disque = sliceSource(build, '<div class="vocal-orb">', "<aside ", 20);
+  // Le disque : de son ouverture au bouton de depannage du micro, qui le suit.
+  const disque = sliceSource(
+    build,
+    '<div class="vocal-orb">',
+    '<button type="button" class="vocal-mic-fix',
+    20,
+  );
 
-  it("il VIT dans la colonne de droite, et pas dans le disque", () => {
-    expect(colonne).toMatch(/class="vocal-portrait"/);
-    // AUCUN nom sous l'image (decision du proprietaire, 2026-10-29) : la
-    // pastille d'autrefois ne doit pas revenir par une ligne de balisage.
-    expect(colonne).not.toMatch(/vocal-portrait-name/);
-    // Aucun portrait dans le cercle : la question du contraste portrait / halo
-    // est close, elle ne doit pas revenir par une ligne de balisage.
-    expect(disque).not.toMatch(/class="vocal-portrait/);
+  it("il VIT dans le disque, et plus dans la colonne de droite", () => {
+    // Decision du proprietaire (mission « ecran Vocal ») : le personnage est au
+    // centre du cercle, la colonne de droite garde la liste des taches.
+    expect(disque).toMatch(/class="vocal-portrait"/);
+    expect(colonne).not.toMatch(/vocal-portrait/);
+    // AUCUN nom sous l'image, sinon le seul nom de l'ecran : la pastille
+    // d'autrefois ne doit pas revenir par une ligne de balisage.
+    expect(build).not.toMatch(/vocal-portrait-name/);
   });
 
-  it("il vient AVANT le conteneur de liste (revision du 2026-10-29)", () => {
-    const liste = colonne.indexOf("class=\"vocal-side-body\"");
-    const image = colonne.indexOf("class=\"vocal-portrait\"");
+  it("il vient AVANT le halo : la lueur d'ecoute et le bouton se peignent dessus", () => {
+    const image = disque.indexOf('class="vocal-portrait"');
+    const halo = disque.indexOf('class="vocal-halo"');
+    const relance = disque.indexOf('class="vocal-restart');
     expect(image).toBeGreaterThan(-1);
-    expect(liste).toBeGreaterThan(-1);
-    // LA ZONE D'IMAGE EST EN HAUT, LA LISTE DESSOUS : le personnage d'abord.
-    expect(image).toBeLessThan(liste);
+    expect(halo).toBeGreaterThan(image);
+    expect(relance).toBeGreaterThan(halo);
   });
 
-  it("le CSS en fait un medaillon de 72 px, rond, qui ne capte pas le clic", () => {
+  it("le CSS le CENTRE et le borne a la moitie de l'interieur du cercle", () => {
     const portrait = sliceSource(CSS, ".vocal-portrait {", "}", 10);
-    expect(portrait).toMatch(/width:\s*72px/);
-    expect(portrait).toMatch(/height:\s*72px/);
+    // Au plus la moitie du disque : 168 px pour 336, sans une valeur en dur.
+    expect(portrait).toMatch(/width:\s*calc\(var\(--vocal-orb-size\)\s*\/\s*2\)/);
+    expect(portrait).toMatch(/height:\s*calc\(var\(--vocal-orb-size\)\s*\/\s*2\)/);
+    // CENTRE : pose en absolu sur le milieu du disque, ramene de sa propre
+    // moitie — il ne prend aucune place dans la grille.
+    expect(portrait).toMatch(/position:\s*absolute/);
+    expect(portrait).toMatch(/left:\s*50%/);
+    expect(portrait).toMatch(/top:\s*50%/);
+    expect(portrait).toMatch(/transform:\s*translate\(-50%,\s*-50%\)/);
+    // Rond, garni, jamais cliquable.
     expect(portrait).toMatch(/border-radius:\s*50%/);
     expect(portrait).toMatch(/object-fit:\s*cover/);
     expect(portrait).toMatch(/pointer-events:\s*none/);
+    // Le medaillon de 72 px de la colonne n'existe plus nulle part.
+    expect(CSS).not.toMatch(/\.vocal-portrait\s*\{[^}]*72px/);
   });
 
-  it("le nom est SOUS le bouton-cercle, en absolu, et ne capte jamais le clic", () => {
+  it("le nom est DANS le disque, juste sous l'image, sur une seule ligne", () => {
     const nom = sliceSource(CSS, ".vocal-orb-name {", "}", 10);
-    // En absolu sous le disque : il ne prend aucune place dans la grille et ne
-    // peut donc pas deplacer le cercle.
+    // En absolu sous l'image (le portrait vaut la moitie du disque et il est
+    // centre : son bas est a 50 % + 25 %), plus les 6 px d'ecart du projet.
     expect(nom).toMatch(/position:\s*absolute/);
-    expect(nom).toMatch(/top:\s*calc\(100% \+ 6px\)/);
+    expect(nom).toMatch(/top:\s*calc\(75% \+ 6px\)/);
     expect(nom).toMatch(/font-size:\s*var\(--font-sm\)/);
-    // Un nom long est coupe par des points de suspension : la colonne ne
-    // s'elargit pas pour lui.
+    // Une seule ligne, jamais deux noms : coupe par des points de suspension,
+    // et borne a 66 % du disque pour ne jamais toucher l'anneau.
+    expect(nom).toMatch(/white-space:\s*nowrap/);
     expect(nom).toMatch(/text-overflow:\s*ellipsis/);
+    expect(nom).toMatch(/max-width:\s*66%/);
     expect(nom).toMatch(/pointer-events:\s*none/);
     expect(nom).not.toMatch(/pointer-events:\s*auto/);
-    // L'ancienne pastille sous l'image n'existe plus.
+    // L'ancienne pastille sous le bouton-cercle n'existe plus.
     expect(CSS).not.toContain(".vocal-portrait-name");
+  });
+
+  it("le nom est cree DANS le disque, une seule fois, apres le modele", () => {
+    const cree = corpsFonctionEntete("function buildVocalOrbName(");
+    expect(cree).toMatch(/"vocal-orb-name"/);
+    expect(cree).toMatch(/disque\.appendChild\(nom\)/);
+    // Il est pose sur le disque, jamais sur la colonne ni sur l'ecran entier.
+    expect(build).toMatch(/buildVocalOrbName\(ov\.querySelector\("\.vocal-orb"\)\)/);
   });
 
   it("la source du portrait est getAssistantPortrait(), SANS repli sur le logo", () => {
@@ -130,6 +155,10 @@ describe("T9 — le portrait est un medaillon EN HAUT de la colonne de droite", 
     // Et il est ecrit meme quand il n'y a aucun personnage : le nom de
     // l'Assistant prend alors la place, il n'est jamais vide.
     expect(nom).not.toMatch(/hidden\s*=\s*true/);
+    // UN seul nom a l'ecran : la classe du nom est creee a UN seul endroit
+    // (`buildVocalOrbName`), et le balisage n'en porte aucune autre.
+    expect((SUPER.match(/"vocal-orb-name"/g) || [])).toHaveLength(1);
+    expect(SUPER).not.toMatch(/class="vocal-[a-z-]*-name"/);
   });
 
   it("il suit le personnage au MEME point d'application que le bouton de relance", () => {
@@ -155,10 +184,9 @@ describe("T9 — le portrait est un medaillon EN HAUT de la colonne de droite", 
   it("il est pose a l'ENTREE du mode, avant la ligne d'etat", () => {
     const entree = corps("function enterVocal()", "function exitVocal()");
     expect(entree).toMatch(/applyVocalPortrait\(vocalOverlay\)/);
-    // L'ORDRE des dernieres lignes : le nom sous le cercle, le portrait, puis
-    // l'etat, puis la largeur des colonnes (celle-ci n'utilise que la fenetre et
-    // le personnage, mais elle vient en dernier pour ne jamais etre recalculee
-    // deux fois).
+    // L'ORDRE des dernieres lignes : le nom dans le disque, le portrait, puis
+    // l'etat, puis la largeur des colonnes (celle-ci vient en dernier pour ne
+    // jamais etre recalculee deux fois).
     expect(entree).toMatch(
       /applyVocalOrbName\(vocalOverlay\);\s*applyVocalPortrait\(vocalOverlay\);\s*[\s\S]*?applyVocalState\(\);[\s\S]*vocalSyncSides\(\);[\s\S]*addEventListener\("resize", vocalSyncSides\);/,
     );

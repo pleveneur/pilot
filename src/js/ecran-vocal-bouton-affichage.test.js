@@ -410,11 +410,17 @@ describe("7. ce qui se masque — et ce qui ne se masque JAMAIS", () => {
     // sont deja coupes par l'effacement du bas.
     expect(blocSaisie()).toMatch(/opacity:\s*0/);
     expect(blocSaisie()).toMatch(/visibility:\s*hidden/);
-    // La colonne des taches se vide de son CONTENU (titre, liste, activite) :
-    // elle ne peut pas etre eteinte en bloc, le portrait vit dedans.
+    // La colonne des taches se vide de son CONTENU (titre, liste) : elle ne peut
+    // pas etre eteinte en bloc, la ZONE D'IMAGE y vit et sa hauteur reservee ne
+    // doit pas bouger.
     expect(effacement).toContain(".vocal-side-tasks > .vocal-tasks-title");
     expect(effacement).toContain(".vocal-side-tasks > .vocal-side-body");
-    expect(effacement).toContain(".vocal-side-tasks > .vocal-now");
+    // LA LIGNE D'ACTIVITE N'EXISTE PLUS (mission « ecran Vocal », point 1) : la
+    // fonction `vocalNowLine` et son noeud `.vocal-now` sont partis ensemble, et
+    // le test qui les decrivait est retire avec eux — aucun selecteur ne doit
+    // rester ici pour une chose qui n'existe plus.
+    expect(effacement).not.toContain(".vocal-now");
+    expect(CSS).not.toMatch(/\.vocal-now/);
   });
 
   it("le clic sur la saisie n'est coupe que par l'effacement du bas (verrou #381)", () => {

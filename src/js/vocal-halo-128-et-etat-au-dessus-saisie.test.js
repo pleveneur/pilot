@@ -304,16 +304,17 @@ describe("5. la phrase d'etat est AU-DESSUS de la barre de saisie", () => {
       "vocal-top",
       "vocal-stage",
       "vocal-orb",
+      // Mission « ecran Vocal » : le portrait est au CENTRE DU DISQUE, premier
+      // enfant de `.vocal-orb` — donc avant le halo et le bouton de relance.
+      "vocal-portrait",
       "vocal-halo",
       "vocal-restart",
       "vocal-mic-fix",
-      // LOT 1 : les deux colonnes laterales et le portrait de la colonne droite.
-      // Revision du 2026-10-29 : le portrait est EN HAUT, AU-DESSUS de la liste
-      // (l'ordre du balisage suit l'ordre de l'ecran), et le nom n'est plus une
-      // pastille sous l'image : il est sous le bouton-cercle.
+      // LOT 1 : les deux colonnes laterales et leur conteneur de liste. Le
+      // personnage n'est plus dans la colonne, et le nom est cree apres le
+      // modele (aucune entree de plus dans cette liste).
       "vocal-side-discussion",
       "vocal-side-tasks",
-      "vocal-portrait",
       "vocal-side-body",
       "vocal-status",
       "vocal-input",
