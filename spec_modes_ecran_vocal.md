@@ -391,16 +391,36 @@ montre **un**, une colonne de 331 px et plus en montre **deux** — c'est un rap
 ce qui vient d'être dit, pas un journal.
 
 **Rien n'est déplacé, rien n'est copié.** `collectVocalDiscussion()`
-(`super-agent.js`) ne fait que **lire** — `.agent-message-user` /
-`.agent-message-assistant` du chat, et le texte de la **bulle**, jamais la rangée
-d'actions qui porte « 🔊 Écouter » — et `vocalRenderDiscussion()`, appelée par
-`vocalSyncSides()`, en recopie le texte. **Un seul point de peinture**, comme pour
-les tâches. Aucun nœud de conversation n'entre dans l'écran, aucun n'est cloné, vidé
-ni déplacé ; les messages système, les blocs d'outils et les réflexions ne sont pas
-repris. Le titre et le corps sont **créés à la peinture**, comme ceux de la colonne
-de droite : le balisage de `buildVocalOverlay()` ne gagne **aucun** nœud et la liste
-ordonnée des classes ne bouge pas. Une écriture n'a lieu que si le texte change, et
-le tic de 900 ms repasse donc sans faire clignoter la colonne.
+(`super-agent.js`) ne fait que **lire** les deux familles du chat
+(`.agent-message-user` / `.agent-message-assistant`), et `vocalRenderDiscussion()`,
+appelée par `vocalSyncSides()`, en recopie le texte. **Un seul point de peinture**,
+comme pour les tâches. Aucun nœud de conversation n'entre dans l'écran, aucun n'est
+cloné, vidé ni déplacé.
+
+**Ce qui est lu, exactement** (correctif du 2026-11 : la colonne restait **vide** —
+elle ne peignait que son titre) :
+
+- pour le propriétaire, le texte de sa **bulle**, la rangée d'étiquettes de projet
+  (« 📁 nom ») retirée — ce n'est pas une parole — et jamais la rangée d'actions qui
+  porte « 🔊 Écouter » ;
+- pour l'assistant, les **seules sections de texte** de la réponse
+  (`.agent-text-section`). La **réflexion** et les **lignes d'outils** vivent dans la
+  **même bulle** : lire la bulle entière les ferait paraître. On ne cite donc pas ce
+  qu'on refuse, on ne lit que ce qu'on accepte (liste blanche) ;
+- puis le **filtre unique** `vocalSpeechTurns()` (`src/js/vocal-discussion-turns.js`,
+  **pur**) : seuls les rôles `user` / `assistant` passent ; un message système, une
+  trace, un diff, une réflexion, un appel d'outil ou son résultat n'entre **jamais**,
+  même quand son rôle ressemble à celui d'une réponse.
+
+Le **corps** de la colonne de gauche est désormais **créé à la peinture** (le balisage
+statique ne porte que celui de la colonne de droite), posé **sous le titre** ; sans lui
+la peinture s'arrêtait, et c'est la cause exacte de la colonne vide. Le corps **défile
+jusqu'au dernier message écrit** : le plus récent reste visible sans aucun geste. La
+mise à jour est **celle du tic existant** (900 ms), sans seconde horloge, et le corps
+n'est réécrit que si le texte change (`data-vocal-discussion`). Le titre et le corps
+sont créés à la peinture, comme ceux de la colonne de droite : le balisage de
+`buildVocalOverlay()` ne gagne **aucun** nœud et la liste ordonnée des classes ne
+bouge pas.
 
 **Aucun réglage, aucune persistance** : l'aperçu est recalculé à chaque entrée dans le
 mode et à chaque tic. La colonne ne capte **aucun clic** (six hôtes, pas sept — §8bis),

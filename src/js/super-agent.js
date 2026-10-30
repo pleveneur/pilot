@@ -238,6 +238,12 @@ import {
   VOCAL_DISCUSSION_TITLE,
   VOCAL_DISCUSSION_MAX_MESSAGES,
 } from "./vocal-sides.js";
+// LE FILTRE DE LA COLONNE DE GAUCHE (correctif « la colonne restait vide ») :
+// ce qui a ete DIT, et rien d'autre. Ce module pur decide quels messages sont
+// des tours de parole (proprietaire / assistant) ; il ecarte les reflexions, les
+// appels d'outils et leurs resultats, les messages systeme, les traces et les
+// diffs. Une seule regle, testee sur elle-meme (vocal-discussion-turns.test.js).
+import { vocalSpeechTurns } from "./vocal-discussion-turns.js";
 // LA ZONE D'IMAGE DE L'ECRAN VOCAL (complement du 2026-10-29, § 7bis) : la
 // fenetre du VISAGE (PLface) se pose dans la zone d'image par la SEULE
 // passerelle existante du visage (`face-gateway.js`, la meme que les outils de
@@ -2386,9 +2392,21 @@ function vocalRenderColumn(plan) {
  * (les classes existantes du chat). Les messages systeme, les blocs d'outils et
  * les reflexions ne sont PAS repris — un apercu, pas un journal technique.
  *
+ * CE QUI EST LU, EXACTEMENT (correctif « la colonne restait vide ») :
+ *   - pour le proprietaire, le texte de sa BULLE, moins la rangee d'etiquettes
+ *     de projet (« 📁 nom ») que le chat y pose et qui n'est pas une parole ;
+ *   - pour l'assistant, les SEULES sections de texte de la reponse
+ *     (`.agent-text-section`). La reflexion (`.agent-thinking`), les lignes
+ *     d'outils et leurs resultats vivent dans la MEME bulle : lire la bulle
+ *     entiere les ferait paraitre. On ne cite donc pas ce qu'on refuse, on ne
+ *     lit que ce qu'on accepte (liste blanche).
+ *   - puis le FILTRE unique de `vocal-discussion-turns.js` : un message qui
+ *     n'est pas un tour de parole n'entre pas, meme s'il ressemble a une
+ *     reponse.
+ *
  * Seuls les `VOCAL_DISCUSSION_MAX_MESSAGES` derniers sont lus, mais le NOMBRE
- * TOTAL est rendu : les plus anciens ne sont pas lus et doivent pourtant etre
- * comptes dans « ... et N echange(s) plus haut ».
+ * TOTAL de tours de parole est rendu : les plus anciens ne sont pas lus et
+ * doivent pourtant etre comptes dans « ... et N echange(s) plus haut ».
  *
  * @returns {{messages:Array<{role:string, text:string}>, total:number}}
  */
@@ -2396,23 +2414,46 @@ function collectVocalDiscussion() {
   const zone = superMessagesEl;
   if (!zone || typeof zone.querySelectorAll !== "function") return { messages: [], total: 0 };
   const noeuds = zone.querySelectorAll(".agent-message-user, .agent-message-assistant");
-  const total = noeuds.length;
-  if (!total) return { messages: [], total: 0 };
-  const debut = Math.max(0, total - VOCAL_DISCUSSION_MAX_MESSAGES);
-  const messages = [];
-  for (let i = debut; i < total; i++) {
+  if (!noeuds.length) return { messages: [], total: 0 };
+  const lus = [];
+  for (let i = 0; i < noeuds.length; i++) {
     const el = noeuds[i];
-    if (!el) continue;
+    if (!el || !el.classList) continue;
+    const estUtilisateur = el.classList.contains("agent-message-user");
     // La BULLE, jamais le message entier : la rangee d'actions (bouton
     // « Ecouter ») est posee a cote d'elle et son libelle ne fait pas partie
     // de ce qui a ete dit.
     const bulle = typeof el.querySelector === "function" ? el.querySelector(".agent-bubble") : null;
-    const texte = String((bulle || el).textContent || "");
-    if (!texte.trim()) continue;
-    const estUtilisateur = !!(el.classList && el.classList.contains("agent-message-user"));
-    messages.push({ role: estUtilisateur ? "user" : "assistant", text: texte });
+    const source = bulle || el;
+    let texte = "";
+    if (estUtilisateur) {
+      // CE QUE LE PROPRIETAIRE A DIT. L'etiquette de projet n'est pas une
+      // parole : son libelle est retire du texte lu.
+      texte = String(source.textContent || "");
+      const etiquettes =
+        typeof source.querySelector === "function" ? source.querySelector(".agent-project-badges") : null;
+      if (etiquettes) {
+        const libelle = String(etiquettes.textContent || "");
+        if (libelle) texte = texte.split(libelle).join(" ");
+      }
+    } else {
+      // CE QUE L'ASSISTANT A REPONDU : les seules sections de texte.
+      const sections =
+        typeof source.querySelectorAll === "function" ? source.querySelectorAll(".agent-text-section") : [];
+      const morceaux = [];
+      for (let j = 0; j < sections.length; j++) {
+        const section = String(sections[j].textContent || "");
+        if (section.trim()) morceaux.push(section);
+      }
+      texte = morceaux.join("\n\n");
+    }
+    lus.push({ role: estUtilisateur ? "user" : "assistant", text: texte });
   }
-  return { messages, total };
+  const messages = vocalSpeechTurns(lus);
+  const total = messages.length;
+  if (!total) return { messages: [], total: 0 };
+  const debut = Math.max(0, total - VOCAL_DISCUSSION_MAX_MESSAGES);
+  return { messages: messages.slice(debut), total };
 }
 
 /**
@@ -2466,12 +2507,23 @@ function vocalRenderDiscussion(plan) {
   if (titre && titre.textContent !== VOCAL_DISCUSSION_TITLE) {
     titre.textContent = VOCAL_DISCUSSION_TITLE;
   }
-  const corps = colonne.querySelector(".vocal-side-body");
+  // LE CORPS DE LA COLONNE, CREE ICI (correctif « la colonne restait vide »).
+  // La colonne de droite porte son `.vocal-side-body` dans le balisage statique
+  // de l'overlay ; celle de GAUCHE n'en avait aucun, et cette fonction sortait
+  // donc par `if (!corps) return;` : le titre « DISCUSSION » etait peint, le
+  // contenu jamais. Le noeud est cree une seule fois, APRES le titre (`"last"`)
+  // — l'apercu tombe donc au bas de la colonne, sous le titre.
+  const corps = vocalColumnNode(colonne, ".vocal-side-body", "last");
   if (!corps) return;
   const html = buildVocalDiscussionHtml(vue);
   if (corps.getAttribute("data-vocal-discussion") !== html) {
     corps.innerHTML = html;
     corps.setAttribute("data-vocal-discussion", html);
+    // LE PLUS RECENT RESTE VISIBLE. Le corps est deja colle au bas
+    // (`justify-content: flex-end`) ; ce defilement explicite tient aussi le
+    // cas d'un contenu plus haut que la place disponible : on ne demande jamais
+    // a l'utilisateur de faire defiler une colonne qui n'a aucun geste.
+    corps.scrollTop = corps.scrollHeight;
   }
   const plus = vue.hidden > 0 ? "1" : "0";
   if (colonne.getAttribute("data-vocal-more") !== plus) {
