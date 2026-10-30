@@ -1964,17 +1964,32 @@ apprend et répond.
   nom** et affiche **son portrait** à la place de l'icône 🧭 : dans le titre de
   l'onglet 🧭, dans la **liste des agents** (cercle en haut à droite) et, en
   mode « Assistant seul », dans l'accueil (« Bonjour, je suis … ») et dans le
-  cercle.
-- **Aucun personnage actif** (aucun fichier déposé) : rien ne change —
-  l'Assistant garde le nom réglé dans **Options ⚙️ → Assistant** et son icône
-  habituelle. Ce n'est **pas une panne** : aucun message, aucune erreur.
-- **Changer de personnage ne demande aucun redémarrage** : l'Assistant relit le
-  personnage **au démarrage**, **à l'ouverture de son onglet** et **quand la
-  fenêtre reprend le focus**. Ce même relevé alimente toutes les surfaces qui
-  affichent son nom (titre de l'onglet, liste des agents, écran Vocal), pas
+  cercle (et, dans l'écran Vocal, sur le portrait de la scène).
+- **Aucun personnage actif** (aucun fichier déposé, ou Présences l'a
+  **désactivé**) : rien ne change — l'Assistant garde le nom réglé dans
+  **Options ⚙️ → Assistant** et son icône habituelle. Ce n'est **pas une
+  panne** : aucun message, aucune erreur.
+- **Activer ou désactiver un personnage ne demande aucun redémarrage** :
+  l'Assistant relit le personnage **au démarrage**, **à l'ouverture de son
+  onglet**, **quand la fenêtre reprend le focus** et — c'est ce qui manquait —
+  **dès que les fichiers du personnage changent**, même sans changer de
+  fenêtre (écran Vocal, « Assistant seul »). La mise à jour se voit en quelques
+  secondes. Ce même relevé alimente toutes les surfaces qui affichent son nom
+  et son portrait (titre de l'onglet, liste des agents, écran Vocal), pas
   seulement l'onglet ouvert.
+- **Un personnage désactivé ne laisse RIEN à l'écran** : le nom de l'onglet est
+  **recalculé** (nom réglé, sinon « Assistant ») et la photo est remplacée par la
+  silhouette habituelle — elle n'est pas seulement déplacée ou grisée.
+- **« Aucun personnage » n'est jamais un nom** : c'est la phrase par laquelle
+  Présences déclare une absence. Elle n'est donc jamais affichée.
+- **L'ancien dossier de données de Pilot n'a plus la parole** : si le dossier
+  personnel du personnage existe et déclare une absence (ou ne contient plus
+  rien), Pilot **ne retombe jamais** sur une ancienne copie
+  (`<données de l'application>\.pilot\portrait`), même pour l'image. Une vieille
+  photo résiduelle ne peut donc plus réapparaître.
 - Pilot **ne fait que lire** ces informations : il ne crée ni ne modifie jamais
-  le dossier du personnage, et il n'écrit rien dedans.
+  le dossier du personnage, et il n'écrit rien dedans. Il ne supprime rien non
+  plus : une ancienne image est simplement **ignorée**.
 - Le nom réglé dans les paramètres reste le **repli** : il réapparaît dès qu'il
   n'y a plus de personnage actif.
 <!-- /HELP:super-agent-personnage -->

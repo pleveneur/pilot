@@ -219,6 +219,7 @@ import {
   getAssistantPortrait,
   personaDisplayName,
   refreshAssistantPersona,
+  startAssistantPersonaWatch,
 } from "./assistant-persona.js";
 // LOT 1 (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.4) : la largeur des
 // deux colonnes laterales de l'ecran Vocal — decision PURE, une seule formule.
@@ -2860,6 +2861,29 @@ export async function refreshAssistantPersonaAndApply() {
     /* refreshAssistantPersona ne lève pas ; garde-fou si son contrat changeait */
   }
   return applyAssistantPersonaUi();
+}
+
+/**
+ * Démarre le DÉTECTEUR DE CHANGEMENT du personnage (activation ou désactivation
+ * dans Présences → mise à jour sans redémarrer Pilot).
+ *
+ * Le détecteur ne lit JAMAIS le personnage : il compare une empreinte légère
+ * (date + taille de `nom.txt` et de `portrait.png`) et, quand elle change, il
+ * passe par le mécanisme EXISTANT `refreshAssistantPersonaAndApply` — lecture
+ * unique côté Rust, application unique côté interface (onglet 🧭, liste des
+ * agents, bouton de relance de l'écran Vocal, portrait et titre du héros).
+ *
+ * Idempotent : un seul intervalle pour toute l'application, aucun réglage.
+ * Fail-open : socle absent ou panne d'IPC → l'affichage reste celui d'avant.
+ *
+ * @returns {object} le détecteur (pour l'arrêt)
+ */
+export function startPersonaWatch() {
+  return startAssistantPersonaWatch({
+    onChange: () => {
+      refreshAssistantPersonaAndApply().catch(() => {});
+    },
+  });
 }
 
 /**

@@ -20,6 +20,25 @@
 //   - l'état vit en MÉMOIRE seulement : aucun réglage nouveau, aucune
 //     persistance. Une relecture suffit à changer de personnage.
 //
+// ── RÈGLE DE PRIORITÉ (le Rust en est l'autorité, `src-tauri/src/persona.rs`) ──
+//   a. le premier dépôt PERSONNEL qui existe (dossier désigné par Présences, puis
+//      `<dossier personnel>/.pilot/portrait`) fait autorité et ferme la recherche :
+//      un dossier qui existe a « parlé », même vide ;
+//   b. « Aucun personnage » dans `nom.txt` est une DÉCLARATION D'ABSENCE, jamais un
+//      nom : elle donne le nom réglé (ou « Assistant »), et aucune image ;
+//   c. le dépôt historique de Pilot (`<app_data_dir>/.pilot/portrait`) ne fournit
+//      que le nom, JAMAIS son image : une vieille image résiduelle ne peut plus
+//      réapparaître. Pilot ne la supprime pas, il l'ignore.
+//
+// ── MISE À JOUR SANS REDÉMARRER ──
+// Le personnage est relu au démarrage, à l'ouverture de l'onglet 🧭, au retour de
+// focus ET — c'est ce qui manquait — dès que son EMPREINTE change sur le disque
+// (`createPersonaWatcher` : date + taille des deux fichiers, contenu jamais lu).
+// Une activation ou une désactivation dans Présences se voit donc en quelques
+// secondes, y compris quand la fenêtre ne perd jamais le focus (écran Vocal).
+// Ce détecteur ne lit pas le personnage : il dit seulement QUAND relire, par le
+// mécanisme existant (`refreshAssistantPersona`).
+//
 // Ce que ce module ne fait PAS : aucun DOM (il ne décide que de valeurs que
 // super-agent.js et tabs.js appliquent), aucune écriture, aucun second mécanisme
 // de nom (le nom réglé dans ⚙️ → Assistant reste le repli).
@@ -43,6 +62,25 @@ export const PERSONA_NAME_MAX_CHARS = 60;
 /** Taille maximale d'un portrait affichable (8 Mio, même borne que le Rust). */
 export const PERSONA_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Phrases par lesquelles Présences déclare qu'il n'y a AUCUN personnage actif
+ * (elle les écrit dans `nom.txt`). Mêmes valeurs que le Rust
+ * (`PERSONA_NO_CHARACTER_MARKERS`) : ce n'est pas un nom, c'est une déclaration
+ * d'absence. La comparaison ignore la casse et les accents.
+ */
+export const PERSONA_NO_CHARACTER_MARKERS = [
+  "aucun personnage",
+  "aucun personnage actif",
+  "pas de personnage",
+  "no character",
+];
+
+/** Commande Rust de l'empreinte légère du personnage (date + taille des fichiers). */
+export const PERSONA_STAMP_COMMAND = "read_assistant_persona_stamp";
+
+/** Intervalle de comparaison de l'empreinte (aucun réglage utilisateur). */
+export const PERSONA_WATCH_MS = 2000;
+
 /** Chemin du dossier, tel que le contrat le nomme (documentation et tests). */
 export const PERSONA_DIR_LABEL = `${PERSONA_DIR}/${PERSONA_SUBDIR}`;
 
@@ -56,6 +94,40 @@ export function personaDirFor(appDataDir) {
   const base = String(appDataDir == null ? "" : appDataDir).replace(/[\\/]+$/, "");
   if (!base) return PERSONA_DIR_LABEL;
   return `${base.replace(/\\/g, "/")}/${PERSONA_DIR}/${PERSONA_SUBDIR}`;
+}
+
+/**
+ * Vrai si le contenu de `nom.txt` est la DÉCLARATION EXPLICITE d'une absence de
+ * personnage (« Aucun personnage », casse et accents indifférents). Fonction
+ * PURE. Le Rust fait la même reconnaissance (`declares_no_character`) : ici elle
+ * protège l'affichage d'une valeur qui aurait échappé au socle.
+ * @param {unknown} raw - contenu brut (ou valeur quelconque)
+ * @returns {boolean}
+ */
+export function isNoCharacterDeclaration(raw) {
+  if (typeof raw !== "string") return false;
+  const premiere = raw
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l !== "");
+  if (!premiere) return false;
+  const plat = Array.from(premiere)
+    .filter((c) => {
+      const code = c.codePointAt(0) || 0;
+      return !(code < 0x20 || code === 0x7f);
+    })
+    .join("")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  const compact = plat
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ")
+    .replace(/[.!…;:\s]+$/, "");
+  return PERSONA_NO_CHARACTER_MARKERS.includes(compact);
 }
 
 /**
@@ -83,6 +155,10 @@ export function normalizePersonaName(raw) {
     .join("")
     .trim();
   if (!propre) return "";
+  // « Aucun personnage » est la phrase par laquelle Présences dit qu'il n'y a
+  // pas de personnage : ce n'est pas un nom, et elle ne doit jamais s'afficher
+  // dans l'onglet. Même reconnaissance que le Rust.
+  if (isNoCharacterDeclaration(propre)) return "";
   return Array.from(propre).slice(0, PERSONA_NAME_MAX_CHARS).join("").trim();
 }
 
@@ -215,4 +291,143 @@ export async function refreshAssistantPersona(deps = {}) {
     });
   }
   return setAssistantPersona(await refreshInFlight);
+}
+
+// ── Détecteur de CHANGEMENT du personnage (activation / désactivation) ──────
+//
+// L'état du personnage n'était relu qu'au démarrage, à l'ouverture de l'onglet 🧭
+// et au retour de focus de la fenêtre. Le propriétaire qui reste dans Pilot
+// (écran Vocal, « Assistant seul ») ne déclenche AUCUN de ces trois moments :
+// activer ou désactiver un personnage dans Présences ne changeait donc rien à
+// l'écran tant que Pilot n'avait pas redémarré (photo encore affichée, nom de
+// l'onglet figé).
+//
+// Ce n'est PAS une seconde lecture du personnage : on compare une empreinte
+// LÉGÈRE (date + taille de `nom.txt` et `portrait.png`, contenu jamais lu) et,
+// quand elle change, on relit le personnage par le mécanisme EXISTANT
+// (`refreshAssistantPersona` → `refreshAssistantPersonaAndApply`). Aucune
+// image n'est relue, ni même lue, tant que rien n'a changé.
+//
+// Pourquoi une comparaison et pas un minuteur qui relit : une `data:` URL de
+// portrait pèse plusieurs mégaoctets ; la relire toutes les deux secondes
+// coûterait cher pour rien.
+
+/**
+ * Crée le détecteur de changement du personnage.
+ *
+ * Fail-open de bout en bout : une commande absente, une réponse d'une autre
+ * forme ou une panne d'IPC laisse simplement l'affichage tel quel (aucune
+ * exception, aucun message, aucune trace console). Un seul intervalle à la fois,
+ * et jamais deux comparaisons simultanées.
+ *
+ * @param {{
+ *   onChange?: (empreinte: string) => void,
+ *   invoke?: (cmd: string) => Promise<unknown>,
+ *   intervalMs?: number,
+ *   setInterval?: Function,
+ *   clearInterval?: Function,
+ * }} [deps] injections (tests) ; par défaut : la commande Rust réelle
+ * @returns {{start: Function, stop: Function, isRunning: Function, tick: Function,
+ *            getReference: () => string|null, getChanges: () => number}}
+ */
+export function createPersonaWatcher(deps = {}) {
+  const invokeFn = typeof deps.invoke === "function" ? deps.invoke : invoke;
+  const onChange = typeof deps.onChange === "function" ? deps.onChange : () => {};
+  const intervalMs =
+    Number.isFinite(deps.intervalMs) && deps.intervalMs > 0
+      ? Number(deps.intervalMs)
+      : PERSONA_WATCH_MS;
+  const setIntervalFn =
+    typeof deps.setInterval === "function" ? deps.setInterval : setInterval;
+  const clearIntervalFn =
+    typeof deps.clearInterval === "function" ? deps.clearInterval : clearInterval;
+  let timer = null;
+  // Empreinte de référence : `null` tant que la première comparaison n'a pas eu
+  // lieu (le premier tick ne declenche donc aucune relecture : l'etat vient
+  // d'etre lu au demarrage).
+  let reference = null;
+  let comparing = false;
+  let changes = 0;
+
+  /** Compare l'empreinte courante à la référence. Vrai si elle a changé. */
+  async function tick() {
+    if (comparing) return false;
+    comparing = true;
+    try {
+      let empreinte;
+      try {
+        empreinte = await invokeFn(PERSONA_STAMP_COMMAND);
+      } catch (_) {
+        return false; // socle absent : on ne conclut rien
+      }
+      const valeur = typeof empreinte === "string" ? empreinte : "";
+      if (reference === null) {
+        reference = valeur;
+        return false;
+      }
+      if (valeur === reference) return false;
+      reference = valeur;
+      changes += 1;
+      try {
+        onChange(valeur);
+      } catch (_) {
+        /* l'affichage ne doit jamais casser le détecteur */
+      }
+      return true;
+    } finally {
+      comparing = false;
+    }
+  }
+
+  return {
+    start() {
+      if (timer !== null) return; // idempotent : un seul intervalle
+      timer = setIntervalFn(() => {
+        tick();
+      }, intervalMs);
+      // Un minuteur ne doit pas retenir un processus de test en vie.
+      if (timer && typeof timer.unref === "function") timer.unref();
+    },
+    stop() {
+      if (timer !== null) {
+        clearIntervalFn(timer);
+        timer = null;
+      }
+    },
+    isRunning() {
+      return timer !== null;
+    },
+    tick,
+    getReference() {
+      return reference;
+    },
+    getChanges() {
+      return changes;
+    },
+  };
+}
+
+/** Détecteur unique de l'application (aucun second minuteur, aucun réglage). */
+let assistantPersonaWatch = null;
+
+/**
+ * Démarre le détecteur (idempotent) : `onChange` doit relire ET réappliquer le
+ * personnage par le chemin existant.
+ * @param {Parameters<typeof createPersonaWatcher>[0]} [deps]
+ */
+export function startAssistantPersonaWatch(deps = {}) {
+  if (!assistantPersonaWatch) assistantPersonaWatch = createPersonaWatcher(deps);
+  assistantPersonaWatch.start();
+  return assistantPersonaWatch;
+}
+
+/** Arrête le détecteur (aucun intervalle ne survit à l'appel). */
+export function stopAssistantPersonaWatch() {
+  if (assistantPersonaWatch) assistantPersonaWatch.stop();
+  return assistantPersonaWatch;
+}
+
+/** Détecteur courant (tests et arrêt), ou `null` s'il n'a jamais démarré. */
+export function getAssistantPersonaWatch() {
+  return assistantPersonaWatch;
 }

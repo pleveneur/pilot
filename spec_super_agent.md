@@ -48,17 +48,32 @@ apprend et répond.
   nom** et affiche **son portrait** à la place de l'icône 🧭 : dans le titre de
   l'onglet 🧭, dans la **liste des agents** (cercle en haut à droite) et, en
   mode « Assistant seul », dans l'accueil (« Bonjour, je suis … ») et dans le
-  cercle.
-- **Aucun personnage actif** (aucun fichier déposé) : rien ne change —
-  l'Assistant garde le nom réglé dans **Options ⚙️ → Assistant** et son icône
-  habituelle. Ce n'est **pas une panne** : aucun message, aucune erreur.
-- **Changer de personnage ne demande aucun redémarrage** : l'Assistant relit le
-  personnage **au démarrage**, **à l'ouverture de son onglet** et **quand la
-  fenêtre reprend le focus**. Ce même relevé alimente toutes les surfaces qui
-  affichent son nom (titre de l'onglet, liste des agents, écran Vocal), pas
+  cercle (et, dans l'écran Vocal, sur le portrait de la scène).
+- **Aucun personnage actif** (aucun fichier déposé, ou Présences l'a
+  **désactivé**) : rien ne change — l'Assistant garde le nom réglé dans
+  **Options ⚙️ → Assistant** et son icône habituelle. Ce n'est **pas une
+  panne** : aucun message, aucune erreur.
+- **Activer ou désactiver un personnage ne demande aucun redémarrage** :
+  l'Assistant relit le personnage **au démarrage**, **à l'ouverture de son
+  onglet**, **quand la fenêtre reprend le focus** et — c'est ce qui manquait —
+  **dès que les fichiers du personnage changent**, même sans changer de
+  fenêtre (écran Vocal, « Assistant seul »). La mise à jour se voit en quelques
+  secondes. Ce même relevé alimente toutes les surfaces qui affichent son nom
+  et son portrait (titre de l'onglet, liste des agents, écran Vocal), pas
   seulement l'onglet ouvert.
+- **Un personnage désactivé ne laisse RIEN à l'écran** : le nom de l'onglet est
+  **recalculé** (nom réglé, sinon « Assistant ») et la photo est remplacée par la
+  silhouette habituelle — elle n'est pas seulement déplacée ou grisée.
+- **« Aucun personnage » n'est jamais un nom** : c'est la phrase par laquelle
+  Présences déclare une absence. Elle n'est donc jamais affichée.
+- **L'ancien dossier de données de Pilot n'a plus la parole** : si le dossier
+  personnel du personnage existe et déclare une absence (ou ne contient plus
+  rien), Pilot **ne retombe jamais** sur une ancienne copie
+  (`<données de l'application>\.pilot\portrait`), même pour l'image. Une vieille
+  photo résiduelle ne peut donc plus réapparaître.
 - Pilot **ne fait que lire** ces informations : il ne crée ni ne modifie jamais
-  le dossier du personnage, et il n'écrit rien dedans.
+  le dossier du personnage, et il n'écrit rien dedans. Il ne supprime rien non
+  plus : une ancienne image est simplement **ignorée**.
 - Le nom réglé dans les paramètres reste le **repli** : il réapparaît dès qu'il
   n'y a plus de personnage actif.
 <!-- /HELP:super-agent-personnage -->
@@ -2073,16 +2088,28 @@ que Pilot **lit seulement** :
 | nom affiché | `<dossier personnel>/.pilot/portrait/nom.txt` |
 | image affichée | `<dossier personnel>/.pilot/portrait/portrait.png` |
 
-- **Emplacement** : c'est le dossier que Présences **dépose** (sa décision D23) —
-  `~/.pilot/portrait`, soit `C:\Users\<utilisateur>\.pilot\portrait` sous
-  Windows. Pilot le lit en PREMIER ; il garde ensuite deux replis, dans cet
-  ordre : `PRESENCES_PILOT_DIR/portrait` (variable d'environnement par laquelle
-  Présences désigne un autre dossier) puis `<app_data_dir>/.pilot/portrait`
-  (l'emplacement historique de Pilot). L'ordre et le choix du dossier vivent dans
-  la fonction PURE `persona_dir_candidates` (`src-tauri/src/persona.rs`) : le
-  premier dossier qui contient **au moins un** des deux fichiers est retenu tel
-  quel, **aucune fusion** entre deux dépôts (le nom et l'image viennent toujours
-  du même).
+- **Emplacement et RÈGLE DE PRIORITÉ** (correctif du 2026-11-14, autorité :
+  `src-tauri/src/persona.rs`, fonction `persona_sources`) :
+  1. `PRESENCES_PILOT_DIR/portrait` s'il est défini (dépôt **personnel**) ;
+  2. sinon `<dossier personnel>/.pilot/portrait` — le dossier que Présences
+     **dépose** (sa décision D23), `C:\Users\<utilisateur>\.pilot\portrait` sous
+     Windows (dépôt **personnel**) ;
+  3. en dernier recours seulement `<app_data_dir>/.pilot/portrait` (dépôt
+     **historique** de Pilot).
+  Le premier dépôt **personnel** qui **existe** fait **autorité** et ferme la
+  recherche : un dossier qui existe a « parlé », **même vide**. Le dépôt
+  **historique** n'est lu que si aucun dépôt personnel n'existe, et il ne
+  fournit **que le nom** — son `portrait.png` n'est **jamais** utilisé (une
+  vieille image résiduelle ne peut donc plus réapparaître ; elle n'est ni lue,
+  ni supprimée, ni déplacée). **Aucune fusion** entre deux dépôts : le nom et
+  l'image viennent toujours du même.
+- **« Aucun personnage » n'est pas un nom** : `nom.txt` contenant « Aucun
+  personnage » (casse, accents et ponctuation de fin indifférents, liste
+  `PERSONA_NO_CHARACTER_MARKERS` côté Rust, `PERSONA_NO_CHARACTER_MARKERS` côté
+  interface) est une **déclaration d'absence** écrite par Présences. Elle donne
+  « aucun personnage actif » — donc nom réglé (⚙️ → Assistant → Nom, sinon
+  « Assistant ») et aucune image — et **ferme la recherche** au lieu de
+  s'afficher.
 - **Fichier absent = aucun personnage actif** → nom réglé (⚙️ → Assistant →
   Nom, sinon « Assistant ») et icône 🧭. L'absence n'est pas une panne :
   aucune erreur, aucun message, aucune trace console.
@@ -2121,22 +2148,42 @@ que Pilot **lit seulement** :
   avant le repli historique « Magnus » : avec un personnage actif, la sonde de
   supervision continuait sinon de déclarer l'assistant « Déconnecté » alors
   que sa session vivait.
-- **Relecture** : au **démarrage** (`src/js/main.js`), à l'**ouverture de
-  l'onglet** et à chaque **retour de focus** de la fenêtre (écouteur `focus` de
-  `main.js` pour toutes les surfaces, plus celui de l'onglet, retiré à sa
-  fermeture). Les deux appelants d'un même événement **partagent une seule
+- **Relecture (activation / désactivation à chaud)** : au **démarrage**
+  (`src/js/main.js`), à l'**ouverture de l'onglet**, à chaque **retour de focus**
+  de la fenêtre (écouteur `focus` de `main.js` pour toutes les surfaces, plus
+  celui de l'onglet, retiré à sa fermeture) **et dès que les fichiers du
+  personnage changent** — c'est ce dernier point qui manquait : dans l'écran
+  Vocal ou en « Assistant seul », la fenêtre ne perd jamais le focus, donc
+  activer ou désactiver un personnage ne changeait rien avant redémarrage.
+  Le détecteur (`createPersonaWatcher`, `startAssistantPersonaWatch`,
+  `startPersonaWatch`, `PERSONA_WATCH_MS` = 2 s, **aucun réglage**) ne lit
+  **jamais** le personnage : il compare une **empreinte légère** fournie par la
+  commande Rust **`read_assistant_persona_stamp`** (existence du dossier, date et
+  taille de `nom.txt` et `portrait.png`, **contenu jamais lu**) et, quand elle
+  change, passe par le mécanisme EXISTANT `refreshAssistantPersonaAndApply`
+  (une lecture, une application). Un seul intervalle pour toute l'application,
+  jamais deux comparaisons simultanées, et **fail-open** (commande absente ou
+  panne d'IPC → l'affichage reste celui d'avant, aucune exception, aucun
+  message). Les deux appelants d'un même événement **partagent une seule
   lecture disque** (`refreshAssistantPersona` garde la promesse en cours) :
   changer de personnage ne demande aucun redémarrage et ne relit pas deux fois
-  un portrait qui pèse plusieurs Mo. La liste des agents suit au plus tard au
-  relevé suivant (≤ 2 s).
+  un portrait qui pèse plusieurs Mo.
 - **Aucune écriture** : Pilot ne crée ni le dossier, ni les fichiers, ne les
   nettoie jamais. Le dossier appartient à Présences.
 - Couverture : `src/js/assistant-persona.test.js` (13 tests),
   `src/js/assistant-nom-partout.test.js` (7 tests : la liste des agents suit le
   personnage, l'identité ne change pas, la lecture alimente la liste, la sonde
-  retrouve la session sous le nom réglé, une seule lecture par événement) et
-  les tests unitaires Rust de `src-tauri/src/persona.rs` (8 tests, dossiers
-  **temporaires**).
+  retrouve la session sous le nom réglé, une seule lecture par événement),
+  `src/js/personnage-desactivation-complete.test.js` (10 tests : nom d'onglet
+  **recalculé** après désactivation, image retirée de l'écran sans `src`
+  résiduel, « Aucun personnage » jamais affiché, empreinte changée → mise à jour
+  sans redémarrer, détecteur sans exception ni double intervalle, **câblage de
+  `main.js` verrouillé**) et les tests unitaires Rust de
+  `src-tauri/src/persona.rs` (13 tests, dossiers **temporaires**, dont 5 ajoutés
+  le 2026-11-14 : déclaration d'absence, dossier personnel qui ferme la
+  recherche, image du dépôt historique jamais utilisée, dossier personnel vide
+  qui fait autorité, empreinte qui suit les changements).
+  Rapport : `docs/rapports/RAPPORT-personnage-actif-et-desactivation-complete.md`.
 
 ---
 

@@ -3719,6 +3719,7 @@ pub fn run() {
             tts_local::tts_local_synthesize,
             tts_local::tts_local_log,
             persona::read_assistant_persona,
+            persona::read_assistant_persona_stamp,
             tts_local_download::tts_local_download,
             tts_local_download::tts_local_cancel_download,
             tts_local_download::tts_local_download_state,

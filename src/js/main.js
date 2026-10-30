@@ -15,7 +15,7 @@ import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus,
 // installée ICI, au seul endroit qui connaît à la fois le bus d'agents (runs en
 // cours) et l'activité RÉELLE des sessions (agent qui travaille sans run).
 import { isRunInProgress } from "./agents-bus.js";
-import { isProjectAgentBusy, initOwnerEngagementWatch, startTaskCounter, startSuperMissionsWatch, refreshAssistantPersonaAndApply } from "./super-agent.js";
+import { isProjectAgentBusy, initOwnerEngagementWatch, startTaskCounter, startSuperMissionsWatch, refreshAssistantPersonaAndApply, startPersonaWatch } from "./super-agent.js";
 import { getAgentActivitySnapshot, subscribeAgentActivity, isAgentWorking, initAgentActivity } from "./agent-activity.js";
 // Bande de contexte supprimee (docs/proposition-bande-contexte-allegee.md) :
 // le fil « Projet > projet > onglet » n'existe plus. L'entree « Travail » vit
@@ -598,6 +598,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   window.addEventListener("focus", () => {
     refreshAssistantPersonaAndApply().catch(() => {});
   });
+  // ACTIVATION / DÉSACTIVATION D'UN PERSONNAGE SANS REDÉMARRER : le personnage est
+  // relu dès que son empreinte change sur le disque (activation, désactivation,
+  // remplacement). Le retour de focus ci-dessus ne suffit pas : dans l'écran
+  // Vocal ou en « Assistant seul », la fenêtre ne perd jamais le focus, et la
+  // photo comme le nom de l'onglet restaient ceux d'avant. Un seul intervalle
+  // pour toute l'application, aucun réglage, aucune seconde lecture du
+  // personnage (le détecteur ne lit que des dates et des tailles). Fail-open.
+  try {
+    startPersonaWatch();
+  } catch (e) {
+    console.warn("Suivi du personnage indisponible:", e);
+  }
   // Compteur « Travail » (bouton de la rangee d'onglets) : demarre ICI, avec
   // l'application, et non dans la fabrique de l'onglet 🧭 Assistant. Sans cela,
   // tant que l'onglet 🧭 n'avait jamais ete ouvert, le calcul du compte

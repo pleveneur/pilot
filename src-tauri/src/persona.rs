@@ -27,6 +27,33 @@
 // La décision de repli vit ICI (une seule autorité) : `read_persona` renvoie
 // toujours une valeur valide, `Persona::default()` représentant « aucun
 // personnage actif ». Le front (src/js/assistant-persona.js) ne fait qu'afficher.
+//
+// ── RÈGLE DE PRIORITÉ entre les emplacements (correctif du 2026-11-14) ───────
+//
+// Trois emplacements candidats, dans cet ordre (voir `persona_sources`) :
+//   1. `PRESENCES_PILOT_DIR/portrait`   — dépôt PERSONNEL (désigné par Présences) ;
+//   2. `<dossier personnel>/.pilot/portrait` — dépôt PERSONNEL (D23, le normal) ;
+//   3. `<app_data_dir>/.pilot/portrait` — dépôt HISTORIQUE de Pilot (repli).
+//
+//   a. Le premier dépôt PERSONNEL qui EXISTE est l'AUTORITÉ : sa lecture est
+//      définitive et la recherche s'ARRÊTE là. Un dossier qui existe a « parlé »,
+//      même s'il ne contient qu'une déclaration d'absence (« Aucun personnage »),
+//      même s'il est vide. Aucun dépôt historique ne peut donc reprendre la main
+//      derrière lui.
+//   b. Déclaration EXPLICITE d'absence : `nom.txt` valant « Aucun personnage »
+//      (casse et accents indifférents) ne donne AUCUN nom — ce n'est pas un nom
+//      de personnage, c'est la phrase par laquelle Présences dit qu'il n'y en a
+//      pas. Elle ferme la recherche (règle a) au lieu de s'afficher.
+//   c. Le dépôt HISTORIQUE n'est lu que si AUCUN dépôt personnel n'existe, et il
+//      ne fournit QUE le nom : son `portrait.png` n'est JAMAIS utilisé. Une
+//      vieille image résiduelle (1,5 Mo dans `%APPDATA%\com.pilot.editor`) ne
+//      peut donc plus réapparaître. Ce module ne la supprime pas, ne l'écrase
+//      pas, ne la déplace pas : il l'IGNORE franchement.
+//
+// `persona_stamp_from_sources` publie une empreinte LÉGÈRE (date + taille des
+// deux fichiers, contenu jamais lu) : le front la compare toutes les
+// `PERSONA_WATCH_MS` pour savoir QUAND relire. Elle ne remplace jamais la
+// lecture : c'est un détecteur de changement, pas une seconde lecture.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -52,9 +79,39 @@ pub const PERSONA_IMAGE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// défaut (`<dossier personnel>/.pilot`) est utilisé, comme avant.
 pub const PRESENCES_PILOT_DIR_ENV: &str = "PRESENCES_PILOT_DIR";
 
+/// Phrases par lesquelles Présences déclare qu'il n'y a AUCUN personnage actif
+/// (elle les écrit dans `nom.txt`). Comparaison en minuscules, accents retirés,
+/// ponctuation de fin ignorée : « Aucun personnage », « aucun personnage. »,
+/// « Aucun personnage actif » et « No character » sont toutes reconnues.
+/// Une telle valeur n'est JAMAIS un nom de personnage.
+pub const PERSONA_NO_CHARACTER_MARKERS: &[&str] = &[
+    "aucun personnage",
+    "aucun personnage actif",
+    "pas de personnage",
+    "no character",
+];
+
 /// Signature PNG (8 premiers octets) : un `portrait.png` qui n'en est pas un
 /// n'est pas affiché (repli), jamais une image cassée dans l'interface.
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+
+/// Rôle d'un dépôt du personnage (voir la règle de priorité en tête de module).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonaDepot {
+    /// Dépôt PERSONNEL : celui que Présences gère (surcharge ou dossier personnel).
+    /// Il fait autorité dès qu'il existe, et son image est affichable.
+    Personal,
+    /// Dépôt HISTORIQUE de Pilot (`<app_data_dir>/.pilot/portrait`) : repli de
+    /// dernier recours, NOM seulement — son image n'est jamais utilisée.
+    Legacy,
+}
+
+/// Un emplacement candidat et son rôle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonaSource {
+    pub dir: PathBuf,
+    pub depot: PersonaDepot,
+}
 
 /// Personnage actif lu sur le disque. `None` = fichier absent (ou inutilisable).
 /// `Default` = « aucun personnage actif » → nom et icône habituels.
@@ -86,46 +143,151 @@ pub fn persona_dir(app_data_dir: &Path) -> PathBuf {
 ///      conservé pour qu'aucun autre hôte ne perde l'affichage.
 ///
 /// Un argument `None` retire simplement son candidat.
+pub fn persona_sources(
+    app_data_dir: Option<&Path>,
+    home_dir: Option<&Path>,
+    override_dir: Option<&Path>,
+) -> Vec<PersonaSource> {
+    let mut sources: Vec<PersonaSource> = Vec::new();
+    let mut pousser = |dir: PathBuf, depot: PersonaDepot| {
+        if !sources.iter().any(|s| s.dir == dir) {
+            sources.push(PersonaSource { dir, depot });
+        }
+    };
+    if let Some(racine) = override_dir {
+        if !racine.as_os_str().is_empty() {
+            pousser(persona_dir(racine), PersonaDepot::Personal);
+        }
+    }
+    if let Some(home) = home_dir {
+        // `persona_dir(home)` = `<home>/.pilot/portrait` : le dossier de D23.
+        pousser(persona_dir(home), PersonaDepot::Personal);
+    }
+    if let Some(data) = app_data_dir {
+        pousser(persona_dir(data), PersonaDepot::Legacy);
+    }
+    sources
+}
+
+/// Dossiers où Pilot cherche le personnage actif, DANS L'ORDRE — mêmes candidats
+/// que `persona_sources` (seuls les chemins, sans leur rôle).
 pub fn persona_dir_candidates(
     app_data_dir: Option<&Path>,
     home_dir: Option<&Path>,
     override_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    let mut pousser = |dir: PathBuf| {
-        if !dirs.contains(&dir) {
-            dirs.push(dir);
-        }
-    };
-    if let Some(racine) = override_dir {
-        if !racine.as_os_str().is_empty() {
-            pousser(persona_dir(racine));
-        }
-    }
-    if let Some(home) = home_dir {
-        // `persona_dir(home)` = `<home>/.pilot/portrait` : le dossier de D23.
-        pousser(persona_dir(home));
-    }
-    if let Some(data) = app_data_dir {
-        pousser(persona_dir(data));
-    }
-    dirs
+    persona_sources(app_data_dir, home_dir, override_dir)
+        .into_iter()
+        .map(|source| source.dir)
+        .collect()
 }
 
-/// Lit le personnage dans le PREMIER dossier qui contient au moins un des deux
-/// fichiers (`nom.txt` ou `portrait.png`), puis s'arrête là.
-///
-/// Aucune fusion entre dossiers : le nom et l'image viennent toujours du MÊME
-/// dépôt, jamais de deux. Aucun dossier utilisable → `Persona::default()`.
-pub fn read_persona_from(dirs: &[PathBuf]) -> Persona {
-    for dir in dirs {
-        let a_un_nom = dir.join(PERSONA_NAME_FILE).is_file();
-        let a_une_image = dir.join(PERSONA_IMAGE_FILE).is_file();
-        if a_un_nom || a_une_image {
-            return read_persona(dir);
+/// Lit le personnage en appliquant la RÈGLE DE PRIORITÉ du module, et s'arrête
+/// au PREMIER dépôt qui EXISTE (règle a). Le dépôt historique ne fournit que le
+/// nom (règle c).
+pub fn read_persona_from_sources(sources: &[PersonaSource]) -> Persona {
+    for source in sources {
+        // Un dépôt absent n'a rien dit : il ne ferme pas la recherche.
+        if !source.dir.is_dir() {
+            continue;
         }
+        let persona = read_persona(&source.dir);
+        return match source.depot {
+            PersonaDepot::Personal => persona,
+            // Dépôt historique : NOM seulement. Une vieille image résiduelle ne
+            // peut plus jamais réapparaître (elle n'est ni lue ni supprimée).
+            PersonaDepot::Legacy => Persona {
+                name: persona.name,
+                portrait: None,
+            },
+        };
     }
     Persona::default()
+}
+
+/// Lit le personnage dans une liste de dossiers, tous considérés comme des
+/// dépôts PERSONNELS : le premier qui EXISTE a l'autorité, et rien n'est fusionné
+/// entre deux dossiers. Aucun dossier existant → `Persona::default()`.
+pub fn read_persona_from(dirs: &[PathBuf]) -> Persona {
+    let sources: Vec<PersonaSource> = dirs
+        .iter()
+        .cloned()
+        .map(|dir| PersonaSource {
+            dir,
+            depot: PersonaDepot::Personal,
+        })
+        .collect();
+    read_persona_from_sources(&sources)
+}
+
+/// Vrai si le contenu de `nom.txt` est la DÉCLARATION EXPLICITE d'une absence de
+/// personnage (« Aucun personnage », casse et accents indifférents). Pure.
+pub fn declares_no_character(raw: &str) -> bool {
+    let normalise = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let premiere = match normalise.lines().map(|l| l.trim()).find(|l| !l.is_empty()) {
+        Some(ligne) => ligne,
+        None => return false,
+    };
+    let mut plat = String::with_capacity(premiere.len());
+    for c in premiere.chars() {
+        if c.is_control() {
+            continue;
+        }
+        let minuscule = c.to_lowercase().next().unwrap_or(c);
+        let sans_accent = match minuscule {
+            'à' | 'â' | 'ä' | 'á' | 'ã' | 'å' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'î' | 'ï' | 'í' | 'ì' => 'i',
+            'ô' | 'ö' | 'ó' | 'õ' | 'ò' => 'o',
+            'ù' | 'û' | 'ü' | 'ú' => 'u',
+            'ç' => 'c',
+            'ñ' => 'n',
+            autre => autre,
+        };
+        plat.push(sans_accent);
+    }
+    // Espaces multiples réduits, ponctuation de fin retirée (« . », « ! », « … »).
+    let compact: String = plat.split_whitespace().collect::<Vec<_>>().join(" ");
+    let compact = compact.trim_end_matches(['.', '!', '…', ';', ':', ' ']);
+    PERSONA_NO_CHARACTER_MARKERS.contains(&compact)
+}
+
+/// Empreinte LÉGÈRE d'un fichier (date de modification + taille), sans jamais
+/// lire son contenu. `-` quand le fichier n'existe pas.
+fn file_stamp(path: &Path) -> String {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("{}:{}", mtime, meta.len())
+        }
+        _ => "-".to_string(),
+    }
+}
+
+/// Empreinte de l'ENSEMBLE des dépôts : existence du dossier + date et taille de
+/// `nom.txt` et `portrait.png`. Elle change dès qu'un personnage est activé,
+/// désactivé, remplacé — c'est ce qui permet au front de relire SANS redémarrer
+/// Pilot, et sans relire plusieurs mégaoctets à chaque fois.
+///
+/// Fonction PURE de lecture de métadonnées : aucun contenu de fichier lu, aucune
+/// écriture (le dossier du personnage reste en lecture seule).
+pub fn persona_stamp_from_sources(sources: &[PersonaSource]) -> String {
+    let mut morceaux: Vec<String> = Vec::new();
+    for source in sources {
+        morceaux.push(format!(
+            "{}|{}|{}|{}",
+            source.dir.display(),
+            if source.dir.is_dir() { "dir" } else { "-" },
+            file_stamp(&source.dir.join(PERSONA_NAME_FILE)),
+            file_stamp(&source.dir.join(PERSONA_IMAGE_FILE)),
+        ));
+    }
+    morceaux.join(";")
 }
 
 /// Normalise le contenu de `nom.txt` : première ligne utile, espaces rognés,
@@ -145,6 +307,11 @@ pub fn normalize_name(raw: &str) -> Option<String> {
     let premiere = propre.lines().map(|l| l.trim()).find(|l| !l.is_empty())?;
     let nom = premiere.trim();
     if nom.is_empty() {
+        return None;
+    }
+    // Une déclaration EXPLICITE d'absence (« Aucun personnage ») n'est pas un nom :
+    // c'est la phrase par laquelle Présences dit qu'il n'y a pas de personnage.
+    if declares_no_character(nom) {
         return None;
     }
     let borne: String = nom.chars().take(PERSONA_NAME_MAX_CHARS).collect();
@@ -199,11 +366,18 @@ pub fn read_persona(dir: &Path) -> Persona {
 
 /// Commande Tauri : personnage actif de l'Assistant (`{ name, portrait }`).
 ///
-/// Cherche dans l'ORDRE de `persona_dir_candidates` : le dossier désigné par
-/// `PRESENCES_PILOT_DIR` s'il est défini, puis `<dossier personnel>/.pilot/portrait`
-/// (ce que Présences dépose, décision D23), puis `<app_data_dir>/.pilot/portrait`
-/// (emplacement historique). Aucun chemin en dur : les trois sont résolus par
-/// Tauri ou par l'environnement, donc portables Windows / macOS / Linux.
+/// Applique la RÈGLE DE PRIORITÉ décrite en tête de module
+/// (`persona_sources` puis `read_persona_from_sources`) :
+///   1. le premier dépôt PERSONNEL qui existe (`PRESENCES_PILOT_DIR/portrait`
+///      s'il est défini, sinon `<dossier personnel>/.pilot/portrait` — ce que
+///      Présences dépose, décision D23) FAIT AUTORITÉ et arrête la recherche ;
+///      une déclaration d'absence (« Aucun personnage ») y donne « aucun
+///      personnage », jamais un nom ;
+///   2. le dépôt HISTORIQUE `<app_data_dir>/.pilot/portrait` n'est lu que si
+///      aucun dépôt personnel n'existe, et son image n'est JAMAIS utilisée.
+///
+/// Aucun chemin en dur : les trois emplacements sont résolus par Tauri ou par
+/// l'environnement, donc portables Windows / macOS / Linux.
 ///
 /// Fail-open de bout en bout : aucun dossier résoluble donne
 /// `Persona::default()` — l'Assistant garde alors son nom et son icône
@@ -217,8 +391,31 @@ pub fn read_assistant_persona(app: tauri::AppHandle) -> Persona {
         .ok()
         .map(|v| PathBuf::from(v.trim()))
         .filter(|p| !p.as_os_str().is_empty());
-    let dirs = persona_dir_candidates(app_data.as_deref(), home.as_deref(), racine.as_deref());
-    read_persona_from(&dirs)
+    let sources = persona_sources(app_data.as_deref(), home.as_deref(), racine.as_deref());
+    read_persona_from_sources(&sources)
+}
+
+/// Commande Tauri : EMPREINTE du personnage actif (chaîne courte, sans image).
+///
+/// Le front la compare périodiquement pour savoir QUAND relire le personnage
+/// (`read_assistant_persona`), afin qu'une activation ou une désactivation dans
+/// Présences se voie SANS redémarrer Pilot. Mêmes dossiers, mêmes règles de
+/// priorité que `read_assistant_persona` : c'est un détecteur de changement, pas
+/// une seconde lecture du personnage.
+///
+/// Fail-open : aucun dossier résoluble donne une empreinte vide, jamais une
+/// exception.
+#[tauri::command]
+pub fn read_assistant_persona_stamp(app: tauri::AppHandle) -> String {
+    use tauri::Manager as _;
+    let app_data = app.path().app_data_dir().ok();
+    let home = app.path().home_dir().ok();
+    let racine = std::env::var(PRESENCES_PILOT_DIR_ENV)
+        .ok()
+        .map(|v| PathBuf::from(v.trim()))
+        .filter(|p| !p.as_os_str().is_empty());
+    let sources = persona_sources(app_data.as_deref(), home.as_deref(), racine.as_deref());
+    persona_stamp_from_sources(&sources)
 }
 
 #[cfg(test)]
@@ -419,5 +616,134 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    // ── Désactivation complète (correctif du 2026-11-14) ─────────────────────
+    //
+    // Presences ecrit « Aucun personnage » dans `nom.txt` quand AUCUN personnage
+    // n'est actif. Ce n'est pas un nom : c'est une declaration d'absence. Et
+    // l'ancienne image du depot historique ne doit JAMAIS reprendre la main.
+
+    #[test]
+    fn la_declaration_d_absence_n_est_jamais_un_nom() {
+        assert!(declares_no_character("Aucun personnage"));
+        assert!(declares_no_character("  aucun personnage  \r\n"));
+        assert!(declares_no_character("AUCUN PERSONNAGE"));
+        assert!(declares_no_character("Aucun personnage.\n"));
+        assert!(declares_no_character("Aucun personnage actif"));
+        assert!(declares_no_character("No character"));
+        // Un vrai nom n'est jamais pris pour une declaration d'absence.
+        assert!(!declares_no_character("Sylvie"));
+        assert!(!declares_no_character("Aucune"));
+        assert!(!declares_no_character(""));
+        // ... et elle ne ressort pas comme nom normalise.
+        assert_eq!(normalize_name("Aucun personnage\n"), None);
+        assert_eq!(normalize_name("Sylvie\n").as_deref(), Some("Sylvie"));
+    }
+
+    #[test]
+    fn le_dossier_personnel_qui_declare_l_absence_ferme_la_recherche() {
+        let home = dossier_de_test("home-absent-personnage");
+        let data = dossier_de_test("data-ancien");
+        let dossier_home = home.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        let dossier_data = data.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        std::fs::create_dir_all(&dossier_home).expect("depot Presences");
+        std::fs::create_dir_all(&dossier_data).expect("depot historique");
+        // Le depot personnel DIT qu'il n'y a aucun personnage...
+        std::fs::write(dossier_home.join(PERSONA_NAME_FILE), "Aucun personnage").expect("nom.txt");
+        // ... et l'ancien depot porte encore un nom ET une image (1,5 Mo chez le
+        // proprietaire) : ni l'un ni l'autre ne doivent revenir.
+        std::fs::write(dossier_data.join(PERSONA_NAME_FILE), "Sylvie\n").expect("nom ancien");
+        std::fs::write(dossier_data.join(PERSONA_IMAGE_FILE), png_minimal()).expect("image ancienne");
+
+        let sources = persona_sources(Some(&data), Some(&home), None);
+        assert_eq!(
+            read_persona_from_sources(&sources),
+            Persona::default(),
+            "declaration d'absence : aucun nom, aucune image, et surtout PAS l'image du depot historique"
+        );
+        // Aucune fusion, aucune ecriture : l'ancienne image est ignoree, pas touchee.
+        assert!(dossier_data.join(PERSONA_IMAGE_FILE).is_file());
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn l_image_du_depot_historique_n_est_jamais_utilisee() {
+        let home = dossier_de_test("home-sans-depot");
+        let data = dossier_de_test("data-seul");
+        let dossier_data = data.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        std::fs::create_dir_all(&dossier_data).expect("depot historique");
+        std::fs::write(dossier_data.join(PERSONA_NAME_FILE), "Ancien\n").expect("nom ancien");
+        std::fs::write(dossier_data.join(PERSONA_IMAGE_FILE), png_minimal()).expect("image ancienne");
+
+        // Aucun depot personnel n'existe : l'historique est consulte, mais pour le
+        // NOM seulement.
+        let sources = persona_sources(Some(&data), Some(&home), None);
+        let persona = read_persona_from_sources(&sources);
+        assert_eq!(persona.name.as_deref(), Some("Ancien"));
+        assert_eq!(
+            persona.portrait, None,
+            "une vieille image residuelle ne peut plus jamais reapparaitre a l'ecran"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn un_dossier_personnel_vide_fait_autorite_sur_l_historique() {
+        let home = dossier_de_test("home-vide");
+        let data = dossier_de_test("data-rempli");
+        let dossier_home = home.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        let dossier_data = data.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        std::fs::create_dir_all(&dossier_home).expect("depot Presences vide");
+        std::fs::create_dir_all(&dossier_data).expect("depot historique");
+        std::fs::write(dossier_data.join(PERSONA_NAME_FILE), "Sylvie\n").expect("nom ancien");
+        std::fs::write(dossier_data.join(PERSONA_IMAGE_FILE), png_minimal()).expect("image ancienne");
+
+        // Le dossier personnel existe (Presences l'a cree) : il a « parle », meme
+        // vide, donc il ferme la recherche.
+        let sources = persona_sources(Some(&data), Some(&home), None);
+        assert_eq!(read_persona_from_sources(&sources), Persona::default());
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn l_empreinte_change_quand_le_personnage_change() {
+        let home = dossier_de_test("empreinte");
+        let dossier_home = home.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        let sources = persona_sources(None, Some(&home), None);
+
+        // Dossier absent.
+        let vide = persona_stamp_from_sources(&sources);
+        // Activation : les fichiers apparaissent.
+        std::fs::create_dir_all(&dossier_home).expect("depot");
+        let cree = persona_stamp_from_sources(&sources);
+        assert_ne!(vide, cree, "la creation du dossier doit changer l'empreinte");
+        std::fs::write(dossier_home.join(PERSONA_NAME_FILE), "Sylvie\n").expect("nom.txt");
+        let nomme = persona_stamp_from_sources(&sources);
+        assert_ne!(cree, nomme, "l'arrivee du nom doit changer l'empreinte");
+        std::fs::write(dossier_home.join(PERSONA_IMAGE_FILE), png_minimal()).expect("portrait.png");
+        let avec_image = persona_stamp_from_sources(&sources);
+        assert_ne!(nomme, avec_image, "l'arrivee de l'image doit changer l'empreinte");
+        // Rien ne bouge : l'empreinte est stable (aucune relecture inutile).
+        assert_eq!(avec_image, persona_stamp_from_sources(&sources));
+        // Desactivation : le nom change de valeur, l'empreinte suit.
+        std::fs::write(dossier_home.join(PERSONA_NAME_FILE), "Aucun personnage")
+            .expect("nom.txt desactive");
+        assert_ne!(avec_image, persona_stamp_from_sources(&sources));
+        // Retrait de l'image : l'empreinte suit encore.
+        let _ = std::fs::remove_file(dossier_home.join(PERSONA_IMAGE_FILE));
+        assert_ne!(
+            persona_stamp_from_sources(&sources),
+            avec_image,
+            "le retrait de l'image doit changer l'empreinte"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
