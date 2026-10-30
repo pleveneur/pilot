@@ -373,10 +373,15 @@ describe("le tableau § 4.2 se rejoue : les lignes suivent la hauteur", () => {
     }
   });
 
-  it("`charsPerLine` vient de la largeur REELLE : 42 a 320 px, 37 a 282, 52 a 400", () => {
-    expect(vocalCharsPerLine(320)).toBe(42);
-    expect(vocalCharsPerLine(282)).toBe(37);
-    expect(vocalCharsPerLine(400)).toBe(52);
+  it("`charsPerLine` vient de la largeur REELLE moins le cadre : 39 a 320 px, 34 a 282, 49 a 400", () => {
+    // CORRECTIF DU 2026-11-02 (cadre des panneaux) : le cadre des deux colonnes
+    // prend 22 px de large (1 px de bordure + 10 px de marge interieure de
+    // chaque cote, `VOCAL_SIDE_FRAME_PX`), et `vocalCharsPerLine()` le retire
+    // AVANT de diviser. 320 -> 298 -> 39 ; 282 -> 260 -> 34 ; 400 -> 378 -> 49.
+    // Le chiffre baisse, il ne s'assouplit pas : c'est la place reelle du texte.
+    expect(vocalCharsPerLine(320)).toBe(39);
+    expect(vocalCharsPerLine(282)).toBe(34);
+    expect(vocalCharsPerLine(400)).toBe(49);
     // Jamais zero, meme sans colonne : aucune division par zero en aval.
     expect(vocalCharsPerLine(0)).toBe(1);
     expect(vocalCharsPerLine(undefined)).toBe(1);
@@ -394,7 +399,7 @@ describe("le tableau § 4.2 se rejoue : les lignes suivent la hauteur", () => {
     );
     expect(vue.items).toHaveLength(2);
     expect(vue.lines).toBe(13);
-    expect(vue.charsPerLine).toBe(42);
+    expect(vue.charsPerLine).toBe(39);
   });
 
   it("une colonne trop basse montre QUAND MEME le plus recent, coupe court", () => {
@@ -406,7 +411,7 @@ describe("le tableau § 4.2 se rejoue : les lignes suivent la hauteur", () => {
     });
     expect(vue.items).toHaveLength(1);
     expect(vue.items[0].text.endsWith("\u2026")).toBe(true);
-    expect(vue.items[0].text.length).toBeLessThanOrEqual(42);
+    expect(vue.items[0].text.length).toBeLessThanOrEqual(39);
   });
 });
 

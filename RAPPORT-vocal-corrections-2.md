@@ -102,6 +102,16 @@ Il porte maintenant **une icône et son texte**, dans les deux états :
   `innerHTML`, et l'appliquer au bouton emporterait le texte **et** le point de clic. Même raison
   pour le libellé, isolé dans `.vocal-display-toggle-label`.
 
+> **Mise à jour du 2026-11-02 — le texte visible a été retiré.** Sur demande du
+> propriétaire, le bouton du masquage ne porte plus que **son icône** : plus de
+> `VOCAL_BARE_TEXT_VISIBLE` / `VOCAL_BARE_TEXT_HIDDEN`, plus de `vocalBareText()`,
+> plus de nœud `.vocal-display-toggle-label` ni de règle CSS associée. Ce qui reste
+> — inchangé, et c'est ce qui doit suffire — est le **nom accessible** (`title` +
+> `aria-label`, alimentés par `vocalBareLabel(état)`) et `aria-pressed`. Taille, forme
+> et position sont **inchangées** (`min-width: 190px`, `height: 28px`, rayon pastille
+> `999px`, centré dans `.vocal-top`). Verrou : `src/js/bouton-masquage-sans-texte.test.js`.
+> Le présent rapport reste le compte rendu daté de ce qu'il s'est passé le 2026-10-31.
+
 ---
 
 ## 3. Les tests
@@ -164,7 +174,8 @@ Les trois fichiers de liste ordonnée (`lot2`, `bouton-relance`, `halo-128`) n'o
   plantait à l'entrée du mode depuis que `enterVocal` ne recevait plus l'overlay) ; le bouton
   d'affichage porte son texte.
 - `src/js/vocal-bare.js` — `VOCAL_BARE_TEXT_VISIBLE` / `VOCAL_BARE_TEXT_HIDDEN` / `vocalBareText()`
-  (pures ; les libellés d'infobulle existants ne changent pas).
+  (pures ; les libellés d'infobulle existants ne changent pas). **Retirées le 2026-11-02**
+  (voir la mise à jour ci-dessus) : le bouton ne porte plus de texte visible.
 - `src/css/style.css` — `.vocal-portrait` passe de l'absolu-dans-le-disque au **médaillon dans le
   flux** ; `.vocal-orb-name` **supprimée**, `.vocal-portrait-name` créée ; `.vocal-display-toggle`
   gagne sa largeur stable et ses deux sous-nœuds.

@@ -19,7 +19,6 @@ import {
   VOCAL_BARE_CLASS,
   VOCAL_DISPLAY_TOGGLE_CLASS,
   vocalBareLabel,
-  vocalBareText,
   vocalBareIcon,
   vocalBarePressed,
   vocalBareClass,
@@ -5636,19 +5635,16 @@ let vocalDicteeParGeste = false;
     bouton.setAttribute("aria-pressed", vocalBarePressed(false) ? "true" : "false");
     // L'ICONE, dans son propre noeud : posee par le mecanisme existant, a la
     // taille des menus. `setIcon` ecrit `innerHTML`, donc jamais sur le bouton
-    // lui-meme (il emporterait le texte visible).
+    // lui-meme (il emporterait le noeud du clic).
+    //
+    // PAS DE TEXTE VISIBLE (demande du proprietaire, 2026-11-02) : le bouton ne
+    // porte plus que son icone. Le nom accessible reste, et il dit tout — c'est
+    // lui que lisent l'infobulle et les lecteurs d'ecran.
     const icone = document.createElement("span");
     icone.className = "vocal-display-toggle-icon";
     setIcon(icone, vocalBareIcon(false), { size: "icon-sm" });
     bouton.appendChild(icone);
     bouton.dataset.vocalBareIcon = vocalBareIcon(false);
-    // LE TEXTE VISIBLE : ce qui rend le bouton trouvable sans survol. Il est
-    // ecrit dans les deux etats et sa longueur ne change pas (meme largeur de
-    // pastille, donc meme point de clic).
-    const texte = document.createElement("span");
-    texte.className = "vocal-display-toggle-label";
-    texte.textContent = vocalBareText(false);
-    bouton.appendChild(texte);
     bouton.addEventListener("click", () => {
       vocalBare = vocalBareNext(vocalBare);
       vocalSyncBare();
@@ -5907,14 +5903,10 @@ let vocalDicteeParGeste = false;
       if (bouton.dataset.vocalBareIcon !== icone) {
         bouton.dataset.vocalBareIcon = icone;
         // L'icone est dans SON noeud : `setIcon` ecrit `innerHTML`, donc jamais
-        // sur le bouton (il emporterait le texte visible et le noeud du clic).
+        // sur le bouton (il emporterait le noeud du clic).
         const cible = bouton.querySelector(".vocal-display-toggle-icon") || bouton;
         setIcon(cible, icone, { size: "icon-sm" });
       }
-      // Le TEXTE suit l'etat : c'est lui qui dit ce que fait le bouton.
-      const texte = bouton.querySelector(".vocal-display-toggle-label");
-      const mot = vocalBareText(vocalBare);
-      if (texte && texte.textContent !== mot) texte.textContent = mot;
     }
     vocalSyncChrome();
   }

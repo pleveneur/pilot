@@ -30,15 +30,13 @@ export const VOCAL_BARE_LABEL_VISIBLE =
 export const VOCAL_BARE_LABEL_HIDDEN =
   "tout est masqué — cliquer pour tout réafficher";
 
-// LE TEXTE ECRIT DANS LE BOUTON, A COTE DE L'ICONE (correctif du 2026-10-31 : le
-// proprietaire ne TROUVAIT pas le bouton — une icone d'oeil seule, en gris
-// secondaire, dans une barre vide, ne dit ni ce qu'elle fait ni ce qu'elle
-// commande). Il est ecrit en clair, dans les deux etats, donc lisible sans
-// survol : le premier dit l'ACTION (« ne garder que le portrait »), le second
-// la SORTIE de l'etat nu. Les deux sont courts et de longueur voisine, si bien
-// que la pastille ne change pas de largeur : le point de clic ne bouge pas.
-export const VOCAL_BARE_TEXT_VISIBLE = "Ne garder que le portrait";
-export const VOCAL_BARE_TEXT_HIDDEN = "Tout réafficher";
+// L'ETIQUETTE VISIBLE A ETE RETIREE (demande du proprietaire, 2026-11-02) : le
+// bouton ne porte plus que son icone. Ce qui reste — et qui suffit — est le
+// nom accessible (`title` + `aria-label`), ecrit plus bas : il dit l'ETAT puis
+// l'ACTION, et il suit l'etat reel (masque / affiche). La taille et la forme du
+// bouton ne changent pas (`--radius-*` et `min-width` de la feuille de style) :
+// seule la phrase visible disparait. Aucun texte n'est ecrit ici, donc aucun
+// libelle visible ne peut revenir par megarde.
 
 // L'icone de Lucide deja disponible dans le projet : la paire de tous les
 // logiciels, aucune legende a apprendre, aucune icone a dessiner.
@@ -68,17 +66,6 @@ export function normalizeVocalBare(valeur) {
  */
 export function vocalBareLabel(bare) {
   return normalizeVocalBare(bare) ? VOCAL_BARE_LABEL_HIDDEN : VOCAL_BARE_LABEL_VISIBLE;
-}
-
-/**
- * Le TEXTE VISIBLE du bouton, a cote de l'icone. Il repete l'ACTION de
- * l'infobulle en trois mots : c'est ce qui rend le bouton trouvable sans
- * survol, et il est ecrit dans les DEUX etats.
- * @param {unknown} bare etat nu
- * @returns {string}
- */
-export function vocalBareText(bare) {
-  return normalizeVocalBare(bare) ? VOCAL_BARE_TEXT_HIDDEN : VOCAL_BARE_TEXT_VISIBLE;
 }
 
 /**

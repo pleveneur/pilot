@@ -467,7 +467,9 @@ ce qui est affiché.
 petit **bouton-œil**, au centre du bandeau du haut, efface en un clic **tout ce que
 l'écran affiche sauf le portrait du personnage et son nom** — le cercle et sa
 lumières, la phrase d'état, les deux colonnes — puis remet tout en place d'un second
-clic. La **zone de saisie sous le cercle** n'est pas concernée : le champ de texte et
+clic. Le bouton ne porte **qu'une icône** (un œil, puis un œil barré) : ce qu'il fait
+est dit dans son **infobulle**. La **zone de saisie sous le cercle** n'est pas
+concernée : le champ de texte et
 le bouton de dictée restent **affichés et utilisables** dans les deux états. Son
 infobulle dit **l'état d'abord, l'action ensuite** : « **tout est visible — cliquer
 pour ne garder que le portrait** », puis « **tout est masqué — cliquer pour tout

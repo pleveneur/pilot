@@ -397,7 +397,9 @@ largeur) montre **ce qui vient d'être dit** :
   il effacerait le début du plus ancien message sans rien annoncer.
 
 Le budget suit la hauteur et la largeur **mesurées**, jamais une constante cachée :
-`charsPerLine = floor(track / 7,6)` — **42** caractères à 320 px, 37 à 282, 52 à
+`charsPerLine = floor((track - cadre) / 7,6)` — où `cadre = VOCAL_SIDE_FRAME_PX
+= 22 px` (1 px de bordure + 10 px de marge intérieure de chaque côté, voir le
+**cadre des panneaux** ci-dessous) : **39** caractères à 320 px, 34 à 282, 49 à
 400 — et `lignes = floor((H - 14) / 37)`, soit **13** à 512 px, 12 à 479, 9 à 383, 8 à
 331, 7 à 287, 5 à 231 (le tableau du § 4.2 de la conception, rejoué par un test). La
 coupe se fait **sur une frontière de mot**, jamais dans un mot, et l'ellipse le dit.
@@ -409,6 +411,27 @@ message. `VOCAL_DISCUSSION_MAX_MESSAGES = 6` borne la **lecture** du DOM (trois
 (question 2 lignes + réponse 8 lignes) vaut 10 lignes : une colonne de 512 px en
 montre **un**, une colonne de 331 px et plus en montre **deux** — c'est un rappel de
 ce qui vient d'être dit, pas un journal.
+
+### Le cadre des panneaux (2026-11-02)
+
+Les deux colonnes sont des **panneaux** : elles portent un **cadre visible, en bords
+arrondis**, dans la **même couleur que le texte qu'elles affichent**. Comme les
+autres panneaux translucides, elles prennent ce cadre du **même jeton de thème**, et
+rien n'est décidé ici en local :
+
+| Décision | Valeur retenue | Pourquoi |
+|---|---|---|
+| Couleur | `--glass-frame` = `color-mix(in srgb, var(--text-secondary) 80%, transparent)` | Même famille que le texte secondaire des panneaux ; dérivé d'une variable de thème, donc les **dix** palettes suivent, y compris un **changement à chaud** (acquis `684e9f3`, conservé). Mesure : **5,32:1** en sombre par défaut, **3,69:1** en clair, plancher **2,69:1** (tokyo-day) — lisible et discret, et **jamais plus contrasté que le texte** qu'il entoure |
+| Arrondi | `--radius-lg` (**12 px**) | Jeton **existant**, déjà porté par `.projects-dropdown`. Aucun cinquième rayon inventé, jamais une valeur en px écrite sur place |
+| Mesure | `box-sizing: border-box` + `padding-inline: 10px` = **`VOCAL_SIDE_FRAME_PX` = 22 px** | Le cadre est **pris sur** la largeur de la colonne, pas ajouté à côté, et `vocalCharsPerLine()` le retranche **avant** de compter les caractères : la mesure dit vrai, sinon le texte serait coupé plus tôt qu'annoncé |
+
+La **hauteur n'est pas touchée** : aucun `padding-block`, aucune hauteur posée — les
+51 px de haut fixe et les 46 px par tâche restent exacts. Le **même cadre** est porté
+par **tout panneau translucide** (les deux qui portent `background: var(--glass-tint)` :
+`.projects-dropdown` et `.context-menu`) ; les **voiles** (`--glass-scrim`,
+`--glass-scrim-soft`) sont des surfaces plein écran, ils n'ont pas de bord. Verrou :
+`src/js/cadre-listes-panneaux.test.js` (couleur, arrondi, mesure, contraste sur les dix
+palettes, et 22 px = bordure + marge lus dans la feuille de style).
 
 **Rien n'est déplacé, rien n'est copié.** `collectVocalDiscussion()`
 (`super-agent.js`) ne fait que **lire** les deux familles du chat
@@ -863,24 +886,29 @@ contredirait « tout masquer » et créerait un état nu à deux vitesses.
 n'ont pas de disque à sauver : y masquer tout ne laisserait qu'un écran vide, et
 leur équivalent est déjà le logo-bouton des trois modes.
 
-**Le bouton.** Une **icône et son texte, toujours visibles** (`œil` quand tout est
+**Le bouton.** Une **icône seule**, toujours visible (`œil` quand tout est
 visible, `œil barré` quand tout est masqué), dans la **barre du haut de 44 px**,
 centré, `pointer-events: auto` **par héritage de la barre** — il n'ajoute **pas**
 de septième hôte cliquable, il vit dans `.vocal-top` qui en est déjà un. Sa taille
-**ne change pas d'un état à l'autre** (`min-width: 190px`, `height: 28px`, la
-largeur du plus long des deux libellés) : le point de clic ne bouge pas sous le
+et sa forme **ne changent pas d'un état à l'autre** (`min-width: 190px`,
+`height: 28px`, rayon pastille `999px`) : le point de clic ne bouge pas sous le
 doigt. L'infobulle et
 l'`aria-label` disent **l'état d'abord, l'action ensuite** : « tout est visible —
 cliquer pour ne garder que le portrait », puis « tout est masqué — cliquer pour
 tout réafficher ». Le mot est **« le portrait »** et non « le personnage » : plus
 court dans une infobulle, et « personnage » nomme l'entité du carnet — deux mots
 pour deux choses. `aria-pressed` suit l'état.
-**Correction du 2026-10-31 : le bouton porte son texte.** Il était une icône seule
-(28 × 24 px) ; le propriétaire ne le **trouvait pas**. Il affiche donc, en clair,
-« Ne garder que le portrait » puis « Tout réafficher » — une phrase plus courte que
-l'infobulle, qui tient sur une ligne et ne dépend pas du survol. L'icône est posée
-dans son **propre nœud** (`.vocal-display-toggle-icon`), jamais sur le bouton :
-`setIcon` écrit `innerHTML` et emporterait le texte et le point de clic.
+**Correction du 2026-11-02 : le bouton perd son texte visible.** Le texte en clair
+ajouté le 2026-10-31 (« Ne garder que le portrait » / « Tout réafficher ») est
+**retiré** sur demande du propriétaire : l'icône reste seule dans la pastille,
+**position, taille et forme inchangées**. Ce qui reste — et qui suffit — est le
+**nom accessible** : `title` **et** `aria-label`, alimentés par la même fonction
+pure `vocalBareLabel(état)`, donc toujours l'état réel. Aucune constante de texte
+visible ne subsiste dans le module (elle ne peut donc pas revenir par mégarde) et
+la règle CSS de l'étiquette a disparu. L'icône est posée dans son **propre nœud**
+(`.vocal-display-toggle-icon`), jamais sur le bouton : `setIcon` écrit
+`innerHTML` et emporterait le point de clic. Verrou :
+`src/js/bouton-masquage-sans-texte.test.js`.
 **Jamais `hidden`, jamais `disabled`**, même quand la fenêtre est trop étroite
 pour les colonnes : ce qu'il commande existe toujours.
 
@@ -1530,7 +1558,7 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
 | `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les quatre règles **dans l'ordre**), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
-| ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône ET texte visible** (« Ne garder que le portrait » / « Tout réafficher », `vocalBareText()`), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed`, l'infobulle et le texte), le terme `vocalBare ||` dans `vocalSyncChrome` (le bas est **retenu allumé**, il n'est plus éteint par l'état nu : la zone de saisie n'est pas dans le périmètre, 2026-11-01), la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
+| ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône seule** depuis le 2026-11-02 (le texte visible est retiré ; `title` + `aria-label` = `vocalBareLabel()`, qui dit l'état puis l'action), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed` et l'infobulle), le terme `vocalBare ||` dans `vocalSyncChrome` (le bas est **retenu allumé**, il n'est plus éteint par l'état nu : la zone de saisie n'est pas dans le périmètre, 2026-11-01), la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 

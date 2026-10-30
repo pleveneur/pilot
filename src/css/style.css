@@ -352,12 +352,28 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
                           derriere, au-dessus le fond redevient opaque.
        --glass-scrim      le voile d'une modale, qui doit MASQUER l'ecran.
        --glass-scrim-soft le voile d'une attente (chargement, indexation).
+       --glass-frame      le CADRE d'une liste posee sur un panneau translucide
+                          (colonnes de l'ecran Vocal, panneaux flottants). Il
+                          vient de la meme famille que le TEXTE de ces
+                          panneaux : 80 % de `--text-secondary`. Mesure sur le
+                          fond de l'application : 5.32:1 en sombre, 3.69:1 en
+                          clair ; plancher des dix palettes 2.69:1 (tokyo-day,
+                          le theme ou le secondaire est deja le plus pale).
+                          Un cadre plus affirme que le texte ne passerait pas
+                          inapercu : il resterait sous les 4.5:1 du texte
+                          courant. Verrou : cadre-listes-panneaux.test.js.
+                          Il ne consomme AUCUN pixel de hauteur (aucun
+                          `padding-block`) : les hauteurs de lignes calculees
+                          restent vraies. En largeur, il prend
+                          `VOCAL_SIDE_FRAME_PX` sur la colonne, que
+                          `vocalCharsPerLine()` retranche avant de compter.
      En theme sombre les deux voiles viennent du fond de l'application ; en
      theme clair ils viennent de l'encre, parce qu'un voile clair ne masquerait
      rien (voir .theme-light). */
   --glass-tint: color-mix(in srgb, var(--surface-floating) 94%, transparent);
   --glass-scrim: color-mix(in srgb, var(--bg-app) 62%, transparent);
   --glass-scrim-soft: color-mix(in srgb, var(--bg-app) 40%, transparent);
+  --glass-frame: color-mix(in srgb, var(--text-secondary) 80%, transparent);
 
   /* Texte */
   --text-primary: #e6e8ee;
@@ -480,6 +496,11 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   --glass-tint: color-mix(in srgb, var(--surface-floating) 94%, transparent);
   --glass-scrim: color-mix(in srgb, var(--text-primary) 26%, transparent);
   --glass-scrim-soft: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  /* Meme cadre qu'en sombre, et la aussi derive du TEXTE du theme :
+     `--text-secondary` suit les huit palettes claires sans une valeur
+     recopiee. Mesure : 3.69:1 sur le fond de l'application (voir le
+     commentaire detaille sous `.theme-dark`). */
+  --glass-frame: color-mix(in srgb, var(--text-secondary) 80%, transparent);
 
   /* Texte */
   --text-primary: #1a1d24;
@@ -1373,7 +1394,12 @@ body.theme-light.theme-tokyo-day {
      rien. La surface etant desormais translucide, le flou fait enfin son
      travail — et le voile suit le theme instantanement (variables CSS). */
   background: var(--glass-tint);
-  border: 1px solid var(--border-subtle);
+  /* LE CADRE DES PANNEAUX TRANSLUCIDES : meme jeton que les deux colonnes de
+     l'ecran Vocal (`--glass-frame`, 80 % du texte secondaire du theme). Un
+     panneau translucide se voit ; son bord dit ou il s'arrete, et il le dit
+     dans la couleur du texte qu'il porte. Aucune couleur en dur, donc les dix
+     palettes suivent, y compris a chaud. */
+  border: 1px solid var(--glass-frame);
   border-radius: var(--radius-lg);
   margin-top: 6px;
   box-shadow: var(--shadow-md);
@@ -3949,9 +3975,11 @@ mark.search-highlight {
 .context-menu {
   position: fixed;
   z-index: 200;
-  /* Meme verre teinte que le menu deroulant des projets (--glass-tint). */
+  /* Meme verre teinte que le menu deroulant des projets (--glass-tint), et donc
+     meme cadre : `--glass-frame`, le meme jeton que les deux colonnes de
+     l'ecran Vocal. */
   background: var(--glass-tint);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--glass-frame);
   border-radius: var(--radius-md);
   padding: var(--space-1);
   min-width: 200px;
@@ -12012,6 +12040,44 @@ body.pilot-vocal-active #agent-activity {
      liste. */
   padding-block-end: 12px;
 }
+/* --- LE CADRE DES DEUX COLONNES (demande du proprietaire, 2026-11-02) ---
+   « Un cadre visible, en bords arrondis, dans la meme couleur que le texte
+   translucide de ces panneaux. » Les deux colonnes de l'ecran Vocal sont des
+   PANNEAUX : elles portent donc le cadre des panneaux translucides, et rien de
+   plus. Trois choix, ecrits ici une fois pour les deux :
+
+     la COULEUR  `--glass-frame`, un jeton de theme. Il vient de la meme famille
+                  que le texte de ces panneaux (80 % de `--text-secondary`) et
+                  suit donc les dix palettes, y compris un changement a chaud :
+                  aucun gris n'est ecrit en dur, et `684e9f3` reste vrai.
+     l'ARRONDI   `--radius-lg`, celui que porte deja `.projects-dropdown`
+                  (l'autre panneau translucide de l'application). Aucun
+                  cinquieme rayon invente.
+     la MESURE   `box-sizing: border-box` : le cadre est PRIS SUR la largeur de
+                  la colonne, pas ajoute a cote. Le contenu perd donc
+                  `2 x (1 bordure + 10 marge interieure) = 22 px`, chiffre
+                  unique porte par `VOCAL_SIDE_FRAME_PX` (`vocal-sides.js`), que
+                  `vocalCharsPerLine()` retranche avant de compter les
+                  caracteres : la mesure de la colonne dit vrai. Sans cela le
+                  texte serait coupe plus tot qu'annonce.
+
+   PLACEMENT : la regle groupee vient APRES les deux blocs de colonne, pour que
+   chacun d'eux reste lisible par son nom exact — plusieurs verrous decoupent
+   ces deux blocs-la par leur selecteur, et une regle groupee placee avant les
+   priverait de leur contenu.
+
+   La hauteur, elle, n'est PAS touchee : la bordure est deduite de la boite
+   (border-box) mais elle ne prend la place de rien, et aucun `padding-block`
+   n'est ajoute — les 51 px de haut fixe et les 46 px par tache du budget
+   restent exacts. Verrou : src/js/cadre-listes-panneaux.test.js. */
+.vocal-side-discussion,
+.vocal-side-tasks {
+  box-sizing: border-box;
+  border: 1px solid var(--glass-frame);
+  border-radius: var(--radius-lg);
+  /* 10 px de chaque cote : `VOCAL_SIDE_FRAME_PX / 2 - 1` (10 = 22 / 2 - 1). */
+  padding-inline: 10px;
+}
 /* LA ZONE D'IMAGE, SOUS LE PORTRAIT (complement du 2026-10-29, § 7bis ;
    correction du 2026-10-31) : la place que Pilot reserve a la fenetre du visage
    (PLface), AU-DESSUS de la liste des taches et SOUS le portrait du personnage.
@@ -12689,6 +12755,11 @@ body.pilot-vocal-active #agent-activity {
 .vocal-display-toggle {
   z-index: 1;
   margin-inline: auto;
+  /* La PASTILLE garde sa taille et sa forme d'avant (demande du proprietaire,
+     2026-11-02 : « position, taille et forme inchangees ») : la pastille de
+     190 x 28 px ne bouge pas d'un pixel, seule l'etiquette visible en est
+     partie. `min-width` n'est donc plus la pour couvrir le texte : elle est la
+     TAILLE du bouton, et la retirer le rendrait plus petit qu'avant. */
   min-width: 190px;
   height: 28px;
   display: inline-flex;
@@ -12713,19 +12784,13 @@ body.pilot-vocal-active #agent-activity {
   transition: background var(--transition), border-color var(--transition),
     box-shadow var(--transition);
 }
-/* L'icone a son noeud (pour que `setIcon`, qui ecrit `innerHTML`, n'emporte
-   jamais le texte ni le noeud du clic) : elle ne prend que sa taille. */
+/* L'icone a son noeud : `setIcon` ecrit `innerHTML`, donc jamais sur le bouton
+   lui-meme, ou il emporterait le noeud du clic. Elle est seule dans la pastille
+   (le bouton n'a plus de texte visible, voir plus bas). */
 .vocal-display-toggle-icon {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-}
-/* Le TEXTE, sur une seule ligne, jamais coupe en deux : c'est lui qui rend le
-   bouton trouvable. */
-.vocal-display-toggle-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .vocal-display-toggle:hover,
 .vocal-display-toggle:focus-visible {

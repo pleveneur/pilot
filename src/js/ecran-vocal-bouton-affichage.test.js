@@ -264,22 +264,22 @@ describe("3. le bouton existe dans l'ecran Vocal, et LA SEULEMENT", () => {
 });
 
 describe("4. les trois etats du bouton : libelle, icone, aria-pressed", () => {
-  it("a la construction : tout est visible, l'oeil est ouvert", () => {
+  it("a la construction : tout est visible, l'oeil est ouvert, AUCUN texte", () => {
     const bouton = corpsBouton();
     expect(bouton).toContain("vocalBareLabel(false)");
     expect(bouton).toContain("vocalBarePressed(false)");
     expect(bouton).toContain("vocalBareIcon(false)");
-    expect(bouton).toContain("vocalBareText(false)");
     // L'icone est posee dans SON noeud (`.vocal-display-toggle-icon`) : `setIcon`
-    // ecrit `innerHTML`, donc jamais sur le bouton — il emporterait le texte
-    // visible et le noeud du clic avec lui.
+    // ecrit `innerHTML`, donc jamais sur le bouton — il emporterait le noeud du
+    // clic avec lui.
     expect(bouton).toContain('setIcon(icone, vocalBareIcon(false), { size: "icon-sm" })');
     expect(bouton).toContain('icone.className = "vocal-display-toggle-icon"');
     expect(bouton).toContain("bouton.appendChild(icone)");
-    // Le TEXTE aussi a son noeud, et il est ecrit des la construction.
-    expect(bouton).toContain('texte.className = "vocal-display-toggle-label"');
-    expect(bouton).toContain("texte.textContent = vocalBareText(false)");
-    expect(bouton).toContain("bouton.appendChild(texte)");
+    // PLUS AUCUNE ETIQUETTE VISIBLE (demande du proprietaire, 2026-11-02) : le
+    // bouton ne porte que l'icone. C'est le `title` / l'`aria-label` qui parle.
+    expect(bouton).not.toContain("vocal-display-toggle-label");
+    expect(bouton).not.toContain("textContent");
+    expect(bouton).not.toContain("appendChild(texte)");
     // Le `title` ET l'`aria-label` portent la MEME phrase.
     expect(bouton).toContain('bouton.setAttribute("title", vocalBareLabel(false))');
     expect(bouton).toContain('bouton.setAttribute("aria-label", vocalBareLabel(false))');
@@ -312,12 +312,14 @@ describe("4. les trois etats du bouton : libelle, icone, aria-pressed", () => {
     expect(sync).toContain("bouton.dataset.vocalBareIcon !== icone");
   });
 
-  it("le TEXTE suit l'etat, lui aussi sans clignoter", () => {
+  it("le libelle accessible suit l'etat, sans clignoter", () => {
     const sync = corpsSyncBare();
-    expect(sync).toContain("vocalBareText(vocalBare)");
-    expect(sync).toContain('.vocal-display-toggle-label');
+    expect(sync).toContain("vocalBareLabel(vocalBare)");
     // Meme regle que le reste : on n'ecrit que si la phrase change.
-    expect(sync).toContain("texte.textContent !== mot");
+    expect(sync).toContain('bouton.getAttribute("title") !== libelle');
+    // Aucun texte visible n'est ecrit : plus de noeud d'etiquette du tout.
+    expect(sync).not.toContain("vocal-display-toggle-label");
+    expect(sync).not.toContain("textContent");
     // Et l'icone est peinte dans SON noeud, jamais sur le bouton.
     expect(sync).toContain('.vocal-display-toggle-icon');
   });
@@ -338,12 +340,12 @@ describe("4. les trois etats du bouton : libelle, icone, aria-pressed", () => {
 });
 
 describe("5. la taille du bouton ne change pas d'un etat a l'autre", () => {
-  it("190 x 28 px pour l'icone ET son texte, rayon pastille, largeur qui couvre les deux", () => {
+  it("190 x 28 px, rayon pastille : la taille et la forme ne bougent pas", () => {
     const bouton = blocBouton();
-    // CORRECTIF DU 2026-10-31 : le proprietaire ne TROUVAIT pas le bouton. Il
-    // porte donc son texte en clair, dans les deux etats — et sa largeur est
-    // couverte par le plus long des deux (`min-width`), pour que le point de clic
-    // ne bouge pas sous le doigt.
+    // DEMANDE DU 2026-11-02 : l'etiquette visible part, mais « position, taille
+    // et forme inchangees ». La pastille de 190 x 28 px reste donc exactement
+    // celle du correctif du 2026-10-31 : `min-width` n'est plus la pour couvrir
+    // un texte, elle est la TAILLE du bouton.
     expect(bouton).toMatch(/min-width:\s*190px/);
     expect(bouton).toMatch(/height:\s*28px/);
     expect(bouton).toMatch(/border-radius:\s*999px/);
@@ -355,10 +357,13 @@ describe("5. la taille du bouton ne change pas d'un etat a l'autre", () => {
     expect(blocException()).not.toMatch(/(^|[;\s])padding\s*:/);
   });
 
-  it("le texte est sur UNE ligne, et l'icone a son propre noeud", () => {
-    const label = sliceSource(CSS, ".vocal-display-toggle-label {", "}", 10);
-    expect(label).toMatch(/white-space:\s*nowrap/);
-    expect(label).toMatch(/text-overflow:\s*ellipsis/);
+  it("le noeud d'etiquette a disparu, l'icone garde le sien", () => {
+    // Plus de `.vocal-display-toggle-label` nulle part : ni dans la feuille de
+    // style, ni dans le code, ni dans le module. Une regle orpheline redeviendrait
+    // un emplacement pour un texte qu'on ne veut plus.
+    expect(CSS).not.toContain(".vocal-display-toggle-label");
+    expect(SUPER).not.toContain("vocal-display-toggle-label");
+    expect(MODULE).not.toContain("vocal-display-toggle-label");
     const icone = sliceSource(CSS, ".vocal-display-toggle-icon {", "}", 10);
     expect(icone).toMatch(/display:\s*inline-flex/);
     expect(icone).toMatch(/flex:\s*0 0 auto/);

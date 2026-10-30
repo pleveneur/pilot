@@ -252,3 +252,27 @@ npm run build:handbook                                      → 47 blocs, handbo
 
 Commit unique de la mission (rapport, code et tests ensemble), à partir de
 `476ba3f`.
+
+---
+
+## 9. Suites (2026-11-02) — le cadre des panneaux
+
+Un lot suivant ajoute aux panneaux translucides un **cadre** dans la même famille
+de couleur que leur texte : `--glass-frame` = `color-mix(in srgb, var(--text-secondary)
+80%, transparent)`, arrondi par `--radius-lg` (12 px). Il est déclaré **au même
+endroit** que `--glass-tint` / `--glass-scrim` / `--glass-scrim-soft` (`.theme-dark`
+et `.theme-light`), donc il suit les **dix** palettes et un **changement à chaud**
+exactement comme la teinte décrite ci-dessus — l'acquis de ce rapport est conservé.
+
+Deux conséquences pour ce document :
+
+- les deux colonnes de l'écran Vocal portent désormais ce cadre
+  (`border: 1px solid var(--glass-frame)` + `border-radius: var(--radius-lg)` +
+  `box-sizing: border-box` + `padding-inline: 10px`) : elles restent **sans fond**,
+  comme § 5 l'exige ;
+- `.projects-dropdown` et `.context-menu` passaient une bordure
+  `1px solid var(--border-subtle)` : elle devient `1px solid var(--glass-frame)`,
+  même jeton, même mécanisme. Rien d'autre ne change dans leurs règles.
+
+Verrou du lot : `src/js/cadre-listes-panneaux.test.js`. Rapport détaillé :
+`docs/rapports/RAPPORT-cadres-arrondis-panneaux.md`.

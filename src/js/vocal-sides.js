@@ -48,6 +48,19 @@ export const VOCAL_SIDE_WIDE_AT_PX = 1600;
 export const VOCAL_SIDE_GAP_PX = 24;
 /** Marge de chaque cote de l'ecran, en px (`padding` de la scene). */
 export const VOCAL_SIDE_PAD_PX = 16;
+/**
+ * Ce que le CADRE d'une colonne prend sur sa largeur, en px :
+ * `2 x (1 de bordure + 10 de marge interieure) = 22`. La feuille de style ecrit
+ * les trois valeurs (`border: 1px solid var(--glass-frame)` et
+ * `padding-inline: 10px` sur `.vocal-side-discussion` et `.vocal-side-tasks`,
+ * en `box-sizing: border-box`) ; ce chiffre en est la somme, et
+ * `vocalCharsPerLine()` le retranche AVANT de compter les caracteres, sinon la
+ * mesure annoncerait plus de place qu'il n'en reste et un message serait coupe
+ * sans le dire. La hauteur, elle, n'en perd rien : aucun `padding-block` n'est
+ * ajoute, donc les budgets de lignes et de taches restent exacts.
+ * Verrou : src/js/cadre-listes-panneaux.test.js.
+ */
+export const VOCAL_SIDE_FRAME_PX = 2 * (1 + 10);
 /** Hauteur d'une tache dans la liste, en px (lot 2). */
 export const VOCAL_TASK_PX = 46;
 /** Hauteur d'un en-tete de groupe de la liste, en px (lot 2). */
@@ -529,10 +542,14 @@ export function planVocalTasks(missions, { listHeight } = {}) {
 }
 
 /**
- * Combien de caracteres tiennent sur une ligne de la colonne : `track / 7,6`.
+ * Combien de caracteres tiennent sur une ligne de la colonne :
+ * `(track - cadre) / 7,6`.
  *
  * C'est ce chiffre qui FIXE le nombre de lignes coupees par `vocalExcerpt` :
- * aucune constante cachee ne vient doubler la largeur reelle.
+ * aucune constante cachee ne vient doubler la largeur reelle. Le cadre des deux
+ * colonnes (`VOCAL_SIDE_FRAME_PX`, 22 px : 1 px de bordure et 10 px de marge
+ * interieure de chaque cote) est retire AVANT la division — la place qu'il
+ * occupe n'est pas de la place pour du texte.
  *
  * @param {number} track largeur d'une colonne, en px (`planVocalSides`)
  * @returns {number} caracteres par ligne, au moins 1
@@ -540,7 +557,7 @@ export function planVocalTasks(missions, { listHeight } = {}) {
 export function vocalCharsPerLine(track) {
   const largeur = Number(track);
   const px = Number.isFinite(largeur) && largeur > 0 ? largeur : 0;
-  return Math.max(1, Math.floor(px / VOCAL_DISCUSSION_CHAR_PX));
+  return Math.max(1, Math.floor(Math.max(0, px - VOCAL_SIDE_FRAME_PX) / VOCAL_DISCUSSION_CHAR_PX));
 }
 
 /**
