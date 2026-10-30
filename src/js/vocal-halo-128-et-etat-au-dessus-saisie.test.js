@@ -308,11 +308,13 @@ describe("5. la phrase d'etat est AU-DESSUS de la barre de saisie", () => {
       "vocal-restart",
       "vocal-mic-fix",
       // LOT 1 : les deux colonnes laterales et le portrait de la colonne droite.
+      // Revision du 2026-10-29 : le portrait est EN HAUT, AU-DESSUS de la liste
+      // (l'ordre du balisage suit l'ordre de l'ecran), et le nom n'est plus une
+      // pastille sous l'image : il est sous le bouton-cercle.
       "vocal-side-discussion",
       "vocal-side-tasks",
-      "vocal-side-body",
       "vocal-portrait",
-      "vocal-portrait-name",
+      "vocal-side-body",
       "vocal-status",
       "vocal-input",
     ]);

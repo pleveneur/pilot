@@ -42,8 +42,16 @@ export function buildFaceRequest(toolName, args = {}) {
       return { pathname: "/emotion", params: { name: args.emotion } };
     case "get_status":
       return { pathname: "/status", params: {} };
-    case "set_position":
-      return { pathname: "/set_position", params: { x: args.x, y: args.y } };
+    case "set_position": {
+      // x et y sont obligatoires ; w et h sont FACULTATIFS (la zone d'image de
+      // l'ecran Vocal demande au visage de s'y poser a sa taille — conception
+      // § 7bis.5). Les deux ne sont transmis que s'ils sont fournis : un appel
+      // `set_position` sans taille continue d'envoyer exactement `x` et `y`.
+      const params = { x: args.x, y: args.y };
+      if (args.w !== undefined && args.w !== null) params.w = args.w;
+      if (args.h !== undefined && args.h !== null) params.h = args.h;
+      return { pathname: "/set_position", params };
+    }
     case "reset":
       return { pathname: "/neutral", params: {} };
     default:

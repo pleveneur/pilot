@@ -250,13 +250,13 @@ describe("4. l'objet lumineux et son trait (§2.2)", () => {
       "vocal-restart",
       "vocal-mic-fix",
       // LOT 1 (CONCEPTION-ecran-vocal-portrait-et-colonnes.md §2.1) : les deux
-      // colonnes laterales, leur conteneur de liste, puis le portrait et son
-      // nom AU PIED de la colonne de droite.
+      // colonnes laterales, leur conteneur de liste, puis le portrait EN HAUT
+      // de la colonne de droite, au-dessus de la liste (revision du 2026-10-29 :
+      // le nom, lui, est sous le bouton-cercle et n'est donc plus ici).
       "vocal-side-discussion",
       "vocal-side-tasks",
-      "vocal-side-body",
       "vocal-portrait",
-      "vocal-portrait-name",
+      "vocal-side-body",
       "vocal-status",
       "vocal-input",
     ]);

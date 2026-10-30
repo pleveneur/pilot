@@ -1391,18 +1391,20 @@ texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que c
 tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
 cliquable dans la colonne : on la lit, on ne la manipule pas.
 
-La colonne de droite parle du **travail** : le titre **« TÂCHES »**, la **liste des tâches
-en cours** — l'agent et le projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui
-se passe à cet instant. Les tâches sont rangées en **« En cours »** d'abord, **« En
+La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis, **en haut**, la
+place de l'**image** (voir plus bas), puis la **liste des tâches en cours** — l'agent et le
+projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui se passe à cet instant. Les tâches sont rangées en **« En cours »** d'abord, **« En
 attente »** ensuite. La liste **ne défile pas** : elle montre ce que la hauteur permet
 (jusqu'à **6** tâches quand un personnage est présent, **8** sans) et, s'il y en a plus, la
 ligne **« + N autre(s) »** le dit — la liste complète reste dans le bouton **« Travail »**.
 Aucune tâche en cours ? La colonne affiche « **Aucune tâche en cours** », jamais du vide.
 
-Dans cette même colonne, **tout en bas**, le **portrait du personnage** apparaît en
-médaillon rond, avec son nom juste en dessous. Pas de personnage déposé par le projet
-**Présences** ? Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la
-colonne reste simplement sans image, et la liste occupe alors **toute la hauteur**. Le
+Dans cette même colonne, **tout en haut**, le **portrait du personnage** apparaît en
+médaillon rond. **Aucun nom n'est écrit sous cette image** : le nom est **sous le cercle**,
+au centre de l'écran, et il y reste même quand il n'y a aucune image. Pas de personnage
+déposé par le projet **Présences** ? Il n'y a **aucune image de remplacement**, pas même le
+logo Pilot : la zone est simplement absente, la liste remonte et occupe alors **toute la
+hauteur**. Le
 portrait suit un éventuel changement de personnage sans redémarrer Pilot, et le haut de la
 colonne ne bouge pas quand il apparaît ou disparaît.
 

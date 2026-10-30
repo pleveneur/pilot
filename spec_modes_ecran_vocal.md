@@ -257,13 +257,15 @@ non-recouvrement, mouvement réduit).
 
 ---
 
-## 3ter. Les colonnes de l'écran Vocal (discussion à gauche ; tâches, personnage, avatar à droite) — ✅ **lots 1, 2 et 3 livrés**
+## 3ter. Les colonnes de l'écran Vocal (discussion à gauche ; zone d'image et tâches à droite) — ✅ **lots 1, 2, 3 et 4 livrés**
 
 > **État réel (lots 1 à 3, appliqués)** : la **structure** des colonnes existe — deux
 > `<aside class="vocal-side">` enfants de la scène (discussion à gauche, tâches à
-> droite), la grille à trois pistes de `.vocal-stage`, dans la colonne de droite le
-> **portrait du personnage au pied** (médaillon rond de 72 px) avec son nom, et dans
-> celle de gauche l'**aperçu de la discussion**. La lecture de la largeur est unique :
+> droite), la grille à trois pistes de `.vocal-stage`, dans la colonne de droite la
+> **zone d'image EN HAUT** — le portrait du personnage (médaillon rond de 72 px), ou la
+> place de la fenêtre du visage, ou rien — suivie de la **liste des tâches**, et dans
+> celle de gauche l'**aperçu de la discussion**. **Aucun nom n'est écrit sous l'image** :
+> le nom est **sous le cercle**, en permanence (voir le dernier point de cette section). La lecture de la largeur est unique :
 > `planVocalSides()` (`src/js/vocal-sides.js`), appliquée par
 > `vocalSyncSides()` à l'entrée, à chaque changement de taille de fenêtre et à chaque tic de
 > **900 ms** (`VOCAL_SIDES_TICK_MS`) ; sous 240 px de place disponible, les deux colonnes
@@ -285,17 +287,20 @@ non-recouvrement, mouvement réduit).
 
 Quand la place le permet (seuil d'affichage des colonnes), l'écran Vocal montre à droite
 **une** colonne qui parle du **travail**, dans cet ordre de haut en bas : le titre
-« TÂCHES », **la liste des tâches**, puis **l'image** de la zone d'image — le portrait du
-personnage, ou à défaut l'avatar du visage, ou rien —, puis **une** ligne disant ce que fait
-l'agent à cet instant. **Trois cas, et deux critères qui sont des faits** (complément du
+« TÂCHES », puis **la zone d'image** — le portrait du personnage, ou à défaut la place de la
+fenêtre du visage, ou rien —, puis **la liste des tâches**, puis **une** ligne disant ce que
+fait l'agent à cet instant. **L'image est en haut, les tâches en dessous** (décision du
+propriétaire du 2026-10-29) : la ligne d'activité et le haut de la colonne ne bougent pas
+d'un pixel d'un cas à l'autre, seule la hauteur de la liste change. **Trois cas, et deux critères qui sont des faits** (complément du
 2026-10-29), **dans cet ordre de priorité** :
 
 - **1. Un personnage occupe la zone d'image si et seulement si un portrait affichable
   existe** (`getAssistantPortrait() !== ""`). Rien d'autre n'est lu : aucun réglage, aucun
   état mémorisé, aucun redémarrage — le personnage est déjà relu à l'ouverture de l'onglet et
-  à chaque retour de focus de la fenêtre. Les tâches sont **en haut** (elles commencent à la
-  même place qu'il y ait une image ou non) et le portrait est **au pied** de la colonne ;
-  **98 px** sont réservés à son bloc (72 + 6 + 20). La liste affiche jusqu'à **6** tâches.
+  à chaque retour de focus de la fenêtre. Le portrait est **en haut** de la colonne et la
+  liste vient **en dessous** ; **98 px** sont réservés à son bloc (72 px de médaillon + 6
+  d'écart + 20 d'air), et **aucun nom n'est écrit dessous**. La liste affiche jusqu'à **6**
+  tâches.
 - **2. Sinon, l'avatar du visage (PLface) occupe la zone s'il tourne et répond**
   (`invoke("plface_status")`, la même sonde que l'écran Paramètres → Avatar) **et si sa
   taille est connue** ; **180 px** sont réservés (son plancher : 160 × 180) et la liste
@@ -327,6 +332,13 @@ l'agent à cet instant. **Trois cas, et deux critères qui sont des faits** (com
   déplace ni le haut de la colonne ni la ligne d'activité. Le complément du 2026-10-29
   n'ajoute **ni minuterie, ni nœud, ni case à cocher** : la place de l'avatar est décidée à
   chaque affichage, pas mémorisée.
+
+- **Le nom est sous le cercle, et il y reste** (décision du 2026-10-29) : l'écran affiche en
+  permanence, **sous le bouton du cercle**, le nom du **personnage actif** ; sans personnage,
+  le nom que vous avez donné à l'assistant. On voit donc **toujours** à qui l'on parle, même
+  quand la zone d'image est vide, et **aucun nom n'est écrit sous une image**. Ce libellé est
+  **une** ligne de texte posée **sous** le disque, hors de lui : il ne déplace ni le cercle,
+  ni le halo, ni la ligne d'état, ne capte **aucun clic** et ne se règle pas.
 
 Les trois sorties (logo, Échap, fermeture de l'onglet) et les colonnes sans clic restent
 **inchangées** : **aucune** des deux colonnes n'ajoute de zone cliquable.
@@ -402,18 +414,20 @@ texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que c
 tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
 cliquable dans la colonne : on la lit, on ne la manipule pas.
 
-La colonne de droite parle du **travail** : le titre **« TÂCHES »**, la **liste des tâches
-en cours** — l'agent et le projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui
-se passe à cet instant. Les tâches sont rangées en **« En cours »** d'abord, **« En
+La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis, **en haut**, la
+place de l'**image** (voir plus bas), puis la **liste des tâches en cours** — l'agent et le
+projet, puis ce qu'il fait —, puis **une phrase** qui dit ce qui se passe à cet instant. Les tâches sont rangées en **« En cours »** d'abord, **« En
 attente »** ensuite. La liste **ne défile pas** : elle montre ce que la hauteur permet
 (jusqu'à **6** tâches quand un personnage est présent, **8** sans) et, s'il y en a plus, la
 ligne **« + N autre(s) »** le dit — la liste complète reste dans le bouton **« Travail »**.
 Aucune tâche en cours ? La colonne affiche « **Aucune tâche en cours** », jamais du vide.
 
-Dans cette même colonne, **tout en bas**, le **portrait du personnage** apparaît en
-médaillon rond, avec son nom juste en dessous. Pas de personnage déposé par le projet
-**Présences** ? Il n'y a **aucune image de remplacement**, pas même le logo Pilot : la
-colonne reste simplement sans image, et la liste occupe alors **toute la hauteur**. Le
+Dans cette même colonne, **tout en haut**, le **portrait du personnage** apparaît en
+médaillon rond. **Aucun nom n'est écrit sous cette image** : le nom est **sous le cercle**,
+au centre de l'écran, et il y reste même quand il n'y a aucune image. Pas de personnage
+déposé par le projet **Présences** ? Il n'y a **aucune image de remplacement**, pas même le
+logo Pilot : la zone est simplement absente, la liste remonte et occupe alors **toute la
+hauteur**. Le
 portrait suit un éventuel changement de personnage sans redémarrer Pilot, et le haut de la
 colonne ne bouge pas quand il apparaît ou disparaît.
 
@@ -1422,6 +1436,20 @@ sans casse, **clic sur la voie existante** et une seule définition de
 calculée** (rayon du bouton = rayon intérieur du disque, seule épaisseur restante
 = l'anneau, aucune unité de fenêtre), aucun recouvrement du halo ni de la phrase
 d'état, aucune animation et mouvement réduit respecté).
+
+`ecran-vocal-zone-image.test.js` tient la **zone d'image** (§7bis) : **T20** les trois
+cas **dans l'ordre** (le personnage, sinon l'avatar du visage, sinon rien), rejoués sur
+les **sept** fenêtres du tableau §7bis.4 — les quatre totaux de liste `H − 72` /
+`H − 170` / `H − 252` / `H − 356` et le nombre de lignes qui en découle —, le cas 2
+**absent sous `H = 298`** et un avatar refusé qui **ne déplace rien** ; **T21** l'avatar
+**n'est jamais un nœud** (la zone ne porte ni `img`, ni `src`, ni logo, ni texte, ni
+`innerHTML`, et sa règle CSS ne dessine **ni cadre, ni fond, ni ombre, ni rond**) ;
+**T22** la **pose** (conversion CSS → physique **arrondie**, **aucune** demande sans
+taille confirmée, **un seul** appel par geste — une place identique n'est pas
+redemandée —, `w`/`h` transmis par la passerelle et absents quand ils ne sont pas
+connus, **aucune minuterie** nouvelle, aucun réglage). Les décisions pures vivent dans
+`src/js/vocal-sides.js` (`planVocalImageZone`, `planVocalAvatarPose`,
+`vocalAvatarPoseKey`, `planVocalAvatarPlacement`).
 
 `vocal-aucun-calque-ne-capte-les-clics.test.js` tient la règle du §8bis :
 `pointer-events: none` sur le calque plein écran, liste **exhaustive** des six

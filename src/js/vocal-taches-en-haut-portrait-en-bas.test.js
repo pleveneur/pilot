@@ -115,17 +115,19 @@ describe("T18 — sans personnage, la colonne ne reserve rien", () => {
     expect(planVocalSides(base).listHeight).toBe(440);
   });
 
-  it("au cas B, ni le medaillon ni la pastille ne sont affiches (balisage + CSS)", () => {
+  it("au cas B, le medaillon n'est pas affiche, et il n'y a AUCUN nom sous l'image", () => {
     const build = corps("function buildVocalOverlay()", "function vocalStatusLine");
-    // Les deux noeuds existent dans la colonne, mais naissent `hidden` : c'est
-    // `applyVocalPortrait` qui les montre, et seulement s'il y a un personnage.
+    // Le noeud existe dans la colonne, mais nait `hidden` : c'est
+    // `applyVocalPortrait` qui le montre, et seulement s'il y a un personnage.
     expect(build).toMatch(/<img class="vocal-portrait"[^>]*hidden/);
-    expect(build).toMatch(/<span class="vocal-portrait-name"[^>]*hidden/);
-    // Aucune hauteur n'est reservee a leur place : `hidden` les retire du flux
-    // (aucune regle CSS ne leur rend un `display`), et rien ne leur cede de
-    // place quand ils sont absents.
+    // REVISION DU 2026-10-29 (decision du proprietaire) : aucun nom sous
+    // l'image. Le nom vit sous le bouton-cercle, il n'a donc plus rien a faire
+    // ici — ni en balisage, ni en CSS.
+    expect(build).not.toMatch(/vocal-portrait-name/);
+    // Aucune hauteur n'est reservee a sa place : `hidden` le retire du flux
+    // (aucune regle CSS ne lui rend un `display`), et rien ne lui cede de place
+    // quand il est absent.
     expect(CSS).not.toMatch(/\.vocal-portrait[^{]*\{[^}]*display\s*:/);
-    expect(CSS).not.toMatch(/\.vocal-portrait-name[^{]*\{[^}]*display\s*:/);
     // Le seul element qui absorbe la hauteur libre est la liste.
     expect(CSS).toMatch(/\.vocal-side-body\s*\{[^}]*flex:\s*1 1 auto/);
   });
@@ -138,13 +140,20 @@ describe("T19 — le portrait ne bouge pas quand la liste change", () => {
     expect(vide.listHeight).toBe(342);
     // Le nombre de missions n'entre pas dans la decision des colonnes : il n'y a
     // meme pas de parametre pour lui. Le plan ne bouge donc pas.
-    expect(Object.keys(vide).sort()).toEqual(
-      ["columnHeight", "hasPortrait", "listHeight", "shown", "track"],
-    );
+    expect(Object.keys(vide).sort()).toEqual([
+      "columnHeight",
+      "hasAvatar",
+      "hasPortrait",
+      "imageZone",
+      "listHeight",
+      "shown",
+      "track",
+    ]);
   });
 
-  it("l'ordre du document est titre -> liste -> portrait -> pastille -> activite", () => {
-    // Le balisage statique pose liste -> portrait -> pastille.
+  it("l'ordre du document est titre -> zone d'image -> liste -> activite", () => {
+    // Le balisage statique pose portrait -> liste (revision du 2026-10-29 : le
+    // personnage d'abord, la liste dessous ; plus aucun nom sous l'image).
     const build = corps("function buildVocalOverlay()", "function vocalStatusLine");
     const colonne = sliceSource(
       build,
@@ -154,12 +163,12 @@ describe("T19 — le portrait ne bouge pas quand la liste change", () => {
     );
     const iCorps = colonne.indexOf('class="vocal-side-body"');
     const iPortrait = colonne.indexOf('class="vocal-portrait"');
-    const iNom = colonne.indexOf('class="vocal-portrait-name"');
     expect(iCorps).toBeGreaterThan(-1);
-    expect(iPortrait).toBeGreaterThan(iCorps);
-    expect(iNom).toBeGreaterThan(iPortrait);
+    expect(iPortrait).toBeGreaterThan(-1);
+    expect(iPortrait).toBeLessThan(iCorps);
+    expect(colonne).not.toMatch(/vocal-portrait-name/);
     // Le titre et la ligne d'activite sont CREES par la repeinture, a leur place
-    // imposee : le titre AVANT tout, la ligne APRES tout (donc apres le nom).
+    // imposee : le titre AVANT tout, la ligne APRES tout.
     const rendu = corps("function vocalRenderColumn(plan)", "\n}\n");
     expect(rendu).toMatch(
       /vocalColumnNode\(colonne, "\.vocal-tasks-title", "first"\)/,

@@ -11891,15 +11891,26 @@ body.pilot-vocal-active #agent-activity {
   grid-column: 3;
   display: flex;
   flex-direction: column;
-  /* Le HAUT de la colonne ne bouge pas : titre et premiere tache a la meme
-     place, avec ou sans portrait. */
+  /* Le HAUT de la colonne ne bouge pas : titre et zone d'image a la meme place,
+     avec ou sans personnage. */
   justify-content: flex-start;
   overflow: hidden;
   /* LOT 2 : les 12 px d'air sous la ligne d'activite (budget du §2.5). Les
-     72 px du medaillon, les 6 px de l'ecart et les 20 px de la pastille n'existent
-     que si le portrait existe : quand il est `hidden`, ils disparaissent avec lui
-     et la liste prend TOUTE la hauteur (0 px reserve, cas B). */
+     72 px du medaillon, les 6 px de l'ecart et les 20 px du nom n'existent que
+     si le portrait existe : quand il est `hidden`, ils disparaissent avec lui et
+     la liste prend TOUTE la hauteur (0 px reserve, cas B). */
   padding-block-end: 12px;
+}
+/* LA ZONE D'IMAGE, EN HAUT de la colonne de droite (complement du 2026-10-29,
+   § 7bis ; decision du proprietaire) : la place que Pilot reserve a la fenetre
+   du visage, AU-DESSUS de la liste des taches. Son noeud est INERTE : aucune
+   image, aucun cadre, aucune icone, aucun texte, jamais le logo. Sa hauteur est
+   ecrite a l'execution par `vocalRenderColumn` (0 px hors du cas 2 — il est
+   alors `hidden`, la liste prend la place). */
+.vocal-image-zone {
+  flex: 0 0 auto;
+  width: 100%;
+  pointer-events: none;
 }
 /* La liste (remplie au lot 2) : c'est ELLE qui absorbe la hauteur libre. Deux
    marges automatiques se partageraient l'air et le portrait flotterait au
@@ -11909,9 +11920,11 @@ body.pilot-vocal-active #agent-activity {
   min-height: 0;
   overflow: hidden;
 }
-/* LE PORTRAIT DU PERSONNAGE, AU PIED de la colonne de droite (revision du
-   2026-10-29) : un medaillon de 72 px, jamais dans le disque. `hidden` quand
-   il n'y a pas de personnage — AUCUN repli sur le logo dans la colonne. */
+/* LE PORTRAIT DU PERSONNAGE, EN HAUT de la colonne de droite (revision du
+   2026-10-29 : le personnage d'abord, la liste dessous) : un medaillon de
+   72 px, jamais dans le disque. `hidden` quand il n'y a pas de personnage —
+   AUCUN repli sur le logo dans la colonne. AUCUN NOM DESSOUS : le nom est sous
+   le bouton-cercle (`.vocal-orb-name`). */
 .vocal-portrait {
   width: 72px;
   height: 72px;
@@ -11921,11 +11934,17 @@ body.pilot-vocal-active #agent-activity {
   flex: 0 0 auto;
   pointer-events: none;
 }
-/* Son nom, sous le medaillon : une pastille lisible sur le voile des colonnes,
-   JAMAIS une zone cliquable (le nom complet vit sur le texte). */
-.vocal-portrait-name {
-  align-self: center;
-  margin-block-start: 6px;
+/* LE NOM DU PERSONNAGE, SOUS LE BOUTON-CERCLE, EN PERMANENCE (decision du
+   proprietaire, 2026-10-29) : on voit toujours a qui l'on parle — le nom du
+   personnage actif, a defaut le nom de l'Assistant. Il ne depend d'AUCUNE
+   image. Pose en absolu sous le disque (`top: 100%` + 6 px) : il ne prend aucune
+   place dans la grille et ne peut donc pas deplacer le disque. Une pastille
+   lisible sur le voile suffit ; JAMAIS une zone cliquable. */
+.vocal-orb-name {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + 6px);
+  text-align: center;
   line-height: 20px;
   font-size: var(--font-sm);
   background: color-mix(in srgb, var(--bg-app) 88%, transparent);
@@ -11935,13 +11954,15 @@ body.pilot-vocal-active #agent-activity {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 /* --- LOT 2 (§2.2 a §2.7) : CE QUE LA COLONNE DE DROITE MONTRE ---
-   Ordre du document, de haut en bas : titre, liste, portrait, pastille, ligne
+   Ordre du document, de haut en bas (revise le 2026-10-29) : titre, ZONE
+   D'IMAGE (personnage, sinon la place du visage, sinon rien), liste, ligne
    d'activite. Les hauteurs du budget (§2.5) sont ECRITES ici : elles doivent
    tomber juste, sinon le nombre de lignes calcule par `planVocalTasks` ne
-   serait plus celui qu'on voit. Cas A : 39 + 72 + 26 + 18 + 12 = 167 px de
+   serait plus celui qu'on voit. Cas A : 39 + 72 + 6 + 20 + 18 + 12 = 167 px de
    fixe pour 170 px prevus ; cas B : 69 px pour 72 px prevus. Le reste est de
    l'air, jamais un debordement. */
 /* LE TITRE DES DEUX COLONNES : une seule regle, deux selecteurs — les deux
@@ -12577,9 +12598,11 @@ body.pilot-vocal-active #agent-activity {
    position. L'ESPACE RESTE RESERVE : le disque et le portrait ne bougent pas d'un
    pixel, et le retour ne les fait pas sauter. Aucune translation non plus : le
    disque ne glisse pas, il s'eteint.
-   CE QUI N'EST PAS NOMME ICI, ET NE DOIT JAMAIS L'ETRE : le portrait et sa
-   pastille (`.vocal-portrait`, `.vocal-portrait-name`) — la regle la plus sure est
-   l'absence de regle ; le logo (une sortie), l'entree « Travail » (un acces) et
+   CE QUI N'EST PAS NOMME ICI, ET NE DOIT JAMAIS L'ETRE : le portrait et son nom
+   (`.vocal-portrait`, `.vocal-orb-name` — ce dernier vit DANS le disque, il
+   s'eteint donc avec lui) et la zone d'image (`.vocal-image-zone`, dont la
+   hauteur reservee ne doit pas bouger, sinon le portrait saute) — la regle la
+   plus sure est l'absence de regle ; le logo (une sortie), l'entree « Travail » (un acces) et
    les trois boutons systeme (hors de l'overlay).
    SANS PERSONNAGE, il ne reste que le bouton : le disque s'eteint comme le
    reste, il ne demeure pas pour lui tenir compagnie. */

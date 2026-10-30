@@ -1,5 +1,7 @@
 // vocal-sides.js — LOT 1 de l'ecran Vocal : la LARGEUR des deux colonnes
-// laterales, en une seule formule PURE.
+// laterales, en une seule formule PURE ; LOT 2 : le contenu de la colonne de
+// droite ; COMPLEMENT DU 2026-10-29 : la ZONE D'IMAGE a trois cas (§ 7bis) et
+// la POSE de la fenetre du visage.
 //
 // Source : docs/conceptions/CONCEPTION-ecran-vocal-portrait-et-colonnes.md
 // (§ 2.4 pour les noms, § 3.1 pour la formule, § 3.2 pour le tableau que le
@@ -44,12 +46,46 @@ export const VOCAL_TASK_PX = 46;
 /** Hauteur d'un en-tete de groupe de la liste, en px (lot 2). */
 export const VOCAL_TASK_HEADER_PX = 20;
 /**
+ * Hauteur du bloc du personnage quand il est la : le medaillon (72) + son
+ * ecart (6) + la pastille de son nom (20) = 98 px. C'est le bloc rendu a la
+ * LISTE quand il n'y a pas de personnage (decision du 2026-10-29 : aucun nom
+ * sous l'image, donc plus rien a reserver pour un nom).
+ */
+export const VOCAL_PORTRAIT_BLOCK_PX = VOCAL_PORTRAIT_PX + 6 + 20;
+/**
  * Total fixe du haut de la colonne QUAND un personnage est affiche :
  * 14 + 14 + 14 (titre et marges) + 72 (portrait) + 6 (ecart du nom) +
  * 20 (nom) + 12 + 18 (ligne d'activite) = 170 px. C'est ce total qui garantit
  * qu'un personnage actif ne coute pas un pixel de plus a la colonne.
  */
-export const VOCAL_SIDE_FIXED_PX = 170;
+export const VOCAL_SIDE_FIXED_PX = 72 + VOCAL_PORTRAIT_BLOCK_PX;
+
+// ── LA ZONE D'IMAGE, A TROIS CAS ──
+// Source : CONCEPTION-ecran-vocal-portrait-et-colonnes.md, complement du
+// 2026-10-29, § 7bis (la zone d'image a trois cas). Decision du proprietaire :
+// la zone est EN HAUT de la colonne de droite, la liste des taches passe
+// DESSOUS. Aucun nombre du § 7bis.4 ne change : les totaux de hauteur sont les
+// memes, seule l'ancre du bloc remonte.
+//
+//   1. le PERSONNAGE (un portrait affichable existe)      -> 98 px
+//   2. sinon l'AVATAR DU VISAGE (PLface), s'il tourne et si
+//      sa TAILLE est connue                               -> 180 px
+//   3. sinon rien du tout : AUCUNE place reservee          -> 0 px
+
+/** Largeur du plancher de la fenetre du visage (PLface), en px (§ 7bis.7). */
+export const VOCAL_AVATAR_W_PX = 160;
+/** Hauteur du plancher de la fenetre du visage (PLface), en px (§ 7bis.7). */
+export const VOCAL_AVATAR_H_PX = 180;
+/** Ecart entre la fenetre du visage et le medaillon pose dessous, en px. */
+export const VOCAL_IMAGE_GAP_PX = 6;
+/** Le cas 1 : le personnage occupe la zone. */
+export const VOCAL_IMAGE_PORTRAIT = "portrait";
+/** Le cas 2 : l'avatar du visage occupe la zone, seul. */
+export const VOCAL_IMAGE_AVATAR = "avatar";
+/** Les cas 1 et 2 : l'avatar, puis le medaillon du personnage dessous. */
+export const VOCAL_IMAGE_AVATAR_PORTRAIT = "avatar+portrait";
+/** Le cas 3 : la zone n'existe pas (aucune image, aucun cadre, aucune place). */
+export const VOCAL_IMAGE_NONE = "none";
 /** Rapport boite / disque : 336 + 2 x 88 = 512 px de boite pour 336 de disque. */
 export const VOCAL_ORB_BOX_RATIO = 1 + (2 * 88) / 336;
 
@@ -132,15 +168,19 @@ export const VOCAL_DISCUSSION_TITLE = "DISCUSSION";
  * @param {number} entrees.height   hauteur de la fenetre, en px
  * @param {number} entrees.orbSize  diametre du disque, en px (`--vocal-orb-size`)
  * @param {boolean} [entrees.hasPortrait] un portrait affichable existe-t-il
+ * @param {boolean} [entrees.hasAvatar] une fenetre de visage (PLface) de taille
+ *   connue est-elle disponible (voir `planVocalImageZone`)
  * @returns {{track:number, shown:boolean, columnHeight:number, listHeight:number,
- *   hasPortrait:boolean}}
+ *   hasPortrait:boolean, hasAvatar:boolean, imageZone:object}}
  *   `track` = largeur d'UNE colonne (0 = colonnes absentes), `shown` = les
  *   colonnes sont-elles affichees, `columnHeight` = hauteur de la colonne
- *   (`H`), `listHeight` = place laissee a la LISTE sous son haut fixe,
- *   `hasPortrait` = le cas A (personnage au pied) est-il celui qui s'applique
- *   — la repeinture de la colonne n'a donc pas a relire le personnage.
+ *   (`H`), `listHeight` = place laissee a la LISTE sous son haut fixe et sous
+ *   la zone d'image, `hasPortrait` = le cas 1 (personnage) s'applique,
+ *   `hasAvatar` = le cas 2 (avatar du visage) s'affiche REELLEMENT (il peut
+ *   etre refuse faute de place), `imageZone` = la zone d'image decidee (voir
+ *   `planVocalImageZone`) — la repeinture n'a donc pas a relire le personnage.
  */
-export function planVocalSides({ width, height, orbSize, hasPortrait } = {}) {
+export function planVocalSides({ width, height, orbSize, hasPortrait, hasAvatar } = {}) {
   const largeur = Number(width);
   const hauteur = Number(height);
   const disque = Number(orbSize);
@@ -170,12 +210,179 @@ export function planVocalSides({ width, height, orbSize, hasPortrait } = {}) {
   const place = h - VOCAL_ORB_RESERVED_PX;
   const columnHeight = Math.max(0, Math.round(Math.min(orb * VOCAL_ORB_BOX_RATIO, place)));
 
+  // Les trois cas de la zone d'image, dans l'ordre : le personnage, sinon
+  // l'avatar du visage, sinon rien. Une zone qui ne laisserait pas au moins UNE
+  // tache a la liste n'est pas dessinee : c'est le seul refus possible de
+  // l'avatar ("une zone qui ne dessine rien ne fait jamais un trou").
+  const imageZone = planVocalImageZone({ hasPortrait, hasAvatar, columnHeight });
+
   // Haut fixe de la colonne : 170 px avec un personnage, 72 px sans (il n'y a
-  // alors ni portrait ni nom, et la liste prend toute la hauteur).
-  const fixe = hasPortrait ? VOCAL_SIDE_FIXED_PX : VOCAL_PORTRAIT_PX;
+  // alors ni portrait ni nom, et la liste prend toute la hauteur), plus la
+  // place de la fenetre du visage quand elle s'affiche.
+  const fixe = (hasPortrait ? VOCAL_SIDE_FIXED_PX : VOCAL_PORTRAIT_PX) + imageZone.height;
   const listHeight = Math.max(0, columnHeight - fixe);
 
-  return { track, shown: track > 0, columnHeight, listHeight, hasPortrait: !!hasPortrait };
+  return {
+    track,
+    shown: track > 0,
+    columnHeight,
+    listHeight,
+    hasPortrait: !!hasPortrait,
+    hasAvatar: imageZone.avatar,
+    imageZone,
+  };
+}
+
+/**
+ * LA ZONE D'IMAGE, A TROIS CAS (CONCEPTION-ecran-vocal-portrait-et-colonnes.md,
+ * complement du 2026-10-29, § 7bis.2) — decision PURE, dans cet ordre :
+ *
+ *   1. le PERSONNAGE occupe la zone si et seulement si un portrait affichable
+ *      existe (`hasPortrait`) : rien d'autre n'est lu, aucun reglage, aucun
+ *      etat memorise ;
+ *   2. SINON l'AVATAR DU VISAGE, s'il tourne ET si sa taille est connue
+ *      (`hasAvatar`), et seulement s'il reste au moins UNE ligne de liste
+ *      apres lui — sinon il n'est pas pose du tout et la liste garde la place ;
+ *   3. SINON rien : la zone n'existe pas, la liste prend toute la hauteur.
+ *
+ * La HAUTEUR de la zone ne compte que l'ESPACE VIDE que Pilot reserve a la
+ * fenetre du visage : 0 px au cas 1 et au cas 3 (le medaillon du personnage est
+ * un vrai noeud, il prend sa place lui-meme), 180 px au cas 2, et 180 + 6 px
+ * au-dessus du medaillon quand les deux s'affichent. Les totaux du § 7bis.4
+ * sont donc exactement ceux du document :
+ *   cas 3 : liste = H - 72     cas 1 : liste = H - 170
+ *   cas 2 : liste = H - 252    cas 1+2 : liste = H - 356
+ *
+ * @param {object} entrees
+ * @param {boolean} [entrees.hasPortrait] un portrait affichable existe-t-il
+ * @param {boolean} [entrees.hasAvatar] une fenetre de visage de taille connue
+ *   est-elle disponible
+ * @param {number} [entrees.columnHeight] hauteur de la colonne, en px (`H`)
+ * @returns {{kind:string, height:number, avatar:boolean, portrait:boolean}}
+ *   `kind` vaut "portrait", "avatar", "avatar+portrait" ou "none" ; `height`
+ *   est la place VIDE reservee a la fenetre du visage ; `avatar` et `portrait`
+ *   disent quels blocs s'affichent.
+ */
+export function planVocalImageZone({ hasPortrait, hasAvatar, columnHeight } = {}) {
+  const portrait = hasPortrait === true;
+  const hauteur = Number(columnHeight);
+  const H = Number.isFinite(hauteur) && hauteur > 0 ? hauteur : 0;
+  // Ce qui reste a la liste quand la fenetre du visage n'est pas posee.
+  const sansAvatar = VOCAL_PORTRAIT_PX + (portrait ? VOCAL_PORTRAIT_BLOCK_PX : 0);
+  const reserve = VOCAL_AVATAR_H_PX + (portrait ? VOCAL_IMAGE_GAP_PX : 0);
+  // L'avatar n'est pose que s'il reste UNE ligne de liste apres lui : une zone
+  // qui ne dessine rien ne fait jamais un trou, mais elle ne mange pas non plus
+  // la derniere tache.
+  const avatar = hasAvatar === true && H - sansAvatar - reserve >= VOCAL_TASK_PX;
+  const height = avatar ? reserve : 0;
+  let kind = VOCAL_IMAGE_NONE;
+  if (avatar) kind = portrait ? VOCAL_IMAGE_AVATAR_PORTRAIT : VOCAL_IMAGE_AVATAR;
+  else if (portrait) kind = VOCAL_IMAGE_PORTRAIT;
+  return { kind, height, avatar, portrait };
+}
+
+/**
+ * LA POSE DE LA FENETRE DU VISAGE, decidee en PIXELS PHYSIQUES (§ 7bis.5).
+ *
+ * Pilot raisonne en pixels CSS ; la fenetre du visage se deplace en pixels
+ * PHYSIQUES depuis le coin superieur gauche de l'ECRAN. La conversion est donc
+ * `position de la fenetre + coordonnee CSS x facteur d'echelle`, ARRONDIE : le
+ * visage n'accepte que des entiers.
+ *
+ * Trois refus, et aucun n'invente une valeur :
+ *   - la TAILLE du visage n'est pas confirmee (`avatar.width` / `height`) :
+ *     sans elle on ne sait pas ou poser la fenetre, donc AUCUNE pose n'est
+ *     demandee (cas 2 muet, § 7bis.6) ;
+ *   - le rectangle de la zone est illisible ;
+ *   - la zone d'image n'est pas celle de l'avatar (cas 1 ou cas 3).
+ *
+ * L'avatar est CENTRE dans la colonne, comme le medaillon du personnage :
+ * jamais colle a gauche, jamais plus large que la colonne.
+ *
+ * Limite connue et assumee (§ 7bis.6) : un autre ecran avec un autre facteur
+ * d'echelle donne une place fausse, corrigee au geste suivant, SANS message.
+ *
+ * @param {object} entrees
+ * @param {{left:number, top:number, width:number}} [entrees.rect] rectangle de
+ *   la zone d'image en pixels CSS (mesure du noeud, jamais un calcul theorique)
+ * @param {{x:number, y:number, scaleFactor:number}} [entrees.windowOrigin]
+ *   position PHYSIQUE de la fenetre Pilot et son facteur d'echelle
+ * @param {{width:number, height:number}} [entrees.avatar] taille CONFIRMEE de
+ *   la fenetre du visage, en pixels physiques
+ * @returns {{x:number, y:number, width:number, height:number}|null} la pose a
+ *   demander, ou null quand rien ne doit etre demande.
+ */
+export function planVocalAvatarPose({ rect, windowOrigin, avatar } = {}) {
+  const largeur = Number(avatar && avatar.width);
+  const hauteur = Number(avatar && avatar.height);
+  if (!Number.isFinite(largeur) || !Number.isFinite(hauteur) || largeur <= 0 || hauteur <= 0) {
+    return null;
+  }
+  const gauche = Number(rect && rect.left);
+  const haut = Number(rect && rect.top);
+  if (!Number.isFinite(gauche) || !Number.isFinite(haut)) return null;
+  const largeurZone = Number(rect && rect.width);
+  const colonne = Number.isFinite(largeurZone) && largeurZone > 0 ? largeurZone : largeur;
+  const centrage = Math.max(0, (colonne - largeur) / 2);
+  const origineX = Number(windowOrigin && windowOrigin.x);
+  const origineY = Number(windowOrigin && windowOrigin.y);
+  const facteur = Number(windowOrigin && windowOrigin.scaleFactor);
+  const echelle = Number.isFinite(facteur) && facteur > 0 ? facteur : 1;
+  const x0 = Number.isFinite(origineX) ? origineX : 0;
+  const y0 = Number.isFinite(origineY) ? origineY : 0;
+  return {
+    x: Math.round(x0 + (gauche + centrage) * echelle),
+    y: Math.round(y0 + haut * echelle),
+    width: Math.round(largeur),
+    height: Math.round(hauteur),
+  };
+}
+
+/**
+ * L'empreinte d'une pose : deux poses identiques ont la meme cle. Elle sert a
+ * n'envoyer qu'UN appel par geste — une position qui ne change pas n'est pas
+ * redemandee a chaque tic.
+ *
+ * @param {{x:number, y:number, width:number, height:number}|null} pose
+ * @returns {string} la cle, vide quand il n'y a pas de pose
+ */
+export function vocalAvatarPoseKey(pose) {
+  if (!pose) return "";
+  return `${pose.x},${pose.y},${pose.width},${pose.height}`;
+}
+
+/**
+ * FAUT-IL DEMANDER LA POSE, MAINTENANT ? (decision PURE : un seul appel par
+ * geste)
+ *
+ * La pose n'est demandee que dans les deux cas ou la zone porte l'avatar, que
+ * si la taille est connue (sinon `planVocalAvatarPose` rend null), et une seule
+ * fois tant que la pose calculee ne change pas (`lastKey`).
+ *
+ * @param {object} entrees
+ * @param {object} [entrees.imageZone] resultat de `planVocalImageZone`
+ * @param {object} [entrees.rect] rectangle de la zone, en pixels CSS
+ * @param {object} [entrees.windowOrigin] origine physique de la fenetre
+ * @param {object} [entrees.avatar] taille confirmee du visage
+ * @param {string} [entrees.lastKey] cle de la derniere pose REELLEMENT demandee
+ * @returns {{pose:object|null, key:string, send:boolean}}
+ */
+export function planVocalAvatarPlacement({
+  imageZone,
+  rect,
+  windowOrigin,
+  avatar,
+  lastKey,
+} = {}) {
+  const zone = imageZone;
+  const cas = zone && zone.kind;
+  if (cas !== VOCAL_IMAGE_AVATAR && cas !== VOCAL_IMAGE_AVATAR_PORTRAIT) {
+    return { pose: null, key: "", send: false };
+  }
+  const pose = planVocalAvatarPose({ rect, windowOrigin, avatar });
+  if (!pose) return { pose: null, key: "", send: false };
+  const key = vocalAvatarPoseKey(pose);
+  return { pose, key, send: key !== String(lastKey || "") };
 }
 
 /**
