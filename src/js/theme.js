@@ -3,6 +3,12 @@
 const THEME_STORAGE_KEY = "pilot-theme";
 const SUBTHEME_STORAGE_KEY = "pilot-subtheme";
 
+// SOURCE UNIQUE du nom de l'évènement « le thème vient de changer ».
+// `applyTheme` l'émet ; les écouteurs l'importent au lieu de recopier la
+// chaîne, sinon un renommage casserait les rafraîchissements en silence
+// (verrou : panneaux-translucides-theme.test.js).
+export const THEME_CHANGED_EVENT = "theme-changed";
+
 // Liste des sous-thèmes disponibles (id → libellé). Le sous-thème "default"
 // correspond à la palette Pilot de base (aucune classe supplémentaire).
 export const SUBTHEMES = {
@@ -43,7 +49,7 @@ export function applyTheme(theme, subtheme = "default") {
 
   // Notifie CodeMirror si des éditeurs existent
   window.dispatchEvent(
-    new CustomEvent("theme-changed", { detail: { theme, subtheme } })
+    new CustomEvent(THEME_CHANGED_EVENT, { detail: { theme, subtheme } })
   );
 }
 

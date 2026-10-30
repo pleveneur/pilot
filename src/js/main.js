@@ -1,6 +1,7 @@
 // main.js — Point d'entrée de l'application Pilot
 
 import { initTheme } from "./theme.js";
+import { installGlassThemeRefresh } from "./glass-theme.js";
 import { initTabs } from "./tabs.js";
 import { initSidebar } from "./sidebar.js";
 import { initSettings } from "./settings.js";
@@ -529,6 +530,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 1. Initialiser le thème
   initTheme();
+  // 1 bis. Panneaux translucides : au changement de theme, le flou d'arriere-plan
+  // est retire une image pour que l'instantane du compositeur soit recapture —
+  // sans cela, une modale ou le panneau du suivi gardait la teinte PRECEDENTE
+  // jusqu'au redemarrage (glass-theme.js, sur l'evenement de theme.js).
+  installGlassThemeRefresh(window, document);
   // 2. Remplacer les balises <i data-lucide="..."> du HTML statique par des
   // icônes SVG Lucide. À rappeler après toute insertion dynamique d'icônes.
   refreshIcons();

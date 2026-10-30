@@ -190,7 +190,10 @@ agents** et n'écrit aucun réglage : elle explique, elle ne reconfigure rien.
 ## Thème et Options
 
 - **Thème** : bascule dark/light depuis les **Options ⚙️** (bouton du panneau
-  d'actions) → section « Apparence ». Le thème est mémorisé.
+  d'actions) → section « Apparence ». Le thème est mémorisé. Le changement
+  s'applique **tout de suite**, y compris aux **panneaux translucides** (voiles
+  des fenêtres, menus flottants, liste des agents) : leur teinte est celle du
+  thème choisi — vous n'avez **pas** à redémarrer Pilot.
 - **Options ⚙️** : les Options s'ouvrent dans un **onglet** (thème, éditeur,
   l'agent, accès distant, etc.). Le **✕ de l'onglet** équivaut à **« Annuler »**
   (rien n'est enregistré) ; « Annuler » et « Enregistrer » ne ferment pas

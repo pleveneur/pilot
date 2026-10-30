@@ -228,8 +228,13 @@ describe("6. placement du menu : au-dessus des boutons, jetons de surface", () =
   it("l'apparence vient des menus contextuels existants : sombre ET clair", () => {
     // Le look est celui de .context-menu (jetons de surface), donc il suit les
     // 8 sous-themes sans une ligne de plus ; aucune couleur en dur n'est ajoutee.
+    // Depuis le correctif des panneaux translucides, la teinte n'est plus la
+    // surface OPAQUE du theme (le `backdrop-filter` ne montrait alors rien) mais
+    // le jeton `--glass-tint` : 94 % de `--surface-floating`, donc la meme
+    // palette, en laissant voir la page derriere.
     const contexte = sliceSource(css, ".context-menu {", "}", 100);
-    expect(contexte).toContain("background: var(--surface-floating)");
+    expect(contexte).toContain("background: var(--glass-tint)");
+    expect(contexte).not.toMatch(/rgba?\(|#[0-9a-fA-F]{3,6}/);
     const entreeContexte = sliceSource(css, ".context-menu button {", "}", 100);
     expect(entreeContexte).toContain("color: var(--text-primary)");
     const menu = sliceSource(css, "#dispose-menu {", "}", 20);
