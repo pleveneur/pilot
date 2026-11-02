@@ -263,6 +263,53 @@ describe("la protection réelle reste intacte (sortie fichier réellement demand
   });
 });
 
+describe("la SORTIE est la réponse, pas un fichier (faux refus corrigé n° 2)", () => {
+  // Cas RÉELS de missions de LECTURE SEULE refusées à tort : le mot « fichier »
+  // se trouvait dans le complément de l'ordre, mais ce que l'ordre demandait de
+  // produire était la RÉPONSE (ou rien du tout : les fichiers étaient ce qu'on
+  // lisait). Preuve que la cible compte par sa FONCTION, pas sa présence.
+  const SORTIE_REPONSE = {
+    "« écris ta réponse dans le chat : liste les fichiers concernés »":
+      "Écris ta réponse dans le chat : liste les fichiers concernés par le défaut.",
+    "« rédige ton analyse des fichiers du projet dans ta réponse »":
+      "Rédige ton analyse des fichiers du projet dans ta réponse.",
+    "« écris un compte rendu des fichiers lus, dans ta réponse »":
+      "Écris un compte rendu des fichiers lus, directement dans ta réponse.",
+    "« écris tes remarques sur les fichiers … dans ta réponse finale »":
+      "Écris tes remarques sur les fichiers de src/js dans ta réponse finale.",
+    "« ajoute à ta réponse la liste des fichiers de src/js/main.js »":
+      "Ajoute à ta réponse la liste des fichiers de src/js/main.js.",
+    "« complète ton analyse avec les fichiers que tu as lus »":
+      "Complète ton analyse avec les fichiers que tu as lus.",
+    "« mets à jour ta liste des fichiers du projet »":
+      "Mets à jour ta liste des fichiers du projet, dans ta réponse.",
+  };
+
+  for (const [nom, task] of Object.entries(SORTIE_REPONSE)) {
+    it(`accepte : ${nom}`, () => {
+      expect(detectExplicitWriteRequest(task).explicit, `refus indu : ${task}`).toBe(false);
+      expect(refus(task), `refus indu : ${task}`).toBeNull();
+    });
+  }
+
+  it("le nom « fichier » ne compte que comme COMPLÉMENT DIRECT de l'ordre", () => {
+    // Complément direct (« écris un fichier … ») = sortie attendue ⇒ refus.
+    expect(detectExplicitWriteRequest("Écris un fichier de synthèse.").via).toBe("file-noun");
+    expect(detectExplicitWriteRequest("Crée un nouveau fichier de config.").explicit).toBe(true);
+    // Fichier rencontré après une préposition ou un autre nom = ENTRÉE de lecture.
+    expect(detectExplicitWriteRequest("Écris ton avis sur les fichiers du projet.").explicit).toBe(false);
+    expect(detectExplicitWriteRequest("Rédige ton analyse des fichiers du projet.").explicit).toBe(false);
+    expect(detectExplicitWriteRequest("Complète ton analyse avec les fichiers lus.").explicit).toBe(false);
+  });
+
+  it("la destination « réponse » ferme la portée de l'ordre (orderScopeEnd)", () => {
+    const brut = normalizeForMatch("Écris ta réponse dans le chat : liste les fichiers concernés");
+    const fin = orderScopeEnd(brut, "écris".length);
+    const portee = brut.slice("écris".length, fin).trim();
+    expect(portee).toBe("ta réponse"); // ce qui suit qualifie la réponse, pas un fichier
+  });
+});
+
 describe("verrou de source : le refus ne peut pas retomber sur un simple mot", () => {
   it("la décision passe par findWriteOrder (aucune décision sur un verbe isolé)", async () => {
     const { readFileSync } = await import("node:fs");
@@ -278,6 +325,11 @@ describe("verrou de source : le refus ne peut pas retomber sur un simple mot", (
     expect(body).toContain("orderScopeEnd("); // la cible doit être dans la portée de l'ordre
     expect(body).toContain("stripNegations(");
     expect(body).toContain("stripLabels(");
+    // Le NOM « fichier » et la destination « réponse » sont distingués d'une
+    // sortie : sans ces deux règles, des missions de lecture seule sont refusées.
+    expect(body).toContain("fileTargetIn(");
+    expect(source).toContain("FILE_NOUN_HEAD_RE.test(");
+    expect(source).toContain("RESPONSE_TARGET_RE");
     // Le simple repérage de mot (WRITE_VERB_RE) ne sert QUE de trace, jamais de décision :
     // un `if (WRITE_VERB_RE...)` ou un `.match(WRITE_VERB_RE)` retourné serait un retour au défaut.
     expect(body).not.toContain("if (WRITE_VERB_RE");

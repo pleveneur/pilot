@@ -48,6 +48,55 @@ const REPOS = {
   question: false,
 };
 
+describe("0. L'ETAT PAR DEFAUT EST MASQUE (demande du proprietaire, 2026-11-14)", () => {
+  it("a l'entree du mode, le bas est efface TOUT DE SUITE", () => {
+    // « Par defaut, ce bloc ne doit pas s'afficher » : il n'y a pas de decompte
+    // a attendre a l'ouverture, et aucun affichage de courtoisie. L'entree ne
+    // pose donc AUCUN minuteur (il n'y a qu'une pose dans tout le fichier :
+    // le reveil par un geste).
+    const entree = sliceSource(SUPER, "function enterVocal() {", "vocalSyncSides();", 200);
+    expect(entree).not.toMatch(/vocalRestartChromeTimer\(\)/);
+    expect(SUPER.match(/vocalRestartChromeTimer\(\);/g) || []).toHaveLength(1);
+    // Le premier rendu est deja efface : la classe est posee AVANT la peinture,
+    // dans la meme tache que l'entree du calque dans le document.
+    expect(entree).toContain("document.body.appendChild(vocalOverlay)");
+    expect(entree.indexOf("document.body.appendChild(vocalOverlay)")).toBeLessThan(
+      entree.indexOf("vocalSyncChrome();"),
+    );
+    // Et la decision, elle, rend deja « masquage permis » pour l'etat d'entree :
+    // micro ouvert (aucun message), champ vide, aucun geste, aucune question.
+    expect(vocalChromeVisible({ micFerme: "", saisie: false, pointeurGeste: false })).toBe(false);
+    expect(vocalChromeClass(vocalChromeVisible({ micFerme: "" }))).toBe(VOCAL_CHROME_HIDDEN_CLASS);
+  });
+
+  it("un changement d'etat interne ne la rallume pas (remasquee = remasquee)", () => {
+    // Le point d'ecriture de la classe, seul juge, ne lit AUCUN etat de
+    // conversation et ne pose jamais de minuteur : une reflexion, une lecture,
+    // un passage a l'ecoute laissent donc l'ecran nu. Seul un geste rallume.
+    const sync = sliceSource(SUPER, "function vocalSyncChrome(state)", "\n  }", 80);
+    expect(sync).not.toMatch(/vocalRestartChromeTimer|setTimeout/);
+    expect(sync).not.toMatch(/\betat:/);
+    const etat = sliceSource(SUPER, "function applyVocalState(", "\n  }", 300);
+    expect(etat).not.toMatch(/vocalRestartChromeTimer|setTimeout|vocalWakeChrome/);
+  });
+
+  it("une fois remasquee, elle se rallume au geste (et seulement la)", () => {
+    // Le reveil est le SEUL chemin qui repose le minuteur, et la decision pure
+    // garde ses quatre interdictions, inchangees et prioritaires.
+    const reveil = sliceSource(SUPER, "function vocalWakeChrome()", "\n  }", 20);
+    expect(reveil).toContain("vocalRestartChromeTimer()");
+    expect(vocalChromeMoved({ x: 104, y: 100 }, { x: 100, y: 100 })).toBe(true);
+    for (const fait of ["micFerme", "saisie", "question"]) {
+      const valeur = fait === "micFerme" ? "refus" : true;
+      expect(vocalChromeVisible({ ...REPOS, [fait]: valeur }), fait).toBe(true);
+    }
+    // Le pointeur est le cas a part : c'est le GESTE qui retient, pas la
+    // position (`pointeurGeste: false` = le decompte est alle au bout).
+    expect(vocalChromeVisible({ ...REPOS, pointeurActif: true, pointeurGeste: true })).toBe(true);
+    expect(vocalChromeVisible({ ...REPOS, pointeurActif: true, pointeurGeste: false })).toBe(false);
+  });
+});
+
 describe("1. LE DELAI — dix secondes sans souris", () => {
   it("le delai vaut EXACTEMENT 10 000 ms (decision du 2026-11-14)", () => {
     // REGLE PROTEGEE : le temps de repos avant effacement du bas. Le

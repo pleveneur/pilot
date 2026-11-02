@@ -83,13 +83,18 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **Ce qui compte, c'est l'ORDRE, pas les mots.** Le refus se fonde sur une
   consigne **positive** adressée à l'agent (« écris », « modifie », « génère »,
   « il faut écrire », « merci de créer », « n'oublie pas de créer »…) **et** sur
-  la cible qu'elle désigne (un fichier), dans la **même phrase**. Tout le reste
-  ne déclenche **aucun** refus : une phrase **négative** (« n'écrire aucun
-  rapport », « ne modifier aucun fichier », « sans rien modifier »), une
-  **étiquette** de verdict (« À CORRIGER »), le mot « correction »,
-  l'évocation d'un fichier **déjà** modifié, un message de commit **cité** ou un
-  **nom de fichier** qui ressemble à un verbe (« corrige-guard.md »).
-  Une mission de lecture seule n'est donc plus bloquée à cause d'un mot.
+  ce que cette consigne demande de **PRODUIRE sur le disque** (un fichier),
+  dans la **même phrase**. Un fichier doit donc être le **produit** de l'ordre
+  (« écris un fichier de synthèse »), pas un fichier que l'on **lit** (« ton
+  analyse des fichiers du projet », « avec les fichiers que tu as lus ») ; et
+  une réponse demandée **dans la conversation** reste une tâche de lecture
+  (« écris ta réponse dans le chat »). Tout le reste ne déclenche **aucun**
+  refus : une phrase **négative** (« n'écrire aucun rapport », « ne modifier
+  aucun fichier », « sans rien modifier »), une **étiquette** de verdict (« À
+  CORRIGER »), le mot « correction », l'évocation d'un fichier **déjà** modifié,
+  un message de commit **cité** ou un **nom de fichier** qui ressemble à un
+  verbe (« corrige-guard.md »). Une mission de lecture seule n'est donc plus
+  bloquée à cause d'un mot.
 - **Fichiers attendus** : quand la demande **déclare** les fichiers réellement
   attendus, Pilot vérifie **en fin de tâche** que **chacun existe**. Un fichier
   déclaré **absent** fait **échouer** la tâche avec un message qui le nomme et
@@ -290,6 +295,18 @@ prompt et la fin de mission ne vérifiait aucun fichier.
       successifs d'une mission d'analyse en lecture seule (« Ajoute les familles
       qui manquent… », « Complète avec les familles que le propriétaire n'a pas
       citées… », fichier cité = celui où *lire* la demande).
+    - **La cible compte par sa FONCTION, pas par sa présence** (second faux
+      refus corrigé, `docs/rapports/correctif-faux-refus-lecture-seule.md`) :
+      (a) le **nom** « fichier » n'est retenu que s'il est le **complément
+      direct** de l'ordre (`FILE_NOUN_HEAD_RE` : « écris **un fichier** de
+      synthèse ») — après une préposition ou un autre nom (« complète **ton
+      analyse avec les fichiers** que tu as lus »), c'est une entrée de
+      lecture ; (b) une **destination « réponse »** (`RESPONSE_TARGET_RE` :
+      « dans ta réponse », « dans le chat », « réponse finale », « dans ta
+      conversation »…) **ferme la portée** — ce qui suit qualifie la réponse,
+      donc « Écris ta réponse dans le chat : liste les fichiers concernés »
+      n'est pas une écriture. Les **chemins** (`file-path`) gardent la règle
+      antérieure, inchangée.
     - Chemins et passages cités sont **masqués à longueur constante**
       (`maskFileTargets`, `maskQuoted`) : le verbe est cherché sans chemin ni
       citation (un nom comme `corrige-guard.md` n'est pas un ordre) et les

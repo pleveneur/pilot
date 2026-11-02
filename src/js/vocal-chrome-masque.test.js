@@ -263,17 +263,29 @@ describe("3. le branchement : un minuteur, un point d'ecriture, quatre ecouteurs
     const corps = corpsFonction(SUPER, "function vocalRestartChromeTimer(");
     expect(corps).toMatch(/clearVocalChromeTimer\(\)/);
     expect(corps).toMatch(/VOCAL_CHROME_IDLE_MS/);
-    // Pose du minuteur : deux endroits, et deux seulement (le geste et l'entree
-    // dans le mode). Un troisieme appel ferait un second decompte.
+    // Pose du minuteur : UN endroit, et un seul — le GESTE (`vocalWakeChrome`).
+    // L'entree dans le mode ne le pose plus : le bas y est efface d'emblee
+    // (demande du proprietaire du 2026-11-14, « par defaut, ce bloc ne doit pas
+    // s'afficher »). Un second appel ferait un second decompte, ou rallumerait
+    // l'ecran a l'ouverture.
     const poses = (SUPER.match(/vocalRestartChromeTimer\(\);/g) || []).length;
-    expect(poses).toBe(2);
+    expect(poses).toBe(1);
+    expect(corpsFonction(SUPER, "function vocalWakeChrome(")).toMatch(
+      /vocalRestartChromeTimer\(\)/,
+    );
   });
 
   it("les quatre ecouteurs sont poses a l'entree et retires a la sortie", () => {
     const entree = corpsFonction(SUPER, "function enterVocal(");
     expect(entree).toMatch(/attachVocalChromeListeners\(\)/);
-    // Entrer dans le mode EST un geste : le bas demarre visible.
-    expect(entree).toMatch(/vocalRestartChromeTimer\(\)/);
+    // L'ETAT PAR DEFAUT EST EFFACE : aucun minuteur a l'entree, et la classe est
+    // posee des le premier rendu (`vocalSyncChrome`, avant que le navigateur ne
+    // peigne) — ni aller-retour, ni clignotement.
+    expect(entree).not.toMatch(/vocalRestartChromeTimer\(\)/);
+    expect(entree).toMatch(/vocalSyncChrome\(\);/);
+    expect(entree.indexOf("document.body.appendChild(vocalOverlay)")).toBeLessThan(
+      entree.lastIndexOf("vocalSyncChrome();"),
+    );
     const sortie = corpsFonction(SUPER, "function exitVocal(");
     expect(sortie).toMatch(/detachVocalChromeListeners\(\)/);
     expect(sortie).toMatch(/clearVocalChromeTimer\(\)/);

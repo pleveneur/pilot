@@ -139,7 +139,9 @@ describe("4. la barre REVIENT quand on parle (le seul geste sans pointeur ni cla
     expect(prise).toMatch(/vocalWakeChrome\(\);/);
     // Et le reveil reste bien celui qui existe : un seul minuteur, 10 000 ms.
     expect(SUPER.match(/vocalChromeTimer = setTimeout\(/g) || []).toHaveLength(1);
-    expect(SUPER.match(/vocalRestartChromeTimer\(\);/g) || []).toHaveLength(2);
+    // UNE seule pose : le geste. L'entree du mode n'en pose plus (le bas y est
+    // efface d'emblee).
+    expect(SUPER.match(/vocalRestartChromeTimer\(\);/g) || []).toHaveLength(1);
   });
 
   it("la dictee reveille aussi la barre (les mots arrivent dans le champ)", () => {

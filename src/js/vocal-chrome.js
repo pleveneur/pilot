@@ -14,6 +14,13 @@
  * CSS ne les nomme pas, et un test le verifie. La rangee des questions en
  * attente n'est pas masquee non plus : elle vit DANS la zone de saisie, et la
  * regle 4 ci-dessous interdit de l'effacer tant qu'une question attend.
+ *
+ * L'ETAT PAR DEFAUT EST MASQUE (demande du proprietaire du 2026-11-14 : « par
+ * defaut, ce bloc ne doit pas s'afficher ») : a l'entree dans le mode, le bas
+ * n'est pas la — pas de decompte a attendre, pas d'affichage de courtoisie. La
+ * decision ci-dessous rend deja « masquage permis » quand rien ne la retient,
+ * il n'y a donc AUCUNE regle d'entree a ajouter : c'est l'appelant qui ne pose
+ * plus de minuteur a l'ouverture, et le premier rendu nait avec la classe.
  */
 
 /**

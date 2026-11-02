@@ -1003,6 +1003,15 @@ disparaît, et il **revient au geste**. Le cercle, lui, ne bouge **pas d'un
 pixel** : la promesse « le cercle est le centre de l'écran » ne dépend plus de
 la présence du texte.
 
+**L'état par défaut est MASQUÉ** (précision du propriétaire, 2026-11-14 : « par
+défaut, ce bloc ne doit pas s'afficher ») : à l'**entrée** dans le mode, le bas
+n'est **pas** là — aucun décompte à attendre, aucun affichage de courtoisie — et
+le **premier rendu naît déjà effacé** (la classe est posée avant la peinture,
+donc aucun aller-retour ni clignotement). L'entrée ne pose **aucun** minuteur :
+seul un geste le met en marche, et un changement d'état interne (réflexion,
+parole, écoute) ne rallume **jamais** le bas. Le repos est le défaut, l'affichage
+est l'exception.
+
 **Ce qui s'efface, et ce qui reste.** Trois nœuds, **et eux seuls** : la ligne
 d'état (`.vocal-status`), la zone de saisie (`.vocal-input`) et le bouton de
 dépannage du micro (`.vocal-mic-fix`, déjà masqué sauf panne). La **rangée des
@@ -1025,7 +1034,9 @@ le réveil : **aucun contrôle invisible n'est activable**.
 **Le remasquage** : **10 000 ms** sans aucun geste (décision du propriétaire, 2026-11-14 :
 « la zone de saisie doit disparaitre apres 10 secondes sans souris » ; c'était 2 500 ms),
 **un seul minuteur**, relancé à zéro à chaque geste — pendant ces 10 s le bas est visible,
-même si l'on ne fait rien. **Quatre situations l'interdisent**, et l'**ordre de la décision est
+même si l'on ne fait rien — et **posé par le seul geste** (jamais à l'entrée du mode).
+Une fois remasquée, la barre reste masquée jusqu'au geste suivant : c'est de nouveau
+l'état par défaut. **Quatre situations l'interdisent**, et l'**ordre de la décision est
 la spec** :
 
 | # | Situation | Pourquoi |
@@ -1155,13 +1166,16 @@ viennent du même module : `pointeurActif` (position, calculée) et `pointeurGes
 (geste récent, `false` seulement quand le décompte a expiré — absent = geste récent). Son **seul point d'écriture** est
 `vocalSyncChrome(state)`, en **dernière ligne** de `applyVocalState` (après
 `vocalSyncRestartButton`) : il lit le DOM, appelle la décision pure et pose ou
-retire la classe `vocal-chrome-hidden`. Aucun autre endroit ne l'écrit. Quatre
-appels **sans logique** s'y ajoutent : les quatre écouteurs (posés à la fin de
+retire la classe `vocal-chrome-hidden`. Aucun autre endroit ne l'écrit. Cinq
+appels **sans logique** s'y ajoutent : le **premier rendu** à l'entrée du mode
+(`enterVocal`, pour que le bas **naisse effacé** — c'est là que l'état par défaut
+masqué s'applique, aucun minuteur n'y est posé), les quatre écouteurs (posés à la fin de
 `enterVocal`, retirés au début de `exitVocal`), le point d'écriture du **texte
 dicté** (`rec.onresult`), l'écouteur `input` **existant** de la saisie, et le
 rappel `pendingQuestionChromeSync` (appelé à chaque changement de la file des
 questions, pour que le bas revienne si une question arrive alors qu'il est
-effacé).
+effacé). Verrou de l'état initial masqué :
+`src/js/ecran-vocal-saisie-disparait-apres-dix-secondes.test.js` (bloc 0).
 
 ## 4ter. L'état nu : tout masquer d'un seul geste (décision du 2026-10-29, révisée) — ✅ **livré**
 

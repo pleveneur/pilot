@@ -5874,7 +5874,9 @@ let vocalDicteeParGeste = false;
    * decision du 2026-11-14 : « la zone de saisie doit disparaitre apres 10
    * secondes sans souris »), repart de zero a chaque geste. Il n'en existe qu'un (cette variable), il est toujours annule avant
    * d'etre repose, et il est retire a la sortie du mode : aucune minuterie ne
-   * survit a l'ecran.
+   * survit a l'ecran. Il n'est JAMAIS pose a l'entree du mode : le bas y est
+   * efface d'emblee, et seule une fonction de reveil (`vocalWakeChrome`, donc un
+   * geste ou la prise de parole) peut le mettre en marche.
    */
   function vocalRestartChromeTimer() {
     clearVocalChromeTimer();
@@ -6776,8 +6778,12 @@ let vocalDicteeParGeste = false;
     // vient de « Assistant seul » (dont la sortie a ecrit « Detaille »).
     rememberScreenMode("vocal");
     // §2.5 : les QUATRE facons de reveiller le bas sont posees ICI, a l'entree,
-    // et retirees a la sortie. Le bas demarre VISIBLE (on entre dans l'ecran, on
-    // n'arrive pas sur un ecran vide) ; le premier decompte part tout seul.
+    // et retirees a la sortie. LE BAS DEMARRE EFFACE (demande du proprietaire du
+    // 2026-11-14 : « par defaut, ce bloc ne doit pas s'afficher ») : l'etat par
+    // defaut est l'ecran nu, sans attendre les 10 000 ms. Aucun minuteur n'est
+    // donc pose ici — il ne reste que le geste pour le poser (une seule pose
+    // dans tout le fichier, `vocalWakeChrome`) — et l'ecran se remasque tout
+    // seul des l'expiration, sans qu'aucun etat interne ne le rallume.
     vocalChromePointeur = null;
     vocalChromeRepere = null;
     vocalChromeEtat = "idle";
@@ -6785,13 +6791,18 @@ let vocalDicteeParGeste = false;
     // pas « vrai » par defaut (sinon une souris posee retiendrait le bas).
     vocalChromeGestePointeur = false;
     attachVocalChromeListeners();
-    // Entrer dans le mode EST un geste : le decompte part donc deja, et le bas
-    // est visible a l'ouverture (on n'arrive jamais sur un ecran nu).
-    vocalRestartChromeTimer();
+    // LE PREMIER RENDU EST DEJA EFFACE : `vocalChromeTimer` vaut 0 et aucun geste
+    // n'a eu lieu, donc la decision pure rend « masquage permis » et la classe
+    // est posee MAINTENANT — avant que le navigateur ne peigne. Aucun
+    // aller-retour, aucun clignotement : le calque entre dans le document deja
+    // efface, et les quatre interdictions (micro ferme, champ rempli, pointeur,
+    // question) restent seules a pouvoir le rallumer.
+    vocalSyncChrome();
     // ETAT NU : on entre TOUJOURS avec tout visible (section 6.6 — l'ecran Vocal
     // est un mode, pas une preference). La remise a lieu AVANT la peinture des
-    // colonnes et avant `vocalSyncChrome` (appele par `applyVocalState`) : aucun
-    // etat masque ne peut donc survivre d'une entree a l'autre.
+    // colonnes et avant l'`applyVocalState` qui suit : aucun etat masque ne peut
+    // donc survivre d'une entree a l'autre. Elle ne touche pas le bas : la
+    // decision de `vocalSyncChrome` (appele ci-dessus) ne lit aucun etat « nu ».
     vocalBare = normalizeVocalBare(false);
     vocalSyncBare();
     // LOT 1 (correction du 2026-10-31) : le PORTRAIT du personnage et son nom, EN

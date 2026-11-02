@@ -34,6 +34,18 @@
 //     fichiers du projet », « dans le fichier où se trouve la demande », « puis
 //     ajoute … à ta réponse ») est une ENTRÉE de lecture, pas une sortie
 //     attendue : il ne fonde aucun refus.
+//
+//     Second FAUX POSITIF corrigé (mêmes missions de lecture seule, refusées
+//     encore) : le simple NOM « fichier » n'était pas distingué d'une SORTIE.
+//     « Écris ta réponse dans le chat : liste les fichiers concernés », « Rédige
+//     ton analyse des fichiers du projet », « Complète ton analyse avec les
+//     fichiers que tu as lus » étaient refusées. Deux règles les séparent :
+//       a. le nom « fichier » ne compte que s'il est le COMPLÉMENT DIRECT de
+//          l'ordre (« écris un fichier de synthèse ») — un fichier rencontré
+//          après une préposition ou un autre nom est une ENTRÉE de lecture ;
+//       b. une DESTINATION « réponse / conversation / chat / message » ferme la
+//          portée de l'ordre : ce qui suit qualifie la RÉPONSE, jamais un
+//          fichier.
 //  2. PREUVE DU LIVRABLE (`verifyExpectedFiles`) : quand la demande déclare les
 //     fichiers réellement attendus sur disque (`expected_files`), Pilot vérifie
 //     à la fin de la tâche que CHACUN existe. Absent ⇒ la tâche est rapportée en
@@ -120,9 +132,15 @@ const FILE_EXT_RE = new RegExp(
     ")\\b",
   "i"
 );
-const FILE_NOUN_RE = /\bfichiers?\b|\bfiles?\b/;
 // Même motif, global : sert à RETIRER les chemins avant la recherche du verbe.
 const FILE_EXT_GLOBAL_RE = new RegExp(FILE_EXT_RE.source, "gi");
+
+// (Historique) L'ancienne regle du nom « fichier » (`FILE_NOUN_RE`, supprimee le
+// 2026-11-14) testait le mot N'IMPORTE OU dans la portee : des missions de
+// lecture seule etaient donc refusees (« complete ton analyse avec les fichiers
+// que tu as lus »). Elle n'est plus lue : la regle est desormais
+// `FILE_NOUN_HEAD_RE` (le nom doit etre le COMPLEMENT DIRECT de l'ordre),
+// cf. `fileTargetIn`.
 
 /**
  * Retire les CHEMINS de fichier d'un texte. Un nom de fichier n'est jamais un
@@ -172,6 +190,25 @@ function accentTolerantKeepingEnd(word) {
 function orderAlternation(words) {
   return words.map(accentTolerantKeepingEnd).join("|");
 }
+
+// Déterminants et quantifiants qui peuvent précéder le nom « fichier » quand il
+// est le COMPLÉMENT DIRECT de l'ordre (« écris un fichier », « crée les deux
+// fichiers »). Au-delà de cette tête de complément, le nom est une ENTRÉE de
+// lecture, pas une sortie (cf. `fileTargetIn`).
+const FILE_NOUN_DETERMINERS = [
+  "le", "la", "les", "l'", "un", "une", "des", "du", "de", "d'", "ce", "cet",
+  "cette", "ces", "ton", "ta", "tes", "son", "sa", "ses", "mon", "ma", "mes",
+  "notre", "nos", "votre", "vos", "leur", "leurs", "nouveau", "nouvel",
+  "nouvelle", "nouveaux", "nouvelles", "premier", "premiere", "second",
+  "seconde", "deuxieme", "troisieme", "petit", "petite", "grand", "grande",
+  "seul", "seule", "unique", "meme", "memes", "autre", "autres", "deux",
+  "trois", "quatre", "cinq", "plusieurs",
+];
+const FILE_NOUN_HEAD_RE = new RegExp(
+  "^\\s*(?:(?:" +
+    FILE_NOUN_DETERMINERS.map(accentTolerant).join("|") +
+    ")\\s+)*(?:fichiers?|files?)\\b"
+);
 
 // Un « \b » ne fonctionne pas devant une voyelle accentuée (é n'est pas un
 // caractère de mot en JavaScript) : on borne par un séparateur explicite.
@@ -396,6 +433,31 @@ export function maskQuoted(text) {
   return out;
 }
 
+// ── Destinations qui ne sont PAS un fichier ────────────────────────────────
+// Un ordre peut demander de rendre quelque chose DANS LA RÉPONSE : c'est une
+// tâche de lecture (le résultat vit dans le message de l'agent), pas une
+// écriture sur disque. Ces formules ferment la portée de l'ordre.
+const RESPONSE_TARGET_RE = new RegExp(
+  // Bornage par un séparateur explicite : un « \b » ne fonctionne pas devant une
+  // voyelle accentuée (« à ta réponse »), é n'est pas un caractère de mot.
+  WORD_START +
+    "(?:" +
+    [
+      "dans ta reponse",
+      "a ta reponse",
+      "dans la reponse",
+      "reponse finale",
+      "dans ton message",
+      "message de fin",
+      "dans ta conversation",
+      "dans la conversation",
+      "dans le chat",
+    ]
+      .map(accentTolerant)
+      .join("|") +
+    ")\\b"
+);
+
 // ── PORTÉE d'un ordre : jusqu'où va ce qu'il demande ───────────────────────
 // Une proposition peut contenir plusieurs clauses : « Ajoute les familles qui
 // manquent (voir le fichier .pilot/demande.md) » n'ordonne pas d'écrire le
@@ -425,6 +487,11 @@ const SCOPE_BREAK_RES = [
         .join("|") +
       ")\\b"
   ),
+  // Destination = la RÉPONSE de l'agent : « écris ta réponse dans le chat »,
+  // « rends ton avis dans ta réponse finale »… Tout ce qui suit qualifie la
+  // RÉPONSE, pas un fichier : la portée de l'ordre s'arrête là. Un fichier cité
+  // après est une ENTRÉE de lecture (« liste les fichiers concernés »).
+  RESPONSE_TARGET_RE,
 ];
 
 /**
@@ -469,7 +536,12 @@ function fileTargetIn(scope) {
   const source = String(scope || "");
   const path = new RegExp(FILE_EXT_GLOBAL_RE.source, "i").exec(source);
   if (path) return { value: path[0], via: "file-path" };
-  if (FILE_NOUN_RE.test(source)) return { value: "fichier", via: "file-noun" };
+  // Le NOM « fichier » ne compte que s'il est le COMPLÉMENT DIRECT de l'ordre
+  // (« écris un fichier de synthèse », « crée le nouveau fichier de config »).
+  // Un fichier rencontré plus loin, après une préposition ou un autre nom
+  // (« avec les fichiers que tu as lus », « sur les fichiers du projet », « ton
+  // analyse des fichiers »), est une ENTRÉE de lecture : il ne fonde aucun refus.
+  if (FILE_NOUN_HEAD_RE.test(source)) return { value: "fichier", via: "file-noun" };
   return null;
 }
 
