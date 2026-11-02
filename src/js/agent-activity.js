@@ -1132,6 +1132,35 @@ function activityRefresh(force = false) {
   return refreshInFlight;
 }
 
+/**
+ * DEMANDE DE RELECTURE DES CHAMPS D'AFFICHAGE DE LA MISSION (texte de la tâche
+ * affichée).
+ *
+ * POURQUOI CE POINT D'ENTRÉE EXISTE — le défaut qu'il répare : le texte affiché
+ * d'une mission (`prompt` / `resume`) ne vit que dans la vue LOURDE
+ * (`get_agent_supervision`). Or ÉCRIRE un prompt n'émet AUCUN évènement
+ * (`AgentService::send` retient prompt + résumé puis rend la main en silence,
+ * `agent_service.rs`), et une session REPRISE garde la même signature
+ * `projet + agent + vivacité` : ni le push `agent-state-changed`, ni le
+ * changement d'ensemble des sessions, ni la sonde de 2 s (volontairement
+ * LÉGÈRE) ne relisent ces champs. Résultat constaté : la colonne des tâches
+ * affichait la mission PRÉCÉDENTE pour la mission en cours (une seule ligne,
+ * mauvais texte) ; avec deux missions, le démarrage de la seconde tombait
+ * pendant la première et forçait — par accident — la bonne relecture, d'où
+ * « avec 2 tâches c'était bon ».
+ *
+ * Le correctif ne crée AUCUNE seconde sonde : il demande la relecture LOURDE
+ * EXISTANTE (`activityRefresh(true)`, le chemin déjà emprunté par
+ * `agent-state-changed`) au SEUL moment où le texte de la mission change
+ * réellement — juste après l'envoi effectif du prompt de mission. La relecture
+ * est coalescée avec une éventuelle relecture en vol (aucun appel concurrent)
+ * et reste FAIL-OPEN (jamais d'exception, jamais de blocage de l'envoi).
+ * @returns {Promise<void>}
+ */
+export function refreshAgentMissionDisplay() {
+  return activityRefresh(true).catch(() => {});
+}
+
 /** Démarre le polling partagé (une seule fois, au premier abonné). */
 function ensureActivityStore() {
   if (activityStarted) return;

@@ -292,7 +292,7 @@ import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel
 // mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
 // « Supprimer les rappels inutiles » de Paramètres → Assistant.
 import { classifyScheduleCleanup, cleanupApplyPayload } from "./super-agent-schedule-cleanup.js";
-import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, buildStartingMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility, splitMissions, setAgentPanelTaskCount, isAgentPanelPaneVisible, missionWho } from "./agent-activity.js";
+import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, buildStartingMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility, splitMissions, setAgentPanelTaskCount, isAgentPanelPaneVisible, missionWho, refreshAgentMissionDisplay } from "./agent-activity.js";
 // Compteur du bouton « Travail » : les commandes TAPEES A LA MAIN mises en file
 // sur un projet sont une famille d'attente a part entiere (elles n'etaient
 // comptees nulle part, donc le total affiche etait faux).
@@ -7435,6 +7435,14 @@ let vocalDicteeParGeste = false;
     setReflecting(true);
     try {
       await invoke("send_super_agent_prompt", { message: messageAgent });
+      // LA DEMANDE VIENT D'ETRE ECRITE COMME MISSION DE LA SESSION : la vue
+      // d'ensemble qui porte ce texte n'est relue par aucun évènement (écrire
+      // un prompt n'en émet pas). Sans cette relecture, la ligne de l'Assistant
+      // dans la colonne des tâches gardait la demande PRECEDENTE pendant tout
+      // le tour en cours (rapport
+      // docs/rapports/RAPPORT-libelle-tache-en-cours-en-haut-a-droite.md).
+      // Fail-open, coalescée avec la relecture en vol : jamais de doublon.
+      refreshAgentMissionDisplay();
       // La réponse arrive en streaming via le canal rpc-event-superagent
       // (handleSuperAgentEvent). On ne fait rien ici : on attend agent_end.
     } catch (err) {

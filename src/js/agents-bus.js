@@ -25,6 +25,9 @@ import { buildMemoryBlock } from "./project-memory.js";
 import { buildGraphBlock } from "./code-graph.js";
 // Niveaux de réflexion (T5) : socle pur de ramenage (T1), miroir Rust de T4.
 import { clampThinkingLevel, pickThinkingLevel } from "./thinking-levels.js";
+// RELECTURE DU TEXTE DE LA MISSION après envoi du prompt (une seule source :
+// le magasin d'activité partagé — aucune seconde file, aucune seconde sonde).
+import { refreshAgentMissionDisplay } from "./agent-activity.js";
 import {
   loadAgentRegistry,
   normalizeAgent,
@@ -4186,6 +4189,14 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     } else {
       await sendPromptToAgent(agent.id, prompt, ctx, resume);
     }
+    // LE TEXTE DE LA MISSION VIENT D'ETRE ECRIT (prompt + resume) : la vue
+    // d'ensemble qui le porte n'est relue par personne d'autre (écrire un
+    // prompt n'émet aucun évènement, et une session reprise garde la même
+    // signature) — sans cette demande, la colonne des tâches affichait la
+    // mission PRECEDENTE pour la mission en cours (rapport
+    // docs/rapports/RAPPORT-libelle-tache-en-cours-en-haut-a-droite.md).
+    // Fail-open, coalescée : aucune seconde sonde, aucun blocage de l'envoi.
+    refreshAgentMissionDisplay();
     resetTimeout(ctx);
     console.log("[agents-bus] prompt sent to", agent.id);
   } catch (err) {

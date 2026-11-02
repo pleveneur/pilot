@@ -382,6 +382,46 @@ et son nœud sont partis ensemble, et la place libérée n'est pas réoccupée.
 Les trois sorties (logo, Échap, fermeture de l'onglet) et les colonnes sans clic restent
 **inchangées** : **aucune** des deux colonnes n'ajoute de zone cliquable.
 
+#### Le texte d'une tâche est celui de la mission qui tourne (correction du 2026-11-14)
+
+**Défaut corrigé** : pour la tâche en cours, la colonne affichait le texte de la mission
+**précédente**. Il était juste avec deux missions (une en cours, une en file) et faux avec
+une seule — l'indice exact du propriétaire. Rapport :
+`docs/rapports/RAPPORT-libelle-tache-en-cours-en-haut-a-droite.md`.
+
+- **Cause** : le texte d'une mission (`prompt` / `resume`) n'existe que dans la vue
+  d'ensemble **LOURDE** (`get_agent_supervision`, `src-tauri/src/dashboard.rs:1298-1310`).
+  Or **écrire un prompt n'émet aucun évènement** (`AgentService::send` retient prompt et
+  résumé puis rend la main en silence, `src-tauri/src/agent_service.rs:1898-1916`), et une
+  session **reprise** garde la même signature `projet + agent + vivacité` : ni le push
+  `agent-state-changed`, ni le changement d'ensemble des sessions (`planActivityRefresh`,
+  `src/js/agent-activity.js:1006`) ne relisaient ces champs. La boucle de 2 s est
+  volontairement **légère** (`mergeProbeActivity`, `:1051` : jamais `prompt`/`resume`) — et
+  elle doit le rester (gel de session, commit `551c944`). La vue restait donc sur la mission
+  d'avant, et la ligne portait son texte dès qu'un outil tournait (`toolInProgress`, frais).
+  Avec **deux** missions, le démarrage de la seconde provoquait un `set_state` de plus
+  pendant la première, donc une relecture qui tombait **après** l'écriture du prompt : la
+  ligne était juste **par accident**.
+- **Correctif, au plus près de la cause** : un point d'entrée **unique**
+  `refreshAgentMissionDisplay()` (`src/js/agent-activity.js`) qui demande la relecture
+  lourde **existante** (`activityRefresh(true)`, le chemin déjà emprunté par
+  `agent-state-changed`), appelé **juste après l'envoi réel d'un prompt de mission** :
+  missions déléguées (`src/js/agents-bus.js`, dans le tour de l'agent, après
+  `sendPromptToAgent` / `sendPromptToAssistantAgent`) et demande de l'Assistant
+  (`src/js/super-agent.js`, après `send_super_agent_prompt`). **Aucune seconde sonde,
+  aucune seconde file, aucun changement Rust** ; la demande est **coalescée** avec une
+  relecture en vol (jamais deux lectures concurrentes) et **fail-open** (une panne de la
+  sonde ne bloque jamais l'envoi).
+- **Ce qui ne change pas** : la composition de la file et le rang → mission restent dans
+  leur source unique (`project-queue-view.js`, `project-task-queue.js`) ; la boucle de 2 s
+  reste légère ; une mission **acceptée mais pas encore démarrée** peut se montrer un
+  instant du côté « en attente » le temps que le travail soit constaté (règle existante de
+  `trackMissionStarting`, `src/js/agent-activity.js:415`) — mais son **texte est juste dès
+  l'envoi**, et c'est cela qui manquait.
+- Verrou : `src/js/libelle-tache-en-cours-mission-reelle.test.js` (les deux cas — 1 mission
+  et 2 missions — reproduits par la chaîne réelle `mergeProbeActivity` → `flattenAgents` →
+  `buildRunningMissions`, plus les ancres du branchement ; il échoue sans le correctif).
+
 ### La colonne de gauche : l'aperçu de la discussion (lot 3, livré)
 
 À gauche du disque, une colonne symétrique de celle de droite (même hauteur, même
@@ -771,7 +811,10 @@ tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rie
 cliquable dans la colonne : on la lit, on ne la manipule pas.
 
 La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis la **liste des
-tâches en cours** — l'agent et le projet, puis ce qu'il fait. Rien n'est écrit sous la
+tâches en cours** — l'agent et le projet, puis ce qu'il fait. Le texte d'une tâche est
+**celui de la mission qui tourne vraiment** : dès que vous envoyez une demande, la colonne
+la montre, jamais celle d'avant (une mission tout juste acceptée peut apparaître un instant
+du côté « en attente », le temps qu'elle démarre). Rien n'est écrit sous la
 liste. Les tâches sont rangées en **« En cours »** d'abord, **« En attente »** ensuite. La
 liste **ne défile pas** : elle montre ce que la hauteur permet (jusqu'à **8** tâches) et,
 s'il y en a plus, la ligne **« + N autre(s) »** le dit — la liste complète reste dans le
