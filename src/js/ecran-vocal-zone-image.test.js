@@ -152,7 +152,16 @@ describe("T20 — trois cas, dans cet ordre : le personnage, la fenetre du visag
     // comme s'il n'y avait personne (contre 132 px avant le deplacement, quand
     // son bloc de 327 px sortait de la liste).
     expect(deux.listHeight).toBe(459);
-    expect(portrait.portraitSize).toBe(288);
+    // Depuis le 2026-11-14, la couronne de la lueur du cercle est prise sous le
+    // disque : 693 - 276 - (73 + 52) = 292 px de place, et le medaillon s'arrete a
+    // la largeur du disque, 276 px — plus a la cible de 288. Le cas `cas` de ce
+    // fichier porte encore le disque de la conception (336) : il rend 217 px, et
+    // c'est cette valeur-la qu'on verrouille ici, comme reference de calcul.
+    expect(portrait.portraitSize).toBe(217);
+    expect(
+      planVocalSides({ width: 1440, height: 900, orbSize: 276, hasPortrait: true })
+        .portraitSize,
+    ).toBe(276);
     // Une entree absente n'est pas « vrai » : sans personnage, l'avatar decide.
     expect(planVocalSides({ ...cas, hasAvatar: true }).imageZone.kind).toBe(
       VOCAL_IMAGE_AVATAR,

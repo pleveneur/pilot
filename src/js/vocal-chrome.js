@@ -16,8 +16,17 @@
  * regle 4 ci-dessous interdit de l'effacer tant qu'une question attend.
  */
 
-/** Delai avant le REMASQUAGE, quand aucun geste ne vient : 2 500 ms. */
-export const VOCAL_CHROME_IDLE_MS = 2500;
+/**
+ * Delai avant le REMASQUAGE, quand aucun geste ne vient : 10 000 ms.
+ *
+ * VALEUR FIXE, decision du proprietaire (2026-11-14) : « la barre du bas doit
+ * disparaitre apres 10 secondes sans souris ». Ce n'est PAS un reglage : aucune
+ * option, aucun jeton, aucune variante — une seule constante, lue par le seul
+ * minuteur de `super-agent.js` (`vocalChromeTimer`). Elle valait 2 500 ms ; le
+ * reste du mecanisme ne bouge pas d'une ligne (quatre regles d'interdiction,
+ * seuil de geste de 4 px, reveil par toute frappe sauf Echap).
+ */
+export const VOCAL_CHROME_IDLE_MS = 10000;
 
 /**
  * Tolerance du pointeur : un deplacement cumule de 4 px depuis le dernier
@@ -66,8 +75,9 @@ export const VOCAL_CHROME_HIDDEN_CLASS = "vocal-chrome-hidden";
  *
  * LA PAROLE N'EST PLUS UNE RAISON (decision ferme du proprietaire du
  * 2026-11-13) : ni « Pilot parle », ni « l'utilisateur parle », ni « le micro
- * ecoute » ne retiennent le bas. La barre s'efface apres 2 500 ms de repos QUOI
- * QU'IL ARRIVE, et elle revient au geste — souris, clavier, ou parole. L'ancienne
+ * ecoute » ne retiennent le bas. La barre s'efface apres 10 000 ms de repos QUOI
+ * QU'IL ARRIVE (delai porte par `VOCAL_CHROME_IDLE_MS`), et elle revient au geste
+ * — souris, clavier, ou parole. L'ancienne
  * regle 3 a donc ete SUPPRIMEE, avec le fait d'usage qui la nourrissait (voir
  * `docs/rapports/RAPPORT-barre-du-bas-ne-s-efface-pas.md`) : il n'existe plus
  * aucun chemin par lequel un etat de conversation peut retenir le bas.

@@ -1,9 +1,11 @@
 // LA BARRE DU BAS S'EFFACE QUOI QU'IL ARRIVE — decision ferme du proprietaire
 // (2026-11-13) : « la barre de saisie du bas ne s'efface pas comme elle
-// devrait ; elle doit s'effacer apres 2,5 secondes de repos, de facon FIABLE ».
+// devrait ; elle doit s'effacer apres un temps de repos, de facon FIABLE » — puis
+// la meme decision, delai porte a DIX SECONDES le 2026-11-14 : « la zone de saisie
+// doit disparaitre apres 10 secondes sans souris ».
 //
 // LA REGLE, telle quelle :
-//   - la barre s'efface apres 2 500 ms sans geste, QUOI QU'IL ARRIVE ;
+//   - la barre s'efface apres 10 000 ms sans geste, QUOI QU'IL ARRIVE ;
 //   - seules DEUX circonstances d'usage la retiennent :
 //       1. le CHAMP CONTIENT DU TEXTE (il est occupe) ;
 //       2. le POINTEUR est sur la zone du bas (geste a l'appui) ;
@@ -135,7 +137,7 @@ describe("4. la barre REVIENT quand on parle (le seul geste sans pointeur ni cla
     // doit appeler le reveil. Aucun second minuteur n'est cree pour autant.
     const prise = sliceSource(SUPER, "  function vocalBargeIn(rapport) {", "\n  function enterVocal", 400);
     expect(prise).toMatch(/vocalWakeChrome\(\);/);
-    // Et le reveil reste bien celui qui existe : un seul minuteur, 2 500 ms.
+    // Et le reveil reste bien celui qui existe : un seul minuteur, 10 000 ms.
     expect(SUPER.match(/vocalChromeTimer = setTimeout\(/g) || []).toHaveLength(1);
     expect(SUPER.match(/vocalRestartChromeTimer\(\);/g) || []).toHaveLength(2);
   });

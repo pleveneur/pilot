@@ -5,7 +5,9 @@
 //   1. La decision PURE (`src/js/vocal-chrome.js`) : les CINQ circonstances
 //      qui interdisent le masquage, DANS L'ORDRE du document, et le masquage
 //      permis au repos — y compris dictée armée mais encore silencieuse.
-//   2. Les deux bornes du geste : 2 500 ms de delai, 4 px de mouvement, et
+//   2. Les trois bornes du geste : 10 000 ms de delai (decision du 2026-11-14 :
+//      « la zone de saisie doit disparaitre apres 10 secondes sans souris »), 4 px
+//      de mouvement, et
 //      Echap qui ne reveille rien (c'est la sortie du mode).
 //   3. Le BRANCHEMENT : un seul minuteur, un seul point d'ecriture de la classe,
 //      la decision prise a la FIN de `applyVocalState` (donc a chaque etat), les
@@ -170,9 +172,12 @@ describe("1. la decision pure : les circonstances qui retiennent le bas", () => 
 });
 
 // ---------------------------------------------------------------------------
-describe("2. le geste : 2 500 ms, 4 px, et Echap excepte", () => {
-  it("le delai de remasquage est de 2 500 ms", () => {
-    expect(VOCAL_CHROME_IDLE_MS).toBe(2500);
+describe("2. le geste : 10 000 ms, 4 px, et Echap excepte", () => {
+  it("le delai de remasquage est de 10 000 ms (decision du 2026-11-14)", () => {
+    // REGLE PROTEGEE : le delai de repos avant effacement du bas. Le proprietaire
+    // a demande 10 secondes sans souris (et non plus 2 500 ms). Ce test tombe si
+    // le delai change de valeur ou redevient un reglage : une seule constante.
+    expect(VOCAL_CHROME_IDLE_MS).toBe(10_000);
     expect(VOCAL_CHROME_MOVE_PX).toBe(4);
   });
 

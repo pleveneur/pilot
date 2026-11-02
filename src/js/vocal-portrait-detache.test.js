@@ -47,6 +47,7 @@ import {
   VOCAL_PORTRAIT_AIR_PX,
   VOCAL_PORTRAIT_AIR_TOP_PX,
   VOCAL_PORTRAIT_BLOCK_PX,
+  VOCAL_PORTRAIT_CROWN_RATIO,
   VOCAL_PORTRAIT_FRAME_PX,
   VOCAL_PORTRAIT_GAP_PX,
   VOCAL_PORTRAIT_MIN_PX,
@@ -86,15 +87,29 @@ const NOM = regle(".vocal-portrait-name", 60);
  *
  * `portraitSize` est ce que le plan rend pour cette rangee — le chiffre REEL,
  * jamais arrondi en silence.
+ *
+ * DEPUIS LE 2026-11-14, le medaillon commence la ou la LUEUR du cercle finit
+ * (`VOCAL_PORTRAIT_CROWN_RATIO`, `88 / 336` du disque) et non plus a 12 px fixes :
+ * la lueur le recouvrait de 17,58 px au repos, jusqu'a 60 px en pleine voix.
+ * Quand la couronne entiere rapetisserait le medaillon sous sa taille
+ * confortable (96 px), c'est l'ECART qui cede, jamais le personnage : a 720 x 520,
+ * ou la rangee est pleine, l'ecart ne prend que ce qui reste et le medaillon garde
+ * ses 108 px.
+ *
+ * `orbSize` n'est pas un chiffre de confort : c'est EXACTEMENT ce que rend
+ * `--vocal-orb-size` (`clamp(100px, (hauteur - 289px) x 276 / 512, 276px)`) a
+ * cette hauteur de fenetre — 124,52 px a 520, 276 px des 900 (mesure au banc,
+ * concordance au centieme). Depuis le 2026-11-14 le disque plafonne donc a 276 px,
+ * et le medaillon avec lui : la cible de 288 px n'est plus atteignable.
  */
 const MESURES = [
-  { width: 720, height: 520, orbSize: 151.6, stageHeight: 313, portraitSize: 97 },
-  { width: 768, height: 576, orbSize: 188.3, stageHeight: 369, portraitSize: 116 },
-  { width: 896, height: 672, orbSize: 251.3, stageHeight: 465, portraitSize: 149 },
-  { width: 1024, height: 768, orbSize: 314.3, stageHeight: 561, portraitSize: 182 },
-  { width: 1280, height: 800, orbSize: 335.3, stageHeight: 593, portraitSize: 193 },
-  { width: 1440, height: 900, orbSize: 336, stageHeight: 693, portraitSize: 288 },
-  { width: 1920, height: 1080, orbSize: 336, stageHeight: 873, portraitSize: 288 },
+  { width: 720, height: 520, orbSize: 124.52, stageHeight: 313, portraitSize: 108 },
+  { width: 768, height: 576, orbSize: 154.71, stageHeight: 369, portraitSize: 121 },
+  { width: 896, height: 672, orbSize: 206.46, stageHeight: 465, portraitSize: 151 },
+  { width: 1024, height: 768, orbSize: 258.21, stageHeight: 561, portraitSize: 182 },
+  { width: 1280, height: 800, orbSize: 275.46, stageHeight: 593, portraitSize: 192 },
+  { width: 1440, height: 900, orbSize: 276, stageHeight: 693, portraitSize: 276 },
+  { width: 1920, height: 1080, orbSize: 276, stageHeight: 873, portraitSize: 276 },
 ];
 
 describe("R1 — le portrait est plus grand, et les deux sources disent le meme chiffre", () => {
@@ -127,7 +142,7 @@ describe("R1 — le portrait est plus grand, et les deux sources disent le meme 
       // tient dans la rangee : rien ne deborde sur la barre du haut ni sur la
       // ligne d'etat.
       expect(
-        VOCAL_STAGE_AIR_PX + cas.orbSize + vocalPortraitBlockSize(plan.portraitSize),
+        VOCAL_STAGE_AIR_PX + cas.orbSize + vocalPortraitBlockSize(plan.portraitSize, cas.orbSize, cas.stageHeight),
         `${nom} : la composition deborde de la rangee`,
       ).toBeLessThanOrEqual(cas.stageHeight);
     }
@@ -169,9 +184,17 @@ describe("R2 — il est DETACHE, sans ajouter de trait", () => {
     expect(VOCAL_PORTRAIT_AIR_PX).toBe(12);
     expect(NOM).toMatch(/margin-block:\s*8px 12px/);
     expect(NOM).toContain(`${VOCAL_PORTRAIT_GAP_PX}px ${VOCAL_PORTRAIT_AIR_PX}px`);
-    // Et l'ecart au DISQUE est le meme air : 12 px, en haut du medaillon.
+    // Et l'ecart au DISQUE n'est plus un air fixe : c'est la COURONNE DE LA LUEUR
+    // du cercle (`88 / 336` du disque), ecrite dans `--vocal-portrait-gap` par
+    // `vocalSyncSides`. Le plancher de 12 px reste le minimum quand le disque est
+    // inconnu (`VOCAL_PORTRAIT_AIR_TOP_PX`) : le medaillon ne touche donc jamais
+    // le cercle, ni sa lueur.
     expect(VOCAL_PORTRAIT_AIR_TOP_PX).toBe(VOCAL_PORTRAIT_AIR_PX);
-    expect(PORTRAIT).toMatch(/margin-block-start:\s*12px/);
+    expect(PORTRAIT).toMatch(/margin-block-start:\s*var\(--vocal-portrait-gap,\s*var\(--vocal-crown\)\)/);
+    expect(VOCAL_PORTRAIT_CROWN_RATIO).toBeCloseTo(88 / 336, 10);
+    // Le jeton `--vocal-crown` de la feuille de style porte le MEME rapport :
+    // une seule couronne, lue des deux cotes.
+    expect(CSS).toMatch(/--vocal-crown:\s*calc\(var\(--vocal-orb-size\) \* 88 \/ 336\)/);
   });
 
   it("le bloc du personnage vaut la somme exacte de ses parties", () => {
@@ -308,7 +331,9 @@ describe("R5 — la place n'est plus payee par aucune colonne", () => {
     expect(avec.listHeight).toBe(avec.columnHeight - 53);
     // Et le bloc du personnage est bien compte, mais AILLEURS : dans la rangee,
     // sous le disque.
-    expect(avec.portraitBlock).toBe(vocalPortraitBlockSize(avec.portraitSize));
+    expect(avec.portraitBlock).toBe(
+      vocalPortraitBlockSize(avec.portraitSize, base.orbSize, base.stageHeight),
+    );
     expect(VOCAL_STAGE_AIR_PX + base.orbSize + avec.portraitBlock).toBeLessThanOrEqual(
       base.stageHeight,
     );
@@ -318,9 +343,9 @@ describe("R5 — la place n'est plus payee par aucune colonne", () => {
     // Une place gagnee en ecrasant la liste serait une regression. A 720 x 520
     // la liste garde ses 178 px, soit TROIS rangees et leurs deux en-tetes,
     // exactement comme sans personnage ; le medaillon, lui, se contente de ce
-    // que la rangee laisse (97 px).
+    // que la rangee laisse (108 px, l'ecart a la lueur compris).
     const avec = planVocalSides(MESURES[0] && { ...MESURES[0], hasPortrait: true });
-    expect(avec.portraitSize).toBe(97);
+    expect(avec.portraitSize).toBe(108);
     expect(avec.listHeight).toBe(178);
     expect(vocalTaskRows(avec.listHeight).rows).toBe(3);
     expect(vocalTaskRows(avec.listHeight).headers).toBe(true);
@@ -332,27 +357,37 @@ describe("R6 — « environ trois fois plus grand », et la VRAIE mesure", () =>
     // Le tableau du rapport et de `spec_modes_ecran_vocal.md` § 3ter, ligne par
     // ligne. Il tombe si un seul chiffre bouge — c'est un plafond tenu, pas une
     // formule qu'on peut arrondir.
-    const attendu = [97, 116, 149, 182, 193, 288, 288];
+    const attendu = [108, 121, 151, 182, 192, 276, 276];
     expect(MESURES.map((c) => c.portraitSize)).toEqual(attendu);
     for (const cas of MESURES) {
       const plan = planVocalSides({ ...cas, hasPortrait: true });
       expect(plan.portraitSize, `${cas.width}x${cas.height}`).toBe(cas.portraitSize);
-      // Le medaillon ne touche NI le cercle (12 px d'ecart) NI la fin de la
-      // rangee : la marge est toujours reelle.
-      expect(plan.portraitBlock).toBe(cas.portraitSize + 52);
+      // Le medaillon ne touche NI le cercle (l'ecart vaut la couronne de sa
+      // lueur) NI la fin de la rangee : la marge est toujours reelle.
+      expect(plan.portraitBlock).toBe(
+        vocalPortraitBlockSize(cas.portraitSize, cas.orbSize, cas.stageHeight),
+      );
     }
   });
 
-  it("la cible de 3 x est atteinte des que la hauteur la porte (1440 x 900)", () => {
+  it("la cible de 3 x n'est plus atteignable : le CERCLE borne le medaillon avant elle", () => {
+    // MESURE, PAS SOUHAIT. La cible de la remarque du 2026-11-02 est 3 x le
+    // plancher, soit 288 px. Depuis que le disque est ramene a 276 px
+    // (2026-11-14), le medaillon ne peut plus la depasser : il n'est jamais plus
+    // large que le cercle qu'il surmonte (`vocalPortraitSize`, borne 2). La
+    // cible reste donc la REFERENCE de la formule, jamais un chiffre rendu.
     for (const cas of MESURES.filter((c) => c.height >= 900)) {
       const plan = planVocalSides({ ...cas, hasPortrait: true });
-      expect(plan.portraitSize, `${cas.width}x${cas.height}`).toBe(VOCAL_PORTRAIT_TARGET_PX);
-      expect(plan.portraitSize / VOCAL_PORTRAIT_PX).toBe(3);
+      // Le medaillon prend TOUT ce que le cercle permet : 276 px, soit 2,875 x.
+      expect(plan.portraitSize, `${cas.width}x${cas.height}`).toBe(cas.orbSize);
+      expect(plan.portraitSize, `${cas.width}x${cas.height}`).toBe(276);
+      expect(plan.portraitSize / VOCAL_PORTRAIT_PX).toBeGreaterThan(2.8);
+      expect(plan.portraitSize).toBeLessThanOrEqual(VOCAL_PORTRAIT_TARGET_PX);
     }
     // En dessous, ce n'est pas un choix : c'est la hauteur qui manque, et le
     // chiffre baisse sans jamais deborder (verifie en R1).
     const petit = planVocalSides({ ...MESURES[4], hasPortrait: true });
-    expect(petit.portraitSize).toBe(193);
+    expect(petit.portraitSize).toBe(192);
     expect(petit.portraitSize).toBeLessThan(VOCAL_PORTRAIT_TARGET_PX);
   });
 

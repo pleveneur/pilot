@@ -174,8 +174,9 @@ import {
 // LE BAS DE L'ECRAN S'EFFACE AU REPOS (CONCEPTION-ecran-vocal-cercle-et-bas.md
 // §2) : la DECISION est PURE et vit dans vocal-chrome.js (les quatre
 // circonstances qui interdisent le masquage, le seuil de 4 px, la touche
-// Echap, le delai de 2 500 ms). Ici, on ne fait que l'appliquer, en UN SEUL
-// point d'ecriture (`vocalSyncChrome`), avec UN SEUL minuteur.
+// Echap, le delai de 10 000 ms, decision du 2026-11-14 : « la zone de saisie doit
+// disparaitre apres 10 secondes sans souris »). Ici, on ne fait que l'appliquer,
+// en UN SEUL point d'ecriture (`vocalSyncChrome`), avec UN SEUL minuteur.
 import {
   vocalChromeVisible,
   vocalChromeClass,
@@ -2772,6 +2773,12 @@ function vocalSyncSides() {
   // s'affiche alors pas du tout). Le budget des colonnes ne la retranche plus :
   // la liste des taches garde toute sa hauteur, que le medaillon soit la ou non.
   ov.style.setProperty("--vocal-portrait-size", `${plan.portraitSize}px`);
+  // L'ECART PEINT AU-DESSUS DU MEDAILLON : la couronne de la lueur du cercle
+  // quand la rangee la porte, moins quand elle rapetisserait le personnage sous
+  // sa taille confortable (voir `vocalPortraitAirTopPx`). Le budget du medaillon
+  // (`plan.portraitSize`) est deja calcule avec CE chiffre : la feuille de style
+  // et le calcul ne peuvent donc pas se contredire.
+  ov.style.setProperty("--vocal-portrait-gap", `${plan.portraitAir}px`);
   ov.classList.toggle("vocal-sides-off", !plan.shown);
   // `track = 0` = colonnes ABSENTES : sans `hidden`, les deux `<aside>` vides
   // resteraient dans la grille et y creeraient des pistes fantomes.
@@ -5862,8 +5869,9 @@ let vocalDicteeParGeste = false;
   }
 
   /**
-   * LE MINUTEUR UNIQUE du masquage du bas : 2 500 ms, repart de zero a chaque
-   * geste. Il n'en existe qu'un (cette variable), il est toujours annule avant
+   * LE MINUTEUR UNIQUE du masquage du bas : 10 000 ms (`VOCAL_CHROME_IDLE_MS`,
+   * decision du 2026-11-14 : « la zone de saisie doit disparaitre apres 10
+   * secondes sans souris »), repart de zero a chaque geste. Il n'en existe qu'un (cette variable), il est toujours annule avant
    * d'etre repose, et il est retire a la sortie du mode : aucune minuterie ne
    * survit a l'ecran.
    */

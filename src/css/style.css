@@ -12275,7 +12275,8 @@ body.pilot-vocal-active #agent-activity {
    droite : il n'appartient ni au panneau des taches ni a celui de la discussion.
    `hidden` quand il n'y a pas de personnage — AUCUN repli sur le logo. Il ne
    prend jamais le clic : la scene est traversante.
-   L'ORDRE DE LA SCENE est donc : cercle, ecart de 12 px, medaillon, 8 px, nom —
+   L'ORDRE DE LA SCENE est donc : cercle, ecart egal a la couronne de sa lueur,
+   medaillon, 8 px, nom —
    le tout dans `.vocal-center`, sur l'axe du cercle. La composition est centree
    en hauteur : quand il n'y a pas de personnage, elle se reduit au cercle, qui
    est donc centre ; quand il y en a un, c'est l'ensemble qui est centre, donc le
@@ -12284,23 +12285,33 @@ body.pilot-vocal-active #agent-activity {
   /* LA TAILLE EST UNE MESURE, PAS UN CHIFFRE. Le medaillon vaut
      `--vocal-portrait-size`, que `vocalSyncSides()` (super-agent.js) pose a la
      valeur rendue par `vocalPortraitSize` : la hauteur laissee libre SOUS le
-     disque (moins les 64 px du cadre de la composition), plafonnee par la
+     disque (moins le cadre de la composition : la couronne de la lueur + 52 px),
+     plafonnee par la
      largeur du disque et par trois fois le plancher de 96 px. Valeur de repli :
      96 px, le plancher du 2026-10-03 (`VOCAL_PORTRAIT_PX`).
      Mesure des fenetres du document, medaillon sous le disque (2026-11-14,
-     disque ramene de 336 a 276 px) : 124 px a 720 x 520, 150 a 768 x 576, 170 a
-     820 x 620, 194 a 896 x 672, 238 a 1024 x 768, 253 a 1280 x 800, puis 276 px
-     a 1440 x 900 comme a 1920 x 1080 : le CERCLE borne le medaillon avant la
-     CIBLE de 288 px (3 x le plancher), qui reste la reference si le disque
-     remonte. Le disque plus petit LIBERE de la hauteur : le medaillon en
-     profite au lieu d'y perdre. Voir `spec_modes_ecran_vocal.md` § 3ter. */
+     disque ramene de 336 a 276 px, l'ecart a la lueur paye sous le cercle) :
+     108 px a 720 x 520, 121 a 768 x 576, 151 a 896 x 672, 182 a 1024 x 768,
+     192 a 1280 x 800, puis 276 px a 1440 x 900 comme a 1920 x 1080 : le CERCLE
+     borne le medaillon avant la CIBLE de 288 px (3 x le plancher), qui reste la
+     reference de la formule et n'est plus atteignable tant que le disque
+     plafonne a 276. Le disque plus petit LIBERE de la hauteur : le medaillon en
+     profite au lieu d'y perdre, une fois la couronne de la lueur payee.
+     Voir `spec_modes_ecran_vocal.md` § 3ter. */
   width: var(--vocal-portrait-size, 96px);
   height: var(--vocal-portrait-size, 96px);
-  /* L'ECART AU DISQUE (12 px, `VOCAL_PORTRAIT_AIR_TOP_PX`) : le medaillon se
-     detache du cercle sans s'en eloigner. Il ne touche jamais le cercle, et il
-     ne s'en va pas non plus de l'autre cote de l'ecran : c'est un ecart fixe,
-     pas une respiration automatique. */
-  margin-block-start: 12px;
+  /* L'ECART AU DISQUE : LA COURONNE DE SA LUEUR, `88 / 336` du disque
+     (`--vocal-crown`, le meme jeton que le halo du cercle et que
+     `VOCAL_PORTRAIT_CROWN_RATIO` cote budget), pose par `vocalSyncSides` dans le
+     jeton `--vocal-portrait-gap` — parce que la couronne ne tient pas toujours :
+     dans une rangee etroite, l'ecart se reduit plutot que d'ecraser le medaillon
+     (`vocalPortraitAirTopPx`). Le cercle n'est donc jamais recolle au portrait.
+     Le medaillon commence la ou la lueur FINIT : c'est ce qui repond au constat du
+     2026-11-14 (« son portrait chevauche le cercle situe au-dessus »), ou 12 px
+     fixes laissaient la lueur recouvrir le haut du portrait sur 17,58 px au
+     repos et jusqu'a 60 px pendant la parole. Un ecart FIXE, pas une respiration
+     automatique : il ne s'ouvre ni ne se ferme. */
+  margin-block-start: var(--vocal-portrait-gap, var(--vocal-crown));
   border-radius: 50%;
   object-fit: cover;
   align-self: center;

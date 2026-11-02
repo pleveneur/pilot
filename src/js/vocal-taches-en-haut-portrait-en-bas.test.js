@@ -45,6 +45,7 @@ import {
   VOCAL_TASKS_GROUP_RUNNING,
   VOCAL_TASKS_GROUP_WAITING,
   VOCAL_PORTRAIT_BLOCK_PX,
+  vocalPortraitBlockSize,
   VOCAL_IMAGE_PORTRAIT,
   VOCAL_IMAGE_AVATAR,
   VOCAL_IMAGE_NONE,
@@ -99,9 +100,13 @@ describe("T18 — le personnage ne prend plus de place a la colonne", () => {
       expect(portrait.listHeight, `${largeur} : la liste a perdu des rangees`).toBe(
         rien.listHeight,
       );
-      // Le medaillon, lui, EXISTE : il est mesure, et son bloc suit sa taille.
+      // Le medaillon, lui, EXISTE : il est mesure, et son bloc suit sa taille
+      // ET l'ecart au cercle (la couronne de sa lueur, qui peut ceder pour ne pas
+      // rapetisser le personnage sous sa taille confortable).
       expect(portrait.portraitSize, `${largeur} : medaillon`).toBeGreaterThanOrEqual(96);
-      expect(portrait.portraitBlock).toBe(portrait.portraitSize + 52);
+      expect(portrait.portraitBlock).toBe(
+        vocalPortraitBlockSize(portrait.portraitSize, disque, portrait.stageHeight),
+      );
       // L'image du personnage ne prend aucune place DANS la colonne : la zone
       // d'image reste vide, son role est desormais unique (la fenetre du visage).
       expect(portrait.imageZone.kind).toBe(VOCAL_IMAGE_PORTRAIT);
@@ -134,7 +139,7 @@ describe("T18 — le personnage ne prend plus de place a la colonne", () => {
     // visage ne lui prend pas non plus la place qu'elle aurait pu reclamer. Le
     // personnage l'emporte — et il ne coute plus une rangee.
     expect(deux.listHeight).toBe(459);
-    expect(deux.portraitSize).toBe(288);
+    expect(deux.portraitSize).toBe(217);
   });
 
   it("le plan connait le personnage : `hasPortrait` et la taille du medaillon en font partie", () => {
@@ -146,6 +151,7 @@ describe("T18 — le personnage ne prend plus de place a la colonne", () => {
       "hasPortrait",
       "imageZone",
       "listHeight",
+      "portraitAir",
       "portraitBlock",
       "portraitSize",
       "shown",
@@ -158,7 +164,7 @@ describe("T18 — le personnage ne prend plus de place a la colonne", () => {
     expect(plan.portraitBlock).toBe(0);
     // Une entree `hasPortrait` bien vraie CHANGE la liste : elle est lue.
     const avec = planVocalSides({ ...cas, hasPortrait: true });
-    expect(avec.portraitSize).toBe(288);
+    expect(avec.portraitSize).toBe(217);
     // Une entree `hasPortrait` vraie CHANGE le plan (le medaillon est mesure)…
     expect(avec.portraitBlock).toBeGreaterThan(0);
     // …mais PLUS la liste : sa place est ailleurs (sous le disque).

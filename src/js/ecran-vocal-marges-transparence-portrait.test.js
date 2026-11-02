@@ -51,6 +51,7 @@ import {
   VOCAL_PORTRAIT_AIR_PX,
   VOCAL_PORTRAIT_AIR_TOP_PX,
   VOCAL_PORTRAIT_BLOCK_PX,
+  VOCAL_PORTRAIT_CROWN_RATIO,
   VOCAL_PORTRAIT_FRAME_PX,
   VOCAL_PORTRAIT_GAP_PX,
   // Le plancher du VISIBLE (56 px) : sous lui, aucun medaillon.
@@ -105,11 +106,17 @@ describe("R1 — le contenu ne touche plus le cadre", () => {
     expect(planVocalDiscussion(VOCAL_SIDE_FIXED_PX, 320).lines).toBe(0);
   });
 
-  it("le medaillon ne touche plus le haut du cadre : 12 px d'air, comptes", () => {
+  it("le medaillon ne touche plus le CERCLE ni sa LUEUR : l'ecart vaut la couronne", () => {
+    // Le plancher de l'ecart reste l'air de la colonne (12 px), mais l'ecart REEL
+    // est la couronne de la lueur du cercle (`88 / 336` du disque) : le medaillon
+    // commence la ou la lueur finit (constat du 2026-11-14).
     expect(VOCAL_PORTRAIT_AIR_TOP_PX).toBe(VOCAL_SIDE_AIR_PX);
+    expect(VOCAL_PORTRAIT_CROWN_RATIO).toBeCloseTo(88 / 336, 10);
     const portrait = regle(".vocal-portrait", 60);
-    expect(portrait).toMatch(/margin-block-start:\s*12px/);
-    expect(portrait).toContain(`${VOCAL_PORTRAIT_AIR_TOP_PX}px`);
+    expect(portrait).toMatch(
+      /margin-block-start:\s*var\(--vocal-portrait-gap,\s*var\(--vocal-crown\)\)/,
+    );
+    expect(portrait).not.toMatch(/margin-block-start:\s*12px/);
     // Le bloc du personnage porte l'air du haut dans son total : la liste ne
     // perd pas une rangee de plus que ce qui est peint.
     expect(VOCAL_PORTRAIT_BLOCK_PX).toBe(
@@ -215,10 +222,20 @@ describe("R3 — le medaillon est MESURE, plus fige", () => {
     // donc plus la largeur d'une colonne mais ce que la rangee de la scene
     // laisse libre sous le disque : rangee - disque - cadre (64 px).
     expect(VOCAL_PORTRAIT_FRAME_PX).toBe(64);
-    // Une rangee haute : la cible de 288 px (3 x 96) est atteinte, et bornee.
-    expect(vocalPortraitSize({ orbSize: 336, stageHeight: 693 })).toBe(
+    // Une rangee haute : la cible de 288 px (3 x 96) est atteinte a 764 px de
+    // rangee pour un disque de 336 (336 + la couronne 88 + 52 de cadre + 288).
+    expect(vocalPortraitSize({ orbSize: 336, stageHeight: 764 })).toBe(
       VOCAL_PORTRAIT_TARGET_PX,
     );
+    // A 1440 x 900 la rangee vaut 693 px, mais le DISQUE reel n'y est pas 336 :
+    // `--vocal-orb-size` plafonne a 276 px depuis le 2026-11-14. Le medaillon y
+    // prend donc tout ce que le cercle permet : 276 px, sous une couronne de
+    // 73 px (et non 88, qui est la couronne du disque de la conception).
+    expect(vocalPortraitSize({ orbSize: 276, stageHeight: 693 })).toBe(276);
+    // Avec le disque de la conception (336 px), la fonction rend bien 217 : c'est
+    // l'ancienne geometrie, gardee comme reference de calcul — elle n'est plus
+    // atteinte par aucune fenetre.
+    expect(vocalPortraitSize({ orbSize: 336, stageHeight: 693 })).toBe(217);
     // Une rangee courte : c'est la HAUTEUR qui decide, au pixel.
     expect(vocalPortraitSize({ orbSize: 336, stageHeight: 500 })).toBe(100);
     // Jamais plus large que le disque qu'il surmonte (regle 2).
@@ -255,8 +272,11 @@ describe("R3 — le medaillon est MESURE, plus fige", () => {
   it("le plan porte la taille ET le bloc, et la LISTE ne paie plus rien", () => {
     const entrees = { width: 1440, height: 900, orbSize: 336, stageHeight: 693 };
     const avec = planVocalSides({ ...entrees, hasPortrait: true });
-    expect(avec.portraitSize).toBe(VOCAL_PORTRAIT_TARGET_PX);
-    expect(avec.portraitBlock).toBe(vocalPortraitBlockSize(avec.portraitSize));
+    expect(avec.portraitSize).toBe(217);
+    expect(avec.portraitAir).toBe(88);
+    expect(avec.portraitBlock).toBe(
+      vocalPortraitBlockSize(avec.portraitSize, entrees.orbSize, entrees.stageHeight),
+    );
     // LE POINT 7 TIENT DANS CETTE LIGNE : la liste garde toute sa hauteur, le
     // bloc du personnage ne lui est plus retranche (avant, elle tombait a UNE
     // rangee des que le personnage etait la).

@@ -108,13 +108,16 @@ describe("D2 — le geste expire AVEC le decompte", () => {
   });
 
   it("le decompte a toujours la meme duree : ce n'est pas un nouveau reglage", () => {
-    expect(VOCAL_CHROME_IDLE_MS).toBe(2500);
+    // DELAI PORTE A 10 000 ms (decision du proprietaire, 2026-11-14 : « la zone
+    // de saisie doit disparaitre apres 10 secondes sans souris »). Ce n'est
+    // toujours pas un reglage : une constante du module pur, lue par le minuteur.
+    expect(VOCAL_CHROME_IDLE_MS).toBe(10_000);
     // Le corps du minuteur ne contient pas la constante (elle ferme la fonction) :
     // on verifie donc qu'il la PASSE, sous son nom, et jamais un nombre ecrit en
     // dur — un second `2500` serait un second reglage a tenir a jour.
     expect(TIMER).toContain("setTimeout(");
     expect(SUPER).toContain("}, VOCAL_CHROME_IDLE_MS);");
-    expect(TIMER).not.toMatch(/\b2500\b/);
+    expect(TIMER).not.toMatch(/\b(2500|10000|10_000)\b/);
     // Le seuil de reveil non plus : le tremblement d'une main posee ne reveille
     // pas l'ecran, donc il ne peut pas relancer le decompte sans fin.
     expect(VOCAL_CHROME_MOVE_PX).toBe(4);

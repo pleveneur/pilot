@@ -614,9 +614,10 @@ qui plafonnait le médaillon à **274-275 px** et ne pouvait jamais tenir la cib
 mesure maintenant dans la **rangée du stage** :
 
 1. **jamais plus haut que l'air disponible sous le disque** :
-   `parHauteur = hauteurDeRangee − tailleDuDisque − VOCAL_PORTRAIT_FRAME_PX` (**64 px** =
-   12 px d'air du stage + 8 px d'écart image/nom + 20 px de nom + 12 px d'air + 12 px d'air
-   interne du bloc) ;
+   `parHauteur = hauteurDeRangee − tailleDuDisque − vocalPortraitFramePx(disque, rangee)`
+   = l'**écart à la lueur** (voir ci-dessous ; 12 px tant que le disque est inconnu) +
+   8 px d'écart image/nom + 20 px de nom + 12 px d'air + 12 px d'air interne du bloc
+   (les **64 px** de `VOCAL_PORTRAIT_FRAME_PX` sont le repli, écart au plancher de 12) ;
 2. **jamais plus de trois fois le plancher** (`VOCAL_PORTRAIT_TARGET_PX` = **288 px**) ;
    en pratique le **diamètre du disque** (276 px) borne avant elle (14/11) ;
 3. **plancher 96 px** (`VOCAL_PORTRAIT_PX`) tant que la place le porte, **56 px**
@@ -645,37 +646,64 @@ Mesure réelle des **huit fenêtres** (composition de haut en bas : disque, méd
 personnage présent, valeurs **mesurées dans le navigateur** après convergence — relevé du
 **2026-11-14**, disque ramené à 276 px (les valeurs du 13/11 sont entre parenthèses) :
 
-| Fenêtre | Rangée | Disque | Médaillon | Bloc (`taille + 52`) | Composition | Liste | Rangées (avec / sans) |
-|---|---|---|---|---|---|---|---|
-| 720 × 520 | 313 px | 124,5 px (151,6) | **124 px** (97) | 176 px | 312,5 px | 178 px | **3 / 3** |
-| 768 × 576 | 369 px | 154,7 px (188,3) | **150 px** (116) | 202 px | 368,7 px | 234 px | **4 / 4** |
-| 820 × 620 | 413 px | 178,4 px (217,2) | **170 px** (131) | 222 px | 412,4 px | 278 px | **5 / 5** |
-| 896 × 672 | 465 px | 206,5 px (251,3) | **194 px** (149) | 246 px | 464,5 px | 330 px | **6 / 6** |
-| 1024 × 768 | 561 px | 258,2 px (314,3) | **238 px** (182) | 290 px | 560,2 px | 426 px | **8 / 8** |
-| 1280 × 800 | 593 px | 275,5 px (335,3) | **253 px** (193) | 305 px | 592,5 px | 458 px | **8 / 8** |
-| 1440 × 900 | 693 px | 276,0 px (336,0) | **276 px** (288) | 328 px | 616 px | 459 px | **8 / 8** |
-| 1920 × 1080 | 873 px | 276,0 px (336,0) | **276 px** (288) | 328 px | 616 px | 459 px | **8 / 8** |
+| Fenêtre | Rangée | Disque | Écart à la lueur | Médaillon | Bloc | Composition | Liste | Rangées (avec / sans) |
+|---|---|---|---|---|---|---|---|---|
+| 720 × 520 | 313 px | 124,5 px | 28 px | **108 px** | 176 px | 312,5 px | 178 px | **3 / 3** |
+| 768 × 576 | 369 px | 154,7 px | 41 px | **121 px** | 202 px | 368,7 px | 234 px | **4 / 4** |
+| 820 × 620 | 413 px | 178,4 px | 47 px | **135 px** | 222 px | 412,4 px | 278 px | **5 / 5** |
+| 896 × 672 | 465 px | 206,5 px | 55 px | **151 px** | 246 px | 464,5 px | 330 px | **6 / 6** |
+| 1024 × 768 | 561 px | 258,2 px | 68 px | **182 px** | 290 px | 560,2 px | 426 px | **8 / 8** |
+| 1280 × 800 | 593 px | 275,5 px | 73 px | **192 px** | 245 px | 592,5 px | 458 px | **8 / 8** |
+| 1440 × 900 | 693 px | 276,0 px | 73 px | **276 px** | 389 px | 677 px | 459 px | **8 / 8** |
+| 1920 × 1080 | 873 px | 276,0 px | 73 px | **276 px** | 389 px | 677 px | 459 px | **8 / 8** |
+
+**L'ÉCART AU CERCLE EST LA COURONNE DE SA LUEUR, ET IL SE MESURE** (correctif du
+2026-11-14 : « son portrait s'affiche bien, mais il chevauche le cercle situé
+au-dessus »). La lueur du disque (`.vocal-orb::before`) déborde du cercle — vers le
+**bas** comme ailleurs — de `--vocal-crown`, soit `88 / 336` du disque. Un écart fixe
+de **12 px** laissait donc la lueur **recouvrir le haut du portrait de 17,58 px au
+repos et de 60,29 px en pleine voix** (banc, disque de 276 px). L'écart vaut désormais
+**le rayon de cette couronne**, arrondi **vers le haut** (au dixième de pixel près :
+276 px de disque ⇒ 72,28 px de couronne ⇒ **73 px**), et il est écrit par
+`vocalSyncSides` dans le jeton **`--vocal-portrait-gap`**, que la feuille de style lit
+en priorité (`var(--vocal-portrait-gap, var(--vocal-crown))` : le repli vaut la
+couronne entière, donc jamais de chevauchement même sans JavaScript). **Un seul
+rapport `88 / 336`, deux lecteurs** : `VOCAL_PORTRAIT_CROWN_RATIO` côté budget, le jeton
+`--vocal-crown` côté feuille de style.
+
+**L'écart cède, le personnage ne rapetisse jamais pour une lueur** : quand prendre
+toute la couronne ferait tomber le médaillon sous son plancher confortable (96 px),
+c'est l'**écart** qui se réduit (`vocalPortraitAirTopPx(disque, rangee)`), jamais sous
+**12 px**. C'est ce qui explique la colonne « Écart à la lueur » : 28, 41, 47, 55, 68 px
+aux fenêtres courtes, 73 px dès que la rangée le porte. Verrous :
+`src/js/ecran-vocal-portrait-ne-chevauche-plus-le-cercle.test.js` (inégalité de
+**géométrie** : `haut(médaillon) ≥ bas(disque) + couronne`, sur neuf disques réels ; le
+même chiffre des deux côtés ; le cercle sans image) et
+`src/js/vocal-portrait-detache.test.js` (R6, les huit chiffres ci-dessus).
 
 **La cible est tenue au maximum que le disque autorise** : le médaillon ne peut pas être
 plus large que le cercle qu'il surmonte, donc **276 px dès 1440 × 900** (2,9 fois le
-plancher de 96 px) — **288 px** avant la réduction du cercle —, et **150 à 253 px** aux
-tailles intermédiaires (116 à 193 avant), contre **274-275 px** au mieux avant le point 7,
+plancher de 96 px) — **288 px** avant la réduction du cercle, cible qui n'est plus
+atteignable tant que le disque plafonne à 276 —, et **108 à 192 px** aux tailles
+intermédiaires (l'écart à la lueur payé), contre **274-275 px** au mieux avant le point 7,
 et **jamais plus de deux rangées** de tâches. Le disque qui rétrécit **libère de la
-hauteur** : le médaillon en profite, il ne perd rien.
+hauteur** : le médaillon en profite, il ne perd rien — mais la couronne de la lueur, elle,
+se paie : c'est le prix du dégagement.
 
 Positions réelles relevées au navigateur (relevé du 2026-11-14, arbre de
 `buildVocalOverlay` et feuille de style du projet, une boîte par fenêtre) :
 `cx(disque) = cx(photo) = cx(stage)` **exactement au centre de la fenêtre, avec comme sans
 personnage** — 360 à 720 de large, 384 à 768, 410 à 820, 448 à 896, 512 à 1024, 640 à 1280,
 720 à 1440. Avec personnage à 896 × 672, le disque occupe `94,5 → 301` et la photo commence
-à `313` (écart de 12 px), son nom finit à `535` ; **sans** personnage, le disque occupe
-`217,5 → 424` et la composition **est** centrée. La composition ne descend **jamais** sous
-le bas de la rangée : elle s'arrête 137 px au-dessus (12 px d'air du bas de la composition,
-puis le reste de la rangée).
+à `356` (écart de 55 px : la couronne de sa lueur, qui s'arrête à `352,1`) ; le médaillon
+mesure 151 px et son nom finit à `535` ; **sans** personnage, le disque occupe `217,5 → 424`
+et la composition **est** centrée. La composition ne descend **jamais** sous le bas de la
+rangée : elle s'arrête 0,5 px au-dessus (arrondi vers le bas du médaillon : le pixel perdu
+est invisible, l'air du haut reste entier).
 
-**Le médaillon ne touche ni le cadre, ni le bord, ni son nom** : 12 px d'air au-dessus
-(`VOCAL_PORTRAIT_AIR_TOP_PX`, comptés dans le bloc), 8 px entre l'image et le nom, 12 px
-sous le nom, et la composition est **centrée dans la largeur de la piste du disque**
+**Le médaillon ne touche ni la lueur du cercle, ni son nom** : l'écart au-dessus vaut la
+**couronne de la lueur** (au moins 12 px, `VOCAL_PORTRAIT_AIR_TOP_PX`), compté dans le
+bloc, 8 px entre l'image et le nom, 12 px sous le nom, et la composition est **centrée dans la largeur de la piste du disque**
 (`width: var(--vocal-orb-size)`) : le médaillon est donc toujours sur l'axe du disque,
 quelle que soit la largeur des colonnes. `object-fit: cover` sur un carré de côté
 `taille` : aucun visage rogné. Verrou : `src/js/vocal-portrait-detache.test.js` (R6 : la
@@ -994,9 +1022,10 @@ parole** (`vocalBargeIn` appelle le réveil existant : parler ne passe par aucun
 des quatre écouteurs). Un geste sur un bas effacé ne déclenche rien d'autre que
 le réveil : **aucun contrôle invisible n'est activable**.
 
-**Le remasquage** : **2 500 ms** sans aucun geste, **un seul minuteur**, relancé
-à zéro à chaque geste — pendant ces 2,5 s le bas est visible, même si l'on ne
-fait rien. **Quatre situations l'interdisent**, et l'**ordre de la décision est
+**Le remasquage** : **10 000 ms** sans aucun geste (décision du propriétaire, 2026-11-14 :
+« la zone de saisie doit disparaitre apres 10 secondes sans souris » ; c'était 2 500 ms),
+**un seul minuteur**, relancé à zéro à chaque geste — pendant ces 10 s le bas est visible,
+même si l'on ne fait rien. **Quatre situations l'interdisent**, et l'**ordre de la décision est
 la spec** :
 
 | # | Situation | Pourquoi |
@@ -1081,7 +1110,8 @@ Deux causes, toutes deux dans la décision pure, aucun défaut du minuteur :
    retenait donc le bas pour **toute la session**.
 
 La décision ferme est appliquée telle quelle : **2 500 ms de repos ⇒ le bas
-s'efface, quoi qu'il arrive**, et **deux raisons d'usage seulement** le retiennent
+s'efface, quoi qu'il arrive** (porté à **10 000 ms** le 2026-11-14, à la demande du
+propriétaire — voir ci-dessus ; le mécanisme, lui, n'a pas bougé), et **deux raisons d'usage seulement** le retiennent
 (du texte dans le champ, le pointeur en geste sur la zone du bas) — les deux autres
 lignes du tableau (panne du micro, question en attente) restant des cas de sûreté
 déjà verrouillés. Concrètement : la règle 3 est **supprimée** (le tableau passe de
@@ -1092,7 +1122,9 @@ vaut désormais « le champ **contient du texte** ». La parole **fait revenir**
 au lieu de le retenir : `vocalBargeIn` (prise de parole détectée par la garde du
 micro) appelle le réveil **existant** — aucun second minuteur, aucun nouvel
 écouteur. Le mécanisme lui-même est intact : même minuteur unique, même point
-d'écriture, mêmes 2 500 ms, mêmes 4 px, mêmes quatre gestes. Verrous :
+d'écriture, mêmes 4 px, mêmes quatre gestes (la seule chose qui ait changé depuis est le
+DÉLAI, passé à 10 000 ms le 2026-11-14 sur décision du propriétaire, dans la même
+constante unique `VOCAL_CHROME_IDLE_MS`). Verrous :
 `src/js/vocal-barre-effacee-pendant-la-parole.test.js` (la barre s'efface pendant
 que Pilot parle, pendant que l'on parle et pendant que le micro écoute ; le champ
 rempli et le pointeur la retiennent encore ; la parole la réveille) et
@@ -1115,7 +1147,7 @@ façon dans les deux situations. En **mouvement réduit**, aucun fondu, aucune
 translation : `transition: none`.
 
 **Où la décision vit** : un module **pur** `src/js/vocal-chrome.js` (aucun DOM,
-aucune minuterie) — `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4),
+aucune minuterie) — `VOCAL_CHROME_IDLE_MS` (10 000), `VOCAL_CHROME_MOVE_PX` (4),
 `vocalChromeVisible({ etat, saisie, micFerme, pointeurActif, pointeurGeste, question })`,
 `vocalChromeClass(visible)`, `vocalChromeWakeKey(touche)` et
 `vocalChromeMoved(courant, repere)`. Les **deux** faits de pointeur sont distincts et
@@ -1932,9 +1964,9 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : les **quatre niveaux** de longueur (`VOCAL_BREVITY_LEVELS`, `normalizeVocalBrevityLevel`, `vocalBrevityLabel`), la consigne d'un niveau (`vocalBrevityInstruction`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
-| `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (2 500), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les **quatre** règles **dans l'ordre** : micro fermé, champ rempli, pointeur en geste, question en attente — **aucun état de conversation**, cf. 2026-11-13), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
+| `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (10 000), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les **quatre** règles **dans l'ordre** : micro fermé, champ rempli, pointeur en geste, question en attente — **aucun état de conversation**, cf. 2026-11-13), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
 | ✅ **livré** `super-agent.js` + `vocal-bare.js` + `style.css` | **l'état nu** (§4ter) : `buildVocalDisplayToggle()` (le bouton posé **après** `buildVocalOverlay()`, dans `.vocal-top`) — **icône seule** depuis le 2026-11-02 (le texte visible est retiré ; `title` + `aria-label` = `vocalBareLabel()`, qui dit l'état puis l'action), l'icône dans son **propre nœud** parce que `setIcon` écrit `innerHTML` ; `vocalSyncBare()` (**seul** écrivain de `.vocal-bare` et **seul** endroit qui remet l'icône, l'`aria-pressed` et l'infobulle), le terme `vocalBare ||` dans `vocalSyncChrome` (le bas est **retenu allumé**, il n'est plus éteint par l'état nu : la zone de saisie n'est pas dans le périmètre, 2026-11-01), la remise à « tout visible » dans `enterVocal()`. Aucun réglage, aucune persistance |
-| ✅ **livré** `vocal-sides.js` | **source unique** du budget des colonnes et du personnage (§3ter) : `planVocalSides` (`track`, `taskTrack`, `columnHeight`, `listHeight`, `portraitSize`, `portraitBlock`, `imageZone`), `vocalPortraitSize` (médaillon **mesuré sur la HAUTEUR de la rangée** depuis le point 7 : `hauteurDeRangee − disque − 64`, cible 288, plancher 96 puis 56, arrondi vers le bas), `vocalPortraitBlockSize` (`taille + 52`), `planVocalImageZone` (le personnage n'y prend plus de place, l'avatar 180 px), `planVocalTasks`, `planVocalDiscussion` — aucun DOM, aucune constante cachée |
+| ✅ **livré** `vocal-sides.js` | **source unique** du budget des colonnes et du personnage (§3ter) : `planVocalSides` (`track`, `taskTrack`, `columnHeight`, `listHeight`, `portraitSize`, `portraitBlock`, `imageZone`), `vocalPortraitSize` (médaillon **mesuré sur la HAUTEUR de la rangée** depuis le point 7 : `hauteurDeRangee − disque − vocalPortraitFramePx`, où le cadre porte l'**écart à la lueur** — `vocalPortraitAirTopPx`, `88 / 336` du disque, jamais sous 12 px, qui **cède** plutôt que d'écraser le médaillon ; cible 288, plancher 96 puis 56, arrondi vers le bas), `vocalPortraitBlockSize` (`écart + taille + 40`), `portraitAir` (l'écart **peint**, lu par `--vocal-portrait-gap`), `planVocalImageZone` (le personnage n'y prend plus de place, l'avatar 180 px), `planVocalTasks`, `planVocalDiscussion` — aucun DOM, aucune constante cachée |
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 
@@ -1974,7 +2006,7 @@ l'application, cas de sécurité exclus explicitement, documentation à jour),
 `vocal-chrome-masque.test.js` (**le bas effacé au repos** §4bis : les quatre
 règles **dans l'ordre**, le masquage permis au repos avec la dictée **armée mais
 silencieuse**, jamais pendant l'écoute / la parole / une panne de micro / un
-champ occupé, 2 500 ms et **un seul** minuteur, seuil de 4 px, `Échap` qui ne
+champ occupé, **10 000 ms** et **un seul** minuteur, seuil de 4 px, `Échap` qui ne
 réveille rien, décision prise **en dernière ligne** de `applyVocalState`, la
 classe écrite à **un seul** endroit, les quatre écouteurs posés puis **retirés**,
 la dictée et la frappe qui font revenir le bas, le masquage qui **ne nomme que

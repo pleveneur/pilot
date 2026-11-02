@@ -207,9 +207,13 @@ describe("T10 — la largeur des colonnes, formule du § 3.1", () => {
       hasPortrait: true,
     });
     expect(avec.hasPortrait).toBe(true);
-    // La taille, elle, reste MESUREE (hauteur de rangee - disque - 64).
-    expect(avec.portraitSize).toBe(288);
-    expect(avec.portraitBlock).toBe(340);
+    // La taille, elle, reste MESUREE (hauteur de rangee - disque - cadre), et le
+    // cadre porte desormais l'ecart au cercle : la couronne de sa lueur, 88 px
+    // pour un disque de 336 (2026-11-14, le portrait chevauchait le cercle).
+    expect(avec.portraitAir).toBe(88);
+    expect(avec.portraitSize).toBe(693 - 336 - 88 - 52);
+    expect(avec.portraitSize).toBe(217);
+    expect(avec.portraitBlock).toBe(88 + 217 + 40);
     // La colonne est INTACTE : elle ne paie plus rien au personnage.
     expect(avec.listHeight).toBe(512 - VOCAL_SIDE_FIXED_PX);
     expect(avec.listHeight).toBe(459);

@@ -475,7 +475,17 @@ infobulle dit **l'état d'abord, l'action ensuite** : « **tout est visible — 
 pour ne garder que le portrait** », puis « **tout est masqué — cliquer pour tout
 réafficher** ». Masqué n'est pas perdu : **rien ne bouge**, l'espace reste réservé,
 et le logo, `Échap` et la fermeture de l'onglet continuent de fonctionner. Sans
-personnage, il ne reste que le bouton et la zone de saisie. Aucune mémoire : on entre
+personnage, il ne reste que le bouton et la zone de saisie.
+
+**La zone de saisie s'efface d'elle-même au repos** : après **10 secondes sans
+souris** — sans geste, sans frappe — elle s'estompe et laisse la place au cercle,
+puis **revient** au moindre mouvement de souris ou à la première touche. Elle ne
+s'efface jamais quand vous y avez écrit quelque chose, ni pendant que Pilot parle
+ou écoute : c'est du confort de lecture, pas une disparition. Quand elle est
+effacée, elle ne capte aucun clic : rien ne s'active par erreur. `Échap`, lui,
+quitte le mode au lieu de la réveiller. Aucun réglage : c'est le rythme de l'écran.
+
+Aucune mémoire : on entre
 **toujours** avec tout visible, et l'état tombe en quittant le mode.
 
 Sur l'écran **Vocal**, le bouton **« Travail »** est là lui aussi : **tout en

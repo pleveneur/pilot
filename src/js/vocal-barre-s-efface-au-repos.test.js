@@ -1,9 +1,13 @@
 /**
  * Verrou de la remarque n° 5 du proprietaire (2026-11-03) : « la barre du bas ne
  * s'efface plus du tout, alors que c'etait le comportement attendu » — et de sa
- * decision ferme du 2026-11-13 : « elle doit s'effacer apres 2,5 s de repos, QUOI
- * QU'IL ARRIVE ; seules deux raisons la retiennent : du texte dans le champ, le
- * pointeur sur la zone du bas ».
+ * decision ferme du 2026-11-13 : « elle doit s'effacer apres un temps de repos,
+ * QUOI QU'IL ARRIVE ; seules deux raisons la retiennent : du texte dans le champ,
+ * le pointeur sur la zone du bas ».
+ *
+ * DELAI PORTE A 10 SECONDES (decision du 2026-11-14) : « la zone de saisie doit
+ * disparaitre apres 10 secondes sans souris ». C'etait 2 500 ms ; c'est 10 000 ms,
+ * et c'est TOUJOURS une decision, pas un reglage (aucun jeton, aucune variante).
  *
  * LES DEUX DEFAUTS EMPILES, et pourquoi ils echouent ici s'ils reviennent :
  *
@@ -133,8 +137,11 @@ describe("3. aucun second mecanisme d'effacement n'a ete ajoute", () => {
     expect(SYNC).not.toMatch(/set_config|get_config|pilot_/);
   });
 
-  it("les valeurs du mecanisme existant n'ont pas bouge", () => {
-    expect(VOCAL_CHROME_IDLE_MS).toBe(2500);
+  it("le delai est celui de la decision du 2026-11-14 (10 s), et le geste n'a pas bouge", () => {
+    // DECISION DU PROPRIETAIRE (2026-11-14) : « la zone de saisie doit disparaitre
+    // apres 10 secondes sans souris ». Ce test tombe si le delai revient a 2 500 ms
+    // ou prend une autre valeur : ce n'est pas un reglage, c'est UNE constante.
+    expect(VOCAL_CHROME_IDLE_MS).toBe(10_000);
     expect(VOCAL_CHROME_MOVE_PX).toBe(4);
     expect(VOCAL_CHROME_HIDDEN_CLASS).toBe("vocal-chrome-hidden");
   });

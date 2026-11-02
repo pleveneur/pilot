@@ -187,12 +187,67 @@ export const VOCAL_PORTRAIT_MIN_PX = 56;
  */
 export const VOCAL_PORTRAIT_TARGET_PX = 3 * VOCAL_PORTRAIT_PX;
 /**
- * L'ECART entre le bas du disque et le haut du medaillon, en px (point 7 :
- * « le personnage est sous le cercle »). C'est l'air qui detache le medaillon du
- * disque sans les decoller l'un de l'autre : le medaillon est sur le MEME axe,
- * donc un ecart nul les souderait et un grand ecart en ferait deux objets.
+ * LA COURONNE DE LA LUEUR, en fraction du disque : `88 / 336`, exactement le
+ * jeton `--vocal-crown` de la feuille de style (`inset: calc(var(--vocal-crown)
+ * * -1)` sur `.vocal-orb::before`). C'est la distance que la lueur du cercle
+ * atteint AU-DELA de son anneau, et donc la seule frontiere a partir de laquelle
+ * un medaillon pose sous le cercle ne le chevauche plus.
+ *
+ * Un seul rapport, deux lecteurs (la feuille de style et le budget), comme
+ * partout dans ce fichier : il ne peut pas y avoir deux couronnes.
+ */
+export const VOCAL_PORTRAIT_CROWN_RATIO = 88 / 336;
+/**
+ * L'ECART MINIMUM entre le bas du disque et le haut du medaillon, en px : le
+ * PLANCHER de l'air, celui qu'on garde quand le disque est inconnu (appel sans
+ * `orbSize`). Il ne sert jamais a l'ecran, ou le disque est toujours mesure.
  */
 export const VOCAL_PORTRAIT_AIR_TOP_PX = 12;
+/**
+ * L'ECART REEL entre le bas du disque et le haut du medaillon, en px. PURE.
+ *
+ * CONSTAT DU PROPRIETAIRE (2026-11-14) : « son portrait s'affiche bien, mais il
+ * chevauche le cercle situe au-dessus ». Mesure faite dans un vrai moteur de
+ * rendu (CSS du projet, 1424 x 905, disque de 276 px) : l'ecart n'etait que de
+ * 12 px alors que la lueur du cercle (`--vocal-crown`, 72,29 px a ce disque)
+ * descend jusqu'a 29,15 px sous l'anneau au repos et 72,29 px en pleine voix.
+ * Le medaillon etait donc RECOUVERT par la lueur sur 17,58 px au repos, et
+ * jusqu'a 60 px pendant la parole : c'est le chevauchement qu'il voyait.
+ *
+ * REGLE (elle remplace le 12 px fixe, et elle se mesure au lieu de se choisir) :
+ * le medaillon commence la ou la lueur FINIT, pour le disque REELLEMENT a
+ * l'ecran — `disque x 88 / 336`, arrondi vers le HAUT (`Math.ceil`) pour que la
+ * lueur ne touche jamais le portrait, meme au dixieme de pixel.
+ *
+ * MAIS L'ECART NE RAPETISSE JAMAIS LE PERSONNAGE : si prendre toute la couronne
+ * devait faire tomber le medaillon sous sa taille CONFORTABLE (`VOCAL_PORTRAIT_PX`,
+ * 96 px), l'ecart se reduit a ce que la rangee peut donner sans cela — et jamais
+ * sous le plancher de 12 px. C'est ce qui garde aux petites fenetres (720 x 520)
+ * le medaillon qu'elles avaient : une lueur degagee ne vaut pas un portrait
+ * ecrase.
+ *
+ * Sans `stageHeight` (rangee inconnue), la couronne entiere est rendue : c'est
+ * le maximum, et le seul chiffre qu'on puisse affirmer sans mesurer.
+ *
+ * @param {number} orbSize diametre du disque, en px (`--vocal-orb-size`)
+ * @param {number} [stageHeight] hauteur de la RANGEE de la scene, en px
+ * @returns {number} l'ecart, en px
+ */
+export function vocalPortraitAirTopPx(orbSize, stageHeight) {
+  const disque = Number(orbSize);
+  if (!Number.isFinite(disque) || disque <= 0) return VOCAL_PORTRAIT_AIR_TOP_PX;
+  const couronne = Math.ceil(disque * VOCAL_PORTRAIT_CROWN_RATIO);
+  const rangee = Number(stageHeight);
+  if (!Number.isFinite(rangee) || rangee <= 0) {
+    return Math.max(VOCAL_PORTRAIT_AIR_TOP_PX, couronne);
+  }
+  // Ce que la rangee donne AU-DELA du cadre au plancher et de la taille
+  // confortable du medaillon : c'est la seule marge que l'ecart peut prendre.
+  const surplus = Math.floor(
+    rangee - disque - VOCAL_PORTRAIT_FRAME_PX - VOCAL_PORTRAIT_PX,
+  );
+  return Math.max(VOCAL_PORTRAIT_AIR_TOP_PX, Math.min(couronne, surplus));
+}
 /**
  * L'AIR au-dessus de la COMPOSITION (disque + medaillon + nom) : c'est lui qui
  * egale l'air du bas, donc qui centre la composition dans la scene. Meme valeur
@@ -229,11 +284,14 @@ export const VOCAL_PORTRAIT_NAME_PX = 20;
 export const VOCAL_PORTRAIT_AIR_PX = 12;
 /**
  * Ce que la COMPOSITION prend autour du medaillon, en px, et qui n'est pas le
- * medaillon lui-meme : l'ecart au disque (12), l'ecart au nom (8), le nom (20),
- * l'air sous le nom (12) et l'air au-dessus du disque (12) — soit 64 px.
+ * medaillon lui-meme : l'ecart au disque (12 au plancher, la couronne de la lueur
+ * des que le disque est connu), l'ecart au nom (8), le nom (20), l'air sous le nom
+ * (12) et l'air au-dessus du disque (12) — soit 64 px au plancher.
  *
  * C'est le chiffre que `vocalPortraitSize` retranche de la place disponible sous
- * le disque : il ne reste alors que ce que le medaillon peut prendre.
+ * le disque : il ne reste alors que ce que le medaillon peut prendre. Il est
+ * derive de `VOCAL_PORTRAIT_AIR_TOP_PX` (le plancher) : la valeur reelle, elle,
+ * se calcule avec `vocalPortraitFramePx(disque)`.
  */
 export const VOCAL_PORTRAIT_FRAME_PX =
   VOCAL_PORTRAIT_AIR_TOP_PX +
@@ -241,6 +299,29 @@ export const VOCAL_PORTRAIT_FRAME_PX =
   VOCAL_PORTRAIT_NAME_PX +
   VOCAL_PORTRAIT_AIR_PX +
   VOCAL_STAGE_AIR_PX;
+/**
+ * Le CADRE reel de la composition, en px, pour un disque donne : l'ecart au
+ * disque de CE disque (`vocalPortraitAirTopPx`) plus tout le reste (nom, airs,
+ * ecart au nom) — soit `VOCAL_PORTRAIT_FRAME_PX` avec le plancher remplace par la
+ * couronne.
+ *
+ * Sans disque connu, rend `VOCAL_PORTRAIT_FRAME_PX` (64) : c'est le plancher,
+ * jamais un second chiffre.
+ *
+ * @param {number} orbSize diametre du disque, en px
+ * @param {number} [stageHeight] hauteur de la RANGEE de la scene, en px : c'est
+ *   elle qui decide si la couronne entiere tient sans rapetisser le medaillon.
+ * @returns {number} le cadre, en px
+ */
+export function vocalPortraitFramePx(orbSize, stageHeight) {
+  return (
+    vocalPortraitAirTopPx(orbSize, stageHeight) +
+    VOCAL_PORTRAIT_GAP_PX +
+    VOCAL_PORTRAIT_NAME_PX +
+    VOCAL_PORTRAIT_AIR_PX +
+    VOCAL_STAGE_AIR_PX
+  );
+}
 /**
  * La hauteur du BLOC DU PERSONNAGE, en px, pour un medaillon de `taille` px :
  * l'ecart au disque (12), le medaillon, son ecart (8), son nom (20) et l'air qui
@@ -251,13 +332,17 @@ export const VOCAL_PORTRAIT_FRAME_PX =
  * lui qui est verifie contre la place disponible sous le disque.
  *
  * @param {number} taille diametre du medaillon, en px
+ * @param {number} [orbSize] diametre du disque, en px : c'est lui qui donne
+ *   l'ecart reel au cercle (`vocalPortraitAirTopPx`). Omis = le plancher de
+ *   12 px (bloc au plancher, disque inconnu).
+ * @param {number} [stageHeight] hauteur de la rangee, en px
  * @returns {number} la hauteur du bloc, en px (0 pour une taille nulle)
  */
-export function vocalPortraitBlockSize(taille) {
+export function vocalPortraitBlockSize(taille, orbSize, stageHeight) {
   const px = Number(taille);
   if (!Number.isFinite(px) || px <= 0) return 0;
   return (
-    VOCAL_PORTRAIT_AIR_TOP_PX +
+    vocalPortraitAirTopPx(orbSize, stageHeight) +
     px +
     VOCAL_PORTRAIT_GAP_PX +
     VOCAL_PORTRAIT_NAME_PX +
@@ -281,8 +366,8 @@ export const VOCAL_PORTRAIT_BLOCK_PX = vocalPortraitBlockSize(VOCAL_PORTRAIT_PX)
  *
  *   1. ce que la rangee de la scene offre sous le disque : la hauteur de la
  *      rangee, moins le disque lui-meme, moins le cadre de la composition
- *      (`VOCAL_PORTRAIT_FRAME_PX` : ecart au disque, ecart au nom, nom, air sous
- *      le nom, air au-dessus du disque) — jamais negatif ;
+ *      (`vocalPortraitFramePx(disque)` : ecart au disque — la couronne de sa
+ *      lueur —, ecart au nom, nom, air sous le nom, air au-dessus du disque) — jamais negatif ;
  *   2. jamais plus large que le disque qu'il surmonte : un medaillon plus large
  *      que le cercle ne serait plus « sous le cercle », il le deborderait ;
  *   3. jamais plus que la cible (`VOCAL_PORTRAIT_TARGET_PX`, 288 px) ;
@@ -311,7 +396,11 @@ export function vocalPortraitSize({ orbSize, stageHeight } = {}) {
   const A = Number.isFinite(rangeeBrute) && rangeeBrute > 0 ? rangeeBrute : 0;
   if (disque <= 0 || A <= 0) return 0;
   // 1. la place laissee au medaillon sous le disque (regle 1).
-  const parHauteur = A - disque - VOCAL_PORTRAIT_FRAME_PX;
+  // 1. la place laissee au medaillon sous le disque (regle 1). Le cadre porte
+  // l'ecart REEL au disque, donc la couronne de sa lueur : le medaillon commence
+  // la ou la lueur finit (correctif du 2026-11-14, « le portrait chevauche le
+  // cercle »).
+  const parHauteur = A - disque - vocalPortraitFramePx(disque, A);
   // 2. la cible, et jamais plus large que le disque (regle 2 et 3).
   const taille = Math.min(VOCAL_PORTRAIT_TARGET_PX, disque, parHauteur);
   // ARRONDI VERS LE BAS, jamais vers le haut : c'est ce qui garantit que la
@@ -459,7 +548,8 @@ export const VOCAL_DISCUSSION_TITLE = "DISCUSSION";
  *   connue est-elle disponible (voir `planVocalImageZone`)
  * @returns {{track:number, taskTrack:number, shown:boolean, columnHeight:number,
  *   listHeight:number, stageHeight:number, hasPortrait:boolean, hasAvatar:boolean,
- *   imageZone:object, portraitSize:number, portraitBlock:number}}
+ *   imageZone:object, portraitSize:number, portraitBlock:number,
+ *   portraitAir:number}}
  *   `track` = largeur d'UNE colonne (0 = colonnes absentes), `taskTrack` =
  *   largeur de la COLONNE DES TACHES : elle s'arrete avant la couronne du
  *   disque, donc elle ne peut jamais passer sous le cercle, `shown` = les
@@ -471,8 +561,9 @@ export const VOCAL_DISCUSSION_TITLE = "DISCUSSION";
  *   REELLEMENT (il peut etre refuse faute de place), `imageZone` = la zone
  *   d'image decidee (voir `planVocalImageZone`), `portraitSize` = diametre MESURE
  *   du medaillon sous le disque (0 = pas de medaillon), `portraitBlock` = la
- *   hauteur du bloc du personnage (`taille + 52`, voir
- *   `vocalPortraitBlockSize`) — la repeinture n'a donc pas a relire le personnage.
+ *   hauteur du bloc du personnage (voir `vocalPortraitBlockSize`), `portraitAir`
+ *   = l'ECART peint entre le bas du disque et le haut du medaillon — la
+ *   repeinture n'a donc pas a relire le personnage.
  */
 export function planVocalSides({
   width,
@@ -542,7 +633,15 @@ export function planVocalSides({
   const portraitSize = imageZone.portrait
     ? vocalPortraitSize({ orbSize: orb, stageHeight: rangee })
     : 0;
-  const portraitBlock = portraitSize ? vocalPortraitBlockSize(portraitSize) : 0;
+  const portraitBlock = portraitSize
+    ? vocalPortraitBlockSize(portraitSize, orb, rangee)
+    : 0;
+  // L'ECART PEINT entre le bas du disque et le haut du medaillon : le MEME
+  // chiffre que celui porte par le bloc. `vocalSyncSides` l'ecrit dans
+  // `--vocal-portrait-gap`, que la feuille de style lit — sans quoi la feuille
+  // peindrait la couronne entiere la ou le budget n'en a donne qu'une partie, et
+  // la composition deborderait de sa rangee.
+  const portraitAir = portraitSize ? vocalPortraitAirTopPx(orb, rangee) : 0;
 
   // Haut fixe de la colonne : le titre, l'air du bas et les deux filets du cadre
   // (53 px, `VOCAL_SIDE_FIXED_PX`), PLUS la place de la fenetre du visage quand
@@ -563,6 +662,7 @@ export function planVocalSides({
     imageZone,
     portraitSize,
     portraitBlock,
+    portraitAir,
   };
 }
 

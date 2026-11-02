@@ -24,10 +24,11 @@
 //
 // RECTIFICATION DU 2026-11-14 : le disque a ete ramene de 336 a 276 px. Ce
 // fichier passe `orbSize` en PARAMETRE (la taille reelle du disque ne le
-// concerne pas) et `336` y est la valeur du disque de la CONCEPTION : ses
-// attentes (288 px de medaillon) restent donc vraies et n'ont pas bouge. La
-// taille reelle et le decouplage des colonnes sont verrouilles ailleurs
-// (`vocal-sides.test.js`, `ecran-vocal-cadres-et-cercle.test.js`) ; voir
+// concerne pas) et `336` y est la valeur du disque de la CONCEPTION. Depuis le
+// 2026-11-14 (soir), le medaillon commence la ou la LUEUR du cercle finit : la
+// cible de 288 px demande donc 764 px de rangee pour un disque de 336, et vaut
+// 217 px a 693. La taille reelle et le decouplage des colonnes sont verrouilles
+// ailleurs (`vocal-sides.test.js`, `ecran-vocal-cadres-et-cercle.test.js`) ; voir
 // docs/rapports/RAPPORT-ecran-vocal-cercle-reduit.md.
 //
 // Les commentaires sont en ASCII ; les chaines lues dans les sources sont
@@ -105,9 +106,15 @@ describe("P2 — aucun decalage ecrit : le cercle ne bouge que par le centrage",
       expect(bloc).not.toMatch(/margin[^:]*:\s*-\d/);
       expect(bloc).not.toMatch(/position:\s*absolute/);
     }
-    // Aucune marge en HAUT du medaillon pour « compenser » : l'ecart de 12 px est
-    // un ecart au cercle, pas un reglage de centrage.
-    expect(regle(".vocal-portrait", 40)).toMatch(/margin-block-start:\s*12px/);
+    // Aucune marge en HAUT du medaillon pour « compenser » : l'ecart au cercle
+    // n'est pas un reglage de centrage, c'est la couronne de sa lueur, ecrite par
+    // `vocalSyncSides` dans `--vocal-portrait-gap` (constat du 2026-11-14 : le
+    // portrait chevauchait le cercle).
+    const portrait = regle(".vocal-portrait", 40);
+    expect(portrait).toMatch(
+      /margin-block-start:\s*var\(--vocal-portrait-gap,\s*var\(--vocal-crown\)\)/,
+    );
+    expect(portrait).not.toMatch(/margin-block-start:\s*-/);
   });
 
   it("le balisage ne pose aucun style en ligne sur le disque", () => {
@@ -182,8 +189,8 @@ describe("P5 — la taille du medaillon ne vient pas de la largeur", () => {
     const large = planVocalSides({ ...base, width: 1920, height: 1080 });
     // La colonne change (plafond de largeur), le medaillon NON : il occupait
     // 183 px a 1024 et 275 a 1440 du temps ou il vivait dans la colonne.
-    expect(etroit.portraitSize).toBe(288);
-    expect(large.portraitSize).toBe(288);
+    expect(etroit.portraitSize).toBe(217);
+    expect(large.portraitSize).toBe(217);
     expect(etroit.track).toBeLessThan(large.track);
     // Et a largeur egale, c'est la HAUTEUR qui decide : deux rangees differentes,
     // deux medaillons differents.
