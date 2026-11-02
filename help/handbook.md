@@ -4063,17 +4063,29 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
 - **Confirmation** : si `confirm` est activé (défaut), l'Assistant **demande à
   l'utilisateur** (`ask_confirm`) avant de lancer un agent sur un serveur MCP.
   Si désactivé, il choisit et lance seul.
+- **Utiliser les outils d'un serveur dans la conversation** : vous n'avez rien
+  à faire. **Tous les serveurs activés sont chargés ensemble** au début de la
+  conversation de l'Assistant, et leurs outils lui sont proposés directement :
+  quand vous lui demandez « active le personnage Présences », il appelle
+  l'outil du serveur concerné **lui-même**, sans passer par un agent. C'est
+  l'Assistant qui choisit le bon serveur en raisonnant, jamais parce qu'un seul
+  serait branché.
 - **Activer / désactiver un serveur depuis la conversation** : demandez-le
   simplement à l'Assistant (« active Presence », « désactive test »). Il
   utilise `mcp_enable_server` / `mcp_disable_server`, **sans vous renvoyer dans
-  les Paramètres**, et applique le changement aussitôt. Comme Pilot ne branche
-  **qu'un serveur à la fois**, en activer un **coupe les autres** — et
-  l'Assistant vous **dit lesquels** (aucun changement silencieux). Désactiver
-  n'active personne d'office. Rien d'autre n'est touché : ni le client MCP, ni la
-  confirmation requise, ni le contenu des serveurs, ni les clés du coffre, et
-  aucun serveur n'est supprimé. Le changement vaut à la **prochaine session
-  d'agent** : une conversation déjà en cours garde son serveur. Un nom de
-  serveur inconnu donne un message clair, sans rien modifier.
+  les Paramètres**, et le changement est pris en compte **dès sa prochaine
+  demande**, sans redémarrer Pilot. En activer un **ne coupe AUCUN autre** : les
+  autres restent activés, et l'Assistant vous **les nomme** (aucun changement
+  silencieux). Désactiver n'active personne d'office. Rien d'autre n'est touché :
+  ni le client MCP, ni la confirmation requise, ni le contenu des serveurs, ni
+  les clés du coffre, et aucun serveur n'est supprimé. Une session d'agent déjà
+  lancée garde le serveur avec lequel elle a démarré. Un nom de serveur inconnu
+  donne un message clair, sans rien modifier.
+- **Un serveur qui ne répond pas ne bloque rien** : si un serveur est cassé,
+  lent ou injoignable, vous recevez **un message clair qui le nomme**, les autres
+  serveurs restent disponibles et la conversation continue normalement. Le même
+  serveur n'est pas retenté en boucle à chaque tour : il le sera à nouveau si
+  vous modifiez sa fiche. Un serveur **désactivé n'est jamais chargé**.
 - L'agent standard du projet garde son comportement historique (1er serveur
   activé au démarrage, local ou distant).
 - **Serveur distant** : dans **Options → Serveurs MCP**, choisissez le type
@@ -4089,13 +4101,16 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
   vérifier l'adresse et la clé.
 - **Nom des outils exposés** : chaque outil d'un serveur porte le nom
   `mcp_<identifiant du serveur>_<nom de l'outil>` (par ex. `mcp_mcp-1_echo`).
-  Comme **un seul serveur est utilisé à la fois**, deux serveurs ne peuvent pas
-  se disputer un nom. En revanche, si **deux serveurs enregistrés ont le même
-  identifiant**, leurs outils porteraient exactement le même nom : Pilot refuse
-  alors de charger MCP et **vous dit lequel des deux serveurs est en cause** —
-  pour rétablir, désactivez l'un des deux ou donnez-leur des identifiants
-  différents. Si un serveur annonce **deux fois le même outil**, seul le premier
-  est proposé à l'agent (et c'est signalé), jamais un remplacement silencieux.
+  Comme plusieurs serveurs peuvent être chargés **ensemble**, les cas ambigus
+  sont signalés, jamais silencieux : si **deux serveurs enregistrés ont le même
+  identifiant**, leurs outils porteraient exactement le même nom ⇒ **aucun des
+  deux n'est chargé**, les autres serveurs restent disponibles, et un message
+  **vous nomme les deux** (pour rétablir : en désactiver un, ou leur donner des
+  identifiants différents). Si deux outils de serveurs différents produiraient
+  le **même nom**, le serveur **déclaré en premier** garde l'outil, l'autre n'est
+  pas proposé, et le message nomme les deux serveurs. Si un serveur annonce
+  **deux fois le même outil**, seul le premier est proposé (et c'est signalé),
+  jamais un remplacement silencieux.
 
 ---
 

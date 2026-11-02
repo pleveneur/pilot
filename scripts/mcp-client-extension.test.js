@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { sliceSource } from "../src/js/source-slice.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SOURCE = resolve(here, "../src-tauri/extensions/mcp-client.src.ts");
@@ -98,8 +99,13 @@ describe("extension MCP — second transport (E3)", () => {
 
   it("conserve le fail-open et le garde-fou de timeout", () => {
     expect(src).toContain("CONNECT_TIMEOUT_MS");
-    expect(src).toMatch(/catch \{\s*\/\/ Fail-open/);
-    expect(src).toContain("safeClose(transport, client)");
+    expect(src).toMatch(/withTimeout\(client\.connect\(transport\), CONNECT_TIMEOUT_MS/);
+    // Fail-open : un échec de connexion rend un VERDICT (jamais une exception qui
+    // ferait planter la session), et tout ce qui a été ouvert est refermé.
+    const connectBody = slice("async function connectServer(", "function toolDescriptor(");
+    expect(connectBody).toMatch(/catch \(err\) \{[\s\S]*?Fail-open/);
+    expect(connectBody).toContain("return { ok: false");
+    expect(connectBody).toContain("safeClose(transport, client)");
   });
 });
 
@@ -113,7 +119,11 @@ describe("extension MCP — second transport (E3)", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("extension MCP — garde-fous du contrôle de l'écran", () => {
-  const gateBody = slice('api.on("tool_call"', "// ── Nettoyage à la fin de session");
+  // La porte elle-même (décision, journal, blocage) vit dans `screenGate`, appelée
+  // par les DEUX branchements (`tool_call` du serveur cible et porte commune de la
+  // session multi-serveurs). On contrôle donc son corps, ET son branchement.
+  const gateBody = slice("async function screenGate(", "// ── Utilitaires ──");
+  const wiringBody = sliceSource(src, 'api.on("tool_call"', "// ── Chargement initial", 400);
   const guardBody = slice("async function readScreenGuard(", "/// Demande l'accord de l'utilisateur");
   const askBody = slice("async function askScreenConfirmation(", "/// Ajoute une ligne au journal");
   const journalBody = src.slice(src.indexOf("async function journalScreenAction("));
@@ -123,6 +133,18 @@ describe("extension MCP — garde-fous du contrôle de l'écran", () => {
     expect(src).toContain("isScreenServer(server)");
     expect(src).toContain("isScreenTool(event.toolName, serverId)");
     expect(src).toContain("screenGateOutcome(guard)");
+  });
+
+  it("chaque appel d'outil passe par la porte (deux branchements, une seule logique)", () => {
+    // Sans ce branchement, la logique de garde serait parfaite et jamais appelée.
+    const handlers = wiringBody.match(/api\.on\("tool_call"/g) ?? [];
+    expect(handlers.length).toBe(2); // serveur cible (agent) + porte commune
+    const delegations = wiringBody.match(/return screenGate\(configPath, ctx, event\);/g) ?? [];
+    expect(delegations.length).toBe(handlers.length);
+    // Le serveur cible filtre par son identifiant ; la porte commune par le
+    // propriétaire de l'outil enregistré (`record.screen`).
+    expect(wiringBody).toContain("isScreenTool(event.toolName, serverId)");
+    expect(wiringBody).toContain("toolOwners.get(event.toolName)");
   });
 
   it("n'enregistre pas les outils du serveur écran quand le contrôle est coupé", () => {

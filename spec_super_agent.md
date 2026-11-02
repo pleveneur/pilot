@@ -3036,17 +3036,29 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
 - **Confirmation** : si `confirm` est activé (défaut), l'Assistant **demande à
   l'utilisateur** (`ask_confirm`) avant de lancer un agent sur un serveur MCP.
   Si désactivé, il choisit et lance seul.
+- **Utiliser les outils d'un serveur dans la conversation** : vous n'avez rien
+  à faire. **Tous les serveurs activés sont chargés ensemble** au début de la
+  conversation de l'Assistant, et leurs outils lui sont proposés directement :
+  quand vous lui demandez « active le personnage Présences », il appelle
+  l'outil du serveur concerné **lui-même**, sans passer par un agent. C'est
+  l'Assistant qui choisit le bon serveur en raisonnant, jamais parce qu'un seul
+  serait branché.
 - **Activer / désactiver un serveur depuis la conversation** : demandez-le
   simplement à l'Assistant (« active Presence », « désactive test »). Il
   utilise `mcp_enable_server` / `mcp_disable_server`, **sans vous renvoyer dans
-  les Paramètres**, et applique le changement aussitôt. Comme Pilot ne branche
-  **qu'un serveur à la fois**, en activer un **coupe les autres** — et
-  l'Assistant vous **dit lesquels** (aucun changement silencieux). Désactiver
-  n'active personne d'office. Rien d'autre n'est touché : ni le client MCP, ni la
-  confirmation requise, ni le contenu des serveurs, ni les clés du coffre, et
-  aucun serveur n'est supprimé. Le changement vaut à la **prochaine session
-  d'agent** : une conversation déjà en cours garde son serveur. Un nom de
-  serveur inconnu donne un message clair, sans rien modifier.
+  les Paramètres**, et le changement est pris en compte **dès sa prochaine
+  demande**, sans redémarrer Pilot. En activer un **ne coupe AUCUN autre** : les
+  autres restent activés, et l'Assistant vous **les nomme** (aucun changement
+  silencieux). Désactiver n'active personne d'office. Rien d'autre n'est touché :
+  ni le client MCP, ni la confirmation requise, ni le contenu des serveurs, ni
+  les clés du coffre, et aucun serveur n'est supprimé. Une session d'agent déjà
+  lancée garde le serveur avec lequel elle a démarré. Un nom de serveur inconnu
+  donne un message clair, sans rien modifier.
+- **Un serveur qui ne répond pas ne bloque rien** : si un serveur est cassé,
+  lent ou injoignable, vous recevez **un message clair qui le nomme**, les autres
+  serveurs restent disponibles et la conversation continue normalement. Le même
+  serveur n'est pas retenté en boucle à chaque tour : il le sera à nouveau si
+  vous modifiez sa fiche. Un serveur **désactivé n'est jamais chargé**.
 - L'agent standard du projet garde son comportement historique (1er serveur
   activé au démarrage, local ou distant).
 - **Serveur distant** : dans **Options → Serveurs MCP**, choisissez le type
@@ -3062,13 +3074,16 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
   vérifier l'adresse et la clé.
 - **Nom des outils exposés** : chaque outil d'un serveur porte le nom
   `mcp_<identifiant du serveur>_<nom de l'outil>` (par ex. `mcp_mcp-1_echo`).
-  Comme **un seul serveur est utilisé à la fois**, deux serveurs ne peuvent pas
-  se disputer un nom. En revanche, si **deux serveurs enregistrés ont le même
-  identifiant**, leurs outils porteraient exactement le même nom : Pilot refuse
-  alors de charger MCP et **vous dit lequel des deux serveurs est en cause** —
-  pour rétablir, désactivez l'un des deux ou donnez-leur des identifiants
-  différents. Si un serveur annonce **deux fois le même outil**, seul le premier
-  est proposé à l'agent (et c'est signalé), jamais un remplacement silencieux.
+  Comme plusieurs serveurs peuvent être chargés **ensemble**, les cas ambigus
+  sont signalés, jamais silencieux : si **deux serveurs enregistrés ont le même
+  identifiant**, leurs outils porteraient exactement le même nom ⇒ **aucun des
+  deux n'est chargé**, les autres serveurs restent disponibles, et un message
+  **vous nomme les deux** (pour rétablir : en désactiver un, ou leur donner des
+  identifiants différents). Si deux outils de serveurs différents produiraient
+  le **même nom**, le serveur **déclaré en premier** garde l'outil, l'autre n'est
+  pas proposé, et le message nomme les deux serveurs. Si un serveur annonce
+  **deux fois le même outil**, seul le premier est proposé (et c'est signalé),
+  jamais un remplacement silencieux.
 <!-- /HELP:super-agent-mcp -->
 
 ### Technique — activer / désactiver un serveur MCP depuis la conversation
@@ -3080,11 +3095,12 @@ interception dans `super-agent.js` → module de décision
 `src/js/mcp-server-toggle.js` → commandes Rust `mcp_get_state` (lecture) et
 `mcp_set_servers_enabled` (écriture, `mcp_config.rs`).
 
-- **Décision** : `planMcpServerToggle` (pure) est le SEUL endroit qui applique
-  la règle d'exclusivité — activer un serveur produit les changements
-  `[{ id, enabled: true }]` **plus** `[{ id: autres, enabled: false }]`, et
-  `disabledOthers` nomme les serveurs coupés (nommés aussi dans la réponse et
-  dans le message système de la conversation). Désactiver n'active personne.
+- **Décision** : `planMcpServerToggle` (pure) est le SEUL endroit qui décide —
+  et la règle est **NON exclusive** (décision du 2026-11-02) : activer un
+  serveur produit **un seul** changement, `[{ id, enabled: true }]`, et
+  `othersEnabled` nomme les serveurs **restés activés** (nommés aussi dans la
+  réponse et dans le message système). Aucun `enabled: false` n'est ajouté pour
+  un voisin. Désactiver n'active personne.
 - **Portée de l'écriture** : `apply_server_enable_changes` (pure) valide TOUS
   les identifiants **avant** d'écrire, refuse un identifiant inconnu (`Err`
   nommant l'identifiant et les serveurs connus, configuration **inchangée**),
@@ -3094,19 +3110,28 @@ interception dans `super-agent.js` → module de décision
   `write_mcp_config` : ni `mcp_enabled`, ni `mcp_agent_confirm`, ni
   `mcp_secret_strict`, ni le contrôle de l'écran ne peuvent changer par ce
   chemin.
-- **Effet différé dit** : le serveur d'une session est choisi au spawn
-  (`select_session_server`), donc chaque réponse rappelle que le changement vaut
-  à la **prochaine session d'agent**.
+- **Effet dit, sans redémarrage** : la session de l'Assistant relit `mcp.json`
+  **avant chaque tour** (`planMcpSessionServers` + `refresh`, extension MCP), donc
+  le changement est pris en compte **dès la prochaine demande**, sans redémarrer
+  Pilot ; chaque réponse le rappelle. Une session d'**agent** déjà lancée garde
+  le serveur choisi au spawn (`select_session_server`).
 - **Confirmation** : c'est l'Assistant qui demande (`ask_confirm`) avant
   d'appeler l'outil ; l'outil applique ensuite (règle écrite dans la description
   des deux outils et dans leur `promptGuidelines`).
 - **Aucune exception** : état illisible, écriture refusée ou en échec → message
   clair en une ligne, configuration laissée en l'état.
-- **Couverture** : `src/js/mcp-server-toggle.test.js` (22 tests : activation,
-  désactivation, identifiant inconnu, activation exclusive qui coupe les autres,
-  aucun autre réglage touché, chaîne outil → sentinel → assistant → Rust) et
-  `assistant_server_toggle_tests` (`mcp_config.rs`) pour la portée de l'écriture
-  côté Rust. Rapport : `docs/rapports/RAPPORT-mcp-activation-par-l-assistant.md`.
+- **Couverture** : `src/js/mcp-server-toggle.test.js` (activation,
+  désactivation, identifiant inconnu, **activation NON exclusive** — activer
+  n'écrit jamais `enabled: false` pour un autre serveur, les autres sont nommés
+  « restés activés » —, aucun autre réglage touché, chaîne outil → sentinel →
+  assistant → Rust), `src/js/mcp-servers-session.test.js` (tous les serveurs
+  activés chargés ensemble, serveur désactivé jamais chargé, répartition des
+  noms entre serveurs, clé du coffre par serveur) et
+  `assistant_server_toggle_tests` / `cles_multi_serveurs_une_cle_par_serveur_jamais_pour_un_desactive`
+  (`mcp_config.rs`) pour la portée de l'écriture côté Rust. Rapports :
+  `docs/rapports/RAPPORT-mcp-activation-par-l-assistant.md` (historique) et
+  `docs/rapports/RAPPORT-mcp-tous-les-serveurs-actives.md` (décision du
+  2026-11-02).
 
 <!-- HELP:super-agent-checklist -->
 ### Checklist de livraison d'une tâche

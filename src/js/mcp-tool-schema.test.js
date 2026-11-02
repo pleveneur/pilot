@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sliceSource } from "./source-slice.js";
 
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), "../../src-tauri/extensions/mcp-client.src.ts"),
@@ -21,12 +22,17 @@ describe("schéma des paramètres d'un outil MCP (tâche 307)", () => {
   });
 
   it("n'enregistre plus l'outil avec un schéma générique unique", () => {
-    const start = SRC.indexOf("api.registerTool({");
-    const end = SRC.indexOf("} as never);", start);
-    expect(start, "appel api.registerTool absent").toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const body = SRC.slice(start, end);
-    expect(body).toContain("parameters: toolParametersSchema(");
+    // Les DEUX branchements (serveur cible, session multi-serveurs) enregistrent
+    // un descripteur construit par `toolDescriptor`, seul endroit qui pose le
+    // schéma — aucun n'a le droit d'enregistrer un schéma générique à la main.
+    const registrations = SRC.match(/api\.registerTool\(\{[\s\S]*?as never\);/g) ?? [];
+    expect(registrations.length).toBeGreaterThanOrEqual(2);
+    for (const body of registrations) {
+      expect(body, `enregistrement sans schéma du serveur : ${body}`).toContain("toolDescriptor(");
+    }
+    // Découpage PROTÉGÉ : ancre de début et de fin vérifiées, taille minimale.
+    const descriptor = sliceSource(SRC, "function toolDescriptor(", "async function runTool(", 100);
+    expect(descriptor).toContain("parameters: toolParametersSchema(tool.inputSchema)");
   });
 
   it("conserve un repli générique quand le serveur n'annonce aucun schéma", () => {

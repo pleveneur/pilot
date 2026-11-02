@@ -375,7 +375,8 @@ import {
 // MCP PILOTÉ PAR L'ASSISTANT — ACTIVER / DÉSACTIVER UN SERVEUR NOMMÉ (outils
 // `mcp_enable_server` / `mcp_disable_server`) : l'Assistant n'a plus à renvoyer
 // l'utilisateur dans les Paramètres. La DÉCISION (identifiant connu,
-// exclusivité « un seul serveur branché par session », texte de réponse) vit
+// activation NON exclusive — un serveur activé n'en coupe aucun autre, texte de
+// réponse) vit
 // dans `mcp-server-toggle.js` ; l'ÉCRITURE est la commande Rust
 // `mcp_set_servers_enabled`, qui ne change QUE le champ `enabled` des serveurs
 // nommés. Aucun autre réglage MCP n'est lu ni écrit ici.

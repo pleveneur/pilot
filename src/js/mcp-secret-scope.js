@@ -148,3 +148,148 @@ export function secretStatusLabel(code) {
       return "état de clé inconnu";
   }
 }
+
+// ── Plusieurs serveurs dans la MÊME session (décision du 2026-11-02) ──
+//
+// La conversation de l'Assistant charge TOUS les serveurs activés : la clé du
+// coffre ne peut donc plus voyager dans la variable unique `PILOT_MCP_SECRET`
+// (elle serait la même pour tous). Pilot pose à la place une TABLE
+// `PILOT_MCP_SECRETS` = `{ "<identifiant de serveur>": "<clé>" }` : chaque serveur
+// ne reçoit QUE la sienne, et les deux tables (clés et refus) sont retirées de
+// l'environnement AVANT de lancer un serveur — un serveur ne peut donc jamais
+// lire la clé d'un autre. Aucune clé n'est affichée ni journalisée.
+
+/** Table des clés par identifiant de serveur (posée par Pilot, multi-serveurs). */
+export const MCP_SECRETS_VAR = "PILOT_MCP_SECRETS";
+
+/** Table des refus par identifiant de serveur (référence introuvable, mode strict). */
+export const MCP_SECRET_BLOCKS_VAR = "PILOT_MCP_SECRET_BLOCKS";
+
+/**
+ * Lit une table `{ identifiant: valeur }` depuis le JSON posé par Pilot. Toute
+ * entrée dont la valeur n'est pas une chaîne non vide est ignorée (jamais une
+ * exception). Fonction pure.
+ * @param {string} raw
+ * @returns {Record<string,string>}
+ */
+export function parseSecretMap(raw) {
+  const out = {};
+  let parsed;
+  try {
+    parsed = JSON.parse(String(raw || ""));
+  } catch {
+    return out;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return out;
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value === "string" && value.trim() !== "") out[String(key)] = value;
+  }
+  return out;
+}
+
+/**
+ * Clés auxquelles la fiche d'un serveur peut répondre dans les tables de Pilot :
+ * l'identifiant utilisé dans les noms d'outils, puis `id`, puis `name`, avec et
+ * sans espaces autour. Plusieurs candidats parce que Rust et l'extension ne
+ * résolvent pas l'identifiant de la même façon quand `id` est absent ou vide —
+ * aucune de ces deux résolutions ne doit jamais faire perdre une clé. Fonction
+ * pure.
+ * @param {{id?: string, name?: string}|any} server
+ * @returns {string[]}
+ */
+export function serverSecretKeyCandidates(server) {
+  const s = server || {};
+  const id = String(s.id ?? "");
+  const name = String(s.name ?? "");
+  const list = [id, name, id.trim(), name.trim()]
+    .map((k) => String(k || ""))
+    .filter((k) => k !== "");
+  return [...new Set(list)];
+}
+
+/**
+ * Décide l'environnement d'UN serveur quand PLUSIEURS serveurs sont chargés
+ * ensemble. Mêmes règles que `scopeMcpSecret`, avec deux différences :
+ *   - la clé vient de la table `secrets` (celle du serveur, jamais celle d'un
+ *     autre ; les deux tables sont retirées de l'environnement transmis) ;
+ *   - le refus vient de la table `blocks`, et nomme l'identifiant du serveur.
+ * Fonction pure : ni `baseEnv`, ni `secrets`, ni `blocks` ne sont modifiés.
+ * @param {Record<string,string|undefined>|undefined} baseEnv
+ * @param {{serverId?: string, server?: any, declared?: boolean, strict?: boolean, secrets?: Record<string,string>, blocks?: Record<string,string>}} [options]
+ * @returns {{env: Record<string,string>, secret: string, blocked: boolean, reason: string, notice: string, removedInherited: boolean}}
+ */
+export function scopeMcpSecretForServer(baseEnv, options = {}) {
+  const env = { ...(baseEnv || {}) };
+  delete env[MCP_SECRETS_VAR]; // la table entière ne part JAMAIS chez un serveur
+  delete env[MCP_SECRET_BLOCKS_VAR];
+  delete env[MCP_SECRET_BLOCK_VAR];
+  const strict = options.strict !== false;
+  const declared = options.declared === true;
+  const serverId = String(options.serverId ?? "");
+  const secrets = options.secrets || {};
+  const blocks = options.blocks || {};
+  const keys = [serverId, ...serverSecretKeyCandidates(options.server)];
+  const lookup = (table) => {
+    for (const key of keys) {
+      const value = String(table[key] ?? "").trim();
+      if (value !== "") return value;
+    }
+    return "";
+  };
+  const inherited = String(env[MCP_SECRET_VAR] || "").trim();
+  const blockRef = lookup(blocks);
+
+  if (blockRef) {
+    delete env[MCP_SECRET_VAR];
+    return {
+      env,
+      secret: "",
+      blocked: true,
+      reason:
+        `MCP : le serveur « ${serverId} » demande la clé du coffre « ${blockRef} », introuvable — lancement refusé en mode strict. ` +
+        `Choisissez une entrée existante du coffre 🔐 ou désactivez le mode strict dans les Options → Serveurs MCP.`,
+      notice: "",
+      removedInherited: inherited !== "",
+    };
+  }
+
+  const own = lookup(secrets);
+
+  if (declared) {
+    if (own) {
+      env[MCP_SECRET_VAR] = own;
+      return { env, secret: own, blocked: false, reason: "", notice: "", removedInherited: false };
+    }
+    delete env[MCP_SECRET_VAR];
+    return {
+      env,
+      secret: "",
+      blocked: false,
+      reason: "",
+      notice:
+        `MCP : le serveur « ${serverId} » demande une clé du coffre, mais elle est indisponible ` +
+        "(coffre 🔐 verrouillé, référence vide, ou mode non strict) — il démarre SANS clé.",
+      removedInherited: inherited !== "",
+    };
+  }
+
+  if (strict) {
+    delete env[MCP_SECRET_VAR];
+    return {
+      env,
+      secret: "",
+      blocked: false,
+      reason: "",
+      notice: "",
+      removedInherited: inherited !== "",
+    };
+  }
+  return {
+    env,
+    secret: inherited,
+    blocked: false,
+    reason: "",
+    notice: "",
+    removedInherited: false,
+  };
+}

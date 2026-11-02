@@ -45,8 +45,9 @@ const MCP_STATE_SENTINEL = "PILOT_ASSISTANT_MCP_STATE::";
 // détecte, applique l'activation ou la désactivation du serveur NOMMÉ (commande
 // Rust `mcp_set_servers_enabled`, qui ne change QUE le champ `enabled`) et
 // renvoie le résultat en CLAIR comme `value` de la réponse : serveur activé ou
-// désactivé, serveurs coupés par l'exclusivité, effet à la prochaine session
-// d'agent, et rappel qu'aucun autre réglage MCP n'a été touché.
+// désactivé, serveurs restés activés (l'activation n'est PAS exclusive), effet à
+// la prochaine demande de l'Assistant, et rappel qu'aucun autre réglage MCP n'a
+// été touché.
 const MCP_SERVER_TOGGLE_SENTINEL = "PILOT_ASSISTANT_MCP_SERVER::";
 // Sentinel préfixant le titre d'un `input` d'outil git_status. Pilot le détecte,
 // exécute la commande Rust `git_status_project` (lecture seule) et renvoie l'état
@@ -353,13 +354,13 @@ export default function (pi: ExtensionAPI) {
     name: "mcp_enable_server",
     label: "MCP Enable Server",
     description:
-      "Activer UN serveur MCP nommé (par son identifiant, lu avec mcp_state), directement depuis la conversation — sans passer par les Paramètres. L'activation est EXCLUSIVE : Pilot ne branche qu'un serveur par session, donc activer un serveur DÉSACTIVE les autres serveurs activés ; la réponse nomme ceux qui ont été coupés (aucun effet de bord silencieux). L'outil ne change QUE l'état activé/désactivé : il ne modifie ni le client MCP, ni la confirmation requise, ni le contenu des serveurs, ni les secrets, et ne supprime aucun serveur. Effet à la PROCHAINE session d'agent (une session en cours garde son serveur). Règle de confirmation : c'est TOI qui demandes confirmation à l'utilisateur (ask_confirm) avant d'appeler cet outil ; l'outil applique ensuite l'action.",
-    promptSnippet: "mcp_enable_server: activer un serveur MCP nommé (coupe les autres)",
+      "Activer UN serveur MCP nommé (par son identifiant, lu avec mcp_state), directement depuis la conversation — sans passer par les Paramètres. L'activation n'est PAS exclusive : la conversation de l'Assistant charge TOUS les serveurs activés ensemble (Pilot ne se limite plus à un seul serveur par session), donc activer un serveur n'en coupe AUCUN autre ; la réponse nomme les serveurs qui restent activés (aucun effet de bord silencieux). Un serveur DÉSACTIVÉ n'est jamais chargé. L'outil ne change QUE l'état activé/désactivé : il ne modifie ni le client MCP, ni la confirmation requise, ni le contenu des serveurs, ni les secrets, et ne supprime aucun serveur. Effet immédiat pour l'Assistant (liste relue à chaque demande, sans redémarrer Pilot) ; une session d'agent déjà lancée garde le serveur avec lequel elle a démarré. Règle de confirmation : c'est TOI qui demandes confirmation à l'utilisateur (ask_confirm) avant d'appeler cet outil ; l'outil applique ensuite l'action.",
+    promptSnippet: "mcp_enable_server: activer un serveur MCP nommé (sans couper les autres)",
     promptGuidelines: [
-      "Use mcp_enable_server when the user wants a specific MCP server to be the one agents use. Pass the server id discovered with mcp_state; an unknown id is reported clearly and nothing is changed.",
-      "Activation is exclusive (one MCP server per agent session): the other enabled servers are switched off and named in the answer. Tell the user which ones were cut — never hide it.",
+      "Use mcp_enable_server when the user wants a specific MCP server to be available. Pass the server id discovered with mcp_state; an unknown id is reported clearly and nothing is changed.",
+      "Activation is NOT exclusive: several MCP servers can be enabled and loaded together. Enabling one never switches another one off — say which servers stay enabled.",
       "Always ask the user for confirmation (ask_confirm) before calling this tool. The tool applies the change; it never asks by itself.",
-      "The change takes effect at the NEXT agent session; a running session keeps the server it started with. Say so to the user.",
+      "The change is picked up by the Assistant at its next request, without restarting Pilot; an agent session already running keeps the server it started with. Say so to the user.",
       "Do not touch anything else: the tool only toggles the enabled flag. Never delete a configured server, never edit commands, arguments, URLs or secrets.",
     ],
     parameters: Type.Object({
@@ -380,13 +381,13 @@ export default function (pi: ExtensionAPI) {
     name: "mcp_disable_server",
     label: "MCP Disable Server",
     description:
-      "Désactiver UN serveur MCP nommé (par son identifiant, lu avec mcp_state), directement depuis la conversation — sans passer par les Paramètres. Pilot ne le branchera plus ; aucun autre serveur n'est activé d'office à sa place et les autres serveurs gardent leur état. L'outil ne change QUE l'état activé/désactivé : il ne modifie ni le client MCP, ni la confirmation requise, ni le contenu des serveurs, ni les secrets, et ne supprime aucun serveur (il reste configuré, prêt à être réactivé). Effet à la PROCHAINE session d'agent (une session en cours garde son serveur). Règle de confirmation : c'est TOI qui demandes confirmation à l'utilisateur (ask_confirm) avant d'appeler cet outil ; l'outil applique ensuite l'action.",
+      "Désactiver UN serveur MCP nommé (par son identifiant, lu avec mcp_state), directement depuis la conversation — sans passer par les Paramètres. Pilot ne le branchera plus (un serveur désactivé n'est jamais chargé) ; aucun autre serveur n'est activé d'office à sa place et les autres serveurs gardent leur état. L'outil ne change QUE l'état activé/désactivé : il ne modifie ni le client MCP, ni la confirmation requise, ni le contenu des serveurs, ni les secrets, et ne supprime aucun serveur (il reste configuré, prêt à être réactivé). Effet immédiat pour l'Assistant (liste relue à chaque demande, sans redémarrer Pilot) ; une session d'agent déjà lancée garde le serveur avec lequel elle a démarré. Règle de confirmation : c'est TOI qui demandes confirmation à l'utilisateur (ask_confirm) avant d'appeler cet outil ; l'outil applique ensuite l'action.",
     promptSnippet: "mcp_disable_server: désactiver un serveur MCP nommé (sans rien activer d'autre)",
     promptGuidelines: [
       "Use mcp_disable_server when the user wants a specific MCP server to stop being used. Pass the server id discovered with mcp_state; an unknown id is reported clearly and nothing is changed.",
       "Disabling never enables another server on its own: tell the user plainly that no server is used until one is enabled.",
       "Always ask the user for confirmation (ask_confirm) before calling this tool. The tool applies the change; it never asks by itself.",
-      "The change takes effect at the NEXT agent session; a running session keeps the server it started with. Say so to the user.",
+      "The change is picked up by the Assistant at its next request, without restarting Pilot; an agent session already running keeps the server it started with. Say so to the user.",
       "Never delete a configured server: this tool only toggles the enabled flag, the server stays configured and can be re-enabled later.",
     ],
     parameters: Type.Object({

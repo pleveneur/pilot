@@ -7,10 +7,11 @@
 //     pilot-assistant-actions) transmet `{ server, enabled }` par le sentinel
 //     `PILOT_ASSISTANT_MCP_SERVER::` — même mécanisme que `mcp_state`,
 //     `open_project`, `delegate_to_coder` : aucune autre voie n'est créée ;
-//   - la DÉCISION est ici (`planMcpServerToggle`, pure) : quel(s) serveur(s)
-//     changent d'état, et ce qu'on répond. C'est le SEUL endroit où la règle
-//     « un seul serveur branché par session ⇒ activer un serveur coupe les
-//     autres » est appliquée ;
+//   - la DÉCISION est ici (`planMcpServerToggle`, pure) : quel serveur change
+//     d'état, et ce qu'on répond. ACTIVATION NON EXCLUSIVE (décision du
+//     2026-11-02) : activer un serveur n'en coupe AUCUN autre. La conversation de
+//     l'Assistant charge TOUS les serveurs activés ensemble et c'est elle qui
+//     choisit, en raisonnant, celui qu'il lui faut ;
 //   - l'ÉCRITURE est faite par Rust (`mcp_set_servers_enabled`), qui ne change
 //     QUE le champ `enabled` des serveurs nommés, refuse un identifiant inconnu
 //     et ne touche ni au client MCP (`mcp_enabled`), ni à la confirmation
@@ -21,10 +22,12 @@
 // l'utilisateur (`ask_confirm`) avant d'appeler l'outil — l'outil, lui, applique
 // l'action demandée (doc dans la description des outils + la spec).
 //
-// Effet différé : le serveur branché est décidé AU SPAWN d'une session d'agent
-// (`select_session_server` / `PILOT_MCP_SERVER`). La réponse le rappelle donc
-// toujours : la prochaine session prend le nouveau serveur, une session en
-// cours garde celui avec lequel elle a démarré.
+// Effet différé, DEUX cas à ne pas confondre :
+//   - l'ASSISTANT relit la liste des serveurs activés avant chaque tour : son
+//     changement est pris en compte SANS redémarrer Pilot ;
+//   - une session d'AGENT, elle, choisit son serveur AU SPAWN
+//     (`select_session_server` / `PILOT_MCP_SERVER`) : une session déjà lancée
+//     garde le serveur avec lequel elle a démarré. La réponse le rappelle.
 
 /** Sentinel préfixant le titre d'un `input` des deux outils d'activation. */
 export const MCP_SERVER_TOGGLE_SENTINEL = "PILOT_ASSISTANT_MCP_SERVER::";
@@ -35,9 +38,13 @@ export const MCP_SET_SERVERS_ENABLED_COMMAND = "mcp_set_servers_enabled";
 /** Commande Rust qui relit l'état MCP (la même que l'outil `mcp_state`). */
 export const MCP_GET_STATE_COMMAND = "mcp_get_state";
 
-/** Rappel ajouté à CHAQUE réponse : le changement vaut à la prochaine session. */
+/**
+ * Rappel ajouté à CHAQUE réponse : quand le changement s'applique. L'Assistant
+ * relit la liste à chaque tour (aucun redémarrage) ; une session d'agent déjà
+ * lancée, elle, garde le serveur avec lequel elle a démarré.
+ */
 export const MCP_NEXT_SESSION_NOTE =
-  "Le changement prend effet à la prochaine session d'agent : une session déjà lancée garde le serveur avec lequel elle a démarré.";
+  "Le changement est pris en compte par l'Assistant dès sa prochaine demande, sans redémarrer Pilot ; une session d'agent déjà lancée garde le serveur avec lequel elle a démarré.";
 
 /** Rappel ajouté à CHAQUE réponse : rien d'autre n'a été modifié. */
 export const MCP_NO_OTHER_SETTING_NOTE =
@@ -106,20 +113,21 @@ function knownServerIds(state) {
 
 /**
  * DÉCISION d'une activation/désactivation de serveur MCP — AUCUNE I/O. Fonction
- * PURE, la seule à connaître la règle d'exclusivité.
+ * PURE, seule à décider ce qui est écrit.
  *
  * Rend :
  *   - `{ ok: false, reason, message, knownServers }` si la demande est
  *     inutilisable (identifiant absent) ou si l'identifiant est INCONNU — le
  *     message est clair et rien n'est modifié ;
- *   - `{ ok: true, id, name, enabled, changes, disabledOthers, changed }` sinon.
- *     `changes` est la liste EXACTE des états à écrire (`[{ id, enabled }]`), et
- *     `disabledOthers` nomme les serveurs coupés par l'activation (aucun effet de
- *     bord silencieux).
+ *   - `{ ok: true, id, name, enabled, changes, othersEnabled, changed }` sinon.
+ *     `changes` est la liste EXACTE des états à écrire (`[{ id, enabled }]`) et
+ *     ne contient JAMAIS qu'une seule entrée : le serveur nommé. `othersEnabled`
+ *     nomme les AUTRES serveurs activés, qui RESTENT activés.
  *
- * Règle d'exclusivité : Pilot ne branche qu'UN serveur par session
- * (`select_session_server` : le premier activé). Activer un serveur coupe donc
- * les AUTRES serveurs activés, et le dit. Désactiver n'active personne d'office.
+ * Règle (décision du propriétaire, 2026-11-02) : l'activation n'est plus
+ * exclusive. La conversation de l'Assistant charge TOUS les serveurs activés
+ * ensemble ; activer un serveur n'en coupe aucun, désactiver n'active personne
+ * d'office. Un serveur DÉSACTIVÉ n'est jamais chargé.
  *
  * @param {{servers?: Array<object>}|null|undefined} state état lu par `mcp_get_state`
  * @param {{server?: string, enabled?: boolean}} request
@@ -152,21 +160,20 @@ export function planMcpServerToggle(state, request = {}) {
   const target = hit.server;
   const targetId = normalizeMcpServerId(target.id);
   const changes = [];
-  const disabledOthers = [];
   if (isEnabled(target) !== enabled) {
+    // UN SEUL état écrit : celui du serveur nommé. Aucun autre serveur n'est
+    // modifié — l'activation n'est plus exclusive.
     changes.push({ id: targetId, enabled });
   }
-  if (enabled) {
-    // Activation EXCLUSIVE : tout autre serveur activé est coupé, et nommé.
-    servers.forEach((s, index) => {
-      if (index === hit.index || !s) return;
-      if (!isEnabled(s)) return;
-      const otherId = normalizeMcpServerId(s.id);
-      if (!otherId) return;
-      changes.push({ id: otherId, enabled: false });
-      disabledOthers.push(mcpServerLabel(s));
-    });
-  }
+  // Les autres serveurs activés, qui RESTENT activés : ils sont nommés pour que
+  // l'utilisateur voie qu'aucun n'a été coupé (aucun effet de bord silencieux).
+  const othersEnabled = [];
+  servers.forEach((s, index) => {
+    if (index === hit.index || !s) return;
+    if (!isEnabled(s)) return;
+    if (!normalizeMcpServerId(s.id)) return;
+    othersEnabled.push(mcpServerLabel(s));
+  });
   return {
     ok: true,
     id: targetId,
@@ -175,7 +182,7 @@ export function planMcpServerToggle(state, request = {}) {
     wasEnabled: isEnabled(target),
     changed: changes.length > 0,
     changes,
-    disabledOthers,
+    othersEnabled,
   };
 }
 
@@ -193,19 +200,22 @@ export function mcpToggleAnswer(plan) {
       : "Demande d'activation MCP inutilisable : rien n'a été modifié.";
   }
   const label = `« ${plan.name} »` + (plan.id && plan.name !== plan.id ? ` (${plan.id})` : "");
+  const autres = plan.othersEnabled || [];
   if (!plan.changed) {
+    const ensemble = plan.enabled
+      ? autres.length
+        ? ` Les autres serveurs activés restent activés : ${autres.join(", ")}.`
+        : " Aucun autre serveur n'est activé."
+      : "";
     return plan.enabled
-      ? `MCP : le serveur ${label} est DÉJÀ activé — rien à changer. ${MCP_NEXT_SESSION_NOTE} ${MCP_NO_OTHER_SETTING_NOTE}`
+      ? `MCP : le serveur ${label} est DÉJÀ activé — rien à changer.${ensemble} ${MCP_NEXT_SESSION_NOTE} ${MCP_NO_OTHER_SETTING_NOTE}`
       : `MCP : le serveur ${label} est DÉJÀ désactivé — rien à changer. ${MCP_NO_OTHER_SETTING_NOTE}`;
   }
   if (plan.enabled) {
-    const coupes = plan.disabledOthers.length
-      ? ` Pour respecter la règle « un seul serveur branché par session », ces serveurs activés ont été COUPÉS : ${plan.disabledOthers.join(", ")}.`
-      : " Aucun autre serveur n'était activé : aucun n'a été coupé.";
-    const etat = plan.wasEnabled
-      ? `MCP : le serveur ${label} était DÉJÀ activé ; c'est désormais le SEUL serveur activé.`
-      : `MCP : le serveur ${label} est maintenant ACTIVÉ.`;
-    return `${etat}${coupes} ${MCP_NEXT_SESSION_NOTE} ${MCP_NO_OTHER_SETTING_NOTE}`;
+    const ensemble = autres.length
+      ? ` Aucun autre serveur n'a été coupé : ${autres.join(", ")} ${autres.length > 1 ? "restent" : "reste"} activé(s).`
+      : " Aucun autre serveur n'est activé pour l'instant.";
+    return `MCP : le serveur ${label} est maintenant ACTIVÉ. Plusieurs serveurs peuvent être branchés ensemble : l'Assistant les voit tous et choisit celui qu'il lui faut.${ensemble} ${MCP_NEXT_SESSION_NOTE} ${MCP_NO_OTHER_SETTING_NOTE}`;
   }
   return `MCP : le serveur ${label} est maintenant DÉSACTIVÉ. Pilot ne le branchera plus ; les autres serveurs gardent leur état (aucun serveur n'est activé d'office à sa place). ${MCP_NEXT_SESSION_NOTE} ${MCP_NO_OTHER_SETTING_NOTE}`;
 }
@@ -221,13 +231,14 @@ export function mcpToggleSystemMessage(plan) {
   if (!plan || plan.ok !== true) return "⚠️ Serveur MCP inchangé.";
   const label = `« ${plan.name} »`;
   if (plan.enabled) {
-    const coupes = plan.disabledOthers.length
-      ? ` — serveur(s) coupé(s) : ${plan.disabledOthers
+    const autres = plan.othersEnabled || [];
+    const ensemble = autres.length
+      ? ` — ${autres.length} autre(s) serveur(s) restent activé(s) : ${autres
           .map((l) => l.replace(/[«»]/g, "").trim())
           .join(", ")}`
       : "";
     const verbe = plan.wasEnabled ? "déjà activé" : "activé";
-    return `🔌 Serveur MCP ${label} ${verbe}${coupes}.`;
+    return `🔌 Serveur MCP ${label} ${verbe}${ensemble}.`;
   }
   return `🔌 Serveur MCP ${label} désactivé.`;
 }

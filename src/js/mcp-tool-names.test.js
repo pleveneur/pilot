@@ -163,8 +163,20 @@ describe("branchement réel de l'extension MCP (garde-fou de source)", () => {
   });
 
   it("n'enregistre que la première déclaration d'un outil et signale le doublon", () => {
-    expect(EXTENSION_SRC).toContain("duplicateToolNames(discovered)");
+    // Les deux modes (serveur cible d'un agent, session multi-serveurs de
+    // l'Assistant) passent par les MÊMES fonctions : lus depuis `connection.tools`,
+    // la liste rendue par `tools/list`.
+    const doublons = EXTENSION_SRC.match(/duplicateToolNames\(connection\.tools\)/g) ?? [];
+    const gardes = EXTENSION_SRC.match(/firstDeclarationOnly\(connection\.tools\)/g) ?? [];
+    expect(doublons.length).toBe(2);
+    expect(gardes.length).toBe(2);
     expect(EXTENSION_SRC).toContain("duplicateToolNameMessage(serverId, declaredTwice)");
-    expect(EXTENSION_SRC).toContain("firstDeclarationOnly(discovered)");
+  });
+
+  it("répartit les noms entre les serveurs chargés ENSEMBLE (jamais de masquage muet)", () => {
+    // Multi-serveurs : `resolveToolNames` nomme les deux serveurs en conflit et
+    // `crossServerToolClashMessage` l'explique à l'utilisateur.
+    expect(EXTENSION_SRC).toContain("resolveToolNames(");
+    expect(EXTENSION_SRC).toContain("crossServerToolClashMessage(clash.name, clash.owners)");
   });
 });

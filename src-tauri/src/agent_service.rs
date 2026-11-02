@@ -3274,6 +3274,30 @@ impl AgentService {
         eprintln!("[mcp-secret] {}", attachment.message);
     }
 
+    /// Clé du coffre pour une session qui charge PLUSIEURS serveurs MCP (la
+    /// conversation de l'Assistant) : une table `{ identifiant: clé }` posée par
+    /// `attach_mcp_secrets`, jamais une clé unique — un serveur ne peut pas lire
+    /// la clé d'un autre. Le journal ne contient que le diagnostic déjà masqué
+    /// (comptes et identifiants de serveur, jamais une valeur).
+    fn attach_mcp_secrets_env(app: &AppHandle, vars: &mut Vec<(String, String)>) {
+        let Some(dir) = app.path().app_data_dir().ok() else {
+            return;
+        };
+        let Ok(vault_file) = crate::vault::vault_file_path() else {
+            return;
+        };
+        let vault_key = app.state::<AppState>().vault_key.lock().unwrap().clone();
+        let strict = app.state::<AppState>().config_snapshot().mcp_secret_strict;
+        let attachment = crate::mcp_config::attach_mcp_secrets(
+            vars,
+            &dir.join("mcp.json"),
+            vault_key.as_deref(),
+            &vault_file,
+            strict,
+        );
+        eprintln!("[mcp-secret] {}", attachment.message);
+    }
+
     /// Lance un nouveau processus pi --mode rpc pour un agent d'assistant.
     /// Canal rpc-event-agents (comme les agents multi-rôles), extensions
     /// assistant LECTURE SEULE (comme le super-agent), SANS porte pré-écriture
@@ -3476,8 +3500,10 @@ impl AgentService {
             Some(SuperAgentExtStatus { ext_supported, extensions_built: extensions.len(), probe_failed: probe.probe_failed });
         // Assistant piloté MCP (brique A) : expose le chemin du mcp.json au process
         // pi de l'assistant via PILOT_MCP_CONFIG (uniquement si l'extension MCP est
-        // bien chargée). L'extension lit cette env au démarrage. E2 : la clé du
-        // serveur de la session (premier activé, faute de cible) est ajoutée à part.
+        // bien chargée). L'extension lit cette env au démarrage. Décision du
+        // 2026-11-02 : la conversation de l'Assistant charge TOUS les serveurs
+        // activés (plus de « un seul serveur à la fois »), donc chaque serveur
+        // reçoit SA clé via la table `PILOT_MCP_SECRETS`, jamais une clé unique.
         let mcp_env_vars: Option<Vec<(String, String)>> = if mcp_enabled
             && extensions.iter().any(|e| e.contains("pilot-mcp-client.ts"))
         {
@@ -3486,7 +3512,7 @@ impl AgentService {
                     "PILOT_MCP_CONFIG".to_string(),
                     d.join("mcp.json").to_string_lossy().into_owned(),
                 )];
-                Self::attach_mcp_secret_env(app, &mut vars, None);
+                Self::attach_mcp_secrets_env(app, &mut vars);
                 vars
             })
         } else {

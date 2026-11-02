@@ -438,6 +438,22 @@ pub struct McpSecretAttachment {
     pub blocked: bool,
 }
 
+/// Résultat de `attach_mcp_secrets` (session multi-serveurs). Ne contient AUCUNE
+/// valeur de clé : des comptes, des identifiants de serveur et une ligne de
+/// diagnostic déjà masquée.
+#[derive(Debug, Clone, Default)]
+pub struct McpSecretsAttachment {
+    /// Nombre de serveurs activés dans la configuration relue.
+    pub enabled: usize,
+    /// Nombre de serveurs dont la clé a été résolue et posée dans la table.
+    pub ready: usize,
+    /// Identifiants des serveurs dont le lancement est refusé (référence
+    /// introuvable en mode strict).
+    pub blocked: Vec<String>,
+    /// Ligne de diagnostic déjà masquée (comptes et identifiants seulement).
+    pub message: String,
+}
+
 /// Chaîne du secret (E2) : complète `vars` avec `PILOT_MCP_SECRET` si le
 /// serveur de la session (cible sinon premier activé) possède une référence
 /// RÉSOLUBLE dans le coffre, et retourne l'état + une ligne de diagnostic DÉJÀ
@@ -499,6 +515,123 @@ pub fn attach_mcp_secret(
         message,
         blocked,
     }
+}
+
+/// Attachement des clés quand la session charge PLUSIEURS serveurs MCP
+/// (conversation de l'Assistant : tous les serveurs activés — décision du
+/// 2026-11-02, plus de « un seul serveur à la fois »).
+///
+/// Une seule variable ne suffit plus : la clé d'un serveur ne doit jamais être
+/// lisible par un autre. `PILOT_MCP_SECRETS` porte donc une TABLE
+/// `{ "<identifiant de serveur>": "<clé>" }`, construite uniquement pour les
+/// serveurs ACTIVÉS qui déclarent une référence résoluble ; `PILOT_MCP_SECRET_BLOCKS`
+/// porte les refus (référence introuvable en mode strict, même forme). L'extension
+/// retire ces deux tables de l'environnement AVANT de lancer un serveur : un
+/// serveur ne voit que SA clé, et aucune table ne peut fuir.
+///
+/// Les trois canaux (`PILOT_MCP_SECRET`, `PILOT_MCP_SECRETS`,
+/// `PILOT_MCP_SECRET_BLOCK(S)`) sont TOUJOURS retirés d'abord : aucune clé héritée
+/// ne peut plus être transmise par accident. En mode NON strict (ancien
+/// comportement assumé), la clé du premier serveur activé résoluble est en plus
+/// posée dans `PILOT_MCP_SECRET` pour les serveurs qui ne déclarent rien.
+///
+/// Le message de diagnostic est DÉJÀ MASQUÉ : il ne contient que des comptes et
+/// des identifiants de serveur, jamais une référence, jamais une valeur.
+pub fn attach_mcp_secrets(
+    vars: &mut Vec<(String, String)>,
+    config_path: &Path,
+    vault_key: Option<&[u8]>,
+    vault_file: &Path,
+    strict: bool,
+) -> McpSecretsAttachment {
+    vars.retain(|(k, _)| {
+        k != "PILOT_MCP_SECRET"
+            && k != "PILOT_MCP_SECRETS"
+            && k != "PILOT_MCP_SECRET_BLOCK"
+            && k != "PILOT_MCP_SECRET_BLOCKS"
+    });
+    let cfg = read_mcp_config_at(config_path);
+    let mut secrets: BTreeMap<String, String> = BTreeMap::new();
+    let mut blocks: BTreeMap<String, String> = BTreeMap::new();
+    let mut blocked: Vec<String> = Vec::new();
+    let mut ready = 0usize;
+    let mut without_reference = 0usize;
+    let mut locked = 0usize;
+    let mut unresolved = 0usize;
+    let mut first_secret: Option<String> = None;
+    let mut enabled = 0usize;
+    for server in cfg.servers.iter().filter(|s| s.enabled) {
+        enabled += 1;
+        let key = mcp_secret_server_key(server);
+        match server_key_state(server, vault_key, vault_file) {
+            ServerKeyState::Ready(secret) => {
+                if first_secret.is_none() {
+                    first_secret = Some(secret.clone());
+                }
+                secrets.insert(key, secret);
+                ready += 1;
+            }
+            ServerKeyState::UnknownRef(reference) if strict => {
+                // Refus nommé côté extension : identifiant de serveur → référence
+                // (jamais une valeur de clé).
+                blocks.insert(key.clone(), reference);
+                blocked.push(key);
+            }
+            ServerKeyState::NotRequested => without_reference += 1,
+            ServerKeyState::EmptyRef => unresolved += 1,
+            ServerKeyState::Locked(_) => locked += 1,
+            // Mode non strict : une référence introuvable ne refuse rien (ancien
+            // comportement), le serveur démarre simplement sans clé.
+            ServerKeyState::UnknownRef(_) => unresolved += 1,
+        }
+    }
+    if !secrets.is_empty() {
+        vars.push((
+            "PILOT_MCP_SECRETS".to_string(),
+            serde_json::to_string(&secrets).unwrap_or_else(|_| "{}".to_string()),
+        ));
+    }
+    if !blocks.is_empty() {
+        vars.push((
+            "PILOT_MCP_SECRET_BLOCKS".to_string(),
+            serde_json::to_string(&blocks).unwrap_or_else(|_| "{}".to_string()),
+        ));
+    }
+    if !strict {
+        // Ancien comportement (mode non strict) : la clé héritée reste le canal
+        // des serveurs qui ne déclarent rien.
+        if let Some(secret) = first_secret {
+            vars.push(("PILOT_MCP_SECRET".to_string(), secret));
+        }
+    }
+    let message = format!(
+        "MCP: {} serveur(s) activé(s) — clés résolues: {}, sans clé demandée: {}, refusées: {}, coffre verrouillé: {}, référence non résolue: {}",
+        enabled,
+        ready,
+        without_reference,
+        blocked.len(),
+        locked,
+        unresolved
+    );
+    McpSecretsAttachment {
+        enabled,
+        ready,
+        blocked,
+        message: redact_mcp_message(&message, ""),
+    }
+}
+
+/// Identifiant sous lequel la clé d'un serveur est rangée dans la table
+/// `PILOT_MCP_SECRETS` : `id` (nettoyé) s'il existe, sinon `name` (nettoyé).
+/// C'est la clé que l'extension recherche (`serverSecretKeyCandidates` accepte
+/// aussi `id`/`name` bruts, pour qu'une différence de nettoyage ne fasse jamais
+/// perdre une clé).
+fn mcp_secret_server_key(server: &McpServer) -> String {
+    let id = server.id.trim();
+    if !id.is_empty() {
+        return id.to_string();
+    }
+    server.name.trim().to_string()
 }
 
 // ── Commandes Tauri ──
@@ -1686,6 +1819,127 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Table des clés pour une session QUI CHARGE TOUS LES SERVEURS ACTIVÉS
+    /// (conversation de l'Assistant, décision du 2026-11-02) : chaque serveur
+    /// activé reçoit SA clé sous SON identifiant, un serveur DÉSACTIVÉ n'en reçoit
+    /// aucune, et aucune valeur ne sort dans le diagnostic.
+    #[test]
+    fn cles_multi_serveurs_une_cle_par_serveur_jamais_pour_un_desactive() {
+        const CLE_UN: &str = "cle-un-fictive-11";
+        const CLE_DEUX: &str = "cle-deux-fictive-22";
+        let dir = std::env::temp_dir().join(format!("pilot_mcp_multi_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vault_file = dir.join("vault.json");
+        let config_file = dir.join("mcp.json");
+        let serveur = |id: &str, enabled: bool, reference: &str| McpServer {
+            id: id.to_string(),
+            name: format!("Nom {}", id),
+            transport: "http".to_string(),
+            enabled,
+            url: "https://exemple.invalid/mcp".to_string(),
+            secret_ref: Some(format!("vault:{}", reference)),
+            ..Default::default()
+        };
+        let cfg = McpConfig {
+            servers: vec![
+                serveur("un", true, "entree-un"),
+                serveur("deux", true, "entree-deux"),
+                // DÉSACTIVÉ et pourtant porteur d'une référence : il ne doit
+                // JAMAIS apparaître dans la table (un serveur désactivé n'est
+                // jamais chargé).
+                serveur("off", false, "entree-un"),
+            ],
+        };
+        std::fs::write(&config_file, serde_json::to_string(&cfg).unwrap()).unwrap();
+        let entree = |id: &str, mot: &str| crate::vault::VaultEntry {
+            id: id.to_string(),
+            description: String::new(),
+            login: String::new(),
+            password: mot.to_string(),
+            scope: "global".to_string(),
+            project_path: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let key = crate::vault::write_test_vault(
+            &vault_file,
+            "mot-de-passe-fictif",
+            &[entree("entree-un", CLE_UN), entree("entree-deux", CLE_DEUX)],
+        );
+
+        let mut vars = Vec::new();
+        let attachment = attach_mcp_secrets(&mut vars, &config_file, Some(&key), &vault_file, true);
+
+        let table = vars
+            .iter()
+            .find(|(k, _)| k == "PILOT_MCP_SECRETS")
+            .map(|(_, v)| v.clone())
+            .expect("la table des clés doit être posée");
+        let map: BTreeMap<String, String> = serde_json::from_str(&table).unwrap();
+        assert_eq!(map.get("un").map(String::as_str), Some(CLE_UN));
+        assert_eq!(map.get("deux").map(String::as_str), Some(CLE_DEUX));
+        // Le serveur désactivé n'a pas d'entrée : il ne sera pas lancé.
+        assert!(!map.contains_key("off"), "table: {:?}", map.keys().collect::<Vec<_>>());
+        assert_eq!(map.len(), 2);
+        // Mode strict : plus de clé unique héritée (chaque serveur lit la sienne).
+        assert!(vars.iter().all(|(k, _)| k != "PILOT_MCP_SECRET"));
+        assert_eq!(attachment.enabled, 2, "seuls les serveurs ACTIVÉS sont comptés");
+        assert_eq!(attachment.ready, 2);
+
+        // Aucune valeur, aucune référence, aucun contenu de serveur dans le
+        // diagnostic : seulement des comptes.
+        let diag = &attachment.message;
+        for interdit in [CLE_UN, CLE_DEUX, "entree-un", "entree-deux", "vault:", "exemple.invalid"] {
+            assert!(!diag.contains(interdit), "diagnostic: {}", diag);
+        }
+        assert_eq!(
+            vars.iter().filter(|(k, _)| k.starts_with("PILOT_MCP")).count(),
+            1,
+            "seule PILOT_MCP_SECRETS est ajoutée : aucune variable par serveur"
+        );
+
+        // Mode non strict (ancien comportement assumé) : la clé unique reste
+        // posée pour les serveurs qui ne déclarent rien.
+        let mut legacy = Vec::new();
+        attach_mcp_secrets(&mut legacy, &config_file, Some(&key), &vault_file, false);
+        assert!(legacy.iter().any(|(k, v)| k == "PILOT_MCP_SECRET" && v == CLE_UN));
+
+        // Référence introuvable en mode strict : refus NOMMÉ, aucune clé pour ce
+        // serveur, et les autres gardent la leur.
+        let casse = McpConfig {
+            servers: vec![
+                serveur("un", true, "entree-un"),
+                serveur("cassee", true, "entree-absente"),
+            ],
+        };
+        let config_casse = dir.join("mcp-casse.json");
+        std::fs::write(&config_casse, serde_json::to_string(&casse).unwrap()).unwrap();
+        let mut vars = Vec::new();
+        let attachment =
+            attach_mcp_secrets(&mut vars, &config_casse, Some(&key), &vault_file, true);
+        let blocks: BTreeMap<String, String> = serde_json::from_str(
+            vars.iter()
+                .find(|(k, _)| k == "PILOT_MCP_SECRET_BLOCKS")
+                .map(|(_, v)| v.as_str())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(blocks.contains_key("cassee"));
+        assert!(!blocks.contains_key("un"));
+        assert_eq!(attachment.blocked, vec!["cassee".to_string()]);
+        let table: BTreeMap<String, String> = serde_json::from_str(
+            vars.iter()
+                .find(|(k, _)| k == "PILOT_MCP_SECRETS")
+                .map(|(_, v)| v.as_str())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(table.len(), 1, "le serveur en échec ne reçoit pas de clé");
+        assert!(table.contains_key("un"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── E4 : test de connexion distant (construction de requête, lecture de
     //    réponse JSON/SSE, échec propre sans fuite de clé) ──
 
@@ -2781,20 +3035,30 @@ mod assistant_server_toggle_tests {
         assert!(cfg.servers[1].enabled);
     }
 
-    /// 6) Activation EXCLUSIVE telle que la demande l'assistant (le module JS
-    /// `mcp-server-toggle.js` construit la liste) : après application, UN SEUL
-    /// serveur est activé, et la liste appliquée nomme le serveur coupé.
+    /// 6) Activation NON EXCLUSIVE (décision du 2026-11-02) : la conversation de
+    /// l'Assistant charge TOUS les serveurs activés ensemble. L'écriture Rust ne
+    /// calcule donc AUCUNE exclusivité : elle applique littéralement les couples
+    /// `{id, enabled}` reçus. La preuve que la règle a changé : un changement SEUL
+    /// (activer `test`) laisse `mcp-1` ACTIVÉ — l'ancien comportement aurait coupé
+    /// le voisin, et ce test échouerait.
     #[test]
-    fn activation_exclusive_ne_laisse_qu_un_serveur_active() {
+    fn activation_n_est_plus_exclusive_les_autres_restent_actives() {
         let mut cfg = config_deux_serveurs();
-        let applied = apply_server_enable_changes(
-            &mut cfg,
-            &[changement("test", true), changement("mcp-1", false)],
-        )
-        .unwrap();
-        assert_eq!(applied, vec!["test".to_string(), "mcp-1".to_string()]);
+        let applied = apply_server_enable_changes(&mut cfg, &[changement("test", true)]).unwrap();
+        assert_eq!(applied, vec!["test".to_string()]);
         assert_eq!(
             cfg.servers.iter().filter(|s| s.enabled).map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["mcp-1", "test"]
+        );
+        // Et aucun `enabled: false` n'est ajouté d'office : la fonction pure ne
+        // fait qu'appliquer ce qu'on lui donne, jamais une coupure implicite.
+        let mut cfg2 = config_deux_serveurs();
+        let applied2 =
+            apply_server_enable_changes(&mut cfg2, &[changement("test", true), changement("mcp-1", false)])
+                .unwrap();
+        assert_eq!(applied2, vec!["test".to_string(), "mcp-1".to_string()]);
+        assert_eq!(
+            cfg2.servers.iter().filter(|s| s.enabled).map(|s| s.id.as_str()).collect::<Vec<_>>(),
             vec!["test"]
         );
     }

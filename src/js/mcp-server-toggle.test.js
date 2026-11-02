@@ -9,12 +9,13 @@
 //   (a) activer un serveur n'écrit pas son état activé ;
 //   (b) désactiver un serveur n'écrit pas son état désactivé ;
 //   (c) un identifiant inconnu provoque une exception ou une écriture ;
-//   (d) l'activation n'est pas EXCLUSIVE (les autres serveurs restent activés)
-//       ou ne les nomme pas (effet de bord silencieux) ;
+//   (d) l'activation reste EXCLUSIVE (activer un serveur en coupe un autre) ou
+//       les autres serveurs activés ne sont pas nommés (effet de bord silencieux) ;
 //   (e) un autre réglage MCP est touché (client activé, confirmation requise,
 //       mode strict, contenu des serveurs, secrets) ;
 //   (f) un serveur configuré est supprimé ;
-//   (g) la réponse ne rappelle pas l'effet à la prochaine session d'agent ;
+//   (g) la réponse ne rappelle pas quand le changement s'applique (Assistant :
+//       prochaine demande ; session d'agent : au démarrage) ;
 //   (h) la chaîne outil → sentinel → assistant → commande Rust est rompue.
 
 import { describe, expect, it } from "vitest";
@@ -131,8 +132,8 @@ describe("serveur MCP nommé — décision pure (aucune I/O)", () => {
     expect(findMcpServer({}, "mcp-1")).toBeNull();
   });
 
-  it("ACTIVE un serveur désactivé : un seul état à écrire, rien d'autre coupé", () => {
-    // (a) — ici aucun AUTRE serveur n'est activé : l'exclusivité n'a rien à couper.
+  it("ACTIVE un serveur désactivé : un seul état à écrire, AUCUN autre coupé", () => {
+    // (a) — aucun AUTRE serveur n'est activé : rien à nommer.
     const plan = planMcpServerToggle(etat([["mcp-1", false], ["test", false]]), {
       server: "test",
       enabled: true,
@@ -141,7 +142,7 @@ describe("serveur MCP nommé — décision pure (aucune I/O)", () => {
     expect(plan.changed).toBe(true);
     expect(plan.id).toBe("test");
     expect(plan.changes).toEqual([{ id: "test", enabled: true }]);
-    expect(plan.disabledOthers).toEqual([]);
+    expect(plan.othersEnabled).toEqual([]);
     expect(plan.wasEnabled).toBe(false);
   });
 
@@ -155,7 +156,7 @@ describe("serveur MCP nommé — décision pure (aucune I/O)", () => {
     expect(plan.changes).toEqual([{ id: "mcp-1", enabled: false }]);
     // Aucune ligne n'active `test` : désactiver ne promeut personne.
     expect(plan.changes.some((c) => c.enabled === true)).toBe(false);
-    expect(plan.disabledOthers).toEqual([]);
+    expect(plan.othersEnabled).toEqual([]);
   });
 
   it("REFUSE un identifiant inconnu avec un message clair, sans rien changer", () => {
@@ -180,29 +181,38 @@ describe("serveur MCP nommé — décision pure (aucune I/O)", () => {
     expect(plan.message).toContain("rien n'a été modifié");
   });
 
-  it("ACTIVATION EXCLUSIVE : les autres serveurs activés sont coupés ET nommés", () => {
-    // (d) — `context7` est DÉJÀ activé : il n'y a donc rien à écrire pour lui, ce
-    // sont les AUTRES qui sont coupés.
+  it("ACTIVATION NON EXCLUSIVE : activer un serveur NE coupe AUCUN autre", () => {
+    // (d) — `context7` est DÉJÀ activé, et deux autres serveurs aussi. Décision du
+    // 2026-11-02 : la conversation de l'Assistant charge TOUS les serveurs activés
+    // ensemble. Activer ne doit donc RIEN écrire d'autre que l'état du serveur
+    // nommé — et surtout pas `enabled: false` pour un voisin.
     const plan = planMcpServerToggle(
       etat([["mcp-1", true, "Presence"], ["test", true, "Test"], ["context7", true], ["off", false]]),
       { server: "context7", enabled: true },
     );
     expect(plan.ok).toBe(true);
     expect(plan.wasEnabled).toBe(true);
-    expect(plan.disabledOthers).toEqual(["« Presence » (mcp-1)", "« Test » (test)"]);
-    // Le serveur déjà désactivé n'est pas touché : une écriture pour rien n'a
-    // pas lieu d'être.
-    expect(plan.changes).toEqual([
-      { id: "mcp-1", enabled: false },
-      { id: "test", enabled: false },
-    ]);
-    expect(plan.changes.some((c) => c.id === "off")).toBe(false);
-    // Et après application, il ne reste qu'UN serveur activé.
+    // Aucune écriture : le serveur nommé est déjà activé.
+    expect(plan.changes).toEqual([]);
+    // Les autres serveurs activés sont nommés… et restent activés.
+    expect(plan.othersEnabled).toEqual(["« Presence » (mcp-1)", "« Test » (test)"]);
+    expect(plan.disabledOthers).toBeUndefined();
+    // Après application, les trois serveurs sont TOUJOURS activés.
     const restants = etat([["mcp-1", true], ["test", true], ["context7", true], ["off", false]]).servers
-      .map((s) => (plan.changes.find((c) => c.id === s.id) ? { ...s, enabled: false } : s))
       .filter((s) => s.enabled)
       .map((s) => s.id);
-    expect(restants).toEqual(["context7"]);
+    expect(restants).toEqual(["mcp-1", "test", "context7"]);
+  });
+
+  it("ACTIVER un serveur désactivé n'écrit QUE son état, même entouré d'activés", () => {
+    // (d) cœur de la nouvelle règle : une seule entrée `changes`, toujours.
+    const plan = planMcpServerToggle(
+      etat([["mcp-1", true, "Presence"], ["test", false, "Test"]]),
+      { server: "test", enabled: true },
+    );
+    expect(plan.changes).toEqual([{ id: "test", enabled: true }]);
+    expect(plan.changes.some((c) => c.enabled === false)).toBe(false);
+    expect(plan.othersEnabled).toEqual(["« Presence » (mcp-1)"]);
   });
 
   it("un serveur DÉJÀ activé seul n'écrit rien et le dit", () => {
@@ -218,7 +228,7 @@ describe("serveur MCP nommé — décision pure (aucune I/O)", () => {
     expect(answer).toContain("rien à changer");
   });
 
-  it("la réponse dit l'exclusivité, la prochaine session et la portée de l'écriture", () => {
+  it("la réponse dit la non-exclusivité, quand ça s'applique, et la portée de l'écriture", () => {
     // (d) + (g)
     const plan = planMcpServerToggle(etat([["mcp-1", true, "Presence"], ["test", false]]), {
       server: "test",
@@ -226,7 +236,9 @@ describe("serveur MCP nommé — décision pure (aucune I/O)", () => {
     });
     const answer = mcpToggleAnswer(plan);
     expect(answer).toContain("ACTIVÉ");
-    expect(answer).toContain("« Presence » (mcp-1)"); // le serveur coupé est nommé
+    expect(answer).toContain("« Presence » (mcp-1)"); // l'autre serveur est nommé…
+    expect(answer).toContain("Aucun autre serveur n'a été coupé"); // …et reste activé
+    expect(answer).not.toContain("COUPÉS");
     expect(answer).toContain(MCP_NEXT_SESSION_NOTE);
     expect(answer).toContain(MCP_NO_OTHER_SETTING_NOTE);
     expect(answer.split("\n")).toHaveLength(1);
@@ -247,7 +259,8 @@ describe("serveur MCP nommé — décision pure (aucune I/O)", () => {
     const ligne = mcpToggleSystemMessage(actif);
     expect(ligne).toContain("Serveur MCP");
     expect(ligne).toContain("test");
-    expect(ligne).toContain("Presence"); // le serveur coupé est visible
+    expect(ligne).toContain("Presence"); // les autres serveurs restent visibles
+    expect(ligne).toContain("restent activé"); // …et restent activés
     expect(ligne.split("\n")).toHaveLength(1);
     const off = mcpToggleSystemMessage(
       planMcpServerToggle(etat([["test", true]]), { server: "test", enabled: false }),
@@ -297,8 +310,8 @@ describe("serveur MCP nommé — application (commande Rust, écriture NARROW)",
     ]);
   });
 
-  it("ACTIVATION EXCLUSIVE : après écriture, un seul serveur reste activé", async () => {
-    // (d)
+  it("ACTIVATION NON EXCLUSIVE : après écriture, les autres serveurs restent activés", async () => {
+    // (d) — la règle du 2026-11-02 : activer un serveur n'en désactive AUCUN.
     const fake = fakeInvoke(
       etat([["mcp-1", true, "Presence"], ["test", true, "Test"], ["context7", false]]),
     );
@@ -307,9 +320,12 @@ describe("serveur MCP nommé — application (commande Rust, écriture NARROW)",
       { invokeFn: fake.invokeFn },
     );
     expect(plan.ok).toBe(true);
+    expect(plan.written).toEqual(["context7"]);
     const actifs = fake.etatCourant().filter((s) => s.enabled).map((s) => s.id);
-    expect(actifs).toEqual(["context7"]);
-    expect(plan.disabledOthers).toHaveLength(2);
+    expect(actifs).toEqual(["mcp-1", "test", "context7"]);
+    expect(plan.othersEnabled).toHaveLength(2);
+    // La charge écrite ne contient QUE le serveur nommé (aucune coupure annexe).
+    expect(fake.calls[1].args.changes).toEqual([{ id: "context7", enabled: true }]);
   });
 
   it("IDENTIFIANT INCONNU : aucune écriture, message clair, aucune exception", async () => {
@@ -405,12 +421,17 @@ describe("serveur MCP nommé — chaîne complète outil → sentinel → assist
     }
   });
 
-  it("les descriptions portent les garde-fous (connu, exclusivité, session, portée)", () => {
+  it("les descriptions portent les garde-fous (connu, non-exclusivité, session, portée)", () => {
     const actif = toolBody("mcp_enable_server");
-    expect(actif).toContain("EXCLUSIVE");
-    expect(actif).toContain("DÉSACTIVE les autres");
-    expect(actif).toContain("PROCHAINE session");
+    expect(actif).toContain("n'est PAS exclusive");
+    expect(actif).toContain("n'en coupe AUCUN autre");
+    expect(actif).toContain("TOUS les serveurs activés ensemble");
+    expect(actif).toContain("Un serveur DÉSACTIVÉ n'est jamais chargé");
+    expect(actif).toContain("sans redémarrer Pilot");
     expect(actif).toContain("ne supprime aucun serveur");
+    // L'ancienne règle ne doit plus être enseignée au modèle.
+    expect(actif).not.toContain("EXCLUSIVE :");
+    expect(actif).not.toContain("DÉSACTIVE les autres");
     // (e) la portée est dite dans les deux sens
     for (const mot of ["client MCP", "confirmation requise", "secrets"]) {
       expect(actif).toContain(mot);

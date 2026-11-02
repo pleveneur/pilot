@@ -1504,7 +1504,7 @@
             <pre id="mcp-screen-log" class="mcp-screen-log" style="display:none"></pre>
             <hr class="settings-sep" />
             <div class="setting-row">
-              <small class="muted">La configuration est enregistrée dans <code>mcp.json</code> (dossier de données Pilot). Le serveur connecté au démarrage d'une session agent est le premier serveur activé de la liste (local ou distant).</small>
+              <small class="muted">La configuration est enregistrée dans <code>mcp.json</code> (dossier de données Pilot). La conversation de l'Assistant connecte <strong>tous les serveurs activés</strong> (local ou distant) et prend en compte un changement dès sa demande suivante, sans redémarrer. Une session d'agent connecte le serveur qui lui est désigné, sinon le premier serveur activé de la liste.</small>
             </div>
             <div class="providers-toolbar">
               <button type="button" id="btn-mcp-add" class="pc-btn"><i data-lucide="plus" class="icon-sm"></i> Ajouter un serveur</button>
@@ -1565,7 +1565,7 @@
               <div class="field-row">
                 <label for="mcp-f-enabled">Activé :</label>
                 <input type="checkbox" id="mcp-f-enabled" checked style="width:auto;"/>
-                <small class="muted">Uniquement le premier serveur activé est connecté au démarrage.</small>
+                <small class="muted">Un serveur désactivé n'est jamais connecté. Les serveurs activés sont connectés ensemble.</small>
               </div>
               <div class="field-row">
                 <span id="mcp-f-status" class="muted"></span>

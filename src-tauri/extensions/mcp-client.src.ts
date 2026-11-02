@@ -7,16 +7,29 @@
 //
 // Ce POC prouve que Pilot peut se connecter à un serveur MCP tier via une
 // extension pi, en embarquant le SDK MCP (@modelcontextprotocol/sdk) BUNDLÉ.
-// L'extension :
+// L'extension a DEUX modes, décidés par une seule chose : `PILOT_MCP_SERVER`.
+//
+//   A. SESSION D'UN AGENT (`PILOT_MCP_SERVER` = identifiant) : UN serveur, celui
+//      que l'agent a demandé (`run_agents` / `mcp_server`), sinon le premier
+//      activé (mêmes règles que `select_session_server` côté Rust). Comportement
+//      historique inchangé — un agent ne voit JAMAIS les outils d'un serveur
+//      qu'il n'a pas demandé.
+//
+//   B. SESSION DE L'ASSISTANT (pas de `PILOT_MCP_SERVER`) : TOUS les serveurs
+//      ACTIVÉS, ensemble (décision du propriétaire, 2026-11-02 : plus de « un
+//      seul serveur à la fois »). L'Assistant choisit lequel utiliser en
+//      raisonnant, jamais parce qu'un seul serait branché. Un serveur DÉSACTIVÉ
+//      n'est jamais chargé ; la liste est relue avant chaque tour, donc un
+//      changement d'activation est pris en compte SANS redémarrer Pilot.
+//
+// Étapes communes :
 //   1. lit la config via process.env.PILOT_MCP_CONFIG (chemin d'un mcp.json —
 //      Pilot le renseigne à la création du process pi, PAS via AppConfig),
-//   2. choisit le serveur : `process.env.PILOT_MCP_SERVER` (id d'un serveur
-//      cible, posé à la demande par l'assistant via run_agents / mcp_server)
-//      s'il correspond à un serveur `enabled` — sinon retombe sur le PREMIER
-//      serveur `enabled` (mêmes règles que `select_session_server` côté Rust),
 //   3. choisit le transport selon le type du serveur : local (`stdio` =
 //      programme) ou distant (`http`/`https` = adresse réseau, clé d'accès
-//      présentée en EN-TÊTE `Authorization` via PILOT_MCP_SECRET — E2),
+//      présentée en EN-TÊTE `Authorization` via PILOT_MCP_SECRET — E2 ; en mode
+//      multi-serveurs la clé vient de la table `PILOT_MCP_SECRETS`, une entrée par
+//      serveur, jamais lisible par un autre serveur),
 //   4. découvre tools/list et enregistre chaque outil sous
 //      `mcp_<serverId>_<name>` via pi.registerTool (exécution qui redéclenche un
 //      callTool sur le serveur).
@@ -25,15 +38,21 @@
 // `src/js/mcp-tool-names.js` (source unique, testée). Un nom d'outil ne doit
 // jamais être disputé par deux serveurs : si deux entrées de mcp.json portent le
 // même identifiant (donc les mêmes noms d'outils), le chargement est REFUSÉ avec
-// un message qui nomme les deux serveurs (§ 2 quater) ; si un serveur déclare
-// deux fois le même outil, seule la première déclaration est exposée (§ 3).
+// un message qui nomme les deux serveurs (§ 2 quater) ; si deux serveurs chargés
+// ENSEMBLE exposeraient le même nom, `resolveToolNames` garde le premier et nomme
+// le second ; si un serveur déclare deux fois le même outil, seule la première
+// déclaration est exposée (§ 3).
 //
 // Fail-open : toute erreur (config absente, serveur indisponible, tools/list en
 // échec) est interceptée — pi ne doit jamais planter à cause d'une extension MCP.
+// En mode multi-serveurs, l'échec d'UN serveur est dit à l'utilisateur en une
+// phrase (identifiant seul, jamais une adresse ni une clé) et les autres serveurs
+// restent disponibles : un serveur lent, cassé ou injoignable ne bloque jamais la
+// conversation.
 //
 // NOTE : la factory des extensions pi ne reçoit AUCUN `ctx` UI (le `ctx` n'est
-// fourni que dans les event handlers / tool execute). Ce POC reste donc MUET
-// (fail-open silencieux) pour ne dépendre d'aucune surface UI non garantie.
+// fourni que dans les event handlers / tool execute). Les messages décidés ici
+// sont donc mis en attente et délivrés au `session_start` (ou au premier tour).
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -41,19 +60,38 @@ import { Type } from "typebox";
 // un serveur ne garde la clé héritée que s'il la déclare lui-même ; refus
 // explicite et message de lancement sont décidés par le module testé en unitaire.
 import {
+  MCP_SECRETS_VAR,
+  MCP_SECRET_BLOCKS_VAR,
   declaresSecret,
+  parseSecretMap,
   parseSecretStrict,
   scopeMcpSecret,
+  scopeMcpSecretForServer,
 } from "../../src/js/mcp-secret-scope.js";
+// Quelle liste de serveurs une session charge (module PUR partagé, testé) :
+// tous les serveurs activés pour l'Assistant, un seul pour un agent, jamais un
+// serveur désactivé, et les cas ambigus (même identifiant) refusés ensemble.
+import {
+  mcpAmbiguousIdNotice,
+  mcpNoServerNotice,
+  mcpServerFingerprint,
+  mcpServerStillEnabled,
+  mcpServerUnavailableNotice,
+  mcpToolUnavailableMessage,
+  planMcpRefresh,
+  planMcpSessionServers,
+} from "../../src/js/mcp-servers-session.js";
 // Noms d'outils MCP (source unique, module PUR partagé avec les tests) : la
 // règle `mcp_<serverId>_<outil>` et la détection des noms ambigus n'existent
 // qu'ici.
 import {
+  crossServerToolClashMessage,
   duplicateToolNameMessage,
   duplicateToolNames,
   firstDeclarationOnly,
   mcpServerId,
   registeredToolName,
+  resolveToolNames,
   serverIdClashMessage,
   serverIdOwners,
 } from "../../src/js/mcp-tool-names.js";
@@ -129,9 +167,9 @@ interface McpConfig {
 export default async function (api: ExtensionAPI): Promise<void> {
   // ── 0. Messages différés vers l'interface ──
   // La factory ne reçoit AUCUN `ctx` UI (fourni seulement dans les gestionnaires
-  // d'événements) : les messages décidés ici (refus de clé, lancement sans clé)
-  // sont mis en attente et délivrés au `session_start`. Aucun ne contient une
-  // valeur de clé.
+  // d'événements) : les messages décidés ici (refus de clé, lancement sans clé,
+  // serveur injoignable) sont mis en attente et délivrés au `session_start`.
+  // Aucun ne contient une valeur de clé, ni une adresse, ni une commande.
   const pendingNotices: Array<{ text: string; level: string }> = [];
   let sessionCtx: ExtensionContext | null = null;
   const flushNotices = (): void => {
@@ -163,71 +201,408 @@ export default async function (api: ExtensionAPI): Promise<void> {
 
   let config: McpConfig;
   try {
-    const raw = await readFileText(configPath);
-    config = JSON.parse(raw) as McpConfig;
+    config = JSON.parse(await readFileText(configPath)) as McpConfig;
   } catch {
     return; // Config illisible — fail-open.
   }
 
-  const servers = config.servers ?? [];
-  // Serveur cible (brique B) : si PILOT_MCP_SERVER désigne un serveur enabled de
-  // la config, on le prend ; sinon fail-back sur le 1er enabled. Mêmes règles
-  // que `select_session_server` côté Rust : la clé transmise par Pilot (E2) est
-  // celle du serveur que l'extension retient ici.
   const targetId = (process.env.PILOT_MCP_SERVER || "").trim();
-  const enabledServers = servers.filter((s) => s.enabled !== false);
-  const server =
-    (targetId
-      ? enabledServers.find((s) => (s.id ?? "") === targetId)
-      : undefined) ?? enabledServers[0];
-  if (!server) {
-    return; // Aucun serveur enabled (ni cible valide) — fail-open.
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 2. SESSION D'UN AGENT — UN serveur désigné (PILOT_MCP_SERVER), inchangé.
+  // `PILOT_MCP_SERVER` est posé par Pilot quand un agent demande explicitement
+  // un serveur (run_agents / mcp_server). Sans lui, un agent ne voit AUCUN outil
+  // MCP : le chargement de tous les serveurs est réservé à l'Assistant (§ 3).
+  // ══════════════════════════════════════════════════════════════════════════
+  if (targetId) {
+    // Serveur cible (brique B) : si PILOT_MCP_SERVER désigne un serveur enabled de
+    // la config, on le prend ; sinon fail-back sur le 1er enabled. Mêmes règles
+    // que `select_session_server` côté Rust : la clé transmise par Pilot (E2) est
+    // celle du serveur que l'extension retient ici.
+    const enabledServers = (config.servers ?? []).filter((s) => s.enabled !== false);
+    const server =
+      enabledServers.find((s) => (s.id ?? "") === targetId) ?? enabledServers[0];
+    if (!server) {
+      return; // Aucun serveur enabled (ni cible valide) — fail-open.
+    }
+
+    const serverId = mcpServerId(server);
+
+    // ── 2 quater. Nom d'outil non ambigu (identifiant de serveur unique) ──
+    // Deux entrées ACTIVÉES portant le même identifiant produiraient exactement
+    // les mêmes noms d'outils (`mcp_<id>_<outil>`) : impossible de savoir lequel
+    // des deux serveurs serait appelé, et le second serait ignoré en silence.
+    // Le cas ambigu est donc refusé EXPLICITEMENT, en nommant les deux serveurs
+    // (fail-closed : aucun outil n'est enregistré).
+    const sameIdServers = serverIdOwners(enabledServers, serverId);
+    if (sameIdServers.length > 1) {
+      notifyUser(
+        serverIdClashMessage(serverId, sameIdServers) ?? "Identifiant MCP ambigu",
+        "warning"
+      );
+      return;
+    }
+
+    // ── 2 bis. Garde-fous du contrôle de l'écran ──
+    // Un serveur « écran » peut piloter la machine : il n'est proposé à l'agent
+    // que si l'utilisateur l'a autorisé. Désactivé (ou arrêt d'urgence actif), le
+    // serveur n'est même pas lancé et AUCUN de ses outils n'est enregistré.
+    const isScreen = isScreenServer(server);
+    if (isScreen && !(await readScreenGuard(configPath)).enabled) {
+      return; // Contrôle de l'écran coupé — fail-closed (rien ne part).
+    }
+
+    // ── 2 ter. Clé du coffre : périmètre PAR SERVEUR (tâche 399) ──
+    const strict = await readMcpSecretStrict(configPath);
+    const keyScope = scopeMcpSecret(process.env, { declared: declaresSecret(server), strict });
+    if (keyScope.blocked) {
+      // Référence déclarée introuvable (décision de Rust en mode strict) : ce
+      // serveur n'est PAS lancé et aucun de ses outils n'est enregistré.
+      notifyUser(keyScope.reason, "warning");
+      return;
+    }
+    if (keyScope.notice) {
+      notifyUser(keyScope.notice, "warning");
+    }
+
+    // ── 2. Transport + découverte des outils ──
+    const connection = await connectServer(server, keyScope);
+    if (!connection.ok) {
+      return; // Serveur indisponible — fail-open (comportement historique).
+    }
+    const { client, transport, secret } = connection;
+
+    // ── 3. Enregistrement d'un outil pi par outil MCP découvert ──
+    // Un `tools/list` qui déclare deux fois le même nom d'outil ne doit pas faire
+    // écraser en silence la première déclaration par la seconde (pi range ses
+    // outils dans une table par nom) : la première est conservée, le doublon est
+    // signalé. Aucun nom d'outil déjà en service ne change.
+    const declaredTwice = duplicateToolNames(connection.tools);
+    if (declaredTwice.length > 0) {
+      notifyUser(
+        duplicateToolNameMessage(serverId, declaredTwice) ?? "Outil MCP déclaré deux fois",
+        "warning"
+      );
+    }
+    for (const tool of firstDeclarationOnly(connection.tools)) {
+      const toolName = tool.name;
+      try {
+        api.registerTool({
+          ...toolDescriptor(serverId, tool),
+          async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+            return runTool(client, toolName, params as Record<string, unknown>, secret);
+          },
+        } as never);
+      } catch {
+        // Échec d'enregistrement (concurrence d'extensions) : fail-open.
+      }
+    }
+
+    // ── 4. Garde-fous du contrôle de l'écran (porte pré-action) ──
+    // Pour un serveur « écran » : chaque action est relue en DIRECT, confirmée
+    // par l'utilisateur, et journalisée. Un refus (réglage coupé, arrêt
+    // d'urgence, réponse de l'utilisateur, mode simulation) BLOQUE l'action :
+    // rien n'est envoyé au serveur et l'agent reçoit la raison.
+    if (isScreen) {
+      api.on("tool_call", async (event, ctx) => {
+        if (!isScreenTool(event.toolName, serverId)) {
+          return; // Outil d'un autre serveur MCP : hors de cette porte.
+        }
+        return screenGate(configPath, ctx, event);
+      });
+    }
+
+    // ── Nettoyage à la fin de session (fermeture du serveur local ou distant) ──
+    api.on("session_shutdown", async () => {
+      await safeClose(transport, client);
+    });
+    return;
   }
 
-  const serverId = mcpServerId(server);
+  // ══════════════════════════════════════════════════════════════════════════
+  // 3. SESSION DE L'ASSISTANT — TOUS les serveurs ACTIVÉS (décision du
+  //    2026-11-02 : plus de « un seul serveur à la fois »).
+  //
+  // Ce que la session charge :
+  //   - tous les serveurs `enabled !== false` de `mcp.json`, ENSEMBLE ;
+  //   - jamais un serveur désactivé (il n'est pas chargé, et si l'utilisateur le
+  //     désactive en cours de route, ses outils refusent tout appel et le
+  //     serveur est refermé) ;
+  //   - deux entrées de même identifiant sont refusées ENSEMBLE et EXPLIQUÉES.
+  // L'Assistant choisit ensuite le serveur en raisonnant : ce n'est plus une
+  // limite technique.
+  //
+  // Robustesse : la connexion de chaque serveur a son propre délai borné et son
+  // propre échec. Un serveur lent, cassé ou injoignable donne UN message clair,
+  // les autres serveurs restent disponibles, la conversation continue.
+  // ══════════════════════════════════════════════════════════════════════════
+  const loaded = new Map<string, LoadedServer>();
+  const loading = new Set<string>();
+  const attempted = new Map<string, string>(); // id → empreinte déjà tentée
+  const toolOwners = new Map<string, LoadedServer>(); // nom enregistré → serveur
+  const notified = new Set<string>(); // messages déjà dits (aucun doublon)
+  const notifyOnce = (key: string, text: string, level = "warning"): void => {
+    if (notified.has(key)) return;
+    notified.add(key);
+    notifyUser(text, level);
+  };
 
-  // ── 2 quater. Nom d'outil non ambigu (identifiant de serveur unique) ──
-  // Deux entrées ACTIVÉES portant le même identifiant produiraient exactement
-  // les mêmes noms d'outils (`mcp_<id>_<outil>`) : impossible de savoir lequel
-  // des deux serveurs serait appelé, et le second serait ignoré en silence.
-  // Le cas ambigu est donc refusé EXPLICITEMENT, en nommant les deux serveurs
-  // (fail-closed : aucun outil n'est enregistré). Un identifiant unique — le cas
-  // normal — n'est jamais concerné : rien ne change pour lui.
-  const sameIdServers = serverIdOwners(enabledServers, serverId);
-  if (sameIdServers.length > 1) {
-    notifyUser(
-      serverIdClashMessage(serverId, sameIdServers) ?? "Identifiant MCP ambigu",
-      "warning"
+  /// Retire un serveur de la session : ses outils ne sont plus exposés (le modèle
+  /// reçoit une phrase actionnable s'il les appelle) et la connexion est fermée.
+  const dropServer = async (serverId: string): Promise<void> => {
+    const record = loaded.get(serverId);
+    if (!record) return;
+    loaded.delete(serverId);
+    attempted.delete(serverId);
+    for (const [name, owner] of [...toolOwners]) {
+      if (owner === record) toolOwners.delete(name);
+    }
+    await safeClose(record.transport, record.client);
+  };
+
+  /// Lit la config à neuf (le fichier peut changer sans redémarrer Pilot).
+  const readConfig = async (): Promise<McpConfig | null> => {
+    try {
+      return JSON.parse(await readFileText(configPath)) as McpConfig;
+    } catch {
+      return null; // Illisible/partiel : on ne touche à rien.
+    }
+  };
+
+  let strictCache: boolean | null = null;
+  /// Relit le réglage du mode strict (jamais deviné : un fichier absent vaut
+  /// strict, comme côté Rust). Mis en cache pour la session : la table des clés a
+  /// été calculée par Pilot AU LANCEMENT de la session, la relire ici ne pourrait
+  /// pas la changer.
+  const strictMode = async (): Promise<boolean> => {
+    if (strictCache === null) strictCache = await readMcpSecretStrict(configPath);
+    return strictCache;
+  };
+
+  /// Aligne la session sur la liste des serveurs ACTIVÉS (chargement, retrait,
+  /// apparition de nouveaux outils). Appelé au démarrage puis avant CHAQUE tour :
+  /// un serveur activé dans les Options ou par l'Assistant est pris en compte
+  /// sans redémarrer Pilot.
+  const refresh = async (): Promise<void> => {
+    const cfg = await readConfig();
+    if (!cfg) return;
+    const plan = planMcpSessionServers(cfg, {});
+    for (const ambiguous of plan.ambiguous) {
+      notifyOnce(
+        `ambiguous:${ambiguous.id}`,
+        mcpAmbiguousIdNotice(ambiguous.id, ambiguous.owners)
+      );
+    }
+    const wanted = new Set(plan.servers.map((s) => mcpServerId(s)));
+    for (const serverId of [...loaded.keys()]) {
+      if (!wanted.has(serverId)) await dropServer(serverId);
+    }
+    if (plan.servers.length === 0) {
+      notifyOnce("no-server", mcpNoServerNotice(), "info");
+    }
+
+    const secrets = parseSecretMap(process.env[MCP_SECRETS_VAR] || "");
+    const blocks = parseSecretMap(process.env[MCP_SECRET_BLOCKS_VAR] || "");
+    if (strictCache === null) strictCache = await readMcpSecretStrict(configPath);
+    const strict = await strictMode();
+
+    // Connexions manquantes. Un serveur déjà tenté avec la MÊME fiche n'est pas
+    // retenté à chaque tour (aucune attente répétée) ; une fiche modifiée l'est.
+    const diff = planMcpRefresh(plan, { loaded: [...loaded.keys()], loading: [...loading] });
+    for (const server of diff.load) {
+      const serverId = mcpServerId(server);
+      const fingerprint = mcpServerFingerprint(server);
+      if (attempted.get(serverId) === fingerprint) continue;
+      if (server.screen === true || isScreenServer(server)) {
+        // Contrôle de l'écran coupé → ce serveur n'est pas lancé (fail-closed).
+        if (!(await readScreenGuard(configPath)).enabled) continue;
+      }
+      const keyScope = scopeMcpSecretForServer(process.env, {
+        serverId,
+        server,
+        declared: declaresSecret(server),
+        strict,
+        secrets,
+        blocks,
+      });
+      if (keyScope.blocked) {
+        attempted.set(serverId, fingerprint);
+        notifyOnce(`blocked:${serverId}`, keyScope.reason);
+        continue;
+      }
+      if (keyScope.notice) notifyOnce(`notice:${serverId}`, keyScope.notice);
+      loading.add(serverId);
+      try {
+        attempted.set(serverId, fingerprint);
+        const connection = await connectServer(server, keyScope);
+        if (!connection.ok) {
+          notifyOnce(
+            `failed:${serverId}:${connection.reason}`,
+            mcpServerUnavailableNotice(serverId, connection.reason)
+          );
+          continue;
+        }
+        const declaredTwice = duplicateToolNames(connection.tools);
+        if (declaredTwice.length > 0) {
+          notifyOnce(
+            `duplicate:${serverId}`,
+            duplicateToolNameMessage(serverId, declaredTwice) ?? "Outil MCP déclaré deux fois"
+          );
+        }
+        loaded.set(serverId, {
+          id: serverId,
+          client: connection.client,
+          transport: connection.transport,
+          secret: connection.secret,
+          screen: isScreenServer(server),
+          tools: firstDeclarationOnly(connection.tools),
+          fingerprint,
+        });
+      } finally {
+        loading.delete(serverId);
+      }
+    }
+
+    // ── Répartition des noms d'outils entre serveurs ──
+    // Deux serveurs ne peuvent se disputer un nom que si leurs identifiants sont
+    // identiques (`mcp_<id>_<outil>`) — cas déjà refusé ci-dessus — sauf si deux
+    // OUTILS de serveurs différents portent le même nom d'outil et le même
+    // identifiant de serveur… c'est-à-dire le même nom enregistré. `resolveToolNames`
+    // tranche alors EN NOMMANT les deux serveurs : le premier garde l'outil, le
+    // second n'est pas exposé. Jamais un remplacement silencieux.
+    const records = [...loaded.values()];
+    const resolution = resolveToolNames(
+      records.map((record) => ({ serverId: record.id, tools: record.tools }))
     );
-    return;
-  }
+    for (const clash of resolution.clashes) {
+      notifyOnce(`clash:${clash.name}`, crossServerToolClashMessage(clash.name, clash.owners) ?? "");
+    }
+    records.forEach((record, index) => {
+      for (const tool of resolution.entries[index]?.tools ?? []) {
+        const registeredName = registeredToolName(record.id, tool.name);
+        // Un nom déjà enregistré garde son enregistrement pi (on ne peut pas le
+        // retirer), mais il suit désormais le serveur RECHARGÉ : la propriété est
+        // mise à jour, et l'exécution relit la fiche vivante par identifiant.
+        if (toolOwners.has(registeredName)) {
+          toolOwners.set(registeredName, record);
+          continue;
+        }
+        try {
+          api.registerTool({
+            ...toolDescriptor(record.id, tool),
+            async execute(_toolCallId, params) {
+              const live = loaded.get(record.id);
+              if (!live) {
+                // Serveur déchargé (désactivé, ou panne) : phrase actionnable,
+                // aucun envoi au serveur.
+                return errorText(mcpToolUnavailableMessage(record.id, registeredName));
+              }
+              return executeOnLoadedServer(live, tool.name, params);
+            },
+          } as never);
+          toolOwners.set(registeredName, record);
+        } catch {
+          // Échec d'enregistrement (concurrence d'extensions) : fail-open.
+        }
+      }
+    });
+  };
 
-  // ── 2 bis. Garde-fous du contrôle de l'écran ──
-  // Un serveur « écran » peut piloter la machine : il n'est proposé à l'agent
-  // que si l'utilisateur l'a autorisé. Désactivé (ou arrêt d'urgence actif), le
-  // serveur n'est même pas lancé et AUCUN de ses outils n'est enregistré.
-  const isScreen = isScreenServer(server);
-  if (isScreen && !(await readScreenGuard(configPath)).enabled) {
-    return; // Contrôle de l'écran coupé — fail-closed (rien ne part).
-  }
+  /// Exécution d'un outil d'un serveur chargé. Contrôle AVANT tout envoi que le
+  /// serveur est encore ACTIVÉ (désactivation depuis les Options ou la
+  /// conversation, en cours de session) : un serveur désactivé n'exécute rien.
+  const executeOnLoadedServer = async (
+    record: LoadedServer,
+    toolName: string,
+    params: unknown
+  ) => {
+    const cfg = await readConfig();
+    const stillEnabled = cfg !== null && mcpServerStillEnabled(cfg, record.id);
+    if (!stillEnabled) {
+      await dropServer(record.id);
+      return errorText(
+        mcpToolUnavailableMessage(record.id, registeredToolName(record.id, toolName))
+      );
+    }
+    return runTool(record.client, toolName, params as Record<string, unknown>, record.secret);
+  };
 
-  // ── 2 ter. Clé du coffre : périmètre PAR SERVEUR (tâche 399) ──
-  // L'environnement hérité du process de l'agent ne transmet la clé qu'au
-  // serveur qui la déclare LUI-MÊME (référence d'entrée du coffre). Sinon la
-  // variable est retirée avant de lancer le serveur : plus de fuite par
-  // héritage. Le mode non strict (réglage Pilot) conserve l'ancien comportement.
-  const strict = await readMcpSecretStrict(configPath);
-  const keyScope = scopeMcpSecret(process.env, { declared: declaresSecret(server), strict });
-  if (keyScope.blocked) {
-    // Référence déclarée introuvable (décision de Rust en mode strict) : ce
-    // serveur n'est PAS lancé et aucun de ses outils n'est enregistré.
-    notifyUser(keyScope.reason, "warning");
-    return;
-  }
-  if (keyScope.notice) {
-    notifyUser(keyScope.notice, "warning");
-  }
+  // ── Porte du contrôle de l'écran, pour TOUS les serveurs écran chargés ──
+  // Enregistrée une seule fois ; elle ne s'active que pour un outil dont le
+  // serveur propriétaire est un serveur « écran ».
+  api.on("tool_call", async (event, ctx) => {
+    const record = toolOwners.get(event.toolName);
+    if (!record || !record.screen) {
+      return; // Outil d'un autre serveur (ou non MCP) : hors de cette porte.
+    }
+    return screenGate(configPath, ctx, event);
+  });
 
+  // ── Chargement initial + mise à jour sans redémarrage ──
+  let queue: Promise<void> = Promise.resolve();
+  const scheduleRefresh = (): Promise<void> => {
+    queue = queue.then(refresh).catch(() => undefined); // jamais deux à la fois
+    return queue;
+  };
+  await scheduleRefresh();
+  api.on("before_agent_start", async () => {
+    await scheduleRefresh();
+  });
+
+  api.on("session_shutdown", async () => {
+    for (const record of [...loaded.values()]) {
+      await dropServer(record.id);
+    }
+  });
+}
+
+// ── Serveurs MCP : types, connexion, enregistrement, porte de l'écran ──
+
+/** Outil tel que déclaré par un serveur dans `tools/list`. */
+interface DiscoveredTool {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+}
+
+/** Résultat d'une tentative de connexion à UN serveur. */
+type ConnectOutcome =
+  | { ok: false; reason: "no-command" | "no-url" | "bad-url" | "timeout" | "connect" }
+  | {
+      ok: true;
+      client: Client;
+      transport: Transport;
+      secret: string;
+      tools: DiscoveredTool[];
+    };
+
+/** Un serveur MCP effectivement chargé dans la session (Assistant). */
+interface LoadedServer {
+  id: string;
+  client: Client;
+  transport: Transport;
+  secret: string;
+  /// Serveur de contrôle de l'écran : ses outils passent par les garde-fous.
+  screen: boolean;
+  /// Outils déclarés (première déclaration de chaque nom).
+  tools: DiscoveredTool[];
+  /// Empreinte de la fiche au moment du chargement (détection des changements).
+  fingerprint: string;
+}
+
+/// Vrai si l'erreur vient de `withTimeout` (message `timeout (…ms): …`).
+function isTimeoutFailure(err: unknown): boolean {
+  return /^timeout \(/.test(String((err as { message?: unknown } | null)?.message ?? err));
+}
+
+/// Établit la connexion à UN serveur et découvre ses outils. Ne lève jamais :
+/// chaque échec est rendu sous forme de cause (`reason`), la connexion est
+/// refermée, et l'appelant décide du message. Un serveur lent, cassé ou
+/// injoignable ne bloque donc jamais la session (ni l'Assistant, ni un agent).
+async function connectServer(
+  server: McpServerConfig,
+  keyScope: { env: Record<string, string>; secret: string }
+): Promise<ConnectOutcome> {
   // ── 2. Choix du transport selon le type du serveur (E3) ──
   // `http` / `https` = serveur distant joignable par le réseau ; toute autre
   // valeur reste un serveur local (programme), comportement du POC inchangé.
@@ -243,7 +618,7 @@ export default async function (api: ExtensionAPI): Promise<void> {
     if (isRemote) {
       const url = (server.url ?? "").trim();
       if (!url) {
-        return; // Serveur distant sans adresse — fail-open.
+        return { ok: false, reason: "no-url" };
       }
       transport = new StreamableHTTPClientTransport(new URL(url), {
         requestInit: secret
@@ -252,7 +627,7 @@ export default async function (api: ExtensionAPI): Promise<void> {
       });
     } else {
       if (!server.command) {
-        return; // Serveur local sans commande — fail-open.
+        return { ok: false, reason: "no-command" };
       }
       transport = new StdioClientTransport({
         command: server.command,
@@ -260,17 +635,18 @@ export default async function (api: ExtensionAPI): Promise<void> {
         // Variables d'environnement déclarées pour ce serveur (tâche 308) :
         // l'environnement hérité du process pi est transmis SANS la clé du
         // coffre quand ce serveur ne la déclare pas (tâche 399) ; les valeurs
-        // déclarées écrasent les homonymes.
+        // déclarées écrasent les homonymes. La table des clés des AUTRES
+        // serveurs (PILOT_MCP_SECRETS) a déjà été retirée par
+        // `scopeMcpSecretForServer` : un serveur ne lit jamais la clé d'un autre.
         env: { ...keyScope.env, ...(server.env ?? {}) } as Record<string, string>,
       });
     }
   } catch {
-    return; // Adresse illisible — fail-open.
+    return { ok: false, reason: "bad-url" }; // Adresse illisible — fail-open.
   }
 
   const client = new Client({ name: "pilot-mcp", version: "0.1.0" });
-
-  let discovered: Array<{ name: string; description?: string; inputSchema?: unknown }> = [];
+  let tools: DiscoveredTool[] = [];
   try {
     await withTimeout(client.connect(transport), CONNECT_TIMEOUT_MS, "MCP handshake");
     const toolsResult = await withTimeout(
@@ -278,98 +654,72 @@ export default async function (api: ExtensionAPI): Promise<void> {
       CONNECT_TIMEOUT_MS,
       "MCP tools/list"
     );
-    discovered = (toolsResult.tools ?? []) as typeof discovered;
-  } catch {
+    tools = (toolsResult.tools ?? []) as DiscoveredTool[];
+  } catch (err) {
     // Fail-open : on ne fait jamais planter pi, on ne bloque pas le démarrage.
     await safeClose(transport, client);
-    return;
+    return { ok: false, reason: isTimeoutFailure(err) ? "timeout" : "connect" };
   }
+  return { ok: true, client, transport, secret, tools };
+}
 
-  // ── 3. Enregistrement d'un outil pi par outil MCP découvert ──
-  // Un `tools/list` qui déclare deux fois le même nom d'outil ne doit pas faire
-  // écraser en silence la première déclaration par la seconde (pi range ses
-  // outils dans une table par nom) : la première est conservée, le doublon est
-  // signalé. Aucun nom d'outil déjà en service ne change.
-  const declaredTwice = duplicateToolNames(discovered);
-  if (declaredTwice.length > 0) {
-    notifyUser(
-      duplicateToolNameMessage(serverId, declaredTwice) ?? "Outil MCP déclaré deux fois",
-      "warning"
-    );
+/// Descripteur d'outil pi pour un outil MCP découvert. Le nom exposé est
+/// `mcp_<serverId>_<outil>` (source unique : `mcp-tool-names.js`) et le schéma
+/// est celui RÉELLEMENT déclaré par le serveur (`tools/list` → `inputSchema`) :
+/// sans lui, le modèle ne voit ni les noms des paramètres ni leurs types.
+function toolDescriptor(serverId: string, tool: DiscoveredTool) {
+  const toolName = tool.name;
+  const registeredName = registeredToolName(serverId, toolName);
+  return {
+    name: registeredName,
+    label: `MCP ${toolName}`,
+    description:
+      tool.description ?? `Outil MCP \`${toolName}\` fourni par le serveur \`${serverId}\`.`,
+    promptSnippet: `${registeredName}: appeler l'outil MCP ${toolName}`,
+    promptGuidelines: [
+      `Use ${registeredName} to call the MCP tool \`${toolName}\` on the "${serverId}" server. Pass the arguments expected by the MCP tool (as an object of properties). Results are returned as text (JSON where applicable).`,
+    ],
+    parameters: toolParametersSchema(tool.inputSchema),
+    executionMode: "sequential" as const,
+  };
+}
+
+/// Porte du contrôle de l'écran pour UN outil de serveur « écran » : l'action
+/// est relue en DIRECT, confirmée par l'utilisateur, et journalisée. Un refus
+/// (réglage coupé, arrêt d'urgence, réponse de l'utilisateur, mode simulation)
+/// BLOQUE l'action : rien n'est envoyé au serveur et l'agent reçoit la raison.
+async function screenGate(
+  configPath: string,
+  ctx: ExtensionContext,
+  event: { toolName: string; input?: unknown }
+): Promise<{ block: true; reason: string } | undefined> {
+  // Réglages relus à CHAQUE action : l'arrêt d'urgence (ou une coupure du
+  // réglage) prend effet immédiatement, sans redémarrer la session.
+  const guard = await readScreenGuard(configPath);
+  const outcome = screenGateOutcome(guard);
+  if (outcome.action !== "confirm") {
+    await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_REFUSED, outcome.reason);
+    return { block: true, reason: outcome.reason };
   }
-  for (const tool of firstDeclarationOnly(discovered)) {
-    const toolName = tool.name;
-    const registeredName = registeredToolName(serverId, toolName);
-    const description =
-      tool.description ?? `Outil MCP \`${toolName}\` fourni par le serveur \`${serverId}\`.`;
-
-    try {
-      api.registerTool({
-        name: registeredName,
-        label: `MCP ${toolName}`,
-        description,
-        promptSnippet: `${registeredName}: appeler l'outil MCP ${toolName}`,
-        promptGuidelines: [
-          `Use ${registeredName} to call the MCP tool \`${toolName}\` on the "${serverId}" server. Pass the arguments expected by the MCP tool (as an object of properties). Results are returned as text (JSON where applicable).`,
-        ],
-        // Schéma RÉEL déclaré par le serveur MCP (`tools/list` → `inputSchema`) :
-        // sans lui, l'agent ne voit ni les noms des paramètres ni leurs types et
-        // appelle l'outil au hasard.
-        parameters: toolParametersSchema(tool.inputSchema),
-        executionMode: "sequential",
-        async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-          return runTool(client, toolName, params as Record<string, unknown>, secret);
-        },
-      } as never);
-    } catch {
-      // Échec d'enregistrement (concurrence d'extensions) : fail-open.
-    }
+  if (!ctx.hasUI) {
+    // Session autonome : aucune interface pour confirmer → refus.
+    await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_REFUSED, SCREEN_NO_UI_MESSAGE);
+    return { block: true, reason: SCREEN_NO_UI_MESSAGE };
   }
-
-  // ── 4. Garde-fous du contrôle de l'écran (porte pré-action) ──
-  // Pour un serveur « écran » : chaque action est relue en DIRECT, confirmée
-  // par l'utilisateur, et journalisée. Un refus (réglage coupé, arrêt
-  // d'urgence, réponse de l'utilisateur, mode simulation) BLOQUE l'action :
-  // rien n'est envoyé au serveur et l'agent reçoit la raison.
-  if (isScreen) {
-    api.on("tool_call", async (event, ctx) => {
-      if (!isScreenTool(event.toolName, serverId)) {
-        return; // Outil d'un autre serveur MCP : hors de cette porte.
-      }
-      // Réglages relus à CHAQUE action : l'arrêt d'urgence (ou une coupure du
-      // réglage) prend effet immédiatement, sans redémarrer la session.
-      const guard = await readScreenGuard(configPath);
-      const outcome = screenGateOutcome(guard);
-      if (outcome.action !== "confirm") {
-        await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_REFUSED, outcome.reason);
-        return { block: true, reason: outcome.reason };
-      }
-      if (!ctx.hasUI) {
-        // Session autonome : aucune interface pour confirmer → refus.
-        await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_REFUSED, SCREEN_NO_UI_MESSAGE);
-        return { block: true, reason: SCREEN_NO_UI_MESSAGE };
-      }
-      const input = (event.input ?? {}) as Record<string, unknown>;
-      const accepted = await askScreenConfirmation(ctx, event.toolName, input, outcome.simulated);
-      if (!accepted) {
-        await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_REFUSED, SCREEN_REFUSED_MESSAGE);
-        return { block: true, reason: SCREEN_REFUSED_MESSAGE };
-      }
-      if (outcome.simulated) {
-        // Mode simulation : l'accord ne déclenche AUCUNE action réelle.
-        await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_SIMULATED, summarizeScreenAction(input));
-        return { block: true, reason: SCREEN_SIMULATION_MESSAGE };
-      }
-      // Action réelle autorisée cette fois-ci : journal, puis exécution.
-      await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_ACCEPTED, summarizeScreenAction(input));
-      return;
-    });
+  const input = (event.input ?? {}) as Record<string, unknown>;
+  const accepted = await askScreenConfirmation(ctx, event.toolName, input, outcome.simulated);
+  if (!accepted) {
+    await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_REFUSED, SCREEN_REFUSED_MESSAGE);
+    return { block: true, reason: SCREEN_REFUSED_MESSAGE };
   }
-
-  // ── Nettoyage à la fin de session (fermeture du serveur local ou distant) ──
-  api.on("session_shutdown", async () => {
-    await safeClose(transport, client);
-  });
+  if (outcome.simulated) {
+    // Mode simulation : l'accord ne déclenche AUCUNE action réelle.
+    await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_SIMULATED, summarizeScreenAction(input));
+    return { block: true, reason: SCREEN_SIMULATION_MESSAGE };
+  }
+  // Action réelle autorisée cette fois-ci : journal, puis exécution.
+  await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_ACCEPTED, summarizeScreenAction(input));
+  return undefined;
 }
 
 // ── Utilitaires ──
