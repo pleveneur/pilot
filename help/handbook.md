@@ -693,6 +693,18 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   **choix de la voix**, l'**état de la lecture** et l'**explication**, regroupés
   au même endroit — ce réglage n'existe nulle part ailleurs (ni dans un autre
   onglet des Options, ni dans une fenêtre par message).
+- **Un personnage peut avoir SA propre voix** : quand un personnage est actif
+  (celui que Présences dépose), une ligne **« Voix de <nom> : »** apparaît
+  **juste sous** le choix de la voix de lecture. Choisissez-y la voix de ce
+  personnage ; **sans choix, il lit avec la voix de lecture ci-dessus**. Le
+  choix prend effet **tout de suite**, sans redémarrer Pilot, et il ne concerne
+  **que** ce personnage. Si la voix choisie n'est plus disponible sur cet
+  ordinateur (voix locale supprimée, votre voix imitée retirée du service, voix
+  du système désinstallée), le personnage relit avec la voix de lecture
+  ci-dessus : la lecture ne s'arrête pas, et rien n'est effacé.
+- **Sans personnage actif, cette ligne n'existe pas** : la section est
+  exactement celle décrite ici — aucune ligne vide, aucun message, rien à
+  comprendre ni à vérifier.
 - **Juste en dessous, la section « Mode Vocal »** porte le **Délai d'envoi** de
   l'écran vocal (de 1 à 5 secondes, **2 secondes** par défaut) : le temps
   d'attente après votre dernier mot avant que la demande parte toute seule —

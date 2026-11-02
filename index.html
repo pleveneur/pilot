@@ -1369,6 +1369,22 @@
                 <option value="">Automatique (voix de la langue de l'interface)</option>
               </select>
             </div>
+            <!-- VOIX PROPRE AU PERSONNAGE ACTIF (Présences). Cette ligne n'est
+                 visible QUE si un personnage est actif : settings.js la montre
+                 (`characterVoiceRow`, source unique de la décision) et écrit son
+                 libellé avec le NOM du personnage. Sans personnage actif, elle
+                 reste masquée : la section est alors exactement celle d'avant,
+                 sans ligne vide, sans message, sans explication. Le catalogue
+                 proposé est la MÊME liste de voix que le sélecteur ci-dessus
+                 (aucune seconde liste), et le premier choix (valeur vide) veut
+                 dire « comme la voix de lecture ci-dessus ». -->
+            <div class="setting-row" id="read-aloud-character-row" style="display:none;">
+              <label for="setting-read-aloud-character-voice" id="read-aloud-character-label" title="Voix utilisée pour lire les réponses quand ce personnage est actif. Sans choix, il lit avec la voix de lecture ci-dessus.">Voix du personnage :</label>
+              <select id="setting-read-aloud-character-voice" aria-describedby="read-aloud-character-note">
+                <option value="">Comme la voix de lecture ci-dessus</option>
+              </select>
+              <span id="read-aloud-character-note" role="note" style="font-size:11px;color:var(--text-muted);">Cette voix ne sert qu'à ce personnage&nbsp;: elle s'applique dès qu'il est actif, sans redémarrer Pilot. Sans choix, il lit avec la voix de lecture ci-dessus, et une voix devenue indisponible sur cet ordinateur le fait revenir à cette même voix.</span>
+            </div>
             <!-- Voix IMITÉE : ce qu'est VoiceStudio, ce qu'il faut faire, et où le
                  prendre. Le texte vient de `src/js/voicestudio-explication.js`
                  (source unique, réécrite telle quelle par settings.js au rendu de

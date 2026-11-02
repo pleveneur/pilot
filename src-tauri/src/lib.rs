@@ -706,6 +706,17 @@ struct AppConfig {
     // l'interface (aucune erreur, aucune lecture muette).
     #[serde(default)]
     read_aloud_voice: String,
+    // Voix PROPRES AUX PERSONNAGES (Présences) : nom du personnage → valeur de
+    // voix, dans la même grammaire que la voix de lecture générale (identité
+    // stable d'une voix du système, voix française locale, voix imitée).
+    // Une clé absente (ou une valeur vide) signifie « pas de voix propre » : le
+    // personnage est alors lu avec la voix de lecture générale, exactement comme
+    // avant cette fonctionnalité. Champ absent d'une configuration existante ⇒
+    // objet vide, aucune migration, aucun comportement changé. La règle de
+    // priorité (voix du personnage sinon voix générale, et jamais un échec de
+    // lecture) vit côté fenêtre dans `character-voices.js`.
+    #[serde(default)]
+    character_voices: HashMap<String, String>,
     // Mode Vocal (écran vocal) : DÉLAI D'ENVOI après le dernier mot transcrit,
     // en millisecondes. Réglé UNIQUEMENT dans Paramètres → onglet « Assistant »
     // → section « Mode Vocal » (curseur de 1 à 5 s, pas de 0,5 s). Défaut 2000
@@ -1248,6 +1259,7 @@ impl Default for AppConfig {
             assistant_sound_enabled: false,
             assistant_sound_volume: default_assistant_sound_volume(),
             read_aloud_voice: String::new(),
+            character_voices: HashMap::new(),
             vocal_silence_send_ms: default_vocal_silence_send_ms(),
             vocal_brevity_level: default_vocal_brevity_level(),
             super_agent_concise: false,
@@ -4301,6 +4313,29 @@ mod tests {
         let reloaded: AppConfig =
             serde_json::from_str(r#"{"super_agent_schedule_interval_secs":900}"#).unwrap();
         assert_eq!(reloaded.super_agent_schedule_interval_secs, 900);
+    }
+
+    #[test]
+    fn character_voices_field_is_additive_and_backward_compatible() {
+        // Configuration EXISTANTE (champ absent) : objet vide, donc aucun
+        // changement de comportement — le personnage est lu avec la voix de
+        // lecture générale, exactement comme avant cette fonctionnalité.
+        let legacy: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(legacy.character_voices.is_empty());
+        assert!(AppConfig::default().character_voices.is_empty());
+        // Configuration écrite par la fenêtre : une voix par personnage, relue à
+        // l'identique au démarrage suivant (aucune migration, aucun autre champ
+        // touché : le reste de la structure garde ses défauts).
+        let reloaded: AppConfig =
+            serde_json::from_str(r#"{"character_voices":{"Nova":"Alex"}}"#).unwrap();
+        assert_eq!(
+            reloaded.character_voices.get("Nova").map(String::as_str),
+            Some("Alex")
+        );
+        // Le reste de la structure garde ses défauts de désérialisation : un
+        // champ ajouté ne change rien aux autres champs de la configuration.
+        let vide: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(reloaded.theme, vide.theme);
     }
 
     #[test]

@@ -31,6 +31,16 @@
 //      voix de la langue de l'interface (aucune erreur, aucune lecture muette)
 //      et ce repli est DIT a cote du bouton d'ecoute (`system-fallback`, voir
 //      `readAloudSystemFallbackNotice`) : jamais un remplacement silencieux.
+//   7ter. VOIX PROPRE AU PERSONNAGE ACTIF (Présences). Le personnage actif —
+//      celui que lit `assistant-persona.js` — peut avoir SA voix, choisie dans
+//      la MEME section des Parametres, sous le choix general. La priorite vit
+//      dans UNE fonction pure (`character-voices.js`, `voiceForCharacter`) et
+//      elle est appliquee ICI a UN SEUL endroit (`resolveReadingVoice`) :
+//      personnage actif avec une voix utilisable → sa voix ; sinon → la voix
+//      generale, qui garde ensuite tous ses replis. Aucun personnage actif →
+//      rien ne change, et la section des Parametres est exactement celle
+//      d'aujourd'hui. La lecture reste CE module : seule la valeur choisie
+//      change, jamais le chemin de lecture.
 //   7bis. TROIS moteurs possibles, choisis par LE MEME reglage unique :
 //      - `""` ou une voix du systeme : synthese vocale de la fenetre ;
 //      - `LOCAL_VOICE_VALUE` : voix FRANCAISE LOCALE (Piper, hors ligne, sans
@@ -107,8 +117,21 @@ import {
   voiceStudioProfileIdFor,
   voiceStudioChoices,
   voiceStudioUnavailableLabel,
+  getVoiceStudioStatus,
   VOICESTUDIO_UNKNOWN_HINT,
 } from "./voicestudio-voice.js";
+// VOIX PROPRE AU PERSONNAGE ACTIF (Présences) : le personnage a sa voix, sinon la
+// voix générale. La RÈGLE de priorité vit dans `character-voices.js` (pure) et
+// elle est appliquée ici à UN SEUL endroit : `resolveReadingVoice`. Ce fichier ne
+// décide rien d'autre : la lecture, ses replis et ses états restent inchangés.
+import {
+  CHARACTER_VOICES_KEY,
+  normalizeCharacterVoices,
+  voiceForCharacter,
+} from "./character-voices.js";
+// Nom du PERSONNAGE ACTIF (déposé par Présences) : lu, jamais écrit ni inventé.
+// Fichier absent = aucun personnage ⇒ aucun changement de comportement.
+import { getAssistantPersonaName } from "./assistant-persona.js";
 
 // Re-exporte pour les appelants historiques (le nom vient de speech-text.js).
 export { CODE_BLOCK_NOTICE };
@@ -277,6 +300,13 @@ let playbackSeq = 0;
  */
 let preferredVoiceName = "";
 
+/**
+ * Voix PROPRES AUX PERSONNAGES (`nom du personnage` → valeur de voix), telles
+ * qu'enregistrees dans la configuration. Objet vide par defaut : aucun
+ * personnage, aucun changement (le reglage général s'applique).
+ */
+let preferredCharacterVoices = {};
+
 /** Appelle `fn` sans jamais laisser remonter d'exception (API navigateur). */
 function safeCall(fn, fallback = null) {
   try {
@@ -397,12 +427,97 @@ export function setPreferredVoiceName(name) {
  * Applique la voix memorisee dans la configuration (`read_aloud_voice`).
  * Appelee au demarrage et apres chaque enregistrement des Parametres : une
  * configuration sans le champ (ou un objet absent) ne change rien.
+ *
+ * Le MEME point applique les voix des personnages
+ * (`character_voices`, voir `character-voices.js`) : un champ absent d'une ancienne
+ * configuration ne change rien, et les deux reglages sont indépendants (l'un
+ * peut changer sans l'autre).
  * @param {object} [config]
  */
 export function applyVoicePreferenceFromConfig(config) {
   if (!config || typeof config !== "object") return;
-  if (!Object.prototype.hasOwnProperty.call(config, "read_aloud_voice")) return;
-  setPreferredVoiceName(config.read_aloud_voice ? String(config.read_aloud_voice) : "");
+  if (Object.prototype.hasOwnProperty.call(config, "read_aloud_voice")) {
+    setPreferredVoiceName(config.read_aloud_voice ? String(config.read_aloud_voice) : "");
+  }
+  if (Object.prototype.hasOwnProperty.call(config, CHARACTER_VOICES_KEY)) {
+    setCharacterVoices(config[CHARACTER_VOICES_KEY]);
+  }
+}
+
+/**
+ * Memorise les voix des personnages, en memoire. La persistance est faite par la
+ * configuration (`character_voices`), ecrite par les Parametres.
+ * @param {object|null} [raw]
+ * @returns {Object<string, string>} objet normalise retenu
+ */
+export function setCharacterVoices(raw) {
+  preferredCharacterVoices = normalizeCharacterVoices(raw);
+  return { ...preferredCharacterVoices };
+}
+
+/**
+ * Voix des personnages telles qu'appliquees (copie : l'appelant ne peut pas
+ * modifier l'etat interne).
+ * @returns {Object<string, string>}
+ */
+export function getCharacterVoices() {
+  return { ...preferredCharacterVoices };
+}
+
+/**
+ * Une voix choisie existe-t-elle REELLEMENT sur cet ordinateur ? Sert uniquement
+ * a la regle 3 de `voiceForCharacter` (voix attribuee devenue indisponible →
+ * voix generale). Un etat INCONNU ne condamne jamais une voix : le module de
+ * lecture sait deja se replier en le disant, et une voix pas encore verifiee
+ * n'est pas une voix disparue.
+ * @param {string} value
+ * @returns {boolean}
+ */
+function readingVoiceAvailable(value) {
+  try {
+    if (isLocalVoiceChoice(value)) {
+      const model = localVoiceModelFor(value);
+      const status = model ? localVoiceStatusFor(model) : null;
+      return !status || status.installed !== false;
+    }
+    if (isVoiceStudioChoice(value)) {
+      const studio = getVoiceStudioStatus();
+      if (!studio || studio.unknown || !studio.reachable) return true;
+      const profiles = Array.isArray(studio.profiles) ? studio.profiles : [];
+      if (!profiles.length) return true;
+      return voiceStudioKnowsProfile(value, profiles);
+    }
+    // Voix du systeme : liste vide = pas encore chargee (inconnu), donc retenue.
+    const list = availableVoices();
+    if (!list.length) return true;
+    return !!findVoiceForChoice(list, value);
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * SEULE decision « quelle voix pour CETTE lecture ? » : voix du personnage ACTIF
+ * si elle existe et qu'elle est utilisable, sinon la voix generale (regle 7).
+ *
+ * C'est le point unique branche dans `speak` : aucune autre ligne du module ne
+ * choisit la voix, donc la priorite ne peut pas diverger.
+ * @param {{voiceName?: string, character?: string, characterVoices?: object}} [options]
+ *   `voiceName` = voix IMPOSEE (ecoute d'exemple des Parametres, ou repli
+ *   interne) : elle est alors rendue telle quelle, sans passer par le personnage ;
+ *   `character` / `characterVoices` permettent de decider pour un etat donne
+ *   (tests et appelants explicites), par defaut le personnage actif et les voix
+ *   memorisees.
+ * @returns {string}
+ */
+export function resolveReadingVoice(options) {
+  const opts = options && typeof options === "object" ? options : {};
+  if (opts.voiceName != null) return String(opts.voiceName);
+  const character =
+    opts.character === undefined ? getAssistantPersonaName() : opts.character;
+  const voices =
+    opts.characterVoices === undefined ? preferredCharacterVoices : opts.characterVoices;
+  return voiceForCharacter(character, getPreferredVoiceName(), voices, readingVoiceAvailable);
 }
 
 /**
@@ -997,13 +1112,14 @@ export function createSpeaker(win, options = {}) {
     // donc lui qui donne le rythme quand le son n'est pas mesurable.
     const spokenText = chunks.join(" ");
     // Voix choisie dans LE reglage unique (Parametres → Assistant → Lecture des
-    // reponses). Soit une voix du systeme, soit la voix francaise LOCALE. Elle
-    // est lue ICI, avant l'annonce, pour que l'annonce dise le moteur qui va
+    // reponses). Soit une voix du systeme, soit la voix francaise LOCALE, soit la
+    // voix IMITÉE. Laquelle s'applique est decide a UN SEUL endroit :
+    // `resolveReadingVoice` (personnage actif → sa voix, sinon la voix generale).
+    // Elle est lue ICI, avant l'annonce, pour que l'annonce dise le moteur qui va
     // parler (fait joint a l'etat, voir `READ_ALOUD_STATE_EVENT`).
     // `let` : un repli du moteur IMITÉ réoriente la lecture vers la voix locale
     // (Piper) SANS dupliquer le chemin de lecture local ci-dessous.
-    let choice =
-      options.voiceName == null ? getPreferredVoiceName() : options.voiceName;
+    let choice = resolveReadingVoice(options);
     // TROIS moteurs possibles derriere ce point unique : la voix IMITÉE (service
     // local, choix explicite de l'utilisateur), la voix française LOCALE (Piper,
     // voix par défaut), puis la voix du SYSTÈME. Le moteur annoncé est celui qui
@@ -1531,8 +1647,11 @@ export function createReadAloudButton({ doc, win, getText, lang, invoke, refresh
   const disableIfNoVoice = (list) => {
     if (list && list.length) return;
     // La voix francaise LOCALE installee rend la lecture possible meme sans
-    // aucune voix du systeme : dans ce cas on ne desactive pas le bouton.
-    if (isLocalVoiceChoice(getPreferredVoiceName()) && isLocalVoiceInstalledFor(localVoiceModelFor(getPreferredVoiceName()))) return;
+    // aucune voix du systeme : dans ce cas on ne desactive pas le bouton. La
+    // voix lue est celle que decide le point unique (`resolveReadingVoice`) :
+    // celle du personnage actif quand il en a une, sinon la voix generale.
+    const lue = resolveReadingVoice();
+    if (isLocalVoiceChoice(lue) && isLocalVoiceInstalledFor(localVoiceModelFor(lue))) return;
     // Jamais pendant une lecture : on ne desactive pas un bouton qui parle.
     const state = button.dataset.readState;
     if (state === "speaking" || state === "unavailable") return;
@@ -1568,8 +1687,9 @@ export function createReadAloudButton({ doc, win, getText, lang, invoke, refresh
   });
   // Statut du moteur de voix locale : demande UNE fois, sans bloquer. Il sert a
   // ne pas desactiver le bouton quand la voix locale est choisie et prete.
-  if (isLocalVoiceChoice(getPreferredVoiceName()) && !getLocalVoiceStatus()) {
-    refreshLocalVoiceStatus({ invoke, model: localVoiceModelFor(getPreferredVoiceName()) }).then((status) => {
+  const voixLue = resolveReadingVoice();
+  if (isLocalVoiceChoice(voixLue) && !getLocalVoiceStatus()) {
+    refreshLocalVoiceStatus({ invoke, model: localVoiceModelFor(voixLue) }).then((status) => {
       if (!status || !status.installed) return;
       if (button.dataset.readState !== "novoice") return;
       button.disabled = false;

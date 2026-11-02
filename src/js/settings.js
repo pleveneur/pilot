@@ -71,6 +71,20 @@ import {
 // réponses » au rendu. Il dit que VoiceStudio est un logiciel séparé, à installer
 // et à lancer sur ce même ordinateur, et où le prendre.
 import { fillVoiceStudioExplanation } from "./voicestudio-explication.js";
+// VOIX PROPRE AU PERSONNAGE ACTIF (Présences) : la décision « cette ligne existe
+// ou non », le libellé et la valeur choisie viennent du module PUR
+// `character-voices.js` (aucune règle recopiée ici). Le catalogue proposé est la
+// MÊME liste de voix que le sélecteur général ; le premier choix (valeur vide)
+// signifie « la voix de lecture ci-dessus ».
+import {
+  CHARACTER_VOICES_KEY,
+  characterVoiceRow,
+  normalizeCharacterVoices,
+  withCharacterVoice,
+} from "./character-voices.js";
+// Nom du PERSONNAGE ACTIF : lu en mémoire, jamais deviné. Aucun personnage (le
+// service Présences n'est pas installé ou pas activé) ⇒ la ligne n'apparaît pas.
+import { getAssistantPersonaName } from "./assistant-persona.js";
 // Mode Vocal : la valeur par défaut du délai d'envoi, ses bornes, son pas et le
 // libellé lisible viennent de la SOURCE UNIQUE des décisions du mode Vocal
 // (`vocal-conversation.js`, pures) : aucun nombre n'est recopié ici.
@@ -855,6 +869,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
       selectReadAloudVoice.appendChild(el);
     }
     renderVoicePreviews(options);
+    renderCharacterVoice(options);
     const status = voiceChoiceStatus(voices, wanted, local, voicestudio || undefined);
     selectReadAloudVoice.value = status.value;
     selectReadAloudVoice.disabled = status.kind === "empty";
@@ -884,6 +899,37 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         }
       });
     }
+  }
+
+  /**
+   * Rendu de la ligne « voix du personnage actif » (même section, sous le choix
+   * général).
+   *
+   * Règle tenue ici : SANS personnage actif, la ligne n'existe pas à l'écran —
+   * aucune ligne vide, aucun message, aucune explication, aucun bouton. La
+   * décision vient de `characterVoiceRow` (module pur) : ce fichier ne fait que
+   * l'afficher, avec le nom du personnage tel que le lit `assistant-persona.js`.
+   * @param {{value: string, label: string}[]} [baseOptions] options du sélecteur
+   *   général : la MÊME liste sert ici (aucune seconde liste de voix)
+   */
+  function renderCharacterVoice(baseOptions) {
+    if (!readAloudCharacterRow || !selectReadAloudCharacterVoice) return;
+    const row = characterVoiceRow(getAssistantPersonaName(), characterVoicesDraft, baseOptions);
+    if (!row.visible) {
+      readAloudCharacterRow.style.display = "none";
+      selectReadAloudCharacterVoice.innerHTML = "";
+      return;
+    }
+    if (readAloudCharacterLabel) readAloudCharacterLabel.textContent = row.label;
+    selectReadAloudCharacterVoice.innerHTML = "";
+    for (const opt of row.options) {
+      const el = document.createElement("option");
+      el.value = opt.value;
+      el.textContent = opt.label;
+      selectReadAloudCharacterVoice.appendChild(el);
+    }
+    selectReadAloudCharacterVoice.value = row.value;
+    readAloudCharacterRow.style.display = "";
   }
 
   // ── Téléchargement d'un modèle de voix locale (GESTE EXPLICITE seulement) ──
@@ -1126,6 +1172,15 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const selectReadAloudVoice = document.getElementById("setting-read-aloud-voice");
   const readAloudStateEl = document.getElementById("read-aloud-state");
   const readAloudVoiceNote = document.getElementById("read-aloud-voice-note");
+  // Ligne « voix du personnage actif » (même section, juste sous le choix
+  // général). Elle est MASQUÉE tant qu'aucun personnage n'est actif : ni ligne,
+  // ni champ vide, ni message — la section est alors celle d'avant.
+  const readAloudCharacterRow = document.getElementById("read-aloud-character-row");
+  const readAloudCharacterLabel = document.getElementById("read-aloud-character-label");
+  const selectReadAloudCharacterVoice = document.getElementById("setting-read-aloud-character-voice");
+  // Voix des personnages telles qu'elles seront enregistrées (copie de travail :
+  // une entrée est retirée quand le choix revient à « comme la voix de lecture »).
+  let characterVoicesDraft = {};
   // Explication de la VOIX IMITÉE (logiciel séparé VoiceStudio, à installer et à
   // lancer sur ce même ordinateur) : ligne de la même section, remplie par
   // `fillVoiceStudioExplanation` (source unique du texte).
@@ -1856,6 +1911,10 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   // renseigne ici a partir de la configuration lue.
   async function fillSettingsFromConfig(config) {
     currentConfig = config;
+    // Voix des personnages : recopiée UNE fois par lecture de configuration, puis
+    // tenue à jour par les choix de l'utilisateur (un re-rendu de la section ne
+    // doit pas perdre un choix non encore enregistré).
+    characterVoicesDraft = normalizeCharacterVoices(config && config[CHARACTER_VOICES_KEY]);
     // Agents du projet (issue #35) : charger la config du projet actif.
     await loadProjectAgents();
     await loadMcp();
@@ -2243,6 +2302,19 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
       if (model && !(local && local.installed) && !(downloadState && downloadState.running)) {
         startReadAloudDownload(true);
       }
+    });
+  }
+  // Voix PROPRE AU PERSONNAGE ACTIF (même section) : le choix ne sert QUE ce
+  // personnage. Retirer le choix (retour au premier élément, valeur vide) fait
+  // relire le personnage avec la voix de lecture ci-dessus — l'entrée n'est pas
+  // conservée vide dans la configuration.
+  if (selectReadAloudCharacterVoice) {
+    selectReadAloudCharacterVoice.addEventListener("change", () => {
+      characterVoicesDraft = withCharacterVoice(
+        characterVoicesDraft,
+        getAssistantPersonaName(),
+        selectReadAloudCharacterVoice.value,
+      );
     });
   }
   // Bouton « Installer la voix locale » (geste explicite unique : moteur +
@@ -3013,6 +3085,11 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         // Lecture des reponses a voix haute : voix choisie dans l'onglet
         // Assistant. Vide = automatique (voix de la langue de l'interface).
         read_aloud_voice: selectReadAloudVoice ? selectReadAloudVoice.value : "",
+        // Voix PROPRES AUX PERSONNAGES (Présences) : nom du personnage → voix
+        // choisie dans la ligne dédiée de la MÊME section. Objet vide quand aucun
+        // personnage n'a de voix propre (ou aucun personnage du tout) : la voix
+        // générale ci-dessus s'applique alors, exactement comme avant.
+        [CHARACTER_VOICES_KEY]: { ...characterVoicesDraft },
         // Mode Vocal : delai d'envoi sur silence (ms). Meme mecanisme que les
         // reglages voisins : lu au curseur, borne par la source unique, jamais
         // une valeur hors 1–5 s ecrite dans la configuration.

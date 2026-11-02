@@ -204,6 +204,11 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   lit une **phrase d'exemple courte** (le même bouton devient **« Arrêter »**, une seule voix à la
   fois). Une voix dont le modèle n'est pas encore téléchargé n'est **pas** remplacée par la voix du
   système : la section le dit et propose le téléchargement.
+- **Un personnage peut avoir sa propre voix** : quand un personnage est actif, une ligne
+  **« Voix de <nom> : »** apparaît **sous** le choix de la voix de lecture — c'est la voix de ce
+  personnage, et elle seule. Sans choix, il lit avec la voix de lecture ci-dessus, et une voix
+  devenue indisponible l'y ramène sans rien interrompre. **Sans personnage actif, cette ligne
+  n'existe pas** : la section reste exactement celle décrite ci-dessus.
 - Aucune voix installée sur le poste : le réglage est inactif et le bouton reste visible mais
   inactif, avec une phrase qui explique quoi faire.
 - **Vraies voix françaises, hors ligne** : la liste propose des **voix françaises locales** (une entrée

@@ -145,6 +145,7 @@ haute »** (`index.html`, panneau `data-settings-panel="superagent"`, section
 | `#read-aloud-download-state` (`role="status"`, `aria-live="polite"`) | état de l'**installation** : étape en cours (moteur / voix), taille et pourcentage de l'étape **et** du total, puis terminé / arrêté / impossible |
 | `#btn-read-aloud-download`, `#btn-read-aloud-download-cancel`, `#btn-read-aloud-recheck` | **le geste unique « Installer la voix locale »** (moteur + les deux voix françaises), **arrêter l'installation en cours**, **vérifier à nouveau** la présence du moteur et des modèles |
 | `#read-aloud-voice-previews` | **écoute d'exemple** : une rangée par voix proposée (bouton « ▶ Écouter » ↔ « ⏹ Arrêter », libellé de la voix, message court en cas d'échec) — voir § 2 bis |
+| `#read-aloud-character-row` (`#read-aloud-character-label`, `#setting-read-aloud-character-voice`, `#read-aloud-character-note`) | **voix du personnage actif** — **présente seulement si un personnage est actif** (§ 3 bis) ; sinon rien du tout (aucune ligne, aucun message) |
 
 - **Aucun doublon** : ce réglage n'existe dans aucun autre onglet des paramètres
   et dans aucune fenêtre par message (vérifié par test).
@@ -290,6 +291,59 @@ proposée** et une ligne bloquée sur « vérification du moteur en cours… »
   mémorise un état **par modèle** et `voiceChoiceStatus` ignore un état portant un
   autre nom de modèle (un modèle installé ne fait jamais croire qu'un autre
   l'est).
+
+## 3 bis. Voix propre au personnage actif (Présences)
+
+**Décision du propriétaire** : le personnage actif — nom et portrait déposés par
+Présences, lus par `src/js/assistant-persona.js` (Rust `read_assistant_persona`)
+— peut avoir **sa propre voix** de lecture, avec **repli obligatoire** sur la
+voix générale quand il n'en a pas.
+
+- **Aucun second mécanisme de lecture** : la lecture reste `read-aloud.js`
+  (une seule `Utterance`, un seul `synth.speak`, un seul découpage
+  `splitSentences(textForSpeech(...))`). Seule la **valeur de voix** change.
+- **Un seul champ de plus** : `character_voices` (`AppConfig`,
+  `serde(default)`, objet `nom du personnage` → valeur de voix, défaut vide).
+  Il est **additif** : une configuration existante sans ce champ garde
+  exactement le comportement d'avant (objet vide, aucune migration). Il ne
+  contient **aucune** voix par défaut et **ne remplace jamais**
+  `read_aloud_voice` : c'est une **assignation** de voix à un personnage.
+  Nom volontairement hors de la famille `read_aloud_*` pour que la garde « un
+  seul champ gouverne la voix de lecture » reste littéralement vraie.
+- **La décision est UNE fonction pure** : `voiceForCharacter(nom, voixGénérale,
+  characterVoices, isAvailable)` dans `src/js/character-voices.js`. Ordre, et
+  c'est tout : (1) aucun personnage actif → voix générale ; (2) personnage sans
+  voix attribuée (ou valeur inutilisable) → voix générale ; (3) voix attribuée
+  devenue **indisponible** sur cette machine (modèle local absent, profil imité
+  retiré, voix du système désinstallée) → voix générale ; (4) sinon → la voix du
+  personnage. Un **état inconnu** ne condamne jamais une voix (les replis de la
+  lecture restent là), et un contrôle d'existence qui échoue laisse la voix du
+  personnage en place.
+- **Un seul point d'application** : `resolveReadingVoice(options)` dans
+  `read-aloud.js`, appelée par `speak` (`let choice = resolveReadingVoice(...)`)
+  et par les deux lectures d'état du bouton (voix locale encore possible ?).
+  `options.voiceName` (voix imposée, écoute d'exemple) garde la main. Le nom du
+  personnage est relu **à chaque lecture** : changer de personnage change la
+  voix **sans redémarrer**.
+- **Grammaire des valeurs** : celle déjà gérée, jamais recopiée —
+  `isLocalVoiceChoice` (voix locale / un modèle) et `isVoiceStudioChoice`
+  (voix imitée), sinon identité stable d'une voix du système. Une valeur
+  `local:…` inconnue n'est jamais retenue.
+- **À l'écran, rien tant qu'aucun personnage n'est actif** : la ligne
+  `#read-aloud-character-row` (« Voix de <nom> : ») est **masquée par le code**
+  (`characterVoiceRow(...).visible === false` → `display:none`, liste vidée).
+  Elle vit **dans** la section « Lecture des réponses » (onglet Assistant),
+  juste sous le choix général, et propose **le même catalogue** (`voiceChoiceOptions`)
+  avec un premier choix qui veut dire « comme la voix de lecture ci-dessus »
+  (`CHARACTER_VOICE_INHERIT_LABEL`). Aucun message, aucune explication, aucun
+  bouton de vérification : le service absent ne se signale pas.
+- **Mémorisation** : `withCharacterVoice` attribue, remplace ou **retire**
+  (valeur vide → entrée supprimée, jamais une valeur vide conservée) et ne
+  touche jamais les autres personnages ; `normalizeCharacterVoices` ignore toute
+  entrée inutilisable (configuration abîmée ⇒ aucune exception).
+- **Aucun échec de lecture** : la voix générale garde ensuite tous ses replis
+  (§ 3, § 4, § 4 ter, § 4 quater) — la voix du personnage ne fait qu'ajouter un
+  cran **au-dessus** d'eux, jamais à leur place.
 
 ## 4. Voix française LOCALE (hors ligne, sans clé, sans GPU)
 
@@ -647,6 +701,19 @@ utilisé à la place, la mention apparaît près du bouton (un seul
 réglage mémorisé (`getPreferredVoiceName()`) reste intact. Vérifié en cassant
 exprès le code : retirer l'émission de `system-fallback`, forcer la cause, ou
 retirer la branche d'affichage fait **échouer** ce fichier.
+
+Voix **par personnage** : `src/js/voix-par-personnage.test.js` verrouille les
+six règles — décision prise **à un seul endroit** et **appliquée à un seul**
+(`resolveReadingVoice`, compté), aucun personnage actif ⇒ voix générale et
+**aucune ligne à l'écran** (`visible === false` pour chaque forme d'absence),
+personnage sans voix ⇒ voix générale, voix devenue indisponible ⇒ voix générale
+(sans jamais échouer), catalogue **identique** au sélecteur général (aucune
+seconde liste, aucun second mécanisme : compteurs `Utterance` / `synth.speak` /
+`splitSentences(textForSpeech(`), configuration **additive** (champ absent ⇒
+rien de touché). Vérifié par neutralisation : retirer la ligne de `speak`,
+rendre la ligne toujours visible, ou lire `getPreferredVoiceName()` en direct
+fait **échouer** ce fichier. Côté Rust, un test de `lib.rs` désérialise une
+configuration **sans** le champ (objet vide, reste intact) puis **avec**.
 
 Aide utilisateur : `help/overview.md`, bloc `HELP:lire-reponses`.
 
