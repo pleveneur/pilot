@@ -19,6 +19,10 @@
 //
 // Module PUR (aucune I/O, aucun appel Tauri).
 import { SCREEN_GATE_SENTINEL } from "./screen-guard.js";
+// FILET DE SÉCURITÉ DES SENTINELLES MACHINE : ce module fabrique le LIBELLÉ
+// d'alerte d'une question d'agent ; il ne doit jamais recopier une sentinelle
+// (`PILOT_*::`) — elle s'afficherait une seconde fois, hors du widget.
+import { readableMachineText } from "./machine-sentinel.js";
 
 /** Événement UNIQUE de relais d'une question d'agent vers la conversation de
  *  l'assistant. Détail attendu : `{ payload, agentId, projectPath }`. */
@@ -97,6 +101,10 @@ export function agentQuestionLabel(payload) {
     title = title.replace("PILOT_MULTI_CHOICE::", "");
   }
   title = title.trim();
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : une sentinelle machine non reconnue
+  // devient une phrase française neutre — jamais un identifiant technique dans
+  // le message d'alerte (« ❓ L'agent … attend votre réponse : « PILOT_…::… » »).
+  title = readableMachineText(title);
   if (title) return title;
   const method = (payload && payload.method) || "demande";
   return method === "select" ? "choix à faire" : method === "input" ? "saisie attendue" : "confirmation attendue";

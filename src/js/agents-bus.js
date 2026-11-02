@@ -108,6 +108,9 @@ import {
   isRelayableAgentChoice,
   agentQuestionLabel,
 } from "./agent-choice-relay.js";
+// Une ACTION INTERNE (sentinelle machine exécutée par le relais) ne pose aucune
+// question : le message d'attente doit le dire, et jamais recopier la sentinelle.
+import { isSelfAnsweredMachineRequest } from "./machine-sentinel.js";
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
@@ -3131,12 +3134,18 @@ function relayAgentQuestion(agentId, event, ctx) {
   } catch (err) {
     console.error("[agents-bus] relais de la question impossible", agentId, err);
   }
-  // Visibilité garantie : la question est signalée même si la conversation de
+  // Visibilité garantie : la demande est signalée même si la conversation de
   // l'assistant n'est pas ouverte (aucune réponse n'est décidée pour autant).
+  // Une ACTION INTERNE (sentinelle machine exécutée par le relais, ex. rappels
+  // programmés) n'attend AUCUNE réponse : le dire clairement vaut mieux que de
+  // réclamer une réponse qui n'existe pas — et le libellé ne recopie jamais la
+  // sentinelle (machine-sentinel.js).
   emit("notify", {
     agentId,
-    notifyType: "warning",
-    message: `❓ L'agent ${agentId} attend votre réponse : « ${agentQuestionLabel(event)} ».`,
+    notifyType: isSelfAnsweredMachineRequest(event) ? "info" : "warning",
+    message: isSelfAnsweredMachineRequest(event)
+      ? `ℹ️ L'agent ${agentId} a demandé une action interne de Pilot (« ${agentQuestionLabel(event)} ») : elle est exécutée automatiquement, aucune réponse de votre part n'est attendue.`
+      : `❓ L'agent ${agentId} attend votre réponse : « ${agentQuestionLabel(event)} ».`,
   });
 }
 

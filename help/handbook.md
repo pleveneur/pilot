@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-30 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-11-02 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -2691,6 +2691,23 @@ uniquement un bloc d'instructions dans le prompt système.
   chat : choix, confirmation Oui/Non, ou saisie libre, via des **boutons**
   inline. Répondez en cliquant ; l'Assistant reprend son raisonnement avec
   votre réponse.
+
+### Une action interne ne devient jamais une question technique
+- Certaines demandes de l'Assistant ne sont **pas des questions** : ce sont des
+  **actions internes de Pilot** (relever / créer / supprimer un rappel
+  programmé, accéder à sa base de suivi, ouvrir un projet…). Elles portent un
+  identifiant technique invisible (`PILOT_<FAMILLE>::…`).
+- **Règle** : une action interne **s'exécute sans rien demander** ; un
+  identifiant technique **ne s'affiche jamais** à l'écran. Si un texte contient
+  une sentinelle inconnue, l'écran affiche une **phrase française neutre**
+  (« Pilot a besoin de votre accord pour continuer une action interne. Je
+  continue ? ») — jamais de JSON, jamais de bouton Valider/Annuler posé devant
+  un texte incompréhensible.
+- Vaut pour **tous** les chemins d'affichage : conversation de l'Assistant,
+  agent d'onglet, **questions d'agents relayées** (`run_agents` sur un agent de
+  l'Assistant), barre des questions en attente. Source unique des règles :
+  `src/js/machine-sentinel.js` ; verrou :
+  `src/js/sentinelle-jamais-affichee-brute.test.js`.
 
 ### Ouvrir un projet discuté
 - Quand vous **discutez d'un projet**, l'Assistant peut **l'ouvrir** pour le

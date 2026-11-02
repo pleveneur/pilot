@@ -769,6 +769,23 @@ uniquement un bloc d'instructions dans le prompt système.
   inline. Répondez en cliquant ; l'Assistant reprend son raisonnement avec
   votre réponse.
 
+### Une action interne ne devient jamais une question technique
+- Certaines demandes de l'Assistant ne sont **pas des questions** : ce sont des
+  **actions internes de Pilot** (relever / créer / supprimer un rappel
+  programmé, accéder à sa base de suivi, ouvrir un projet…). Elles portent un
+  identifiant technique invisible (`PILOT_<FAMILLE>::…`).
+- **Règle** : une action interne **s'exécute sans rien demander** ; un
+  identifiant technique **ne s'affiche jamais** à l'écran. Si un texte contient
+  une sentinelle inconnue, l'écran affiche une **phrase française neutre**
+  (« Pilot a besoin de votre accord pour continuer une action interne. Je
+  continue ? ») — jamais de JSON, jamais de bouton Valider/Annuler posé devant
+  un texte incompréhensible.
+- Vaut pour **tous** les chemins d'affichage : conversation de l'Assistant,
+  agent d'onglet, **questions d'agents relayées** (`run_agents` sur un agent de
+  l'Assistant), barre des questions en attente. Source unique des règles :
+  `src/js/machine-sentinel.js` ; verrou :
+  `src/js/sentinelle-jamais-affichee-brute.test.js`.
+
 ### Ouvrir un projet discuté
 - Quand vous **discutez d'un projet**, l'Assistant peut **l'ouvrir** pour le
   rendre **actif** (projet en cours de traitement), comme si vous l'aviez

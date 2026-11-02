@@ -18,6 +18,12 @@ import { SCREEN_GATE_SENTINEL } from "./screen-guard.js";
 // Relais des questions d'agent (SOURCE UNIQUE partagée avec le bus d'agents) :
 // décision « relayable » + nom de l'événement de relais vers l'assistant.
 import { AGENT_RELAY_EVENT, isRelayableAgentChoice } from "./agent-choice-relay.js";
+// FILET DE SÉCURITÉ DES SENTINELLES MACHINE : une chaîne `PILOT_*::` (appel de
+// fonction interne d'une extension) ne doit JAMAIS être peinte brute — elle
+// devient une phrase française, ou une formulation neutre si la famille est
+// inconnue. Module pur, appliqué ici au moment de peindre (chat d'agent et
+// relais), voir docs/rapports/RAPPORT-sentinelle-brute-confirmation.md.
+import { readableMachineText } from "./machine-sentinel.js";
 import { animateModalOpen, animatePanelOpen } from "./modal-anim.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { agentSelectorIds, findModelSelect } from "./agent-model-selector.js";
@@ -9011,7 +9017,8 @@ function renderInlineChoice(container, state, id, title, options, multi) {
   wrapper.className = "agent-choice";
   const titleEl = document.createElement("div");
   titleEl.className = "agent-choice-title";
-  titleEl.textContent = title;
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : jamais de sentinelle machine à l'écran.
+  titleEl.textContent = readableMachineText(typeof title === "string" ? title : "");
   wrapper.appendChild(titleEl);
 
   const buttons = document.createElement("div");
@@ -9103,12 +9110,15 @@ function renderInlineConfirm(container, state, id, title, message) {
   wrapper.className = "agent-choice";
   const titleEl = document.createElement("div");
   titleEl.className = "agent-choice-title";
-  titleEl.textContent = title;
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : titre et message nettoyés.
+  const safeTitle = readableMachineText(typeof title === "string" ? title : "");
+  const safeMessage = readableMachineText(typeof message === "string" ? message : "");
+  titleEl.textContent = safeTitle;
   wrapper.appendChild(titleEl);
-  if (message) {
+  if (safeMessage) {
     const msg = document.createElement("div");
     msg.className = "agent-choice-message";
-    msg.textContent = message;
+    msg.textContent = safeMessage;
     wrapper.appendChild(msg);
   }
   const buttons = document.createElement("div");
@@ -9161,7 +9171,10 @@ function renderInlineInput(container, state, id, title, placeholder) {
   wrapper.className = "agent-choice";
   const titleEl = document.createElement("div");
   titleEl.className = "agent-choice-title";
-  titleEl.textContent = title;
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : une demande de saisie portant une
+  // sentinelle machine est traduite, jamais affichée brute (c'était le chemin
+  // qui montrait « PILOT_ASSISTANT_SCHEDULE::{"op":"list"} »).
+  titleEl.textContent = readableMachineText(typeof title === "string" ? title : "");
   wrapper.appendChild(titleEl);
   const input = document.createElement("input");
   input.type = "text";

@@ -52,6 +52,18 @@ import {
 // souvient qu'il a deja ete lu automatiquement) vit dans ce module pur ; ce
 // fichier ne fait que la demander avant d'actionner le bouton.
 import { claimAutoRead } from "./reponse-lue-une-seule-fois.js";
+// FILET DE SÉCURITÉ DES SENTINELLES MACHINE (une sentinelle `PILOT_*::` ne doit
+// JAMAIS être peinte brute : elle est traduite en phrase française, ou
+// remplacée par une formulation neutre). Toutes les règles vivent dans ce
+// module pur ; ce fichier ne fait que les appliquer au moment de PEINDRE, donc
+// sur les trois chemins d'affichage (session de l'assistant, relais des
+// questions d'agents, barre des questions en attente) — un seul mécanisme.
+import {
+  SCHEDULE_SENTINEL,
+  isAssistantSentinel,
+  readableMachineText,
+  scheduleRequestFrom,
+} from "./machine-sentinel.js";
 // LOT 3 (ecran Vocal) : le NIVEAU DU MICRO. Toute la capture (demande de
 // permission, flux, analyseur, lissage, ARRET reel) vit dans vocal-mic.js ; ce
 // fichier ne fait que brancher ses trois retours et ne contient donc aucune des
@@ -7422,11 +7434,11 @@ let vocalDicteeParGeste = false;
   // : chaque agent est identifié, les réponses ne sont pas mélangées).
   const onAgentRelayRequest = (e) => {
     const d = e.detail || {};
-    try {
-      relayAgentChoiceRequest(d.payload, d.agentId, d.projectPath, messagesEl, state);
-    } catch (err) {
-      console.error("[relais-agent] erreur:", err);
-    }
+    // `relayAgentChoiceRequest` est ASYNCHRONE : une demande de planification
+    // d'agent d'assistant y est exécutée avant tout affichage (aucune sentinelle
+    // machine à l'écran), donc on attend la promesse et on journalise l'échec.
+    Promise.resolve(relayAgentChoiceRequest(d.payload, d.agentId, d.projectPath, messagesEl, state))
+      .catch((err) => console.error("[relais-agent] erreur:", err));
   };
   window.addEventListener("pilot-agent-relay-request", onAgentRelayRequest);
   window._pilotSuperAgentOpen = true;
@@ -8568,6 +8580,66 @@ function removeSuperAgentDisconnectedEvent() {
 }
 
 // ── Questions posées par l'assistant (pilot-choices) ──
+
+/**
+ * POINT UNIQUE d'exécution des opérations de planification (`schedule_*`).
+ *
+ * RÈGLE PROTÉGÉE : une demande de planification n'est JAMAIS une question
+ * posée à l'utilisateur — c'est un appel de fonction interne. Elle s'exécute
+ * donc directement, sans afficher quoi que ce soit, et la réponse revient au
+ * moteur comme `value`.
+ *
+ * Deux appelants, la même exécution :
+ *   - la session de l'assistant (`handleSuperAgentExtensionUiRequest`, canal
+ *     `rpc-event-superagent`) ;
+ *   - les agents d'assistant lancés par l'assistant, dont la demande remonte
+ *     par le relais (`relayAgentChoiceRequest`, canal `rpc-event-agents`) —
+ *     c'est ce chemin qui affichait `PILOT_ASSISTANT_SCHEDULE::{"op":"list"}`
+ *     brut avec deux boutons Valider / Annuler.
+ *
+ * Ne lève jamais : toute panne devient une réponse JSON `{ error }`, donc une
+ * phrase explicite pour le moteur (aucune erreur masquée en silence).
+ *
+ * @param {{op?:string, name?:string, prompt?:string, everySeconds?:number,
+ *          once?:boolean, id?:number, enabled?:boolean}} req
+ * @returns {Promise<string>} JSON du résultat.
+ */
+async function runSuperAgentScheduleOp(req) {
+  try {
+    let result;
+    const op = req && typeof req === "object" ? req.op : undefined;
+    if (op === "create") {
+      // Lot A idée 6 : `every` est optionnel. Si l'assistant ne précise AUCUNE
+      // fréquence (champ absent, 0 ou invalide), on envoie `null` : Rust
+      // applique alors le réglage « Fréquence des rappels de surveillance »
+      // (1 heure par défaut). Une fréquence explicite est transmise telle
+      // quelle (le garde-fou >= 60 s reste côté Rust).
+      const everySeconds = Number(req.everySeconds);
+      result = await invoke("super_agent_schedule_create", {
+        name: String(req.name || ""),
+        prompt: String(req.prompt || ""),
+        every: Number.isFinite(everySeconds) && everySeconds > 0 ? everySeconds : null,
+        // Relance UNIQUE (`once: true`) : consommée à la première livraison,
+        // puis supprimée par la règle de ménage n° 2 une fois périmée.
+        once: req.once === true,
+      });
+    } else if (op === "list") {
+      result = await invoke("super_agent_schedule_list");
+    } else if (op === "delete") {
+      result = await invoke("super_agent_schedule_delete", { id: Number(req.id) });
+    } else if (op === "set_enabled") {
+      result = await invoke("super_agent_schedule_set_enabled", {
+        id: Number(req.id),
+        enabled: Boolean(req.enabled),
+      });
+    } else {
+      result = { error: `Opération schedule inconnue : ${op}` };
+    }
+    return JSON.stringify(result);
+  } catch (e) {
+    return JSON.stringify({ error: String(e) });
+  }
+}
 
 /**
  * Gère les demandes d'interaction de l'extension pilot-choices (ask_choice,
@@ -9773,46 +9845,15 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       // différées/périodiques. Le titre contient un JSON {op, name, prompt,
       // everySeconds, id}. On exécute la commande Rust et on renvoie le
       // résultat (JSON) comme `value` de la réponse.
-      let req;
-      try {
-        req = JSON.parse(title.slice(SCHEDULE_SENTINEL.length));
-      } catch (_) {
+      // La demande NE MONTE JAMAIS à l'écran : `runSuperAgentScheduleOp` est le
+      // point unique d'exécution, utilisé aussi par le relais des questions
+      // d'agents (mêmes outils, autre session) — voir machine-sentinel.js.
+      const req = scheduleRequestFrom(title);
+      if (!req) {
         await respondSuperAgent(id, JSON.stringify({ error: "Payload schedule invalide." }), false);
         return;
       }
-      try {
-        let result;
-        if (req.op === "create") {
-          // Lot A idée 6 : `every` est optionnel. Si l'assistant ne précise AUCUNE
-          // fréquence (champ absent, 0 ou invalide), on envoie `null` : Rust
-          // applique alors le réglage « Fréquence des rappels de surveillance »
-          // (1 heure par défaut). Une fréquence explicite est transmise telle
-          // quelle (le garde-fou >= 60 s reste côté Rust).
-          const everySeconds = Number(req.everySeconds);
-          result = await invoke("super_agent_schedule_create", {
-            name: String(req.name || ""),
-            prompt: String(req.prompt || ""),
-            every: Number.isFinite(everySeconds) && everySeconds > 0 ? everySeconds : null,
-            // Relance UNIQUE (`once: true`) : consommée à la première livraison,
-            // puis supprimée par la règle de ménage n° 2 une fois périmée.
-            once: req.once === true,
-          });
-        } else if (req.op === "list") {
-          result = await invoke("super_agent_schedule_list");
-        } else if (req.op === "delete") {
-          result = await invoke("super_agent_schedule_delete", { id: Number(req.id) });
-        } else if (req.op === "set_enabled") {
-          result = await invoke("super_agent_schedule_set_enabled", {
-            id: Number(req.id),
-            enabled: Boolean(req.enabled),
-          });
-        } else {
-          result = { error: `Opération schedule inconnue : ${req.op}` };
-        }
-        await respondSuperAgent(id, JSON.stringify(result), false);
-      } catch (e) {
-        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
-      }
+      await respondSuperAgent(id, await runSuperAgentScheduleOp(req), false);
       return;
     }
     if (title.startsWith(TOOLS_SENTINEL)) {
@@ -11026,11 +11067,44 @@ async function respondAgentRelay(projectPath, agentId, id, value, cancelled) {
  * identifiant l'agent source. L'utilisateur peut annoter / modifier / valider sa
  * réponse, qui est alors routée vers LA bonne session agent (multi-agents).
  */
-function relayAgentChoiceRequest(payload, agentId, projectPath, messagesEl, state) {
+async function relayAgentChoiceRequest(payload, agentId, projectPath, messagesEl, state) {
   const { id, method } = payload;
   // Répondre en routant vers la session agent ciblée (et non le super-agent).
   const responder = (value, cancelled) =>
     respondAgentRelay(projectPath, agentId, id, value, cancelled);
+
+  // ── RÈGLE PROTÉGÉE : une sentinelle machine n'arrive JAMAIS à l'écran ──
+  // Un agent d'assistant porte les MÊMES extensions que l'assistant : sa
+  // demande de planification (« PILOT_ASSISTANT_SCHEDULE::… ») remonte donc par
+  // le RELAIS au lieu d'être interceptée par `handleSuperAgentExtensionUiRequest`
+  // (autre canal). Elle ne demande rien à l'utilisateur : elle s'exécute, avec
+  // le point unique d'exécution `runSuperAgentScheduleOp`, et la réponse part
+  // vers la BONNE session. C'était le défaut : le titre brut s'affichait avec
+  // deux boutons Valider / Annuler.
+  if (method === "input") {
+    const rawTitle = typeof payload.title === "string" ? payload.title : "";
+    if (rawTitle.startsWith(SCHEDULE_SENTINEL)) {
+      const req = scheduleRequestFrom(rawTitle);
+      const answer = req
+        ? await runSuperAgentScheduleOp(req)
+        : JSON.stringify({ error: "Demande de planification illisible : rien n'a été modifié." });
+      await responder(answer, false);
+      return;
+    }
+    // Autre sentinelle de l'assistant : elle ne peut pas être exécutée depuis la
+    // session d'un agent. On répond une phrase française claire au moteur — ni
+    // formulaire technique, ni silence (une erreur ne se cache pas).
+    if (isAssistantSentinel(rawTitle)) {
+      await responder(
+        JSON.stringify({
+          error:
+            "Cette action interne de Pilot doit être demandée dans la conversation de l'assistant : elle ne peut pas être exécutée depuis la session d'un agent. Rien n'a été modifié.",
+        }),
+        false,
+      );
+      return;
+    }
+  }
 
   // Bloc dédié (distinct du flux de l'assistant) : en-tête + widget. Badges
   // EXPLICITES : la question vient de l'agent de CE projet (projectPath), et
@@ -11103,7 +11177,10 @@ function renderChoicePendingBar(q, bar) {
   bar.innerHTML = "";
   const titleEl = document.createElement("div");
   titleEl.className = "agent-pending-title";
-  titleEl.textContent = q.title;
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : la barre des questions en attente est
+  // le DERNIER point de peinture — elle ne montre jamais une sentinelle brute,
+  // même si un état ancien a été mis en file avant la correction.
+  titleEl.textContent = readableMachineText(typeof q.title === "string" ? q.title : "");
   bar.appendChild(titleEl);
   const buttons = document.createElement("div");
   buttons.className = "agent-choice-buttons";
@@ -11146,7 +11223,8 @@ function renderConfirmPendingBar(q, bar) {
   bar.innerHTML = "";
   const titleEl = document.createElement("div");
   titleEl.className = "agent-pending-title";
-  titleEl.textContent = q.title;
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : jamais de sentinelle brute à l'écran.
+  titleEl.textContent = readableMachineText(typeof q.title === "string" ? q.title : "");
   bar.appendChild(titleEl);
   const buttons = document.createElement("div");
   buttons.className = "agent-choice-buttons";
@@ -11169,7 +11247,9 @@ function renderInputPendingBar(q, bar) {
   bar.innerHTML = "";
   const titleEl = document.createElement("div");
   titleEl.className = "agent-pending-title";
-  titleEl.textContent = q.title;
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : c'est ICI que s'affichait
+  // « PILOT_ASSISTANT_SCHEDULE::{"op":"list"} » avec « ✓ Valider / Annuler ».
+  titleEl.textContent = readableMachineText(typeof q.title === "string" ? q.title : "");
   bar.appendChild(titleEl);
   const buttons = document.createElement("div");
   buttons.className = "agent-choice-buttons";
@@ -11196,10 +11276,14 @@ function renderInputPendingBar(q, bar) {
  * @param {HTMLElement|null} targetOverride - cible d'attache (sinon auto). */
 function renderSuperAgentChoice(messagesEl, state, id, title, options, multi, responder = respondSuperAgent, targetOverride = null) {
   const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : dernier point de passage avant
+  // l'écran, donc le filet de sécurité. Une sentinelle machine n'est jamais
+  // peinte brute, même si un intercepteur en amont l'a manquée.
+  const safeTitle = readableMachineText(typeof title === "string" ? title : "");
   // Bandeau informatif en lecture seule dans le fil.
-  target.appendChild(makeChoiceBanner(title, ""));
+  target.appendChild(makeChoiceBanner(safeTitle, ""));
   const q = {
-    id, title, responder, multi,
+    id, title: safeTitle, responder, multi,
     options: options.slice(),
     selected: multi ? new Set() : null,
     placeholder: PENDING_NOTE_PLACEHOLDER,
@@ -11222,9 +11306,13 @@ function renderSuperAgentChoice(messagesEl, state, id, title, options, multi, re
  * @param {Function} responder - (id, value, cancelled) => Promise */
 function renderSuperAgentConfirm(messagesEl, state, id, title, message, responder = respondSuperAgent, targetOverride = null) {
   const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
-  target.appendChild(makeChoiceBanner(title, message));
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : ni le titre ni le message ne sont
+  // peints s'ils portent une sentinelle machine.
+  const safeTitle = readableMachineText(typeof title === "string" ? title : "");
+  const safeMessage = readableMachineText(typeof message === "string" ? message : "");
+  target.appendChild(makeChoiceBanner(safeTitle, safeMessage));
   const q = {
-    id, title, responder, confirmed: true, message,
+    id, title: safeTitle, responder, confirmed: true, message: safeMessage,
     placeholder: PENDING_NOTE_PLACEHOLDER,
   };
   q.render = (bar) => renderConfirmPendingBar(q, bar);
@@ -11245,9 +11333,13 @@ function renderSuperAgentConfirm(messagesEl, state, id, title, message, responde
  * @param {Function} responder - (id, value, cancelled) => Promise */
 function renderSuperAgentInput(messagesEl, state, id, title, placeholder, responder = respondSuperAgent, targetOverride = null) {
   const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
-  target.appendChild(makeChoiceBanner(title, ""));
+  // RÈGLE PROTÉGÉE (machine-sentinel.js) : une demande de saisie qui porterait
+  // une sentinelle machine (ex. « PILOT_ASSISTANT_SCHEDULE::{"op":"list"} »)
+  // est traduite en phrase française lisible, jamais affichée brute.
+  const safeTitle = readableMachineText(typeof title === "string" ? title : "");
+  target.appendChild(makeChoiceBanner(safeTitle, ""));
   const q = {
-    id, title, responder,
+    id, title: safeTitle, responder,
     placeholder: placeholder || PENDING_NOTE_PLACEHOLDER,
   };
   q.render = (bar) => renderInputPendingBar(q, bar);
