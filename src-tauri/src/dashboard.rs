@@ -1228,6 +1228,30 @@ fn recent_summaries(conn: &rusqlite::Connection, sql: &str, project_id: i64) -> 
     out
 }
 
+/// Couple (IDENTITÉ, LIBELLÉ) d'une session dans la supervision : `id` est l'id
+/// BRUT du registre (`default`, `superagent`, `groupassistant`, `codeur`, `eph-…`),
+/// `agent` le libellé d'affichage (« Dossier », nom réglé de l'assistant).
+///
+/// Fonction PURE (aucun état, aucune I/O) — c'est la SEULE règle qui distingue
+/// l'identité de l'affichage. Elle existe parce que les deux étaient confondues :
+/// le frontend déduisait l'identité d'une session du libellé, donc deux sessions
+/// distinctes pouvaient partager une identité (une seule ligne à l'écran, la
+/// seconde invisible) et les actions visaient un agent inexistant (« Dossier »
+/// au lieu de `default`).
+///
+/// Le libellé ne dépend que de l'id brut et du nom réglé de l'assistant ; il
+/// n'invente rien (`codeur` reste `codeur`).
+fn agent_entry_ids(raw_id: &str, super_name: &str) -> (String, String) {
+    let label = if raw_id == SUPERAGENT_ID {
+        super_name.to_string()
+    } else if raw_id == "default" {
+        "Dossier".to_string()
+    } else {
+        raw_id.to_string()
+    };
+    (raw_id.to_string(), label)
+}
+
 /// Ajoute le champ ADDITIF `name` à une entrée de supervision : NOM LISIBLE
 /// d'un agent (agent jetable), destiné à l'AFFICHAGE seulement.
 ///
@@ -1361,18 +1385,24 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
         // d'aujourd'hui. `agent` conserve son sens d'IDENTITÉ technique.
         let agent_name = app_state.agent_service.ephemeral_agent_name(&agent);
 
-        // L'assistant (super-agent) est enregistré sous l'id `superagent` avec
-        // un projet pseudo-global "" : on lui donne le nom réglé par
-        // l'utilisateur (⚙️ → Assistant → Nom), et non un libellé codé en dur.
-        let agent_label = if agent == SUPERAGENT_ID {
-            super_name.clone()
-        } else if agent == "default" {
-            "Dossier".to_string()
-        } else {
-            agent
-        };
+        // IDENTITÉ TECHNIQUE de la session (champ ADDITIF `id`) : l'id BRUT du
+        // registre (`default`, `superagent`, `groupassistant`, `codeur`, `eph-…`),
+        // distinct du LIBELLÉ d'affichage publié dans `agent` (« Dossier », nom
+        // réglé de l'assistant, nom lisible d'un agent jetable).
+        //
+        // POURQUOI CE CHAMP EXISTE — le défaut qu'il répare : l'affichage
+        // déduisait l'identité d'une session du champ `agent`, c'est-à-dire
+        // d'un libellé. Deux sessions DISTINCTES pouvaient donc porter la même
+        // identité (donc la même ligne : la seconde restait invisible) et une
+        // action sur la ligne (afficher l'onglet, arrêter) pouvait viser un
+        // agent qui n'existe pas — « Dossier » au lieu de `default`. Une liste
+        // qui ne distingue pas deux sessions ne peut pas garantir qu'aucun
+        // agent n'est invisible.
+        let (agent_id, agent_label) = agent_entry_ids(&agent, &super_name);
 
         let mut entry = serde_json::json!({
+            // `id` = identité (brute), `agent` = libellé affiché (inchangé).
+            "id": agent_id,
             "agent": agent_label,
             "mode": mode,
             "state": status,
@@ -1596,6 +1626,40 @@ mod tests {
         insert_display_name(&mut blank, Some("   ".to_string()));
         assert!(blank.get("name").is_none());
         assert_eq!(blank["agent"], serde_json::json!("eph-x-1"));
+    }
+
+    /// L'IDENTITÉ d'une session ne dépend JAMAIS de son libellé d'affichage.
+    /// Échoue si les deux sont confondus : le frontend déduirait alors
+    /// l'identité de « Dossier » ou du nom réglé de l'assistant, deux sessions
+    /// distinctes entreraient en collision dans la liste (la seconde
+    /// invisible) et les actions viseraient un agent inexistant.
+    #[test]
+    fn l_identite_d_une_session_ne_depend_jamais_de_son_libelle() {
+        // Agent `default` : libellé lisible, identité brute.
+        assert_eq!(
+            agent_entry_ids("default", "Nova"),
+            ("default".to_string(), "Dossier".to_string())
+        );
+        // Assistant : libellé = nom réglé, identité = id du registre.
+        assert_eq!(
+            agent_entry_ids(SUPERAGENT_ID, "Nova"),
+            (SUPERAGENT_ID.to_string(), "Nova".to_string())
+        );
+        // Session de GROUPE et agents du registre : identité == libellé, mais
+        // aucun n'est écrasé par le nom de l'assistant (aucune absorption).
+        for id in ["groupassistant", "codeur", "orch-reviewer", "eph-42"] {
+            assert_eq!(agent_entry_ids(id, "Nova"), (id.to_string(), id.to_string()));
+        }
+        // Deux sessions distinctes ne peuvent pas produire la même identité,
+        // même quand leurs libellés diffèrent de leurs ids.
+        let ids: Vec<String> = ["default", SUPERAGENT_ID, "groupassistant", "codeur"]
+            .iter()
+            .map(|id| agent_entry_ids(id, "Nova").0)
+            .collect();
+        let mut uniques = ids.clone();
+        uniques.sort();
+        uniques.dedup();
+        assert_eq!(uniques.len(), ids.len(), "identités dupliquées: {ids:?}");
     }
 
     #[test]

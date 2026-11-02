@@ -64,6 +64,11 @@ const workingSince = new Map();
 // distinct de "" (super-agent Magnus) et de tout chemin de projet réel.
 const ASSISTANT_SPACE = "__assistant__";
 
+// Id BRUT de la session de l'assistant dans le registre du moteur. Sert
+// UNIQUEMENT de repli pour une charge ancienne (sans champ `id`) : l'identité
+// d'une session se lit désormais sur `id`, jamais sur un libellé d'affichage.
+const SUPERAGENT_ID = "superagent";
+
 /** Échappe un texte pour insertion HTML sûre. */
 function esc(s) {
   return String(s == null ? "" : s)
@@ -109,6 +114,64 @@ function trackWorkingSince(map, key, working) {
 }
 
 /**
+ * Id BRUT d'une session, lu sur une entrée de la supervision.
+ *
+ * SOURCE UNIQUE de la lecture d'identité : `id` (champ ADDITIF publié par
+ * `dashboard.rs`) d'abord, puis, pour une charge ancienne qui n'a que le
+ * libellé, `agent`. Jamais le libellé lisible (`name`) — il ne sert qu'à
+ * l'affichage.
+ * @param {object} a entrée de supervision ({id?, agent?, name?})
+ * @returns {string} identifiant technique (chaîne vide si absent)
+ */
+export function rawAgentId(a) {
+  if (!a) return "";
+  if (typeof a.id === "string" && a.id) return a.id;
+  if (a.agent != null) return String(a.agent);
+  return "";
+}
+
+/**
+ * RÈGLE UNIQUE D'APPARTENANCE À LA LISTE DU TRAVAIL (point en haut à droite,
+ * son volet « Agents », le résumé du mode « Assistant seul », le volet
+ * « Tâches » et les compteurs qui en découlent) : aucune autre copie de cette
+ * décision n'existe, ni ici, ni côté Rust.
+ *
+ * Elle répond à UNE question : « cette session doit-elle apparaître dans la
+ * liste en ce moment ? » — jamais « a-t-elle un onglet ? ». Un drapeau
+ * d'arrière-plan / d'invisibilité ne peut donc jamais retirer un agent de la
+ * liste : il ne décide QUE de l'ouverture de l'onglet (`visible` sert aussi à
+ * dire « travaille sans onglet », pas à masquer la ligne).
+ *
+ * Règles, dans cet ordre :
+ *  1. une session qui TRAVAILLE est TOUJOURS listée (aucun onglet requis) ;
+ *  1 bis. une mission ACCEPTÉE mais pas encore démarrée (`starting`) est
+ *     listée elle aussi — jamais quand le processus est connu mort : elle
+ *     vient d'être confiée à l'agent, la voir disparaître serait le défaut
+ *     même que cette règle interdit ;
+ *  2. l'assistant (projet pseudo-global "") et les agents d'assistant
+ *     (`__assistant__`) sont toujours listés ;
+ *  3. une autre session du projet pseudo-global (session de groupe, aucun
+ *     onglet propre) est listée : c'est une session vivante du moteur ;
+ *  4. un agent de projet au repos reste listé s'il a un onglet (`visible`
+ *     n'est pas `false` ; absent = charge ancienne = onglet ouvert) ou si son
+ *     processus pi est vivant (`alive === true`, tous modes de lancement) ;
+ *  5. sinon la ligne est écartée : aucun agent fantôme.
+ * @param {{working?:boolean,starting?:boolean,kind?:string,visible?:boolean,alive?:boolean}} a
+ * @returns {boolean} true si la session appartient à la liste
+ */
+export function isAgentListedInWorkList(a) {
+  if (!a) return false;
+  if (a.working === true) return true;
+  // Mission acceptée, pas encore démarrée : listée elle aussi, mais jamais
+  // quand le processus est CONNU mort (aucune entrée fantôme).
+  if (a.starting === true && a.alive !== false) return true;
+  const kind = a.kind || "agent";
+  if (kind === "superagent" || kind === "assistant" || kind === "global") return true;
+  if (a.visible !== false) return true;
+  return a.alive === true;
+}
+
+/**
  * Aplatit la supervision en une liste plate d'agents.
  * @param {object} supervision — sortie de get_agent_supervision ({projects:[...]}).
  * @param {Map<string,number>} [lastActivityMap] — timestamps de dernière activité.
@@ -142,21 +205,38 @@ export function flattenAgents(
         ? "Assistant"
         : proj.name || project.split(/[\\/]/).pop() || "";
     for (const a of proj.agents || []) {
-      // Affichage vs IDENTITÉ : `name` est un champ ADDITIF de la supervision
-      // (nom lisible d'un agent jetable, publié par dashboard.rs). Le libellé
-      // affiché le prend quand il existe et retombe sur l'identifiant technique
-      // sinon (agents du registre : comportement inchangé). L'IDENTITÉ reste
-      // l'identifiant brut `a.agent` (`eph-…` pour un agent jetable) : elle
-      // alimente `rawId` (arrêt ciblé, ouverture d'onglet) et la clé
-      // d'horodatage d'activité. Un libellé mis à la place de l'identifiant
-      // casserait ces actions.
+      // IDENTITÉ vs AFFICHAGE (défaut corrigé « aucun agent invisible ») :
+      // l'identité d'une session se lit sur l'id BRUT du moteur (`id`, champ
+      // additif publié par dashboard.rs), JAMAIS sur un libellé. Déduite d'un
+      // libellé, elle faisait entrer deux sessions distinctes en collision
+      // (même `agentId`, donc une seule ligne : la seconde était invisible) et
+      // envoyait les actions vers un agent inexistant (« Dossier » au lieu de
+      // `default`). Le repli `a.agent` ne sert qu'aux charges anciennes.
+      // Le projet pseudo-global "" ne force PLUS l'identité à « superagent » :
+      // il ne porte pas que l'assistant (session de groupe).
+      // Pour le projet pseudo-global "", l'ABSENCE de champ `id` (charge
+      // ancienne) désigne l'assistant : on retombe alors sur son id historique
+      // et jamais sur son libellé, qui est son nom réglé.
+      const rawId = isSuper
+        ? (typeof a.id === "string" && a.id ? a.id : SUPERAGENT_ID)
+        : rawAgentId(a);
+      // Famille : l'assistant est « superagent », les agents de l'espace
+      // assistant « assistant », les AUTRES sessions du projet pseudo-global
+      // « global » (session de groupe : vivante, sans onglet propre), le reste
+      // « agent » (agent de projet).
+      const kind = isSuper
+        ? (rawId === SUPERAGENT_ID ? "superagent" : "global")
+        : isAssistant
+          ? "assistant"
+          : "agent";
       // L'assistant : le libelle affiche suit la SEULE regle de nom (personnage
       // actif -> nom regle -> « Assistant »). Le nom que porte la session cote
       // moteur EST le nom regle : il ne doit pas gagner sur le personnage.
-      // L'IDENTITE, elle, ne change pas (`rawId`/`agentId` restent « superagent »).
-      const label = isSuper
+      // Les AUTRES sessions affichent leur nom lisible s'il existe (agent
+      // jetable), sinon leur identifiant technique.
+      const label = kind === "superagent"
         ? personaDisplayName(getAssistantPersonaName(), a.name || a.agent || "")
-        : a.name || a.agent || "";
+        : a.name || a.agent || rawId || "";
       const state = a.state || "stopped";
       const busy = state === "running" || state === "compacting";
       // Travail EFFECTIF de la session, lu sur l'ACTIVITE REELLE : soit l'agent
@@ -171,29 +251,14 @@ export function flattenAgents(
       // plus. Fonction pure partagee (isAgentWorking).
       const toolInProgress = a.toolInProgress === true;
       const working = busy || toolInProgress;
-      // Regle 1 : une session qui TRAVAILLE est TOUJOURS listee, qu'elle ait un
-      // onglet ouvert ou non (agent lance en arriere-plan, onglet ferme).
-      // Une session qui NE travaille pas n'apparait que si elle a un onglet
-      // ouvert (`visible`) ou si son processus pi est encore vivant (agent
-      // recuperable au repos entre deux tours, tous modes de lancement : main /
-      // agent_process / assistant_agent). Un agent au repos dont le processus
-      // est mort est ecarte : aucune entree fantome. `visible` absent (backend
-      // ancien) est traite comme « onglet ouvert ». L'assistant (projet "") et
-      // les agents d'assistant (ASSISTANT_SPACE) ne sont jamais filtres.
-      if (!isSuper && !isAssistant && !working) {
-        const hasTab = a.visible !== false;
-        const aliveBackground = a.alive === true; // pi process alive, all modes
-        if (!hasTab && !aliveBackground) continue;
-      }
       // Identité UNIQUE par agent : deux agents peuvent porter le même nom
-      // (« codeur ») sur des PROJETS différents. Pour l'assistant (projet ""),
-      // l'id reste "superagent" ; pour un agent, on combine l'IDENTIFIANT BRUT
-      // + chemin projet (ex: "codeur|C:/proj/Pilot") pour lever toute ambiguïté
-      // dans la liste aplatie et au clic. `rawId` garde l'id brut (`a.agent`) :
-      // jamais le libellé d'affichage, qui peut être un nom lisible (agent
-      // jetable) et ne sert qu'à l'affichage.
-      const rawId = isSuper ? "superagent" : (a.agent || label);
-      const agentId = isSuper ? "superagent" : (isAssistant ? rawId : `${rawId}|${project}`);
+      // (« codeur ») sur des PROJETS différents. Identifiant BRUT + chemin
+      // projet (ex: "codeur|C:/proj/Pilot") pour lever toute ambiguïté dans la
+      // liste aplatie et au clic. L'assistant garde son id historique et les
+      // agents d'assistant leur id brut seul (comportement inchangé).
+      const agentId = kind === "superagent"
+        ? SUPERAGENT_ID
+        : (kind === "assistant" ? rawId : `${rawId}|${project}`);
       // Début du travail EN COURS (intervalle daté) : mémorisé la première fois
       // qu'on voit l'agent travailler, effacé dès qu'il s'arrête.
       const startedAt = trackWorkingSince(workingSinceMap, agentId, working);
@@ -209,6 +274,19 @@ export function flattenAgents(
         state,
         working,
       });
+      // Règle UNIQUE d'appartenance à la liste : elle est appliquée APRÈS le
+      // calcul de l'identité et de la famille « Démarrage », parce qu'une
+      // mission ACCEPTÉE mais pas encore démarrée appartient à la liste elle
+      // aussi (sinon elle disparaîtrait justement pendant son démarrage).
+      if (!isAgentListedInWorkList({
+        working,
+        starting,
+        kind,
+        visible: a.visible,
+        alive: a.alive,
+      })) {
+        continue;
+      }
       const entry = {
         agentId,
         rawId,
@@ -251,7 +329,7 @@ export function flattenAgents(
           null,
         lastActivityRelative:
           typeof a.lastActivityRelative === "string" ? a.lastActivityRelative : "",
-        kind: isSuper ? "superagent" : (isAssistant ? "assistant" : "agent"),
+        kind,
       };
       // Champ ADDITIF « starting » : present SEULEMENT quand la mission est en
       // demarrage (voir MISSION_START_MAX_MS et trackMissionStarting).
@@ -1060,7 +1138,12 @@ export function mergeProbeActivity(supervision, sessions) {
       const agents = proj && Array.isArray(proj.agents) ? proj.agents : [];
       let touched = false;
       const mergedAgents = agents.map((a) => {
-        const key = `${path}\u001f${a && a.agent != null ? String(a.agent) : ""}`;
+        // Identité = id BRUT (`id`), jamais le libellé : sinon la sonde (qui
+        // publie l'id brut) ne s'appliquait PAS aux sessions dont la
+        // supervision publie un nom (« Dossier », nom réglé de l'assistant)
+        // — leur vivacité et leur outil long restaient figés sur la dernière
+        // lecture lourde.
+        const key = `${path}\u001f${rawAgentId(a)}`;
         const probe = byKey.get(key);
         if (!probe) return a;
         touched = true;
@@ -1364,9 +1447,9 @@ export function renderCard(agent) {
     <div class="agent-activity-card-row"><span>État</span><span>${stateLabel}</span></div>
     ${sinceLabel ? `<div class="agent-activity-card-row agent-activity-card-working"><span>En cours depuis</span><span>${esc(sinceLabel.replace("En cours depuis ", ""))}</span></div>` : ""}
     <div class="agent-activity-card-row"><span>Projet</span><span>${esc(agent.project || "—")}</span></div>
-    <div class="agent-activity-card-row"><span>Onglet</span><span>${withoutTab ? "Aucun (arrière-plan)" : "Ouvert"}</span></div>
+    <div class="agent-activity-card-row"><span>Onglet</span><span>${agent.kind === "global" ? "Aucun (session du moteur)" : withoutTab ? "Aucun (arrière-plan)" : "Ouvert"}</span></div>
     <div class="agent-activity-card-row"><span>Dernière activité</span><span>${esc(lastLabel)}</span></div>
-    <button class="agent-activity-card-open" data-agent-id="${esc(agent.agentId)}" data-kind="${esc(agent.kind)}">Afficher l'onglet</button>
+    ${agent.kind === "global" ? "" : `<button class="agent-activity-card-open" data-agent-id="${esc(agent.agentId)}" data-kind="${esc(agent.kind)}">Afficher l'onglet</button>`}
   `;
 }
 

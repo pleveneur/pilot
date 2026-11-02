@@ -30,6 +30,8 @@ import {
   isAgentWorking,
   isWorkingWithoutTab,
   buildBackgroundWorkMissions,
+  isAgentListedInWorkList,
+  mergeProbeActivity,
   renderBackgroundWorkersHtml,
 } from "./agent-activity.js";
 
@@ -1494,5 +1496,144 @@ describe("buildBackgroundWorkMissions / renderBackgroundWorkersHtml — panneau 
   it("ignore un agent qui travaille AVEC un onglet ouvert (deja visible autrement)", () => {
     const list = flattenAgents(makeSupervision([session({ state: "running", visible: true, alive: true })]));
     expect(buildBackgroundWorkMissions(list)).toEqual([]);
+  });
+});
+
+// ── AUCUN AGENT INVISIBLE (décision propriétaire 2026-11-15) ──────────────────
+// Deux défauts PROUVÉS ici, tous deux dans la règle centrale d'appartenance à
+// la liste (`flattenAgents` / `isAgentListedInWorkList`) :
+//  1. l'identité d'une session était déduite d'un LIBELLÉ (le champ `agent` de
+//     la supervision porte « Dossier » pour l'agent `default`, le nom réglé
+//     pour l'assistant) : deux sessions distinctes pouvaient donc partager la
+//     même identité — une seule ligne, la seconde invisible — et une action
+//     visait un agent inexistant ;
+//  2. toute session du projet pseudo-global "" recevait l'identité forcée
+//     « superagent » : la session de GROUPE (`groupassistant`), qui travaille
+//     réellement, était absorbée par la ligne de l'assistant et n'existait
+//     nulle part à l'écran.
+// Ces tests échouent sans le correctif (identité brute + règle unique).
+describe("aucun agent invisible — identité brute et règle unique d'appartenance", () => {
+  it("la session de GROUPE du projet pseudo-global \"\" a sa propre ligne (aucune absorption par l'assistant)", () => {
+    const sup = makeSupervision([
+      {
+        path: "",
+        name: "Assistant",
+        agents: [
+          { id: "superagent", agent: "Nova", state: "idle", alive: true },
+          { id: "groupassistant", agent: "groupassistant", state: "running", alive: true },
+        ],
+      },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list.map((a) => a.rawId)).toEqual(["superagent", "groupassistant"]);
+    expect(list.map((a) => a.kind)).toEqual(["superagent", "global"]);
+    // Identités DISTINCTES : aucune collision de clé dans la liste ni au clic.
+    expect(new Set(list.map((a) => a.agentId)).size).toBe(2);
+    // La session de groupe n'usurpe pas le nom de l'assistant.
+    expect(list[1].label).toBe("groupassistant");
+    // Elle travaille : le cercle « respire ».
+    expect(anyBusy(list)).toBe(true);
+  });
+
+  it("l'identité d'une session se lit sur l'id brute, jamais sur le libellé affiché", () => {
+    const sup = makeSupervision([
+      {
+        path: "C:/proj/a",
+        name: "a",
+        agents: [
+          // `agent` porte le LIBELLÉ (« Dossier » = agent `default`).
+          { id: "default", agent: "Dossier", state: "idle", visible: false, alive: true },
+          { id: "codeur", agent: "codeur", state: "idle", visible: false, alive: true },
+        ],
+      },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list.map((a) => a.rawId)).toEqual(["default", "codeur"]);
+    expect(list.map((a) => a.agentId)).toEqual(["default|C:/proj/a", "codeur|C:/proj/a"]);
+    // L'affichage garde le libellé lisible.
+    expect(list[0].label).toBe("Dossier");
+  });
+
+  it("règle UNIQUE : un drapeau d'arrière-plan ne retire jamais une session vivante", () => {
+    // Table de vérité de la seule fonction qui décide de l'appartenance.
+    const base = { kind: "agent", visible: false, alive: true, working: false };
+    expect(isAgentListedInWorkList(base)).toBe(true); // vivant sans onglet
+    expect(isAgentListedInWorkList({ ...base, alive: false })).toBe(false); // mort : aucune ligne fantôme
+    expect(isAgentListedInWorkList({ ...base, alive: false, visible: true })).toBe(true); // onglet ouvert
+    expect(isAgentListedInWorkList({ ...base, alive: false, visible: undefined })).toBe(true); // charge ancienne
+    expect(isAgentListedInWorkList({ ...base, alive: false, working: true })).toBe(true); // il travaille
+    // Mission acceptée, pas encore démarrée : elle appartient déjà à la liste.
+    expect(isAgentListedInWorkList({ ...base, starting: true })).toBe(true);
+    // …mais une mission en démarrage dont le processus est CONNU mort reste
+    // écartée : aucune entrée fantôme dans la liste.
+    expect(isAgentListedInWorkList({ ...base, alive: false, starting: true })).toBe(false);
+    for (const kind of ["superagent", "assistant", "global"]) {
+      expect(isAgentListedInWorkList({ ...base, kind, alive: false })).toBe(true);
+    }
+  });
+
+  it("tout chemin de lancement produit exactement UNE ligne visible", () => {
+    const sup = makeSupervision([
+      {
+        path: "",
+        name: "Assistant",
+        agents: [
+          { id: "superagent", agent: "Nova", state: "idle", alive: true },
+          { id: "groupassistant", agent: "groupassistant", state: "idle", alive: true },
+        ],
+      },
+      {
+        path: "__assistant__",
+        name: "Assistant",
+        agents: [{ id: "analyseur", agent: "analyseur", state: "idle", visible: false, alive: true }],
+      },
+      {
+        path: "C:/proj/a",
+        name: "a",
+        agents: [
+          // session principale lancée en arrière-plan (`startAgentInvisible`)
+          { id: "codeur", agent: "codeur", mode: "main", state: "idle", visible: false, alive: true },
+          // agent délégué par l'assistant
+          { id: "docs", agent: "docs", mode: "agent_process", state: "running", visible: false, alive: true },
+          // agent secondaire (assistant du projet)
+          { id: "audit", agent: "audit", mode: "assistant_agent", state: "idle", visible: false, alive: true },
+          // reviewer d'orchestration
+          { id: "orch-reviewer", agent: "orch-reviewer", state: "idle", visible: false, alive: true },
+          // agent jetable (nom lisible additif)
+          { id: "eph-42", agent: "eph-42", name: "Rédacteur", state: "idle", visible: false, alive: true },
+        ],
+      },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list.map((a) => a.rawId)).toEqual([
+      "superagent",
+      "groupassistant",
+      "analyseur",
+      "codeur",
+      "docs",
+      "audit",
+      "orch-reviewer",
+      "eph-42",
+    ]);
+    // Aucune collision : chaque session a une identité unique dans la liste.
+    expect(new Set(list.map((a) => a.agentId)).size).toBe(list.length);
+    // L'agent jetable s'affiche par son nom lisible, sans perdre son identité.
+    const eph = list.find((a) => a.rawId === "eph-42");
+    expect(eph.label).toBe("Rédacteur");
+    expect(eph.agentId).toBe("eph-42|C:/proj/a");
+  });
+
+  it("la sonde d'activité atteint aussi les sessions dont la supervision publie un nom", () => {
+    const sup = makeSupervision([
+      {
+        path: "C:/proj/a",
+        name: "a",
+        agents: [{ id: "default", agent: "Dossier", state: "idle", visible: false, alive: true }],
+      },
+    ]);
+    const merged = mergeProbeActivity(sup, [
+      { project: "C:/proj/a", agent: "default", alive: true, toolInProgress: true },
+    ]);
+    expect(merged.projects[0].agents[0].toolInProgress).toBe(true);
   });
 });
