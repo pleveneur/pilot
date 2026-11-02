@@ -1149,6 +1149,21 @@ transcription en cours le retient. Une **panne de micro** et une **transcription
 en cours** ne laissent **jamais** le bas s'effacer ; une **lecture à voix haute**,
 elle, ne le retient plus (mais parler par-dessus la lecture le réveille).
 
+**Correctif du 2026-11-15 — un résultat de dictée VIDE ne réveille plus le bas.**
+Troisième cause du même symptôme (« la barre du bas ne s'efface plus »), et elle
+n'était pas dans la décision : elle était dans le **branchement**. Le point
+d'écriture du texte dicté (`rec.onresult`) appelait `vocalWakeChrome()` à
+**chaque** résultat, sans regarder s'il contenait un mot. Or le moteur de
+reconnaissance émet des résultats **vides** en continu — micro armé, pièce
+silencieuse — et l'écran arme justement la dictée **au repos** : le décompte des
+10 000 ms était donc remis à zéro avant son terme, à répétition, et le bas ne
+s'effaçait **jamais**. Le réveil est désormais réservé au **texte réel** :
+`if (transcript.trim()) vocalWakeChrome(); else vocalSyncChrome();`. Un résultat
+vide ne fait que **rejouer la décision** (le champ a pu changer) ; il ne touche
+pas au minuteur, puisque `vocalSyncChrome` n'en pose aucun. Un **seul** appel au
+réveil subsiste dans toute la session de dictée (vérifié). Verrou :
+`src/js/vocal-resultat-vide-ne-reveille-pas-le-bas.test.js`.
+
 **Le fondu** : **180 ms** (le `var(--transition)` du projet), opacité 1 → 0,
 `translateY(0)` → `translateY(8px)` (le bas s'enfonce vers le bas),
 `visibility: hidden` **à la fin** du fondu et `visible` **immédiatement** au
@@ -1171,7 +1186,8 @@ appels **sans logique** s'y ajoutent : le **premier rendu** à l'entrée du mode
 (`enterVocal`, pour que le bas **naisse effacé** — c'est là que l'état par défaut
 masqué s'applique, aucun minuteur n'y est posé), les quatre écouteurs (posés à la fin de
 `enterVocal`, retirés au début de `exitVocal`), le point d'écriture du **texte
-dicté** (`rec.onresult`), l'écouteur `input` **existant** de la saisie, et le
+dicté** (`rec.onresult` — réveil sur un **texte réel** seulement, correctif du
+2026-11-15), l'écouteur `input` **existant** de la saisie, et le
 rappel `pendingQuestionChromeSync` (appelé à chaque changement de la file des
 questions, pour que le bas revienne si une question arrive alors qu'il est
 effacé). Verrou de l'état initial masqué :
@@ -2026,6 +2042,11 @@ classe écrite à **un seul** endroit, les quatre écouteurs posés puis **retir
 la dictée et la frappe qui font revenir le bas, le masquage qui **ne nomme que
 les trois nœuds du bas** — jamais le disque, le bouton de relance, le logo ni
 « Travail » — et qui **ne change pas la mise en page**),
+`vocal-resultat-vide-ne-reveille-pas-le-bas.test.js` (**un résultat de dictée
+VIDE ne réveille plus le bas**, correctif du 2026-11-15 : le seul appel au réveil
+de la session de dictée est gouverné par le **texte réel**, le chemin vide ne
+fait que rejouer la décision, `vocalSyncChrome` ne pose **aucun** minuteur — donc
+les 10 000 ms ne repartent pas — et un champ vide laisse le bas s'effacer),
 `vocal-saisie-declenchement.test.js` (**le déclenchement** du même mécanisme,
 remarque du propriétaire du 2026-10-03 : une **position** ne retient plus le bas,
 seul un **geste** le retient, le geste **expire avec le décompte** (remis à zéro

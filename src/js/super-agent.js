@@ -4994,7 +4994,17 @@ let vocalDicteeParGeste = false;
       // §2.5 : un texte DICTE occupe la zone — le bas revient, comme pour une
       // frappe (l'ecriture du moteur n'emet aucun `input`, c'est donc ici que
       // l'ecran l'apprend).
-      vocalWakeChrome();
+      //
+      // CORRECTIF « la barre du bas ne s'efface plus » (2026-11-15) : un resultat
+      // SANS UN SEUL MOT n'est pas un texte dicte, et pourtant il REVEILLAIT le
+      // bas exactement comme un mot (decompte remis a zero). Le service de
+      // reconnaissance en emet en continu, y compris micro arme et piece
+      // silencieuse — et la conversation parlee arme justement la dictee AU
+      // REPOS : le compte a rebours repartait donc avant son terme et le bas ne
+      // s'effacait jamais. Le reveil est desormais reserve au texte REEL ; un
+      // resultat vide ne fait que rejouer la decision (le champ a pu changer).
+      if (transcript.trim()) vocalWakeChrome();
+      else vocalSyncChrome();
       // ENVOI SUR SILENCE : chaque TEXTE recupere (provisoire ou definitif)
       // repousse l'echeance du delai REGLE (2 s par defaut, 1 a 5 s). Un texte
       // identique au precedent n'est pas un nouveau mot : il ne la repousse pas.
