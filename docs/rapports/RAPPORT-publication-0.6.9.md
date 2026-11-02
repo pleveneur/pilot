@@ -370,6 +370,26 @@ Le remote local `gds` (reliquat de test) n'a reçu **aucune** poussée : les seu
 commandes de publication exécutées visent `origin`
 (`https://github.com/pleveneur/pilot.git`).
 
+### 6.6 Un travail d'une AUTRE session est apparu pendant la publication — laissé intact
+
+Juste après la poussée du rapport, `git status` signale un fichier modifié que
+**cette session n'a pas touché** :
+
+```
+ M src/js/super-agent.js   (+11 −1)
+```
+
+Le contenu est un correctif vocal (« la barre du bas ne s'efface plus », daté
+2026-11-15 dans son propre commentaire, `if (transcript.trim()) vocalWakeChrome();`)
+: c'est le travail en cours d'une **autre session du projet**. Décisions prises :
+
+- **rien n'a été supprimé, écrasé, restauré ni committé** ;
+- il **n'est pas** dans la 0.6.9 : le commit livré (`31f585c`) a été composé par
+  chemins explicites (6 fichiers), donc la Release ne contient que le bump, le
+  changelog et ce rapport ;
+- il reste dans l'arbre de travail du propriétaire, à livrer par la session qui
+  l'a écrit.
+
 ---
 
 ## 7. Ce que le propriétaire doit vérifier lui-même à la main
@@ -399,6 +419,9 @@ commandes de publication exécutées visent `origin`
 8. **Les sorties de fabrication locales** : `target/release/bundle/{msi,nsis}` et
    `.pilot/tmp-pub/0.6.9-build.log` restent sur votre disque (ignorés par Git).
    Aucune n'a été publiée en dehors de la CI.
+9. **Le correctif vocal en cours d'une autre session** (`src/js/super-agent.js`,
+   non committé, voir § 6.6) n'est **pas** dans la 0.6.9 : si vous le vouliez dans
+   cette version, il faudra une publication suivante.
 
 ---
 
