@@ -46,6 +46,11 @@ src-tauri/extensions/pilot-mcp-client.ts
 # Local dev/temp files
 nul
 
+# Briques de travail de l'agent (scripts jetables, journaux de banc, mesures) :
+# propres a la session, jamais versionnees. Les skills de `.pi/skills/` restent
+# versionnes.
+.pi/tmp/
+
 # Temp release/issue dumps (API GitHub)
 issues_tmp.json
 r*.json
