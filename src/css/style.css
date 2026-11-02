@@ -904,6 +904,26 @@ body.theme-light.theme-tokyo-day {
   overflow: hidden;
 }
 
+/* --- CADRE ACCENT PARTAGE : UNE SEULE DEFINITION, DEUX BLOCS ---
+   Demande du proprietaire (2026-11-02) : « encadrer la liste des projets en
+   cours, avec le meme cadre que les options en bas a gauche ». Le cadre des sept
+   lignes du bas (`#project-footer`) est donc PARTAGE avec la liste « Projets en
+   cours » (`#open-projects-bar`) au lieu d'etre recopie : une seule ecriture de
+   la bordure accent, du fond leger et du rayon, donc aucune divergence possible
+   entre les deux blocs plus tard.
+   - Ce bloc ne porte QUE le cadre. Chaque conteneur garde sa mise en page dans
+     sa propre regle (padding, marges, repli, defilement, plafond de hauteur) :
+     rien d'autre n'est mutualise.
+   - Aucune couleur en dur : `--accent` et `color-mix` suivent les themes clair
+     et sombre et toutes les palettes du projet.
+   - Verrou : `src/js/cadre-liste-projets-en-cours.test.js` (une seconde regle de
+     cadre, ou un cadre redevenu propre a un seul bloc, le fait echouer). */
+#project-footer, #open-projects-bar {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+}
+
 #project-footer {
   flex-shrink: 0;
   margin: 0 8px 8px;
@@ -935,11 +955,10 @@ body.theme-light.theme-tokyo-day {
      `overflow` reste `visible` (obligatoire : le menu s'ouvre vers le haut), donc
      le debordement ne serait pas rattrape par un defilement. */
   max-height: 60%;
-  /* Un seul cadre pour les SEPT lignes du bas : la bordure accent, le fond
-     léger et le rayon restent ici (c'est le SEUL cadre accentue de l'interface). */
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-lg);
+  /* Le cadre (bordure accent, fond leger, rayon) n'est plus ecrit ici : il est
+     porte par la regle PARTAGEE `#project-footer, #open-projects-bar`, juste
+     au-dessus (demande du proprietaire du 2026-11-02). Rendu identique a
+     l'avant ; seule l'ecriture est factorisee. */
   /* LOT 3 : plus de padding horizontal — les lignes occupent toute la largeur
      du cadre et leurs fonds de survol touchent la bordure (inset 30 -> 16 px).
      8 px en haut et en bas : 2 + 16 + 7 x 32 + 6 x 6 = 278 px pour les SEPT
@@ -1617,7 +1636,7 @@ body.theme-light.theme-tokyo-day {
 .dd-open-close:hover { background: var(--surface-3); color: var(--danger); }
 .dd-recent-item:hover .dd-open-close { opacity: 1; }
 
-/* --- Barre « Projets ouverts » (sous le bouton Projets) --- */
+/* --- Barre « Projets en cours » (sous le bouton Projets) --- */
 .open-projects-label {
   font-size: 10px;
   font-weight: var(--fw-semibold);
@@ -1627,8 +1646,19 @@ body.theme-light.theme-tokyo-day {
   padding: 0 4px;
 }
 #open-projects-bar {
-  border-bottom: 1px solid var(--border-subtle);
+  /* CADRE : il vient de la regle PARTAGEE `#project-footer, #open-projects-bar`
+     (bordure accent, fond leger, rayon), plus haut dans cette feuille — aucune
+     seconde regle de cadre n'est ecrite ici (demande du proprietaire du
+     2026-11-02 : meme cadre que les options du bas).
+     L'ancien `border-bottom: 1px solid var(--border-subtle)` de separation a
+     disparu : le cadre fait desormais le tour de la liste, un filet bas en plus
+     ferait un double trait dans le rayon. */
   flex-shrink: 0;
+  /* Meme retrait horizontal que le bloc du bas (8 px de chaque cote) : les deux
+     cadres sont alignes sur la meme marge dans la colonne. La marge haute
+     detache le cadre du bandeau du projet, comme le bas du bloc du bas est
+     detache de la ligne d'information. */
+  margin: 8px;
   max-height: 40%;
   overflow-y: auto;
   padding: 4px 8px 8px;
@@ -1666,6 +1696,12 @@ body.theme-light.theme-tokyo-day {
 
 .open-project-name {
   flex: 1;
+  /* `min-width: 0` : sans lui, `flex: 1` garde le minimum de contenu d'un texte
+     `nowrap`, donc un nom long ne se reduit pas et deborde du cadre (barre de
+     defilement horizontale). Le cadre de la liste (2026-11-02) reduit la largeur
+     utile de 18 px (8 + 8 de marge, 1 + 1 de bordure) : le point de suspension
+     doit fonctionner. Rien ne change pour un nom court. */
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

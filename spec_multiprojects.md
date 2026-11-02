@@ -137,6 +137,11 @@ struct AppState {
   sidebar : liste des projets ouverts, projet actif en surbrillance, bascule au
   clic, fermeture par bouton ✕. (Divergence assumée vs la 1re esquisse « bandeau
   horizontal » : la barre est intégrée au sélecteur existant, sous le bouton.)
+  Depuis le 2026-11-02 (demande du propriétaire), la liste est **encadrée** du
+  même cadre que les options du bas de la colonne : le cadre accent est écrit
+  **une seule fois**, dans la règle partagée `#project-footer, #open-projects-bar`
+  de `src/css/style.css` (bordure accent, fond léger, rayon — jetons de thème,
+  aucun cadre dupliqué). Verrou : `src/js/cadre-liste-projets-en-cours.test.js`.
 - Le **dropdown** Projets affiche les récents **sans dupliquer** les projets déjà
   ouverts : les projets en cours sont **exclus** de la liste « Récents » (ils ne
   sont visibles que dans la barre « Projets en cours »).

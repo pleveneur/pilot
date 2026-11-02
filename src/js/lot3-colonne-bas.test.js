@@ -87,11 +87,19 @@ const piedNu = pied.replace(/<!--[\s\S]*?-->/g, "");
 
 /** Bloc de regle dont le selecteur est ecrit EXACTEMENT `selector {`. */
 function blocs(source, selector) {
-  const echappe = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`(?:^|\\n)${echappe} \\{([^}]*)\\}`, "g");
+  // Un selecteur peut appartenir a une REGLE PARTAGEE par plusieurs selecteurs
+  // (« A, B { ... } ») : c'est le cas du cadre accent commun a `#project-footer`
+  // et `#open-projects-bar` (demande du proprietaire du 2026-11-02). Comme le
+  // moteur CSS, la regle est rattachee a CHACUN de ses selecteurs ; sans cela une
+  // regle factorisee deviendrait invisible et le test accuserait a tort une
+  // regression. Aucune assertion n'est modifiee.
+  const re = /(?:^|\n)([^\n{}]+) \{([^}]*)\}/g;
   const trouves = [];
   let m;
-  while ((m = re.exec(source)) !== null) trouves.push(m[1]);
+  while ((m = re.exec(source)) !== null) {
+    const selecteurs = m[1].split(",").map((s) => s.trim());
+    if (selecteurs.includes(selector)) trouves.push(m[2]);
+  }
   return trouves;
 }
 
