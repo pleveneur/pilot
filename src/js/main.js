@@ -21,6 +21,10 @@ import { getAgentActivitySnapshot, subscribeAgentActivity, isAgentWorking, initA
 // le fil « Projet > projet > onglet » n'existe plus. L'entree « Travail » vit
 // desormais a droite de la rangee d'onglets (#tab-row, index.html).
 import { initAnomalyDetection } from "./anomaly.js";
+// SURFACE DE SECOURS DES QUESTIONS D'AGENT : installée avec l'application, jamais
+// à l'ouverture d'un onglet — une question d'agent doit toujours trouver un
+// porteur (l'onglet 🧭 s'il est ouvert, sinon le dialogue de choix existant).
+import { initAgentQuestionFallback } from "./agent-question-fallback.js";
 // Étape 2 Telegram (lot 0) : écoute des messages entrants. Démarrée avec
 // l'application, INDÉPENDAMMENT de l'ouverture de l'onglet 🧭 Assistant.
 import { initTelegramInbound } from "./telegram-inbound.js";
@@ -685,6 +689,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     void initOwnerEngagementWatch();
   } catch (e) {
     console.warn("Écoute de l'engagement du propriétaire indisponible:", e);
+  }
+
+  // 3d-bis. SURFACE DE SECOURS DES QUESTIONS D'AGENT (défaut protégé : une
+  // question posée sans onglet 🧭 ouvert restait sans réponse et l'attente
+  // n'était jamais terminée). Comme l'engagement du propriétaire ci-dessus,
+  // l'écoute est posée ICI, avec l'application, JAMAIS dans la fabrique de
+  // l'onglet : sans onglet, la question est peinte par le dialogue de choix
+  // existant et la réponse revient au MÊME endroit du bus. Quand l'onglet est
+  // ouvert, il garde la priorité (aucun double affichage).
+  try {
+    initAgentQuestionFallback();
+  } catch (e) {
+    console.warn("Surface de secours des questions d'agent indisponible:", e);
   }
 
   // 3d-bis. Telegram (étape 2, lot 3) : charger l'état de la communication du

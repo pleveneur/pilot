@@ -191,10 +191,12 @@ describe("matrice des sites d'arrêt — aucun chemin automatique muet", () => {
     // Cardinalité ÉPINGLÉE : un nouveau site d'arrêt (donc potentiellement muet)
     // fait échouer ce test — il faut alors lui ajouter sa trace et mettre à jour
     // ces nombres, jamais ajouter un arrêt silencieux.
-    // 4 = 2 détections de boucle + l'arrêt automatique de run (dans
-    // `stopAgentsRun`, via l'entonnoir) + l'arrêt MANUEL du même mécanisme
-    // (bouton « tout arrêter », exception déclarée, non journalisée).
-    expect(abortSites).toHaveLength(4);
+    // 5 = 2 détections de boucle + l'arrêt automatique de run (dans
+    // `stopAgentsRun`, via l'entonnoir) + la fin d'une question que PERSONNE ne
+    // peut afficher (`terminateUnanswerableQuestion`, via l'entonnoir, motif
+    // `question-sans-surface`) + l'arrêt MANUEL du même mécanisme (bouton
+    // « tout arrêter », exception déclarée, non journalisée).
+    expect(abortSites).toHaveLength(5);
     expect(stopRunSites).toHaveLength(3);
     expect(watchdogSites).toHaveLength(2);
     expect(settleStopSites).toHaveLength(3);
@@ -439,7 +441,7 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     const kinds = [
       // 2 boucles + 1 arrêt automatique de run (entonnoir) + 1 arrêt MANUEL
       // déclaré (R3-EXCEPTION-MANUEL : bouton « tout arrêter »).
-      [/invoke\("abort_agent_process"/g, "abort_agent_process", 4],
+      [/invoke\("abort_agent_process"/g, "abort_agent_process", 5],
       // Les deux arrêts de processus ajoutés par la fermeture des faux verrous
       // (session périmée → redémarrage ; échec de lancement → nettoyage).
       [/invoke\("stop_agent_process"/g, "stop_agent_process", 2],
@@ -593,9 +595,9 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
     expect(positionsIn(SRC_BUS, /traceAutomaticAgentStop[A-Za-z]*[(]/g).length, "traces explicites du bus").toBe(18);
     // Points de trace de l'entonnoir : 2 boucles + 1 timeout + 1 plafond pi +
     // 1 plafond MAX_TURNS + 1 arrêt auto de run + 1 session périmée + 1 nettoyage.
-    expect(positionsIn(SRC_BUS, /stopAgentWithTrace[(]/g).length, "appels d'entonnoir du bus").toBe(8);
+    expect(positionsIn(SRC_BUS, /stopAgentWithTrace[(]/g).length, "appels d'entonnoir du bus").toBe(9);
     // Total des points de trace du bus (traces explicites + entonnoir) : épinglé.
-    expect(counts.bus, "points de trace du bus").toBe(26);
+    expect(counts.bus, "points de trace du bus").toBe(27);
   });
 
   it("un site terminal ajouté sans trace fait échouer la matrice (preuve du contrôle)", () => {
@@ -614,7 +616,7 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       const fake = SRC_BUS.replace(anchor, silentStop + anchor);
       expect(fake, `injection impossible : ancre introuvable (${anchor})`).not.toBe(SRC_BUS);
       const res = precedences(fake, /invoke\("abort_agent_process"/g, `fake@${anchor}`);
-      expect(res.sites, `le site injecté avant ${anchor} n'est pas vu`).toBe(5);
+      expect(res.sites, `le site injecté avant ${anchor} n'est pas vu`).toBe(6);
       expect(res.untraced.length, `la matrice doit voir le site muet injecté avant ${anchor}`).toBe(1);
       // 3 vrais sites restent TRACÉS et 1 est une exception NOMMÉE (l'arrêt
       // manuel « tout arrêter », marqueur R3-EXCEPTION-MANUEL). Avant le
@@ -622,7 +624,7 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       // arrêt manuel était compté comme tracé par simple proximité avec la
       // trace de l'arrêt automatique du même bloc : le compte d'exceptions est
       // désormais épinglé ici pour que cette distinction ne se reperde pas.
-      expect(res.traced, `les 3 vrais sites tracés doivent le rester (${anchor})`).toBe(3);
+      expect(res.traced, `les 4 vrais sites tracés doivent le rester (${anchor})`).toBe(4);
       expect(res.exceptions, `l'arrêt manuel doit rester une exception nommée (${anchor})`).toHaveLength(1);
     }
   });
@@ -766,7 +768,7 @@ describe("matrice étendue — les trois fichiers d'arrêt automatique", () => {
       ["agent-pi.js", SRC_PI, /invoke\("stop_agent_session"/g, { sites: 3, traced: 3, exceptions: 0 }],
       ["super-agent.js", SRC_SA, /invoke\("abort_super_agent"\)/g, { sites: 3, traced: 2, exceptions: 1 }],
       ["super-agent.js", SRC_SA, /invoke\("stop_agent_session"/g, { sites: 2, traced: 1, exceptions: 1 }],
-      ["agents-bus.js", SRC_BUS, /invoke\("abort_agent_process"/g, { sites: 4, traced: 3, exceptions: 1 }],
+      ["agents-bus.js", SRC_BUS, /invoke\("abort_agent_process"/g, { sites: 5, traced: 4, exceptions: 1 }],
     ];
     for (const [name, src, siteRe, expected] of checks) {
       const res = precedences(src, siteRe, name);

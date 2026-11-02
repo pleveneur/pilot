@@ -13,9 +13,17 @@
 //
 // Règle du propriétaire (2026-10-16) : un agent PEUT poser une question, on en
 // a besoin ; la question doit remonter à l'utilisateur, qui répond lui-même.
-// Aucune réponse de repli n'est inventée à sa place. Si l'utilisateur ne répond
-// pas, la question reste en attente (la limite de 45 min côté Rust,
-// `anomaly::AWAITING_USER_MAX_SUSPEND_SECS`, empêche le gel de la file).
+// Aucune réponse de repli n'est inventée à sa place.
+//
+// DEUX cas distincts, longtemps confondus (RAPPORT-gel-questions-sans-surface) :
+//   - question AFFICHÉE, sans réponse de l'utilisateur → elle reste en attente ;
+//     la limite de 45 min côté Rust (`anomaly::AWAITING_USER_MAX_SUSPEND_SECS`)
+//     BORNE cette attente (elle libère la file au bout du plafond) — elle ne
+//     RÉSOUT rien et ne répond jamais à la question ;
+//   - question que PERSONNE n'a pu afficher → l'attente n'est plus laissée
+//     ouverte : la décision de surface (`agent-question-surface.js`) constate
+//     l'absence de porteur et le bus termine l'attente (arrêt tracé + message
+//     explicite).
 //
 // Module PUR (aucune I/O, aucun appel Tauri).
 import { SCREEN_GATE_SENTINEL } from "./screen-guard.js";

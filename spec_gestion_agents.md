@@ -31,9 +31,11 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - Pour en ajouter une : créez le dossier `<nom>/SKILL.md` dans `~/.pilot/skills`, puis rouvrez l'éditeur de l'agent.
 
 ### Poser une question : elle vous revient toujours
-- Un agent **peut poser une question** (choix d'une approche, confirmation, saisie) : c'est souvent indispensable, et la question **remonte jusqu'à vous**. Elle s'affiche dans la conversation de l'**Assistant**, avec ses options, et **vous** y répondez (champ de précision optionnel).
-- Cela vaut **aussi pour les agents lancés en arrière-plan** par l'Assistant, même si vous n'êtes pas sur l'onglet 🧭 : la question est relayée de la même façon, et elle est **signalée** dans le suivi. **Aucune réponse n'est décidée à votre place** (ni approbation, ni première option, ni annulation).
-- Si vous ne répondez pas, la demande **reste en attente** : la limite d'attente de **45 minutes** déjà en place évite qu'elle bloque la file indéfiniment. Aucune réponse de repli n'est inventée.
+- Un agent **peut poser une question** (choix d'une approche, confirmation, saisie) : c'est souvent indispensable, et la question **remonte jusqu'à vous**. Elle s'affiche dans la conversation de l'**Assistant** quand cet onglet est ouvert, avec ses options, et **vous** y répondez (champ de précision optionnel).
+- **Elle s'affiche même si l'onglet 🧭 Assistant est fermé** : la question apparaît alors dans le **dialogue de choix habituel** de Pilot (les mêmes boutons), avec l'agent et le projet qui la posent. Votre réponse repart vers la **même** session d'agent, exactement comme depuis l'onglet.
+- Cela vaut **aussi pour les agents lancés en arrière-plan** par l'Assistant : la question est relayée de la même façon, et elle est **signalée** dans le suivi. **Aucune réponse n'est décidée à votre place** (ni approbation, ni première option, ni annulation). Un seul écran affiche la question : jamais deux, jamais deux réponses.
+- **Aucune attente sans fin** : si la question ne peut être affichée nulle part, l'attente est **terminée** proprement — un message clair vous le dit, le créneau de l'agent est libéré et le motif est écrit dans `.pilot/agent-stops.log` (jamais une réponse inventée, jamais un agent qui attend pour rien).
+- Si vous ne répondez pas **alors qu'elle est bien affichée**, la demande reste en attente : la limite de **45 minutes** déjà en place ne fait que **borner** cette attente (elle libère la file au bout du plafond) — elle ne répond jamais à votre place.
 - Les **demandes internes** (validation d'écriture, action Pilot, contrôle de l'écran) gardent leur propre dialogue et ne sont jamais tranchées automatiquement.
 
 ### Suivre et arrêter
@@ -651,6 +653,53 @@ Les identifiants `#ae-*` sont **inchangés** : l'enregistrement relit exactement
 - Le coordinateur garde son contexte pendant toute la run.
 
 ## 8. Anti-régression
+
+### 8.0 Une question d'agent trouve TOUJOURS une surface (ou se termine)
+
+> Origine : `docs/rapports/RAPPORT-gel-questions-sans-surface.md` (point 3
+> « détonateur » du diagnostic `RAPPORT-gel-session-pilot.md`). La seule surface
+> capable d'afficher une question d'agent était l'onglet 🧭 Assistant, dont
+> l'écouteur de `pilot-agent-relay-request` naît à l'ouverture et meurt à la
+> fermeture. Onglet fermé : la question n'était peinte nulle part, aucune réponse
+> n'était possible et l'attente restait ouverte — la file du projet réservée tout
+> ce temps. Aucune règle de détection ni d'arrêt n'est modifiée ; seule la
+> **surface de réponse** l'est.
+
+- **Module PUR `src/js/agent-question-surface.js`** — SOURCE UNIQUE de « qui
+  peint » et de « qui a RÉELLEMENT pris la question » :
+  `decideAgentQuestionSurface` (onglet 🧭 prioritaire → dialogue de secours →
+  `none`), registre `claimAgentQuestion` / `isAgentQuestionClaimed` /
+  `agentQuestionSurfaceOf` / `releaseAgentQuestion` (le PREMIER porteur gagne :
+  aucun double affichage, aucune double réponse), `agentQuestionView` (débalage
+  des sentinelles de présentation `PILOT_MULTI_CHOICE::` / `PILOT_CONFIRM::`,
+  sentinelle MACHINE jamais peinte), `agentQuestionAnswer` (formats EXACTS de
+  `pilot-choices.ts`), `normalizeAgentAnswerArgs` (un `responder` est appelé avec
+  2 ou 3 arguments), `agentQuestionHeadline` / `agentQuestionNoSurfaceMessage`.
+- **Surface de SECOURS `src/js/agent-question-fallback.js`** : installée avec
+  l'application (`main.js`, jamais à l'ouverture d'un onglet), idempotente (un
+  seul écouteur). Elle **réutilise l'existant** : dialogues de choix d'`agent-pi.js`
+  (`domSelect` / `domConfirm` / `domPrompt` / `domMultiSelect`) et le routage
+  `respondAgentRelay` de `super-agent.js` → `send_agent_command_to` (le MÊME
+  endroit du bus que l'onglet). Prise en charge AVANT tout `await`, libérée après
+  la réponse ; un dialogue impossible produit un refus **explicite**.
+- **Onglet 🧭 (`super-agent.js`)** : `onAgentRelayRequest` commence par
+  `claimAgentQuestion` ; il enregistre sa surface au moment où il pose son
+  écouteur et la retire à sa fermeture (jeton propre à l'onglet ouvert).
+- **Émetteur (`agents-bus.js`)** : après l'émission de `AGENT_RELAY_EVENT`, il
+  relit le registre. Si **personne** n'a pris la question,
+  `terminateUnanswerableQuestion` **TERMINE** l'attente : message explicite
+  (`agentQuestionNoSurfaceMessage`) et arrêt par l'entonnoir unique
+  `stopAgentWithTrace` (motif `question-sans-surface`, détecteur
+  `relais-sans-ecouteur`) → trace `.pilot/agent-stops.log` **avant** l'arrêt
+  effectif, puis `abort_agent_process` libère le créneau. Aucune réponse inventée.
+- **La limite de 45 min** (`anomaly::AWAITING_USER_MAX_SUSPEND_SECS`) ne fait que
+  **BORNER** une attente bien affichée : elle ne répond jamais et ne remplace pas
+  le contrat ci-dessus (commentaire corrigé dans `agent-choice-relay.js`).
+- **Ne pas régresser** : aucun second dialogue de question, aucun écouteur
+  supplémentaire, aucune réponse décidée à la place de l'utilisateur, et un
+  `responder` à deux arguments doit continuer à fonctionner (normalisation).
+  Couverture : `src/js/agent-question-surface.test.js` (échoue sans le
+  branchement `main.js` et sans `terminateUnanswerableQuestion`).
 
 ### 8.1 Affichage du travail en cours (attente silencieuse)
 

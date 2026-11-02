@@ -64,6 +64,20 @@ import {
   readableMachineText,
   scheduleRequestFrom,
 } from "./machine-sentinel.js";
+// SURFACE DES QUESTIONS D'AGENT (défaut protégé : une question posée sans onglet
+// 🧭 restait sans réponse). La décision « qui peint » et la prise en charge
+// vivent dans ce module PUR, partagé avec la surface de secours de
+// l'application (`agent-question-fallback.js`) : l'onglet est la surface
+// PRINCIPALE tant qu'il est ouvert, et il PREND la question avant de la peindre
+// (un seul porteur, aucun double affichage).
+import {
+  AGENT_QUESTION_SURFACE_TAB,
+  claimAgentQuestion,
+  clearPrimaryAgentQuestionSurface,
+  normalizeAgentAnswerArgs,
+  releaseAgentQuestion,
+  setPrimaryAgentQuestionSurface,
+} from "./agent-question-surface.js";
 // LOT 3 (ecran Vocal) : le NIVEAU DU MICRO. Toute la capture (demande de
 // permission, flux, analyseur, lissage, ARRET reel) vit dans vocal-mic.js ; ce
 // fichier ne fait que brancher ses trois retours et ne contient donc aucune des
@@ -7452,8 +7466,17 @@ let vocalDicteeParGeste = false;
   // la question ici (dans la conversation de l'assistant) et la réponse est
   // routée vers LA bonne session agent via `send_agent_command_to` (multi-agents
   // : chaque agent est identifié, les réponses ne sont pas mélangées).
+  // Jeton de CET onglet comme surface PRINCIPALE des questions d'agent : unique
+  // par onglet ouvert, il permet de ne retirer que sa propre surface à la
+  // fermeture (un onglet fermé ne retire pas celle d'un onglet ouvert après lui).
+  const assistantQuestionSurfaceToken = { surface: "assistant-tab", openedAt: Date.now() };
   const onAgentRelayRequest = (e) => {
     const d = e.detail || {};
+    // UN SEUL porteur par question (agent-question-surface.js) : l'onglet prend
+    // la question s'il est le premier à la voir, sinon il ne la peint pas (la
+    // surface de secours de l'application s'en charge). Aucun double affichage,
+    // aucune double réponse.
+    if (!claimAgentQuestion(d, AGENT_QUESTION_SURFACE_TAB)) return;
     // `relayAgentChoiceRequest` est ASYNCHRONE : une demande de planification
     // d'agent d'assistant y est exécutée avant tout affichage (aucune sentinelle
     // machine à l'écran), donc on attend la promesse et on journalise l'échec.
@@ -7461,6 +7484,10 @@ let vocalDicteeParGeste = false;
       .catch((err) => console.error("[relais-agent] erreur:", err));
   };
   window.addEventListener("pilot-agent-relay-request", onAgentRelayRequest);
+  // L'onglet est la surface PRINCIPALE des questions d'agent tant qu'il est
+  // ouvert : la surface de secours (`agent-question-fallback.js`) s'efface
+  // devant lui. Enregistré ici, retiré dans `unlisten` avec le jeton.
+  setPrimaryAgentQuestionSurface(assistantQuestionSurfaceToken);
   window._pilotSuperAgentOpen = true;
   // Anti-doublon Telegram (lot 3) : l'onglet est VIVANT — un tour de l'Assistant
   // en cours repousse l'envoi des avis bruts retardés jusqu'à sa fin (fin de tour
@@ -7667,6 +7694,9 @@ let vocalDicteeParGeste = false;
       unlistenStateChanged();
       try { unlistenAutoStop(); } catch (_) {}
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
+      // Plus de surface principale : la surface de secours reprend la main (et
+      // le jeton évite de retirer la surface d'un onglet ouvert après celui-ci).
+      clearPrimaryAgentQuestionSurface(assistantQuestionSurfaceToken);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
       window.removeEventListener("focus", onPersonaFocus);
       window.removeEventListener("pilot-config-changed", onTelegramPrefsChanged);
@@ -11067,8 +11097,11 @@ async function respondSuperAgent(id, value, cancelled) {
   }
 }
 
-/** Envoie la réponse d'un bouton RELAIS à la session agent ciblée (tâche #22). */
-async function respondAgentRelay(projectPath, agentId, id, value, cancelled) {
+/** Envoie la réponse d'un bouton RELAIS à la session agent ciblée (tâche #22).
+ *  Exportée : la surface de secours des questions (`agent-question-fallback.js`)
+ *  RÉUTILISE ce routage — la réponse revient au même endroit du bus, qu'elle ait
+ *  été donnée dans l'onglet 🧭 ou dans le dialogue de secours. */
+export async function respondAgentRelay(projectPath, agentId, id, value, cancelled) {
   const cmd = { type: "extension_ui_response", id };
   if (cancelled) cmd.cancelled = true;
   else cmd.value = value;
@@ -11090,8 +11123,17 @@ async function respondAgentRelay(projectPath, agentId, id, value, cancelled) {
 async function relayAgentChoiceRequest(payload, agentId, projectPath, messagesEl, state) {
   const { id, method } = payload;
   // Répondre en routant vers la session agent ciblée (et non le super-agent).
-  const responder = (value, cancelled) =>
-    respondAgentRelay(projectPath, agentId, id, value, cancelled);
+  // Les arguments sont NORMALISÉS (agent-question-surface.js) : la barre des
+  // questions appelle `responder(id, value, cancelled)` et les demandes internes
+  // ci-dessous `responder(value, cancelled)` — sans normalisation, le second
+  // chemin envoyait la réponse comme « annulée ». La prise en charge de la
+  // question est libérée une fois la réponse transmise.
+  const responder = (...args) => {
+    const { id: targetId, value, cancelled } = normalizeAgentAnswerArgs(id, args);
+    return respondAgentRelay(projectPath, agentId, targetId, value, cancelled).finally(() => {
+      releaseAgentQuestion({ payload, agentId, projectPath });
+    });
+  };
 
   // ── RÈGLE PROTÉGÉE : une sentinelle machine n'arrive JAMAIS à l'écran ──
   // Un agent d'assistant porte les MÊMES extensions que l'assistant : sa

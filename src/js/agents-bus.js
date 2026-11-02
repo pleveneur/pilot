@@ -111,6 +111,15 @@ import {
 // Une ACTION INTERNE (sentinelle machine exécutée par le relais) ne pose aucune
 // question : le message d'attente doit le dire, et jamais recopier la sentinelle.
 import { isSelfAnsweredMachineRequest } from "./machine-sentinel.js";
+// SURFACE DES QUESTIONS : le bus ÉMET la question, il ne décide pas qui la peint.
+// Il relit le registre juste après l'émission (source unique de la décision, dans
+// `agent-question-surface.js`) : une question que PERSONNE n'a prise ne reste
+// jamais en attente — elle se termine par un arrêt TRACÉ (règle 3) et un message
+// explicite, jamais par une réponse inventée.
+import {
+  agentQuestionNoSurfaceMessage,
+  isAgentQuestionClaimed,
+} from "./agent-question-surface.js";
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
@@ -3066,9 +3075,13 @@ function extractTextFromContent(content) {
  *   `editor` → ce ne sont pas des questions de l'utilisateur : elles ne sont pas
  *   relayées, et le bus ne répond plus à leur place (aucun repli inventé).
  *
- * Si l'utilisateur ne répond pas, la demande reste EN ATTENTE : la limite de
- * 45 min déjà en place côté Rust (`anomaly::AWAITING_USER_MAX_SUSPEND_SECS`)
- * empêche le gel de la file. Aucun `setTimeout` ne fabrique de réponse.
+ * Si l'utilisateur ne répond pas, la demande d'une question DÉJÀ AFFICHÉE reste
+ * EN ATTENTE — aucun `setTimeout` ne fabrique de réponse, et la limite de 45 min
+ * côté Rust (`anomaly::AWAITING_USER_MAX_SUSPEND_SECS`) BORNE cette attente :
+ * elle libère la file au bout du plafond, elle ne répond pas à la question.
+ * Une question que PERSONNE n'a pu afficher n'est en revanche jamais laissée
+ * ouverte : `terminateUnanswerableQuestion` termine l'attente (arrêt tracé +
+ * message explicite, cf. RAPPORT-gel-questions-sans-surface.md).
  */
 async function handleExtensionUiRequest(agentId, event, ctx) {
   const { id, method } = event;
@@ -3090,13 +3103,20 @@ async function handleExtensionUiRequest(agentId, event, ctx) {
 
   if (isRelayableAgentChoice(event)) {
     // QUESTION de l'agent : elle remonte à l'utilisateur (aucune réponse ici).
-    relayAgentQuestion(agentId, event, ctx);
+    const prise = relayAgentQuestion(agentId, event, ctx);
+    // AUCUNE surface n'a pris la question (onglet 🧭 fermé ET surface de secours
+    // absente) : l'attente ne doit pas rester ouverte → elle se TERMINE, avec
+    // message explicite et trace d'arrêt automatique. Jamais une réponse
+    // inventée, jamais un silence.
+    if (!prise) await terminateUnanswerableQuestion(agentId, event, ctx);
     return;
   }
 
   // Porte INTERNE (le bus n'a pas de surface pour l'afficher) ou demande sans
   // question pour l'utilisateur : on ne répond PLUS à sa place. L'attente est
-  // signalée (jamais silencieuse) et reste bornée par la limite Rust de 45 min.
+  // signalée (jamais silencieuse) ; elle n'est ni « résolue » ni interrompue par
+  // le bus — la limite Rust de 45 min la BORNE (elle libère la file au bout du
+  // plafond), elle ne la traite pas.
   emit("notify", {
     agentId,
     notifyType: "warning",
@@ -3115,25 +3135,30 @@ async function handleExtensionUiRequest(agentId, event, ctx) {
  * l'utilisateur est routée vers LA bonne session agent par `send_agent_command_to`.
  *
  * Aucune condition « onglet actif » : la question d'un agent lancé en
- * arrière-plan doit remonter. Si aucun écouteur n'est présent (onglet 🧭 jamais
- * ouvert), la question reste EN ATTENTE : surtout aucune réponse inventée.
+ * arrière-plan doit remonter. La question est prise en charge (affichée) par
+ * l'onglet 🧭 s'il est ouvert, sinon par la surface de SECOURS de l'application
+ * (`agent-question-fallback.js`, enregistrée avec l'application) — décision dans
+ * `agent-question-surface.js`. Surtout aucune réponse inventée.
  *
  * @param {string} agentId - agent émetteur (clé du bus)
  * @param {object} event - `extension_ui_request` brut (id, method, title, options…)
  * @param {object} ctx - contexte de run (projet réel de l'agent)
+ * @returns {boolean} true si une surface a RÉELLEMENT pris la question en charge
+ *   (relue dans le registre de `agent-question-surface.js` juste après
+ *   l'émission : c'est ce qui rend « un seul porteur » observable)
  */
 function relayAgentQuestion(agentId, event, ctx) {
   const projectPath = ctx.agentProject[agentId] || ctx.project || null;
+  const detail = { payload: event, agentId, projectPath };
   try {
     if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-      window.dispatchEvent(
-        new CustomEvent(AGENT_RELAY_EVENT, { detail: { payload: event, agentId, projectPath } }),
-      );
+      window.dispatchEvent(new CustomEvent(AGENT_RELAY_EVENT, { detail }));
       console.log("[agents-bus] question relayée à l'assistant", agentId, "method=" + event.method, "id=" + event.id);
     }
   } catch (err) {
     console.error("[agents-bus] relais de la question impossible", agentId, err);
   }
+  const prise = isAgentQuestionClaimed(detail);
   // Visibilité garantie : la demande est signalée même si la conversation de
   // l'assistant n'est pas ouverte (aucune réponse n'est décidée pour autant).
   // Une ACTION INTERNE (sentinelle machine exécutée par le relais, ex. rappels
@@ -3147,6 +3172,69 @@ function relayAgentQuestion(agentId, event, ctx) {
       ? `ℹ️ L'agent ${agentId} a demandé une action interne de Pilot (« ${agentQuestionLabel(event)} ») : elle est exécutée automatiquement, aucune réponse de votre part n'est attendue.`
       : `❓ L'agent ${agentId} attend votre réponse : « ${agentQuestionLabel(event)} ».`,
   });
+  return prise;
+}
+
+/**
+ * TERMINE une attente qui ne peut PAS être affichée : aucune surface n'a pris la
+ * question (onglet 🧭 fermé et surface de secours absente).
+ *
+ * Défaut protégé (RAPPORT-gel-questions-sans-surface.md) : l'attente restait
+ * ouverte jusqu'au plafond Rust de 45 min — l'agent ne travaillait plus, la file
+ * du projet restait réservée et l'utilisateur ne voyait rien.
+ *
+ * Ce que fait cette fonction, dans cet ordre, et rien d'autre :
+ *   1. un message EXPLICITE (notification + journal du bus) : la question ne peut
+ *      pas être affichée, l'attente est terminée, aucune réponse n'a été décidée
+ *      à la place de l'utilisateur ;
+ *   2. un ARRÊT TRACÉ par l'ENTONNOIR unique des arrêts automatiques (règle 3,
+ *      `stopAgentWithTrace` → `.pilot/agent-stops.log`, motif
+ *      `question-sans-surface`) : la libération du créneau est donc la même que
+ *      pour tous les autres arrêts automatiques ;
+ *   3. l'arrêt EFFECTIF de la session, qui libère la file de ce projet.
+ * Jamais une réponse inventée (`confirmed`, `options[0]`, `cancelled`).
+ *
+ * @param {string} agentId - agent qui attend
+ * @param {object} event - `extension_ui_request` sans porteur
+ * @param {object} ctx - contexte de run (projet réel de l'agent)
+ * @returns {Promise<void>}
+ */
+async function terminateUnanswerableQuestion(agentId, event, ctx) {
+  const projectPath = ctx.agentProject[agentId] || ctx.project || "";
+  const message = agentQuestionNoSurfaceMessage({ agentId, label: agentQuestionLabel(event) });
+  // 1. Le message est dit AVANT l'arrêt (l'utilisateur doit pouvoir le lire même
+  //    si l'arrêt se déroule mal).
+  emit("notify", { agentId, notifyType: "error", message });
+  try {
+    notifyAnomaly({
+      project: projectPath,
+      problem: `l'agent ${agentId} attendait une réponse qui ne peut pas être affichée`,
+      decision: "attente terminée, agent arrêté — relancer la tâche ou ouvrir la conversation de l'assistant",
+    });
+  } catch (err) {
+    console.warn("[agents-bus] notification d'anomalie impossible", err);
+  }
+  // 2 et 3. RÈGLE 3 : le motif est écrit AVANT l'arrêt effectif, par l'ENTONNOIR
+  // unique (aucun second mécanisme de journalisation, aucun arrêt muet).
+  try {
+    await stopAgentWithTrace({
+      // RÈGLE 3 : motif et détecteur LITTÉRAUX au site d'appel (jamais une
+      // variable) — exigé et vérifié par agent-stop-funnel.test.js.
+      reason: "question-sans-surface",
+      detected: "relais-sans-ecouteur",
+      agentId,
+      projectPath,
+      uid: expectedSessionUid(ctx, agentId),
+      detail: `method=${event && event.method} id=${event && event.id}`,
+      stop: () => invoke("abort_agent_process", {
+        agentId,
+        project: projectPath || null,
+        expectedUid: expectedSessionUid(ctx, agentId),
+      }),
+    });
+  } catch (err) {
+    console.error("[agents-bus] arrêt de la question sans surface impossible", agentId, err);
+  }
 }
 
 // T6 : nettoie les réservations du projet quand le CODEUR termine son tour

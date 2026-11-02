@@ -8729,8 +8729,16 @@ async function waitForPiReady(state, maxSecs) {
  * window.confirm / window.prompt sont inopérants dans WebView2 (Tauri 2) —
  * utiliser des modales DOM garantit que la réponse repart toujours vers pi,
  * sinon pi reste bloqué indéfiniment (→ timeout 30s → pipe closed).
+ *
+ * `bodyEl` : corps déjà construit (éléments DOM, aucune chaîne HTML à échapper).
+ * `okValue` : valeur résolue au clic sur OK ; une FONCTION est appelée à ce
+ * moment-là (elle peut donc lire l'état de champs créés dans `bodyEl`).
+ *
+ * Exportés : ces dialogues sont RÉUTILISÉS par la surface de secours des
+ * questions d'agent (`agent-question-fallback.js`) — aucune seconde famille de
+ * dialogues pour les questions d'agent.
  */
-function _domDialog({ title, bodyHtml, okLabel, cancelLabel, okValue }) {
+function _domDialog({ title, bodyHtml, bodyEl, okLabel, cancelLabel, okValue }) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "agent-ext-dialog-overlay";
@@ -8741,7 +8749,8 @@ function _domDialog({ title, bodyHtml, okLabel, cancelLabel, okValue }) {
     titleEl.textContent = title || "Pilot";
     const body = document.createElement("div");
     body.className = "agent-ext-dialog-body";
-    body.innerHTML = bodyHtml || "";
+    if (bodyEl) body.appendChild(bodyEl);
+    else body.innerHTML = bodyHtml || "";
     const actions = document.createElement("div");
     actions.className = "agent-ext-dialog-actions";
     const cancelBtn = document.createElement("button");
@@ -8759,7 +8768,8 @@ function _domDialog({ title, bodyHtml, okLabel, cancelLabel, okValue }) {
     document.body.appendChild(overlay);
     animatePanelOpen(box);
     const done = (val) => { overlay.remove(); resolve(val); };
-    okBtn.addEventListener("click", () => done(okValue === undefined ? true : okValue));
+    const okResolved = () => (typeof okValue === "function" ? okValue() : okValue === undefined ? true : okValue);
+    okBtn.addEventListener("click", () => done(okResolved()));
     cancelBtn.addEventListener("click", () => done(okValue === undefined ? false : null));
     overlay.addEventListener("click", (e) => { if (e.target === overlay) done(okValue === undefined ? false : null); });
     // Focus initial
@@ -8770,7 +8780,7 @@ function _domDialog({ title, bodyHtml, okLabel, cancelLabel, okValue }) {
 }
 
 /** Confirm yes/no → Promise<boolean> */
-function domConfirm(title, message) {
+export function domConfirm(title, message) {
   return _domDialog({
     title,
     bodyHtml: `<p style="margin:0;white-space:pre-wrap;word-break:break-word">${escapeHtmlText(message || "")}</p>`,
@@ -8780,7 +8790,7 @@ function domConfirm(title, message) {
 }
 
 /** Free-form input → Promise<string|null> (null = cancelled) */
-function domPrompt(title, placeholder) {
+export function domPrompt(title, placeholder) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "agent-ext-dialog-overlay";
@@ -8820,7 +8830,7 @@ function domPrompt(title, placeholder) {
 }
 
 /** Select from options → Promise<string|null> */
-function domSelect(title, options) {
+export function domSelect(title, options) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "agent-ext-dialog-overlay";
@@ -8858,9 +8868,50 @@ function domSelect(title, options) {
   });
 }
 
-/** Relais via l'assistant (tâche de suivi #22) : vrai si l'onglet Assistant
- * (mode "superagent") est l'onglet actif (l'utilisateur regarde la conversation
- * de l'assistant, qui sert alors d'interface). */
+/**
+ * Multi-selection from options → Promise<string[]|null> (null = cancelled).
+ * Même famille de dialogue que `domSelect` (mêmes classes `.agent-ext-dialog-*`,
+ * même coquille) : seules les cases à cocher changent, rien de nouveau à
+ * l'écran. Sert à la surface de secours des questions d'agent
+ * (`ask_multi_choice` relayé hors de l'onglet 🧭).
+ */
+export function domMultiSelect(title, message, options) {
+  const list = document.createElement("div");
+  list.style.cssText = "display:flex;flex-direction:column;gap:4px;max-height:300px;overflow:auto";
+  const boxes = [];
+  for (const opt of options || []) {
+    const row = document.createElement("label");
+    row.style.cssText = "display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-primary);cursor:pointer";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = String(opt);
+    const text = document.createElement("span");
+    text.textContent = String(opt);
+    row.appendChild(cb);
+    row.appendChild(text);
+    list.appendChild(row);
+    boxes.push(cb);
+  }
+  const body = document.createElement("div");
+  if (message) {
+    const p = document.createElement("p");
+    p.style.cssText = "margin:0 0 8px 0;white-space:pre-wrap;word-break:break-word";
+    p.textContent = String(message);
+    body.appendChild(p);
+  }
+  body.appendChild(list);
+  return _domDialog({
+    title,
+    bodyEl: body,
+    okLabel: "Valider",
+    cancelLabel: "Annuler",
+    okValue: () => boxes.filter((b) => b.checked).map((b) => b.value),
+  });
+}
+
+/** Vrai si l'onglet Assistant (mode "superagent") est l'onglet actif
+ * (l'utilisateur regarde la conversation de l'assistant, qui sert alors
+ * d'interface). */
 function isSuperAgentActiveTab() {
   try {
     return window._pilotTabs?.getActiveTab?.()?.mode === "superagent";

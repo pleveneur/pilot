@@ -1768,9 +1768,11 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - Pour en ajouter une : créez le dossier `<nom>/SKILL.md` dans `~/.pilot/skills`, puis rouvrez l'éditeur de l'agent.
 
 ### Poser une question : elle vous revient toujours
-- Un agent **peut poser une question** (choix d'une approche, confirmation, saisie) : c'est souvent indispensable, et la question **remonte jusqu'à vous**. Elle s'affiche dans la conversation de l'**Assistant**, avec ses options, et **vous** y répondez (champ de précision optionnel).
-- Cela vaut **aussi pour les agents lancés en arrière-plan** par l'Assistant, même si vous n'êtes pas sur l'onglet 🧭 : la question est relayée de la même façon, et elle est **signalée** dans le suivi. **Aucune réponse n'est décidée à votre place** (ni approbation, ni première option, ni annulation).
-- Si vous ne répondez pas, la demande **reste en attente** : la limite d'attente de **45 minutes** déjà en place évite qu'elle bloque la file indéfiniment. Aucune réponse de repli n'est inventée.
+- Un agent **peut poser une question** (choix d'une approche, confirmation, saisie) : c'est souvent indispensable, et la question **remonte jusqu'à vous**. Elle s'affiche dans la conversation de l'**Assistant** quand cet onglet est ouvert, avec ses options, et **vous** y répondez (champ de précision optionnel).
+- **Elle s'affiche même si l'onglet 🧭 Assistant est fermé** : la question apparaît alors dans le **dialogue de choix habituel** de Pilot (les mêmes boutons), avec l'agent et le projet qui la posent. Votre réponse repart vers la **même** session d'agent, exactement comme depuis l'onglet.
+- Cela vaut **aussi pour les agents lancés en arrière-plan** par l'Assistant : la question est relayée de la même façon, et elle est **signalée** dans le suivi. **Aucune réponse n'est décidée à votre place** (ni approbation, ni première option, ni annulation). Un seul écran affiche la question : jamais deux, jamais deux réponses.
+- **Aucune attente sans fin** : si la question ne peut être affichée nulle part, l'attente est **terminée** proprement — un message clair vous le dit, le créneau de l'agent est libéré et le motif est écrit dans `.pilot/agent-stops.log` (jamais une réponse inventée, jamais un agent qui attend pour rien).
+- Si vous ne répondez pas **alors qu'elle est bien affichée**, la demande reste en attente : la limite de **45 minutes** déjà en place ne fait que **borner** cette attente (elle libère la file au bout du plafond) — elle ne répond jamais à votre place.
 - Les **demandes internes** (validation d'écriture, action Pilot, contrôle de l'écran) gardent leur propre dialogue et ne sont jamais tranchées automatiquement.
 
 ### Suivre et arrêter
@@ -3368,14 +3370,32 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   `input` → annulé, si bien que la question n'était jamais visible). Aucune
   réponse n'est désormais décidée à votre place ; la demande reste **en attente**
   tant que vous ne répondez pas (limite de **45 minutes**, `anomaly.rs`
-  `AWAITING_USER_MAX_SUSPEND_SECS`, qui empêche le gel de la file).
+  `AWAITING_USER_MAX_SUSPEND_SECS`, qui **borne** l'attente sans jamais y
+  répondre).
+- **Surface de réponse garantie** (défaut protégé
+  `docs/rapports/RAPPORT-gel-questions-sans-surface.md`) : l'onglet 🧭 n'est plus
+  le seul porteur. S'il est fermé, la question est affichée par la **surface de
+  secours** de l'application (`agent-question-fallback.js`, installée par
+  `main.js`) avec les **dialogues de choix existants**, et la réponse repart par
+  `respondAgentRelay` → `send_agent_command_to` (même endroit du bus). S'il est
+  ouvert, il garde la priorité (un seul porteur : `claimAgentQuestion`,
+  `agent-question-surface.js`). Si **aucune** surface ne peut l'afficher, l'attente
+  est **terminée** : message explicite + arrêt tracé (`question-sans-surface`,
+  entonnoir de la règle 3) — plus jamais d'attente ouverte pour rien.
 
 <!-- HELP:super-agent-relay-questions -->
 - Quand un agent lancé par l'Assistant a besoin d'une décision de votre part
   (choix, confirmation, saisie), la question **remonte dans la conversation de
   l'Assistant** avec ses options — même si l'agent tourne en arrière-plan et même
-  si vous n'êtes pas sur l'onglet 🧭. Aucune réponse n'est décidée à votre place ;
-  sans réponse, la demande attend (plafond de 45 min).
+  si vous n'êtes pas sur l'onglet 🧭. Aucune réponse n'est décidée à votre place.
+- **Onglet 🧭 fermé, la question s'affiche quand même** : dans le dialogue de
+  choix habituel de Pilot, avec l'agent et le projet qui la posent, et votre
+  réponse repart vers la même session d'agent. Un seul écran l'affiche.
+- **Jamais d'attente sans fin** : si aucune surface ne peut l'afficher, l'attente
+  est **terminée** (message clair, créneau de l'agent libéré, motif écrit dans
+  `.pilot/agent-stops.log`). Si elle est bien affichée et que vous ne répondez
+  pas, la demande attend — le plafond de **45 min** ne fait que **borner** cette
+  attente, il ne répond jamais à votre place.
 <!-- /HELP:super-agent-relay-questions -->
 
 ### Apprendre en continu

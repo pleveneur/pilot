@@ -157,15 +157,17 @@ describe("agents-bus.js — aucun arrêt automatique hors de l'entonnoir", () =>
     const count = (kind) => res.sites.filter((s) => s.kind === kind).length;
     // 2 détections de boucle (outils, texte) + 1 arrêt automatique de run dans
     // `stopAgentsRun` (entonnoir) + 1 arrêt MANUEL du même mécanisme (marqué
-    // R3-EXCEPTION-MANUEL : bouton « tout arrêter », volontaire, non journalisé).
-    expect(count("abort_agent_process"), "sites `abort_agent_process` du bus").toBe(4);
+    // R3-EXCEPTION-MANUEL : bouton « tout arrêter », volontaire, non journalisé)
+    // + 1 arrêt d'une question que PERSONNE ne peut afficher
+    // (`terminateUnanswerableQuestion`, motif `question-sans-surface`).
+    expect(count("abort_agent_process"), "sites `abort_agent_process` du bus").toBe(5);
     // Session périmée (contexte vierge) + nettoyage d'un process orphelin.
     expect(count("stop_agent_process"), "sites `stop_agent_process` du bus").toBe(2);
     // Le bus ne détruit jamais de session directement (c'est l'onglet agent).
     expect(count("stop_agent_session"), "sites `stop_agent_session` du bus").toBe(0);
     // Timeout d'inactivité, plafond de tours pi, plafond de tours de la run.
     expect(count(STOP_RUN_MECHANISM), "sites `stopAgentsRun` du bus").toBe(3);
-    expect(res.total).toBe(9);
+    expect(res.total).toBe(10);
     // Une commande d'arrêt a été ajoutée OU retirée : il faut décider sa famille.
     expect([...AUTOMATIC_STOP_COMMANDS]).toContain("abort_agent_process");
   });
@@ -176,7 +178,7 @@ describe("agents-bus.js — aucun arrêt automatique hors de l'entonnoir", () =>
       res.untraced.map((s) => `${s.kind}@${s.line}`),
       "un arrêt automatique contourne l'entonnoir (site muet)",
     ).toEqual([]);
-    expect(res.funneled, "sites passant par l'entonnoir").toBe(8);
+    expect(res.funneled, "sites passant par l'entonnoir").toBe(9);
     expect(res.exceptions, "un seul site manuel déclaré").toBe(1);
     const manual = res.sites.filter((s) => s.exception);
     expect(manual).toHaveLength(1);
@@ -215,7 +217,7 @@ describe("agents-bus.js — aucun arrêt automatique hors de l'entonnoir", () =>
       );
       checked += 1;
     }
-    expect(checked, "aucun site appelant vérifié").toBe(7);
+    expect(checked, "aucun site appelant vérifié").toBe(8);
     // Aucun appel automatique ne doit court-circuiter l'entonnoir en passant un
     // motif à `stopAgentsRun` : cette voie-là écrivait la trace APRÈS coup dans le
     // corps du mécanisme (et pouvait être oubliée par un nouvel appelant).
@@ -242,8 +244,8 @@ describe("contrôle négatif — un site muet injecté en MÉMOIRE est détecté
       expect(res, `le site muet injecté avant ${anchor} n'est pas vu`).toHaveLength(1);
       expect(res[0].kind).toBe("abort_agent_process");
       const sites = scanAutomaticStopSites(injected);
-      expect(sites.total, `cardinalité changée après injection (${anchor})`).toBe(10);
-      expect(sites.funneled, `les sites réels doivent rester entonnoirés (${anchor})`).toBe(8);
+      expect(sites.total, `cardinalité changée après injection (${anchor})`).toBe(11);
+      expect(sites.funneled, `les sites réels doivent rester entonnoirés (${anchor})`).toBe(9);
     }
   });
 
