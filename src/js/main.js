@@ -40,6 +40,10 @@ import { initGroupAssistant } from "./group-assistant.js";
 // Voix de lecture des reponses : la voix choisie dans Parametres → Assistant est
 // appliquee des le demarrage (et a chaque enregistrement des Parametres).
 import { applyVoicePreferenceFromConfig } from "./read-aloud.js";
+// Pré-CHAUFFAGE de la voix imitée (VoiceStudio) : si c'est elle qui est
+// mémorisée, le service est réveillé une fois au démarrage — APRÈS l'affichage
+// (voir § 4 quater de spec_read_aloud.md). Jamais attendu, jamais bloquant.
+import { prewarmVoiceStudioAtStartup } from "./voicestudio-voice.js";
 import { refreshIcons } from "./icons.js";
 // Bande de fenetre Pilot : glisser, double-clic et les trois boutons systeme
 // (reduire, agrandir/restaurer, fermer) — etats et clavier du lot 0.2.
@@ -1472,6 +1476,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Masquer l'écran de chargement une fois tout initialisé
   const bootOverlay = document.getElementById("boot-overlay");
   if (bootOverlay) bootOverlay.classList.add("hidden");
+
+  // 12 bis. PRÉ-CHAUFFAGE DE LA VOIX IMITÉE (VoiceStudio) — APRÈS l'affichage,
+  // donc jamais sur le chemin du démarrage. Le premier appel à froid du service
+  // prend ≈ 6 s : sans ce préchauffage, la PREMIÈRE phrase lue après le
+  // lancement attendait tout ce temps. La décision est prise dans le module de
+  // la voix imitée (`shouldPrewarmVoiceStudio`, pure) : voix du système, voix
+  // locale ou valeur inconnue ⇒ aucun appel. Aucun `await` : l'appel rend la
+  // main immédiatement, la commande de la machine s'exécute hors du thread de
+  // la fenêtre, et tout échec est silencieux (le repli voix locale puis voix du
+  // système reste seul en jeu — aucune ligne affichée, aucune exception).
+  try {
+    void prewarmVoiceStudioAtStartup();
+  } catch (_) {
+    // Silence total : un préchauffage impossible ne concerne pas l'utilisateur.
+  }
 
   // 13. Prise en main de la PREMIÈRE ouverture (spec_onboarding.md, niveau 1).
   // Lancée APRÈS le masquage du chargement et JAMAIS attendue : aucune étape du

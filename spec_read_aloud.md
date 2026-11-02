@@ -562,8 +562,9 @@ defaut et le repli**).
    `[voix imitée]`), et la lecture **continue avec la voix locale (Piper)**, puis
    avec la voix du système si Piper manque. Le démarrage à froid du service
    (~6 s) est **annoncé sans bloquer** : un préchauffage
-   (`tts_voicestudio_warmup`) est lancé **sur le geste** de sélection, jamais
-   automatiquement.
+   (`tts_voicestudio_warmup`) est lancé **sur le geste** de sélection, et **une
+   fois au démarrage** de Pilot (point 13 ci-dessous, quand c'est cette voix-là
+   qui est mémorisée).
 8. **Rien ne tourne sur le thread principal** : chaque commande est
    `pub async fn` et déporte son travail dans `tauri::async_runtime::spawn_blocking`
    (tenu par `src/js/voix-imitee-voicestudio.test.js`).
@@ -611,6 +612,36 @@ defaut et le repli**).
     propriétaire** : l'adresse de téléchargement de VoiceStudio n'existe nulle
     part dans le dépôt — le jour où il en fournit une, c'est ce module, et lui
     seul, qui la portera.
+13. **Préchauffage AU DÉMARRAGE, une seule fois, et seulement si c'est cette
+    voix-là.** La première phrase lue après le lancement attendait le démarrage
+    à froid du service (~6 s) : perçu comme une lenteur. Donc, **au démarrage de
+    Pilot** :
+    - **la décision est PURE et vit dans le module de la voix imitée** :
+      `shouldPrewarmVoiceStudio(value)` (`src/js/voicestudio-voice.js`) — oui
+      **seulement** pour une valeur `local:voicestudio:<profil>` **avec** un
+      identifiant de profil. La grammaire des valeurs n'est **pas** recopiée :
+      la fonction s'appuie sur `voiceStudioProfileIdFor`. **Non** pour : voix du
+      système, voix locale (`local:piper`, `local:piper:<modèle>`), valeur vide,
+      valeur inconnue, `local:voicestudio` sans profil.
+    - **le déclenchement** (`prewarmVoiceStudioAtStartup`) est posé **après** le
+      masquage de l'écran de chargement, en `void` — **jamais** `await` : rien du
+      démarrage ne l'attend, la fenêtre s'affiche comme avant.
+    - **une** tentative ; au plus **une** seconde tentative discrète après
+      `VOICESTUDIO_PREWARM_RETRY_MS` (5 s) et **uniquement** si le premier échec
+      peut être passager (service injoignable, connexion refusée, délai
+      dépassé). Un échec **définitif** (voix inconnue, refus) n'est **jamais**
+      repris. Aucune boucle, aucune relance à chaque lecture.
+    - **silence total** en cas d'échec (logiciel absent, fermé, occupé, lent) :
+      aucun message, aucun blocage, aucune exception, aucune ligne de journal. Le
+      repli existant (voix locale puis voix du système, point 7) est **inchangé**.
+    - **garde en mémoire** : un seul préchauffage par démarrage, jamais deux en
+      parallèle. Aucun réglage ajouté, **aucun son produit** (préchauffer n'est
+      pas lire).
+    Couverture : `src/js/prechauffage-voix-imitee-demarrage.test.js` (décision
+    pure ; aucun préchauffage pour une voix du système, locale ou inconnue ;
+    panne silencieuse au démarrage ; appel non bloquant posé après l'affichage ;
+    une seule relance, et seulement si passagère ; pas de double préchauffage).
+    Rapport : `docs/rapports/RAPPORT-predemarrage-voix-voicestudio.md`.
 
 ## 5. Portée
 
@@ -667,7 +698,9 @@ Piper, texte trop long refusé). `src/js/voicestudio-explique-dans-les-reglages.
 verrouille l'**explication affichée** (§ 4 quater, point 12 : logiciel séparé,
 installé et lancé sur cet ordinateur, repli annoncé, où le récupérer, **aucune
 adresse inventée**, texte identique dans le module et dans `index.html`, écriture
-au rendu de la section et jamais masquée).
+au rendu de la section et jamais masquée). Le **préchauffage au démarrage** est
+tenu par `src/js/prechauffage-voix-imitee-demarrage.test.js` (§ 4 quater,
+point 13).
 
 `voix-locale-choix.test.js` ajoute les tests qui **mordent** sur cet incident :
 (a) avec un moteur partagé, la voix **choisie** est réellement synthétisée

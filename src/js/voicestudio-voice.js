@@ -101,6 +101,30 @@ export function isVoiceStudioChoice(value) {
 }
 
 /**
+ * Faut-il PRÉCHAUFFER le service au démarrage de Pilot ? (fonction PURE)
+ *
+ * Une seule réponse possible, et une seule raison de la donner : la voix de
+ * lecture mémorisée (`read_aloud_voice`) désigne une voix imitée **avec son
+ * identifiant de profil**. Tout le reste dit non, sans exception :
+ *   - `""` / valeur absente / valeur d'un autre type → voix automatique du
+ *     système : aucun préchauffage, donc aucun appel réseau pour rien ;
+ *   - `local:piper` ou `local:piper:<modèle>` → voix locale : le moteur local
+ *     n'a rien à voir avec le service, il n'est pas réveillé par lui ;
+ *   - une valeur inconnue (`autre:chose`, du texte quelconque) → non, on
+ *     n'invente jamais une voix imitée à partir d'un texte qui n'en est pas une ;
+ *   - `local:voicestudio:` vide → non : sans identifiant de profil, il n'y a
+ *     aucune voix que le service pourrait préchauffer.
+ *
+ * La reconnaissance du type de voix n'est PAS recopiée ici : elle vient de
+ * [`voiceStudioProfileIdFor`], le seul endroit qui sait lire ce préfixe.
+ * @param {string} value valeur mémorisée du réglage `read_aloud_voice`
+ * @returns {boolean}
+ */
+export function shouldPrewarmVoiceStudio(value) {
+  return voiceStudioProfileIdFor(value) !== "";
+}
+
+/**
  * Vrai si un profil imité est RÉELLEMENT proposé par le service (par identifiant
  * ou par nom, sans tenir compte de la casse).
  *
@@ -412,20 +436,31 @@ export async function synthesizeVoiceStudioAudio(text, options = {}) {
 /**
  * Préchauffe le service : une synthèse courte dont le son n'est pas joué.
  *
- * Sert au PREMIER appel (chargement du modèle à froid, ≈ 6 s mesurées) et n'est
- * déclenché que par un GESTE (choix de la voix dans les Paramètres). Jamais
- * bloquant : la commande est asynchrone et l'échec est silencieux (le repli
- * existe déjà).
- * @param {{invoke?: Function, voice?: string}} [options]
+ * Sert au PREMIER appel (chargement du modèle à froid, ≈ 6 s mesurées). Deux
+ * déclencheurs, et deux seulement : le GESTE de sélection de la voix dans les
+ * Paramètres, et le DÉMARRAGE de Pilot quand c'est cette voix qui est mémorisée
+ * (`prewarmVoiceStudioAtStartup`). Jamais bloquant : la commande est asynchrone
+ * et l'échec est silencieux (le repli existe déjà).
+ * @param {{invoke?: Function, voice?: string, onFailure?: (reason: string) => void}} [options]
+ *   `onFailure` reçoit la raison COURTE de l'échec (le préchauffage de démarrage
+ *   en a besoin pour distinguer une panne passagère d'un refus définitif).
  * @returns {Promise<boolean>} vrai si le service a répondu
  */
 export async function warmupVoiceStudio(options = {}) {
   const voice = String(options.voice == null ? "" : options.voice).trim();
+  const onFailure = typeof options.onFailure === "function" ? options.onFailure : null;
   try {
     const invoke = await resolveInvoke(options);
     await invoke(VOICESTUDIO_COMMAND_WARMUP, { voice: voice || null });
     return true;
-  } catch (_) {
+  } catch (error) {
+    if (onFailure) {
+      try {
+        onFailure(shortCause(messageOf(error)));
+      } catch (_) {
+        // Un rapporteur fautif ne change rien : l'échec reste silencieux.
+      }
+    }
     return false;
   }
 }
@@ -448,4 +483,141 @@ export async function logVoiceStudio(message, options = {}) {
   } catch (_) {
     return false;
   }
+}
+
+// ── Préchauffage AU DÉMARRAGE ───────────────────────────────────────────────
+
+/**
+ * Délai de la SECONDE tentative (la seule) du préchauffage de démarrage.
+ *
+ * Quelques secondes : le temps que le logiciel de voix imitée finisse de
+ * démarrer s'il était en train de s'ouvrir au moment où Pilot s'est lancé.
+ */
+export const VOICESTUDIO_PREWARM_RETRY_MS = 5000;
+
+/**
+ * Vrai si l'échec du préchauffage peut être PASSAGER (donc mérite l'unique
+ * seconde tentative).
+ *
+ * Un seul cas est passager : le service n'a pas pu être joint du tout (« service
+ * injoignable », connexion refusée, délai dépassé) — exactement ce que produit un
+ * logiciel en train de démarrer. Un refus du service (voix inconnue, `HTTP 4xx`),
+ * un texte refusé ou une erreur interne sont DÉFINITIFS : réessayer n'apporterait
+ * rien et ferait du préchauffage une sonde permanente.
+ * @param {string} reason raison de l'échec
+ * @returns {boolean}
+ */
+export function isTransientWarmupFailure(reason) {
+  const text = String(reason == null ? "" : reason).trim().toLowerCase();
+  if (!text) return false;
+  return ["injoignable", "connection refused", "timed out", "timeout", "délai dépassé"].some(
+    (marker) => text.includes(marker),
+  );
+}
+
+/**
+ * Garde de tentative : UN préchauffage au démarrage par vie de la fenêtre.
+ *
+ * Mémoire seulement (aucune configuration, aucun fichier) : elle empêche le
+ * double préchauffage quand l'appelant repasse par ici (seconde lecture de
+ * configuration, réouverture d'un écran…). Aucun réessai n'est armé par cette
+ * garde : la seule seconde tentative est celle prévue par
+ * [`prewarmVoiceStudioAtStartup`].
+ */
+let prewarmStartupStarted = false;
+
+/**
+ * Réarme la garde de démarrage (tests, et uniquement eux).
+ * @returns {void}
+ */
+export function resetPrewarmStartupGuard() {
+  prewarmStartupStarted = false;
+}
+
+/**
+ * PRÉCHAUFFE la voix imitée AU DÉMARRAGE, si — et seulement si — c'est elle qui
+ * a été choisie (`read_aloud_voice`).
+ *
+ * Pourquoi ici : le premier appel à froid du service prend ≈ 6 s ; sans ce
+ * préchauffage, la PREMIÈRE phrase lue après le lancement de Pilot attendait tout
+ * ce temps (lenteur entendue par l'utilisateur). Rien d'autre ne change : le
+ * repli (voix locale, puis voix du système) reste identique, et aucun réglage
+ * n'est ajouté — le seul signal est la voix déjà choisie.
+ *
+ * Ce que cette fonction ne fait JAMAIS :
+ *   - **bloquer** : elle rend la main immédiatement (promesse non attendue par
+ *     l'appelant) et la commande de la machine s'exécute hors du thread de la
+ *     fenêtre ;
+ *   - **parler** : le préchauffage ne joue aucun son (aucun lecteur ici) ;
+ *   - **faire du bruit** : aucun échec n'est affiché ni journalisé ; la valeur
+ *     rendue dit seulement ce qui s'est passé ;
+ *   - **sonder en boucle** : une tentative, plus UNE seconde tentative et
+ *     seulement si le premier échec peut être passager ;
+ *   - **préchauffer pour rien** : voix du système, voix locale, valeur vide ou
+ *     inconnue → aucun appel, aucun démarrage de logiciel ;
+ *   - **préchauffer deux fois** : la garde `prewarmStartupStarted` (mémoire
+ *     seulement, réarmable par [`resetPrewarmStartupGuard`]) refuse un second
+ *     préchauffage.
+ * @param {{invoke?: Function, loadConfig?: () => any, warmup?: Function,
+ *          wait?: (ms: number) => Promise<any>}} [options] points d'injection
+ *   (tests) — par défaut `warmup(voice, onFailure)` et `wait(ms)` sont ceux de
+ *   ce module, et `loadConfig()` lit `read_aloud_voice` par `get_config`.
+ * @returns {Promise<boolean>} vrai si le service a répondu (jamais d'exception)
+ */
+export async function prewarmVoiceStudioAtStartup(options = {}) {
+  if (prewarmStartupStarted) return false;
+  prewarmStartupStarted = true;
+
+  const loadChoice =
+    typeof options.loadConfig === "function"
+      ? options.loadConfig
+      : async () => {
+          const invoke = await resolveInvoke(options);
+          const config = await invoke("get_config");
+          return config && typeof config === "object" ? config.read_aloud_voice : "";
+        };
+  const runWarmup =
+    typeof options.warmup === "function"
+      ? options.warmup
+      : (voice, onFailure) => warmupVoiceStudio({ invoke: options.invoke, voice, onFailure });
+  const wait =
+    typeof options.wait === "function"
+      ? options.wait
+      : (ms) =>
+          new Promise((resolve) => {
+            const timer = setTimeout(resolve, ms);
+            if (timer && typeof timer.unref === "function") timer.unref();
+          });
+
+  let choice = "";
+  try {
+    choice = await loadChoice();
+  } catch (_) {
+    // Configuration illisible : rien ne se passe, aucune exception ne remonte.
+    return false;
+  }
+  if (!shouldPrewarmVoiceStudio(choice)) return false;
+
+  const voice = voiceStudioProfileIdFor(choice);
+  const attempt = async () => {
+    let reason = "";
+    try {
+      const ok = await runWarmup(voice, (cause) => {
+        reason = String(cause == null ? "" : cause);
+      });
+      return { ok: ok === true, reason };
+    } catch (error) {
+      return { ok: false, reason: messageOf(error) };
+    }
+  };
+
+  const first = await attempt();
+  if (first.ok) return true;
+  if (!isTransientWarmupFailure(first.reason)) return false;
+  try {
+    await wait(VOICESTUDIO_PREWARM_RETRY_MS);
+  } catch (_) {
+    return false;
+  }
+  return (await attempt()).ok;
 }

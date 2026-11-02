@@ -827,6 +827,16 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   quelques **groupes de phrases**, fabrique le son du premier groupe, puis prépare
   le suivant **pendant** que vous écoutez le précédent. L'attente ne se voit qu'au
   tout début, et il n'y a pas de blanc entre les phrases.
+- **La voix est prête dès le lancement de Pilot** : quand votre voix imitée est
+  celle qui est choisie, Pilot **réveille le service une fois au démarrage**, en
+  arrière-plan — la fenêtre s'affiche comme d'habitude, rien n'attend, et la
+  **première** phrase lue n'a plus à subir la mise en route du logiciel. Si le
+  logiciel n'est pas encore lancé (ou pas encore prêt), Pilot **réessaie une
+  seule fois**, quelques secondes plus tard, et s'arrête là : **aucun message**,
+  aucun blocage, aucune erreur — la lecture continue simplement avec la voix
+  française locale, puis avec la voix du système. Ce réveil n'a lieu **que** si
+  vous avez choisi votre voix imitée : avec la voix du système ou une voix
+  locale, **rien** n'est réveillé, et **aucun son** n'est produit par ce réveil.
 - **Le tout premier mot après un long arrêt** peut demander quelques secondes au
   service (il se remet en route). Rien n'est bloqué pour autant : Pilot continue
   de répondre, et la lecture démarre dès que le son est prêt.
