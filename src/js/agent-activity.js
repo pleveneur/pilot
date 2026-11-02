@@ -325,7 +325,7 @@ export function isWorkingWithoutTab(agent) {
 // Defaut corrige (docs/rapports/RAPPORT-taches-invisibles.md § 3 cas (c),
 // correction : docs/rapports/RAPPORT-taches-demarrage-b1.md) : une mission
 // ACCEPTEE mais pas encore DEMARREE n'apparaissait dans AUCUN groupe. Le prompt
-// est pourtant enregistre par le coeur des l'envoi et publie (champs additifs
+// est pourtant enregistre par le coeur dès l'envoi et publie (champs additifs
 // `prompt` / `resume` de la supervision), mais l'etat publie reste « idle » tant
 // que le moteur n'a pas inscrit la session dans son observateur d'anomalie
 // (spawn de la session + sonde du backend : jusqu'a 2 x 5 s a froid, plus 2 s de
@@ -975,8 +975,6 @@ let refreshPendingForce = false;
 let refreshClock = 0;
 let refreshPendingForceAt = 0;
 let refreshReadStartedAt = 0;
-// Le vol en cours a-t-il lu la supervision COMPLÈTE ?
-let refreshFetchedSupervision = false;
 /** Instant monotone suivant (seul ordonnanceur des demandes de relecture). */
 function nextRefreshTick() {
   refreshClock += 1;
@@ -1114,9 +1112,21 @@ async function runActivityRefresh(force) {
       // L'instant de DÉBUT de la lecture est horodaté AVANT l'appel : c'est lui
       // qui décide si une demande forcée arrivée pendant le vol est déjà
       // satisfaite (elle ne l'est que si la lecture a commencé après elle).
-      refreshReadStartedAt = nextRefreshTick();
-      refreshFetchedSupervision = true;
-      const sup = await invoke("get_agent_supervision");
+      const readStartedAt = nextRefreshTick();
+      refreshReadStartedAt = readStartedAt;
+      let sup;
+      try {
+        sup = await invoke("get_agent_supervision");
+      } catch (_) {
+        // LECTURE LOURDE ÉCHOUÉE (moteur injoignable, réponse illisible) : elle
+        // n'a RIEN lu, elle ne peut donc satisfaire AUCUNE demande. L'instant de
+        // début est remis à zéro — « ce vol n'a pas lu la vue lourde » — pour
+        // que la demande forcée arrivée pendant le vol soit REJOUÉE ; la
+        // signature n'est pas mémorisée, donc la prochaine sonde retentera
+        // d'elle-même. L'affichage connu est gardé : aucune publication.
+        if (refreshReadStartedAt === readStartedAt) refreshReadStartedAt = 0;
+        return;
+      }
       currentSupervision = sup || null;
       if (sessions !== null) lastProbeSignature = signature;
     }
@@ -1134,15 +1144,18 @@ async function runActivityRefresh(force) {
  * à la fois ; une demande arrivée pendant ce temps est coalescée (elle est
  * rejouée à la fin, une seule fois) au lieu d'empiler des appels concurrents.
  *
- * UNE DEMANDE FORCÉE N'EST JAMAIS JETÉE (revue du 2026-11-15). Le drapeau
- * « le vol a lu la supervision complète » ne dit PAS « il l'a lue après
+ * UNE DEMANDE FORCÉE N'EST JAMAIS JETÉE (revue du 2026-11-15). Savoir
+ * qu'« une lecture lourde a eu lieu » ne dit PAS « elle a eu lieu après
  * l'écriture du prompt » : sur le chemin normal d'une mission déléguée, le
  * démarrage de la session émet un push (`set_state(Running)`) qui lance une
  * lecture lourde, PUIS le prompt est envoyé, PUIS la relecture est demandée —
  * la demande arrive donc pendant une lecture qui l'a précédée. La règle est
  * donc une règle d'ORDRE : la demande est horodatée, le début de la lecture
  * lourde est horodaté, et le rejeu n'est sauté que si la demande est ANTÉRIEURE
- * au début de la lecture qui vient de finir. Aucun mécanisme concurrent ajouté.
+ * au début de la lecture qui vient de finir. Une lecture qui a ÉCHOUÉ ne
+ * compte pas (son instant de début est remis à zéro, voir
+ * `runActivityRefresh`) : elle n'a rien lu, donc rien satisfait.
+ * Aucun mécanisme concurrent ajouté.
  * @param {boolean} [force] sonde lourde exigée (push `agent-state-changed`).
  */
 function activityRefresh(force = false) {
@@ -1156,7 +1169,6 @@ function activityRefresh(force = false) {
   refreshInFlight = runActivityRefresh(force).finally(() => {
     const readStartedAt = refreshReadStartedAt;
     refreshInFlight = null;
-    refreshFetchedSupervision = false;
     refreshReadStartedAt = 0;
     const pendingAt = refreshPendingForceAt;
     // Satisfaite SEULEMENT si la lecture lourde a commencé APRÈS la demande.

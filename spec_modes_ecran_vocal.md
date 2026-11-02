@@ -415,8 +415,9 @@ une seule — l'indice exact du propriétaire. Rapport :
   éventuel ne remonte **jamais** dans le `try` du tour (il ferait conclure
   « runAgentTurn error » et pourrait arrêter un process fraîchement lancé).
 - **Règle de fraîcheur — une demande forcée n'est JAMAIS jetée** (suite de la revue du
-  2026-11-15, point bloquant levé). Le drapeau « le vol a lu la vue complète » ne dit pas
-  « il l'a lue **après** l'écriture du prompt ». La demande forcée est donc **horodatée**
+  2026-11-15, point bloquant levé). Savoir qu'« une lecture lourde a eu lieu » ne dit pas
+  « elle a eu lieu **après** l'écriture du prompt » (l'ancien drapeau, retiré, ne
+  répondait pas à cette question). La demande forcée est donc **horodatée**
   et le **début de la lecture lourde** en vol aussi (horloge **monotone** interne,
   `refreshPendingForceAt` / `refreshReadStartedAt`, `src/js/agent-activity.js`) : le rejeu
   n'est sauté que si la demande est **antérieure** au début de la lecture qui vient de
@@ -428,6 +429,12 @@ une seule — l'indice exact du propriétaire. Rapport :
   une lecture qui l'a
   **précédée**, elle doit donc être rejouée. Aucun mécanisme concurrent ajouté : un seul
   ordonnanceur, un seul rejeu.
+- **Une lecture qui ÉCHOUE ne satisfait aucune demande** (même règle, cas de panne) :
+  quand `get_agent_supervision` rejette (moteur injoignable, réponse illisible), son
+  instant de début est **remis à zéro** — le vol n'a **rien** lu — donc une demande
+  arrivée pendant ce vol est **rejouée**, la signature n'est **pas** mémorisée (la sonde
+  suivante retentera d'elle-même) et l'affichage connu est **conservé** (aucune exception
+  ne remonte, aucune lecture vide n'écrase la colonne).
 - **Ce qui ne change pas** : la composition de la file et le rang → mission restent dans
   leur source unique (`project-queue-view.js`, `project-task-queue.js`) ; la boucle de 2 s
   reste légère ; une mission **acceptée mais pas encore démarrée** peut se montrer un
@@ -441,7 +448,10 @@ une seule — l'indice exact du propriétaire. Rapport :
   suivante, puis demande de relecture — la colonne doit afficher la nouvelle mission. Ce
   cas rejoue le **store réel** (`subscribeAgentActivity`) avec `invoke` simulé et échoue
   sans la règle de fraîcheur (2 lectures lourdes au lieu de 3, libellé resté sur la
-  mission précédente).
+  mission précédente). Le même verrou tient les deux autres branches de la règle : une
+  demande **sautée** quand la lecture commence **après** elle (aucune lecture inutile,
+  compteur à 2) et une lecture **échouée** qui ne satisfait rien (la demande est rejouée,
+  compteur à 3).
 
 ### La colonne de gauche : l'aperçu de la discussion (lot 3, livré)
 

@@ -47,6 +47,7 @@ const AGENT = "codeur";
 // est le « Tâche : » du prompt (shortMission), jamais le résumé de l'autre.
 const MISSION_A = "## Objectif\nTâche : corriger la barre du bas\n";
 const MISSION_B = "## Objectif\nTâche : corriger le libelle de la tache en cours\n";
+const MISSION_C = "## Objectif\nTâche : verifier la file d'attente\n";
 
 /** Supervision LOURDE telle que `get_agent_supervision` la rend à un instant donné. */
 function supervision({ prompt, resume, state = "idle" }) {
@@ -213,10 +214,10 @@ describe("le correctif est branché au seul moment où le texte change", () => {
  * PUIS `refreshAgentMissionDisplay()`.
  *
  * La demande forcée tombe donc pendant une lecture qui a COMMENCÉ AVANT elle :
- * elle doit être REJOUÉE, jamais jetée. Avant le correctif, `refreshFetchedSupervision`
- * (« le vol a lu la vue complète ») suffisait à l'absorber — mais une lecture
- * commencée avant l'écriture du prompt ne peut pas en rapporter le texte : la
- * colonne restait sur la mission PRÉCÉDENTE pour toute la mission.
+ * elle doit être REJOUÉE, jamais jetée. L'ancien drapeau « le vol a lu la vue
+ * complète » suffisait à l'absorber — mais une lecture commencée avant
+ * l'écriture du prompt ne peut pas en rapporter le texte : la colonne restait
+ * sur la mission PRÉCÉDENTE pour toute la mission.
  */
 describe("revue du 2026-11-15 — une demande forcée n'est jamais jetée", () => {
   const LIGHT = "agent_activity_probe";
@@ -225,6 +226,8 @@ describe("revue du 2026-11-15 — une demande forcée n'est jamais jetée", () =
   let promptActuel = MISSION_A;
   let heavyCalls = 0;
   let gate = null; // promesse non résolue : la lecture lourde reste EN VOL
+  let lightGate = null; // promesse non résolue : la sonde LÉGÈRE (donc la lecture lourde n'a pas commencé)
+  let heavyFail = 0; // nombre de lectures lourdes qui ÉCHOUENT avant de rendre la main
 
   async function flush() {
     for (let i = 0; i < 80; i++) await Promise.resolve();
@@ -245,6 +248,8 @@ describe("revue du 2026-11-15 — une demande forcée n'est jamais jetée", () =
     promptActuel = MISSION_A;
     heavyCalls = 0;
     gate = null;
+    lightGate = null;
+    heavyFail = 0;
     vi.mocked(listen).mockReset();
     vi.mocked(listen).mockImplementation((_event, handler) => {
       storeListener = handler;
@@ -253,9 +258,11 @@ describe("revue du 2026-11-15 — une demande forcée n'est jamais jetée", () =
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockImplementation(async (cmd) => {
       if (cmd === LIGHT) {
-        return {
+        const light = {
           sessions: [{ project: PROJ, agent: AGENT, alive: true, toolInProgress: true }],
         };
+        if (lightGate) await lightGate;
+        return light;
       }
       if (cmd === HEAVY) {
         heavyCalls += 1;
@@ -264,6 +271,10 @@ describe("revue du 2026-11-15 — une demande forcée n'est jamais jetée", () =
         // défaut visible — le prompt de la nouvelle mission n'est pas encore écrit.
         const lu = supervision({ prompt: promptActuel, resume: "", state: "running" });
         if (gate) await gate;
+        if (heavyFail > 0) {
+          heavyFail -= 1;
+          throw new Error("supervision illisible");
+        }
         return lu;
       }
       return undefined;
@@ -309,6 +320,86 @@ describe("revue du 2026-11-15 — une demande forcée n'est jamais jetée", () =
     expect(heavyCalls).toBe(3);
     expect(texteEnCours(published.at(-1))).toContain("libelle de la tache en cours");
     expect(texteEnCours(published.at(-1))).not.toContain("barre du bas");
-    expect(texteEnCours(published.at(-1))).not.toContain("barre du bas");
+  });
+
+  it("une demande SAUTÉE (la lecture commence après elle) puis une demande REJOUÉE", async () => {
+    const mod = await import("./agent-activity.js");
+    const published = [];
+    mod.subscribeAgentActivity((list) => published.push(list));
+    await flush();
+    expect(heavyCalls).toBe(1);
+
+    // ── 1. La demande arrive PENDANT un vol, mais AVANT que la lecture lourde
+    //       commence (le vol en est encore à sa sonde légère). La lecture qui
+    //       suit lit donc forcément le texte déjà écrit : la demande est
+    //       SATISFAITE, aucun rejeu — donc aucune lecture inutile.
+    let releaseLight = null;
+    lightGate = new Promise((resolve) => {
+      releaseLight = resolve;
+    });
+    storeListener({ payload: { agentId: AGENT } }); // vol FORCÉ engagé
+    promptActuel = MISSION_B;
+    const sautee = mod.refreshAgentMissionDisplay(); // demande pendant le vol
+    releaseLight();
+    await sautee;
+    await flush();
+    lightGate = null;
+    // Une seule lecture lourde a eu lieu : celle qui a suivi la demande et qui a
+    // donc vu le bon texte. Sans la règle d'ORDRE (« rejouer seulement si la
+    // demande n'est pas antérieure à la lecture »), cette demande serait rejouée
+    // pour rien : 3 lectures.
+    expect(heavyCalls).toBe(2);
+    expect(texteEnCours(published.at(-1))).toContain("libelle de la tache en cours");
+
+    // ── 2. La même demande, mais tombant PENDANT la lecture lourde : elle est
+    //       REJOUÉE, une seule fois, et la colonne prend le texte de la
+    //       nouvelle mission.
+    let release = null;
+    gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    storeListener({ payload: { agentId: AGENT } });
+    await flush();
+    expect(heavyCalls).toBe(3);
+    promptActuel = MISSION_C;
+    const rejouee = mod.refreshAgentMissionDisplay();
+    gate = null;
+    release();
+    await rejouee;
+    await flush();
+    expect(heavyCalls).toBe(4);
+    expect(texteEnCours(published.at(-1))).toContain("verifier la file d'attente");
+  });
+
+  it("une lecture lourde qui ÉCHOUE ne satisfait aucune demande : la relecture est REJOUÉE", async () => {
+    const mod = await import("./agent-activity.js");
+    const published = [];
+    mod.subscribeAgentActivity((list) => published.push(list));
+    await flush();
+    expect(heavyCalls).toBe(1);
+    expect(texteEnCours(published.at(-1))).toContain("barre du bas");
+
+    // Le vol de la mission suivante : sa lecture lourde ÉCHOUE (supervision
+    // illisible / moteur injoignable). La demande forcée tombe PENDANT ce vol,
+    // avant le début de la lecture — avec une lecture RÉUSSIE elle serait sautée
+    // (cas ci-dessus) ; comme la lecture n'a RIEN lu, elle ne peut rien
+    // satisfaire et la demande doit être rejouée.
+    let releaseLight = null;
+    lightGate = new Promise((resolve) => {
+      releaseLight = resolve;
+    });
+    storeListener({ payload: { agentId: AGENT } });
+    promptActuel = MISSION_B;
+    heavyFail = 1;
+    const demande = mod.refreshAgentMissionDisplay();
+    releaseLight();
+    await demande;
+    await flush();
+    lightGate = null;
+
+    // Lecture échouée (2) + rejeu qui lit vraiment (3) : l'échec n'a pas absorbé
+    // la demande, et l'affichage connu n'a pas été écrasé par une lecture vide.
+    expect(heavyCalls).toBe(3);
+    expect(texteEnCours(published.at(-1))).toContain("libelle de la tache en cours");
   });
 });
