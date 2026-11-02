@@ -526,6 +526,37 @@ defaut et le repli**).
 11. **Écouter avant de choisir** : l'entrée imitée passe par l'aperçu **existant**
     (`previewVoice` → `createSpeaker`), avec la phrase d'exemple commune : aucun
     second chemin de lecture.
+12. **Ce que l'utilisateur doit comprendre est ÉCRIT dans les réglages.** La voix
+    imitée ne vient pas d'un moteur embarqué : c'est un **logiciel séparé**
+    (VoiceStudio) qu'il installe et **lance** lui-même sur le **même ordinateur**.
+    La section « Lecture des réponses » (Options → Assistant) porte donc une
+    phrase qui le dit, en clair et en français : (a) logiciel **séparé**, à
+    installer soi-même sur cet ordinateur, que Pilot n'installe pas, ne lance pas
+    et ne télécharge pas ; (b) il doit être **lancé et rester ouvert** pendant la
+    lecture, c'est lui qui fabrique le son ; (c) **où le récupérer** — et comme
+    Pilot n'en embarque aucun et que le dépôt ne contient **aucune adresse** de
+    téléchargement, la phrase le dit franchement (« Pilot ne fournit pas ce
+    logiciel et ne donne aucune adresse de téléchargement ; installez-le depuis
+    la source dont vous disposez déjà ») : **aucune URL, aucun nom de domaine,
+    aucun nom de paquet, aucune commande n'est inventé** ; le geste réel qui
+    remet la liste à jour, « Vérifier à nouveau », est nommé ; (d) service absent
+    → la lecture **ne s'arrête pas** (voix française locale, puis voix du
+    système), l'annonce se fait **à côté du bouton « Écouter »**.
+    La phrase est **toujours affichée** dans la section, quel que soit l'état du
+    service : la réserver au cas « service présent » la cacherait exactement à
+    celui qui ne connaît pas le logiciel. Elle est écrite à **un seul endroit**
+    (`src/js/voicestudio-explication.js`, module **pur** : `VOICESTUDIO_EXPLAIN_TEXT`
+    et `fillVoiceStudioExplanation(nœud)`, qui n'écrit que dans le nœud qu'on lui
+    passe) ; `index.html` en porte une **copie de repli lisible** si le script n'a
+    pas encore tourné, et l'égalité des deux textes est **vérifiée** par le test.
+    **Aucun réglage nouveau** : `read_aloud_voice` reste le seul champ, et le
+    service absent garde le comportement actuel (repli visible, aucune erreur
+    bloquante). Couverture : `src/js/voicestudio-explique-dans-les-reglages.test.js`
+    (il échoue si la phrase quitte l'écran, si les deux copies divergent, ou si
+    une adresse apparaît dans le texte). **Manque connu, décision du
+    propriétaire** : l'adresse de téléchargement de VoiceStudio n'existe nulle
+    part dans le dépôt — le jour où il en fournit une, c'est ce module, et lui
+    seul, qui la portera.
 
 ## 5. Portée
 
@@ -578,7 +609,11 @@ imitée ; choix mémorisé jamais perdu de la liste) et, côté Rust, les tests 
 `tts_voicestudio` (corps JSON en UTF-8 avec accents, voix vide → `default`,
 seuls les vrais WAV acceptés, profils lus par identifiant **et** par nom, message
 d'explication d'une voix inconnue, phrase d'état qui nomme **toujours** le repli
-Piper, texte trop long refusé).
+Piper, texte trop long refusé). `src/js/voicestudio-explique-dans-les-reglages.test.js`
+verrouille l'**explication affichée** (§ 4 quater, point 12 : logiciel séparé,
+installé et lancé sur cet ordinateur, repli annoncé, où le récupérer, **aucune
+adresse inventée**, texte identique dans le module et dans `index.html`, écriture
+au rendu de la section et jamais masquée).
 
 `voix-locale-choix.test.js` ajoute les tests qui **mordent** sur cet incident :
 (a) avec un moteur partagé, la voix **choisie** est réellement synthétisée

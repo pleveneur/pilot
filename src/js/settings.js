@@ -66,6 +66,11 @@ import {
   voiceStudioProfileIdFor,
   warmupVoiceStudio,
 } from "./voicestudio-voice.js";
+// Explication de la voix IMITÉE : le texte est écrit à UN SEUL endroit (module
+// pur, testé sous Node) et recopié tel quel dans la section « Lecture des
+// réponses » au rendu. Il dit que VoiceStudio est un logiciel séparé, à installer
+// et à lancer sur ce même ordinateur, et où le prendre.
+import { fillVoiceStudioExplanation } from "./voicestudio-explication.js";
 // Mode Vocal : la valeur par défaut du délai d'envoi, ses bornes, son pas et le
 // libellé lisible viennent de la SOURCE UNIQUE des décisions du mode Vocal
 // (`vocal-conversation.js`, pures) : aucun nombre n'est recopié ici.
@@ -828,6 +833,12 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
    * @param {object|null} local état du moteur de voix locale (pour ce modèle)
    */
   function renderReadAloudVoice(wanted, local) {
+    // Explication de la voix imitée : TOUJOURS visible dans la section, quel que
+    // soit l'état du service. C'est précisément quand le service n'est pas
+    // installé que l'utilisateur a besoin de savoir qu'il existe et où le
+    // prendre : la masquer dans ce cas la rendrait inutile. Rien à cliquer, rien
+    // à installer ici, et le service absent ne change rien au reste de l'écran.
+    fillVoiceStudioExplanation(readAloudVoiceStudioNote);
     if (!selectReadAloudVoice) return;
     const voices = availableVoices();
     // État du service de voix imitée : lu, jamais deviné. Sans lui, la liste ne
@@ -1115,6 +1126,10 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const selectReadAloudVoice = document.getElementById("setting-read-aloud-voice");
   const readAloudStateEl = document.getElementById("read-aloud-state");
   const readAloudVoiceNote = document.getElementById("read-aloud-voice-note");
+  // Explication de la VOIX IMITÉE (logiciel séparé VoiceStudio, à installer et à
+  // lancer sur ce même ordinateur) : ligne de la même section, remplie par
+  // `fillVoiceStudioExplanation` (source unique du texte).
+  const readAloudVoiceStudioNote = document.getElementById("read-aloud-voicestudio-note");
   // Ligne d'état du MOTEUR DE VOIX LOCALE (même section, même endroit unique).
   const readAloudLocalNote = document.getElementById("read-aloud-local-note");
   // Rangées d'écoute d'exemple : une par voix proposée (remplies par

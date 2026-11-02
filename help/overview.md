@@ -783,6 +783,19 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   entrée **« Ma voix imitée — <nom> (VoiceStudio) »**. C'est Pilot qui parle, mais
   avec **votre voix imitée**. Rien n'est installé ni téléchargé par Pilot : il
   **s'adresse au service déjà installé** sur la machine, qui garde votre voix.
+- **Ce logiciel n'est pas dans Pilot** : VoiceStudio est un **logiciel séparé**, à
+  **installer vous-même** sur **cet ordinateur**, et à **lancer** pour que ce choix
+  fonctionne — il doit rester ouvert pendant la lecture, c'est lui qui fabrique le
+  son de votre voix. La section **« Lecture des réponses »** écrit cela noir sur
+  blanc, et le dit aussi franchement sur un point qui compte : Pilot ne fournit
+  pas ce logiciel et **ne donne aucune adresse de téléchargement** ; installez-le
+  depuis la source dont vous disposez déjà, puis cliquez sur **« Vérifier à
+  nouveau »**. Vous n'avez donc rien à chercher dans Pilot, et rien n'est
+  téléchargé à votre place.
+- **L'explication reste affichée même quand le service manque** : c'est
+  précisément dans ce cas qu'elle sert. Elle n'ajoute aucun réglage, ne bloque
+  aucun bouton et ne change pas la voix choisie ; service absent, tout continue
+  de fonctionner comme avant (voix française locale, puis voix du système).
 - **Le service est éteint ou ne répond pas** : la lecture ne s'arrête pas et le
   son ne disparaît pas — elle **continue avec la voix locale (Piper)**, et vous le
   **voyez là où vous écoutez** : une ligne courte apparaît **à côté du bouton
