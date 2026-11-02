@@ -7246,10 +7246,25 @@ let vocalDicteeParGeste = false;
    * Le texte n'est PAS conservé dans la zone de saisie : il est déjà pris, il ne
    * peut donc pas être perdu — et la zone reste libre pour la demande suivante.
    *
+   * CORRECTIF « la barre du bas ne s'efface plus apres avoir parle » (2026-11-15) :
+   * cette promesse n'etait PAS tenue — la branche d'enfilage de `send` sortait
+   * avant le vidage de la zone (lignes du chemin normal, plus bas). Le texte
+   * transcrit restait donc dans le champ, la regle 2 de `vocalChromeVisible`
+   * (« un champ rempli ne s'efface jamais ») retenait le bas POUR DE BON, la
+   * dictee suivante le reprenait comme `preText`, et `flushDemandesEnAttente`
+   * le restituait comme « brouillon ». Le vidage se fait donc ICI, avec les deux
+   * lignes EXACTES du chemin normal (aucun second mecanisme), et AVANT
+   * `applyVocalState()` pour que la decision voie un champ vide.
+   *
    * @param {string} text demande déjà validée (non vide)
    */
   function enfilerDemande(text) {
     demandesEnAttente = [...demandesEnAttente, text];
+    // Le texte est PRIS (il vit dans la file) : la zone est liberee ici, comme
+    // sur le chemin d'envoi normal. Rien n'est perdu, et le champ vide rend
+    // l'effacement du bas possible de nouveau (regle 2 de `vocal-chrome.js`).
+    inputEl.value = "";
+    inputEl.style.height = "auto";
     tourEnCoursVu = false;
     busyNotified = true;
     statusEl.textContent = "🕓 Demande en attente";
@@ -7356,6 +7371,9 @@ let vocalDicteeParGeste = false;
       enAttente: demandesEnAttente.length,
     });
     if (decisionDemande.action === DEMANDE_ENFILER) {
+      // La demande est PRISE : `enfilerDemande` libere la zone de saisie. Le
+      // texte ne doit pas y rester — un champ rempli interdit l'effacement du
+      // bas de l'ecran Vocal pour toute la session (regle 2 de `vocal-chrome.js`).
       enfilerDemande(text);
       return;
     }

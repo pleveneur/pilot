@@ -1164,6 +1164,44 @@ pas au minuteur, puisque `vocalSyncChrome` n'en pose aucun. Un **seul** appel au
 réveil subsiste dans toute la session de dictée (vérifié). Verrou :
 `src/js/vocal-resultat-vide-ne-reveille-pas-le-bas.test.js`.
 
+**Correctif du 2026-11-15 (second) — une demande mise en file libère la zone de
+saisie.** Quatrième cause du même symptôme, signalée par le propriétaire juste
+après la précédente : *« la barre s'efface bien au repos, mais dès que je
+prononce une phrase elle réapparaît et ne s'efface plus ensuite. »* Elle n'était
+ni dans la décision, ni dans le minuteur : elle était dans le **branchement du
+champ**.
+
+- **Le fait exact.** Quand une demande dictée arrive pendant que l'Assistant
+travaille, `send()` la met **en file** (décision de 2026-11, §6bis.1) et sortait
+**avant** le vidage de la zone : le texte transcrit **restait écrit dans le
+champ**. Or la règle 2 ci-dessus dit qu'un champ rempli interdit le masquage,
+sans aucune échéance. Le décompte des 10 000 ms sonnait donc dans le vide, à
+chaque fois, pour le reste de la session. La suite aggravait les choses : la
+dictée suivante reprenait ce texte comme `preText` (il s'accumulait), et
+`flushDemandesEnAttente` le restituait comme « brouillon » de l'utilisateur.
+- **Ce n'était pas un cas rare** : la dictée est **armée pendant que l'Assistant
+travaille** (règle 8 de `vocal-conversation.js`, décision de 2026-11 : « le tour
+en cours ne ferme plus l'oreille »). Parler pendant un tour est donc un cas
+**prévu**, et c'est même la raison d'être de la file ; il tombe exactement dans
+la branche fautive.
+- **Le correctif ne touche à AUCUNE des quatre règles** — la règle 2 reste
+« un champ rempli ne s'efface jamais » (décision du propriétaire). Il rétablit
+ce que le module promettait déjà deux fois en commentaire : *« le texte n'est
+pas conservé dans la zone de saisie : il est déjà pris »*. `enfilerDemande` vide
+donc la zone **au moment où le texte est pris**, avec **les deux lignes exactes
+du chemin d'envoi normal** (`inputEl.value = ""` puis
+`inputEl.style.height = "auto"`), et **avant** `applyVocalState()` pour que la
+décision voie un champ vide. Aucun minuteur, aucun stockage, aucun réglage :
+le décompte en cours, à son échéance, efface le bas comme au repos.
+- **Le refus reste tel quel** : quand la file est **pleine**, rien n'est pris et
+le texte **doit** rester dans le champ (message clair, rien n'est perdu).
+- Verrou : `src/js/barre-du-bas-apres-la-prise-de-parole.test.js` (le champ est
+la seule retenue ; le vidage se fait **après** la prise dans la file et
+**avant** la réapplication de l'écran ; le chemin normal et le refus sont
+inchangés ; après une phrase, le bas redevient effaçable, et sans le correctif
+il resterait visible à chaque échéance). Rapport :
+`docs/rapports/RAPPORT-barre-du-bas-apres-la-prise-de-parole.md`.
+
 **Le fondu** : **180 ms** (le `var(--transition)` du projet), opacité 1 → 0,
 `translateY(0)` → `translateY(8px)` (le bas s'enfonce vers le bas),
 `visibility: hidden` **à la fin** du fondu et `visible` **immédiatement** au
