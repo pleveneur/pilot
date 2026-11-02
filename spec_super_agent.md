@@ -3475,10 +3475,10 @@ sont cadencés à **15 s** et jugent l'admission avec le **même** prédicat
 `projectHasWorkingSession`. Ces chemins **répétés** appellent désormais
 `invoke("agent_activity_probe")` : commande Rust (`agent_service.rs`,
 `AgentService::agent_activity_probe`) qui projette le registre **en mémoire**
-sur `{ project, agent, alive, busy, toolInProgress, lastActivity }` — **aucun**
-accès base, **aucun** `get_state` RPC. Le verdict reste calculé à un **seul**
-endroit côté front (`isProjectWorking`, `src/js/exclusivity-queue.js`) : aucune
-règle dupliquée en Rust.
+sur `{ project, agent, alive, working, busy, toolInProgress, lastActivity }` —
+**aucun** accès base, **aucun** `get_state` RPC. Le verdict reste calculé à un
+**seul** endroit côté front (`isProjectWorking`, `src/js/exclusivity-queue.js`) :
+aucune règle dupliquée en Rust.
 
 `list_agent_sessions` (base + `get_state` **synchrone** par session vivante,
 timeout 2 s, + table `agents`) reste réservé aux usages **explicites** : outil
@@ -3530,6 +3530,56 @@ diagnostic dans `RAPPORT-sonde-sessions-15s.md`).
 - **Correctif connu, non appliqué** : faire passer `project-task-queue.js` par
   `projectKey` (comme les autres familles), avec le test d'unicité de file
   correspondant.
+
+### Une session au repos n'est **pas** un travail (état affiché = état réel)
+
+Le libellé « **en cours** », la pastille qui **respire**, la mission comptée dans
+« **Travail** » et la fiche « **Travail** » descendent tous de la **même**
+décision : `isAgentWorking(a)` (`src/js/agent-activity.js`), elle-même dérivée de
+l'**état** de la session (`running` / `compacting` → travail). Or cet état ne
+vivait que dans la vue **LOURDE** (`get_agent_supervision`), relue **uniquement**
+quand l'**ensemble** des sessions change (signature `projet + agent + vivacité`,
+`planActivityRefresh`) ou sur le push `agent-state-changed` — push émis par
+`set_visible` / `set_state` seulement, **jamais** à la fin d'un tour. Une session
+photographiée `running` pendant qu'elle travaillait restait donc `running` **à
+l'écran indéfiniment** : l'Assistante, dont la session ne se ferme jamais,
+s'affichait « en cours » et « respirait » sans rien faire.
+
+Deux règles, une par côté, suppriment la divergence :
+
+- **Moteur** : `anomaly::session_generating(entry)` (`src-tauri/src/anomaly.rs`)
+  = `busy` **et** dernier évènement ni `agent_settled` ni `agent_end`. C'est la
+  **seule** définition, appelée par la vue lourde (`dashboard.rs`) **et**
+  publiée par la sonde légère (champ `working`).
+- **Affichage** : `stateFromProbeActivity(state, probe)`
+  (`src/js/agent-activity.js`, **pure**) applique la sonde sur l'état connu :
+  processus mort → `stopped` ; le moteur dit qu'elle produit → `running` ; il dit
+  qu'elle ne produit pas → `idle` **seulement** si l'état connu affirmait le
+  contraire ; une session **parquée** reste `paused` ; **aucune preuve** (session
+  sans entrée d'observation, charge backend sans `working`) → l'état connu est
+  **conservé** — rien n'est inventé. Appelée par `mergeProbeActivity`, donc à
+  **chaque sonde (2 s)**.
+
+Conséquences voulues : une session **ouverte au repos** reste **listée** (décision
+« aucun agent invisible ») mais n'est **ni** « en cours » **ni** animée ; un
+travail **réel** reste « en cours », animé, et apparaît dans « Travail » **dès**
+son démarrage même si aucun rechargement lourd n'a eu lieu.
+
+**Aucune information ne dépend d'une animation** : la pastille garde sa couleur
+pleine, le nom de l'agent qui travaille reste en gras, la fiche écrit « Travail »
+ou « Repos », la mission porte « en cours » et sa durée. Sous
+`prefers-reduced-motion: reduce`, un bloc **en fin** de `src/css/style.css` coupe
+(`animation: none`) les six indicateurs d'activité — pastille de session, point du
+suivi, statut « en train de répondre », point de mission en cours, outil en cours,
+compteur du tableau de bord, respiration de la barre de saisie — **sans retirer
+un seul texte**.
+
+Couverture : `src/js/au-repos-ce-n-est-pas-du-travail.test.js` (cas a/b/c passant
+par la chaîne réelle `mergeProbeActivity → flattenAgents → buildRunningMissions →
+rendus`, plus repli `busy` / `paused` / `alive=false` et le bloc de mouvement
+réduit), `session_generating_needs_busy_without_a_finished_turn` et
+`activity_probe_entry_publishes_the_working_decision` (Rust). Rapport :
+`docs/rapports/RAPPORT-au-repos-ce-n-est-pas-du-travail.md`.
 
 ---
 

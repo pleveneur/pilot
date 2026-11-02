@@ -4048,10 +4048,17 @@ fn session_entry_json(
 /// testable sans `AppHandle`, aucun accès base ni RPC).
 ///
 /// Les CLÉS sont volontairement les MÊMES que celles lues par le décideur du
-/// frontend (`isProjectWorking` de `exclusivity-queue.js`) : `project`, `agent`,
-/// `alive` et — seulement si une activité a été enregistrée — `busy`,
-/// `toolInProgress`, `lastActivity`. Absence = « aucune preuve de travail »,
-/// exactement comme dans la vue d'ensemble `list_agent_sessions`.
+/// frontend (`isProjectWorking` de `exclusivity-queue.js`, `stateFromProbeActivity`
+/// de `agent-activity.js`) : `project`, `agent`, `alive` et — seulement si une
+/// activité a été enregistrée — `working`, `busy`, `toolInProgress`,
+/// `lastActivity`. Absence = « aucune preuve de travail », exactement comme dans
+/// la vue d'ensemble `list_agent_sessions`.
+///
+/// `working` est la décision d'État de travail (même règle que la vue lourde,
+/// `anomaly::session_generating`) : c'est elle qui fait repasser une session
+/// « au repos » à l'écran dès la fin de son tour, sans attendre une relecture
+/// lourde (correctif « au repos, ce n'est pas du travail »). `busy` reste publié
+/// tel quel (drapeau brut, autres consommateurs).
 fn activity_probe_entry(
     project: &str,
     agent: &str,
@@ -4065,6 +4072,7 @@ fn activity_probe_entry(
     });
     if let Some(a) = activity {
         let (iso, _relative) = anomaly::last_activity_info(a);
+        entry["working"] = Value::Bool(anomaly::session_generating(Some(a)));
         entry["busy"] = Value::Bool(a.busy);
         entry["toolInProgress"] = Value::Bool(a.tool_in_progress);
         if let Some(la) = iso {
@@ -5703,6 +5711,29 @@ mod tests {
                 absent
             );
         }
+    }
+
+    /// Sonde légère : elle publie la DÉCISION de travail (`working`), pas
+    /// seulement le drapeau brut `busy`. C'est ce champ que le frontend lit pour
+    /// repasser la session « au repos » à l'écran sans relecture lourde.
+    #[test]
+    fn activity_probe_entry_publishes_the_working_decision() {
+        // Tour terminé : `busy` resté vrai, mais `agent_end` reçu → pas travail.
+        let mut done = busy_anomaly_entry();
+        done.last_event = "agent_end".to_string();
+        let after_end = activity_probe_entry("/p/A", "codeur", true, Some(&done));
+        assert_eq!(after_end["busy"], serde_json::json!(true));
+        assert_eq!(
+            after_end["working"],
+            serde_json::json!(false),
+            "un tour termine n'est jamais publie comme du travail"
+        );
+        // En pleine génération : `working` vrai.
+        let running = activity_probe_entry("/p/A", "codeur", true, Some(&busy_anomaly_entry()));
+        assert_eq!(running["working"], serde_json::json!(true));
+        // Aucune activité connue : `working` absent (fail-open, rien d'inventé).
+        let unknown = activity_probe_entry("/p/A", "codeur", true, None);
+        assert!(unknown.get("working").is_none());
     }
 
     /// Mission en cours (affichage) : un envoi de prompt est mémorisé comme

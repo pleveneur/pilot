@@ -13431,3 +13431,33 @@ body.glass-refresh .vocal-side-tasks {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
+
+/* --- MOUVEMENT RÉDUIT : AUCUNE ANIMATION D'ACTIVITÉ --------------------
+   `prefers-reduced-motion: reduce` demande de ne pas animer. Les indicateurs
+   d'ACTIVITÉ (pastille de session, point du suivi, statut « en train de
+   répondre », point de mission en cours, outil en cours, compteur du tableau
+   de bord) pulsent en boucle : ce sont eux qui s'arrêtent ici.
+
+   RIEN N'EST PERDU : le travail se lit sans animation. La pastille garde sa
+   COULEUR pleine (les règles ci-dessus posent `background`/`opacity`, que
+   `animation: none` ne touche pas), le nom de l'agent travaillant reste en
+   gras (`working-background`), le statut garde sa couleur d'accent et son
+   TEXTE, la fiche dit « Travail » / « Repos », la mission en cours porte son
+   libellé « en cours » et sa durée. Aucun état n'est signalé par la seule
+   animation : la retirer ne retire aucune information.
+
+   Dernière règle du fichier, donc dernière dans la cascade : elle gagne sur
+   les règles `.breathing` énoncées plus haut, quelle que soit leur position. */
+@media (prefers-reduced-motion: reduce) {
+  #agent-activity-dot.breathing,
+  .agent-activity-item-dot.breathing,
+  .superagent.breathing,
+  .sa-immersive-dot.breathing,
+  .agent-status.agent-status-streaming,
+  .sa-missions-dot,
+  .agent-tool-inline.running .agent-tool-dot,
+  .dash-tracking-agent.busy i,
+  .agent-chat-input-bar.superagent-input-reflecting .agent-input {
+    animation: none;
+  }
+}

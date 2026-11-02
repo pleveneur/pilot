@@ -19,6 +19,7 @@ use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::agent_service::{ASSISTANT_SPACE, SUPERAGENT_ID};
+use crate::anomaly;
 use crate::super_agent;
 use crate::{run_captured, AppState};
 
@@ -1356,9 +1357,7 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             // busy, agent_settled/agent_end → fin de génération).
             let key = format!("\u{1f}{}", SUPERAGENT_ID);
             let busy = match app_state.agent_anomaly.lock() {
-                Ok(m) => m.get(&key).map_or(false, |e| {
-                    e.busy && e.last_event != "agent_settled" && e.last_event != "agent_end"
-                }),
+                Ok(m) => anomaly::session_generating(m.get(&key)),
                 Err(_) => false,
             };
             if busy { "running" } else { "idle" }
@@ -1371,9 +1370,7 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             // super-agent a un projet pseudo-global "" → clé `\u{1f}superagent`).
             let key = format!("{}\u{1f}{}", project, agent);
             let busy = match app_state.agent_anomaly.lock() {
-                Ok(m) => m.get(&key).map_or(false, |e| {
-                    e.busy && e.last_event != "agent_settled" && e.last_event != "agent_end"
-                }),
+                Ok(m) => anomaly::session_generating(m.get(&key)),
                 Err(_) => false,
             };
             if busy { "running" } else if state == "active" { "idle" } else { "paused" }

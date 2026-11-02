@@ -1109,12 +1109,71 @@ export function planActivityRefresh({
 }
 
 /**
+ * États de supervision qui SIGNIFIENT « cette session produit quelque chose ».
+ * `compacting` est traité comme `running` par `flattenAgents` (la session
+ * travaille, elle compacte).
+ */
+const PROBE_RUNNING_STATES = new Set(["running", "compacting"]);
+
+/**
+ * ÉTAT D'AFFICHAGE d'une session après la sonde LÉGÈRE (fonction PURE).
+ *
+ * POURQUOI CETTE FONCTION EXISTE — le défaut qu'elle répare (« au repos, ce
+ * n'est pas du travail ») : l'état affiché d'une session (`running` / `idle` /
+ * `paused` / `stopped`) ne vit que dans la vue LOURDE
+ * (`get_agent_supervision`). Or cette vue n'est relue QUE si l'ENSEMBLE des
+ * sessions change (`planActivityRefresh`, signature `projet + agent +
+ * vivacité`) ou sur le push `agent-state-changed` — push qu'émet uniquement
+ * `set_state` (`agent_service.rs`), jamais la fin d'un tour. Une session
+ * photographiée `running` pendant qu'elle travaillait restait donc `running`
+ * À L'ÉCRAN indéfiniment : pastille qui respire, libellé « en cours », mission
+ * comptée dans « Travail »… alors que le moteur savait depuis longtemps qu'elle
+ * était au repos. Le moteur publie pourtant CETTE vérité toutes les 2 s dans la
+ * sonde légère (champ `working`, à défaut `busy`) : le front l'ignorait.
+ *
+ * Règles, dans cet ordre (aucune n'invente un état) :
+ *  1. aucune sonde pour cette session → l'état connu est conservé ;
+ *  2. processus mort (`alive === false`) → un processus mort ne peut pas
+ *     produire : `stopped` s'il était annoncé `running` / `compacting` ; un état
+ *     déjà au repos (`idle`, `paused`) est conservé tel quel — il n'affirme
+ *     aucun travail, il n'y a donc rien à corriger ;
+ *  3. le moteur dit qu'elle produit (`working` / `busy` vrai) → `running` ;
+ *  4. le moteur dit qu'elle ne produit PAS → `idle` seulement si l'état connu
+ *     affirmait le contraire (`running` / `compacting`) ; `paused` (session
+ *     parquée) et `idle` sont conservés tels quels ;
+ *  5. le moteur ne dit rien de son travail (session sans entrée d'observation :
+ *     aucune preuve) → l'état connu est conservé.
+ * @param {string} state — état de la vue lourde (`running` | `idle` | `paused` | `stopped`).
+ * @param {{alive?:boolean,busy?:boolean,working?:boolean}|null} probe — entrée de sonde.
+ * @returns {string} état d'affichage.
+ */
+export function stateFromProbeActivity(state, probe) {
+  const current = typeof state === "string" && state ? state : "stopped";
+  if (!probe) return current;
+  if (probe.alive === false) {
+    return PROBE_RUNNING_STATES.has(current) ? "stopped" : current;
+  }
+  // `working` est la décision du moteur (même règle que la vue lourde) ; `busy`
+  // est le drapeau brut, conservé en repli pour une charge backend plus ancienne.
+  const working =
+    typeof probe.working === "boolean"
+      ? probe.working
+      : typeof probe.busy === "boolean"
+        ? probe.busy
+        : undefined;
+  if (working === undefined) return current;
+  if (working === true) return "running";
+  return PROBE_RUNNING_STATES.has(current) ? "idle" : current;
+}
+
+/**
  * Applique l'ACTIVITÉ de la sonde légère sur la supervision de référence
  * (fonction PURE : l'entrée n'est jamais mutée). Seuls les champs que la sonde
- * légère porte RÉELLEMENT sont repris — vivacité, outil en cours, dernière
- * activité ; les champs d'affichage (nom, état, onglet ouvert) restent ceux de
- * la supervision complète. Une session non listée par la sonde garde sa valeur
- * connue : rien n'est inventé.
+ * légère porte RÉELLEMENT sont repris — vivacité, travail en cours (donc
+ * l'ÉTAT d'affichage, voir `stateFromProbeActivity`), outil en cours, dernière
+ * activité ; les autres champs d'affichage (nom, onglet ouvert, mission)
+ * restent ceux de la supervision complète. Une session non listée par la sonde
+ * garde sa valeur connue : rien n'est inventé.
  * @param {object} supervision — sortie de `get_agent_supervision`.
  * @param {Array<object>} sessions — `sessions` de `agent_activity_probe`.
  * @returns {object} supervision fusionnée (même forme).
@@ -1155,6 +1214,12 @@ export function mergeProbeActivity(supervision, sessions) {
         if (typeof probe.lastActivity === "string" && probe.lastActivity) {
           next.lastActivity = probe.lastActivity;
         }
+        // ÉTAT RAFRAÎCHI À CHAQUE SONDE (2 s) : une session qui a fini son tour
+        // repasse `idle` sans attendre une relecture lourde qui n'arrive jamais
+        // (voir `stateFromProbeActivity`), et une session qui commence à
+        // travailler devient `running` de la même façon.
+        const state = stateFromProbeActivity(a.state, probe);
+        if (state !== a.state) next.state = state;
         return next;
       });
       return touched ? { ...proj, agents: mergedAgents } : proj;

@@ -355,6 +355,29 @@ pub fn make_observer(
     })
 }
 
+/// « La session est-elle en train de GÉNÉRER, à cet instant ? » — SEULE règle
+/// (fonction PURE), partagée par la vue LOURDE (`get_agent_supervision`,
+/// `dashboard.rs`) et par la sonde LÉGÈRE (`agent_activity_probe`,
+/// `agent_service.rs`).
+///
+/// POURQUOI ELLE EXISTE : le frontend décide « travaille / au repos » sur
+/// l'état publié par la vue lourde, et cet état ne vit que dans la vue lourde.
+/// La règle était recopiée à deux endroits (assistant, agents) sans être
+/// publiée par la sonde de 2 s : quand la fin de tour n'était pas relue, une
+/// session restait affichée « en cours » alors qu'elle était au repos. Une
+/// seule fonction, appelée par les deux vues, supprime cette divergence.
+///
+/// `busy` seul ne suffit pas : un `agent_end` / `agent_settled` **déjà reçu**
+/// dit que le tour est TERMINÉ, même si le drapeau n'a pas encore été remis à
+/// zéro (`agent_end` avec `willRetry: true` est l'inverse : le tour est
+/// partiel et `busy` reste volontairement vrai — c'est l'observateur qui en
+/// décide, ici on ne fait que lire).
+pub fn session_generating(entry: Option<&AgentAnomalyState>) -> bool {
+    entry.map_or(false, |e| {
+        e.busy && e.last_event != "agent_settled" && e.last_event != "agent_end"
+    })
+}
+
 /// Formate la dernière activité d'un agent en (timestamp ISO 8601 UTC, relatif
 /// « il y a X min »). `last_activity` (Instant, monotone) sert au relatif ;
 /// `last_activity_wall` (SystemTime, wall-clock) sert à l'ISO. Retourne
@@ -1246,6 +1269,38 @@ mod tests {
 
     fn ev(t: &str) -> Value {
         serde_json::json!({ "type": t })
+    }
+
+    /// RÈGLE UNIQUE « cette session génère-t-elle ? » (`session_generating`) :
+    /// c'est elle que lisent la vue lourde ET la sonde légère. Un `busy` vrai
+    /// APRÈS un `agent_end` / `agent_settled` déjà reçu ne vaut PAS travail —
+    /// sans quoi l'écran reste « en cours » alors que le tour est terminé (le
+    /// défaut « au repos, ce n'est pas du travail »). Aucune entrée = aucune
+    /// preuve = pas de travail.
+    #[test]
+    fn session_generating_needs_busy_without_a_finished_turn() {
+        assert!(!session_generating(None), "aucune entrée : aucune preuve");
+        let mut st = AgentAnomalyState {
+            last_activity: Instant::now(),
+            last_progress: Instant::now(),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "agent_start".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress: false,
+            tool_started_at: None,
+            produced_output: false,
+        };
+        assert!(session_generating(Some(&st)), "en pleine generation → travail");
+        st.last_event = "agent_end".to_string();
+        assert!(!session_generating(Some(&st)), "tour TERMINE → au repos");
+        st.last_event = "agent_settled".to_string();
+        assert!(!session_generating(Some(&st)), "tour regle → au repos");
+        st.last_event = "message_update".to_string();
+        st.busy = false;
+        assert!(!session_generating(Some(&st)), "busy faux → au repos");
     }
 
     /// Issue #89 : les réglages consommés par la boucle du moniteur sont extraits
