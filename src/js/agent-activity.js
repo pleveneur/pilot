@@ -20,9 +20,13 @@
 // sont persistés (localStorage) et restaurés au démarrage — dernier onglet
 // utilisé, sinon « Agents ».
 //
-// Source de vérité : `get_agent_supervision` (dashboard.rs), pollée toutes les
-// 2 s, + événement push `agent-state-changed` (Rust → JS) pour un rafraîchissement
-// immédiat. Aucune commande Rust ajoutée.
+// Source de vérité : `agent_activity_probe` (sonde LÉGÈRE, mémoire seule —
+// c'est le SEUL appel autorisé dans une boucle) toutes les 2 s, + la
+// supervision complète `get_agent_supervision` (dashboard.rs) UNIQUEMENT quand
+// elle est nécessaire (démarrage, changement d'ensemble des sessions, push
+// `agent-state-changed`) : elle lit la base par session, elle n'a donc rien à
+// faire dans une boucle. Voir `planActivityRefresh` / `mergeProbeActivity`.
+// Aucune commande Rust ajoutée.
 //
 // Le poll + le filtrage sont centralisés dans un « store » partagé
 // (subscribeAgentActivity) consommé par le panneau ci-dessus ET par le
@@ -933,26 +937,199 @@ export function renderMissionsPanelHtml(missions) {
 // Sémantique historique de l'indicateur (poll 2 s + push `agent-state-changed`,
 // filtrage flattenAgents), extraite d'initAgentActivity pour être réutilisée
 // sans doublon : un seul polling actif quelle que soit la consommation. En cas
-// d'échec de get_agent_supervision, aucun abonné n'est noté (pas de mise à
-// jour), comme avant.
+// d'échec de la sonde, aucun abonné n'est noté (pas de mise à jour), comme avant.
+//
+// DEUX SONDES, JAMAIS CONFONDUES (correctif gel de session, cause n° 1) :
+//   - `agent_activity_probe` = LÉGÈRE (lecture mémoire : projet, agent,
+//     vivacité, activité). C'est elle qui cadence la boucle de 2 s ;
+//   - `get_agent_supervision` = LOURDE (accès base par session sous verrou,
+//     et commande Rust synchrone). Elle n'est appelée que lorsque ses champs
+//     d'affichage manquent vraiment : première passe, changement d'ENSEMBLE des
+//     sessions (démarrage, arrêt, mort d'un processus) et push
+//     `agent-state-changed`. La boucle de 2 s ne l'appelle JAMAIS.
+// Une seule sonde en vol à la fois (`activityRefresh` ci-dessous) : deux
+// rafraîchissements ne peuvent plus se chevaucher.
 const activitySubscribers = new Set();
+const ACTIVITY_POLL_MS = 2000;
 let activityStarted = false;
 // Dernière liste/busy notifiés. `null` = store jamais alimenté.
 let currentActivityList = null;
 let currentActivityBusy = false;
+// Supervision COMPLÈTE de référence (seule porteuse des champs d'affichage :
+// nom, état, onglet ouvert). `null` tant que la sonde lourde n'a pas répondu.
+let currentSupervision = null;
+// Signature de l'ensemble des sessions vue par la DERNIÈRE sonde légère.
+let lastProbeSignature = "";
+// GARDE DE RÉENTRANCE : promesse de la sonde en vol, `null` = aucune.
+let refreshInFlight = null;
+// Demande reçue PENDANT une sonde en vol : coalescée, jamais empilée.
+let refreshPendingForce = false;
+// La sonde en vol a-t-elle lu la supervision COMPLÈTE ? (si oui, la demande
+// coalescée est déjà satisfaite : la lecture est postérieure au push.)
+let refreshFetchedSupervision = false;
 
-async function activityRefresh() {
+/**
+ * Signature déterministe de l'ENSEMBLE des sessions vues par la sonde légère :
+ * projet + agent + vivacité, triés. Fonction PURE.
+ * @param {Array<object>} sessions — `sessions` de `agent_activity_probe`.
+ * @returns {string}
+ */
+export function probeSessionsSignature(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  return list
+    .map((s) => {
+      const project = s && s.project != null ? String(s.project) : "";
+      const agent = s && s.agent != null ? String(s.agent) : "";
+      const alive = s && s.alive === true ? "1" : "0";
+      return `${project}\u001f${agent}\u001f${alive}`;
+    })
+    .sort()
+    .join("\u001e");
+}
+
+/**
+ * DÉCISION de rafraîchissement (fonction PURE, testable) : faut-il appeler la
+ * sonde LOURDE `get_agent_supervision` ?
+ *
+ * Règles, dans cet ordre :
+ *  1. store jamais alimenté → OUI (la première passe doit poser les champs
+ *     d'affichage) ;
+ *  2. push `agent-state-changed` (`force`) → OUI : c'est un vrai changement
+ *     d'état d'affichage, il vient d'un événement, jamais d'une boucle ;
+ *  3. sonde légère indisponible → NON (on garde l'affichage connu, aucune
+ *     régression visuelle) ;
+ *  4. ensemble des sessions CHANGÉ (démarrage, arrêt, mort) → OUI ;
+ *  5. sinon → NON : la boucle périodique ne paie pas la sonde lourde.
+ * @param {{hasSupervision?:boolean,cachedSignature?:string,signature?:string,available?:boolean,force?:boolean}} input
+ * @returns {{fetchSupervision:boolean}}
+ */
+export function planActivityRefresh({
+  hasSupervision = false,
+  cachedSignature = "",
+  signature = "",
+  available = true,
+  force = false,
+} = {}) {
+  if (!hasSupervision) return { fetchSupervision: true };
+  if (force === true) return { fetchSupervision: true };
+  if (!available) return { fetchSupervision: false };
+  if (signature !== cachedSignature) return { fetchSupervision: true };
+  return { fetchSupervision: false };
+}
+
+/**
+ * Applique l'ACTIVITÉ de la sonde légère sur la supervision de référence
+ * (fonction PURE : l'entrée n'est jamais mutée). Seuls les champs que la sonde
+ * légère porte RÉELLEMENT sont repris — vivacité, outil en cours, dernière
+ * activité ; les champs d'affichage (nom, état, onglet ouvert) restent ceux de
+ * la supervision complète. Une session non listée par la sonde garde sa valeur
+ * connue : rien n'est inventé.
+ * @param {object} supervision — sortie de `get_agent_supervision`.
+ * @param {Array<object>} sessions — `sessions` de `agent_activity_probe`.
+ * @returns {object} supervision fusionnée (même forme).
+ */
+export function mergeProbeActivity(supervision, sessions) {
+  const projects = supervision && supervision.projects;
+  if (!Array.isArray(projects)) return supervision;
+  const list = Array.isArray(sessions) ? sessions : [];
+  if (!list.length) return supervision;
+  const byKey = new Map();
+  for (const s of list) {
+    if (!s) continue;
+    const project = s.project != null ? String(s.project) : "";
+    const agent = s.agent != null ? String(s.agent) : "";
+    byKey.set(`${project}\u001f${agent}`, s);
+  }
+  return {
+    ...supervision,
+    projects: projects.map((proj) => {
+      const path = proj && proj.path != null ? String(proj.path) : "";
+      const agents = proj && Array.isArray(proj.agents) ? proj.agents : [];
+      let touched = false;
+      const mergedAgents = agents.map((a) => {
+        const key = `${path}\u001f${a && a.agent != null ? String(a.agent) : ""}`;
+        const probe = byKey.get(key);
+        if (!probe) return a;
+        touched = true;
+        const next = { ...a };
+        if (typeof probe.alive === "boolean") next.alive = probe.alive;
+        // Absence de `toolInProgress` côté sonde = aucun outil en cours (même
+        // lecture que flattenAgents : seul `true` fait « travailler »).
+        next.toolInProgress = probe.toolInProgress === true;
+        if (typeof probe.lastActivity === "string" && probe.lastActivity) {
+          next.lastActivity = probe.lastActivity;
+        }
+        return next;
+      });
+      return touched ? { ...proj, agents: mergedAgents } : proj;
+    }),
+  };
+}
+
+/** Notifie les abonnés du dernier état calculé. */
+function publishActivity(sup) {
+  const list = flattenAgents(sup, lastActivity, workingSince);
+  currentActivityList = list;
+  currentActivityBusy = anyBusy(list);
+  for (const cb of [...activitySubscribers]) {
+    try { cb(currentActivityList, currentActivityBusy); } catch (_) {}
+  }
+}
+
+async function runActivityRefresh(force) {
   try {
-    const sup = await invoke("get_agent_supervision");
-    const list = flattenAgents(sup, lastActivity, workingSince);
-    currentActivityList = list;
-    currentActivityBusy = anyBusy(list);
-    for (const cb of [...activitySubscribers]) {
-      try { cb(currentActivityList, currentActivityBusy); } catch (_) {}
+    // 1. SONDE LÉGÈRE (mémoire seule) — le seul appel de la boucle.
+    let sessions = null;
+    try {
+      const probe = await invoke("agent_activity_probe");
+      sessions = (probe && probe.sessions) || [];
+    } catch (_) {
+      sessions = null; // sonde indisponible : on garde l'état connu
     }
+    const signature = sessions === null ? "" : probeSessionsSignature(sessions);
+    const plan = planActivityRefresh({
+      hasSupervision: currentSupervision !== null,
+      cachedSignature: lastProbeSignature,
+      signature,
+      available: sessions !== null,
+      force,
+    });
+    // 2. SONDE LOURDE — seulement si elle est nécessaire (jamais en boucle).
+    if (plan.fetchSupervision) {
+      refreshFetchedSupervision = true;
+      const sup = await invoke("get_agent_supervision");
+      currentSupervision = sup || null;
+      if (sessions !== null) lastProbeSignature = signature;
+    }
+    if (!currentSupervision) return; // jamais alimenté → aucune mise à jour
+    publishActivity(
+      sessions === null ? currentSupervision : mergeProbeActivity(currentSupervision, sessions)
+    );
   } catch (_) {
     /* ignore : pas de mise à jour */
   }
+}
+
+/**
+ * Déclenche un rafraîchissement. GARDE DE RÉENTRANCE : une seule sonde en vol
+ * à la fois ; une demande arrivée pendant ce temps est coalescée (elle est
+ * rejouée à la fin, une seule fois) au lieu d'empiler des appels concurrents.
+ * @param {boolean} [force] sonde lourde exigée (push `agent-state-changed`).
+ */
+function activityRefresh(force = false) {
+  if (refreshInFlight) {
+    if (force) refreshPendingForce = true;
+    return refreshInFlight;
+  }
+  refreshInFlight = runActivityRefresh(force).finally(() => {
+    const fetched = refreshFetchedSupervision;
+    refreshInFlight = null;
+    refreshFetchedSupervision = false;
+    const replay = refreshPendingForce && !fetched;
+    refreshPendingForce = false;
+    if (replay) activityRefresh(true);
+  });
+  return refreshInFlight;
 }
 
 /** Démarre le polling partagé (une seule fois, au premier abonné). */
@@ -960,13 +1137,15 @@ function ensureActivityStore() {
   if (activityStarted) return;
   activityStarted = true;
   // Push immédiat : changement d'état d'un agent (mise à jour lastActivity).
+  // Un changement d'état est un vrai changement D'AFFICHAGE : la supervision
+  // complète est redemandée (comme avant), mais une seule fois à la fois.
   listen("agent-state-changed", (event) => {
     const p = event.payload || {};
     if (p.agentId) lastActivity.set(p.agentId, Date.now());
-    activityRefresh();
+    activityRefresh(true);
   }).catch(() => {});
-  // Poll toutes les 2 s (source de vérité get_agent_supervision).
-  setInterval(activityRefresh, 2000);
+  // Poll toutes les 2 s : SONDE LÉGÈRE uniquement (mémoire, sans base ni RPC).
+  setInterval(activityRefresh, ACTIVITY_POLL_MS);
   activityRefresh();
 }
 

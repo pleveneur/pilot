@@ -670,17 +670,41 @@ pub fn send_agent_command_to(
     crate::agents::send_command_to_agent(state.inner(), &project, &agent_id, command)
 }
 
-pub(crate) fn do_get_agent_state(state: &AppState) -> Result<Value, String> {
-    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+/// Cœur **synchrone** de `get_agent_state`, sans `&AppState` : il ne lui faut
+/// que le service d'agents et le projet. Variante indispensable au déport de la
+/// commande Tauri hors du thread principal (`spawn_blocking` ne peut pas
+/// transporter une référence `&AppState` dans une closure `'static`).
+pub(crate) fn do_get_agent_state_in(
+    agent_service: &crate::agent_service::AgentService,
+    project: &str,
+) -> Result<Value, String> {
     let cmd = serde_json::json!({ "type": "get_state" });
-    state.agent_service.with_active_session(&project, |session| {
+    agent_service.with_active_session(project, |session| {
         rpc_manager::send_command_sync_timeout(session, cmd, 8)
     })?
 }
 
+pub(crate) fn do_get_agent_state(state: &AppState) -> Result<Value, String> {
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+    do_get_agent_state_in(&state.agent_service, &project)
+}
+
+/// État de la session agent (commande `get_state` de pi).
+///
+/// Commande **async** : `get_state` est une commande RPC **synchrone** qui
+/// attend la réponse du processus pi (timeout 8 s). Exécutée sur le main thread
+/// en `pub fn`, elle **gelait l'UI** pendant tout ce temps — d'autant plus que
+/// `pi` est justement occupé quand l'écran l'interroge (envoi de prompt,
+/// `waitForPiReady`). Déportée dans `spawn_blocking` avec le MÊME motif que
+/// `agents::new_agent_process_session` / `set_agent_process_model` : libérer le
+/// main thread, signature et résultat inchangés pour l'écran.
 #[tauri::command]
-pub fn get_agent_state(state: State<AppState>) -> Result<Value, String> {
-    do_get_agent_state(state.inner())
+pub async fn get_agent_state(state: State<'_, AppState>) -> Result<Value, String> {
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+    let agent_service = state.inner().agent_service.clone();
+    tauri::async_runtime::spawn_blocking(move || do_get_agent_state_in(&agent_service, &project))
+        .await
+        .map_err(|e| format!("Erreur interne (join) get_agent_state: {}", e))?
 }
 
 #[tauri::command]
@@ -960,8 +984,8 @@ fn count_rpc_messages(resp: &Value) -> usize {
 /// fraîchement démarrée restaura l'historique persisté, une session vierge
 /// répond 0 → pas de new_session superflu.
 #[tauri::command]
-pub fn purge_agent_conversation_to(
-    state: State<AppState>,
+pub async fn purge_agent_conversation_to(
+    state: State<'_, AppState>,
     project_path: Option<String>,
     agent_id: Option<String>,
 ) -> Result<bool, String> {
@@ -979,11 +1003,30 @@ pub fn purge_agent_conversation_to(
     };
     // La purge n'a de sens que si l'agent a déjà travaillé : get_messages
     // renvoie l'historique de la session pi (vide → conversation vierge).
-    let has_messages = state
-        .agent_service
+    // Le travail bloquant (jusqu'à ≈ 76 s : get_messages 8 s, get_state 8 s,
+    // new_session 30 s, set_model 30 s) est DÉPORTÉ hors du thread principal :
+    // exécutée en `pub fn`, cette commande gelait l'UI et elle est appelée
+    // avant CHAQUE délégation de l'Assistant.
+    let agent_service = state.inner().agent_service.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        do_purge_agent_conversation_to(&agent_service, &project, &agent_id)
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) purge_agent_conversation_to: {}", e))?
+}
+
+/// Cœur **synchrone** de `purge_agent_conversation_to`, sans `&AppState` : il ne
+/// lui faut que le service d'agents, le projet et l'agent (closure `'static`
+/// pour `spawn_blocking`).
+pub(crate) fn do_purge_agent_conversation_to(
+    agent_service: &crate::agent_service::AgentService,
+    project: &str,
+    agent_id: &str,
+) -> Result<bool, String> {
+    let has_messages = agent_service
         .send_sync_timeout(
-            &project,
-            &agent_id,
+            project,
+            agent_id,
             serde_json::json!({ "type": "get_messages" }),
             8,
         )
@@ -992,7 +1035,7 @@ pub fn purge_agent_conversation_to(
     if !has_messages {
         return Ok(false);
     }
-    purge_target_agent_session(state.inner(), &project, &agent_id)?;
+    purge_target_agent_session(agent_service, project, agent_id)?;
     Ok(true)
 }
 
@@ -1002,21 +1045,21 @@ pub fn purge_agent_conversation_to(
 /// (clé composite) au lieu de la session ACTIVE. Ne recrée PAS la session :
 /// l'appelant garantit qu'elle vient d'être démarrée (idempotence gérée par
 /// transmitDelegationToAgent via startAgentInvisible/openFile).
+/// Prend le service (et non `&AppState`) pour rester appelable depuis une
+/// closure `'static` de `spawn_blocking`.
 fn purge_target_agent_session(
-    state: &AppState,
+    agent_service: &crate::agent_service::AgentService,
     project: &str,
     agent_id: &str,
 ) -> Result<(), String> {
     // Capture du modèle actif AVANT new_session (qui reset le modèle au défaut
     // de pi) pour le ré-appliquer ensuite.
-    let model = state
-        .agent_service
-        .send_sync_timeout(&project, &agent_id, serde_json::json!({ "type": "get_state" }), 8)
+    let model = agent_service
+        .send_sync_timeout(project, agent_id, serde_json::json!({ "type": "get_state" }), 8)
         .ok()
         .and_then(|resp| extract_model_from_state(&resp));
-    state
-        .agent_service
-        .send_sync(&project, &agent_id, serde_json::json!({ "type": "new_session" }))
+    agent_service
+        .send_sync(project, agent_id, serde_json::json!({ "type": "new_session" }))
         .ok();
     if let Some((provider, model_id)) = model {
         let set_cmd = serde_json::json!({
@@ -1024,25 +1067,42 @@ fn purge_target_agent_session(
             "provider": provider,
             "modelId": model_id
         });
-        state
-            .agent_service
-            .send_sync(&project, &agent_id, set_cmd)
-            .ok();
+        agent_service.send_sync(project, agent_id, set_cmd).ok();
     }
     Ok(())
 }
 
-pub(crate) fn do_get_agent_messages(state: &AppState) -> Result<Value, String> {
-    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+/// Cœur **synchrone** de `get_agent_messages`, sans `&AppState` (même raison
+/// que `do_get_agent_state_in` : closure `'static` pour `spawn_blocking`).
+pub(crate) fn do_get_agent_messages_in(
+    agent_service: &crate::agent_service::AgentService,
+    project: &str,
+) -> Result<Value, String> {
     let cmd = serde_json::json!({ "type": "get_messages" });
-    state.agent_service.with_active_session(&project, |session| {
+    agent_service.with_active_session(project, |session| {
         rpc_manager::send_command_sync(session, cmd)
     })?
 }
 
+pub(crate) fn do_get_agent_messages(state: &AppState) -> Result<Value, String> {
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+    do_get_agent_messages_in(&state.agent_service, &project)
+}
+
+/// Historique de la conversation agent (commande `get_messages` de pi).
+///
+/// Commande **async** : `get_messages` est une commande RPC **synchrone**
+/// (timeout 30 s par défaut via `send_command_sync`). Exécutée sur le main
+/// thread en `pub fn`, elle **gelait l'UI** jusqu'à 30 s dès que `pi` était muet
+/// — cas qui se produit précisément pendant qu'un agent attend une réponse.
+/// Déportée dans `spawn_blocking` (même motif que `agents.rs`).
 #[tauri::command]
-pub fn get_agent_messages(state: State<AppState>) -> Result<Value, String> {
-    do_get_agent_messages(state.inner())
+pub async fn get_agent_messages(state: State<'_, AppState>) -> Result<Value, String> {
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+    let agent_service = state.inner().agent_service.clone();
+    tauri::async_runtime::spawn_blocking(move || do_get_agent_messages_in(&agent_service, &project))
+        .await
+        .map_err(|e| format!("Erreur interne (join) get_agent_messages: {}", e))?
 }
 
 pub(crate) fn do_set_agent_model(
