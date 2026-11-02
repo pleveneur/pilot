@@ -140,19 +140,26 @@ Le conteneur du propriétaire **n'a pas été rechargé** : c'est sa décision
 ## 6. État du workflow de publication à la fin
 
 `gh` n'est pas installé sur cette machine ; l'état a été lu par l'API GitHub
-(`/repos/pleveneur/pilot/actions/runs`) :
+(`/repos/pleveneur/pilot/actions/runs`).
 
 | Élément | Valeur |
 |---|---|
 | Run | `41465803779` (run n° 175, workflow `release`) |
 | Événement | `push`, branche `v0.6.10` |
 | Commit | `4c2c76bf85edd60d5bef35fc2a399ff552aaaa69` |
-| Statut constaté | **`in_progress`** |
-| Release `v0.6.10` | **pas encore publiée** (`404 Not Found` à l'instant du contrôle) |
+| Statut constaté à la clôture | **`in_progress`** |
+| Job `create-release` | **`completed` / `success`** |
+| Release `v0.6.10` | **créée** : « Pilot v0.6.10 », `draft: false`, `prerelease: false` |
+| Assets de la release | **aucun pour l'instant** (0 `browser_download_url`) |
 
-C'est normal : le job `build` (Windows + macOS) puis `latest-json` doivent
-finir. Rien n'est à faire de plus ici ; aucune étiquette n'a été republiée et
-aucun force-push n'a eu lieu.
+Lecture : la release a bien été créée par le job `create-release`, mais les
+paquets et `latest.json` ne sont déposés qu'à la fin, par le job `latest-json`
+qui dépend du job `build` (Windows + macOS). Le workflow tournait donc encore
+au moment de ce rapport. Rien n'est à faire de plus ici ; aucune étiquette n'a
+été republiée et aucun force-push n'a eu lieu.
+
+Étiquette distante vérifiée : `git ls-remote --tags origin v0.6.10` →
+`4c2c76bf85edd60d5bef35fc2a399ff552aaaa69` (identique au commit de bump).
 
 ---
 
