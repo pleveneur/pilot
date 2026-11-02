@@ -4196,7 +4196,10 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     // mission PRECEDENTE pour la mission en cours (rapport
     // docs/rapports/RAPPORT-libelle-tache-en-cours-en-haut-a-droite.md).
     // Fail-open, coalescée : aucune seconde sonde, aucun blocage de l'envoi.
-    refreshAgentMissionDisplay();
+    // `void` : un rejet de la relecture ne doit JAMAIS remonter dans le `try` du
+    // tour (il ferait conclure « runAgentTurn error » et pourrait arrêter un
+    // process fraîchement lancé).
+    void refreshAgentMissionDisplay();
     resetTimeout(ctx);
     console.log("[agents-bus] prompt sent to", agent.id);
   } catch (err) {

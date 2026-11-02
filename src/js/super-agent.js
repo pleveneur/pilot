@@ -7442,7 +7442,9 @@ let vocalDicteeParGeste = false;
       // le tour en cours (rapport
       // docs/rapports/RAPPORT-libelle-tache-en-cours-en-haut-a-droite.md).
       // Fail-open, coalescée avec la relecture en vol : jamais de doublon.
-      refreshAgentMissionDisplay();
+      // `void` : un rejet de la relecture ne doit JAMAIS être pris pour un échec
+      // de l'envoi (le `catch` ci-dessous afficherait « ❌ » et couperait le tour).
+      void refreshAgentMissionDisplay();
       // La réponse arrive en streaming via le canal rpc-event-superagent
       // (handleSuperAgentEvent). On ne fait rien ici : on attend agent_end.
     } catch (err) {

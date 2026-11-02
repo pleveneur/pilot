@@ -411,7 +411,23 @@ une seule — l'indice exact du propriétaire. Rapport :
   (`src/js/super-agent.js`, après `send_super_agent_prompt`). **Aucune seconde sonde,
   aucune seconde file, aucun changement Rust** ; la demande est **coalescée** avec une
   relecture en vol (jamais deux lectures concurrentes) et **fail-open** (une panne de la
-  sonde ne bloque jamais l'envoi).
+  sonde ne bloque jamais l'envoi). Les deux appels sont écrits `void` pour qu'un rejet
+  éventuel ne remonte **jamais** dans le `try` du tour (il ferait conclure
+  « runAgentTurn error » et pourrait arrêter un process fraîchement lancé).
+- **Règle de fraîcheur — une demande forcée n'est JAMAIS jetée** (suite de la revue du
+  2026-11-15, point bloquant levé). Le drapeau « le vol a lu la vue complète » ne dit pas
+  « il l'a lue **après** l'écriture du prompt ». La demande forcée est donc **horodatée**
+  et le **début de la lecture lourde** en vol aussi (horloge **monotone** interne,
+  `refreshPendingForceAt` / `refreshReadStartedAt`, `src/js/agent-activity.js`) : le rejeu
+  n'est sauté que si la demande est **antérieure** au début de la lecture qui vient de
+  finir ; sinon elle est **rejouée une seule fois**, à la fin du vol. C'est l'ordre
+  **réel** d'une mission déléguée : `start_agent_process` émet `set_state(Running)`
+  (`src-tauri/src/agent_service.rs`) → relecture forcée dont la lecture lourde reste en
+  vol, **puis** `sendPromptToAgent` écrit le prompt (`src/js/agents-bus.js:4190`), **puis**
+  `refreshAgentMissionDisplay()` (`src/js/agents-bus.js:4202`) : la demande tombe pendant
+  une lecture qui l'a
+  **précédée**, elle doit donc être rejouée. Aucun mécanisme concurrent ajouté : un seul
+  ordonnanceur, un seul rejeu.
 - **Ce qui ne change pas** : la composition de la file et le rang → mission restent dans
   leur source unique (`project-queue-view.js`, `project-task-queue.js`) ; la boucle de 2 s
   reste légère ; une mission **acceptée mais pas encore démarrée** peut se montrer un
@@ -420,7 +436,12 @@ une seule — l'indice exact du propriétaire. Rapport :
   l'envoi**, et c'est cela qui manquait.
 - Verrou : `src/js/libelle-tache-en-cours-mission-reelle.test.js` (les deux cas — 1 mission
   et 2 missions — reproduits par la chaîne réelle `mergeProbeActivity` → `flattenAgents` →
-  `buildRunningMissions`, plus les ancres du branchement ; il échoue sans le correctif).
+  `buildRunningMissions`, plus les ancres du branchement ; il échoue sans le correctif)
+  **et le cas de la revue** : lecture lourde **en vol**, puis envoi du prompt de la mission
+  suivante, puis demande de relecture — la colonne doit afficher la nouvelle mission. Ce
+  cas rejoue le **store réel** (`subscribeAgentActivity`) avec `invoke` simulé et échoue
+  sans la règle de fraîcheur (2 lectures lourdes au lieu de 3, libellé resté sur la
+  mission précédente).
 
 ### La colonne de gauche : l'aperçu de la discussion (lot 3, livré)
 
@@ -813,8 +834,10 @@ cliquable dans la colonne : on la lit, on ne la manipule pas.
 La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis la **liste des
 tâches en cours** — l'agent et le projet, puis ce qu'il fait. Le texte d'une tâche est
 **celui de la mission qui tourne vraiment** : dès que vous envoyez une demande, la colonne
-la montre, jamais celle d'avant (une mission tout juste acceptée peut apparaître un instant
-du côté « en attente », le temps qu'elle démarre). Rien n'est écrit sous la
+la relit aussitôt — et si une relecture était déjà en cours au moment de l'envoi, elle est
+**refaite** pour que le texte affiché soit celui de la nouvelle mission (une mission tout
+juste acceptée peut apparaître un instant du côté « en attente », le temps qu'elle
+démarre). Rien n'est écrit sous la
 liste. Les tâches sont rangées en **« En cours »** d'abord, **« En attente »** ensuite. La
 liste **ne défile pas** : elle montre ce que la hauteur permet (jusqu'à **8** tâches) et,
 s'il y en a plus, la ligne **« + N autre(s) »** le dit — la liste complète reste dans le

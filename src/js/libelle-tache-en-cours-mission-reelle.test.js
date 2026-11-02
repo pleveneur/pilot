@@ -18,9 +18,17 @@
  * (`mergeProbeActivity` -> `flattenAgents` -> `buildRunningMissions`), et le
  * câblage du correctif est tenu par des ancres de source.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+// Aucun accès Tauri réel : le cas de la revue du 2026-11-15 (ci-dessous) rejoue
+// la CHAÎNE RÉELLE du store, pas seulement ses fonctions pures.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+
 import {
   mergeProbeActivity,
   flattenAgents,
@@ -169,6 +177,10 @@ describe("le correctif est branché au seul moment où le texte change", () => {
     expect(relecture - envoi).toBeLessThan(900);
     // Un seul point de demande dans tout le fichier (aucun second mécanisme).
     expect((BUS.match(/refreshAgentMissionDisplay\(\)/g) || []).length).toBe(1);
+    // `void` : un rejet de la relecture ne doit pas remonter dans le `try` du
+    // tour (il ferait conclure « runAgentTurn error » et pourrait arrêter un
+    // process fraîchement lancé).
+    expect(BUS).toContain("void refreshAgentMissionDisplay();");
   });
 
   it("Assistant : relecture demandée juste après l'envoi de sa demande", () => {
@@ -176,6 +188,7 @@ describe("le correctif est branché au seul moment où le texte change", () => {
     expect(envoi).toBeGreaterThan(-1);
     const apres = SUPER.slice(envoi, envoi + 900);
     expect(apres).toContain("refreshAgentMissionDisplay();");
+    expect(apres).toContain("void refreshAgentMissionDisplay();");
     expect((SUPER.match(/refreshAgentMissionDisplay\(\)/g) || []).length).toBe(1);
   });
 
@@ -187,5 +200,115 @@ describe("le correctif est branché au seul moment où le texte change", () => {
     // La demande de relecture ne crée aucune entrée de file : elle ne fait que
     // faire relire la vue d'ensemble.
     expect(ACTIVITY).not.toContain("enqueueMissionForProject");
+  });
+});
+
+/**
+ * SUITE DE LA REVUE DU 2026-11-15 — POINT BLOQUANT.
+ *
+ * Chemin RÉEL d'une mission déléguée (`agents-bus.js`) :
+ * `start_agent_process` émet `set_state(Running)` (`agent_service.rs`) → push
+ * `agent-state-changed` → relecture FORCÉE dont la lecture lourde reste EN VOL,
+ * PUIS `sendPromptToAgent` écrit `prompt` / `resume` (aucun évènement),
+ * PUIS `refreshAgentMissionDisplay()`.
+ *
+ * La demande forcée tombe donc pendant une lecture qui a COMMENCÉ AVANT elle :
+ * elle doit être REJOUÉE, jamais jetée. Avant le correctif, `refreshFetchedSupervision`
+ * (« le vol a lu la vue complète ») suffisait à l'absorber — mais une lecture
+ * commencée avant l'écriture du prompt ne peut pas en rapporter le texte : la
+ * colonne restait sur la mission PRÉCÉDENTE pour toute la mission.
+ */
+describe("revue du 2026-11-15 — une demande forcée n'est jamais jetée", () => {
+  const LIGHT = "agent_activity_probe";
+  const HEAVY = "get_agent_supervision";
+  let storeListener = null;
+  let promptActuel = MISSION_A;
+  let heavyCalls = 0;
+  let gate = null; // promesse non résolue : la lecture lourde reste EN VOL
+
+  async function flush() {
+    for (let i = 0; i < 80; i++) await Promise.resolve();
+  }
+
+  /** Le texte que la colonne affiche pour la mission en cours. */
+  function texteEnCours(list) {
+    const missions = buildRunningMissions(list || [], []);
+    const enCours = missions.filter((m) => m.waiting !== true);
+    expect(enCours).toHaveLength(1);
+    return enCours[0].mission;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    storeListener = null;
+    promptActuel = MISSION_A;
+    heavyCalls = 0;
+    gate = null;
+    vi.mocked(listen).mockReset();
+    vi.mocked(listen).mockImplementation((_event, handler) => {
+      storeListener = handler;
+      return Promise.resolve(() => {});
+    });
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === LIGHT) {
+        return {
+          sessions: [{ project: PROJ, agent: AGENT, alive: true, toolInProgress: true }],
+        };
+      }
+      if (cmd === HEAVY) {
+        heavyCalls += 1;
+        // La lecture lit la base À CET INSTANT (avant d'attendre la porte) :
+        // c'est exactement ce que fait la commande Rust, et c'est ce qui rend le
+        // défaut visible — le prompt de la nouvelle mission n'est pas encore écrit.
+        const lu = supervision({ prompt: promptActuel, resume: "", state: "running" });
+        if (gate) await gate;
+        return lu;
+      }
+      return undefined;
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("lecture lourde EN VOL → envoi du prompt de la nouvelle mission → la relecture rattrape le texte", async () => {
+    const mod = await import("./agent-activity.js");
+    const published = [];
+    mod.subscribeAgentActivity((list) => published.push(list));
+    await flush();
+
+    // Première passe : la vue complète porte encore la mission A.
+    expect(heavyCalls).toBe(1);
+    expect(texteEnCours(published.at(-1))).toContain("barre du bas");
+
+    // 1. Le démarrage de la mission suivante pousse `set_state(Running)` :
+    //    relecture FORCÉE, dont la lecture lourde reste EN VOL.
+    let release = null;
+    gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    expect(typeof storeListener).toBe("function");
+    storeListener({ payload: { agentId: AGENT } });
+    await flush();
+    expect(heavyCalls).toBe(2); // la lecture lourde est engagée…
+
+    // 2. …et elle est TOUJOURS en vol quand le prompt de la mission B est écrit,
+    //    puis quand le tour demande la relecture de l'affichage.
+    promptActuel = MISSION_B;
+    const demande = mod.refreshAgentMissionDisplay();
+    gate = null;
+    release();
+    await demande;
+    await flush();
+
+    // La demande forcée n'a pas été jetée : elle a été REJOUÉE après le vol, et
+    // cette seconde lecture, elle, a vu le prompt de B.
+    expect(heavyCalls).toBe(3);
+    expect(texteEnCours(published.at(-1))).toContain("libelle de la tache en cours");
+    expect(texteEnCours(published.at(-1))).not.toContain("barre du bas");
+    expect(texteEnCours(published.at(-1))).not.toContain("barre du bas");
   });
 });

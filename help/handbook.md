@@ -1459,8 +1459,10 @@ cliquable dans la colonne : on la lit, on ne la manipule pas.
 La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis la **liste des
 tâches en cours** — l'agent et le projet, puis ce qu'il fait. Le texte d'une tâche est
 **celui de la mission qui tourne vraiment** : dès que vous envoyez une demande, la colonne
-la montre, jamais celle d'avant (une mission tout juste acceptée peut apparaître un instant
-du côté « en attente », le temps qu'elle démarre). Rien n'est écrit sous la
+la relit aussitôt — et si une relecture était déjà en cours au moment de l'envoi, elle est
+**refaite** pour que le texte affiché soit celui de la nouvelle mission (une mission tout
+juste acceptée peut apparaître un instant du côté « en attente », le temps qu'elle
+démarre). Rien n'est écrit sous la
 liste. Les tâches sont rangées en **« En cours »** d'abord, **« En attente »** ensuite. La
 liste **ne défile pas** : elle montre ce que la hauteur permet (jusqu'à **8** tâches) et,
 s'il y en a plus, la ligne **« + N autre(s) »** le dit — la liste complète reste dans le

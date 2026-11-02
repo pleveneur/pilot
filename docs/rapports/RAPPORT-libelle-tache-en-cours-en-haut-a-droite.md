@@ -196,3 +196,97 @@ pendant le tour), d'où un décalage d'un cran expliquant **exactement** « just
 avec deux tâches, faux avec une ». Correctif au plus près : une demande de
 relecture de la vue **existante**, au seul moment où le texte change, aux deux
 points d'envoi réels d'un prompt de mission.
+
+---
+
+## 7. Suite de la revue du 2026-11-15 — une demande forcée n'est jamais jetée
+
+La revue indépendante du correctif `8a11949` rend **CHANGES_REQUESTED** sur un
+point, et un seul : la demande de relecture forcée pouvait être **silencieusement
+jetée**. Le reste du correctif (point d'entrée unique, branchement aux deux
+points d'envoi, sonde de 2 s restée légère) est approuvé et n'a pas été retouché.
+Le correctif de la barre du bas (`6ed5a65`, `enfilerDemande`) est approuvé : il
+n'a **pas** été touché non plus.
+
+### 7.1 Le défaut, tel qu'il se produit vraiment
+
+L'ancienne garde de réentrance raisonnait sur un **drapeau de lecture** :
+
+| Ligne (avant) | Ce qu'elle faisait | Ce qu'elle ne disait pas |
+|---|---|---|
+| `:1099` | `refreshFetchedSupervision = true` posé **avant** `await invoke("get_agent_supervision")` (`:1100`) | « une lecture lourde a été **entreprise** » — rien sur le fait qu'elle ait lu **après** l'écriture du prompt |
+| `:1121` | une demande forcée arrivée pendant le vol pose `refreshPendingForce = true` | l'**instant** de la demande |
+| `:1128` | `const replay = refreshPendingForce && !fetched;` | si `fetched` est vrai, la demande **disparaît** — et `lastProbeSignature` vient d'être rafraîchi (`:1102`), donc **plus aucune** lecture lourde jusqu'au prochain push |
+
+Cet ordre est le **chemin normal** d'une mission déléguée :
+`start_agent_process` émet `set_state(Running)` (`src-tauri/src/agent_service.rs:1553`)
+→ push `agent-state-changed` → relecture **forcée** dont la lecture lourde reste
+**en vol**, puis `sendPromptToAgent` écrit `prompt` / `resume`
+(`src/js/agents-bus.js:4190`), puis `refreshAgentMissionDisplay()`
+(`src/js/agents-bus.js:4202`). La demande tombe donc **pendant** une lecture qui
+l'a **précédée** : elle était absorbée, et le libellé restait faux pour **toute**
+la mission.
+
+### 7.2 Correctif — une règle d'ORDRE, sans mécanisme concurrent
+
+Un drapeau ne peut pas ordonner deux évènements ; deux **instants** le peuvent.
+`src/js/agent-activity.js` :
+
+- `:981` `nextRefreshTick()` — horloge **monotone** interne (un compteur, pas
+  l'heure système : aucune inversion possible si l'horloge murale saute) ;
+- `:1152` la demande forcée arrivée pendant un vol est **horodatée**
+  (`refreshPendingForceAt = nextRefreshTick()`) — la **dernière** écrase la
+  précédente, choix sûr (conserver la plus récente ne peut que forcer un rejeu) ;
+- `:1117` le **début** de la lecture lourde est horodaté **avant** l'`invoke`
+  (`refreshReadStartedAt = nextRefreshTick()`) ;
+- `:1165` `const replay = refreshPendingForce && pendingAt >= readStartedAt;` —
+  le rejeu n'est sauté que si la demande est **antérieure** au début de la
+  lecture qui vient de finir ; sinon elle est **rejouée une seule fois**. Quand le
+  vol n'a fait aucune lecture lourde, `readStartedAt` vaut 0 et le rejeu a lieu
+  **comme avant** (aucune régression).
+
+Aucun second minuteur, aucune seconde file, aucune promesse supplémentaire : le
+même `activityRefresh`, une seule reprise par vol.
+
+### 7.3 Robustesse des deux appelants
+
+Aux deux seuls points d'appel, l'appel est écrit `void refreshAgentMissionDisplay();`
+(`src/js/agents-bus.js:4202`, `src/js/super-agent.js:7447`) : la fonction est déjà
+`fail-open` (`.catch(() => {})`), mais un appel **nu** dans le `try` du tour ferait
+afficher « runAgentTurn error » si elle venait à rejeter, et pourrait **arrêter un
+process fraîchement lancé**.
+
+### 7.4 Preuves
+
+Le verrou existant a été **étendu** (aucun doublon créé) :
+`src/js/libelle-tache-en-cours-mission-reelle.test.js`, cas « lecture lourde EN
+VOL → envoi du prompt de la nouvelle mission → la relecture rattrape le texte ».
+Il rejoue le **store réel** (`subscribeAgentActivity`) avec `invoke` / `listen`
+simulés : la sonde lourde lit la supervision **à l'instant de l'appel** puis reste
+suspendue, le prompt de la mission suivante est écrit pendant ce vol, la relecture
+est demandée, puis la lecture est libérée — elle rapporte donc l'**ancien** texte.
+
+| Vérification | Résultat |
+|---|---|
+| `npx vitest run src/js/libelle-tache-en-cours-mission-reelle.test.js` **avec** le correctif | **PASS (9) / FAIL (0)** |
+| le même fichier avec `src/js/agent-activity.js` remis à `HEAD` (donc sans le point 1) | **1 échec** sur le cas de la revue : `expected 2 to be 3` — la demande forcée a été **jetée**, aucune seconde lecture lourde, libellé resté sur la mission précédente |
+| `npm test` (suite complète) | **281 fichiers, 5 178 tests, 0 échec** |
+| `node --check` sur les 4 fichiers JS touchés | OK |
+| `npm run build:handbook` | régénéré (4 lignes du bloc `vocal-colonnes-portrait`) |
+| fins de ligne | LF |
+| `cargo` / `src-tauri` | **non touché** |
+| `VOCAL_CHROME_IDLE_MS` | **non touché** (constante à `10 000`) — seule la ligne `AGENTS.md:226` qui annonçait `2 500 ms` a été corrigée |
+
+Documentation alignée dans le même temps : `spec_modes_ecran_vocal.md` § 3ter
+(bullet « Règle de fraîcheur — une demande forcée n'est JAMAIS jetée », et le
+bullet du correctif qui porte désormais `void`), bloc d'aide
+`vocal-colonnes-portrait` (la formulation « jamais celle d'avant » devient ce qui
+est **vrai** : la relecture est refaite si elle était en cours au moment de
+l'envoi), `help/handbook.md` régénéré.
+
+VERDICT : point bloquant levé au plus près de la cause — la garde de réentrance ne
+raisonne plus sur « une lecture a eu lieu » mais sur **l'ordre** entre la demande
+et le début de la lecture ; une demande forcée est rejouée dès qu'elle n'est pas
+antérieure à la lecture qui vient de finir. Le défaut est reproduit par le verrou
+(rouge sans le correctif, vert avec), et rien d'autre n'a bougé : ni la barre du
+bas, ni `vocalChromeVisible`, ni les réglages de lecture, ni Rust.

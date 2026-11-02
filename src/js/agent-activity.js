@@ -962,11 +962,26 @@ let currentSupervision = null;
 let lastProbeSignature = "";
 // GARDE DE RÉENTRANCE : promesse de la sonde en vol, `null` = aucune.
 let refreshInFlight = null;
-// Demande reçue PENDANT une sonde en vol : coalescée, jamais empilée.
+// Demande FORCÉE reçue PENDANT une sonde en vol : coalescée, jamais empilée et
+// JAMAIS jetée (voir `activityRefresh` : elle n'est satisfaite que par une
+// lecture lourde COMMENCÉE APRÈS elle).
 let refreshPendingForce = false;
-// La sonde en vol a-t-elle lu la supervision COMPLÈTE ? (si oui, la demande
-// coalescée est déjà satisfaite : la lecture est postérieure au push.)
+// ORDRE DES DEMANDES — horloge MONOTONE interne (compteur), et non l'heure du
+// système : deux entiers comparables, aucun risque d'inversion si l'horloge
+// murale saute. `refreshPendingForceAt` = instant de la DERNIÈRE demande forcée
+// encore en attente (elle écrase la précédente : conserver la plus récente est
+// le choix sûr). `refreshReadStartedAt` = instant où la lecture LOURDE en vol a
+// COMMENCÉ (0 quand le vol n'en a pas fait).
+let refreshClock = 0;
+let refreshPendingForceAt = 0;
+let refreshReadStartedAt = 0;
+// Le vol en cours a-t-il lu la supervision COMPLÈTE ?
 let refreshFetchedSupervision = false;
+/** Instant monotone suivant (seul ordonnanceur des demandes de relecture). */
+function nextRefreshTick() {
+  refreshClock += 1;
+  return refreshClock;
+}
 
 /**
  * Signature déterministe de l'ENSEMBLE des sessions vues par la sonde légère :
@@ -1096,6 +1111,10 @@ async function runActivityRefresh(force) {
     });
     // 2. SONDE LOURDE — seulement si elle est nécessaire (jamais en boucle).
     if (plan.fetchSupervision) {
+      // L'instant de DÉBUT de la lecture est horodaté AVANT l'appel : c'est lui
+      // qui décide si une demande forcée arrivée pendant le vol est déjà
+      // satisfaite (elle ne l'est que si la lecture a commencé après elle).
+      refreshReadStartedAt = nextRefreshTick();
       refreshFetchedSupervision = true;
       const sup = await invoke("get_agent_supervision");
       currentSupervision = sup || null;
@@ -1114,19 +1133,38 @@ async function runActivityRefresh(force) {
  * Déclenche un rafraîchissement. GARDE DE RÉENTRANCE : une seule sonde en vol
  * à la fois ; une demande arrivée pendant ce temps est coalescée (elle est
  * rejouée à la fin, une seule fois) au lieu d'empiler des appels concurrents.
+ *
+ * UNE DEMANDE FORCÉE N'EST JAMAIS JETÉE (revue du 2026-11-15). Le drapeau
+ * « le vol a lu la supervision complète » ne dit PAS « il l'a lue après
+ * l'écriture du prompt » : sur le chemin normal d'une mission déléguée, le
+ * démarrage de la session émet un push (`set_state(Running)`) qui lance une
+ * lecture lourde, PUIS le prompt est envoyé, PUIS la relecture est demandée —
+ * la demande arrive donc pendant une lecture qui l'a précédée. La règle est
+ * donc une règle d'ORDRE : la demande est horodatée, le début de la lecture
+ * lourde est horodaté, et le rejeu n'est sauté que si la demande est ANTÉRIEURE
+ * au début de la lecture qui vient de finir. Aucun mécanisme concurrent ajouté.
  * @param {boolean} [force] sonde lourde exigée (push `agent-state-changed`).
  */
 function activityRefresh(force = false) {
   if (refreshInFlight) {
-    if (force) refreshPendingForce = true;
+    if (force) {
+      refreshPendingForce = true;
+      refreshPendingForceAt = nextRefreshTick();
+    }
     return refreshInFlight;
   }
   refreshInFlight = runActivityRefresh(force).finally(() => {
-    const fetched = refreshFetchedSupervision;
+    const readStartedAt = refreshReadStartedAt;
     refreshInFlight = null;
     refreshFetchedSupervision = false;
-    const replay = refreshPendingForce && !fetched;
+    refreshReadStartedAt = 0;
+    const pendingAt = refreshPendingForceAt;
+    // Satisfaite SEULEMENT si la lecture lourde a commencé APRÈS la demande.
+    // `readStartedAt` vaut 0 quand le vol n'a fait aucune lecture lourde : la
+    // demande (horodatée ≥ 1) est alors toujours rejouée, comme avant.
+    const replay = refreshPendingForce && pendingAt >= readStartedAt;
     refreshPendingForce = false;
+    refreshPendingForceAt = 0;
     if (replay) activityRefresh(true);
   });
   return refreshInFlight;
