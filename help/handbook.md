@@ -787,6 +787,33 @@ un petit bouton **« 🔊 Écouter »** posé sous le message, à côté de la b
   **journal** (dossier de la voix locale). Rien ne bloque, rien ne plante. Quand
   la voix locale fonctionne, ou si vous n'avez jamais choisi de voix locale,
   **aucune ligne n'apparaît**.
+- **Votre propre voix, si vous l'avez enregistrée** : quand le service
+  **VoiceStudio** tourne sur cet ordinateur, la liste des voix propose en plus une
+  entrée **« Ma voix imitée — <nom> (VoiceStudio) »**. C'est Pilot qui parle, mais
+  avec **votre voix imitée**. Rien n'est installé ni téléchargé par Pilot : il
+  **s'adresse au service déjà installé** sur la machine, qui garde votre voix.
+- **Le service est éteint ou ne répond pas** : la lecture ne s'arrête pas et le
+  son ne disparaît pas — elle **continue avec la voix locale (Piper)**, et vous le
+  **voyez là où vous écoutez** : une ligne courte apparaît **à côté du bouton
+  « 🔊 Écouter »** (« Voix imitée indisponible : lecture avec la voix locale
+  (Piper). »). Votre choix n'est **pas** effacé : dès que le service répond de
+  nouveau, c'est de nouveau votre voix imitée que vous entendez.
+- **La voix est imitée sur votre machine** : le texte des réponses ne part
+  **jamais** sur Internet. Pilot ne parle qu'à un service qui écoute **uniquement
+  sur cet ordinateur** (adresse locale), et le son est produit ici, pas dans la
+  fenêtre.
+- **Un choix mémorisé ne disparaît jamais de la liste** : si le service est
+  éteint au moment où vous ouvrez les Options, l'entrée de votre voix imitée reste
+  visible et dit pourquoi elle attend (« service injoignable », « voix
+  introuvable », « service non vérifié »). Enregistrer ne remplace donc pas votre
+  choix dans votre dos.
+- **La première phrase arrive plus vite** : Pilot découpe sa réponse en
+  quelques **groupes de phrases**, fabrique le son du premier groupe, puis prépare
+  le suivant **pendant** que vous écoutez le précédent. L'attente ne se voit qu'au
+  tout début, et il n'y a pas de blanc entre les phrases.
+- **Le tout premier mot après un long arrêt** peut demander quelques secondes au
+  service (il se remet en route). Rien n'est bloqué pour autant : Pilot continue
+  de répondre, et la lecture démarre dès que le son est prêt.
 - **Le choix reste le même qu'avant** : une seule voix à la fois, mémorisée,
   et le texte lu est nettoyé et découpé de la même façon quel que soit le moteur.
   Une configuration enregistrée avant cette évolution continue de fonctionner

@@ -463,11 +463,77 @@ ne se remplace **jamais en silence**.
 5. **L'état reste lisible dans les Options** : `readAloudStateLabel("system-fallback")`
    dit la même chose dans la ligne d'état de la section (aucun écran nouveau).
 
+## 4 quater. Voix IMITÉE de l'utilisateur (service local VoiceStudio)
+
+Décision du propriétaire : Pilot sait parler avec **sa propre voix imitée**, sans
+que cela remplace ni ne casse la voix locale Piper (qui reste **la voix par
+defaut et le repli**).
+
+1. **Aucun moteur n'est embarqué ni téléchargé.** Pilot **appelle le service déjà
+   installé** sur la machine (VoiceStudio), sur l'adresse **locale**
+   `http://127.0.0.1:3900` uniquement. Aucun appel sortant, aucun secret, aucun
+   compte.
+2. **Un seul point de synthèse, en deux étages.** Côté machine, un module
+   **frère** de la voix locale (`src-tauri/src/tts_voicestudio.rs`) ; côté fenêtre,
+   la décision et le dialogue avec la machine vivent dans
+   `src/js/voicestudio-voice.js`. La fenêtre **ne joint jamais le service
+   elle-même** : elle passe par les commandes de l'application
+   (`tts_voicestudio_status`, `tts_voicestudio_synthesize`, `tts_voicestudio_warmup`).
+   `tts_local.rs` (Piper) est **intact**.
+3. **Le corps de requête est en UTF-8, toujours** : `{"model","voice","input",
+   "response_format":"wav"}` sérialisé par `serde_json` (un corps non UTF-8 fait
+   répondre `400` au service : mesuré).
+4. **Une voix inconnue ne passe jamais pour la bonne** : le service répond
+   `200` **en jouant sa voix par défaut** quand la voix demandée n'existe pas.
+   La voix est donc vérifiée **côté machine** contre `/profiles` **avant**
+   l'appel (`voice_error`) et **côté fenêtre** dans la liste du réglage
+   (`voiceChoiceStatus` → `voicestudio-missing`). Une voix retirée est signalée et
+   **le choix mémorisé n'est pas réécrit**.
+5. **La réponse est un WAV, joué depuis la mémoire** : en-tête `RIFF`/`WAVE`
+   vérifié (`is_wav`), données en base64 (`data:audio/wav;base64,…`), **aucun
+   fichier audio sur le disque**.
+6. **Découpage en groupes de phrases, jamais en flux** :
+   `groupSentencesForVoiceStudio` (`voicestudio-voice.js`, pure) fait du **premier
+   morceau une seule phrase** (le son arrive vite), puis des groupes d'au plus
+   `VOICESTUDIO_GROUP_SENTENCES` (4) phrases / `VOICESTUDIO_GROUP_CHARS` (700)
+   caractères, **sans jamais couper une phrase** (une phrase trop longue reste
+   seule). Le premier morceau **prépare déjà le suivant** pendant sa lecture ;
+   la lecture réutilise `playLocalChunks` (aucune seconde boucle de lecture).
+   Aucun flux audio, aucune API temps réel, aucun mot à mot.
+7. **Jamais de silence ni de gel** : service éteint, lent ou en panne →
+   l'état `voicestudio-fallback` est publié, la ligne
+   `readAloudVoiceStudioFallbackNotice(cause)` s'affiche **à côté du bouton
+   « 🔊 Écouter »** (même `span.agent-read-notice` que les autres replis), une
+   ligne est écrite dans le **journal existant** (`voix-locale.log`, préfixe
+   `[voix imitée]`), et la lecture **continue avec la voix locale (Piper)**, puis
+   avec la voix du système si Piper manque. Le démarrage à froid du service
+   (~6 s) est **annoncé sans bloquer** : un préchauffage
+   (`tts_voicestudio_warmup`) est lancé **sur le geste** de sélection, jamais
+   automatiquement.
+8. **Rien ne tourne sur le thread principal** : chaque commande est
+   `pub async fn` et déporte son travail dans `tauri::async_runtime::spawn_blocking`
+   (tenu par `src/js/voix-imitee-voicestudio.test.js`).
+9. **Un seul réglage de voix** : `read_aloud_voice`, avec les valeurs
+   `local:piper` (défaut), `local:piper:<modèle>` et **`local:voicestudio:<profil>`**
+   (l'**identifiant** du profil, jamais son nom : deux profils peuvent porter le
+   même nom et le service répond alors `409`). Les quatre voix Piper restent
+   proposées, et l'entrée imitée porte le **nom du service** dans son libellé
+   (« Ma voix imitée — <nom> (VoiceStudio) »).
+10. **Un choix mémorisé ne disparaît jamais de la liste** : si le service est
+    éteint, `keepKnownProfiles` garde la dernière liste connue et
+    `voiceStudioUnavailableLabel` porte le choix avec sa raison en clair (« service
+    injoignable », « voix introuvable », « service non vérifié »).
+11. **Écouter avant de choisir** : l'entrée imitée passe par l'aperçu **existant**
+    (`previewVoice` → `createSpeaker`), avec la phrase d'exemple commune : aucun
+    second chemin de lecture.
+
 ## 5. Portée
 
-100 % local : synthèse du système (`speechSynthesis`) **ou** moteur local
-(Piper). Aucune dépendance npm, aucun service en ligne, aucune voix installée
-automatiquement, aucun enregistrement de ce qui est lu.
+100 % local : synthèse du système (`speechSynthesis`), moteur local (Piper) **ou
+service de voix imitée de la machine** (VoiceStudio, joint **uniquement** en
+local et seulement s'il est déjà installé). Aucune dépendance npm, aucun service
+en ligne, aucune voix installée automatiquement, aucun enregistrement de ce qui
+est lu, aucun fichier audio écrit.
 
 ## 6. Couverture
 
@@ -501,6 +567,18 @@ choisie utilisable, partage visible ; et **un dossier voisin étranger n'est jam
 utilisé**), identifiants regroupés par produit) et de `tts_local_download` (URL
 exactes, tailles, `.part` jamais confondu avec le fichier final, aucun
 retéléchargement, dossier absent, état par défaut).
+
+Voix **imitée** (VoiceStudio) : `src/js/voix-imitee-voicestudio.test.js` (service
+absent → la lecture **continue** avec la voix locale, l'état et le journal le
+disent, le choix mémorisé n'est pas réécrit ; découpage du premier morceau en une
+phrase et groupes suivants sans phrase coupée ; accents traversant la frontière
+intacts ; voix inconnue **signalée** ; commandes `pub async fn` +
+`spawn_blocking` ; les quatre voix Piper toujours proposées, une seule entrée
+imitée ; choix mémorisé jamais perdu de la liste) et, côté Rust, les tests de
+`tts_voicestudio` (corps JSON en UTF-8 avec accents, voix vide → `default`,
+seuls les vrais WAV acceptés, profils lus par identifiant **et** par nom, message
+d'explication d'une voix inconnue, phrase d'état qui nomme **toujours** le repli
+Piper, texte trop long refusé).
 
 `voix-locale-choix.test.js` ajoute les tests qui **mordent** sur cet incident :
 (a) avec un moteur partagé, la voix **choisie** est réellement synthétisée

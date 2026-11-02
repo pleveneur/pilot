@@ -66,19 +66,23 @@ const HELP = lire("help/overview.md");
 
 // ---------------------------------------------------------------------------
 describe("1. « Pilot parle » : une seule decision, replis de voix compris", () => {
-  it("vraie pendant la lecture normale ET pendant ses deux replis", () => {
+  it("vraie pendant la lecture normale ET pendant ses trois replis", () => {
     expect(isReadAloudSpeaking("speaking")).toBe(true);
     expect(isReadAloudSpeaking("local-fallback")).toBe(true);
     expect(isReadAloudSpeaking("system-fallback")).toBe(true);
+    // Voix IMITÉE indisponible : Pilot PARLE quand même (voix locale), donc le
+    // micro doit rester protégé — même règle, aucun cas particulier.
+    expect(isReadAloudSpeaking("voicestudio-fallback")).toBe(true);
   });
 
-  it("vraie pour CES TROIS etats, et pour eux seuls", () => {
+  it("vraie pour CES QUATRE etats, et pour eux seuls", () => {
     // La liste est la definition : si un etat de lecture est ajoute demain, il
     // doit etre ajoute ici EN CONNAISSANCE DE CAUSE (parler = micro a proteger).
     expect(READ_ALOUD_SPEAKING_STATES).toEqual([
       "speaking",
       "local-fallback",
       "system-fallback",
+      "voicestudio-fallback",
     ]);
     for (const etat of ["", "unavailable", "empty", "stopped", "ended", "no-voice", "idle"]) {
       expect(isReadAloudSpeaking(etat), etat).toBe(false);
@@ -92,11 +96,14 @@ describe("1. « Pilot parle » : une seule decision, replis de voix compris", ()
   });
 
   it("l'ecran juge comme le bouton de la bulle (aucune deuxieme regle au monde)", () => {
-    // Le bouton de la bulle bascule deja sur « Arreter » pour les deux replis :
+    // Le bouton de la bulle bascule deja sur « Arreter » pour les replis :
     // la lecture CONTINUE. L'ecran Vocal qui, lui, croyait au silence etait donc
     // le seul a se tromper.
     expect(READ_ALOUD).toMatch(/else if \(state === "local-fallback"\) \{\s*setState\("speaking"\);/);
     expect(READ_ALOUD).toMatch(/else if \(state === "system-fallback"\) \{\s*setState\("speaking"\);/);
+    expect(READ_ALOUD).toMatch(
+      /else if \(state === "voicestudio-fallback"\) \{\s*setState\("speaking"\);/,
+    );
   });
 });
 

@@ -83,6 +83,10 @@ mod vault;
 // haute : moteur Piper + modèle ~63 Mo. Repli visible et journalisé si absent.
 mod tts_local;
 mod tts_local_download;
+// Voix IMITÉE de l'utilisateur (service local VoiceStudio, déjà lancé par lui) :
+// deuxième moteur de lecture, à côté de Piper, jamais à sa place. Aucun moteur
+// téléchargé, aucun fichier audio écrit, appels sur la boucle locale seulement.
+mod tts_voicestudio;
 mod pi_update;
 mod project_agents;
 mod db;
@@ -3718,6 +3722,10 @@ pub fn run() {
             tts_local::tts_local_status,
             tts_local::tts_local_synthesize,
             tts_local::tts_local_log,
+            tts_voicestudio::tts_voicestudio_status,
+            tts_voicestudio::tts_voicestudio_synthesize,
+            tts_voicestudio::tts_voicestudio_warmup,
+            tts_voicestudio::tts_voicestudio_log,
             persona::read_assistant_persona,
             persona::read_assistant_persona_stamp,
             tts_local_download::tts_local_download,

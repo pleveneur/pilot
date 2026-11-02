@@ -53,7 +53,19 @@ import {
   stopReading,
   VOICES_WAIT_MS,
   READ_ALOUD_STATE_EVENT,
+  readAloudVoiceStudioFallbackNotice,
 } from "./read-aloud.js";
+// Voix IMITÉE (service local VoiceStudio) : la section « Lecture des réponses »
+// lit SON état, jamais un état inventé, et préchauffe le service sur un GESTE
+// (le premier appel à froid prend ≈ 6 s). Aucun réglage séparé : la voix imitée
+// est une entrée de la MÊME liste que les voix Piper et les voix du système.
+import {
+  getVoiceStudioStatus,
+  refreshVoiceStudioStatus,
+  isVoiceStudioChoice,
+  voiceStudioProfileIdFor,
+  warmupVoiceStudio,
+} from "./voicestudio-voice.js";
 // Mode Vocal : la valeur par défaut du délai d'envoi, ses bornes, son pas et le
 // libellé lisible viennent de la SOURCE UNIQUE des décisions du mode Vocal
 // (`vocal-conversation.js`, pures) : aucun nombre n'est recopié ici.
@@ -726,8 +738,15 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     // sont ouverts : jamais à chaque rendu, jamais en boucle, jamais périodique.
     // L'état mémorisé n'est donc pas une raison de ne rien demander : un modèle
     // déposé à la main (ou supprimé) doit être vu à la première ouverture.
-    if (options && options.gesture) ensureLocalVoiceChecked(wanted, true);
-    else if (!localVoiceAutoChecked) ensureLocalVoiceChecked(wanted, false);
+    if (options && options.gesture) {
+      ensureLocalVoiceChecked(wanted, true);
+      // GESTE sur une voix imitée : on PRÉCHAUFFE le service (le premier appel à
+      // froid prend ≈ 6 s mesurées). Jamais bloquant, jamais silencieux en cas
+      // d'échec : le repli sur la voix locale existe déjà.
+      if (isVoiceStudioChoice(wanted)) {
+        warmupVoiceStudio({ voice: voiceStudioProfileIdFor(wanted) }).catch(() => false);
+      }
+    } else if (!localVoiceAutoChecked) ensureLocalVoiceChecked(wanted, false);
   }
 
   /** Vérification automatique déjà faite pour cette ouverture des Paramètres. */
@@ -756,12 +775,18 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     const status = model
       ? await refreshLocalVoiceStatus({ model })
       : await refreshLocalVoiceStatus({});
-    if (status && selectReadAloudVoice) {
+    // Service de voix IMITÉE : interrogé dans la MÊME vérification (même geste,
+    // même instant, même chemin) — il n'existe pas de seconde vérification de
+    // cette section dans le fichier. L'échec devient un état lisible, jamais une
+    // exception.
+    await refreshVoiceStudioStatus({ voice: voiceStudioProfileIdFor(wanted) });
+    const etatLocal = status || localVoiceStatusFor(model || DEFAULT_LOCAL_VOICE_MODEL);
+    if (selectReadAloudVoice) {
       // Le choix en cours est CONSERVÉ : on re-rend la valeur AFFICHÉE (la
       // valeur demandée quand la liste est vide, pour ne pas perdre l'annonce
       // d'une voix disparue).
       const shown = selectReadAloudVoice.value || wanted;
-      renderReadAloudVoice(shown, status);
+      renderReadAloudVoice(shown, etatLocal);
     }
     return status;
   }
@@ -805,9 +830,12 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   function renderReadAloudVoice(wanted, local) {
     if (!selectReadAloudVoice) return;
     const voices = availableVoices();
+    // État du service de voix imitée : lu, jamais deviné. Sans lui, la liste ne
+    // contiendrait aucune voix imitée (et un choix mémorisé serait invisible).
+    const voicestudio = getVoiceStudioStatus();
     // Liste des voix proposees : calculee UNE fois, et reprise telle quelle par
     // les rangees d'ecoute (aucune seconde liste dans le fichier).
-    const options = voiceChoiceOptions(voices, local || undefined);
+    const options = voiceChoiceOptions(voices, local || undefined, voicestudio || undefined, wanted);
     selectReadAloudVoice.innerHTML = "";
     for (const opt of options) {
       const el = document.createElement("option");
@@ -816,7 +844,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
       selectReadAloudVoice.appendChild(el);
     }
     renderVoicePreviews(options);
-    const status = voiceChoiceStatus(voices, wanted, local);
+    const status = voiceChoiceStatus(voices, wanted, local, voicestudio || undefined);
     selectReadAloudVoice.value = status.value;
     selectReadAloudVoice.disabled = status.kind === "empty";
     if (readAloudVoiceNote) {
@@ -1034,6 +1062,10 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         setPreviewButtonState(button, "idle");
         if (state === "local-fallback") {
           setPreviewMessage(message, readAloudStateLabel("local-fallback"));
+        } else if (state === "voicestudio-fallback") {
+          // Voix imitée indisponible : l'aperçu a joué la voix locale, et la
+          // rangée le dit (même ligne que les autres replis).
+          setPreviewMessage(message, readAloudVoiceStudioFallbackNotice(""));
         } else if (state === "no-voice" || state === "unavailable") {
           setPreviewMessage(message, readAloudStateLabel(state));
         } else {

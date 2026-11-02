@@ -31,14 +31,19 @@
 //      voix de la langue de l'interface (aucune erreur, aucune lecture muette)
 //      et ce repli est DIT a cote du bouton d'ecoute (`system-fallback`, voir
 //      `readAloudSystemFallbackNotice`) : jamais un remplacement silencieux.
-//   7bis. Deux moteurs possibles, choisis par LE MEME reglage unique :
+//   7bis. TROIS moteurs possibles, choisis par LE MEME reglage unique :
 //      - `""` ou une voix du systeme : synthese vocale de la fenetre ;
 //      - `LOCAL_VOICE_VALUE` : voix FRANCAISE LOCALE (Piper, hors ligne, sans
-//        cle, sans carte graphique — voir `local-voice.js`). Le nettoyage et le
-//        decoupage du texte sont IDENTIQUES pour les deux moteurs : seul leur
-//        moteur de synthese change. Si le moteur local manque ou echoue, la
-//        lecture NE S'ARRETE PAS : elle retombe sur la voix du systeme, ecrit
-//        une ligne dans le journal et le dit dans l'etat affiche.
+//        cle, sans carte graphique — voir `local-voice.js`) ;
+//      - `local:voicestudio:<profil>` : voix IMITÉE de l'utilisateur, fabriquee
+//        par le service local `VoiceStudio` qu'il fait tourner lui-meme (voir
+//        `voicestudio-voice.js`). Ce n'est PAS une voix telechargee ni
+//        embarquee : Pilot ne fait que demander le son à la machine.
+//      Le nettoyage et le decoupage du texte sont IDENTIQUES pour les trois
+//      moteurs : seul le moteur de synthese change. Si le moteur local manque ou
+//      echoue, la lecture NE S'ARRETE PAS : elle retombe sur la voix locale
+//      (Piper), puis sur la voix du systeme, ecrit une ligne dans le journal et
+//      le dit dans l'etat affiche. Un repli n'est JAMAIS silencieux.
 //   8. SEULE LA REPONSE FINALE est lue. Un message de l'assistant contient deux
 //      sortes de choses : (a) le TRAVAIL INTERNE — raisonnement affiche, appels
 //      d'outils, resultats d'outils, sorties de commandes, notes techniques ;
@@ -74,6 +79,7 @@ import {
   LOCAL_VOICE_READY_HINT,
   LOCAL_VOICE_UNKNOWN_HINT,
   LOCAL_VOICE_VALUE,
+  DEFAULT_LOCAL_VOICE_MODEL,
   getLocalVoiceStatus,
   isLocalVoiceChoice,
   isLocalVoiceInstalledFor,
@@ -82,10 +88,27 @@ import {
   localVoiceMissingHint,
   localVoiceModelFor,
   localVoiceStatusFor,
+  localVoiceValueFor,
   logLocalVoice,
   playLocalChunks,
   refreshLocalVoiceStatus,
 } from "./local-voice.js";
+// Voix IMITÉE de l'utilisateur (service local VoiceStudio, déjà lancé par lui) :
+// deuxième moteur, à côté de Piper et jamais à sa place. Le module sait quelles
+// voix imitées existent, découpe le texte en morceaux, demande le son à la
+// machine, et journalise un repli. Le réglage unique et l'état de lecture
+// restent ICI, comme pour la voix locale.
+import {
+  groupSentencesForVoiceStudio,
+  isVoiceStudioChoice,
+  logVoiceStudio,
+  synthesizeVoiceStudioAudio,
+  voiceStudioKnowsProfile,
+  voiceStudioProfileIdFor,
+  voiceStudioChoices,
+  voiceStudioUnavailableLabel,
+  VOICESTUDIO_UNKNOWN_HINT,
+} from "./voicestudio-voice.js";
 
 // Re-exporte pour les appelants historiques (le nom vient de speech-text.js).
 export { CODE_BLOCK_NOTICE };
@@ -172,11 +195,14 @@ export const READ_ALOUD_SOUND_EVENT = "pilot-read-aloud-sound";
  * Etats de lecture pendant lesquels PILOT PARLE vraiment — la voix sort des
  * haut-parleurs, donc le micro peut l'entendre.
  *
- * Il y en a TROIS, et pas un : la lecture normale (`speaking`) et ses DEUX
+ * Il y en a QUATRE, et pas un : la lecture normale (`speaking`) et ses TROIS
  * replis. `local-fallback` est emis quand la voix locale choisie n'est pas
  * disponible et que le systeme prend le relais ; `system-fallback` quand aucune
- * voix du systeme ne correspond a la langue demandee. Dans les deux cas Pilot
- * parle : la duree, le texte et le son sont ceux d'une lecture ordinaire.
+ * voix du systeme ne correspond a la langue demandee ; `voicestudio-fallback`
+ * quand la voix IMITEE choisie n'a pas pu etre obtenue (service eteint, voix
+ * disparue, synthese refusee) et que la voix locale a pris le relais. Dans les
+ * trois cas Pilot parle : la duree, le texte et le son sont ceux d'une lecture
+ * ordinaire.
  *
  * Ce que cette liste corrige : l'ecran Vocal ne regardait que `speaking`
  * exactement (`etat === "speaking"`). Pendant un repli, il croyait donc au
@@ -184,7 +210,12 @@ export const READ_ALOUD_SOUND_EVENT = "pilot-read-aloud-sound";
  * de Pilot et la demande repartait toute seule) et la prise de parole ne faisait
  * plus taire Pilot.
  */
-export const READ_ALOUD_SPEAKING_STATES = ["speaking", "local-fallback", "system-fallback"];
+export const READ_ALOUD_SPEAKING_STATES = [
+  "speaking",
+  "local-fallback",
+  "system-fallback",
+  "voicestudio-fallback",
+];
 
 /**
  * SEULE decision « Pilot parle » du projet, pour un etat de lecture donne.
@@ -405,15 +436,46 @@ export function resolveVoiceForChoice(voices, lang, choice) {
 }
 
 /**
- * Options du choix de voix : « automatique » d'abord, puis chaque voix
- * installee, triee par langue puis par nom.
+ * Options du choix de voix : « automatique » d'abord, puis les voix imitées du
+ * service local, puis la voix française locale (Piper), puis chaque voix
+ * installée.
+ *
+ * Une seule liste pour le réglage ET pour les rangées d'écoute : aucune voix
+ * proposée n'est inventée, aucune n'apparaît deux fois.
  * @param {SpeechSynthesisVoice[]} voices
+ * @param {{installed?: boolean, voice?: string, hint?: string, unknown?: boolean}|null} [local]
+ *        état du moteur local (sans lui, aucune voix Piper n'est proposée)
+ * @param {{reachable?: boolean, profiles?: {id: string, name: string}[], unknown?: boolean}|null} [voicestudio]
+ *        état du service de voix imitée (sans lui, aucune voix imitée n'est
+ *        proposée : un service non interrogé ne fait pas naître une option)
+ * @param {string} [wanted] valeur MÉMORISÉE du réglage : si elle désigne une voix
+ *        imitée que le service n'annonce pas (service éteint, voix retirée), une
+ *        ligne la PORTE quand même — un choix mémorisé ne disparaît jamais de la
+ *        liste, sinon l'enregistrement l'écraserait dans le dos de l'utilisateur
  * @returns {{value: string, label: string}[]}
  */
-export function voiceChoiceOptions(voices, local) {
+export function voiceChoiceOptions(voices, local, voicestudio, wanted) {
   const list = (Array.isArray(voices) ? voices : []).filter(Boolean).slice();
   const autoLabel = "Automatique (voix de la langue de l'interface)";
   const options = [{ value: AUTO_VOICE_VALUE, label: autoLabel }];
+  // Voix IMITÉE de l'utilisateur : proposée dès que le service ANNONCE des
+  // profils. Le libellé porte le nom donné dans le service et le nom du service,
+  // pour qu'on ne confonde jamais cette voix avec la voix locale. Le service
+  // éteint ne fait rien disparaître : le choix mémorisé reste dans la liste
+  // (sinon il serait perdu), et la phrase d'état dit que la lecture se rabat sur
+  // la voix locale en attendant.
+  const studioProfiles =
+    voicestudio && Array.isArray(voicestudio.profiles) ? voicestudio.profiles : [];
+  const studioChoices = voiceStudioChoices(studioProfiles);
+  for (const entry of studioChoices) {
+    options.push({ value: entry.value, label: entry.label });
+  }
+  // Choix mémorisé qu'aucun profil annoncé ne porte : une ligne le garde, avec la
+  // raison en clair (service injoignable, non vérifié, voix introuvable).
+  const memoire = isVoiceStudioChoice(wanted) ? String(wanted) : "";
+  if (memoire && !options.some((option) => option.value === memoire)) {
+    options.push({ value: memoire, label: voiceStudioUnavailableLabel(memoire, voicestudio) });
+  }
   // Voix francaises LOCALES : proposees juste apres « automatique » des que
   // l'appelant fournit l'etat du moteur local (Parametres). Une entree par
   // modele, libelle en clair (« voix d'homme » / « voix de femme ») : aucun
@@ -453,9 +515,11 @@ export function voiceChoiceOptions(voices, local) {
  * @param {SpeechSynthesisVoice[]} voices
  * @param {string} [choice]
  * @param {{installed?: boolean, dir?: string, unknown?: boolean}|null} [local] état du moteur local
- * @returns {{kind: "empty"|"missing"|"ok"|"local-missing"|"local-unknown", hint: string, missing: string, value: string}}
+ * @param {{reachable?: boolean, profiles?: {id: string, name: string}[], unknown?: boolean, hint?: string}|null} [voicestudio]
+ *        état du service de voix imitée
+ * @returns {{kind: "empty"|"missing"|"ok"|"local-missing"|"local-unknown"|"voicestudio-unknown"|"voicestudio-down"|"voicestudio-missing", hint: string, missing: string, value: string}}
  */
-export function voiceChoiceStatus(voices, choice, local) {
+export function voiceChoiceStatus(voices, choice, local, voicestudio) {
   const list = (Array.isArray(voices) ? voices : []).filter(Boolean);
   const wanted = String(choice == null ? "" : choice).trim();
   const localModel = localVoiceModelFor(wanted);
@@ -483,6 +547,51 @@ export function voiceChoiceStatus(voices, choice, local) {
     return {
       kind: "local-missing",
       hint: localVoiceMissingHint(local && local.dir, local),
+      missing: "",
+      value: wanted,
+    };
+  }
+  // Choix d'une voix IMITÉE : le choix est CONSERVÉ (le service peut n'être lancé
+  // que plus tard, et la voix reste dans la configuration). La note dit l'état
+  // RÉEL du service et ce qui se passe pendant ce temps — jamais un
+  // remplacement silencieux, jamais un retour à « automatique ». Placé AVANT le
+  // contrôle des voix du système : cette valeur n'est pas une voix du système et
+  // ne doit jamais être jugée comme telle.
+  if (isVoiceStudioChoice(wanted)) {
+    const studio = voicestudio || null;
+    if (!studio || studio.unknown) {
+      return {
+        kind: "voicestudio-unknown",
+        hint: VOICESTUDIO_UNKNOWN_HINT,
+        missing: "",
+        value: wanted,
+      };
+    }
+    if (!studio.reachable) {
+      return {
+        kind: "voicestudio-down",
+        hint: studio.hint || VOICESTUDIO_UNKNOWN_HINT,
+        missing: "",
+        value: wanted,
+      };
+    }
+    const profiles = Array.isArray(studio.profiles) ? studio.profiles : [];
+    if (profiles.length && !voiceStudioKnowsProfile(wanted, profiles)) {
+      return {
+        kind: "voicestudio-missing",
+        hint:
+          "La voix imitée mémorisée n'existe plus dans le service local : choisissez-en une " +
+          "autre dans la liste (la lecture se rabat sur la voix locale en attendant).",
+        missing: wanted,
+        value: wanted,
+      };
+    }
+    return {
+      kind: "ok",
+      hint:
+        "La voix imitée est lue par le service local, sur cet ordinateur. Si le service ne répond " +
+        "pas, la lecture se rabat automatiquement sur la voix locale (Piper), puis sur la voix du " +
+        "système.",
       missing: "",
       value: wanted,
     };
@@ -532,6 +641,11 @@ export function readAloudStateLabel(state) {
     case "local-fallback":
       return (
         "Voix française locale indisponible : lecture avec la voix du système " +
+        "(détail dans le journal)."
+      );
+    case "voicestudio-fallback":
+      return (
+        "Voix imitée indisponible : lecture avec la voix locale (Piper) " +
         "(détail dans le journal)."
       );
     case "system-fallback":
@@ -750,6 +864,22 @@ export function readAloudFallbackNotice(cause) {
 }
 
 /**
+ * Phrase COURTE affichée À CÔTÉ du bouton d'écoute quand la voix IMITÉE choisie
+ * n'a pas pu être obtenue et que la voix locale (Piper) a pris le relais.
+ *
+ * Même ligne, même endroit, même style que les deux autres replis : un seul
+ * mécanisme. Elle dit ce qui se passe, jamais un code technique, et ne propose
+ * aucune action : la lecture continue, c'est tout.
+ * @param {string} [cause] cause courte déjà lisible (« service injoignable », …)
+ * @returns {string}
+ */
+export function readAloudVoiceStudioFallbackNotice(cause) {
+  const why = String(cause == null ? "" : cause).trim();
+  const detail = why ? ` (${why})` : "";
+  return `Voix imitée indisponible${detail} : lecture avec la voix locale (Piper).`;
+}
+
+/**
  * Cause COURTE du repli sur la voix de la langue de l'interface quand la voix du
  * SYSTEME memorisee dans le reglage n'existe plus dans cette fenetre : voix
  * desinstallee, autre ordinateur, autre systeme. Elle est lue dans la liste
@@ -764,6 +894,9 @@ export function systemVoiceMissingCause(voices, choice) {
   if (!wanted) return "";
   // Voix locale : son repli a sa propre phrase (`local-fallback`).
   if (isLocalVoiceChoice(wanted)) return "";
+  // Voix IMITÉE : elle aussi a sa propre phrase (`voicestudio-fallback`) — ce
+  // n'est pas une voix du système, et sa disparition ne se juge pas ici.
+  if (isVoiceStudioChoice(wanted)) return "";
   const list = (Array.isArray(voices) ? voices : []).filter(Boolean);
   // Aucune voix du tout : c'est l'etat « no-voice » qui le dit, pas un repli.
   if (!list.length) return "";
@@ -837,11 +970,12 @@ export function createSpeaker(win, options = {}) {
    * Lit un texte (nettoye puis decoupe). Renvoie une promesse resolue a la fin
    * ou a l'arret.
    * @param {string} text
-   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty"|"no-voice"|"local-fallback"|"system-fallback", cause?: string) => void}} [handlers]
-   *   `cause` accompagne les deux etats de repli (`local-fallback`,
-   *   `system-fallback`) : cause COURTE et lisible du repli (« moteur absent »,
-   *   « la synth\u00e8se locale a \u00e9chou\u00e9 », « voix introuvable »…), pour
-   *   l'afficher pres du bouton d'ecoute. Absente quand elle n'apprend rien.
+   * @param {{onstate?: (state: "speaking"|"stopped"|"ended"|"unavailable"|"empty"|"no-voice"|"local-fallback"|"system-fallback"|"voicestudio-fallback", cause?: string) => void}} [handlers]
+   *   `cause` accompagne les trois etats de repli (`local-fallback`,
+   *   `system-fallback`, `voicestudio-fallback`) : cause COURTE et lisible du
+   *   repli (« moteur absent », « la synth\u00e8se locale a \u00e9chou\u00e9 », « voix
+   *   introuvable », « service injoignable »…), pour l'afficher pres du bouton
+   *   d'ecoute. Absente quand elle n'apprend rien.
    */
   async function speak(text, handlers = {}) {
     const notify = (state, cause, infos) => {
@@ -866,8 +1000,18 @@ export function createSpeaker(win, options = {}) {
     // reponses). Soit une voix du systeme, soit la voix francaise LOCALE. Elle
     // est lue ICI, avant l'annonce, pour que l'annonce dise le moteur qui va
     // parler (fait joint a l'etat, voir `READ_ALOUD_STATE_EVENT`).
-    const choice = options.voiceName == null ? getPreferredVoiceName() : options.voiceName;
-    const moteur = isLocalVoiceChoice(choice) ? READ_ALOUD_ENGINE_LOCAL : READ_ALOUD_ENGINE_SYSTEM;
+    // `let` : un repli du moteur IMITÉ réoriente la lecture vers la voix locale
+    // (Piper) SANS dupliquer le chemin de lecture local ci-dessous.
+    let choice =
+      options.voiceName == null ? getPreferredVoiceName() : options.voiceName;
+    // TROIS moteurs possibles derriere ce point unique : la voix IMITÉE (service
+    // local, choix explicite de l'utilisateur), la voix française LOCALE (Piper,
+    // voix par défaut), puis la voix du SYSTÈME. Le moteur annoncé est celui qui
+    // va RÉELLEMENT parler : un repli ne ment jamais sur ce qu'on entend.
+    const moteur =
+      isVoiceStudioChoice(choice) || isLocalVoiceChoice(choice)
+        ? READ_ALOUD_ENGINE_LOCAL
+        : READ_ALOUD_ENGINE_SYSTEM;
     stopReading(); // une seule lecture a la fois
     const token = { id: ++playbackSeq, stopped: false };
     // Arrets complementaires : la lecture locale doit pouvoir couper son audio
@@ -904,6 +1048,83 @@ export function createSpeaker(win, options = {}) {
       sonAnnonce = true;
       broadcastSound();
     };
+
+    // ── Voix IMITÉE (service local VoiceStudio, choisie par l'utilisateur) ──
+    // Même texte nettoyé, même découpage : seule la DEMANDE change. Le son est
+    // fabriqué par la MACHINE (commande Tauri asynchrone, jamais par la fenêtre),
+    // et il n'est jamais écrit sur le disque : il reste en mémoire, sous forme
+    // de données audio.
+    // Le texte est REGROUPÉ en morceaux : une phrase pour le premier son (il
+    // arrive vite), puis des groupes — la synthèse du groupe suivant tourne
+    // pendant la lecture du précédent, donc aucun trou audible.
+    // Tout échec (service éteint, voix disparue, synthèse refusée) est DIT et
+    // REPLIQUÉ sur la voix locale : jamais de silence, jamais de gel.
+    if (isVoiceStudioChoice(choice)) {
+      const profil = voiceStudioProfileIdFor(choice);
+      const groupes = groupSentencesForVoiceStudio(chunks);
+      let derniereRaison = "";
+      const memoire = new Map();
+      // Une seule demande par texte : le morceau déjà demandé n'est jamais
+      // redemandé, et la demande en cours est réutilisée.
+      const demander = (texte) => {
+        if (!memoire.has(texte)) {
+          memoire.set(
+            texte,
+            synthesizeVoiceStudioAudio(texte, { voice: profil, invoke: options.invoke }),
+          );
+        }
+        return memoire.get(texte);
+      };
+      let premier = true;
+      const outcome = await playLocalChunks({
+        win: w,
+        chunks: groupes,
+        isCancelled: () => token.stopped || currentPlayback !== playback,
+        onStopRegister: (fn) => extraStops.push(fn),
+        // Le son peut démarrer bien après l'annonce (synthèse) : c'est ce
+        // démarrage-là qui compte pour la coupure de parole.
+        onSoundStart: annoncerSon,
+        synthesize: (texte) => {
+          const job = demander(texte);
+          if (premier) {
+            premier = false;
+            // Le morceau SUIVANT part EN MÊME TEMPS que le premier : fabriquer
+            // un groupe de plusieurs phrases dure plus longtemps que lire une
+            // seule phrase, d'où cette avance (aucun trou audible ensuite).
+            const suivant = groupes[1];
+            if (suivant) demander(suivant);
+          }
+          return job.then((res) => {
+            if (res && res.audio) return res.audio;
+            derniereRaison = (res && res.reason) || "le service n'a pas répondu";
+            return null;
+          });
+        },
+      });
+      if (outcome.reason === "ended") {
+        currentPlayback = null;
+        token.stopped = true;
+        notify("ended");
+        return true;
+      }
+      if (outcome.reason === "stopped" || token.stopped) return false;
+      const cause = derniereRaison || localFailureShortCause(outcome.reason) || "service injoignable";
+      await logVoiceStudio(
+        `Voix imitée indisponible (${cause}) : repli sur la voix locale.`,
+        options,
+      );
+      if (token.stopped || currentPlayback !== playback) return false;
+      // Dit clairement que la lecture ne se fait pas avec la voix demandée :
+      // d'abord LÀ OÙ IL ÉCOUTE (la rangée du bouton, voir
+      // `readAloudVoiceStudioFallbackNotice`), puis dans l'état des Paramètres.
+      notify("voicestudio-fallback", cause, {
+        text: spokenText,
+        engine: READ_ALOUD_ENGINE_LOCAL,
+      });
+      // Puis la voix locale (Piper, la voix par défaut) prend le relais, par le
+      // chemin ci-dessous — aucun second chemin de lecture n'est écrit.
+      choice = localVoiceValueFor(DEFAULT_LOCAL_VOICE_MODEL);
+    }
 
     // ── Voix FRANCAISE LOCALE (Piper) : hors ligne, sans cle, sans GPU ──────
     // Meme texte nettoye, meme decoupage que la voix du systeme : seul le moteur
@@ -1384,6 +1605,13 @@ export function createReadAloudButton({ doc, win, getText, lang, invoke, refresh
         else if (state === "system-fallback") {
           setState("speaking");
           showNotice(readAloudSystemFallbackNotice(cause));
+        }
+        // Voix IMITÉE indisponible (service eteint, voix disparue, synthese
+        // refusee) : la lecture CONTINUE avec la voix locale, et la raison
+        // courte est dite sous le bouton — meme ligne, meme endroit.
+        else if (state === "voicestudio-fallback") {
+          setState("speaking");
+          showNotice(readAloudVoiceStudioFallbackNotice(cause));
         } else {
           setState("idle");
         }
