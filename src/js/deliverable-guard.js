@@ -23,7 +23,17 @@
 //       a. un livrable réellement attendu (`expected_files`) ;
 //       b. un ORDRE d'écriture positif adressé à l'agent (impératif, base
 //          verbale anglaise, ou infinitif gouverné par une formule de
-//          consigne) ET une cible de fichier dans la MÊME proposition.
+//          consigne) ET une cible de fichier dans la MÊME proposition, cette
+//          cible étant le COMPLÉMENT de l'ORDRE (donc dans sa portée).
+//
+//     Correction d'un FAUX POSITIF constaté en usage réel (deux refus successifs
+//     sur une mission d'ANALYSE en lecture seule : « Ajoute les familles qui
+//     manquent… », puis « Complète avec les familles que le propriétaire n'a pas
+//     citées… ») : la cible doit être ce que l'ORDRE demande de PRODUIRE. Un
+//     fichier simplement MENTIONNÉ dans la phrase (« en te fondant sur les
+//     fichiers du projet », « dans le fichier où se trouve la demande », « puis
+//     ajoute … à ta réponse ») est une ENTRÉE de lecture, pas une sortie
+//     attendue : il ne fonde aucun refus.
 //  2. PREUVE DU LIVRABLE (`verifyExpectedFiles`) : quand la demande déclare les
 //     fichiers réellement attendus sur disque (`expected_files`), Pilot vérifie
 //     à la fin de la tâche que CHACUN existe. Absent ⇒ la tâche est rapportée en
@@ -362,25 +372,103 @@ export function stripQuoted(text) {
 }
 
 /**
- * Cible de fichier présente dans une proposition ?
+ * Masque les CHEMINS de fichier par des espaces de MÊME LONGUEUR : les index
+ * restent alignés sur le texte d'origine (la position du verbe trouvée sur le
+ * texte masqué vaut donc aussi pour le segment réel, où la cible doit rester
+ * visible).
  * @param {string} text
- * Cible de fichier présente dans une proposition ? La cible cherchée est celle
- * de l'ORDRE : on privilégie le premier chemin situé APRÈS le verbe, sinon le
- * premier chemin de la proposition (un chemin cité avant n'est pas la cible).
+ * @returns {string}
+ */
+export function maskFileTargets(text) {
+  return String(text || "").replace(FILE_EXT_GLOBAL_RE, (m) => " ".repeat(m.length));
+}
+
+/**
+ * Masque les passages CITÉS par des espaces de même longueur (mêmes raisons).
  * @param {string} text
- * @param {number} [fromIndex] - position du verbe dans `text`
+ * @returns {string}
+ */
+export function maskQuoted(text) {
+  let out = String(text || "");
+  for (const re of QUOTED_PATTERNS) {
+    out = out.replace(new RegExp(re.source, "g"), (m) => " ".repeat(m.length));
+  }
+  return out;
+}
+
+// ── PORTÉE d'un ordre : jusqu'où va ce qu'il demande ───────────────────────
+// Une proposition peut contenir plusieurs clauses : « Ajoute les familles qui
+// manquent (voir le fichier .pilot/demande.md) » n'ordonne pas d'écrire le
+// fichier cité, elle dit où LIRE. La cible d'écriture n'est donc cherchée que
+// dans le COMPLÉMENT de l'ordre : après le verbe, et jusqu'à la première
+// frontière de clause (virgule, coordination, subordonnée, gérondif, renvoi à
+// une source).
+const SCOPE_BREAK_RES = [
+  /[,;]/,
+  new RegExp(
+    "\\b(?:" +
+      [
+        "puis", "ensuite", "et", "mais", "car", "parce", "puisque", "afin",
+        "pour", "sans", "selon", "quand", "lorsque", "lorsqu'", "si", "qui",
+        "que", "qu'", "ou",
+      ]
+        .map(accentTolerant)
+        .join("|") +
+      ")\\b"
+  ),
+  // Gérondif : « en te fondant sur … », « en t'appuyant sur … », « en lisant … ».
+  /\ben\s+(?:\S+ant\b|te\b|t'|vous\b|se\b|s')/,
+  new RegExp(
+    "\\b(?:" +
+      ["d'apres", "a partir", "sur la base", "dans le cadre", "au vu"]
+        .map(accentTolerant)
+        .join("|") +
+      ")\\b"
+  ),
+];
+
+/**
+ * Fin de la PORTÉE d'un ordre : première frontière de clause située après le
+ * verbe (recherche faite dans un texte DÉJÀ masqué, donc de même longueur que
+ * le segment). Une virgule isolée juste après le verbe (« Écris, dans
+ * docs/x.md, … ») n'ouvre pas une autre clause : elle est franchie.
+ * @param {string} maskedText - segment masqué (chemins et citations)
+ * @param {number} from - position de fin du verbe
+ * @returns {number} index de fin de portée
+ */
+export function orderScopeEnd(maskedText, from) {
+  const source = String(maskedText || "");
+  let start = Math.max(0, Math.min(from, source.length));
+  for (let guard = 0; guard < 8; guard += 1) {
+    const tail = source.slice(start);
+    let end = source.length;
+    for (const re of SCOPE_BREAK_RES) {
+      const m = re.exec(tail);
+      if (m && start + m.index < end) end = start + m.index;
+    }
+    if (end === source.length) return end;
+    if (source[end] === "," && !source.slice(start, end).trim()) {
+      start = end + 1; // virgule encadrant le complément : on continue
+      continue;
+    }
+    return end;
+  }
+  return source.length;
+}
+
+/**
+ * Cible de fichier DANS LA PORTÉE d'un ordre (son complément) : un chemin avec
+ * extension connue, ou le mot « fichier ». Chercher la cible ici — et pas
+ * n'importe où dans la proposition — est ce qui distingue une SORTIE attendue
+ * d'une simple mention (« les fichiers du projet », « le fichier où se trouve
+ * la demande »).
+ * @param {string} scope
  * @returns {{value: string, via: string}|null}
  */
-function fileTargetIn(text, fromIndex = 0) {
-  const source = String(text || "");
-  const re = new RegExp(FILE_EXT_GLOBAL_RE.source, "gi");
-  let first = null;
-  let m;
-  while ((m = re.exec(source)) !== null) {
-    if (!first) first = m[0];
-    if (m.index >= fromIndex) return { value: m[0], via: "file-path" };
-  }
-  if (first) return { value: first, via: "file-path" };
+function fileTargetIn(scope) {
+  const source = String(scope || "");
+  const path = new RegExp(FILE_EXT_GLOBAL_RE.source, "i").exec(source);
+  if (path) return { value: path[0], via: "file-path" };
   if (FILE_NOUN_RE.test(source)) return { value: "fichier", via: "file-noun" };
   return null;
 }
@@ -391,10 +479,12 @@ function fileTargetIn(text, fromIndex = 0) {
  * Conservateur par construction, et fondé sur ce que la mission DEMANDE, pas
  * sur les mots qu'elle contient. Deux signaux seulement :
  *  a. un livrable DÉCLARÉ (`expected_files`) — rien à interpréter ;
- *  b. un ORDRE d'écriture positif ET une cible de fichier dans la MÊME
- *     proposition, après neutralisation des négations, des étiquettes et des
- *     citations.
- * Un verbe d'écriture sans cible (ex. « écris un plan »), une phrase négative,
+ *  b. un ORDRE d'écriture positif ET une cible de fichier qui est le
+ *     COMPLÉMENT de cet ordre (dans sa portée), après neutralisation des
+ *     négations, des étiquettes et des citations.
+ * Un verbe d'écriture sans cible en sortie (ex. « écris un plan », « ajoute
+ * cette famille à ta réponse »), un fichier simplement mentionné ailleurs dans
+ * la phrase (« en te fondant sur les fichiers du projet »), une phrase négative,
  * une étiquette (« À CORRIGER ») ou une citation ne déclenchent AUCUN refus.
  *
  * @param {string} taskText - texte de la demande (brut, avant enveloppe)
@@ -415,23 +505,30 @@ export function detectExplicitWriteRequest(taskText, options = {}) {
     if (!segment) continue;
     // Verbe cherché hors des CHEMINS et des CITATIONS : un nom de fichier
     // (`corrige-guard.md`) ou un message de commit cité n'est pas un ordre.
-    const forVerb = stripQuoted(stripFileTargets(segment));
-    const order = findWriteOrder(forVerb);
+    // Le masquage conserve la LONGUEUR : les positions restent celles du segment.
+    const masked = maskQuoted(maskFileTargets(segment));
+    const order = findWriteOrder(masked);
     if (!order) {
       // Verbe d'écriture employé dans une autre forme (nom, participe, état) :
       // ce n'est pas un ordre. On le retient seulement pour la traçabilité.
       if (!ambiguousVerb) {
-        const any = forVerb.match(WRITE_VERB_RE);
+        const any = masked.match(WRITE_VERB_RE);
         if (any) ambiguousVerb = any[0];
       }
       continue;
     }
-    // La cible cherchée est celle de l'ORDRE (« … puis écris docs/rapport.md »).
-    const at = order ? segment.toLowerCase().indexOf(order) : -1;
-    const target = fileTargetIn(segment, at >= 0 ? at + order.length : 0);
+    // La cible doit être la SORTIE de l'ORDRE : on la cherche dans son
+    // complément (portée après le verbe), jamais ailleurs dans la proposition
+    // (« Ajoute les familles qui manquent (voir le fichier …) »,
+    // « … puis ajoute les familles à ta réponse »).
+    const at = masked.indexOf(order);
+    const verbEnd = at >= 0 ? at + order.length : 0;
+    const scope =
+      at >= 0 ? segment.slice(verbEnd, orderScopeEnd(masked, verbEnd)) : segment.slice(verbEnd);
+    const target = fileTargetIn(scope);
     if (!target) {
-      // Ordre sans cible de fichier (ex. « écris un plan ») : AMBIGU → aucune
-      // décision, la demande part comme aujourd'hui.
+      // Ordre sans cible de fichier en sortie (ex. « écris un plan », « complète
+      // ta réponse ») : AMBIGU → aucune décision, la demande part comme avant.
       if (!ambiguousVerb) ambiguousVerb = order;
       continue;
     }
@@ -469,14 +566,15 @@ export function readOnlyWriteRefusalMessage({ tool, agents, task, expectedFiles 
     detection.via === "expected_files"
       ? `le livrable déclaré « ${detection.target} »`
       : detection.via === "file-noun"
-        ? `un fichier (verbe « ${detection.verb} »)`
-        : `le fichier « ${detection.target} » (verbe « ${detection.verb} »)`;
+        ? `un fichier du projet (ordre « ${detection.verb} », sans nom de fichier précisé)`
+        : `le fichier « ${detection.target} » (ordre « ${detection.verb} »)`;
   const prefix = tool ? `${tool} : ` : "";
   return (
     `${prefix}la demande n'a PAS été lancée. ${subject} : ce rôle ne modifie aucun fichier ` +
-    `(il analyse, planifie ou rend un avis), or la demande demande explicitement d'écrire ${target}. ` +
+    `(il analyse, planifie ou rend un avis), or la demande lui ordonne de produire un fichier en sortie : ${target}. ` +
     `Choisissez un agent qui écrit (le codeur du projet, par exemple) et relancez la demande. ` +
-    `Si aucun fichier n'est réellement attendu, reformulez la demande comme une tâche de lecture.`
+    `Si aucun fichier n'est réellement attendu, reformulez la demande comme une tâche de lecture : ` +
+    `l'analyse se rend dans la réponse de l'agent (« rends ton analyse dans ta réponse »), sans réclamer de fichier en sortie.`
   );
 }
 

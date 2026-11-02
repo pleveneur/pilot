@@ -1040,6 +1040,11 @@ uniquement un bloc d'instructions dans le prompt système.
   part normalement, une demande **ambiguë** aussi (dans le doute, l'agent est
   lancé comme avant). Une mission qui contient **au moins un agent qui écrit**
   n'est jamais refusée.
+- **Un fichier cité n'est pas un fichier demandé** : il faut que la demande
+  réclame un fichier **en sortie** (à produire). Une analyse qui dit « ajoute
+  les familles qui manquent », « complète avec celles qui manquent » ou « en te
+  fondant sur les fichiers du projet » part **normalement** : ces mots-là
+  décrivent le **contenu de la réponse**, pas un fichier à écrire.
 - **La preuve du livrable** : quand la demande **déclare les fichiers attendus**,
   Pilot vérifie **à la fin de la tâche** que chacun existe réellement sur le
   disque. Un fichier déclaré **absent** fait **échouer** la tâche, avec un
@@ -3001,14 +3006,32 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   ferment le trou où une demande d'écriture rendait un texte et Pilot annonçait
   « terminé » sans fichier.
   1. **Refus au lancement** : si **tous** les agents visés sont en **lecture
-     seule** (`readonly`) ET que la demande demande **explicitement** d'écrire
-     (`expected_files` fourni, ou verbe d'écriture **et** cible de fichier
-     identifiable), `run_agents`, `run_assistant_agents` et `delegate_to_coder`
-     renvoient une **erreur d'outil nommant l'agent, la raison et la sortie** —
-     aucun processus n'est démarré, aucun agent jetable ne subsiste. Détection
-     **conservatrice** (module pur `src/js/deliverable-guard.js` :
-     `detectExplicitWriteRequest`, négations neutralisées) : pas de cible de
-     fichier ⇒ aucune décision, la demande part comme avant.
+     seule** (`readonly`) ET que la demande réclame **explicitement** un fichier
+     **en sortie** (`expected_files` fourni, ou ordre d'écriture **et** cible de
+     fichier qui est le **complément** de cet ordre), `run_agents`,
+     `run_assistant_agents` et `delegate_to_coder` renvoient une **erreur d'outil
+     nommant l'agent, la raison et la sortie** — aucun processus n'est démarré,
+     aucun agent jetable ne subsiste. Détection **conservatrice** (module pur
+     `src/js/deliverable-guard.js` : `detectExplicitWriteRequest`, négations
+     neutralisées) : pas de cible de fichier en sortie ⇒ aucune décision, la
+     demande part comme avant.
+     - **La cible est cherchée dans la PORTÉE de l'ordre** (`orderScopeEnd`) :
+       ce qui suit le verbe jusqu'à la première frontière de clause (virgule,
+       coordination, subordonnée, gérondif, renvoi à une source). Un fichier
+       **mentionné ailleurs** dans la phrase — « en te fondant sur les fichiers
+       du projet », « dans le fichier où se trouve la demande », « puis ajoute
+       les familles **à ta réponse** » — est une **ENTRÉE** de lecture, jamais
+       une sortie attendue : il ne fonde **aucun** refus (faux positifs réels
+       corrigés : deux refus successifs sur une analyse en lecture seule).
+       Les chemins et les passages cités sont **masqués à longueur constante**
+       (`maskFileTargets`, `maskQuoted`) pour chercher le verbe sans décaler les
+       positions ; une virgule qui encadre le complément (« Écris, dans
+       docs/x.md, … ») ne ferme pas la portée.
+     - Ce qui reste refusé, sans changement : un livrable **déclaré**
+       (`expected_files`), un ordre d'écriture dont le complément est un chemin
+       (`Modifie src/js/main.js`, `Ajoute au fichier README.md …`, `Complète le
+       fichier docs/liste.md …`) ou le mot « fichier » (`Écris un fichier de
+       synthèse`).
   2. **Preuve du livrable** : `run_agents` / `run_assistant_agents` acceptent un
      champ **facultatif `expected_files`** (chemins relatifs au projet, ou à
      l'espace `~/.pilot/assistant`, exposé par `get_assistant_workspace`). Le bus
@@ -3020,7 +3043,9 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
      n'échoue **jamais** la tâche. **Sans `expected_files`, rien ne change**
      (rétrocompatibilité totale). Couverture : `garde-fou-livrable.test.js`
      + `garde-fou-refus-lecture-seule.test.js` (formulations réelles acceptées,
-     vraies écritures refusées).
+     vraies écritures refusées, **cible cherchée dans la portée de l'ordre** :
+     une analyse qui mentionne un fichier d'entrée est acceptée, une sortie
+     fichier réellement demandée reste refusée).
 
 <!-- HELP:super-agent-mcp -->
 ### MCP piloté par l'Assistant

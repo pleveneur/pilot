@@ -277,10 +277,24 @@ prompt et la fin de mission ne vérifiait aucun fichier.
     `{explicit, verb, target, via}`. `via` ∈ `expected_files` | `file-path` |
     `file-noun`. Deux signaux seulement : un **livrable déclaré**
     (`expected_files`), ou un **ORDRE** d'écriture (`findWriteOrder`) **et** sa
-    cible de fichier dans la **même proposition** (`splitSegments`).
-    - Le texte est découpé en propositions ; un ordre et sa cible doivent s'y
-      trouver **ensemble** (une étiquette, une citation ou une description
-      ailleurs dans le texte ne compte pas).
+    cible de fichier **dans la portée de cet ordre** (le complément du verbe).
+    - Le texte est découpé en propositions (`splitSegments`) ; un ordre et sa
+      cible doivent s'y trouver **ensemble** (une étiquette, une citation ou une
+      description ailleurs dans le texte ne compte pas).
+    - **La cible doit être la SORTIE de l'ordre** : elle est cherchée après le
+      verbe, jusqu'à la première frontière de clause (`orderScopeEnd` :
+      virgule, coordination, subordonnée, gérondif « en te fondant sur… »,
+      renvoi à une source « d'après / à partir de / sur la base de »). Un
+      fichier simplement **mentionné** ailleurs dans la phrase est une ENTRÉE
+      de lecture et ne fonde aucun refus — défaut réel corrigé : deux refus
+      successifs d'une mission d'analyse en lecture seule (« Ajoute les familles
+      qui manquent… », « Complète avec les familles que le propriétaire n'a pas
+      citées… », fichier cité = celui où *lire* la demande).
+    - Chemins et passages cités sont **masqués à longueur constante**
+      (`maskFileTargets`, `maskQuoted`) : le verbe est cherché sans chemin ni
+      citation (un nom comme `corrige-guard.md` n'est pas un ordre) et les
+      positions restent celles du segment réel. Une virgule encadrant le
+      complément (« Écris, dans docs/x.md, … ») ne ferme pas la portée.
     - Les **accents sont conservés** (`normalizeForMatch`) : ils séparent
       l'impératif du participe (« modifie » vs « modifié », « écris » vs
       « écrit »), seul moyen fiable de distinguer un ordre d'un état.
@@ -318,12 +332,16 @@ prompt et la fin de mission ne vérifiait aucun fichier.
 - **Preuve** : `src/js/garde-fou-livrable.test.js` (refus lecture seule,
   lecture acceptée, fichier absent ⇒ échec, présent ⇒ succès, sans champ ⇒
   inchangé, agent jetable, verrou de source sur les 3 chemins de lancement) +
-  `src/js/garde-fou-refus-lecture-seule.test.js` (les 4 formulations réelles qui
+  `src/js/garde-fou-refus-lecture-seule.test.js` (les formulations réelles qui
   étaient refusées à tort sont **acceptées** : verbe dans une phrase négative,
   consigne « ne modifier aucun fichier », étiquette « À CORRIGER », « relancer
-  une correction » ; les vraies demandes d'écriture restent **refusées** ; deux
-  mutations du module — décision sur un mot, garde-fou permissif — font échouer
-  respectivement 15 et 14 tests).
+  une correction », **et fichier simplement mentionné** (entrée de lecture,
+  « en te fondant sur les fichiers du projet », « … à ta réponse ») ; les vraies
+  demandes d'écriture restent **refusées** (livrable déclaré, chemin ou
+  « fichier » dans le complément de l'ordre, même après une virgule) ;
+  deux mutations du module — décision sur un mot, garde-fou permissif — font
+  échouer respectivement 15 et 14 tests, et la mutation « toute la proposition »
+  de la portée de l'ordre en fait échouer 4).
 
 ### Commandes Tauri (compétences)
 

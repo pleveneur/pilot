@@ -2973,6 +2973,11 @@ uniquement un bloc d'instructions dans le prompt système.
   part normalement, une demande **ambiguë** aussi (dans le doute, l'agent est
   lancé comme avant). Une mission qui contient **au moins un agent qui écrit**
   n'est jamais refusée.
+- **Un fichier cité n'est pas un fichier demandé** : il faut que la demande
+  réclame un fichier **en sortie** (à produire). Une analyse qui dit « ajoute
+  les familles qui manquent », « complète avec celles qui manquent » ou « en te
+  fondant sur les fichiers du projet » part **normalement** : ces mots-là
+  décrivent le **contenu de la réponse**, pas un fichier à écrire.
 - **La preuve du livrable** : quand la demande **déclare les fichiers attendus**,
   Pilot vérifie **à la fin de la tâche** que chacun existe réellement sur le
   disque. Un fichier déclaré **absent** fait **échouer** la tâche, avec un

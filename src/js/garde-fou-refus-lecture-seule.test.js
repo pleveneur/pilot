@@ -23,6 +23,10 @@ import {
   readOnlyWriteRefusalMessage,
   findWriteOrder,
   splitSegments,
+  orderScopeEnd,
+  maskFileTargets,
+  maskQuoted,
+  normalizeForMatch,
 } from "./deliverable-guard.js";
 
 const READ_ONLY = [{ id: "plan-maker", name: "Plan Maker", readonly: true }];
@@ -179,6 +183,86 @@ describe("analyse : ce qui fait un ORDRE (et ce qui n'en fait pas)", () => {
   });
 });
 
+describe("une analyse qui MENTIONNE un fichier n'est PAS une demande d'écriture (cas réel)", () => {
+  // Cas RÉEL, reproduit deux fois avec le même agent en lecture seule : la
+  // mission était une ANALYSE (rendre une liste dans la réponse) et se terminait
+  // par « ne crée AUCUN fichier, ne modifie rien ». Elle a été refusée parce que
+  // le verbe « ajoute » / « complète » et un nom de fichier (le fichier où LIRE
+  // la demande) se trouvaient dans la même phrase. Rien n'était attendu sur le
+  // disque : la cible cherchée est la SORTIE de l'ordre, pas un mot de la phrase.
+  const MISSIONS_ANALYSE = {
+    "« Ajoute les familles qui manquent à la demande du propriétaire » (fichier cité = entrée)": [
+      "Mission de LECTURE SEULE : relève les familles d'ouverture de fichiers utilisées par Pilot.",
+      "Ajoute les familles qui manquent à la demande du propriétaire (elle est dans le fichier .pilot/demande.md).",
+      "Ne crée AUCUN fichier, ne modifie rien.",
+    ].join("\n"),
+    "« Ajoute les familles qui manquent… » (aucun fichier dans la demande)": [
+      "Mission de LECTURE SEULE. Analyse src/js/deliverable-guard.js.",
+      "Ajoute les familles qui manquent à la demande du propriétaire.",
+      "Ne crée AUCUN fichier, ne modifie rien.",
+    ].join("\n"),
+    "« Complète avec les familles que le propriétaire n'a pas citées »": [
+      "Mission de LECTURE SEULE. Compare les familles citées par le propriétaire à celles du code.",
+      "Complète avec les familles que le propriétaire n'a pas citées (sa demande est dans le fichier .pilot/demande.md).",
+      "Réponds dans le message de fin, ne crée AUCUN fichier.",
+    ].join("\n"),
+    "« en te fondant sur les fichiers du projet » (source de lecture)":
+      "Ajoute les familles qui manquent, en te fondant sur les fichiers du projet.",
+    "« puis ajoute … à ta réponse » (sortie = la réponse)":
+      "Analyse les fichiers du projet, puis ajoute les familles manquantes à ta réponse.",
+    "« … et complète avec celles qui manquent » (sortie = la réponse)":
+      "Relève les familles d'ouverture de fichiers et complète avec celles qui manquent. Ne crée AUCUN fichier, ne modifie rien.",
+  };
+
+  for (const [nom, task] of Object.entries(MISSIONS_ANALYSE)) {
+    it(`accepte : ${nom}`, () => {
+      expect(detectExplicitWriteRequest(task).explicit, `refus indu : ${task}`).toBe(false);
+      expect(refus(task), `refus indu : ${task}`).toBeNull();
+    });
+  }
+
+  it("la cible n'est cherchée que dans le COMPLÉMENT de l'ordre (portée)", () => {
+    const brut = normalizeForMatch(
+      "Ajoute les familles qui manquent à la demande du propriétaire (dans le fichier .pilot/demande.md)"
+    );
+    const masque = maskQuoted(maskFileTargets(brut));
+    const fin = orderScopeEnd(masque, "ajoute".length);
+    expect(masque.slice("ajoute".length, fin).trim()).toBe("les familles");
+  });
+});
+
+describe("la protection réelle reste intacte (sortie fichier réellement demandée)", () => {
+  const ORDRES_AVEC_SORTIE = [
+    "Crée docs/analyse.md avec les familles manquantes.",
+    "Écris, dans docs/rapport.md, le compte rendu des familles.",
+    "Complète le fichier docs/liste.md avec les familles manquantes.",
+    "Ajoute au fichier README.md la ligne des familles.",
+    "Relève les familles et ajoute-les dans le fichier docs/liste.md.",
+    "Écris un fichier de synthèse.",
+  ];
+
+  for (const task of ORDRES_AVEC_SORTIE) {
+    it(`refuse : ${task}`, () => {
+      const detection = detectExplicitWriteRequest(task);
+      expect(detection.explicit, `ordre non reconnu : ${task}`).toBe(true);
+      expect(detection.verb).toBeTruthy();
+      expect(refus(task), `ordre non refusé : ${task}`).toBeTruthy();
+    });
+  }
+
+  it("un livrable réellement attendu en sortie est TOUJOURS refusé, avec le message qui dit quoi faire", () => {
+    const msg = refus("Analyse les familles d'ouverture de fichiers.", ["docs/familles.md"]);
+    expect(msg).toBeTruthy();
+    expect(msg).toContain("docs/familles.md"); // la sortie attendue est nommée
+    expect(msg).toContain("livrable déclaré"); // la vraie raison
+    expect(msg).toContain("Choisissez un agent qui écrit"); // quoi faire
+    expect(msg).toContain("reformulez la demande comme une tâche de lecture"); // sortie de secours
+    expect(detectExplicitWriteRequest("Analyse les familles d'ouverture de fichiers.", {
+      expectedFiles: ["docs/familles.md"],
+    }).via).toBe("expected_files");
+  });
+});
+
 describe("verrou de source : le refus ne peut pas retomber sur un simple mot", () => {
   it("la décision passe par findWriteOrder (aucune décision sur un verbe isolé)", async () => {
     const { readFileSync } = await import("node:fs");
@@ -191,6 +275,7 @@ describe("verrou de source : le refus ne peut pas retomber sur un simple mot", (
     expect(start, "détection introuvable").toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf("export function readOnlyWriteRefusalMessage", start));
     expect(body).toContain("findWriteOrder(");
+    expect(body).toContain("orderScopeEnd("); // la cible doit être dans la portée de l'ordre
     expect(body).toContain("stripNegations(");
     expect(body).toContain("stripLabels(");
     // Le simple repérage de mot (WRITE_VERB_RE) ne sert QUE de trace, jamais de décision :
