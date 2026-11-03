@@ -16,7 +16,7 @@
 // La lecture normalise les fins de ligne (worktree CRLF) :
 // cf. `.pi/skills/quality-gate/SKILL.md` § 3.4.
 
-import { readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { describe, expect, it } from "vitest";
@@ -74,8 +74,24 @@ describe("changelog obligatoire", () => {
     expect(v.ok).toBe(false);
     expect(v.accepted).toBe(false);
     // Le refus nomme le fichier attendu : un refus muet serait une panne.
-    expect(v.reason).toContain("release-notes/1.2.3.md");
+    // Le nom est celui de la CONVENTION REELLE du depot — `release-notes/vX.Y.Z.md`,
+    // avec le `v`, comme tous les fichiers de `release-notes/` — et non le chemin
+    // sans `v` que la garde reclame a tort depuis l'incident de publication 0.6.12.
+    expect(v.reason).toContain("release-notes/v1.2.3.md");
     expect(v.reason).toContain("OBLIGATOIRE");
+  });
+
+  it("le refus nomme EXACTEMENT le fichier attendu, jamais un chemin voisin", () => {
+    // Un refus qui nommerait un fichier different de celui que la porte lit
+    // enverrait l'utilisateur ecrire un changelog... que la porte ignorerait.
+    for (const tag of ["v1.2.3", "1.2.3", "V1.2.3", " v1.2.3 "]) {
+      const v = evaluateReleaseNotes({ tag });
+      expect(v.ok).toBe(false);
+      expect(v.reason).toContain(notesPathForTag(tag));
+      expect(v.reason).toContain("release-notes/v1.2.3.md");
+    }
+    // Et l'inverse : le chemin SANS `v` n'est jamais reclame (c'etait le defaut).
+    expect(evaluateReleaseNotes({ tag: "v1.2.3" }).reason).not.toContain("release-notes/1.2.3.md");
   });
 
   it("une note lisible laisse passer", () => {
@@ -90,6 +106,24 @@ describe("changelog obligatoire", () => {
     expect(v.accepted).toBe(true);
     // Une acceptation sans trace serait un contournement silencieux.
     expect(v.reason).toContain(ALLOW_MISSING_NOTES_ENV);
+  });
+});
+
+// ── 1 bis. Le chemin de la porte EST celui des fichiers reellement committes ──
+describe("chemin du changelog = convention du depot", () => {
+  it("chaque changelog de release-notes/ est atteint par la porte", () => {
+    // Verite du depot, pas d'une chaine inventee : pour chaque fichier
+    // `vX.Y.Z.md` present, la porte doit designer CE fichier. Avec l'ancien
+    // calcul (version sans `v`), aucun de ces fichiers n'etait trouve : la
+    // garde refusait toutes les publications.
+    const dossier = resolve(HERE, "../release-notes");
+    const fichiers = readdirSync(dossier).filter((f) => /^v\d+\.\d+\.\d+\.md$/.test(f));
+    expect(fichiers.length).toBeGreaterThan(0);
+    for (const f of fichiers) {
+      const tag = f.replace(/\.md$/, "");
+      const chemin = notesPathForTag(tag);
+      expect(existsSync(resolve(HERE, "..", chemin)), `${tag} -> ${chemin} introuvable`).toBe(true);
+    }
   });
 });
 
@@ -205,7 +239,15 @@ describe("cablage des decisions dans les scripts", () => {
       expect(code, f).toContain("notesPathForTag");
       expect(code, `${f} recopie le chemin`).not.toMatch(/`release-notes\/\$\{/);
     }
-    expect(notesPathForTag("v1.2.3")).toBe("release-notes/1.2.3.md");
+    // Convention REELLE du depot : `release-notes/vX.Y.Z.md` (cf. AGENTS.md et
+    // tous les fichiers deja committes). L'assertion precedente figeait le
+    // contraire (`release-notes/1.2.3.md`) et rendait la garde infalsifiablement
+    // rouge : elle refusait des versions dont le changelog existait.
+    expect(notesPathForTag("v1.2.3")).toBe("release-notes/v1.2.3.md");
+    // Un tag sans `v` designe le MEME fichier : le `v` est ajoute, jamais double.
+    expect(notesPathForTag("1.2.3")).toBe("release-notes/v1.2.3.md");
+    expect(notesPathForTag("V1.2.3")).toBe("release-notes/v1.2.3.md");
+    expect(notesPathForTag("v1.2.3")).not.toContain("vv");
   });
 
   it("gen-latest-json.js passe les portes changelog ET livraison", () => {

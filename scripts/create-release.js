@@ -11,7 +11,7 @@
 // explicite `ALLOW_EXISTING_RELEASE=1` (re-run volontaire). La décision est
 // PURE et vit à un seul endroit : `scripts/release-gates.js`.
 //
-// Le CHANGELOG est exigé AVANT cela (porte 0) : `release-notes/<version>.md` doit
+// Le CHANGELOG est exigé AVANT cela (porte 0) : `release-notes/v<version>.md` doit
 // exister et contenir au moins une ligne lisible. Sans lui, rien n'est publié —
 // pas même la Release, et les trois fabrications ne sont pas lancées.
 // Sortie de secours explicite : `ALLOW_MISSING_RELEASE_NOTES=1`.

@@ -20,7 +20,7 @@
 
 /** Accepter explicitement une Release existante (republier un tag). */
 export const ALLOW_EXISTING_RELEASE_ENV = "ALLOW_EXISTING_RELEASE";
-/** Accepter explicitement une publication SANS `release-notes/<tag>.md`. */
+/** Accepter explicitement une publication SANS `release-notes/v<version>.md`. */
 export const ALLOW_MISSING_NOTES_ENV = "ALLOW_MISSING_RELEASE_NOTES";
 /** Accepter explicitement une livraison incomplète (cible sans artefact). */
 export const ALLOW_INCOMPLETE_ENV = "ALLOW_INCOMPLETE_RELEASE";
@@ -49,14 +49,23 @@ export const CRITICAL_PLATFORMS = Object.freeze([
 export const OPTIONAL_PLATFORMS = Object.freeze(["linux-x86_64", "linux-aarch64"]);
 
 /**
- * Chemin du changelog humain d'un tag : `release-notes/<version>.md`, la
- * version SANS le `v` initial (c'est la convention du dépôt, et c'est le
- * fichier committé avec le bump). SEULE définition de ce chemin : les deux
- * scripts de publication s'en servent, ils ne le recopient pas.
+ * Chemin du changelog humain d'un tag : `release-notes/v<version>.md`, la
+ * version PRÉCÉDÉE du `v` — exactement le nom de fichier employé par la
+ * convention du dépôt (`AGENTS.md` : « Rédiger le changelog utilisateur
+ * `release-notes/vX.Y.Z.md` »), donc le fichier réellement committé avec le
+ * bump. SEULE définition de ce chemin : les deux scripts de publication s'en
+ * servent, ils ne le recopient pas.
+ *
+ * Le `v` est AJOUTÉ s'il manque et n'est jamais doublé : `"v1.2.3"`, `"1.2.3"`
+ * et `"V1.2.3"` désignent tous `release-notes/v1.2.3.md`. Exiger le chemin
+ * sans `v` (défaut antérieur, incident de publication 0.6.12) rendait la porte
+ * du changelog INFALSIFIABLEMENT rouge : elle refusait toutes les versions,
+ * y compris celles dont le changelog existait, et bloquait la publication.
  * @param {string} tag ex. "v1.2.3" ("1.2.3" accepté)
  */
 export function notesPathForTag(tag) {
-  return `release-notes/${String(tag || "").replace(/^v/, "")}.md`;
+  const version = String(tag || "").trim().replace(/^v/i, "");
+  return `release-notes/v${version}.md`;
 }
 
 /**

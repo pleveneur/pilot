@@ -79,7 +79,7 @@ function prevTag(tag) {
 }
 
 // Catégories pour le fallback automatique (quand aucun résumé humain
-// `release-notes/<tag>.md` n'est fourni). Les catégories orientées utilisateur
+// `release-notes/v<version>.md` n'est fourni). Les catégories orientées utilisateur
 // passent en tête ; les changements purement techniques sont regroupés en fin
 // de liste sous une section clairement identifiée (moins parlante pour un
 // utilisateur non technique). Chaque commit conventional (`type(scope): desc`)
@@ -107,15 +107,16 @@ function capitalize(s) {
 }
 
 // Résumé humain optionnel : si le développeur a rédigé
-// `release-notes/<tag>.md` (ou `release-notes/<version>.md`), son contenu
-// est utilisé tel quel comme notes (orienté utilisateur, en français). Le
+// `release-notes/v<version>.md` (nom employé par la convention du dépôt), son
+// contenu est utilisé tel quel comme notes (orienté utilisateur, en français). Le
 // fichier doit être commité avant le tag (il est lu dans le working tree du
 // runner CI). Retourne null si aucun fichier n'existe.
 function loadHumanNotes(tag) {
   // Le chemin n'est pas recopie : il vient de `release-gates.js` (seule
   // definition du depot). `VERSION` reste un repli, au cas ou le tag et la
-  // version declaree divergent.
-  const candidates = [notesPathForTag(tag), notesPathForTag(VERSION)];
+  // version declaree divergent — quand ils concordent, les deux designent le
+  // MEME fichier : il n'est lu qu'une fois.
+  const candidates = [...new Set([notesPathForTag(tag), notesPathForTag(VERSION)])];
   for (const p of candidates) {
     try {
       if (fs.existsSync(p)) return fs.readFileSync(p, "utf8").trim();
@@ -131,7 +132,7 @@ function loadHumanNotes(tag) {
 // de latest.json (consommé par l'updater).
 //
 // Priorité du contenu :
-//   1. `release-notes/<tag>.md` (résumé humain, orienté utilisateur) s'il
+//   1. `release-notes/v<version>.md` (résumé humain, orienté utilisateur) s'il
 //      existe — recommandé pour les versions visibles par les utilisateurs.
 //   2. Fallback : catégorisation automatique des commits conventional
 //      (✨ Nouveautés / 🐛 Corrections / ...) avec retrait du préfixe
