@@ -215,20 +215,28 @@ describe("4. le branchement : plus aucun refus muet pendant un tour", () => {
   });
 
   it("un blocage définitif est dénoué par l'état du MOTEUR, jamais par un délai", () => {
-    const sonde = sliceSource(
+    // L'observation vit maintenant dans `appliquerObservationTravail` (store
+    // partagé du travail) et la décision de vider la file dans
+    // `viderFileAuReposObserve`. Le FAIT qui dénoue reste l'état du moteur — le
+    // repos OBSERVÉ — et jamais un délai choisi par l'écran.
+    const repos = sliceSource(
       SUPER,
-      "      const processing = alive",
-      "      // Filet périodique",
-      2000
+      "      // REPOS OBSERVÉ",
+      "    // Filet périodique",
+      200,
     );
-    expect(sonde).toContain("if (isStreaming && tourEnCoursVu && demandesEnAttente.length > 0)");
-    expect(sonde).toContain("flushDemandesEnAttente(true)");
-    // `tourEnCoursVu` n'est armé QUE si la sonde a vu le moteur en traitement :
-    // une simple latence juste après un envoi ne peut pas faire partir une
-    // seconde demande par-dessus la première.
-    expect(sonde).toContain("if (demandesEnAttente.length > 0) tourEnCoursVu = true;");
+    expect(repos).toContain("viderFileAuReposObserve();");
+    const vidage = corpsFonction(SUPER, "function viderFileAuReposObserve()");
+    expect(vidage).toContain("flushDemandesEnAttente(true)");
+    // Le repos efface l'occupation locale, y compris le tour marqué en cours
+    // (`isStreaming`) : c'est ce qui débloquait la file. Une simple LATENCE
+    // juste après un envoi n'est pas le repos : elle est vue `starting`
+    // (mission acceptée, pas encore démarrée) et ne fait donc rien partir.
+    expect(vidage).toContain("isStreaming = false;");
+    expect(SUPER).toContain("} else if (obs.starting) {");
     // Aucun minuteur n'est introduit pour « laisser le temps ».
     expect(flushTimeoutAbsent()).toBe(true);
+    expect(/setTimeout|setInterval/.test(vidage)).toBe(false);
   });
 
   function flushTimeoutAbsent() {

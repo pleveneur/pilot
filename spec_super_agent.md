@@ -537,6 +537,16 @@ uniquement un bloc d'instructions dans le prompt système.
   applique un contrôle selon `super_agent_checklist_mode` (`off` / `warn`
   défaut / `block`) ; l'écran ne fait que **lire le verdict**. Réglages : mode +
   modèle de points (`super_agent_checklist_template`).
+  **Verrous de livraison (trous C1 et C5)** : (a) une tâche créée avec un modèle
+  porte le marqueur `checklist_expected` ; **checklist vidée** (marqueur posé,
+  zéro point) ⇒ clôture **REFUSÉE** avec un message propre, quel que soit le mode
+  sauf `off` (une checklist vide ne prouve rien et ne compte jamais conforme) ;
+  (b) la checklist d'une tâche **déjà terminée** ne se modifie plus (suppression
+  d'un point refusée : il faut rouvrir la tâche) ; (c) les tables de suivi
+  (`tasks`, `task_checks`, `deliverables`) sont **hors de portée** de
+  `super_agent_db_execute` : aucune écriture SQL directe de l'Assistant ne peut
+  contourner la porte (`db_execute_scope`, message nommant l'outil de suivi à
+  utiliser, **aucune écriture exécutée**).
 - **Traçabilité livrable → demande** (idée 4) : à chaque **passage effectif**
   d'une tâche en état livré (une seule fois, jamais pour une tâche déjà livrée),
   une ligne est écrite dans `deliverables` — libellé = titre de la tâche, origine
@@ -1045,14 +1055,18 @@ uniquement un bloc d'instructions dans le prompt système.
   les familles qui manquent », « complète avec celles qui manquent » ou « en te
   fondant sur les fichiers du projet » part **normalement** : ces mots-là
   décrivent le **contenu de la réponse**, pas un fichier à écrire.
-- **La preuve du livrable** : quand la demande **déclare les fichiers attendus**,
-  Pilot vérifie **à la fin de la tâche** que chacun existe réellement sur le
-  disque. Un fichier déclaré **absent** fait **échouer** la tâche, avec un
-  message qui nomme le fichier manquant et le dossier où il était attendu — vous
-  n'obtiendrez jamais « terminé » sur un fichier qui n'existe pas. Un fichier
-  présent (même vide) donne le déroulement habituel, plus une confirmation.
-- **Sans fichier déclaré, rien ne change** : les demandes existantes se
-  comportent exactement comme avant.
+- **Le livrable doit être DÉCLARÉ** : si vous demandez à un agent d'écrire un
+  fichier, les fichiers attendus sont annoncés à Pilot (`expected_files`).
+  Une demande d'écriture **sans** fichier déclaré est **refusée au lancement** :
+  la tâche ne démarre pas et le message dit quel fichier était réclamé. Sans
+  cette liste, aucune vérification n'était possible.
+- **La preuve du livrable** : à la fin de la tâche, Pilot vérifie que chaque
+  fichier déclaré **existe**, qu'il **n'est pas vide** et qu'il a bien **changé
+  depuis le lancement**. Un fichier absent, vide ou resté identique fait
+  **échouer** la tâche, avec un message qui nomme le fichier et le motif — vous
+  n'obtiendrez jamais « terminé » sur un fichier qui n'a pas été produit.
+- **Les demandes de lecture ne changent pas** : une analyse, un avis, un plan
+  se comportent exactement comme avant.
 - Cela vaut pour les **deux écrans de lancement** (agents du projet, agents
   d'assistant), pour la **délégation directe**, pour les **agents jetables** et
   pour les demandes **mises en file** (la vérification a lieu quand la tâche se
@@ -1105,6 +1119,30 @@ sur le projet), cette demande n'est plus une simple ligne anonyme :
   n'est **pas** retirable (arrêter un agent est un autre geste), et l'**Assistant**
   peut faire ce retrait ciblé à votre demande.
 <!-- /HELP:file-attente-identite-mission -->
+
+<!-- HELP:assistant-une-seule-verite-du-travail -->
+### L'Assistant n'est jamais « occupé » à tort (une seule vérité du travail)
+- **Il n'y a qu'une seule vérité** : l'onglet 🧭 ne juge plus son propre travail
+  par une boucle d'interrogation à lui. Il lit le **même relevé du travail** que
+  le cercle d'activité (le magasin partagé, rafraîchi par la sonde **légère** de
+  2 s et par les événements d'état) et n'y reconnaît que **sa propre session**
+  (`kind === "superagent"`) : le travail d'un autre agent ne peut donc plus le
+  faire passer pour occupé, et aucun sondage lourd ne tourne en boucle.
+- **Le repos constaté efface l'occupation** : dès que ce relevé dit que
+  l'Assistant **ne travaille pas** (et qu'il n'est pas en train de démarrer une
+  mission qu'on vient de lui confier), l'état « occupé » est **remis à zéro** —
+  y compris le marqueur « tour en cours » qui, resté bloqué, retenait les
+  demandes en attente. **Immédiatement après**, la file des demandes est vidée :
+  **une seule à la fois**, dans l'**ordre** d'arrivée, et toujours par le
+  **même chemin d'envoi** que la saisie manuelle (aucun second mécanisme).
+- **Pendant un démarrage ou un travail, rien ne part** : la demande attend son
+  tour. Une latence juste après un envoi (le moteur n'a pas encore enregistré la
+  mission) n'est **pas** un repos : elle est vue « en démarrage », donc aucune
+  seconde demande ne peut s'envoyer par-dessus la première.
+- **Jamais « laisser le temps »** : aucun minuteur, aucun délai d'attente n'est
+  introduit pour débloquer la file — c'est l'**état réel du moteur** qui décide.
+  Les phrases d'accusé déjà affichées ne changent pas.
+<!-- /HELP:assistant-une-seule-verite-du-travail -->
 
 - **Un agent ne s'arrête plus tout seul juste après son lancement** : les
   arrêts automatiques (inactivité d'une tâche, garde-fou anti-boucle, plafond de
@@ -1479,6 +1517,10 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   réfléchit sur vos demandes).
 - Il ne touche **jamais** aux fichiers des projets (lecture seule stricte,
   garantie technique).
+- Il ne peut **pas** modifier directement les tables de suivi (tâches,
+  checklists, livrables) par SQL : ces changements passent par les outils de
+  suivi, qui appliquent les contrôles (une tentative est refusée sans rien
+  écrire).
 - Il **adapte son propre prompt** au fil des discussions : via l'outil
   `update_my_prompt`, il met à jour ses instructions durables (préférences,
   règles, contexte) pour prendre systématiquement en compte ce qu'il apprend.
@@ -3050,20 +3092,35 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
        (`Modifie src/js/main.js`, `Ajoute au fichier README.md …`, `Complète le
        fichier docs/liste.md …`) ou le mot « fichier » (`Écris un fichier de
        synthèse`).
-  2. **Preuve du livrable** : `run_agents` / `run_assistant_agents` acceptent un
-     champ **facultatif `expected_files`** (chemins relatifs au projet, ou à
-     l'espace `~/.pilot/assistant`, exposé par `get_assistant_workspace`). Le bus
-     (`agents-bus.js`, `verifyExpectedFiles`) vérifie **l'existence** de chaque
-     fichier en fin de mission : **absent ⇒ mission en ÉCHEC** (`settleMission`
-     `error`) avec un message factuel nommant le fichier et le dossier de
-     référence ; **présent ⇒ comportement inchangé + confirmation**. L'existence
-     seule compte (un fichier vide est conforme) et une sonde indisponible
-     n'échoue **jamais** la tâche. **Sans `expected_files`, rien ne change**
-     (rétrocompatibilité totale). Couverture : `garde-fou-livrable.test.js`
-     + `garde-fou-refus-lecture-seule.test.js` (formulations réelles acceptées,
-     vraies écritures refusées, **cible cherchée dans la portée de l'ordre** :
-     une analyse qui mentionne un fichier d'entrée est acceptée, une sortie
-     fichier réellement demandée reste refusée).
+  2. **Déclaration OBLIGATOIRE (trou C2)** : `run_agents`,
+     `run_assistant_agents` et `delegate_to_coder` exposent tous les trois le
+     champ `expected_files` (chemins relatifs au projet, ou à l'espace
+     `~/.pilot/assistant`, exposé par `get_assistant_workspace`). Une demande qui
+     **ordonne d'écrire** un fichier **sans** déclarer de livrable est **refusée
+     au lancement** (même détecteur `detectExplicitWriteRequest`, donc même
+     portée d'ordre ; refus nommant le fichier réclamé, ou l'absence de nom
+     précis). Sans liste, la preuve de fin n'aurait **rien** à vérifier et
+     n'importe quelle annonce « terminé » resterait invérifiable.
+  3. **Preuve du livrable (trous C3 et C4)** : en fin de mission, chaque fichier
+     déclaré est sondé (`file_exists` + `get_file_size` + `file_mtime`,
+     `verifyExpectedFiles`) et doit être **présent**, **non vide**, et **avoir
+     CHANGÉ depuis l'état de départ** relevé au lancement
+     (`captureDeliverableState`) : **absent** (`missing`), **vide** (`empty`,
+     0 octet) ou **inchangé** (`unproven`) ⇒ mission en **ÉCHEC**
+     (`settleMission` `error`), message factuel nommant le fichier et le motif.
+     Un **relevé de départ impossible** (`null`) n'impute rien à l'agent
+     (fail-open) ; un fichier **créé pendant la mission** est prouvé.
+  4. **Preuve de travail du watchdog (trou C4)** : avant d'annoncer l'échec
+     d'une run muette, le bus lit l'état Git (`git_status_project`) et exige un
+     **changement depuis le démarrage** (`provesWorkOnDisk` avec
+     `captureWorkBaseline` relevé **avant** le travail des agents : HEAD + liste
+     des fichiers déjà sales). Un **dépôt déjà sale** ne « prouve » plus le
+     travail d'un agent qui n'a rien fait : il faut un **commit nouveau**, un
+     **fichier sale apparu depuis**, ou — pour un fichier déjà sale — une **date
+     de modification postérieure au démarrage** (`dirtyFileChangedSince`).
+     Relevé de départ impossible ⇒ comportement antérieur (fail-open).
+     Couverture : `garde-fou-livrable.test.js` + `agents-bus.test.js`
+     + `garde-fou-refus-lecture-seule.test.js`.
 
 <!-- HELP:super-agent-mcp -->
 ### MCP piloté par l'Assistant
@@ -3189,7 +3246,9 @@ rappelle ce qui reste à faire et peut empêcher de terminer une tâche trop tô
   sur **« Ajouter »** (la touche Entrée fonctionne aussi).
 - **Cocher / décocher un point** : cliquez la case devant le point ; le point
   est conservé, seul son état change.
-- **Retirer un point** : cliquez la croix à côté du point.
+- **Retirer un point** : cliquez la croix à côté du point. La checklist d'une
+  tâche **terminée** ne se modifie plus : rouvrez d'abord la tâche pour changer
+  ses points.
 - **Compteur sur la carte** : la carte affiche **« 2/3 »** (points cochés /
   nombre total de points). Une tâche sans point n'affiche **aucun compteur**.
 - **Modèle de points** : sur une tâche qui n'a encore **aucun** point, un bouton
@@ -3206,6 +3265,10 @@ Le contrôle dépend du mode choisi :
   même »** permet de clôturer ; si vous annulez, la tâche reste dans sa colonne.
 - **Bloquante** : la clôture est **refusée** tant que des points restent à
   cocher (le message est affiché, sans possibilité de passer outre).
+- **Checklist vidée** : si la tâche devait avoir une checklist (un modèle a été
+  appliqué) et qu'il n'y a plus **aucun** point, la clôture est **refusée** sauf
+  en mode « Désactivée » : une liste vide ne prouve rien et ne compte jamais
+  comme conforme.
 
 Le même comportement s'applique quand vous **clôturez plusieurs tâches d'un
 coup**.

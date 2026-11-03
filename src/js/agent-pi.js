@@ -18,6 +18,22 @@ import { SCREEN_GATE_SENTINEL } from "./screen-guard.js";
 // Relais des questions d'agent (SOURCE UNIQUE partagée avec le bus d'agents) :
 // décision « relayable » + nom de l'événement de relais vers l'assistant.
 import { AGENT_RELAY_EVENT, isRelayableAgentChoice } from "./agent-choice-relay.js";
+// PORTE UNIQUE DU VERDICT DES TESTS et du contrôle de style : un « non lancé »
+// ne peut jamais passer pour un « vert » (verdict, cause, phrase affichable).
+// `notRun()` est la SEULE façon d'écrire `ran: false` (verrou
+// verdict-tests-jamais-silencieux.test.js).
+import {
+  NOT_RUN_CAUSES,
+  LINT_UNVERIFIED_CAUSES,
+  TEST_VERDICT_GREEN,
+  TEST_VERDICT_RED,
+  TEST_VERDICT_NOT_RUN,
+  notRun,
+  testVerdict,
+  testVerdictLabel,
+  lintVerdict,
+  lintVerdictLabel,
+} from "./test-verdict.js";
 // FILET DE SÉCURITÉ DES SENTINELLES MACHINE : une chaîne `PILOT_*::` (appel de
 // fonction interne d'une extension) ne doit JAMAIS être peinte brute — elle
 // devient une phrase française, ou une formulation neutre si la famille est
@@ -4116,7 +4132,15 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   /** Gère la fin d'un tour d'agent en mode orchestration. */
   async function runLintCheck(filePaths, projectPath) {
     if (!filePaths || filePaths.length === 0 || !projectPath) {
-      return { ok: true, hadChecker: false, output: "Aucun fichier à vérifier" };
+      // Rien n'a été contrôlé : ce n'est PAS un vert — ni `ok`, ni « vérifié ».
+      // La cause est rendue pour que l'appelant puisse le dire (porte unique :
+      // `test-verdict.js`).
+      return {
+        ok: false,
+        hadChecker: false,
+        cause: LINT_UNVERIFIED_CAUSES.NO_FILES,
+        output: "Aucun fichier à vérifier",
+      };
     }
     try {
       const result = await invoke("check_syntax", { paths: filePaths, projectPath });
@@ -4129,10 +4153,11 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       }
     } catch (e) {
       console.error("[runLintCheck] erreur:", e);
-      // En cas d'erreur du linter, on ne bloque pas la tâche
-      return { ok: true, hadChecker: false, output: String(e) };
+      // On ne bloque pas la tâche sur un linter en panne — mais le verdict
+      // n'est PAS un vert silencieux : il est « non vérifié », avec sa cause.
+      return { ok: false, hadChecker: false, cause: LINT_UNVERIFIED_CAUSES.EXECUTION_ERROR, output: String(e) };
     }
-    return { ok: true, hadChecker: false, output: "" };
+    return { ok: false, hadChecker: false, cause: LINT_UNVERIFIED_CAUSES.UNEXPECTED_RESULT, output: "" };
   }
 
   /** Envoie une demande de correction syntaxique au codeur (linting-in-the-loop). */
@@ -4237,21 +4262,24 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
 
   /**
    * Exécute la gate de tests après une tâche du codeur. Retourne :
-   *  - { ran: false } si E2 désactivé, pas de runner, baseline indisponible
+   *  - notRun(cause) si E2 désactivé, pas de runner, baseline indisponible…
+   *    (la cause est OBLIGATOIRE : `notRun()` de `test-verdict.js`, la seule
+   *    façon d'écrire `ran: false` — un « non lancé » muet passait sinon pour
+   *    un vert, cf. docs/rapports/RAPPORT-verrous-livraison-lot-b.md)
    *  - { ran: true, ok: true, ... } si tests au vert (ou seuls échecs hérités)
    *  - { ran: true, ok: false, failures, newFailures, output, timedOut } si régression
    */
   async function runTestGate(st, task, changedFiles, messagesEl) {
-    if (!st.orchestrationTestEnabled) return { ran: false };
+    if (!st.orchestrationTestEnabled) return notRun(NOT_RUN_CAUSES.E2_DISABLED);
     const projectPath = window._pilotProjectPath;
-    if (!projectPath) return { ran: false };
+    if (!projectPath) return notRun(NOT_RUN_CAUSES.NO_PROJECT);
     // Calcul paresseux de la baseline au premier appel.
     await computeTestBaseline(st, messagesEl);
     if (!st.orchestrationTestBaseline || !st.orchestrationTestBaseline.available) {
-      return { ran: false };
+      return notRun(NOT_RUN_CAUSES.BASELINE_UNAVAILABLE);
     }
     const runner = st.orchestrationTestRunner;
-    if (!runner) return { ran: false };
+    if (!runner) return notRun(NOT_RUN_CAUSES.NO_RUNNER);
     // Ciblage : pour pytest, dériver les fichiers de test candidats et filtrer
     // par existence (buildTestCommand ne peut pas vérifier l'existence — pure).
     let testTargets = [];
@@ -4264,7 +4292,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       testTargets = checked.filter(Boolean);
     }
     const cmd = buildTestCommand(runner, st.orchestrationTestScope, testTargets, st.orchestrationTestCommand);
-    if (!cmd) return { ran: false };
+    if (!cmd) return notRun(NOT_RUN_CAUSES.NO_COMMAND);
     let result;
     try {
       result = await invoke("run_project_tests", {
@@ -4272,8 +4300,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       });
     } catch (e) {
       console.error("[runTestGate] erreur run_project_tests:", e);
-      // Ne pas bloquer la tâche sur une erreur d'exécution — fallback validation.
-      return { ran: false, error: String(e) };
+      // On ne bloque pas la tâche sur une erreur d'exécution — mais le verdict
+      // n'est PAS un vert : la cause est rendue pour être dite à l'écran.
+      return { ...notRun(NOT_RUN_CAUSES.EXECUTION_ERROR), error: String(e) };
     }
     const parsed = parseTestFailures(runner, result.stdout, result.stderr);
     const baseline = st.orchestrationTestBaseline.failures || [];
@@ -4980,6 +5009,21 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
         } catch (_) { /* garder le fichier si la sonde échoue (comportement précédent) */ filesToLint.push(p); }
       }
       const lint = await runLintCheck(filesToLint, window._pilotProjectPath);
+      // Un contrôle de style qui n'a RIEN vérifié (linter en panne, tâche sans
+      // fichier) ne doit jamais se lire comme un vert : sa cause est dite à
+      // l'écran, par la porte unique du verdict (test-verdict.js).
+      const lintVerdictInfo = lintVerdict(lint);
+      if (lintVerdictInfo.state !== TEST_VERDICT_GREEN && lintVerdictInfo.state !== TEST_VERDICT_RED) {
+        appendSystemMessage(messagesEl, lintVerdictLabel(lintVerdictInfo));
+        logTaskAttempt(st, currentTaskId, {
+          marker: "syntax_unverified",
+          reason: lintVerdictLabel(lintVerdictInfo),
+          action: "none",
+          filesChanged: filesToLint,
+          responseExcerpt: responseText,
+          cycles: st.orchestrationCurrentTaskCycles || 0,
+        });
+      }
       if (!lint.ok && lint.hadChecker) {
         st.orchestrationLintAttempts[currentTaskId] = (st.orchestrationLintAttempts[currentTaskId] || 0) + 1;
         const lintAttempt = st.orchestrationLintAttempts[currentTaskId];
@@ -5013,7 +5057,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       // Budget de corrections unifié : lint + test bornés à max_corrections.
       if (st.orchestrationTestEnabled) {
         const testGate = await runTestGate(st, currentTask, changedFiles, messagesEl);
-        if (testGate.ran && !testGate.ok) {
+        // Verdict de la porte : « non lancé » est DIT, jamais sous-entendu vert.
+        const testGateVerdict = testVerdict(testGate);
+        if (testGateVerdict.state === TEST_VERDICT_RED) {
           const lintAttempts = st.orchestrationLintAttempts[currentTaskId] || 0;
           const testAttempts = (st.orchestrationTestAttempts[currentTaskId] || 0) + 1;
           st.orchestrationTestAttempts[currentTaskId] = testAttempts;
@@ -5057,6 +5103,18 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
             await handleTaskFailure(st, messagesEl, statusEl, currentTask, `Tests en échec après ${maxCorrections} corrections : ${testGate.output}`);
             return;
           }
+        } else if (testGateVerdict.state === TEST_VERDICT_NOT_RUN) {
+          // Rien n'a été exécuté : on le DIT (cause nommée), pour que « aucun test
+          // n'a tourné » ne se lise jamais comme « tests verts » dans le rapport.
+          appendSystemMessage(messagesEl, testVerdictLabel(testGateVerdict));
+          logTaskAttempt(st, currentTaskId, {
+            marker: "tests_not_run",
+            reason: testVerdictLabel(testGateVerdict),
+            action: "none",
+            filesChanged: changedFiles,
+            responseExcerpt: responseText,
+            cycles: st.orchestrationCurrentTaskCycles || 0,
+          });
         }
       }
 

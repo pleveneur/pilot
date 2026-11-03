@@ -183,7 +183,7 @@ export function isAgentListedInWorkList(a) {
  *   la supervision courante ; une mémoire explicite est acceptée pour les
  *   tests). Une entrée ne porte le champ additif `starting` que lorsqu'il est
  *   vrai : la forme historique est préservée dans tous les autres cas.
- * @returns {Array<{agentId,rawId,label,project,projectPath,state,busy,working,workingSince,lastActivity,lastActivityRelative,kind,starting?}>}
+ * @returns {Array<{agentId,rawId,label,project,projectPath,state,busy,working,workingSince,lastActivity,lastActivityRelative,kind,starting?,alive?}>}
  */
 export function flattenAgents(
   supervision,
@@ -334,6 +334,15 @@ export function flattenAgents(
       // Champ ADDITIF « starting » : present SEULEMENT quand la mission est en
       // demarrage (voir MISSION_START_MAX_MS et trackMissionStarting).
       if (starting) entry.starting = true;
+      // Champ ADDITIF « alive » : vivacite du processus, telle que la
+      // supervision et la sonde LÉGÈRE (mergeProbeActivity) la publient.
+      // Present SEULEMENT quand l'information existe : jamais inventee, jamais
+      // « vivant par defaut ». Il permet aux consommateurs qui doivent
+      // distinguer « session morte » de « session AU REPOS » — le statut de
+      // l'onglet 🧭, la fenetre de grace au demarrage — de le faire SANS
+      // rappeler la sonde lourde `get_agent_supervision` dans une boucle
+      // (spec_pilot.md § 2, « Aucune attente de `pi` sur le thread principal »).
+      if (typeof a.alive === "boolean") entry.alive = a.alive;
       list.push(entry);
     }
   }
@@ -356,6 +365,48 @@ export function flattenAgents(
  */
 export function anyBusy(list) {
   return list.some(isAgentWorking);
+}
+
+/**
+ * ETAT DE TRAVAIL DE L'ASSISTANT, lu sur LE STORE PARTAGE — SOURCE UNIQUE.
+ *
+ * Pourquoi cette fonction existe : l'onglet 🧭 entretenait un SECOND
+ * observateur de « l'Assistant travaille » (`get_agent_supervision` interroge
+ * dans sa propre boucle de 2 s, avec ses propres drapeaux) qui pouvait
+ * contredire le cercle de la liste des agents — d'ou l'« occupé » fantome
+ * (« on me dit que tu travailles, et tu n'apparais pas en train de
+ * travailler ») et la file de demandes qui ne repartait jamais. Il n'existe
+ * plus qu'UNE lecture : celle-ci, appliquee a la MEME liste que le cercle
+ * (spec_super_agent.md).
+ *
+ * Regles, dans cet ordre :
+ *  1. aucune entree de la famille `superagent` -> `known: false` : AUCUNE
+ *     preuve, donc l'appelant ne touche a rien (fail-open) ;
+ *  2. `working` vient de `isAgentWorking` (regle unique, jamais recopiee) ;
+ *  3. `starting` = mission acceptee mais pas encore demarree (champ additif
+ *     publie par flattenAgents) : ce n'est PAS le repos, on attend ;
+ *  4. `auRepos` = ni travaillant, ni en demarrage. Seul ce cas autorise a
+ *     effacer une occupation locale et a faire repartir la file.
+ * Fonction PURE (aucun DOM, aucun etat, aucune E/S) — donc testable, et
+ * utilisable la ou aucun `invoke` n'est permis.
+ * @param {Array<object>} list liste aplatie (flattenAgents)
+ * @returns {{known:boolean,working:boolean,starting:boolean,alive:boolean,auRepos:boolean}}
+ */
+export function assistantWorkState(list) {
+  const entrees = Array.isArray(list) ? list : [];
+  const entry = entrees.find((a) => a && a.kind === SUPERAGENT_ID);
+  if (!entry) {
+    return { known: false, working: false, starting: false, alive: false, auRepos: false };
+  }
+  const working = isAgentWorking(entry);
+  const starting = entry.starting === true;
+  return {
+    known: true,
+    working,
+    starting,
+    alive: entry.alive === true,
+    auRepos: !working && !starting,
+  };
 }
 
 // ── Travail effectif et travail SANS ONGLET (regle 1) ──

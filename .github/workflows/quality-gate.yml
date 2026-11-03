@@ -1,0 +1,111 @@
+name: quality-gate
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONTRÔLE AUTOMATIQUE DES PROPOSITIONS DE MODIFICATION ET DE LA BRANCHE
+# PRINCIPALE (lot B, trou C7.6 de docs/rapports/RAPPORT-voies-de-contournement-livraison.md).
+#
+# Ce qui était ouvert : seuls `release.yml` (sur étiquette `v*`) et
+# `gds-server-image.yml` (manuel) existaient. Aucun enchaînement ne tournait sur
+# une proposition de modification ni sur une poussée vers `main` : une suite
+# rouge pouvait donc vivre sur la branche principale jusqu'au tag, et ne se
+# découvrir qu'au moment de publier — chez les utilisateurs installés.
+#
+# Ce que fait ce fichier, et rien de plus :
+#   - il ÉCHOUE si les tests du front (Vitest) ou les tests unitaires Rust du
+#     bureau (`cargo test --lib`) échouent ;
+#   - il ne fabrique RIEN, ne signe RIEN, ne publie RIEN, ne crée aucune
+#     Release, ne touche à aucun secret de publication ;
+#   - il est INDÉPENDANT de `release.yml` : ni déclencheur, ni job, ni artefact
+#     partagé. La topologie de publication (quel job est critique, quel job est
+#     optionnel, quelle plateforme ne doit jamais retarder une publication)
+#     reste entièrement décrite dans `release.yml`, et
+#     `scripts/release-workflow.test.js` continue de la verrouiller.
+#
+# Un seul système d'exploitation ici (`ubuntu-22.04`) : c'est le contrôle
+# MINIMAL demandé. Les trois systèmes sont déjà couverts par le job `test` de
+# `release.yml`, qui tourne avant toute publication.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# Aucune permission d'écriture : ce fichier ne peut pas publier, ni commenter,
+# ni modifier quoi que ce soit du dépôt.
+permissions:
+  contents: read
+
+# Une proposition retouchée annule l'exécution précédente devenue inutile.
+concurrency:
+  group: quality-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    # Plafond de durée : un job bloqué ne doit pas rester suspendu (même
+    # précaution que dans `release.yml`).
+    timeout-minutes: 30
+    # AUCUN `continue-on-error` ici, ni sur le job ni sur une étape : un test
+    # rouge doit faire échouer la proposition. C'est tout l'objet du verrou
+    # (`scripts/quality-gate-workflow.test.js`).
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Switch apt mirror (azure → archive)
+        # Même correctif que dans `release.yml` : le miroir par défaut des
+        # runners ubuntu-22.04 bloquait `apt-get update`.
+        run: |
+          sudo sed -i 's@azure\.archive\.ubuntu\.com@archive.ubuntu.com@g' \
+            /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+          sudo sed -i 's@azure\.archive\.ubuntu\.com@archive.ubuntu.com@g' \
+            /etc/apt/sources.list 2>/dev/null || true
+
+      - name: Install Linux dependencies (Tauri)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          export APT_OPTS="-o Acquire::ForceIPv4=true -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \
+            -o Acquire::http::ConnectionAttemptTimeout=10"
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Install npm deps
+        run: npm ci --prefer-offline
+
+      - name: Generate MCP bundle (build:mcp)
+        # `src-tauri/extensions/pilot-mcp-client.ts` est exclu du dépôt mais
+        # embarqué par include_str! : sans lui, `cargo test` échoue à la
+        # compilation (même prérequis que dans `release.yml`).
+        run: npm run build:mcp
+
+      - name: Run Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Run JS unit tests (Vitest)
+        run: npm test

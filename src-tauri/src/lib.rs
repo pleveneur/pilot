@@ -879,10 +879,12 @@ struct AppConfig {
     // commandes de changement de statut.
     #[serde(default)]
     super_agent_checklist_mode: String,
-    // Lot A idée 3 : MODÈLE de checklist par défaut (un point par ligne) proposé
-    // sur une tâche qui n'a encore AUCUN point. Champ libre, jamais imposé :
-    // rien n'est créé automatiquement, l'utilisateur (ou l'écran, sur un clic
-    // explicite) décide. Un champ absent retombe sur le modèle par défaut.
+    // Lot A idée 3 : MODÈLE de checklist par défaut (un point par ligne).
+    // C5 (verrou de livraison) : ce modèle est APPLIQUÉ à la création d'une tâche
+    // (`super_agent_create_task`), puisque le cas le plus courant — une tâche
+    // créée sans aucun point — fermait sinon sans rien vérifier. La création
+    // « sans point » reste possible sur demande explicite
+    // (`with_checklist_template = false`). Un champ vide ⇒ aucun point créé.
     #[serde(default = "default_super_agent_checklist_template")]
     super_agent_checklist_template: String,
     // Lot A idée 4, tranche 4.5 : enregistrer une LIGNE DE TRAÇABILITÉ à chaque

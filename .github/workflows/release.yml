@@ -114,7 +114,15 @@ jobs:
   # chaque tauri-action de la matrice tenterait de créer la release en
   # parallèle, et seules les premières réussiraient.
   # ─────────────────────────────────────────────────────────────────────
+  # `needs: [test]` (lot B, trou C7.1 de l'audit) : la Release n'est plus créée
+  # AVANT le verdict des tests. Sans cette dépendance, un tag dont les tests
+  # échouent produisait une Release PUBLIÉE (draft=false) sans aucun artefact,
+  # pendant que `build` restait bloqué — donc une version annoncée aux
+  # utilisateurs installés alors que les tests étaient rouges. Repartir d'un tag
+  # déjà publié est en plus refusé nettement par `scripts/create-release.js`
+  # (décision pure dans `scripts/release-gates.js`).
   create-release:
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

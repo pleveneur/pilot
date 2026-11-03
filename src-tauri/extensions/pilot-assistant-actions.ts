@@ -503,6 +503,7 @@ export default function (pi: ExtensionAPI) {
       "ALWAYS pass `agent_id` to designate the SPECIFIC agent that must do the work (e.g. 'codeur'). Without it, the delegation is REFUSED with a message asking to name the agent — Pilot never silently falls back to another agent.",
       "Set background=true to start the agent in invisible mode (background, without opening a tab). This is useful when you want the agent to work without disturbing the user's current view.",
       "Pass `project` (absolute path) to delegate to a specific project even if it is not the active one. Its agent is started in the background (invisible) automatically, without opening the project or its tab.",
+      "ALWAYS pass `expected_files` (paths relative to the project) when the request asks the agent to produce a file. A request that explicitly asks to write a file without any declared deliverable is REFUSED at launch: Pilot must be able to verify, at the end, that the file exists, is not empty and has changed since the mission started.",
       "The tool returns as soon as Pilot has FORWARDED the request: the agent works asynchronously and its result is delivered to you automatically later. Do not wait, do not poll (no list_agent_sessions), do not relaunch and do not stop the agent before that result arrives.",
     ],
     parameters: Type.Object({
@@ -510,10 +511,11 @@ export default function (pi: ExtensionAPI) {
       agent_id: Type.String({ description: "Identifiant de l'agent désigné pour la tâche (obligatoire, ex: 'codeur'). Sans cette désignation, la délégation est refusée : aucun repli automatique." }),
       project: Type.Optional(Type.String({ description: "Chemin absolu du projet cible. Si omis, délègue au projet actif." })),
       background: Type.Optional(Type.Boolean({ description: "true → démarrer l'agent en mode invisible (arrière-plan, sans ouvrir d'onglet). Défaut : false (onglet ouvert)." })),
+      expected_files: Type.Optional(Type.Array(Type.String(), { description: "Fichiers RÉELLEMENT attendus sur le disque à la fin du travail (chemins relatifs au projet, ex. [\"docs/plan.md\"]). Obligatoire dès que la demande exige la production d'un fichier : sans cette liste, la délégation est REFUSÉE (Pilot ne pourrait pas vérifier le livrable). Un fichier absent, vide ou inchangé depuis le lancement fait échouer la mission." })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ action: "delegate_to_coder", request: params.request, agentId: params.agent_id || null, project: params.project || null, background: params.background === true });
+      const payload = JSON.stringify({ action: "delegate_to_coder", request: params.request, agentId: params.agent_id || null, project: params.project || null, background: params.background === true, expectedFiles: params.expected_files || [] });
       const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload, PILOT_UI_OPTS);
       if (ok) {
         const mode = params.background === true ? "en arrière-plan (agent invisible)" : "(son onglet est ouvert)";

@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, initAgentsBus, stopAgentsRun, resolveEffectiveModel, describeModelFallback, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, provesWorkOnDisk, resolveWantedThinkingLevel, applyAgentThinkingLevel, __setWatchdogConfirmDelayForTest, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, initAgentsBus, stopAgentsRun, resolveEffectiveModel, describeModelFallback, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, provesWorkOnDisk, dirtyPathsOf, dirtyFileChangedSince, captureWorkBaseline, resolveWantedThinkingLevel, applyAgentThinkingLevel, __setWatchdogConfirmDelayForTest, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -962,6 +962,114 @@ describe("provesWorkOnDisk — preuve disque avant d'annoncer un échec (mission
 
   it("dépôt sans aucun commit (head_ts 0) → aucune preuve", () => {
     expect(provesWorkOnDisk({ is_repo: true, head: "", head_ts: 0, pending: 0 }, start, false)).toBe(false);
+  });
+});
+
+// TROU C4 (rapport des voies de contournement de la livraison) : sur un dépôt
+// DÉJÀ sale au lancement, « pending > 0 » faisait passer un agent qui n'a rien
+// fait pour un agent qui a travaillé. La preuve exige désormais un CHANGEMENT
+// depuis le démarrage, établi par l'état de départ relevé AVANT la run.
+describe("preuve de travail : un changement DEPUIS le démarrage, jamais l'état hérité (C4)", () => {
+  const start = Date.parse("2026-10-01T14:32:17Z");
+  const dirtyAtStart = {
+    is_repo: true,
+    head: "aaa111",
+    head_ts: Math.round((start - 3600_000) / 1000),
+    modified: ["src/js/vieux.js"],
+    pending: 1,
+  };
+
+  it("dépôt déjà sale, RIEN n'a changé → aucune preuve (l'agent n'a pas travaillé)", () => {
+    const baseline = { head: "aaa111", dirty: ["src/js/vieux.js"] };
+    expect(provesWorkOnDisk(dirtyAtStart, start, false, baseline)).toBe(false);
+  });
+
+  it("même dépôt sale + un fichier APPARU depuis → travail prouvé", () => {
+    const baseline = { head: "aaa111", dirty: ["src/js/vieux.js"] };
+    const after = { ...dirtyAtStart, modified: ["src/js/vieux.js", "src/js/neuf.js"], pending: 2 };
+    expect(provesWorkOnDisk(after, start, false, baseline)).toBe(true);
+  });
+
+  it("même dépôt sale + un commit NOUVEAU pendant la run → travail prouvé", () => {
+    const baseline = { head: "aaa111", dirty: ["src/js/vieux.js"] };
+    const after = { ...dirtyAtStart, head: "bbb222", head_ts: Math.round((start + 60_000) / 1000) };
+    expect(provesWorkOnDisk(after, start, false, baseline)).toBe(true);
+  });
+
+  it("HEAD inchangé mais date de commit récente (commit d'AVANT la run) → aucune preuve", () => {
+    const baseline = { head: "aaa111", dirty: [] };
+    const after = {
+      is_repo: true,
+      head: "aaa111",
+      head_ts: Math.round((start + 5_000) / 1000),
+      pending: 0,
+    };
+    expect(provesWorkOnDisk(after, start, false, baseline)).toBe(false);
+  });
+
+  it("un état de départ IMPOSSIBLE à relever ne condamne pas (comportement antérieur)", () => {
+    // `null` = relevé en panne : on ne peut pas prouver, mais on ne prive pas
+    // non plus la protection de la mission 310 (fichiers non committés).
+    expect(provesWorkOnDisk({ is_repo: true, head_ts: 0, pending: 2 }, start, false, null)).toBe(true);
+  });
+
+  it("dirtyPathsOf réunit et dédoublonne toutes les familles de `git status`", () => {
+    expect(
+      dirtyPathsOf({
+        is_repo: true,
+        modified: ["b.js", "a.js"],
+        added: ["c.js"],
+        deleted: ["a.js"],
+        untracked: ["d.js"],
+        staged: ["a.js"],
+      })
+    ).toEqual(["a.js", "b.js", "c.js", "d.js"]);
+    expect(dirtyPathsOf({ is_repo: false })).toEqual([]);
+    expect(dirtyPathsOf(null)).toEqual([]);
+  });
+
+  it("dirtyFileChangedSince : seule une date POSTÉRIEURE au démarrage compte", () => {
+    expect(dirtyFileChangedSince(start + 30_000, start)).toBe(true);
+    expect(dirtyFileChangedSince(start - 30_000, start)).toBe(false);
+    // Granularité du système de fichiers : la même seconde est tolérée.
+    expect(dirtyFileChangedSince(start, start)).toBe(true);
+    // Date inconnue (sonde en panne) : aucune preuve, aucune condamnation.
+    expect(dirtyFileChangedSince(0, start)).toBe(false);
+    expect(dirtyFileChangedSince(undefined, start)).toBe(false);
+  });
+
+  it("captureWorkBaseline relève HEAD et les fichiers déjà sales (sonde existante)", async () => {
+    const invokeFn = vi.fn(async (cmd) => {
+      if (cmd === "git_status_project") {
+        return { is_repo: true, head: "aaa111", modified: ["src/js/vieux.js"], pending: 1 };
+      }
+      return undefined;
+    });
+    const baseline = await captureWorkBaseline("C:\projet", invokeFn);
+    expect(baseline).toEqual({ head: "aaa111", dirty: ["src/js/vieux.js"] });
+    // Dépôt introuvable / sonde en panne → aucun état de départ (fail-open).
+    expect(await captureWorkBaseline("C:\projet", async () => ({ is_repo: false }))).toBeNull();
+    expect(await captureWorkBaseline("C:\projet", async () => { throw new Error("IPC"); })).toBeNull();
+    expect(await captureWorkBaseline(null, invokeFn)).toBeNull();
+  });
+});
+
+// Le décideur C4 est prouvé ci-dessus ; ici, c'est le BRANCHEMENT qui l'est :
+// un état de départ relevé mais jamais transmis ne prouve rien, et un lancement
+// qui oublie de le relever rouvre le trou (dépôt déjà sale = faux travail).
+describe("preuve de travail : l'état de départ est RELEVÉ et TRANSMIS (C4)", () => {
+  const source = readFileSync(new URL("./agents-bus.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+
+  it("chaque lancement de run relève l'état du disque AVANT le travail des agents", () => {
+    // Les deux seuls lancements (`startRun` du coordinateur et `startParallelRun`).
+    const captures = (source.match(/ctx\.workBaseline = await captureWorkBaseline\(/g) || []).length;
+    expect(captures, "les deux chemins de lancement doivent relever l'état de départ").toBe(2);
+  });
+
+  it("la décision de preuve reçoit cet état de départ", () => {
+    expect(source).toContain("provesWorkOnDisk(status, ctx.startedAt, ctx.readonly, ctx.workBaseline)");
+    // Fichiers déjà sales : leur DATE tranche, jamais leur simple présence.
+    expect(source).toContain("dirtyFileChangedSince(mtime, ctx.startedAt)");
   });
 });
 

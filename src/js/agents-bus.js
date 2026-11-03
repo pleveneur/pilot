@@ -20,7 +20,13 @@ import { canStartMission, canStartWork, workBlockedMessage } from "./run-policy.
 // RÉELLEMENT attendus sur disque, déclarés avec la mission, sont vérifiés en fin
 // de run. Un fichier déclaré ABSENT rend la mission en ÉCHEC explicite — jamais
 // « terminé » sur un simple texte. Sans fichiers déclarés : rien ne change.
-import { normalizeExpectedFiles, verifyExpectedFiles, deliverableFailed, appendDeliverableVerdict } from "./deliverable-guard.js";
+import {
+  normalizeExpectedFiles,
+  verifyExpectedFiles,
+  captureDeliverableState,
+  deliverableFailed,
+  appendDeliverableVerdict,
+} from "./deliverable-guard.js";
 import { buildMemoryBlock } from "./project-memory.js";
 import { buildGraphBlock } from "./code-graph.js";
 // Niveaux de réflexion (T5) : socle pur de ramenage (T1), miroir Rust de T4.
@@ -102,6 +108,10 @@ import {
 // n'était jamais rejouée. Les comparaisons passent désormais par `sameProject`.
 // Le chemin RÉEL reste utilisé tel quel pour le backend (jamais la clé).
 import { sameProject, projectScopedKey, deleteProjectScoped, queueKeyMatchesProject } from "./project-key.js";
+// Résolution d'un chemin DÉCLARÉ relativement à son dossier de référence :
+// SOURCE UNIQUE (même fonction que la vérification des livrables et la revue),
+// pour que la preuve de travail du watchdog sonde exactement le même chemin.
+import { resolvePath } from "./orchestration.js";
 import { isProjectReservedBy, deleteReservations, clearAllReservations } from "./reservations.js";
 // RELAIS DES QUESTIONS D'AGENT (source unique partagée avec l'onglet chat) : une
 // question posée par un agent lancé par l'assistant REMONTE à l'utilisateur via
@@ -278,6 +288,29 @@ function pendingExclusivityCount(ctx) {
  * seconde que le démarrage. */
 const DISK_CLOCK_SLACK_MS = 2000;
 
+/** Plafond des dates relevées pour les fichiers déjà sales au démarrage : une
+ * preuve de travail ne doit jamais coûter une sonde par fichier du dépôt. */
+const WORK_BASELINE_MAX_DATES = 50;
+
+/**
+ * Chemins « sales » d'une sortie `git_status_project`, dédoublonnés et triés
+ * (pure). Sert d'état de DÉPART des fichiers déjà modifiés avant la run.
+ * @param {object|null} status
+ * @returns {string[]}
+ */
+export function dirtyPathsOf(status) {
+  if (!status || status.is_repo !== true) return [];
+  const lists = [status.modified, status.added, status.deleted, status.untracked, status.staged];
+  const set = new Set();
+  for (const list of lists) {
+    for (const path of Array.isArray(list) ? list : []) {
+      const p = String(path || "").trim();
+      if (p) set.add(p);
+    }
+  }
+  return [...set].sort();
+}
+
 /**
  * Pure (testable) : le travail d'une run est-il PROUVÉ présent sur le disque ?
  * Sert à ne JAMAIS annoncer l'échec d'une mission sans vérifier les fichiers :
@@ -289,12 +322,25 @@ const DISK_CLOCK_SLACK_MS = 2000;
  *  - pour une mission d'ÉCRITURE (`readonly !== true`), des fichiers modifiés
  *    ou nouveaux non committés (`pending > 0`) : le travail est là, même sans
  *    commit.
+ *
+ * TROU C4 (rapport des voies de contournement) : sur un dépôt DÉJÀ sale au
+ * lancement, `pending > 0` ne prouvait rien — un agent qui n'a rien fait
+ * « prouvait » son travail par les modifications d'un autre. La preuve exige
+ * donc un CHANGEMENT DEPUIS LE DÉMARRAGE, établi par l'état de départ
+ * (`baseline`, relevé par `captureWorkBaseline` AVANT le travail) :
+ *  - un commit NOUVEAU (HEAD différent de celui du départ) pendant la run ;
+ *  - un fichier sale qui n'était PAS sale au départ (apparu depuis) ;
+ *  - sinon (fichier déjà sale, même chemin) : sa DATE tranche, et c'est
+ *    `dirtyFileChangedSince` qui répond (voir `workOnDiskDuringRun`).
+ * Sans état de départ (`undefined`/`null` = relevé impossible), on retombe sur
+ * le comportement antérieur (fail-open) : on ne condamne pas sans preuve.
  * @param {object|null} status - sortie de `git_status_project`
  * @param {number} startedAt - démarrage de la run (ms epoch)
  * @param {boolean} readonly - mission de lecture (aucune écriture attendue)
+ * @param {{head?: string, dirty?: string[]}|null} [baseline] - état disque du départ
  * @returns {boolean}
  */
-export function provesWorkOnDisk(status, startedAt, readonly) {
+export function provesWorkOnDisk(status, startedAt, readonly, baseline) {
   if (!status || status.is_repo !== true) return false;
   // Mission de LECTURE (plan-maker, architecte, reviewer…) : elle n'écrit RIEN
   // sur le disque. Un commit tombé pendant la run vient donc forcément
@@ -305,9 +351,63 @@ export function provesWorkOnDisk(status, startedAt, readonly) {
   if (readonly === true) return false;
   const start = Number(startedAt) || 0;
   const headTs = Number(status.head_ts) || 0;
-  if (start > 0 && headTs > 0 && headTs * 1000 >= start - DISK_CLOCK_SLACK_MS) return true;
-  if (Number(status.pending) > 0) return true;
-  return false;
+  const head = String(status.head || "");
+  const base = baseline && typeof baseline === "object" ? baseline : null;
+  const baseHead = base ? String(base.head || "") : "";
+  const commitInWindow = start > 0 && headTs > 0 && headTs * 1000 >= start - DISK_CLOCK_SLACK_MS;
+  if (base) {
+    // HEAD a bougé pendant la run : le commit est la preuve (fenêtre de temps
+    // conservée pour éviter de créditer un commit antérieur au démarrage).
+    if (head && head !== baseHead && commitInWindow) return true;
+  } else if (commitInWindow) {
+    return true;
+  }
+  const dirty = dirtyPathsOf(status);
+  if (base) {
+    const known = new Set(Array.isArray(base.dirty) ? base.dirty : []);
+    // Un fichier sale APPARU depuis le démarrage : preuve directe.
+    if (dirty.some((p) => !known.has(p))) return true;
+    // Les fichiers déjà sales au départ ne prouvent rien PAR EUX-MÊMES.
+    return false;
+  }
+  if (dirty.length > 0) return true;
+  return Number(status.pending) > 0;
+}
+
+/**
+ * Pure (testable) : un fichier DÉJÀ modifié au lancement (même chemin, même
+ * statut Git) a-t-il été RETOUCHÉ pendant la run ? Sa date de modification
+ * (ms epoch) doit tomber après le démarrage. C'est la seule preuve honnête pour
+ * ce cas : la liste `git status` n'a pas changé.
+ * @param {number} mtimeMs
+ * @param {number} startedAt - ms epoch
+ * @returns {boolean}
+ */
+export function dirtyFileChangedSince(mtimeMs, startedAt) {
+  const mtime = Number(mtimeMs) || 0;
+  const start = Number(startedAt) || 0;
+  if (mtime <= 0 || start <= 0) return false;
+  return mtime >= start - DISK_CLOCK_SLACK_MS;
+}
+
+/**
+ * ÉTAT DE DÉPART du disque pour la preuve de travail (trou C4) : HEAD et liste
+ * des fichiers déjà sales, relevés AVANT que les agents ne commencent. Réutilise
+ * la sonde EXISTANTE `git_status_project` (aucun second mécanisme).
+ * Fail-open : un relevé impossible rend `null` (comportement antérieur conservé).
+ * @param {string|null} project
+ * @param {Function} invokeFn
+ * @returns {Promise<{head: string, dirty: string[]}|null>}
+ */
+export async function captureWorkBaseline(project, invokeFn) {
+  if (!project || typeof invokeFn !== "function") return null;
+  try {
+    const status = await invokeFn("git_status_project", { project });
+    if (!status || status.is_repo !== true) return null;
+    return { head: String(status.head || ""), dirty: dirtyPathsOf(status) };
+  } catch (_) {
+    return null;
+  }
 }
 
 /**
@@ -339,7 +439,30 @@ async function workOnDiskDuringRun(ctx) {
   if (!project) return false;
   try {
     const status = await invoke("git_status_project", { project });
-    return provesWorkOnDisk(status, ctx.startedAt, ctx.readonly);
+    // TROU C4 : la preuve compare l'état du disque à celui du DÉMARRAGE de la
+    // run (`ctx.workBaseline`). Sur un dépôt déjà sale, un fichier présent
+    // depuis avant la mission ne prouve aucun travail de CETTE mission.
+    if (provesWorkOnDisk(status, ctx.startedAt, ctx.readonly, ctx.workBaseline)) return true;
+    if (ctx.readonly === true) return false;
+    // Fichiers DÉJÀ sales au démarrage (même chemin, même statut Git) : la liste
+    // `git status` n'a pas changé pour eux, c'est leur DATE qui tranche —
+    // retouchés pendant la run ou pas. Sonde existante `file_mtime`, bornée.
+    const known = new Set(
+      ctx.workBaseline && Array.isArray(ctx.workBaseline.dirty) ? ctx.workBaseline.dirty : []
+    );
+    const shared = dirtyPathsOf(status)
+      .filter((p) => known.has(p))
+      .slice(0, WORK_BASELINE_MAX_DATES);
+    for (const rel of shared) {
+      try {
+        const mtime = await invoke("file_mtime", { path: resolvePath(rel, project) });
+        if (dirtyFileChangedSince(mtime, ctx.startedAt)) return true;
+      } catch (_) {
+        // Sonde indisponible pour ce chemin : il ne prouve rien (et ne condamne
+        // rien) — les autres preuves restent examinées.
+      }
+    }
+    return false;
   } catch (e) {
     console.warn("[agents-bus] watchdog : vérification du disque impossible :", e);
     return false;
@@ -3540,6 +3663,11 @@ export async function startAgentsRun(userPrompt, projectContext = "") {
   ctx.currentAgentId = busState.coordinator.id;
   ctx.callStack = [];
   ctx.turnCount = 0;
+  // TROU C4 : l'état du disque est relevé MAINTENANT, avant que le moindre agent
+  // ne travaille. C'est lui qui permet à la preuve de travail du watchdog
+  // d'exiger un CHANGEMENT depuis le démarrage (un dépôt déjà sale ne « prouve »
+  // plus le travail d'un agent qui n'a rien fait).
+  ctx.workBaseline = await captureWorkBaseline(projectOfRunKey(runProject) || runProject, invoke);
 
   const manifest = buildCoordinatorManifest(Array.from(busState.agents.values()));
   const brief = `${userPrompt}\n\n${manifest}`;
@@ -3586,6 +3714,9 @@ export async function startParallelRun(assignments, projectContext = "", options
   const ctx = beginRun(runProject, { readOnly });
   ctx.callStack = [];
   ctx.turnCount = 0;
+  // TROU C4 : état de départ du disque (HEAD + fichiers déjà sales), relevé
+  // avant le lancement des agents (voir `captureWorkBaseline`).
+  ctx.workBaseline = await captureWorkBaseline(projectOfRunKey(runProject) || runProject, invoke);
   // Signal « la run a réellement démarré » (défaut « faux succès de lancement ») :
   // appelé APRÈS la garde de verrou et beginRun, donc uniquement quand une run
   // est effectivement marquée « running ». Permet à l'appelant (assistant) de
@@ -3608,21 +3739,35 @@ export async function startParallelRun(assignments, projectContext = "", options
     ((Array.isArray(assignments) && assignments.find((a) => a && a.expectedFilesBase)) || {}).expectedFilesBase ||
     projectOfRunKey(runProject) ||
     null;
+  // GARDE-FOU DU LIVRABLE — ÉTAT DE DÉPART, relevé AVANT le travail des agents.
+  // Sans lui, un fichier déclaré déjà présent avant la mission passait pour un
+  // livrable produit (trou C3 du rapport des voies de contournement) : la preuve
+  // exige désormais un CHANGEMENT (taille / date) depuis ce relevé. Fail-open :
+  // un relevé impossible rend `null` et n'impute rien à l'agent.
+  const deliverablesBaseline = declaredDeliverables.length
+    ? await captureDeliverableState({
+        declared: declaredDeliverables,
+        base: deliverablesBase,
+        invokeFn: invoke,
+      })
+    : null;
 
   emit("start", { agentId: "parallel", prompt: assignments.map((a) => a.agentId).join(", ") });
   try {
     await dispatchParallel(assignments, async (results) => {
       const aggregated = aggregateParallelResults(results);
-      // GARDE-FOU DU LIVRABLE : l'existence des fichiers déclarés est vérifiée
-      // APRÈS le travail des agents, AVANT toute annonce de fin. Un fichier
-      // déclaré absent fait ÉCHOUER la mission (message factuel nommant le
-      // fichier manquant et le dossier où on l'attendait) ; présent, le
-      // comportement reste celui d'avant, avec une confirmation.
+      // GARDE-FOU DU LIVRABLE : les fichiers déclarés sont vérifiés APRÈS le
+      // travail des agents, AVANT toute annonce de fin — ils doivent exister,
+      // ne pas être VIDES et avoir CHANGÉ depuis le relevé de départ. Un fichier
+      // absent, vide ou inchangé fait ÉCHOUER la mission (verdict factuel nommant
+      // le fichier) ; sans réserve, le comportement reste celui d'avant, avec une
+      // confirmation.
       const deliverableCheck = declaredDeliverables.length
         ? await verifyExpectedFiles({
             declared: declaredDeliverables,
             base: deliverablesBase,
             invokeFn: invoke,
+            baseline: deliverablesBaseline,
           })
         : null;
       const finalText = appendDeliverableVerdict(aggregated, deliverableCheck);

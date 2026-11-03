@@ -292,7 +292,7 @@ import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel
 // mêmes règles pour le ménage automatique (une fois par jour) et pour le bouton
 // « Supprimer les rappels inutiles » de Paramètres → Assistant.
 import { classifyScheduleCleanup, cleanupApplyPayload } from "./super-agent-schedule-cleanup.js";
-import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, buildStartingMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility, splitMissions, setAgentPanelTaskCount, isAgentPanelPaneVisible, missionWho, refreshAgentMissionDisplay } from "./agent-activity.js";
+import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions, buildStartingMissions, renderMissionsPanelHtml, normalizeMissionResume, agentPanelEventsListElement, agentPanelTasksListElement, agentPanelNoteEvent, onAgentPanelTabChange, setAgentPanelTabsVisibility, splitMissions, setAgentPanelTaskCount, isAgentPanelPaneVisible, missionWho, refreshAgentMissionDisplay, assistantWorkState } from "./agent-activity.js";
 // Compteur du bouton « Travail » : les commandes TAPEES A LA MAIN mises en file
 // sur un projet sont une famille d'attente a part entiere (elles n'etaient
 // comptees nulle part, donc le total affiche etait faux).
@@ -341,7 +341,16 @@ import { buildEphemeralAgent, persistEphemeralAgent, disposeEphemeralAgents, isE
 // d'une demande d'ÉCRITURE adressée à un agent en LECTURE SEULE, et vérification
 // des fichiers réellement attendus sur disque (`expected_files`). Sans demande
 // d'écriture explicite ni fichier déclaré, RIEN ne change (rétrocompatibilité).
-import { normalizeExpectedFiles, readOnlyWriteRefusalMessage } from "./deliverable-guard.js";
+import {
+  normalizeExpectedFiles,
+  readOnlyWriteRefusalMessage,
+  undeclaredWriteRefusalMessage,
+  captureDeliverableState,
+  verifyExpectedFiles,
+  deliverableFailed,
+  deliverableVerdictText,
+  appendDeliverableVerdict,
+} from "./deliverable-guard.js";
 // MISSION P3 (défaut D3) : IDENTITÉ DE PROJET normalisée, SOURCE UNIQUE.
 // La file de missions, les états de délégation et les drapeaux de run étaient
 // indexés par le chemin BRUT : deux écritures du même dossier (« G:\IA_PL\pilot »
@@ -689,8 +698,8 @@ export function superAgentReflectingFromEvent(type) {
  * travaillait.
  *
  * Regles :
- *  - `agentReflecting` : l'Assistant lui-meme reflechit (agent_start, poll de
- *    `get_agent_supervision`, remis a false des qu'il ne traite plus) ;
+ *  - `agentReflecting` : l'Assistant lui-meme reflechit (agent_start, l'observation
+ *    de son travail sur le store PARTAGE, remis a false des qu'il ne traite plus) ;
  *  - `pendingQuestion` : une question d'agent attend une reponse — la barre
  *    reste alors en mode normal, prete a saisir la precision (chantier #132) ;
  *    aucune teinte, meme si l'Assistant reflechit.
@@ -937,10 +946,12 @@ const superAgentReportGate = createReportDeliveryGate({
 });
 
 // P0-1 : état RÉEL du backend super-agent (busy / libre), maintenu par
-// get_agent_supervision (poll) et les événements agent_start/agent_end. La garde
-// d'envoi de `send()` s'appuie sur ce flag (et sur isStreaming) pour ne PAS
-// accepter puis perdre une saisie envoyée à un backend occupé (l'état local
-// isStreaming peut être en retard sur le backend réel).
+// l'OBSERVATION du store partagé du travail (`appliquerObservationTravail`,
+// alimenté par la sonde légère de 2 s et les événements d'état) et par les
+// événements agent_start/agent_end. La garde d'envoi de `send()` s'appuie sur ce
+// flag (et sur isStreaming) pour ne PAS accepter puis perdre une saisie envoyée
+// à un backend occupé (l'état local isStreaming peut être en retard sur le
+// backend réel).
 let backendBusy = false;
 
 // P0 (issue #84) : buffer borné des derniers `process_error` (stderr réel du
@@ -4805,15 +4816,17 @@ export async function createSuperAgent(container) {
   // quand l'assistante travaille »). File d'attente bornée, dans l'ordre reçu :
   // une demande dictée ou tapée pendant que le moteur travaille est accusée
   // immédiatement puis part à la fin du tour. Aucune minuterie, aucun délai :
-  // la file est vidée sur la fin de tour réelle et sur l'état que le moteur
-  // déclare lui-même (voir `flushDemandesEnAttente`).
+  // la file est vidée sur la fin de tour réelle ET sur le REPOS OBSERVÉ sur le
+  // store partagé du travail (`viderFileAuReposObserve` / `appliquerObservationTravail`).
   let demandesEnAttente = [];
-  // Vrai quand la SUPERVISION a vu le moteur réellement en traitement depuis
-  // qu'une demande a été mise en file. C'est la seule condition qui autorise le
-  // filet « redonner la main » de la sonde (voir `flushDemandesEnAttente`) :
-  // sans elle, une simple latence de la sonde juste après un envoi pourrait
-  // faire partir une seconde demande par-dessus la première.
-  let tourEnCoursVu = false;
+  // NOTE (correctif « l'Assistant se croit occupé alors que rien ne travaille ») :
+  // l'ancien drapeau « tour vu » a été SUPPRIMÉ. Il exigeait d'avoir vu le
+  // moteur travailler pour autoriser le vidage de la file : quand il était déjà
+  // au repos (aucun `agent_end` à venir), le drapeau restait faux et la demande
+  // ne partait JAMAIS. La protection « ne pas envoyer une seconde demande
+  // par-dessus la première pendant la latence qui suit un envoi » est désormais
+  // portée par la famille `starting` du store (mission acceptée, pas encore
+  // démarrée) : ni minuterie, ni délai inventé.
   // Bug 1 (UX) : vrai quand on a déjà informé l'utilisateur qu'il ne peut pas
   // envoyer pendant que l'assistant est occupé (évite de répéter le message).
   let busyNotified = false;
@@ -7265,7 +7278,6 @@ let vocalDicteeParGeste = false;
     // l'effacement du bas possible de nouveau (regle 2 de `vocal-chrome.js`).
     inputEl.value = "";
     inputEl.style.height = "auto";
-    tourEnCoursVu = false;
     busyNotified = true;
     statusEl.textContent = "🕓 Demande en attente";
     setBusyHint(true);
@@ -7279,16 +7291,17 @@ let vocalDicteeParGeste = false;
    * VIDE LA FILE des demandes reçues pendant un tour — une seule, la plus
    * ancienne — par le chemin d'envoi EXISTANT.
    *
-   * Appelée à DEUX moments, tous deux RÉELS (aucun délai, aucun minuteur) :
+   * Appelée à DEUX moments, tous deux des FAITS (aucun délai, aucun minuteur) :
    *  - la fin de tour (`agent_end`), l'évènement qui dit que le moteur a rendu
    *    la main ;
-   *  - la supervision (`get_agent_supervision`) quand elle affirme qu'AUCUNE
-   *    session n'est en traitement alors qu'un tour local est encore marqué
-   *    « en cours » : c'est le seul cas où `isStreaming` reste collé (un
-   *    `agent_end` manqué, un arrêt pendant un outil) et où l'écran resterait
-   *    muet pour de bon — le « j'ai dû relancer mon onglet ».
+   *  - le REPOS OBSERVÉ sur le store partagé du travail
+   *    (`appliquerObservationTravail` → `viderFileAuReposObserve`) : l'Assistant
+   *    y est vu ni travaillant ni en démarrage, donc plus rien ne peut rendre la
+   *    main plus tard — un `agent_end` manqué laisserait sinon l'écran muet pour
+   *    de bon (le « j'ai dû relancer mon onglet », et la demande qui ne part
+   *    jamais).
    *
-   * @param {boolean} [forcer] l'état du moteur est l'autorité (voir ci-dessus)
+   * @param {boolean} [forcer] l'état observé du moteur est l'autorité (voir ci-dessus)
    * @returns {boolean} vrai si une demande vient de partir
    */
   function flushDemandesEnAttente(forcer = false) {
@@ -7303,7 +7316,6 @@ let vocalDicteeParGeste = false;
     );
     if (texte === null) return false;
     demandesEnAttente = reste;
-    tourEnCoursVu = false;
     if (forcer) {
       isStreaming = false;
       backendBusy = false;
@@ -7323,6 +7335,30 @@ let vocalDicteeParGeste = false;
       resizeInput();
     }
     return true;
+  }
+
+  /**
+   * UN REPOS OBSERVÉ FAIT TOMBER L'OCCUPATION LOCALE ET FAIT REPARTIR LA FILE.
+   *
+   * DÉFAUT CORRIGÉ (« on me dit que tu travailles alors que tu n'apparais pas
+   * en train de travailler ») : l'observation du travail ne touchait que
+   * `backendBusy` et `setReflecting` — JAMAIS `isStreaming`. Un tour dont
+   * l'`agent_end` n'arrivait pas (arrêt pendant un outil, relance manquée)
+   * laissait donc `isStreaming` collé à `true` : la demande suivante partait
+   * en file… et la file n'était vidée que si la sonde avait VU le moteur
+   * travailler auparavant (l'ancien drapeau « tour vu »), ce qui n'arrive
+   * jamais quand il est déjà au repos. Résultat : file pleine, écran muet, plus aucune réponse.
+   *
+   * Ici, le repos est un FAIT observé sur le store partagé : il vaut preuve.
+   * Aucun délai, aucun minuteur — l'envoi emprunte le SEUL chemin existant
+   * (`send`, via `flushDemandesEnAttente`).
+   * @returns {boolean} vrai si une demande vient de partir
+   */
+  function viderFileAuReposObserve() {
+    // Le tour local n'est plus en cours : quel qu'il ait été, il est fini.
+    isStreaming = false;
+    if (demandesEnAttente.length === 0) return false;
+    return flushDemandesEnAttente(true);
   }
 
   // ── Envoi (session persistante : streaming + mémoire de conversation) ──
@@ -7353,8 +7389,8 @@ let vocalDicteeParGeste = false;
       return;
     }
     // P0-1 : la garde repose sur l'état RÉEL du backend (backendBusy, mis à
-    // jour par get_agent_supervision et l'événement agent_start), en plus de
-    // l'état local isStreaming. Un backend occupé en arrière-plan (prompt
+    // jour par l'observation du store partagé et l'événement agent_start), en
+    // plus de l'état local isStreaming. Un backend occupé en arrière-plan (prompt
     // distant, relance programmée, compaction) ne doit pas accepter puis perdre
     // la saisie.
     // CORRECTIF « le mode vocal ne répond plus quand l'assistante travaille » :
@@ -7599,98 +7635,83 @@ let vocalDicteeParGeste = false;
 
   const origUnlisten = unlisten;
 
-  // A15 : le statut « Prêt » de l'assistant reflète l'état réel de la machine à
-  // états AgentService (via get_agent_supervision). L'assistant est le projet
-  // pseudo-global "" (agent superagent, libellé « Assistant (Magnus) »).
-  // running/compacting = en traitement ; paused/stopped = en attente. On corrige
-  // le statut dans les deux sens, sans toucher aux états d'erreur/déconnecté.
-  const superStatusPoll = setInterval(async () => {
-    try {
-      const sup = await invoke("get_agent_supervision");
-      if (!sup || !sup.projects) return;
-      const proj = sup.projects.find((p) => !(p.path || ""));
-      // Le libellé de l'assistant suit le nom réglé (⚙️ → Assistant → Nom) : on
-      // compare le libellé courant, avec repli sur l'ancien libellé codé en dur
-      // (compatibilité avec un cœur qui n'aurait pas encore la correction).
-      // Le nom RÉGLÉ est aussi transmis : avec un personnage actif, le nom
-      // AFFICHÉ diffère du libellé de la session côté moteur.
-      const superLabel = superAgentDisplayLabel();
-      const agent = proj && findAssistantSessionAgent(proj.agents, superLabel, configCache.name);
-      // Anti-blocage (bug démarrage) : ne verrouille « occupé » QUE si le
-      // processus super-agent est RÉELLEMENT en cours de génération (état
-      // running/compacting) ET vivant (`alive`). Un processus mort/déconnecté
-      // (process_exit reçu, session non vivante) ne doit pas verrouiller la
-      // saisie : l'utilisateur doit pouvoir resaisir.
-      const alive = !!(agent && agent.alive);
-      // Correctif V2 : quand le processus redevient vivant après un faux
-      // départ/redémarrage, retirer le message « Connexion perdue » devenu
-      // obsolète (sinon il s'accumule et « apparaît/disparaît » à chaque crash).
-      // Ne retire rien si la session reste morte (vrai blocage préservé).
-      if (alive) removeSuperAgentDisconnectedEvent();
-      const processing = alive && (agent.state === "running" || agent.state === "compacting");
-      const classeStreaming = statusEl.classList.contains("agent-status-streaming");
-      const isError = statusEl.classList.contains("agent-status-error");
-      // A15 : bascule vers « Réfléchit… » dès que l'assistant traite, même si
-      // l'élément est encore dans son état initial (classe agent-status seule,
-      // sans agent-status-idle). L'ancienne condition exigeait la classe idle,
-      // absente à la création de l'onglet → le statut restait « Prêt » pendant
-      // tout le travail. On protège uniquement les états d'erreur.
-      //
-      // Chantier « saisie-réflexion » : la teinte de la zone de saisie est
-      // pilotée par la SEULE session de l'Assistant (état `processing` de
-      // get_agent_supervision), SANS la garde `!isStreaming`.
-      // Cette garde était fragile : `isStreaming` dérive de la classe
-      // `agent-status-streaming` posée par le poll lui-même et NON réinitialisée
-      // à l'agent_end (onEnd ne reset que le texte, pas la classe). Si
-      // l'assistant se remettait à réfléchir dans la fenêtre où la classe était
-      // encore `streaming` (et sans agent_start reçu), la garde sautait
-      // `setReflecting(true)` → l'effet de la zone de saisie ne se déclenchait
-      // pas alors que l'Assistant travaillait.
-      // Aucun état GLOBAL n'alimente cette teinte : le travail des autres agents
-      // a son propre signal (point de la liste, compteur « Travail »).
-      if (processing && !isError) {
+  // A15 — STATUT DE L'ASSISTANT : UNE SEULE VÉRITÉ, LE STORE PARTAGÉ DU TRAVAIL.
+  //
+  // Le statut (« Réfléchit… » / « Prêt »), la teinte de la zone de saisie, le
+  // drapeau « occupé » qui met une demande en file et le vidage de cette file
+  // lisent désormais LA MÊME liste que le cercle de la liste des agents
+  // (`subscribeAgentActivity` + `assistantWorkState`, agent-activity.js).
+  //
+  // Pourquoi : cet onglet interrogeait `get_agent_supervision` dans SA propre
+  // boucle de 2 s — deux observateurs pour un même fait, et une sonde LOURDE
+  // périodique (interdite par spec_pilot.md § 2, « Aucune attente de `pi` sur le
+  // thread principal »). Les deux pouvaient se
+  // contredire : le cercle montrait l'Assistant au repos pendant que le statut
+  // de l'onglet le croyait occupé (« on me dit que tu travailles alors que tu
+  // n'apparais pas en train de travailler »), et la demande suivante partait
+  // en file pour ne JAMAIS repartir.
+  //
+  // Aucun état nouveau, aucun minuteur : on applique une observation.
+  /**
+   * Applique une OBSERVATION du travail de l'Assistant (liste du store partagé).
+   *
+   * Trois cas, dans cet ordre :
+   *  1. l'Assistant TRAVAILLE → statut « Réfléchit… », teinte de saisie, occupé ;
+   *  2. il est EN DÉMARRAGE (`starting` : mission acceptée, pas encore lancée)
+   *     → ce n'est PAS le repos : on ne touche ni au statut ni à la file, et on
+   *     ne libère pas l'occupation (aucune seconde demande par-dessus la
+   *     première pendant la latence qui suit un envoi) ;
+   *  3. il est AU REPOS → « Prêt », teinte retirée, `backendBusy` ET
+   *     `isStreaming` effacés (ce dernier ne l'était jamais : c'était le
+   *     « occupé » fantôme), puis la file repart par le seul chemin d'envoi.
+   * Les états d'erreur / déconnecté ne sont jamais écrasés.
+   * @param {Array<object>} list liste aplatie du store (flattenAgents)
+   */
+  function appliquerObservationTravail(list) {
+    const obs = assistantWorkState(list);
+    // Aucune preuve (session absente du store) : on ne change rien.
+    if (!obs.known) return;
+    // Correctif V2 : quand le processus redevient vivant après un faux
+    // départ/redémarrage, retirer le message « Connexion perdue » devenu
+    // obsolète. Ne retire rien si la session reste morte (vrai blocage préservé).
+    if (obs.alive) removeSuperAgentDisconnectedEvent();
+    const classeStreaming = statusEl.classList.contains("agent-status-streaming");
+    const isError = statusEl.classList.contains("agent-status-error");
+    if (obs.working) {
+      if (!isError) {
         backendBusy = true;
         statusEl.textContent = "Réfléchit…";
         statusEl.className = "agent-status agent-status-streaming";
         setReflecting(true);
-        // Le moteur TRAVAILLE vraiment : c'est la seule condition qui autorise
-        // le filet de securite ci-dessous a redonner la main a une demande en
-        // attente (jamais sur une simple latence juste apres un envoi).
-        if (demandesEnAttente.length > 0) tourEnCoursVu = true;
-      } else if (!processing && classeStreaming) {
-        backendBusy = false;
+      }
+    } else if (obs.starting) {
+      // Mission ACCEPTÉE, pas encore démarrée : le moteur n'est pas libre.
+      // On garde l'occupation (aucune seconde demande ne part) mais on ne
+      // peint rien : le statut n'a aucune raison de changer ici.
+      backendBusy = true;
+    } else {
+      // REPOS OBSERVÉ — un fait, pas une supposition.
+      backendBusy = false;
+      if (classeStreaming) {
         statusEl.textContent = "Prêt";
         statusEl.className = "agent-status agent-status-idle";
-        setReflecting(false);
-      } else if (!processing) {
-        // P0-1 : aucune session en traitement → l'assistant est libre, même
-        // après un échec d'envoi qui n'a pas passé par onEnd. Évite de laisser
-        // backendBusy verrouillé sur true (sinon les envois suivants seraient
-        // bloqués sans raison).
-        backendBusy = false;
-        // Filet de sécurité : retire la teinte si elle était restée active
-        // (ex: agent_end manqué). L'effet ne reste jamais bloqué quand
-        // l'assistant ne réfléchit plus — aucune autre source ne peut le
-        // rallumer (le travail des autres agents n'entre pas dans la décision).
-        setReflecting(false);
-        // DEMANDE EN ATTENTE + moteur LIBRE = l'écran doit répondre. Si le moteur
-        // a été VU en traitement depuis la mise en file (`tourEnCoursVu`) et qu'il
-        // déclare maintenant n'avoir AUCUNE session en traitement alors qu'un tour
-        // local est encore marqué « en cours », c'est que la fin de tour n'est
-        // jamais arrivée (arrêt pendant un outil) : `isStreaming` resterait collé
-        // à `true` pour toujours et plus aucune demande ne partirait — c'était le
-        // « j'ai dû relancer mon onglet ». L'état du MOTEUR fait foi (aucun délai
-        // choisi ici) : la file repart par le chemin d'envoi existant.
-        if (isStreaming && tourEnCoursVu && demandesEnAttente.length > 0) {
-          setReflecting(true);
-          flushDemandesEnAttente(true);
-        }
       }
-      // Filet périodique : si l'assistant est libre (aucun traitement) et que
-      // des comptes rendus sont en attente, en rejouer un (no-op si occupé).
-      flushPendingSuperAgentReports().catch(() => {});
-    } catch (_) { /* ignore */ }
-  }, 2000);
+      // Filet de sécurité : retire la teinte si elle était restée active
+      // (ex: agent_end manqué). Aucune autre source ne peut la rallumer.
+      setReflecting(false);
+      // La demande en attente repart (une seule, dans l'ordre), par `send`.
+      viderFileAuReposObserve();
+    }
+    // Filet périodique : si l'assistant est libre et que des comptes rendus
+    // sont en attente, en rejouer un (no-op si occupé).
+    flushPendingSuperAgentReports().catch(() => {});
+  }
+
+  // Abonnement UNIQUE au store (retiré à la fermeture de l'onglet) : il livre
+  // immédiatement l'état connu, puis à chaque changement.
+  const unsubAssistantWork = subscribeAgentActivity((list) => {
+    appliquerObservationTravail(list);
+  });
 
   // Chantier #13 : ticker des relances programmées (toutes les 10 s).
   startScheduleTicker();
@@ -7708,7 +7729,7 @@ let vocalDicteeParGeste = false;
   return {
     wrapper,
     unlisten: async () => {
-      clearInterval(superStatusPoll);
+      unsubAssistantWork();
       // Tâche #160 : retirer l'overlay plein écran + ses minuteurs (sinon
       // éléments orphelins dans le body et timers qui tournent après fermeture).
       hideSuperEventOverlay();
@@ -8602,49 +8623,56 @@ export function shouldClearDisconnectedMessage(alive, hasDisconnectedMessage) {
 /**
  * Délai de grâce après un faux départ du super-agent (onglet 🧭 Assistant).
  * Un `process_exit` au lancement est souvent transitoire : le processus pi meurt
- * une fois puis est relancé automatiquement (politique anti-boucle Rust). On
- * sonde la vivacité du super-agent via get_agent_supervision (agent
- * « Assistant (Magnus) », champ `alive`) toutes les 500 ms pendant ~30 s
- * (SUPER_AGENT_GRACE_WINDOW_MS, aligné sur le cooldown anti-crash Rust) :
+ * une fois puis est relancé automatiquement (politique anti-boucle Rust). La
+ * vivacité est désormais lue sur le STORE PARTAGÉ du travail (champ additif
+ * `alive` de `flattenAgents`, alimenté par la sonde LÉGÈRE de 2 s et par
+ * `agent-state-changed`) — comme le statut de l'onglet : une seule vérité, et
+ * AUCUNE sonde lourde `get_agent_supervision` dans une boucle
+ * (spec_pilot.md § 2, « Aucune attente de `pi` sur le thread principal »).
+ * La fenêtre est bornée par UN `setTimeout`, jamais
+ * répété (SUPER_AGENT_GRACE_WINDOW_MS, aligné sur le cooldown anti-crash Rust) :
  *   - redevient vivant  → reconnexion : PAS d'alerte, statut remis à « Prêt »
- *     (style idle, comme le poll de statut), trace console pour diagnostic.
+ *     (style idle, comme l'observation de statut), trace console pour diagnostic.
  *   - toujours mort à l'expiration → onFail() qui déclenche l'alerte (message +
  *     notification + son) : on ne masque jamais un VRAI blocage.
  */
 function scheduleTransientDisconnect(messagesEl, statusEl, onFail) {
   const GRACE_WINDOW_MS = SUPER_AGENT_GRACE_WINDOW_MS;
-  const POLL_MS = 500;
-  const start = Date.now();
-  const timer = setInterval(async () => {
-    let alive = false;
-    try {
-      const sup = await invoke("get_agent_supervision");
-      const proj = sup && sup.projects && sup.projects.find((p) => !(p.path || ""));
-      // Le libellé de la session d'assistant suit le nom réglé (⚙️ → Assistant →
-      // Nom) : on compare le libellé courant, avec repli sur l'ancien libellé codé
-      // en dur (compatibilité avec un cœur qui n'aurait pas encore la correction).
-      // Sinon, renommer l'assistant faisait échouer cette sonde de reconnexion
-      // (libellé « Magnus » introuvable) : un faux départ rattrapé était pris
-      // pour un vrai blocage au bout de la fenêtre de grâce.
-      const superLabel = superAgentDisplayLabel();
-      const agent = proj && findAssistantSessionAgent(proj.agents, superLabel, configCache.name);
-      alive = !!(agent && agent.alive);
-    } catch (_) { /* ignore, on garde alive=false et on test le délai */ }
-    if (alive) {
-      // Faux départ rattrapé : le processus est de nouveau vivant.
-      clearInterval(timer);
-      statusEl.textContent = "Prêt";
-      statusEl.className = "agent-status agent-status-idle";
-      console.log("[super-agent] reconnexion après faux départ");
-      return;
-    }
-    if (Date.now() - start >= GRACE_WINDOW_MS) {
-      // Vrai blocage : la session est restée morte — ne rien masquer.
-      clearInterval(timer);
-      statusEl.textContent = "Déconnecté";
-      onFail();
-    }
-  }, POLL_MS);
+  let termine = false;
+  let desabonner = null;
+  let borne = null;
+  const finir = () => {
+    if (termine) return false;
+    termine = true;
+    if (desabonner) desabonner();
+    if (borne) clearTimeout(borne);
+    desabonner = null;
+    borne = null;
+    return true;
+  };
+  const reconnecte = () => {
+    if (!finir()) return;
+    // Faux départ rattrapé : le processus est de nouveau vivant.
+    statusEl.textContent = "Prêt";
+    statusEl.className = "agent-status agent-status-idle";
+    console.log("[super-agent] reconnexion après faux départ");
+  };
+  const bloque = () => {
+    if (!finir()) return;
+    // Vrai blocage : la session est restée morte — ne rien masquer.
+    statusEl.textContent = "Déconnecté";
+    onFail();
+  };
+  desabonner = subscribeAgentActivity((list) => {
+    if (termine) return;
+    if (assistantWorkState(list).alive) reconnecte();
+  });
+  // L'abonnement a pu livrer un état VIVANT immédiatement (état déjà connu) :
+  // dans ce cas tout est déjà rangé, et on ne pose aucune borne.
+  if (termine) return;
+  // Borne de la fenêtre : elle décide même si le store ne publie plus rien
+  // (sonde en panne) — on ne reste jamais muet devant un vrai blocage.
+  borne = setTimeout(bloque, GRACE_WINDOW_MS);
 }
 
 /**
@@ -8653,7 +8681,7 @@ function scheduleTransientDisconnect(messagesEl, statusEl, onFail) {
  * V2). Idempotent et fail-open : si le panneau n'existe pas ou qu'aucun message
  * n'est présent, ne fait rien. Ne retire JAMAIS un message si la session reste
  * morte (vrai blocage) — la décision est pilotée par `shouldClearDisconnectedMessage`
- * côté appelant (superStatusPoll, `alive`).
+ * côté appelant (`appliquerObservationTravail`, `alive`).
  */
 function removeSuperAgentDisconnectedEvent() {
   const superEventsList = agentPanelEventsListElement();
@@ -9111,6 +9139,18 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           disposeEphemeralAgents(agentIds, ephemeralScope || null).catch(() => {});
           appendSystemMessage(messagesEl, `⛔ ${readOnlyRefusal}`);
           await respondSuperAgent(id, JSON.stringify({ error: readOnlyRefusal, launched: false }), false);
+          return;
+        }
+        // GARDE-FOU LIVRABLE — DÉCLARATION OBLIGATOIRE (trou C2) : une demande qui
+        // ORDONNE d'écrire un fichier sans déclarer de livrable est refusée AVANT
+        // tout démarrage. Sans liste, la preuve du livrable (existence, non-vide,
+        // changement depuis le lancement) n'aurait rien à vérifier et n'importe
+        // quelle annonce « terminé » resterait invérifiable.
+        const undeclaredRefusal = undeclaredWriteRefusalMessage({ tool: "run_agents", task, expectedFiles });
+        if (undeclaredRefusal) {
+          disposeEphemeralAgents(agentIds, ephemeralScope || null).catch(() => {});
+          appendSystemMessage(messagesEl, `⛔ ${undeclaredRefusal}`);
+          await respondSuperAgent(id, JSON.stringify({ error: undeclaredRefusal, launched: false }), false);
           return;
         }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche sur les agents : ${agentIds.join(", ")}…`);
@@ -9602,6 +9642,17 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         if (readOnlyRefusal) {
           appendSystemMessage(messagesEl, `⛔ ${readOnlyRefusal}`);
           await respondSuperAgent(id, JSON.stringify({ error: readOnlyRefusal, launched: false }), false);
+          return;
+        }
+        // DÉCLARATION OBLIGATOIRE (trou C2) : mêmes règles que `run_agents`.
+        const undeclaredRefusal = undeclaredWriteRefusalMessage({
+          tool: "run_assistant_agents",
+          task,
+          expectedFiles,
+        });
+        if (undeclaredRefusal) {
+          appendSystemMessage(messagesEl, `⛔ ${undeclaredRefusal}`);
+          await respondSuperAgent(id, JSON.stringify({ error: undeclaredRefusal, launched: false }), false);
           return;
         }
         // GARDE-FOU LIVRABLE (2/2) : dossier de référence des livrables déclarés
@@ -10143,6 +10194,11 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // jamais décrire la tâche précédente (bug « une tâche mise en file exécute
       // la tâche précédente »).
       const delegationTask = String(info.request || "");
+      // Livrables déclarés par la délégation (`expected_files`, désormais offert
+      // par l'outil `delegate_to_coder`) : ils commandent le refus C2 (écriture
+      // demandée sans livrable) et la preuve de fin de mission (existence,
+      // non-vide, changement depuis le lancement).
+      const delegationExpectedFiles = normalizeExpectedFiles(info.expected_files);
       const request = await attachDelegationContext(messagesEl, baseRequest, projectPath, delegationTask);
       appendSystemMessage(messagesEl, `🤖 Je lance l'agent du projet et lui transmets la demande…`);
       const tabs = window._pilotTabs;
@@ -10178,9 +10234,25 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         tool: "delegate_to_coder",
         agents: [{ id: target.id, name: target.name, readonly: target.readonly === true }],
         task: String(info.request || ""),
+        expectedFiles: delegationExpectedFiles,
       });
       if (delegationRefusal) {
         appendSystemMessage(messagesEl, `⛔ ${delegationRefusal}`);
+        await respondSuperAgentAction(id, false);
+        return;
+      }
+      // GARDE-FOU LIVRABLE — DÉCLARATION OBLIGATOIRE (trou C2) : la délégation
+      // n'offrait AUCUN moyen de déclarer les fichiers attendus (le paramètre
+      // n'existait pas sur cet outil), donc aucun livrable n'était jamais
+      // vérifié sur ce chemin. Le paramètre existe désormais et devient requis
+      // dès que la demande exige un fichier : le refus nomme le fichier réclamé.
+      const undeclaredDelegation = undeclaredWriteRefusalMessage({
+        tool: "delegate_to_coder",
+        task: String(info.request || ""),
+        expectedFiles: delegationExpectedFiles,
+      });
+      if (undeclaredDelegation) {
+        appendSystemMessage(messagesEl, `⛔ ${undeclaredDelegation}`);
         await respondSuperAgentAction(id, false);
         return;
       }
@@ -10231,6 +10303,10 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
           invisible,
           forceInvisible,
           agentTabOpen,
+          // Livrables déclarés : ils voyagent AVEC l'entrée de file, comme la
+          // demande — une demande rejouée plus tard garde le livrable qu'elle
+          // exigeait (aucun report d'une mission à l'autre).
+          expectedFiles: delegationExpectedFiles,
         });
         // POINT C : la demande en file est TOUJOURS rejouée (sonde réelle de
         // l'agent cible) — jamais de blocage silencieux si l'agent_end n'arrive
@@ -10249,7 +10325,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       }
 
       ds.busy = true;
-      const ok = await transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen });
+      const ok = await transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen, expectedFiles: delegationExpectedFiles });
       if (!ok) {
         ds.busy = false;
         await respondSuperAgentAction(id, false);
@@ -10455,7 +10531,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
  * (openFile en arrière-plan + affichage de la demande déléguée).
  * @returns {Promise<boolean>} true si la demande a été transmise.
  */
-export async function transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen }) {
+export async function transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen, expectedFiles }) {
   let agentTab = null;
   try {
     if (invisible || forceInvisible || !agentTabOpen) {
@@ -10508,9 +10584,20 @@ export async function transmitDelegationToAgent({ request, projectPath, agentId,
     }
     // Issue #47 : mémoriser la délégation en attente (consommée à l'agent_end
     // pour injecter le feedback au super-agent).
+    // GARDE-FOU DU LIVRABLE — ÉTAT DE DÉPART : quand la délégation déclare des
+    // fichiers attendus, leur taille et leur date sont relevées MAINTENANT,
+    // avant l'envoi de la demande. C'est ce relevé qui permet de prouver à la
+    // fin que le fichier a bien été produit par CETTE mission (et non qu'il
+    // était déjà là) — sans lui, la vérification est annoncée non concluante.
+    const declaredDeliverables = normalizeExpectedFiles(expectedFiles);
+    const deliverableBaseline = declaredDeliverables.length
+      ? await captureDeliverableState({ declared: declaredDeliverables, base: projectPath, invokeFn: invoke })
+      : null;
     delegationState(projectPath).pending = {
       request: String(request),
       projectPath,
+      expectedFiles: declaredDeliverables,
+      baseline: deliverableBaseline,
     };
     // Envoyer la demande à l'agent (session du projet, agent résolu).
     await invoke("send_agent_command_to", {
@@ -10600,6 +10687,7 @@ function flushDelegationQueue(projectPath) {
       invisible: next.invisible,
       forceInvisible: next.forceInvisible,
       agentTabOpen: next.agentTabOpen,
+      expectedFiles: next.expectedFiles,
     }))
     .then((ok) => {
       if (ok) {
@@ -11709,8 +11797,38 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath, opt
   // mis en attente (assistant occupé).
   // P0-4 : borne la taille du résumé avant injection.
   const projectDelegationState = delegationStates.get(projectKey(projectPath));
+  // GARDE-FOU DU LIVRABLE (2/2) — PREUVE À LA FIN DE LA DÉLÉGATION. Quand la
+  // mission déléguée a déclaré des fichiers attendus (`expected_files`), ils
+  // sont vérifiés ICI, au point de passage UNIQUE du compte rendu (agent
+  // invisible comme onglet visible) : le fichier doit exister, ne pas être vide
+  // et avoir changé depuis le relevé de départ. Le verdict est joint au rapport
+  // remis à l'assistant — un livrable absent, vide ou inchangé ne peut donc
+  // plus être annoncé « terminé ». Fail-open : une sonde indisponible ne
+  // transforme jamais un travail en échec.
+  const pendingDelegation = projectDelegationState ? projectDelegationState.pending : null;
+  const pendingDeliverables =
+    pendingDelegation && Array.isArray(pendingDelegation.expectedFiles)
+      ? pendingDelegation.expectedFiles
+      : [];
+  let deliveredSummary = summary;
+  if (pendingDeliverables.length > 0) {
+    try {
+      const deliverableCheck = await verifyExpectedFiles({
+        declared: pendingDeliverables,
+        base: (pendingDelegation.baseline && pendingDelegation.baseline.base) || projectPath || null,
+        invokeFn: invoke,
+        baseline: pendingDelegation.baseline,
+      });
+      deliveredSummary = appendDeliverableVerdict(summary, deliverableCheck);
+      if (deliverableFailed(deliverableCheck)) {
+        console.warn("[deliverable] délégation sans livrable prouvé :", deliverableVerdictText(deliverableCheck));
+      }
+    } catch (_) {
+      deliveredSummary = summary; // fail-open : le rapport part intact
+    }
+  }
   const entry = {
-    summary,
+    summary: deliveredSummary,
     projectPath: projectPath || null,
     category: "session",
     delegation: projectDelegationState ? projectDelegationState.pending : null,

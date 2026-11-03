@@ -148,3 +148,42 @@ describe("release.yml — cache et bibliotheque externe", () => {
     expect(jobBlock("build-linux")).toContain('cache-targets: "true"');
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Verrou du lot B, trou C7.1 : LA RELEASE NE PART PLUS AVANT UN VERDICT DE
+// TESTS FAVORABLE. Avant cette garde, `create-release` n'avait aucune
+// dependance : sur un tag dont les tests echouaient, la Release etait creee
+// PUBLIEE (draft=false) pendant que `build` restait bloque, donc une version
+// annoncee aux utilisateurs installes avec une suite rouge qui n'avait jamais
+// tourne sur la branche principale.
+// Preuve par mutation : retirer `needs: [test]` de `create-release` fait
+// echouer ce bloc (et lui seul).
+// ───────────────────────────────────────────────────────────────────────────
+describe("release.yml — aucun publication sans verdict de tests", () => {
+  it("create-release depende du job de tests", () => {
+    const release = jobBlock("create-release");
+    expect(release).not.toBe("");
+    const needs = jobNeeds(release) || "";
+    // Le job de tests doit etre nomme dans les dependances, sous l'une des
+    // deux formes YAML acceptees.
+    expect(needs).toMatch(/\btest\b/);
+  });
+
+  it("l'ordre reste le meme : build attend encore create-release ET test", () => {
+    const needs = jobNeeds(jobBlock("build")) || "";
+    expect(needs).toContain("create-release");
+    expect(needs).toContain("test");
+    // Et latest-json ne depend toujours QUE de build : rien n'a ete deplace
+    // vers le chemin critique des utilisateurs.
+    expect(jobNeeds(jobBlock("latest-json"))).toBe("build");
+  });
+
+  it("aucun job de publication ne peut demarrer avant les tests", () => {
+    // Chaine complete : test -> create-release -> build -> latest-json.
+    expect(jobNeeds(jobBlock("create-release"))).toMatch(/\btest\b/);
+    expect(jobNeeds(jobBlock("latest-json"))).toBe("build");
+    // Linux n'entre jamais dans cette chaine.
+    const refresh = jobBlock("latest-json-linux");
+    expect(jobNeeds(refresh)).toContain("latest-json");
+  });
+});

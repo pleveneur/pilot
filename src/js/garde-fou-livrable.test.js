@@ -12,6 +12,15 @@
 //  (2) VERROU DE SOURCE : les gardes sont bien branchées aux DEUX familles de
 //      lancement, dans la délégation directe, et exposées dans les outils de
 //      l'assistant — ce test ÉCHOUE si une garde disparaît.
+//
+// LOT A (verrous de livraison) : deux trous de plus sont fermés ici, et leurs
+// verrous sont des tests RETOURNÉS (jamais supprimés) :
+//   C2 — la déclaration des livrables était FACULTATIVE et la délégation directe
+//        n'offrait même pas le paramètre : une demande d'écriture sans liste est
+//        désormais refusée au lancement (`undeclaredWriteRefusalMessage`).
+//   C3 — un fichier EXISTANT mais VIDE comptait conforme : il faut maintenant
+//        exister, ne pas être vide, ET avoir changé depuis le relevé de départ
+//        (`captureDeliverableState` / `fileChangedSince`).
 import { describe, it, expect, vi, afterEach } from "vitest";
 
 if (typeof globalThis.window === "undefined") globalThis.window = {};
@@ -37,7 +46,12 @@ import {
   deliverableVerdictText,
   appendDeliverableVerdict,
   deliverableFailed,
+  undeclaredWriteRefusalMessage,
+  captureDeliverableState,
+  fileChangedSince,
 } from "./deliverable-guard.js";
+// Découpage de source VÉRIFIÉ (ancre absente = échec, jamais un fragment vide).
+import { sliceFrom } from "./source-slice.js";
 import { buildEphemeralAgent, persistEphemeralAgent, disposeEphemeralAgents, resetEphemeralAgents } from "./ephemeral-agents.js";
 import { initAgentsBus, destroyAgentsBus, runAgentsForAssistantAsync, handleAgentEvent } from "./agents-bus.js";
 
@@ -83,9 +97,15 @@ async function flushAsync(n = 20) {
  * disque (par suffixe de chemin), tout le reste étant ABSENT — c'est ce qui
  * permet de prouver qu'un fichier déclaré absent fait échouer la mission.
  */
-function instrument({ existing = [] } = {}) {
+function instrument({ existing = [], empty = [], stale = [] } = {}) {
   const spawned = [];
   const sent = [];
+  // Nombre de relevés par chemin : la PREMIÈRE mesure (celle du lancement) vaut
+  // 1 000 ms, les suivantes avancent de 1 000 ms. Un fichier produit pendant la
+  // mission est donc VU comme modifié, de façon déterministe (aucune horloge
+  // réelle, aucun test intermittent). `stale` fige la date : le fichier n'a pas
+  // bougé depuis le lancement.
+  const probes = new Map();
   vi.mocked(invoke).mockImplementation(async (cmd, args = {}) => {
     if (cmd === "get_config") return {};
     if (cmd === "list_agents") return REGISTRY;
@@ -101,7 +121,20 @@ function instrument({ existing = [] } = {}) {
     }
     if (cmd === "file_exists") {
       const path = String(args.path || "");
-      return existing.some((suffix) => path.endsWith(suffix));
+      return [...existing, ...empty, ...stale].some((suffix) => path.endsWith(suffix));
+    }
+    if (cmd === "get_file_size") {
+      const path = String(args.path || "");
+      // C3 : un fichier de 0 octet existe mais ne prouve rien.
+      if (empty.some((suffix) => path.endsWith(suffix))) return 0;
+      return 24;
+    }
+    if (cmd === "file_mtime") {
+      const path = String(args.path || "");
+      const seen = (probes.get(path) || 0) + 1;
+      probes.set(path, seen);
+      if (stale.some((suffix) => path.endsWith(suffix))) return 1000;
+      return 1000 * seen;
     }
     if (cmd === "git_status_project") return { is_repo: true, head_ts: 0, pending: 0 };
     return undefined;
@@ -254,12 +287,22 @@ describe("vérification des fichiers déclarés", () => {
     expect(normalizeExpectedFiles(["a.md", "", " a.md ", 42, "b.md"])).toEqual(["a.md", "b.md"]);
   });
 
-  it("présent → présent, absent → manquant (l'existence seule compte)", async () => {
-    const invokeFn = vi.fn(async (_cmd, args) => args.path.endsWith("present.md"));
+  // LOT A (C3) : « l'existence seule compte » n'est plus vrai — ce test vérifie
+  // désormais la séparation présent / manquant AVEC un relevé de départ (un
+  // fichier existant mais inchangé n'est plus un livrable prouvé).
+  it("présent (créé pendant la mission) → présent, absent → manquant", async () => {
+    const invokeFn = vi.fn(async (cmd, args) => {
+      if (cmd === "file_exists") return args.path.endsWith("present.md");
+      if (cmd === "get_file_size") return 12;
+      if (cmd === "file_mtime") return 1000;
+      return undefined;
+    });
     const check = await verifyExpectedFiles({
       declared: ["present.md", "absent.md"],
       base: "C:\\projet",
       invokeFn,
+      // Relevé de départ : le fichier n'existait pas encore (il a été créé).
+      baseline: { base: "C:\\projet", files: { "present.md": { exists: false, size: null, mtime: null }, "absent.md": { exists: false, size: null, mtime: null } } },
     });
     expect(check.present).toEqual(["present.md"]);
     expect(check.missing).toEqual(["absent.md"]);
@@ -306,6 +349,160 @@ describe("vérification des fichiers déclarés", () => {
   });
 });
 
+// ── 3 bis. TROU C3 : un livrable n'est plus prouvé par sa seule existence ───
+describe("preuve du livrable : vide et « déjà là » ne comptent plus", () => {
+  /** `invoke` de sonde : existence, taille et date pilotées par des tables. */
+  function probe({ sizes = {}, mtimes = {} } = {}) {
+    return vi.fn(async (cmd, args = {}) => {
+      const path = String(args.path || "");
+      const key = [...Object.keys(sizes), ...Object.keys(mtimes)].find((k) => path.endsWith(k));
+      if (cmd === "file_exists") return !!key;
+      if (cmd === "get_file_size") return sizes[key] !== undefined ? sizes[key] : 24;
+      if (cmd === "file_mtime") return mtimes[key] !== undefined ? mtimes[key] : 1000;
+      throw new Error(`commande inattendue : ${cmd}`);
+    });
+  }
+
+  it("fileChangedSince : créé, modifié ou identique (pur)", () => {
+    // Absent au lancement → créé pendant la mission : changé.
+    expect(fileChangedSince({ exists: false }, { exists: true, size: 10, mtime: 5 })).toBe(true);
+    // Relevé de départ inconnu → on ne condamne pas.
+    expect(fileChangedSince({ exists: null, size: null, mtime: null }, { exists: true, size: 10, mtime: 5 })).toBe(true);
+    expect(fileChangedSince(undefined, { exists: true, size: 10, mtime: 5 })).toBe(true);
+    // Taille différente / date différente → changé.
+    expect(fileChangedSince({ exists: true, size: 1, mtime: 5 }, { exists: true, size: 2, mtime: 5 })).toBe(true);
+    expect(fileChangedSince({ exists: true, size: 1, mtime: 5 }, { exists: true, size: 1, mtime: 6 })).toBe(true);
+    // Identique → PAS changé (fichier disparu non plus).
+    expect(fileChangedSince({ exists: true, size: 1, mtime: 5 }, { exists: true, size: 1, mtime: 5 })).toBe(false);
+    expect(fileChangedSince({ exists: true, size: 1, mtime: 5 }, { exists: false, size: null, mtime: null })).toBe(false);
+    // Aucune mesure comparable → on ne condamne pas.
+    expect(fileChangedSince({ exists: true, size: null, mtime: null }, { exists: true, size: null, mtime: null })).toBe(true);
+  });
+
+  it("captureDeliverableState relève l'état d'un fichier VIDE et d'un fichier plein", async () => {
+    const state = await captureDeliverableState({
+      declared: ["vide.md", "plein.md"],
+      base: "C:\\projet",
+      invokeFn: probe({ sizes: { "vide.md": 0, "plein.md": 12 }, mtimes: { "vide.md": 7, "plein.md": 7 } }),
+    });
+    expect(state.base).toBe("C:\\projet");
+    expect(state.files["vide.md"]).toEqual({ exists: true, size: 0, mtime: 7 });
+    expect(state.files["plein.md"]).toEqual({ exists: true, size: 12, mtime: 7 });
+  });
+
+  it("captureDeliverableState ne relève rien sans livrable ni dossier utilisable", async () => {
+    const invokeFn = probe({ sizes: { "a.md": 1 } });
+    expect(await captureDeliverableState({ declared: [], base: "C:\\projet", invokeFn })).toBeNull();
+    expect(await captureDeliverableState({ declared: ["a.md"], base: "__assistant__", invokeFn })).toBeNull();
+    expect(await captureDeliverableState({ declared: ["a.md"], base: "", invokeFn })).toBeNull();
+    expect(invokeFn).not.toHaveBeenCalled();
+  });
+
+  it("présent + VIDE → refusé, nommé dans `empty`", async () => {
+    const invokeFn = probe({ sizes: { "vide.md": 0 }, mtimes: { "vide.md": 1 } });
+    const baseline = await captureDeliverableState({ declared: ["vide.md"], base: "C:\\projet", invokeFn });
+    const check = await verifyExpectedFiles({ declared: ["vide.md"], base: "C:\\projet", invokeFn, baseline });
+    expect(check.present).toEqual([]);
+    expect(check.empty).toEqual(["vide.md"]);
+    expect(deliverableFailed(check)).toBe(true);
+    expect(deliverableVerdictText(check)).toContain("LIVRABLE VIDE");
+  });
+
+  it("présent + INCHANGÉ depuis le lancement → refusé, nommé dans `unproven`", async () => {
+    const invokeFn = probe({ sizes: { "a.md": 12 }, mtimes: { "a.md": 42 } });
+    const baseline = await captureDeliverableState({ declared: ["a.md"], base: "C:\\projet", invokeFn });
+    const check = await verifyExpectedFiles({ declared: ["a.md"], base: "C:\\projet", invokeFn, baseline });
+    expect(check.unproven).toEqual(["a.md"]);
+    expect(deliverableFailed(check)).toBe(true);
+    expect(deliverableVerdictText(check)).toContain("LIVRABLE NON PROUVÉ");
+  });
+
+  it("présent + MODIFIÉ (date) depuis le lancement → conforme", async () => {
+    let n = 0;
+    const invokeFn = vi.fn(async (cmd) => {
+      if (cmd === "file_exists") return true;
+      if (cmd === "get_file_size") return 12;
+      if (cmd === "file_mtime") return (n += 1) * 1000;
+      throw new Error(cmd);
+    });
+    const baseline = await captureDeliverableState({ declared: ["a.md"], base: "C:\\projet", invokeFn });
+    const check = await verifyExpectedFiles({ declared: ["a.md"], base: "C:\\projet", invokeFn, baseline });
+    expect(check.present).toEqual(["a.md"]);
+    expect(deliverableFailed(check)).toBe(false);
+    expect(deliverableVerdictText(check)).toContain("Livrable vérifié");
+  });
+
+  it("sans relevé de départ, la production n'est PAS prouvée", async () => {
+    const invokeFn = probe({ sizes: { "a.md": 12 }, mtimes: { "a.md": 1 } });
+    const check = await verifyExpectedFiles({ declared: ["a.md"], base: "C:\\projet", invokeFn });
+    expect(check.unproven).toEqual(["a.md"]);
+    expect(deliverableFailed(check)).toBe(true);
+  });
+
+  it("un relevé de départ EN PANNE ne condamne pas la mission (fail-open)", async () => {
+    const invokeFn = probe({ sizes: { "a.md": 12 }, mtimes: { "a.md": 1 } });
+    const check = await verifyExpectedFiles({ declared: ["a.md"], base: "C:\\projet", invokeFn, baseline: null });
+    expect(check.present).toEqual(["a.md"]);
+    expect(deliverableFailed(check)).toBe(false);
+  });
+});
+
+// ── 3 ter. TROU C2 : la déclaration du livrable est OBLIGATOIRE ─────────────
+describe("déclaration obligatoire : une demande d'écriture sans livrable est refusée", () => {
+  it("refuse une demande d'écriture explicite sans `expected_files`", () => {
+    const msg = undeclaredWriteRefusalMessage({
+      tool: "delegate_to_coder",
+      task: "Écris le fichier `plan-organisation-par-defaut.md` à la racine.",
+    });
+    expect(msg).toBeTruthy();
+    expect(msg).toContain("plan-organisation-par-defaut.md");
+    expect(msg).toContain("expected_files");
+  });
+
+  it("nomme l'absence de fichier précis quand la demande n'en nomme aucun", () => {
+    const msg = undeclaredWriteRefusalMessage({
+      tool: "run_agents",
+      task: "Crée un fichier de synthèse pour la revue.",
+      expectedFiles: [],
+    });
+    expect(msg).toBeTruthy();
+    expect(msg).toContain("sans nom de fichier précisé");
+    expect(msg).toContain("expected_files");
+  });
+
+  it("ne refuse JAMAIS quand les livrables sont déclarés", () => {
+    expect(
+      undeclaredWriteRefusalMessage({
+        tool: "run_agents",
+        task: "Écris le fichier `docs/rapport.md`.",
+        expectedFiles: ["docs/rapport.md"],
+      })
+    ).toBeNull();
+    // Une liste non vide déclarée sous forme de chaîne compte aussi.
+    expect(
+      undeclaredWriteRefusalMessage({
+        tool: "run_agents",
+        task: "Écris le fichier `docs/rapport.md`.",
+        expectedFiles: "docs/rapport.md",
+      })
+    ).toBeNull();
+  });
+
+  it("ne refuse pas les missions de LECTURE ni les négations (aucun refus indu)", () => {
+    for (const task of [
+      "Analyse le projet et propose un plan d'organisation.",
+      "Vérifie la cohérence entre les specs et le code.",
+      "Écris ta réponse dans le chat : liste les fichiers concernés.",
+      "Analyse le fichier main.js sans rien modifier.",
+    ]) {
+      expect(
+        undeclaredWriteRefusalMessage({ tool: "run_agents", task, expectedFiles: [] }),
+        `refus indu : ${task}`
+      ).toBeNull();
+    }
+  });
+});
+
 // ── 4. EXÉCUTION : la mission échoue si le fichier déclaré n'existe pas ─────
 describe("fin de mission : le fichier déclaré fait foi", () => {
   it("fichier déclaré ABSENT → ÉCHEC explicite nommant le fichier (jamais « terminé »)", async () => {
@@ -342,14 +539,44 @@ describe("fin de mission : le fichier déclaré fait foi", () => {
     expect(out.delivered).not.toContain("Livrable");
   });
 
-  it("un fichier déclaré VIDE (mais existant) est conforme : l'existence seule compte", async () => {
-    instrument({ existing: ["vide.md"] });
+  // TEST RETOURNÉ (trou C3) : ce test verrouillait l'inverse — « un fichier
+  // existant mais VIDE est conforme ». Un fichier de 0 octet ne peut pas tenir
+  // le rôle de livrable : il ne doit plus jamais produire un succès.
+  it("un fichier déclaré VIDE (0 octet) n'est PAS conforme : échec explicite", async () => {
+    instrument({ empty: ["vide.md"] });
     const out = await runMission(
       { agentId: "codeur", expectedFiles: ["vide.md"], expectedFilesBase: "C:\\projet" },
       "Fichier créé."
     );
+    expect(out.done, "un livrable vide ne peut pas produire un succès").toEqual([]);
+    expect(out.error.length).toBe(1);
+    expect(out.delivered).toContain("LIVRABLE VIDE");
+    expect(out.delivered).toContain("vide.md");
+  });
+
+  // Trou C3 (suite) : un fichier qui était DÉJÀ là au lancement et qui n'a pas
+  // changé n'est pas une preuve de travail, même non vide.
+  it("un fichier déclaré INCHANGÉ depuis le lancement est refusé (non prouvé)", async () => {
+    instrument({ stale: ["deja-la.md"] });
+    const out = await runMission(
+      { agentId: "codeur", expectedFiles: ["deja-la.md"], expectedFilesBase: "C:\\projet" },
+      "J'ai mis à jour le fichier."
+    );
+    expect(out.done, "un fichier inchangé ne prouve aucun travail").toEqual([]);
+    expect(out.error.length).toBe(1);
+    expect(out.delivered).toContain("LIVRABLE NON PROUVÉ");
+    expect(out.delivered).toContain("deja-la.md");
+  });
+
+  it("un fichier CRÉÉ pendant la mission (absent au départ) est prouvé", async () => {
+    instrument({ existing: ["nouveau.md"] });
+    const out = await runMission(
+      { agentId: "codeur", expectedFiles: ["nouveau.md"], expectedFilesBase: "C:\\projet" },
+      "Fichier créé."
+    );
     expect(out.error).toEqual([]);
     expect(out.delivered).toContain("Livrable vérifié");
+    expect(out.delivered).toContain("nouveau.md");
   });
 
   it("AGENT JETABLE en lecture seule : mêmes règles (fichier absent → échec explicite)", async () => {
@@ -386,6 +613,13 @@ describe("verrou de source : gardes branchées aux deux familles et à la délé
     expect(body, "refus au lancement absent de run_agents").toContain("readOnlyWriteRefusalMessage");
     expect(body).toContain("expectedFiles");
     expect(body, "les fichiers déclarés doivent être propagés à la mission").toContain("expectedFilesBase");
+    // TROU C2 : calculer le refus ne suffit pas — il doit INTERROMPRE le
+    // lancement (message + réponse « launched: false » + retour). Sans cette
+    // porte, la demande partait sans livrable déclaré et rien n'était vérifié.
+    expect(body, "le refus de déclaration doit arrêter run_agents").toMatch(
+      /if \(undeclaredRefusal\) \{[\s\S]{0,400}?return;/
+    );
+    expect(body, "un refus neutralisé ne protège rien").not.toMatch(/false\s*&&\s*undeclaredRefusal/);
   });
 
   it("run_assistant_agents applique les mêmes règles", () => {
@@ -396,6 +630,11 @@ describe("verrou de source : gardes branchées aux deux familles et à la délé
     expect(body).toContain("expectedFiles");
     // Espace de référence des agents d'assistant (aucun projet réel).
     expect(body).toContain("get_assistant_workspace");
+    // TROU C2 : même exigence que `run_agents` — le refus INTERROMPT.
+    expect(body, "le refus de déclaration doit arrêter run_assistant_agents").toMatch(
+      /if \(undeclaredRefusal\) \{[\s\S]{0,400}?return;/
+    );
+    expect(body, "un refus neutralisé ne protège rien").not.toMatch(/false\s*&&\s*undeclaredRefusal/);
   });
 
   it("delegate_to_coder refuse la même demande vers un agent en lecture seule", () => {
@@ -403,6 +642,35 @@ describe("verrou de source : gardes branchées aux deux familles et à la délé
     expect(start, "handler delegate_to_coder introuvable").toBeGreaterThan(-1);
     const body = superAgent.slice(start, start + 8000);
     expect(body).toContain("readOnlyWriteRefusalMessage");
+    // TROU C2 (verrou retourné) : la délégation directe n'offrait AUCUN moyen de
+    // déclarer les fichiers attendus, donc aucun livrable n'y était jamais
+    // vérifié. Ce test verrouillait cette absence ; il verrouille désormais la
+    // présence de la déclaration ET du refus.
+    expect(body, "la délégation doit exiger la déclaration des livrables").toContain("undeclaredWriteRefusalMessage");
+    expect(body).toContain("expected_files");
+    expect(body, "les livrables voyagent avec la demande").toContain("delegationExpectedFiles");
+    // TROU C2 : la délégation refuse AVANT de transmettre (sinon l'agent
+    // travaille et la déclaration ne sert plus à rien).
+    expect(body, "le refus de déclaration doit arrêter la délégation").toMatch(
+      /if \(undeclaredDelegation\) \{[\s\S]{0,400}?return;/
+    );
+    expect(body, "un refus neutralisé ne protège rien").not.toMatch(/false\s*&&\s*undeclaredDelegation/);
+  });
+
+  it("delegate_to_coder transmet les livrables et relève leur état de départ", () => {
+    expect(superAgent).toContain("expectedFiles: delegationExpectedFiles");
+    const start = superAgent.indexOf("export async function transmitDelegationToAgent");
+    expect(start, "transmitDelegationToAgent introuvable").toBeGreaterThan(-1);
+    const body = superAgent.slice(start, start + 6000);
+    expect(body).toContain("captureDeliverableState");
+    expect(body).toContain("expectedFiles: declaredDeliverables");
+    // La preuve de fin de délégation passe par le module unique. Découpage
+    // VÉRIFIÉ (`sliceFrom`) : une ancre absente fait échouer le test au lieu de
+    // donner un fragment vide (qui rendrait une assertion négative vraie par
+    // construction).
+    const report = sliceFrom(superAgent, "async function injectSessionSummaryToSuperAgent");
+    expect(report).toContain("verifyExpectedFiles");
+    expect(report).toContain("appendDeliverableVerdict");
   });
 
   it("le bus vérifie les fichiers déclarés et fait échouer la mission", () => {
@@ -412,8 +680,17 @@ describe("verrou de source : gardes branchées aux deux familles et à la délé
     expect(agentsBus).toContain("appendDeliverableVerdict");
   });
 
-  it("les outils de l'assistant exposent `expected_files` (les deux familles)", () => {
+  it("les outils de l'assistant exposent `expected_files` sur les TROIS voies de lancement", () => {
     const occurrences = (actions.match(/expected_files: Type\.Optional/g) || []).length;
-    expect(occurrences, "`expected_files` doit être déclaré sur run_agents ET run_assistant_agents").toBe(2);
+    // TROU C2 (verrou retourné) : ce test verrouillait la valeur 2 — donc
+    // l'ABSENCE de `expected_files` sur `delegate_to_coder`. La liste est
+    // désormais offerte sur les trois voies : run_agents, run_assistant_agents
+    // ET delegate_to_coder.
+    expect(occurrences, "`expected_files` doit être déclaré sur run_agents, run_assistant_agents ET delegate_to_coder").toBe(3);
+    const delegateStart = actions.indexOf('name: "delegate_to_coder"');
+    expect(delegateStart, "outil delegate_to_coder introuvable").toBeGreaterThan(-1);
+    const delegateBody = actions.slice(delegateStart, delegateStart + 9000);
+    expect(delegateBody, "l'outil doit exposer expected_files").toContain("expected_files");
+    expect(delegateBody, "l'outil doit transmettre la liste à Pilot").toContain("expectedFiles:");
   });
 });

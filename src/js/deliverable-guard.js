@@ -48,10 +48,18 @@
 //          fichier.
 //  2. PREUVE DU LIVRABLE (`verifyExpectedFiles`) : quand la demande déclare les
 //     fichiers réellement attendus sur disque (`expected_files`), Pilot vérifie
-//     à la fin de la tâche que CHACUN existe. Absent ⇒ la tâche est rapportée en
-//     ÉCHEC explicite nommant le fichier manquant (jamais « terminé »). Présent
-//     ⇒ comportement inchangé, plus une confirmation. Sans fichiers déclarés,
-//     RIEN ne change (rétrocompatibilité totale).
+//     à la fin de la tâche que CHACUN existe, n'est pas VIDE (0 octet) et a
+//     CHANGÉ depuis le lancement de la mission (taille et/ou date relevées
+//     AVANT le travail par `captureDeliverableState`). Absent, vide ou inchangé
+//     ⇒ la tâche est rapportée en ÉCHEC explicite nommant le fichier fautif
+//     (jamais « terminé »). Un fichier vide ou déjà là avant la mission ne peut
+//     plus tenir le rôle de livrable (trou C3).
+//  3. DÉCLARATION OBLIGATOIRE (`undeclaredWriteRefusalMessage`) : une demande
+//     qui ORDONNE d'écrire un fichier sans déclarer de livrable est refusée au
+//     lancement, en nommant le fichier réclamé et le paramètre à renseigner
+//     (trou C2 : la liste était facultative, donc la preuve n'avait rien à
+//     vérifier). Même détection que le refus lecture seule, aucune décision
+//     dans le doute.
 //
 // Principe d'honnêteté : on ne suppose jamais ce que l'agent a fait. On dit ce
 // qui manque et où on l'attendait, et rien de plus.
@@ -651,6 +659,49 @@ export function readOnlyWriteRefusalMessage({ tool, agents, task, expectedFiles 
 }
 
 /**
+ * Message de REFUS (ou null) : la demande ordonne d'ÉCRIRE un fichier mais
+ * AUCUN livrable n'est déclaré (`expected_files` vide).
+ *
+ * C'est le trou C2 du rapport `RAPPORT-voies-de-contournement-livraison.md` : la
+ * liste des fichiers attendus était FACULTATIVE, donc la preuve du livrable
+ * (existence + non-vide + changement depuis le lancement) n'avait rien à
+ * vérifier. Elle devient OBLIGATOIRE dès que la demande exige un fichier :
+ * le refus nomme le fichier que la demande réclame et la façon de le déclarer.
+ *
+ * Le doute n'est JAMAIS un refus : sans ordre d'écriture ET sans cible de
+ * fichier identifiables (même détection que `readOnlyWriteRefusalMessage`, les
+ * deux décisions viennent de `detectExplicitWriteRequest`), la demande part
+ * comme avant.
+ *
+ * @param {object} params
+ * @param {string} [params.tool] - outil appelant (run_agents, delegate_to_coder…)
+ * @param {string} params.task - demande brute
+ * @param {string[]} [params.expectedFiles] - livrables déjà déclarés
+ * @returns {string|null}
+ */
+export function undeclaredWriteRefusalMessage({ tool, task, expectedFiles } = {}) {
+  const declared = normalizeExpectedFiles(expectedFiles);
+  if (declared.length > 0) return null;
+  const detection = detectExplicitWriteRequest(task, { expectedFiles: declared });
+  if (!detection.explicit) return null;
+  const prefix = tool ? `${tool} : ` : "";
+  const target =
+    detection.via === "file-noun"
+      ? `un fichier du projet (ordre « ${detection.verb} », sans nom de fichier précisé)`
+      : `le fichier « ${detection.target} » (ordre « ${detection.verb} »)`;
+  return (
+    `${prefix}la demande n'a PAS été lancée : elle exige la production d'un fichier — ${target} — ` +
+    `mais aucun livrable n'est déclaré. Sans cette liste, Pilot ne peut pas vérifier à la fin du ` +
+    `travail que le fichier existe, qu'il n'est pas vide et qu'il a bien changé depuis le lancement : ` +
+    `n'importe quelle annonce « terminé » resterait donc invérifiable. ` +
+    `Relancez la demande en déclarant les fichiers attendus (paramètre \`expected_files\`, chemins ` +
+    `relatifs au projet, par exemple « ${detection.target || "docs/plan.md"} »). ` +
+    `Si aucun fichier n'est réellement attendu, reformulez la demande comme une tâche de lecture : ` +
+    `l'analyse se rend dans la réponse de l'agent, sans réclamer de fichier en sortie.`
+  );
+}
+
+/**
  * Normalise la liste des fichiers attendus sur disque (chemins relatifs au
  * projet). Tolère un champ absent, une chaîne unique, des entrées vides ou des
  * doublons. Aucune invention : ce qui est fourni est conservé tel quel (espaces
@@ -677,7 +728,7 @@ function quoteList(items) {
 
 /**
  * Texte du verdict d'un livrable vérifié.
- * @param {{declared: string[], present: string[], missing: string[], unreadable: string[], base: string|null, skipped: boolean}} check
+ * @param {{declared: string[], present: string[], missing: string[], empty?: string[], unproven?: string[], unreadable: string[], base: string|null, skipped: boolean}} check
  * @returns {string} ligne à joindre au rapport ("" si rien à dire)
  */
 export function deliverableVerdictText(check) {
@@ -698,6 +749,23 @@ export function deliverableVerdictText(check) {
       `n'existe${plural ? "nt" : ""} pas sur le disque${where}. La tâche n'est donc PAS terminée : ` +
       `le${plural ? "s" : ""} fichier${plural ? "s" : ""} déclaré${plural ? "s" : ""} comme attendu${plural ? "s" : ""} ` +
       `n'a${plural ? "ont" : ""} pas été produit${plural ? "s" : ""}.`
+    );
+  }
+  // C3 : un fichier PRÉSENT mais sans contenu ne prouve rien.
+  if ((check.empty || []).length > 0) {
+    return (
+      `❌ LIVRABLE VIDE : le fichier ${quoteList(check.empty)} existe sur le disque mais ne contient ` +
+      `RIEN (0 octet). Un fichier vide ne peut pas tenir le rôle de livrable : la tâche n'est donc ` +
+      `PAS terminée. Produisez son contenu, puis relancez la vérification.`
+    );
+  }
+  // C3 (suite) : un fichier présent mais INCHANGÉ depuis le lancement de la
+  // mission n'est pas une preuve de travail — il pouvait déjà être là.
+  if ((check.unproven || []).length > 0) {
+    return (
+      `❌ LIVRABLE NON PROUVÉ : le fichier ${quoteList(check.unproven)} était déjà là au lancement ` +
+      `de la mission et n'a pas changé depuis (même taille, même date de modification). Rien ne ` +
+      `prouve que cette mission l'a produit : la tâche n'est donc PAS terminée.`
     );
   }
   const unreadable = check.unreadable || [];
@@ -721,18 +789,110 @@ export function appendDeliverableVerdict(text, check) {
 }
 
 /**
- * Vérifie l'EXISTENCE des fichiers déclarés (I/O via `invokeFn`, fail-open sur
- * une erreur de sonde : un échec de vérification n'échoue jamais la tâche).
- * L'existence est le seul critère : un fichier déclaré EXISTANT mais vide est
- * conforme.
+ * Relève l'état d'UN fichier déclaré : absent, présent (taille + date), ou
+ * inconnu (sonde en panne). Aucune exception ne remonte : une panne de sonde
+ * donne `{ exists: null }`, que la vérification traite en « non prouvable »
+ * SANS faire échouer la mission (fail-open, règle historique conservée).
  *
+ * Utilise les sondes EXISTANTES (`file_exists`, `get_file_size`, `file_mtime`) :
+ * aucun second mécanisme de lecture du disque n'est créé.
+ * @param {Function} invokeFn - `invoke` Tauri (injection pour les tests)
+ * @param {string} abs - chemin absolu
+ * @returns {Promise<{exists: boolean|null, size: number|null, mtime: number|null}>}
+ */
+async function probeDeclaredFile(invokeFn, abs) {
+  let exists = null;
+  try {
+    exists = await invokeFn("file_exists", { path: abs });
+  } catch (_) {
+    return { exists: null, size: null, mtime: null };
+  }
+  if (exists !== true) return { exists: false, size: null, mtime: null };
+  let size = null;
+  try {
+    const raw = await invokeFn("get_file_size", { path: abs });
+    size = Number.isFinite(Number(raw)) ? Number(raw) : null;
+  } catch (_) {
+    size = null;
+  }
+  let mtime = null;
+  try {
+    const raw = await invokeFn("file_mtime", { path: abs });
+    mtime = Number.isFinite(Number(raw)) ? Number(raw) : null;
+  } catch (_) {
+    mtime = null;
+  }
+  return { exists: true, size, mtime };
+}
+
+/**
+ * ÉTAT DE DÉPART des fichiers déclarés, relevé AVANT le travail de la mission
+ * (C3). Sans cet état, la vérification de fin ne peut pas distinguer « le
+ * fichier a été produit par la mission » de « le fichier était déjà là ».
+ *
+ * Fail-open : une panne de relevé rend `null` (la vérification le dit et ne fait
+ * pas échouer la mission).
+ * @param {object} params
+ * @param {unknown} params.declared
+ * @param {string|null} params.base
+ * @param {Function} params.invokeFn
+ * @returns {Promise<{base: string|null, files: Record<string, {exists: boolean|null, size: number|null, mtime: number|null}>}|null>}
+ */
+export async function captureDeliverableState({ declared, base, invokeFn } = {}) {
+  const files = normalizeExpectedFiles(declared);
+  const rawBase = base == null ? "" : String(base).trim();
+  const usableBase = rawBase && rawBase !== "__assistant__" && rawBase !== "." ? rawBase : null;
+  if (files.length === 0 || !usableBase || typeof invokeFn !== "function") return null;
+  const state = {};
+  try {
+    for (const rel of files) {
+      state[rel] = await probeDeclaredFile(invokeFn, resolvePath(rel, usableBase));
+    }
+  } catch (_) {
+    return null;
+  }
+  return { base: usableBase, files: state };
+}
+
+/**
+ * Le fichier a-t-il CHANGÉ depuis le relevé de départ ? Pur.
+ * Vrai quand le fichier n'existait pas au lancement (il a donc été créé) ou
+ * quand sa taille ou sa date diffèrent. `false` = état identique ⇒ rien ne
+ * prouve que la mission l'a produit.
+ * @param {{exists: boolean|null, size: number|null, mtime: number|null}|null|undefined} before
+ * @param {{exists: boolean|null, size: number|null, mtime: number|null}} after
+ * @returns {boolean}
+ */
+export function fileChangedSince(before, after) {
+  if (!after || after.exists !== true) return false;
+  if (!before) return true;
+  if (before.exists === false) return true; // créé pendant la mission
+  if (before.exists !== true) return true; // relevé de départ inconnu : on ne condamne pas
+  const sizeKnown = Number.isFinite(before.size) && Number.isFinite(after.size);
+  if (sizeKnown && before.size !== after.size) return true;
+  const mtimeKnown = Number.isFinite(before.mtime) && Number.isFinite(after.mtime);
+  if (mtimeKnown && before.mtime !== after.mtime) return true;
+  if (!sizeKnown && !mtimeKnown) return true; // aucune mesure comparable : ne pas condamner
+  return false;
+}
+
+/**
+ * Vérifie les fichiers déclarés : ils doivent EXISTER, ne pas être VIDES, et
+ * avoir CHANGÉ depuis le lancement de la mission (C3 — un fichier présent mais
+ * vide ou déjà là avant la mission ne prouve aucun travail).
+ *
+ * Fail-open conservé : une sonde indisponible ne fait jamais échouer la mission
+ * (`unreadable`), et une panne du relevé de départ (`baseline === null`) n'est
+ * pas imputée à l'agent.
  * @param {object} params
  * @param {unknown} params.declared - fichiers attendus (relatifs au projet)
  * @param {string|null} params.base - dossier de référence (projet / espace)
  * @param {Function} params.invokeFn - `invoke` Tauri (injection pour les tests)
- * @returns {Promise<{declared: string[], present: string[], missing: string[], unreadable: string[], base: string|null, skipped: boolean}>}
+ * @param {{files?: Record<string, object>}|null} [params.baseline] - état relevé au lancement
+ *   (`undefined` = jamais relevé ⇒ aucun fichier ne peut être prouvé)
+ * @returns {Promise<{declared: string[], present: string[], missing: string[], empty: string[], unproven: string[], unreadable: string[], base: string|null, skipped: boolean}>}
  */
-export async function verifyExpectedFiles({ declared, base, invokeFn } = {}) {
+export async function verifyExpectedFiles({ declared, base, invokeFn, baseline } = {}) {
   const files = normalizeExpectedFiles(declared);
   const rawBase = base == null ? "" : String(base).trim();
   // Dossiers NON utilisables comme référence : vide, marqueur interne de
@@ -742,6 +902,8 @@ export async function verifyExpectedFiles({ declared, base, invokeFn } = {}) {
     declared: files,
     present: [],
     missing: [],
+    empty: [],
+    unproven: [],
     unreadable: [],
     base: usableBase,
     skipped: false,
@@ -753,26 +915,59 @@ export async function verifyExpectedFiles({ declared, base, invokeFn } = {}) {
     result.skipped = true;
     return result;
   }
+  // `undefined` = l'appelant n'a jamais relevé l'état de départ : la production
+  // n'est alors PROUVABLE pour aucun fichier. `null` = le relevé a échoué : on
+  // ne condamne pas la mission (fail-open).
+  const baselineMissing = baseline === undefined;
+  const baselineBroken = baseline === null;
+  const before = baseline && typeof baseline === "object" && baseline.files ? baseline.files : {};
   for (const rel of files) {
     const abs = resolvePath(rel, usableBase);
+    let after;
     try {
-      const exists = await invokeFn("file_exists", { path: abs });
-      if (exists) result.present.push(rel);
-      else result.missing.push(rel);
+      after = await probeDeclaredFile(invokeFn, abs);
     } catch (_) {
-      result.unreadable.push(rel);
+      after = { exists: null, size: null, mtime: null };
     }
+    if (after.exists === null) {
+      // Sonde indisponible : jamais un échec de mission (règle historique).
+      result.unreadable.push(rel);
+      continue;
+    }
+    if (after.exists !== true) {
+      result.missing.push(rel);
+      continue;
+    }
+    if (after.size === 0) {
+      // C3 : présent mais VIDE ⇒ jamais conforme.
+      result.empty.push(rel);
+      continue;
+    }
+    if (baselineMissing) {
+      // Aucun état de départ fourni : la production n'est pas prouvée.
+      result.unproven.push(rel);
+      continue;
+    }
+    if (!baselineBroken && !fileChangedSince(before[rel], after)) {
+      // C3 (suite) : présent mais identique à l'état de départ ⇒ pas produit ici.
+      result.unproven.push(rel);
+      continue;
+    }
+    result.present.push(rel);
   }
   return result;
 }
 
 /**
- * La vérification rend-elle la mission EN ÉCHEC ? Seul un fichier déclaré
- * ABSENT le fait (jamais une sonde indisponible, jamais un dossier de référence
- * absent).
+ * La vérification rend-elle la mission EN ÉCHEC ? Trois cas seulement : fichier
+ * déclaré ABSENT, fichier VIDE, ou fichier INCHANGÉ depuis le lancement (C3).
+ * Jamais une sonde indisponible, jamais un dossier de référence absent.
  * @param {object|null} check
  * @returns {boolean}
  */
 export function deliverableFailed(check) {
-  return !!(check && Array.isArray(check.missing) && check.missing.length > 0);
+  if (!check) return false;
+  return ["missing", "empty", "unproven"].some(
+    (key) => Array.isArray(check[key]) && check[key].length > 0
+  );
 }

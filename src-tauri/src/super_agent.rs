@@ -194,6 +194,13 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     // perte, aucune erreur au démarrage.
     ensure_column(conn, "tasks", "estimated_minutes", "INTEGER")?;
     ensure_column(conn, "tasks", "spent_minutes", "INTEGER")?;
+    // C5 (verrou de livraison, Lot A) : `checklist_expected` = « cette tâche DOIT
+    // porter une checklist » (1) ou « aucune checklist prévue » (0, défaut).
+    // Migration ADDITIVE et idempotente : les tâches EXISTANTES démarrent à 0,
+    // donc aucune d'elles ne change de comportement (aucune clôture bloquée) ;
+    // la valeur passe à 1 dès qu'un point de checklist est ajouté
+    // (`db_add_task_check`) ou qu'un modèle non vide est appliqué à la création.
+    ensure_column(conn, "tasks", "checklist_expected", "INTEGER NOT NULL DEFAULT 0")?;
     // T1 : migration idempotente de la colonne `delivered` (résumés déjà en
     // base sur les anciennes bases). Les anciens résumés non livrés restent
     // `delivered=0` et seront rejoués à la prochaine opportunité.
@@ -1096,17 +1103,197 @@ pub fn super_agent_db_query(app: AppHandle, sql: String) -> Result<Value, String
     Ok(serde_json::json!({ "rows": result, "count": result.len() }))
 }
 
-/// Exécute une requête d'écriture (CREATE TABLE, INSERT, UPDATE, DELETE, ALTER,
-/// DROP, PRAGMA) sur la base de suivi de l'assistant. Retourne `{ ok: true }`.
-#[tauri::command]
-pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, String> {
+// ── C1 : PORTÉE d'écriture de `db_execute` (verrou de livraison, Lot A) ──
+//
+// Défaut fermé (rapport `RAPPORT-voies-de-contournement-livraison.md`, C1) :
+// l'assistant disposait d'un `db_execute` acceptant N'IMPORTE QUEL SQL non-SELECT
+// sur sa base de suivi, donc `UPDATE tasks SET status='terminee'` écrivait un
+// statut SANS passer par le contrôle de checklist (`guard_task_checklist`,
+// point d'entrée unique). Le contrôle devenait décoratif : il suffisait de ne pas
+// utiliser l'outil gardé.
+//
+// Règle unique et SANS second mécanisme : les tables qui portent la VÉRITÉ du
+// suivi (`tasks`, `task_checks`, `deliverables`) s'écrivent UNIQUEMENT par les
+// commandes de suivi, jamais par SQL libre. Le reste (tables personnelles de
+// l'assistant : `CREATE TABLE assistant_notes…`, `INSERT`/`UPDATE` dessus)
+// passe comme avant : la liberté de l'assistant sur ses propres tables est
+// intacte.
+
+/// Tables dont l'écriture est réservée aux commandes de suivi (donc au contrôle
+/// de checklist). Toute instruction qui les VISE en écriture est refusée.
+const DB_EXECUTE_PROTECTED_TABLES: [&str; 3] = ["tasks", "task_checks", "deliverables"];
+
+/// Retire les commentaires SQL (`-- …` jusqu'à la fin de ligne, `/* … */`) sans
+/// toucher au reste : une instruction cachée derrière un commentaire reste vue.
+fn strip_sql_comments(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let bytes: Vec<char> = sql.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == '-' && i + 1 < bytes.len() && bytes[i + 1] == '-' {
+            while i < bytes.len() && bytes[i] != '\n' {
+                i += 1;
+            }
+            out.push(' ');
+            continue;
+        }
+        if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == '*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == '*' && bytes[i + 1] == '/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            out.push(' ');
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+/// Découpe une requête en instructions (sur `;`), sans les vides. Un lot de
+/// plusieurs instructions est examiné instruction par instruction : une seule
+/// instruction interdite suffit à refuser TOUT le lot (aucune écriture partielle).
+fn sql_statements(sql: &str) -> Vec<String> {
+    sql.split(';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Mots d'une instruction, en minuscules, sans ponctuation de tête : sert à
+/// reconnaître le verbe et sa cible sans reproduire un analyseur SQL complet.
+fn sql_words(statement: &str) -> Vec<String> {
+    statement
+        .split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',')
+        .map(|w| {
+            w.trim_matches(|c: char| c == '"' || c == '`' || c == '[' || c == ']' || c == ';')
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// Normalise un nom de table : dernier segment après `.` (schéma), sans
+/// guillemets ni suffixe de colonne.
+fn sql_table_name(word: &str) -> String {
+    let base = word.rsplit('.').next().unwrap_or(word);
+    base.trim_matches(|c: char| c == '"' || c == '`' || c == '[' || c == ']')
+        .to_string()
+}
+
+/// Table VISÉE en écriture par une instruction (ou `None` si l'instruction
+/// n'écrit pas de table : SELECT, PRAGMA, CREATE INDEX…). Reconnaît les formes
+/// qui écrivent réellement une table : INSERT/REPLACE INTO, UPDATE (avec ou
+/// sans `OR <conflit>`), DELETE FROM, DROP TABLE, ALTER TABLE, TRUNCATE.
+fn sql_write_target(statement: &str) -> Option<String> {
+    let words = sql_words(statement);
+    let mut idx = 0;
+    // `WITH … AS (…)` : la cible est après la sous-requête. On borne la
+    // recherche aux verbes connus plus loin dans l'instruction.
+    while idx < words.len() {
+        match words[idx].as_str() {
+            "insert" | "replace" => {
+                let mut j = idx + 1;
+                if j < words.len() && words[j] == "or" {
+                    j += 2; // INSERT OR REPLACE / OR IGNORE
+                }
+                if j < words.len() && words[j] == "into" {
+                    j += 1;
+                }
+                return words.get(j).map(|w| sql_table_name(w));
+            }
+            "update" => {
+                let mut j = idx + 1;
+                if j < words.len() && words[j] == "or" {
+                    j += 2; // UPDATE OR IGNORE
+                }
+                return words.get(j).map(|w| sql_table_name(w));
+            }
+            "delete" => {
+                let mut j = idx + 1;
+                if words.get(j).map(|w| w.as_str()) == Some("from") {
+                    j += 1;
+                }
+                return words.get(j).map(|w| sql_table_name(w));
+            }
+            "drop" | "alter" => {
+                // Seuls `DROP TABLE …` / `ALTER TABLE …` visent une table.
+                if words.get(idx + 1).map(|w| w.as_str()) != Some("table") {
+                    return None;
+                }
+                let mut j = idx + 2;
+                while j < words.len() && (words[j] == "if" || words[j] == "exists") {
+                    j += 1;
+                }
+                return words.get(j).map(|w| sql_table_name(w));
+            }
+            "truncate" => {
+                let mut j = idx + 1;
+                if j < words.len() && words[j] == "table" {
+                    j += 1;
+                }
+                return words.get(j).map(|w| sql_table_name(w));
+            }
+            _ => idx += 1,
+        }
+    }
+    None
+}
+
+/// Règle de PORTÉE de `db_execute` : refuse toute instruction qui écrit dans une
+/// table de suivi (`tasks`, `task_checks`, `deliverables`) ou dans le schéma
+/// SQLite lui-même (`sqlite_master` / `sqlite_schema`), et laisse passer tout le
+/// reste. Pure : testable sans base ni application graphique.
+fn db_execute_scope(sql: &str) -> Result<(), String> {
+    let cleaned = strip_sql_comments(sql);
+    for statement in sql_statements(&cleaned) {
+        let Some(target) = sql_write_target(&statement) else {
+            continue;
+        };
+        if DB_EXECUTE_PROTECTED_TABLES.contains(&target.as_str()) {
+            return Err(format!(
+                "db_execute : la table « {} » ne s'écrit pas en SQL direct. Elle fait partie du suivi \
+                 (statuts, checklist, livrables) et s'écrit UNIQUEMENT par les outils de suivi — \
+                 update_task_status (qui applique le contrôle de checklist), add_task_check, \
+                 set_task_check_done, update_task… Aucune écriture n'a été exécutée.",
+                target
+            ));
+        }
+        if target == "sqlite_master" || target == "sqlite_schema" || target == "sqlite_temp_master" {
+            return Err(
+                "db_execute : le schéma de la base (sqlite_master) ne s'écrit pas. Aucune écriture n'a été exécutée."
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Exécute une écriture sur une connexion DÉJÀ ouverte, en appliquant la règle de
+/// portée. Séparé de la commande Tauri pour être testable en base mémoire : c'est
+/// ce chemin (et lui seul) qui est utilisé en production.
+fn db_execute_in(conn: &Connection, sql: &str) -> Result<(), String> {
     let trimmed = sql.trim_start();
-    let upper = trimmed.to_uppercase();
-    if upper.starts_with("SELECT") {
+    if trimmed.to_uppercase().starts_with("SELECT") {
         return Err("super_agent_db_execute : utilisez super_agent_db_query pour les SELECT".to_string());
     }
+    db_execute_scope(sql)?;
+    conn.execute_batch(sql).map_err(|e| format!("Erreur SQL : {}", e))?;
+    Ok(())
+}
+
+/// Exécute une requête d'écriture (CREATE TABLE, INSERT, UPDATE, DELETE, ALTER,
+/// DROP, PRAGMA) sur la base de suivi de l'assistant. Retourne `{ ok: true }`.
+/// Les tables de suivi (`tasks`, `task_checks`, `deliverables`) sont HORS de
+/// portée : elles passent par les commandes de suivi et leur contrôle de
+/// checklist (voir `db_execute_scope`).
+#[tauri::command]
+pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, String> {
     let conn = open_db(&app)?;
-    conn.execute_batch(&sql).map_err(|e| format!("Erreur SQL : {}", e))?;
+    db_execute_in(&conn, &sql)?;
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -2896,6 +3083,14 @@ fn db_add_task_check(conn: &Connection, task_id: i64, label: &str) -> Result<i64
         rusqlite::params![task_id, label, position],
     )
     .map_err(|e| format!("Erreur ajout point checklist: {}", e))?;
+    // C5 : une tâche qui PORTE une checklist est marquée comme telle. C'est ce
+    // marqueur — et lui seul — qui permet ensuite de distinguer « tâche sans
+    // checklist » (rien à vérifier, comportement historique) de « checklist
+    // VIDÉE » (des points existaient, il n'en reste aucun : jamais conforme).
+    let _ = conn.execute(
+        "UPDATE tasks SET checklist_expected = 1 WHERE id = ?1",
+        rusqlite::params![task_id],
+    );
     Ok(conn.last_insert_rowid())
 }
 
@@ -2916,7 +3111,31 @@ fn db_set_task_check_done(conn: &Connection, check_id: i64, done: bool) -> Resul
 
 /// Supprime un point de checklist. Retourne une erreur si le point n'existe
 /// pas (aucune suppression silencieuse d'un identifiant inconnu).
+///
+/// C5 (verrou de livraison, Lot A) : la checklist d'une tâche DÉJÀ TERMINÉE ne se
+/// modifie plus. Sans cette garde, supprimer les points APRÈS la clôture (ou
+/// juste avant, puis clore) suffisait à faire passer la porte de checklist sans
+/// jamais examiner un point. Le refus est explicite et ne supprime rien.
 fn db_delete_task_check(conn: &Connection, check_id: i64) -> Result<(), String> {
+    let task_id: Option<i64> = conn
+        .query_row(
+            "SELECT task_id FROM task_checks WHERE id = ?1",
+            rusqlite::params![check_id],
+            |r| r.get(0),
+        )
+        .ok();
+    let Some(task_id) = task_id else {
+        return Err(format!("Point de checklist {} introuvable", check_id));
+    };
+    if let Some(status) = task_status_of(conn, task_id) {
+        if classify_task_status(&status) == "done" {
+            return Err(format!(
+                "delete_task_check : la tâche {} est terminée, sa checklist ne se modifie plus. \
+                 Rouvrez la tâche si un point doit vraiment être retiré. Aucun point n'a été supprimé.",
+                task_id
+            ));
+        }
+    }
     let n = conn
         .execute(
             "DELETE FROM task_checks WHERE id = ?1",
@@ -3430,11 +3649,60 @@ fn db_unchecked_task_check_labels(conn: &Connection, task_id: i64) -> Result<Vec
     Ok(rows.flatten().collect())
 }
 
+/// Nombre de points de checklist (cochés ou non) d'une tâche.
+fn db_count_task_checks(conn: &Connection, task_id: i64) -> Result<usize, String> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_checks WHERE task_id = ?1",
+            rusqlite::params![task_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("Erreur lecture checklist: {}", e))?;
+    Ok(n.max(0) as usize)
+}
+
+/// La tâche PORTE-t-elle une checklist (marqueur `checklist_expected`) ? Vrai
+/// dès qu'un point a été ajouté ou qu'un modèle a été appliqué à la création.
+/// Une tâche inconnue répond `false` (aucune invention).
+fn db_task_expects_checklist(conn: &Connection, task_id: i64) -> bool {
+    conn.query_row(
+        "SELECT COALESCE(checklist_expected, 0) FROM tasks WHERE id = ?1",
+        rusqlite::params![task_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v != 0)
+    .unwrap_or(false)
+}
+
+/// C5 — une checklist a-t-elle été VIDÉE ? Vrai quand la tâche devait porter une
+/// checklist (`expected`) et qu'il n'en reste AUCUN point. C'est la différence
+/// entre « tâche sans checklist, rien à vérifier » (comportement historique
+/// conservé) et « la checklist a disparu » : une checklist vidée ne prouve rien
+/// et ne doit donc JAMAIS compter comme conforme. Pure : testable sans base.
+fn checklist_emptied(expected: bool, points: usize) -> bool {
+    expected && points == 0
+}
+
+/// Message de refus propre à la checklist vidée (distinct du message « il reste
+/// N points », pour que l'utilisateur sache ce qui s'est réellement passé).
+fn checklist_empty_message() -> String {
+    "Checklist de livraison : cette tâche devait porter des points de vérification, \
+     mais sa checklist est VIDE — rien n'a donc été vérifié. Ajoute au moins un point \
+     (add_task_check), coche-le, puis termine la tâche."
+        .to_string()
+}
+
 /// POINT D'ENTRÉE INTERNE UNIQUE du contrôle : à appeler avant toute écriture
 /// qui fait passer une tâche en « Terminé ». Sans effet (Ok) si le nouveau
 /// statut n'est pas « terminé » ou si la tâche n'a aucun point restant — donc
 /// aucune régression pour les tâches existantes. Sinon, applique
 /// `evaluate_checklist_gate` et renvoie le message actionnable en cas de refus.
+///
+/// C5 (verrou de livraison, Lot A) : une checklist VIDÉE n'est jamais conforme.
+/// Sans cette règle, vider les points (ou ne jamais en ajouter après un modèle)
+/// ramenait `unchecked` à 0 et la porte répondait « autorisé » : le contrôle
+/// devenait décoratif. Le mode `off` reste une décision explicite de
+/// l'utilisateur et conserve son sens (aucun contrôle).
 fn guard_task_checklist(
     conn: &Connection,
     task_id: i64,
@@ -3444,6 +3712,10 @@ fn guard_task_checklist(
 ) -> Result<(), String> {
     if classify_task_status(new_status) != "done" {
         return Ok(());
+    }
+    let points = db_count_task_checks(conn, task_id)?;
+    if checklist_emptied(db_task_expects_checklist(conn, task_id), points) && mode != "off" {
+        return Err(checklist_empty_message());
     }
     let pending = db_unchecked_task_check_labels(conn, task_id)?;
     let verdict = evaluate_checklist_gate(mode, pending.len(), force);
@@ -4880,14 +5152,25 @@ fn resolve_project_id(conn: &Connection, project_path: &str) -> Result<i64, Stri
 /// `depends_on_task_id` optionnel pose dès la création la dépendance « attend la
 /// tâche X » (la tâche attendue doit exister ; aucun cycle possible sur une
 /// tâche qui vient d'être créée).
+///
+/// C5 (verrou de livraison, Lot A) : le MODÈLE de checklist réglé
+/// (`super_agent_checklist_template`, une ligne = un point) est appliqué DÈS LA
+/// CRÉATION. Sans cela, le cas le PLUS COURANT — une tâche créée sans point —
+/// fermait sans qu'aucun point ne soit examiné, et la porte de checklist ne
+/// protégeait que les tâches où l'on avait pensé à ajouter des points à la main.
+/// Une demande explicite « sans point » (`with_checklist_template = false`)
+/// conserve la possibilité de créer une tâche sans checklist : c'est un choix
+/// dit, pas un oubli. Un modèle vide ne crée aucun point (et n'échoue jamais).
 #[tauri::command]
 pub fn super_agent_create_task(
     app: AppHandle,
+    state: State<AppState>,
     project_path: String,
     title: String,
     description: Option<String>,
     deadline: Option<String>,
     depends_on_task_id: Option<i64>,
+    with_checklist_template: Option<bool>,
 ) -> Result<Value, String> {
     let title = title.trim();
     if title.is_empty() {
@@ -4910,11 +5193,40 @@ pub fn super_agent_create_task(
     )
     .map_err(|e| format!("Erreur création tâche: {}", e))?;
     let task_id = conn.last_insert_rowid();
+    // C5 : application du modèle réglé (sauf demande explicite « sans point »).
+    // Fail-open : un point refusé (libellé vide, base abîmée) ne fait jamais
+    // échouer la création, déjà écrite à ce stade.
+    if with_checklist_template != Some(false) {
+        let template = {
+            let cfg = state.config.lock().unwrap();
+            cfg.super_agent_checklist_template.clone()
+        };
+        for label in checklist_template_points(&template) {
+            let _ = db_add_task_check(&conn, task_id, &label);
+        }
+    }
     Ok(serde_json::json!({
         "ok": true,
         "task_id": task_id,
         "depends_on_task_id": depends_on,
     }))
+}
+
+/// Points d'un MODÈLE de checklist : une ligne non vide = un point, espaces de
+/// début/fin retirés, `\r\n` toléré, puces `-` / `*` / `•` retirées. Un modèle
+/// vide (ou blanc) ne produit AUCUN point — jamais d'erreur. Pure : testable
+/// sans base ni application graphique.
+fn checklist_template_points(template: &str) -> Vec<String> {
+    template
+        .lines()
+        .map(|line| {
+            line.trim()
+                .trim_start_matches(['-', '*', '•'])
+                .trim()
+                .to_string()
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
 }
 
 /// Definit (ou efface) la dependance d'une tache de suivi : la tache ne sera
@@ -6868,6 +7180,12 @@ mod tests {
         list_memory_trash_entries,
         checklist_gate_message, checklist_mode_from_config, db_unchecked_task_check_labels,
         evaluate_checklist_gate, guard_task_checklist, task_status_of, GateVerdict,
+        // Verrous de livraison (Lot A) : portée d'écriture de `db_execute` (C1) et
+        // checklist jamais vide (C5). Importés explicitement pour que la
+        // disparition de l'un d'eux fasse ÉCHOUER la compilation des tests.
+        db_execute_in, db_execute_scope, checklist_emptied, checklist_empty_message,
+        checklist_template_points, db_count_task_checks, db_task_expects_checklist,
+        strip_sql_comments, sql_write_target,
         db_task_time, db_task_time_json, db_set_task_estimated_minutes, db_add_task_spent_minutes,
         memory_removal_result, parse_model_spec, resolve_super_agent_model,
         resolve_super_agent_thinking_level, MEMORY_FORMAT,
@@ -9243,6 +9561,198 @@ mod tests {
         assert!(db_list_task_checks(&conn, t1).unwrap().is_empty());
         // Deuxième suppression du même point : erreur (aucun succès trompeur).
         assert!(db_delete_task_check(&conn, id).is_err());
+    }
+
+    // ── C5 (verrou de livraison, Lot A) : une checklist VIDÉE n'est jamais
+    // conforme, et la checklist d'une tâche close ne se modifie plus ──
+
+    #[test]
+    fn emptied_checklist_rule_is_pure_and_explicit() {
+        // « Tâche sans checklist » (rien à vérifier) : comportement historique.
+        assert!(!checklist_emptied(false, 0));
+        assert!(!checklist_emptied(false, 3));
+        // « La checklist devait exister et il n'en reste rien » : jamais conforme.
+        assert!(checklist_emptied(true, 0));
+        // Un seul point rend la règle inapplicable : c'est la porte qui décide.
+        assert!(!checklist_emptied(true, 1));
+        // Le refus porte SON message (pas celui des « N points restent à cocher »).
+        let msg = checklist_empty_message();
+        assert!(msg.contains("VIDE"), "message: {}", msg);
+        assert!(!msg.contains("restent à cocher"), "message: {}", msg);
+    }
+
+    #[test]
+    fn checklist_template_points_reads_one_point_per_line() {
+        assert_eq!(
+            checklist_template_points("Tests passés\nDocumentation à jour\nRien de non commité").len(),
+            3
+        );
+        assert_eq!(checklist_template_points("").len(), 0);
+        assert_eq!(checklist_template_points("   \n\r\n\t").len(), 0);
+        assert_eq!(
+            checklist_template_points("- A\r\n* B\r\n• C"),
+            vec!["A".to_string(), "B".to_string(), "C".to_string()]
+        );
+    }
+
+    #[test]
+    fn emptied_checklist_is_refused_at_closure_but_off_mode_stays_explicit() {
+        let (conn, task) = mem_conn_with_open_task();
+        // Une tâche qui PORTE une checklist est marquée comme telle en base.
+        let id = db_add_task_check(&conn, task, "Tests verts").unwrap();
+        assert!(db_task_expects_checklist(&conn, task));
+        db_set_task_check_done(&conn, id, true).unwrap();
+        assert!(guard_task_checklist(&conn, task, "terminee", "warn", false).is_ok());
+        // La checklist est VIDÉE avant la clôture : la clôture est refusée — en
+        // warn comme en block, avec et sans `force`. C'est le trou C5 fermé :
+        // vider les points ne peut plus valoir « aucune vérification à faire ».
+        db_delete_task_check(&conn, id).unwrap();
+        assert_eq!(db_count_task_checks(&conn, task).unwrap(), 0);
+        for mode in ["warn", "block", ""] {
+            for force in [false, true] {
+                let err = guard_task_checklist(&conn, task, "terminee", mode, force)
+                    .expect_err("une checklist vidée ne doit jamais autoriser la clôture");
+                assert!(err.contains("VIDE"), "mode {} force {} : {}", mode, force, err);
+            }
+        }
+        // `off` = contrôle désactivé par décision EXPLICITE de l'utilisateur :
+        // la clôture passe (aucune régression du réglage existant).
+        assert!(guard_task_checklist(&conn, task, "terminee", "off", false).is_ok());
+    }
+
+    #[test]
+    fn checklist_of_a_closed_task_cannot_be_modified() {
+        let (conn, task) = mem_conn_with_open_task();
+        let id = db_add_task_check(&conn, task, "Tests verts").unwrap();
+        db_set_task_check_done(&conn, id, true).unwrap();
+        // Clôture légitime (tous les points cochés) puis écriture du statut.
+        guard_task_checklist(&conn, task, "terminee", "block", false).unwrap();
+        conn.execute(
+            "UPDATE tasks SET status = 'terminee' WHERE id = ?1",
+            rusqlite::params![task],
+        )
+        .unwrap();
+        // Supprimer un point APRÈS la clôture est refusé, et rien n'est supprimé.
+        let err = db_delete_task_check(&conn, id)
+            .expect_err("la checklist d'une tâche terminée ne doit plus se modifier");
+        assert!(!err.is_empty());
+        assert_eq!(db_list_task_checks(&conn, task).unwrap().len(), 1);
+        // Le refus n'est pas définitif : rouvrir la tâche réautorise le geste.
+        conn.execute(
+            "UPDATE tasks SET status = 'en_cours' WHERE id = ?1",
+            rusqlite::params![task],
+        )
+        .unwrap();
+        db_delete_task_check(&conn, id).unwrap();
+    }
+
+    // ── C1 (verrou de livraison, Lot A) : `db_execute` ne peut plus écrire les
+    // tables de suivi (statuts, checklist, livrables) — donc plus contourner la
+    // porte de checklist par SQL brut ──
+
+    #[test]
+    fn db_execute_scope_recognizes_write_targets_purely() {
+        assert_eq!(
+            sql_write_target("UPDATE tasks SET status = 'x'").as_deref(),
+            Some("tasks")
+        );
+        assert_eq!(
+            sql_write_target("update \"tasks\" set status = 'x'").as_deref(),
+            Some("tasks")
+        );
+        assert_eq!(
+            sql_write_target("UPDATE OR IGNORE tasks SET a = 1").as_deref(),
+            Some("tasks")
+        );
+        assert_eq!(
+            sql_write_target("INSERT INTO task_checks (task_id) VALUES (1)").as_deref(),
+            Some("task_checks")
+        );
+        assert_eq!(
+            sql_write_target("INSERT OR REPLACE INTO deliverables VALUES (1)").as_deref(),
+            Some("deliverables")
+        );
+        assert_eq!(
+            sql_write_target("INSERT INTO assistant_notes (txt) VALUES ('a')").as_deref(),
+            Some("assistant_notes")
+        );
+        assert_eq!(
+            sql_write_target("DELETE FROM tasks WHERE 1 = 1").as_deref(),
+            Some("tasks")
+        );
+        assert_eq!(
+            sql_write_target("DROP TABLE task_checks").as_deref(),
+            Some("task_checks")
+        );
+        assert_eq!(
+            sql_write_target("ALTER TABLE tasks ADD COLUMN x INT").as_deref(),
+            Some("tasks")
+        );
+        // Ce qui ne touche aucune ligne d'une table reste permis.
+        assert_eq!(sql_write_target("DROP INDEX idx_task_checks_task"), None);
+        assert_eq!(sql_write_target("CREATE INDEX i ON tasks (id)"), None);
+        assert_eq!(sql_write_target("CREATE TABLE notes (id INTEGER)"), None);
+        assert_eq!(sql_write_target("SELECT status FROM tasks"), None);
+        assert_eq!(sql_write_target("PRAGMA table_info(tasks)"), None);
+    }
+
+    #[test]
+    fn db_execute_scope_sees_through_comments_and_batches() {
+        // Un commentaire ne cache plus une instruction interdite.
+        assert!(db_execute_scope("/* SELECT */ UPDATE tasks SET status = 'terminee'").is_err());
+        assert!(db_execute_scope("-- inoffensif\nUPDATE tasks SET status='terminee'").is_err());
+        // Un lot est examiné instruction par instruction : une seule suffit.
+        assert!(db_execute_scope(
+            "INSERT INTO notes (id) VALUES (1); UPDATE tasks SET status = 'terminee'"
+        )
+        .is_err());
+        // Les écritures personnelles de l'assistant restent libres.
+        assert!(db_execute_scope("CREATE TABLE notes (id INTEGER)").is_ok());
+        assert!(db_execute_scope("INSERT INTO notes (id) VALUES (1)").is_ok());
+        assert!(db_execute_scope("UPDATE notes SET id = 2").is_ok());
+        assert!(db_execute_scope("").is_ok());
+        assert!(!strip_sql_comments("/* secret */ SELECT 1 -- fin").contains("secret"));
+    }
+
+    #[test]
+    fn db_execute_cannot_write_tracking_tables_and_leaves_nothing_behind() {
+        let (conn, task) = mem_conn_with_open_task();
+        // L'assistant crée et remplit ses PROPRES tables : liberté intacte.
+        db_execute_in(
+            &conn,
+            "CREATE TABLE assistant_notes (id INTEGER PRIMARY KEY, txt TEXT)",
+        )
+        .unwrap();
+        db_execute_in(&conn, "INSERT INTO assistant_notes (txt) VALUES ('note')").unwrap();
+        let notes = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM assistant_notes", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(notes(&conn), 1);
+        // Toute écriture d'une table de suivi est refusée, quelle que soit la forme.
+        let refusals = [
+            "UPDATE tasks SET status = 'terminee' WHERE id = 1",
+            "UPDATE \"tasks\" SET status = 'terminee'",
+            "update main.tasks set status = 'terminee'",
+            "INSERT INTO task_checks (task_id, label, done, position) VALUES (1, 'x', 1, 0)",
+            "DELETE FROM task_checks",
+            "DROP TABLE deliverables",
+            "ALTER TABLE tasks ADD COLUMN hack INT",
+            "DELETE FROM sqlite_master",
+            "INSERT INTO assistant_notes (txt) VALUES ('ok'); UPDATE tasks SET status = 'terminee';",
+        ];
+        for sql in refusals {
+            let err = db_execute_in(&conn, sql)
+                .expect_err(&format!("écriture de suivi acceptée par erreur : {}", sql));
+            assert!(err.contains("db_execute"), "message inattendu : {}", err);
+        }
+        // La base n'a PAS bougé : statut, checklist et notes sont intacts.
+        assert_eq!(task_status_of(&conn, task).as_deref(), Some("en_cours"));
+        assert_eq!(db_count_task_checks(&conn, task).unwrap(), 0);
+        assert_eq!(notes(&conn), 1, "aucune écriture partielle d'un lot refusé");
+        // Les chemins historiques restent inchangés.
+        assert!(db_execute_in(&conn, "SELECT * FROM tasks").is_err());
+        assert!(db_execute_in(&conn, "PRAGMA user_version").is_ok());
     }
 
     #[test]

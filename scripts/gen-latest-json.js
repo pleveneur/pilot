@@ -29,6 +29,19 @@ import {
   isExcludedWindowsInstaller,
   platformFromBinaryName,
 } from "./latest-json-platforms.js";
+// Décisions de PUBLICATION (changelog obligatoire, livraison complète, tag déjà
+// publié) : elles vivent à un seul endroit, purs, dans `scripts/release-gates.js`.
+import {
+  ALLOW_INCOMPLETE_ENV,
+  ALLOW_MISSING_NOTES_ENV,
+  CRITICAL_PLATFORMS,
+  EXIT_RELEASE_REFUSED,
+  OPTIONAL_PLATFORMS,
+  evaluateDelivery,
+  evaluateReleaseNotes,
+  flagEnabled,
+  notesPathForTag,
+} from "./release-gates.js";
 
 const TAG = process.argv[2];
 const REPO = process.argv[3];
@@ -99,10 +112,10 @@ function capitalize(s) {
 // fichier doit être commité avant le tag (il est lu dans le working tree du
 // runner CI). Retourne null si aucun fichier n'existe.
 function loadHumanNotes(tag) {
-  const candidates = [
-    `release-notes/${tag}.md`,
-    `release-notes/${VERSION}.md`,
-  ];
+  // Le chemin n'est pas recopie : il vient de `release-gates.js` (seule
+  // definition du depot). `VERSION` reste un repli, au cas ou le tag et la
+  // version declaree divergent.
+  const candidates = [notesPathForTag(tag), notesPathForTag(VERSION)];
   for (const p of candidates) {
     try {
       if (fs.existsSync(p)) return fs.readFileSync(p, "utf8").trim();
@@ -143,7 +156,7 @@ function buildChangelogBody() {
 
   let sections;
   if (human) {
-    console.log(`✓ Résumé humain utilisé : release-notes/${TAG}.md`);
+    console.log(`✓ Résumé humain utilisé : ${notesPathForTag(TAG)}`);
     sections = human;
   } else if (commits.length === 0) {
     sections = prev ? "(aucun changement listé)" : "(première release)";
@@ -266,18 +279,32 @@ async function fetchSig(url) {
 // `latest-json-platforms.js` (testable sans réseau). Voir ce fichier pour la
 // raison du choix exclusif NSIS vs MSI sur `windows-x86_64`.
 
-// Les cibles que la matrice de build du workflow release prévoit (4 cibles :
-// Windows x64, macOS arm64, macOS x64, Linux x64). Sert UNIQUEMENT à SIGNALER
-// une livraison incomplète : un artefact absent n'empêche jamais l'attachement
-// des installateurs déjà produits ni la publication de latest.json.
-const EXPECTED_PLATFORMS = [
-  "windows-x86_64",
-  "darwin-aarch64",
-  "darwin-x86_64",
-  "linux-x86_64",
-];
+/** Refus net et visible (annotation d'erreur dans le résumé du run GitHub). */
+function refuse(reason) {
+  console.error(`✗ ${reason}`);
+  if (process.env.GITHUB_ACTIONS) console.log(`::error::${reason}`);
+  process.exit(EXIT_RELEASE_REFUSED);
+}
+
+/** Trace d'une acceptation délibérée (jamais un silence). */
+function accept(reason) {
+  console.warn(`↷ ${reason}`);
+  if (process.env.GITHUB_ACTIONS) console.log(`::warning::${reason}`);
+}
 
 (async () => {
+  // ── Porte 1 : CHANGELOG OBLIGATOIRE ────────────────────────────────────
+  // Rien n'est écrit ni publié avant ce verdict : sans note lisible par
+  // l'utilisateur, la publication s'arrête ICI (avant tout appel réseau).
+  const notesDecision = evaluateReleaseNotes({
+    tag: TAG,
+    notes: loadHumanNotes(TAG),
+    allowMissing: flagEnabled(process.env[ALLOW_MISSING_NOTES_ENV]),
+  });
+  if (!notesDecision.ok) refuse(notesDecision.reason);
+  if (notesDecision.accepted) accept(notesDecision.reason);
+  else console.log(`✓ ${notesDecision.reason}`);
+
   // Génère le changelog depuis les commits et met à jour le body de la
   // release GitHub (visible sur la page release). On utilise ce même
   // body comme `notes` dans latest.json — pas de re-fetch de l'API, donc
@@ -343,25 +370,33 @@ const EXPECTED_PLATFORMS = [
     process.exit(2);
   }
 
-  // Livraison incomplète : le dire FORT (annotation visible dans le résumé du
-  // run GitHub) sans rien supprimer — les installateurs déjà attachés à la
-  // release restent en place et latest.json est publié en l'état.
-  const missing = EXPECTED_PLATFORMS.filter((k) => !platforms[k]);
-  if (missing.length) {
-    const msg =
-      `Livraison INCOMPLÈTE : ${missing.length}/${EXPECTED_PLATFORMS.length} cible(s) ` +
-      `sans artefact signé (${missing.join(", ")}). Les installateurs déjà produits ` +
-      "sont conservés et latest.json est publié en l'état.";
-    console.warn(`⚠ ${msg}`);
-    if (process.env.GITHUB_ACTIONS) console.log(`::warning::${msg}`);
-  } else {
-    console.log(`✓ Les ${EXPECTED_PLATFORMS.length} cibles attendues sont présentes.`);
+  // ── Porte 2 : LIVRAISON COMPLÈTE SUR LE CHEMIN CRITIQUE ────────────────
+  // Un artefact signé manquant sur une cible du chemin critique n'est plus un
+  // avertissement : la publication s'arrête AVANT d'écrire ou d'imposer
+  // latest.json (les utilisateurs de cette plateforme ne recevraient sinon
+  // jamais la mise à jour, sans que rien ne soit rouge). Les cibles Linux, dont
+  // la fabrication est un job séparé et optionnel, ne sont pas exigées ici
+  // (cf. `CRITICAL_PLATFORMS` dans release-gates.js).
+  const delivery = evaluateDelivery({
+    platforms,
+    expected: CRITICAL_PLATFORMS,
+    allowIncomplete: flagEnabled(process.env[ALLOW_INCOMPLETE_ENV]),
+  });
+  if (!delivery.ok) refuse(delivery.reason);
+  if (delivery.accepted) accept(delivery.reason);
+  else console.log(`✓ ${delivery.reason}.`);
+  const missingOptional = OPTIONAL_PLATFORMS.filter((k) => !platforms[k]);
+  if (missingOptional.length) {
+    console.log(
+      `↷ Cible(s) optionnelle(s) sans artefact (${missingOptional.join(", ")}) : ` +
+        "la fabrication Linux est un job séparé, elle ne retient pas cette publication."
+    );
   }
 
-  // Changelog de la release : on utilise le body généré depuis les commits
-  // (déjà patché sur la release GitHub ci-dessus). Fallback sur un simple
-  // titre si le body est vide.
-  const notes = changelogBody.trim() || `Pilot ${VERSION}`;
+  // Changelog de la release : le body généré depuis le résumé humain (déjà
+  // patché sur la release GitHub ci-dessus). Plus de repli silencieux à une
+  // ligne : la porte 1 a déjà refusé une publication sans changelog lisible.
+  const notes = changelogBody.trim();
 
   const out = {
     version: VERSION,
