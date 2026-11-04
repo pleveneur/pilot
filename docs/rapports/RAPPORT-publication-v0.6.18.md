@@ -166,6 +166,16 @@ supplémentaire ne produit qu'une nouvelle étiquette orpheline de plus.
    `0.6.17` a servi à la relance demandée, `0.6.18` est la relance de cette
    relance, et les trois échecs sont identiques. Relancer encore serait un
    contournement à l'aveugle, pas une correction.
+   S'y ajoute une **décision du propriétaire déjà consignée** dans le suivi
+   (2026-11-04) : il **s'occupe lui-même des minutes macOS sur GitHub** et
+   demandait qu'il n'y ait **aucune nouvelle version ni nouvelle étiquette
+   d'ici là**. Créer `0.6.19` irait contre cette consigne ; je m'arrête donc ici
+   et je lui rends la main, avec les preuves.
+   *(Décision antérieure du même jour, également consignée : autorisation
+   explicite de « contourner sans macOS ». Je ne l'ai pas appliquée de
+   moi-même : elle touche un garde-fou de livraison, et il faut qu'elle soit
+   redite pour **cette** version, avec son accord sur ce que les utilisateurs
+   macOS perdent.)*
 2. **Aucun assouplissement du workflow.** Rendre la tolérance macOS insensible
    à l'**annulation** (et pas seulement à l'échec) réglerait le symptôme, mais
    c'est une **règle de publication** : elle appartient au propriétaire, pas au
