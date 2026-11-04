@@ -117,7 +117,10 @@ Ajoutés dans ce lot :
   genre normalisé, modèle normalisé, **identité qui ne lit jamais le portrait**, dépôt historique
   sans genre ni modèle, empreinte qui suit les deux nouveaux fichiers.
 - `src-tauri/src/super_agent.rs` — verrou « la consigne de genre n'est injectée qu'une fois », et
-  « le modèle du personnage replie toujours sur Pilot ».
+  « le modèle du personnage replie toujours sur Pilot » ; plus le verrou **de bout en bout**
+  `le_genre_regle_apparait_dans_le_prompt_construit` : la VRAIE consigne passée à la VRAIE
+  construction du prompt — « non précisé » rend un prompt **identique, octet pour octet**, et un
+  genre réglé y **apparaît une seule fois** (« au féminin »).
 - `src/js/genre-et-modele-par-personnage.test.js` (nouveau, 19 tests) — trois valeurs et défaut
   vide, valeur inconnue jamais un genre, aller-retour sans perte, une seule phrase de genre,
   `#[serde(default)]`, réglage présent à l'écran et **enregistré** (jamais perdu), lecture de la
@@ -127,8 +130,8 @@ Ajoutés dans ce lot :
   mort), et **sélection par couple (projet, agent) intacte** (l'identité du personnage n'est lue
   que par `super_agent.rs` ; `set_agent_process_model` règle toujours la session de l'agent).
 
-Non-régression vérifiée : `npm test` → **5535 tests / 0 échec** (298 fichiers) et
-`cargo test --manifest-path src-tauri/Cargo.toml --lib` → **900 tests / 0 échec** (3 ignorés),
+Non-régression vérifiée : `npm test` → **5594 tests / 0 échec** et
+`cargo test --manifest-path src-tauri/Cargo.toml --lib` → **902 tests / 0 échec** (3 ignorés),
 recomptés à l'exécution au moment de la livraison (aucun total figé dans le code).
 
 Les tests existants qui devaient rester verts sans modification de leur intention :
@@ -160,4 +163,11 @@ tests de `persona.rs` sur le nom et le portrait.
   `<!-- HELP:super-agent-genre-modele -->` régénéré (`npm run build:handbook`).
 - `AGENTS.md` : arborescence complétée (deux modules ajoutés).
 - `spec_pilot.md` : inchangé (aucun changement de pile ni de commande existante).
+- `README.md` (documentation **utilisateur** de l'onglet ⚙️) : la liste des réglages des Options
+  porte désormais le **genre de l'Assistant** — les trois valeurs, le défaut qui ne change rien,
+  l'accord de **ce qu'il écrit comme de ce qu'il fait lire**, et la priorité du personnage actif.
+- `spec_super_agent.md` : le titre du bloc d'aide est passé de « Le genre de la **voix** de
+  l'Assistant » à « Le genre **grammatical** de l'Assistant », pour qu'on ne le confonde pas avec
+  le **choix de la voix de lecture** (section « Lecture des réponses », réglage distinct) ; l'aide
+  dit maintenant que l'accord couvre l'**écrit** et la **lecture à voix haute**.
 - Ce rapport : `docs/rapports/RAPPORT-genre-et-modele-par-personnage.md`.

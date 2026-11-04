@@ -289,6 +289,13 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   mémorisés ne sont pas restaurés sinon) (désactivé par défaut ; l'onglet agent
   reste toujours ouvrable manuellement).
 - **Lancer la commande au démarrage**.
+- **Genre de l'Assistant** (onglet « Assistant », juste sous son nom) : **« Non précisé »**
+  (le défaut), **Féminin** ou **Masculin**. Ce réglage ne change **ni les réponses ni les
+  décisions** de l'Assistant : il lui demande seulement de **parler de lui** au genre choisi, et
+  **tout ce qu'il écrit comme tout ce qu'il dit à voix haute s'accorde** (« je suis prêt » /
+  « je suis prête »). **« Non précisé » n'ajoute rien du tout** : l'Assistant parle exactement
+  comme avant. Si le **personnage actif** (Présences) porte son propre genre, c'est **le sien**
+  qui s'applique — un personnage est plus précis qu'un réglage général.
 - **Rappels de l'assistant** : sous le compteur « n sur 20 rappels de surveillance
   actifs », le bouton **« Supprimer les rappels inutiles »** fait le ménage
   (rappels désactivés et périmés, rappels uniques déjà consommés, rappels

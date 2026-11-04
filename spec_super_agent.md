@@ -95,12 +95,13 @@ apprend et répond.
 <!-- /HELP:super-agent-personnage -->
 
 <!-- HELP:super-agent-genre-modele -->
-### Le genre de la voix de l'Assistant (masculin / féminin)
+### Le genre grammatical de l'Assistant (masculin / féminin)
 - **Options ⚙️ → onglet « Assistant » → « Genre de l'Assistant »** : trois
   choix — **« Non précisé (aucune indication) »** (le défaut), **Féminin**,
   **Masculin**.
 - Ce réglage ne change **ni les réponses ni les décisions** de l'Assistant : il
-  lui demande seulement de **parler de lui** au genre choisi (accords,
+  lui demande seulement de **parler de lui** au genre choisi, et **tout ce qu'il
+  écrit comme tout ce qu'il fait lire à voix haute s'accorde** (accords,
   adjectifs, pronoms) — « je suis prêt » ou « je suis prête ».
 - **« Non précisé » n'ajoute rien du tout** : l'Assistant garde exactement la
   façon de parler qu'il avait avant.

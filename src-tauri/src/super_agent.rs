@@ -9498,6 +9498,53 @@ Identité de genre : au féminin.");
         assert!(reelle.contains("féminin"));
     }
 
+    /// VERROU (tâche 402) : la VRAIE consigne de genre, branchée sur la VRAIE
+    /// construction du prompt. Deux exigences réunies dans un seul test :
+    ///   - « non précisé » (le défaut) ne change RIEN — la fonction d'identité
+    ///     rend une chaîne vide, donc le prompt est identique à celui d'avant ;
+    ///   - un genre réglé apparaît BIEN dans le prompt construit, une seule fois.
+    #[test]
+    fn le_genre_regle_apparait_dans_le_prompt_construit() {
+        let prompt = |identity: &str| {
+            let blocks = super::SuperAgentPromptBlocks {
+                role: "Tu es « Assistant ».",
+                identity,
+                project_context: "",
+                known_projects: "",
+                available_agents: "",
+                custom_prompt: "",
+                user_memory: "",
+                session_memory: "",
+                concise: false,
+                coordinator: false,
+                user_friendly: false,
+                adaptive_personality: false,
+                personality: "",
+            };
+            super::assemble_super_agent_system_prompt(&blocks)
+        };
+        // « Non précisé » (défaut de la configuration) : bloc VIDE, donc prompt
+        // identique, octet pour octet, à celui sans aucune identité.
+        let neutre = crate::assistant_identity::assistant_identity_block("", "");
+        assert_eq!(neutre, "", "le défaut ne doit ajouter aucune consigne");
+        assert_eq!(prompt(&neutre), prompt(""));
+        // Un genre réglé (ici le réglage global de Pilot) : la consigne réelle
+        // arrive dans le prompt construit, et elle dit bien le genre choisi.
+        let feminin = crate::assistant_identity::assistant_identity_block("", "féminin");
+        assert!(!feminin.is_empty(), "un genre réglé doit produire une consigne");
+        let construit = prompt(&feminin);
+        assert!(
+            construit.contains("au féminin"),
+            "la consigne de genre doit apparaître dans le prompt : {construit}"
+        );
+        assert_eq!(
+            construit.matches("Identité de genre").count(),
+            1,
+            "la consigne de genre doit être injectée exactement une fois"
+        );
+        assert!(construit.len() > prompt("").len());
+    }
+
     /// VERROU (tâche 403) : le modèle effectif de l'assistant passe par la fiche
     /// du personnage, et une fiche MUETTE ou CITANT UN MODÈLE ABSENT retombe
     /// toujours sur la chaîne de Pilot. Ce test ÉCHOUE si le repli disparaît.
