@@ -118,7 +118,22 @@ première mutation (le champ vide n'a plus AUCUNE règle de mot) et par le test
 5. Vérifier hors mode Vocal : l'onglet agent π et la saisie clavier sont
    inchangés, et la saisie **clavier** n'est jamais filtrée.
 
-## 5. Limites assumées (dites à l'utilisateur)
+## 5. Re-vérification de la livraison
+
+La fonctionnalité livrée a été **re-contrôlée sur l'arbre courant** (le module
+`vocal-nom-garde.js` et son verrou sont inchangés depuis la livraison) :
+
+| Commande | Sortie RÉELLE |
+|---|---|
+| `npm test` (suite front complète) | **5 594 tests passés, 0 échec** (300 fichiers) |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | **901 passés, 3 ignorés** |
+| `npx vitest run src/js/mots-de-reveil.test.js src/js/vocal-nom-garde.test.js` | **59 passés, 0 échec** |
+| `npm run build:handbook` | `help/handbook.md` **identique** (aucune dérive, arbre propre) |
+| mutation : suppression de la règle `mot-reveil` | **ÉCHEC** du verrou (puis fichier restauré, vert) |
+
+Aucune version, aucun tag, aucune release n'a été touché.
+
+## 6. Limites assumées (dites à l'utilisateur)
 
 - Un mot de réveil **mal transcrit** ne déclenche rien : la tolérance est
   étroite **par choix** (comme pour le nom). Remèdes, dans l'ordre : redire,
