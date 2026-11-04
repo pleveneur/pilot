@@ -1029,6 +1029,22 @@ le halo ne sort pas du disque, l'enveloppe ne rentre pas dedans.
     que le son (montée **0,5** / retombée **0,12**). **Aucun aléatoire** : le
     même texte donne toujours le même mouvement, et **deux phrases de longueurs
     différentes ne bougent pas pareil**.
+  - **Le plan de rythme ne peut pas s'épuiser pendant que la voix parle**
+    (défaut corrigé « le halo se fige sur une parole longue »,
+    `docs/rapports/RAPPORT-halo-parole-longue.md`). Le débit est une
+    **hypothèse** (190 ms par syllabe) : sur de la prose elle est trop longue
+    (sans effet), mais sur du texte technique que le moteur **épelle** (chemins
+    de fichiers, identifiants, chiffres, anglais, sigles) la lecture réelle la
+    dépasse de **35 à 63 %** (mesuré sur la voix fr-FR du système). Or
+    l'intensité vaut **0 au-delà de la dernière unité** : l'enveloppe se posait
+    donc au repos, immobile, alors que la voix continuait — d'autant plus
+    longtemps que la réponse était longue. La **position est ramenée dans le
+    texte** tant que la lecture dure (le motif continue de respirer) et
+    l'**horloge repart du premier son** (`READ_ALOUD_SOUND_EVENT`), pas de
+    l'annonce qui précède la préparation du moteur. Le débit reste une
+    hypothèse : cette source dit **« ça parle »**, pas **« ça dit ce mot »**.
+    Verrou : `src/js/vocal-enveloppe-rythme.test.js` § 6 (échoue sur le code
+    d'avant, où la fin de la lecture ne contenait que des 0).
 - **En « parole », rien n'est inventé** : la mesure vient du **son** quand il est
   mesurable, du **texte et du temps de lecture** sinon — jamais d'une pulsation
   aveugle. L'animation `vocal-speak-glow` (1,6 s) ne reste que le **repli** du

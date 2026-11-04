@@ -326,3 +326,98 @@ describe("5. mouvement reduit : fixe mais visible, et aucune valeur posee", () =
     expect(planSpeechEnvelopeSource({ reduit: true, rythme: true })).toBe("");
   });
 });
+
+// ---------------------------------------------------------------------------
+describe("6. une parole PLUS LONGUE que le plan ne fige jamais le halo", () => {
+  // Defaut rapporte par le proprietaire : « le halo bouge quand Pilot parle,
+  // mais il se fige quand la parole dure longtemps, alors que la voix continue ».
+  //
+  // CAUSE (mesuree, docs/rapports/RAPPORT-halo-parole-longue.md § 1.3) : le plan
+  // de rythme est une HYPOTHESE de debit (190 ms par syllabe). Sur du texte
+  // technique que le moteur epelle (chemins, identifiants, chiffres, anglais),
+  // la lecture REELLE depasse le plan de 35 a 63 %. `rhythmIntensity` rend 0
+  // au-dela de la derniere unite : l'enveloppe se posait au repos, immobile,
+  // pendant que la voix continuait. Le metre RAMENE donc la position dans le
+  // texte tant que la lecture dure.
+  const TEXTE =
+    "Le halo de parole ne mesure pas la voix du systeme : il avance une position dans le texte lu.";
+
+  /** Les `ms` dernieres millisecondes publiees, echantillonnees au pas donne. */
+  function fenetreFinale(mesures, pas, ms) {
+    return mesures.slice(-Math.max(2, Math.ceil(ms / pas)));
+  }
+
+  it("au-dela de la fin du plan, l'enveloppe CONTINUE de respirer (jamais le repos)", () => {
+    const fenetre = fenetreFactice();
+    const mesures = [];
+    const metre = createSpeechRhythmMeter({
+      win: fenetre.win,
+      onEnergy: (e) => mesures.push(e),
+    });
+    const plan = speechRhythmUnits(TEXTE);
+    expect(plan.total).toBeGreaterThan(1000);
+    expect(metre.demarrer(TEXTE)).toBe(true);
+
+    // La voix parle 2,2 fois plus longtemps que le plan ne le prevoyait : c'est
+    // le regime du texte technique (mesure : 35 a 63 % de depassement).
+    const pas = 40;
+    images(fenetre, Math.ceil((2.2 * plan.total) / pas), pas);
+
+    // CA BOUGE ENCORE : c'est le defaut reproche, et c'est ce que ce verrou
+    // interdit. Sur le code d'avant, cette fenetre ne contenait que des 0 (le
+    // halo pose au repos alors que la voix parlait) et ces deux assertions
+    // echouaient.
+    const fin = fenetreFinale(mesures, pas, 1500);
+    expect(Math.max(...fin)).toBeGreaterThan(0.1);
+    expect(new Set(fin.map((v) => v.toFixed(2))).size).toBeGreaterThan(2);
+
+    // Et la position reste DANS le texte (elle y est ramenee, elle n'en sort pas).
+    expect(metre.position()).toBeGreaterThanOrEqual(0);
+    expect(metre.position()).toBeLessThan(plan.total);
+    metre.arreter();
+  });
+
+  it("la FIN de la lecture ramene le repos (aucun mouvement invente apres)", () => {
+    const fenetre = fenetreFactice();
+    const mesures = [];
+    const metre = createSpeechRhythmMeter({
+      win: fenetre.win,
+      onEnergy: (e) => mesures.push(e),
+    });
+    metre.demarrer(TEXTE);
+    images(fenetre, 40, 40);
+    expect(mesures[mesures.length - 1]).toBeGreaterThan(0);
+    const avant = mesures.length;
+    metre.arreter();
+    expect(mesures.length).toBe(avant + 1);
+    expect(mesures[mesures.length - 1]).toBe(0);
+    // Plus aucune image : la valeur ne peut pas repartir toute seule.
+    images(fenetre, 20);
+    expect(mesures.length).toBe(avant + 1);
+  });
+
+  it("l'horloge repart du PREMIER SON, pas de l'annonce", () => {
+    const fenetre = fenetreFactice();
+    const metre = createSpeechRhythmMeter({ win: fenetre.win, onEnergy: () => {} });
+    metre.demarrer(TEXTE);
+    images(fenetre, 20, 50); // 1 s consommee a l'annonce (ensureVoices, moteur)
+    expect(metre.position()).toBeGreaterThan(500);
+    // Le son commence : l'horloge repart de la, le texte n'a pas ete consomme.
+    expect(metre.reancrer()).toBe(true);
+    expect(metre.position()).toBe(0);
+    images(fenetre, 4, 50);
+    expect(metre.position()).toBeGreaterThan(0);
+    expect(metre.position()).toBeLessThan(250);
+    metre.arreter();
+    // Sans rythme arme, recaler ne fait rien (et ne leve jamais).
+    expect(metre.reancrer()).toBe(false);
+  });
+
+  it("le mode Vocal recale le rythme quand le son commence", () => {
+    // Le signal existant du premier echantillon audible est REUTILISE : aucun
+    // second mecanisme de lecture, aucun seuil nouveau.
+    const corps = corpsFonction(SUPER, "const onVocalReadAloudSound");
+    expect(corps).toMatch(/vocalRhythmMeter/);
+    expect(corps).toMatch(/reancrer\(\)/);
+  });
+});

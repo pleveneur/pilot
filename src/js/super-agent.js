@@ -7711,6 +7711,13 @@ let vocalMotsDeReveil = [];
   // (read-aloud.js) : c'est LA que la fenetre de mesure s'ouvre. Aucun second
   // mecanisme de lecture, aucun seuil : on deplace seulement le MOMENT.
   const onVocalReadAloudSound = () => {
+    // L'HORLOGE DU RYTHME PART AVEC LE SON, PAS AVEC L'ANNONCE (defaut « le halo
+    // se fige sur une parole longue ») : `speaking` part avant `ensureVoices`
+    // (jusqu'a 1,5 s) et avant le demarrage du moteur, donc le plan de rythme
+    // consommait du texte avant que la voix ne commence. Le premier echantillon
+    // audible est le vrai debut : on recale l'horloge dessus. Sans metre arme
+    // (voix locale, mouvement reduit), `reancrer` ne fait rien.
+    if (vocalRhythmMeter) vocalRhythmMeter.reancrer();
     if (!vocalMic) return;
     if (typeof vocalMic.setSoundStarted !== "function") return;
     vocalMic.setSoundStarted();

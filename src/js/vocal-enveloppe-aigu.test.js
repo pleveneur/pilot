@@ -496,6 +496,37 @@ describe("6. le branchement : un analyseur, sur le seul son que Pilot joue", () 
     second.arreter();
   });
 
+  it("une lecture locale LONGUE (plusieurs morceaux) ne fige jamais l'analyseur", async () => {
+    // LA DEUXIEME SOURCE (voix locale du poste) : une lecture longue, c'est
+    // plusieurs morceaux joues l'un apres l'autre, donc PLUSIEURS elements
+    // audio. `local-voice.js` tend chaque element a l'espion, le metre
+    // rebranche son analyseur et relance sa boucle. Sans cela, l'enveloppe
+    // resterait immobile des le deuxieme morceau — le meme defaut que la voix
+    // du systeme, par une autre porte (RAPPORT-halo-parole-longue.md § 1.4).
+    const win = fauxWindow();
+    const mesures = [];
+    const metre = createSpeechEnvelopeMeter({
+      win,
+      onEnergy: (e) => mesures.push(e),
+    });
+    metre.demarrer();
+    for (let morceau = 1; morceau <= 4; morceau += 1) {
+      const element = fauxElement();
+      expect(await metre.attacher(element)).toBe(true);
+      const avant = mesures.length;
+      images(win, 6);
+      // Le son du morceau est mesure : la lumiere monte a chaque fois.
+      expect(mesures.length).toBeGreaterThan(avant + 2);
+      expect(mesures[mesures.length - 1]).toBeGreaterThan(0.5);
+      // Fin du morceau : l'element s'arrete, le metre publie le repos...
+      element.ecouteurs.ended();
+      expect(mesures[mesures.length - 1]).toBe(0);
+      // ... et la boucle repart au morceau suivant (aucune image fantome).
+      expect(win.etat.images.filter(Boolean).length).toBe(0);
+    }
+    metre.arreter();
+  });
+
   it("sans contexte audio, il ne touche PAS au son (aucune voix rendue muette)", async () => {
     const metre = createSpeechEnvelopeMeter({ win: {}, onEnergy: () => {} });
     metre.demarrer();

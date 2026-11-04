@@ -759,6 +759,13 @@ export function createSpeechEnvelopeMeter(options = {}) {
 // mesure AUCUN son (il n'y en a pas) : il avance une position de lecture avec
 // le temps de parole effectif et lit l'intensite du texte dans `rhythmIntensity`.
 // Aucun aleatoire, aucune API audio, aucun DOM : uniquement une horloge.
+//
+// DEUX GARANTIES, et chacune repond a un defaut constate :
+//   - la position est RAMENEE dans le texte (`ecoule % total`) : une lecture
+//     plus longue que le plan ne pose JAMAIS l'enveloppe au repos (le plan est
+//     une hypothese de debit, voir `positionDansLeTexte`) ;
+//   - `reancrer()` recale l'horloge sur le PREMIER SON : l'annonce de lecture
+//     part avant la preparation du moteur, elle ne doit pas consommer du texte.
 
 /**
  * Cree le metre du RYTHME de la phrase lue (voix du systeme).
@@ -767,14 +774,15 @@ export function createSpeechEnvelopeMeter(options = {}) {
  *   `onEnergy` recoit l'intensite LISSEE (0..1) a chaque image, et une derniere
  *   fois 0 a l'arret
  * @returns {{demarrer: (texte: string) => boolean, arreter: () => void,
- *            actif: () => boolean, mesure: () => number,
- *            position: () => number}}
+ *            reancrer: () => boolean, actif: () => boolean,
+ *            mesure: () => number, position: () => number}}
  */
 export function createSpeechRhythmMeter(options = {}) {
   const win = options.win || (typeof globalThis !== "undefined" ? globalThis.window : null);
   const onEnergy = typeof options.onEnergy === "function" ? options.onEnergy : null;
 
   let units = [];
+  let total = 0;
   let debut = 0;
   let energie = 0;
   let actif = false;
@@ -815,11 +823,34 @@ export function createSpeechRhythmMeter(options = {}) {
     }
   }
 
+  /**
+   * Position DANS LE TEXTE (0..total), a un instant donne de l'horloge.
+   *
+   * POURQUOI UNE BOUCLE (defaut « le halo se fige sur une parole longue ») :
+   * le plan de rythme est une HYPOTHESE de debit (190 ms par syllabe). Sur de la
+   * prose simple elle est trop longue (aucun effet) ; sur du texte technique que
+   * le moteur epelle (chemins de fichiers, identifiants, chiffres, anglais,
+   * sigles) la lecture REELLE depasse le plan de 35 a 63 % (mesure :
+   * docs/rapports/RAPPORT-halo-parole-longue.md § 1.3). Or `rhythmIntensity`
+   * rend 0 au-dela de la derniere unite — ce qui est juste pour un silence, mais
+   * la voix parlait encore : l'enveloppe se posait au repos et n'en bougeait
+   * plus. La position est donc RAMENEE dans le texte tant que la lecture dure :
+   * le motif continue de respirer du premier au dernier mot, quelle que soit la
+   * duree. Aucune intensite inventee : c'est le meme texte, relu.
+   */
+  function positionDansLeTexte(maintenantMs) {
+    const ecoule = maintenantMs - debut;
+    if (!(ecoule > 0)) return 0;
+    if (!(total > 0)) return ecoule;
+    return ecoule % total;
+  }
+
   /** Une image : position de lecture -> intensite, lissee comme le son. */
   function image() {
     minuteur = 0;
     if (!actif) return;
-    energie = smoothEnvelopeEnergy(energie, rhythmIntensity(units, maintenant() - debut));
+    const position = positionDansLeTexte(maintenant());
+    energie = smoothEnvelopeEnergy(energie, rhythmIntensity(units, position));
     if (onEnergy) onEnergy(energie);
     planifier();
   }
@@ -833,11 +864,28 @@ export function createSpeechRhythmMeter(options = {}) {
   function demarrer(texte) {
     const plan = speechRhythmUnits(texte);
     units = plan.units;
+    total = Number.isFinite(plan.total) && plan.total > 0 ? plan.total : 0;
     if (!units.length) return false;
     debut = maintenant();
     energie = 0;
     actif = true;
     planifier();
+    return true;
+  }
+
+  /**
+   * Recale l'horloge sur MAINTENANT, sans toucher au texte ni a l'intensite.
+   *
+   * Le mode Vocal arme ce metre a l'ANNONCE de la lecture, qui part avant le
+   * premier son (`ensureVoices` peut attendre jusqu'a 1,5 s, puis le moteur
+   * demarre) : le plan consommait donc du texte avant que la voix ne commence.
+   * `READ_ALOUD_SOUND_EVENT` dit l'instant du premier echantillon audible :
+   * c'est LA que la lecture commence, donc LA que l'horloge doit partir.
+   * @returns {boolean} vrai si un rythme etait arme (sinon rien n'est fait)
+   */
+  function reancrer() {
+    if (!actif || !units.length) return false;
+    debut = maintenant();
     return true;
   }
 
@@ -847,6 +895,7 @@ export function createSpeechRhythmMeter(options = {}) {
     annuler();
     actif = false;
     units = [];
+    total = 0;
     energie = 0;
     if (onEnergy) onEnergy(0);
   }
@@ -854,8 +903,9 @@ export function createSpeechRhythmMeter(options = {}) {
   return {
     demarrer,
     arreter,
+    reancrer,
     actif: () => actif,
     mesure: () => energie,
-    position: () => (actif ? maintenant() - debut : 0),
+    position: () => (actif ? positionDansLeTexte(maintenant()) : 0),
   };
 }
