@@ -136,3 +136,84 @@ fiche > réglage et le repli silencieux sont déjà en place et testés. Cette
 partie est **signalée comme à traiter séparément** dans le suivi.
 
 ---
+
+## POINT 3 — Agents jetables par défaut
+
+### La demande
+Inscrire dans les instructions de l'assistant la règle : **un besoin ponctuel se
+traite par un agent jetable** (défini à la volée, jamais écrit en base,
+disparaît à la fin) ; **un agent permanent est réservé à un rôle réellement
+réutilisable**. Rendre la règle **vérifiable** par un test qui **échoue** si les
+instructions poussent à créer un agent permanent pour un besoin ponctuel.
+
+### Ce qui est en place
+| Élément | Fichier |
+|---|---|
+| **Source unique** de la règle (texte + consigne d'outil + résumé + décision) | `src/js/agent-lifespan-rule.js` |
+| Importée par les outils de l'Assistant | `src-tauri/extensions/pilot-assistant-actions.ts` (`create_agent`, `run_agents`, `run_assistant_agents`) |
+| Embarquée dans le prompt système | `src-tauri/src/super_agent.rs` (`include_str!` + `extract_agent_lifespan_rule`, bloc poussé après « Outils d'agents ») |
+| Écrite sur disque dans les **deux** chemins d'extensions | `src-tauri/src/agent_service.rs` (`write_agent_lifespan_rule`) |
+| Exécution « jetable » | `src/js/ephemeral-agents.js` (id réservé `eph-`, magasin mémoire, purge en fin de tâche) |
+
+### Test ajouté (verrou)
+`src/js/agents-jetables-par-defaut.test.js` + deux verrous Rust :
+- « ne laisse **AUCUN** texte pousser à créer un agent permanent dans le doute »
+  — parcourt la règle **réelle**, la consigne d'outil, la description de
+  `create_agent` et le prompt assemblé ; échoue si une formulation rendant le
+  permanent acceptable par défaut réapparaît (`si nécessaire`, `au besoin`,
+  `agent sur mesure`, `aucun agent ne convient`…), **sans** signaler une
+  consigne qui **déconseille** la création ;
+- « le doute joue TOUJOURS en faveur du jetable » / « seul un besoin
+  explicitement durable autorise une entrée permanente » (`decideAgentKind`) ;
+- « reste extractible par Rust » (une seule déclaration, ni accent grave ni
+  `${` dans le texte) ;
+- `la_regle_de_l_agent_jetable_est_injectee_dans_le_prompt` (Rust) : le bloc est
+  réellement dans le prompt assemblé ;
+- `write_agent_lifespan_rule_ecrit_la_source_unique` (Rust) : l'import côté
+  extension ne peut pas casser.
+
+### Effet visible
+L'Assistant **décrit l'agent dans sa demande** (`agents` = nom + rôle) pour un
+besoin ponctuel : l'agent **n'apparaît pas** dans la liste des agents du
+propriétaire, **rien** n'est écrit au registre, sa définition **disparaît** à la
+fin de la tâche (session et compte rendu restent visibles). `create_agent`
+n'est utilisé que pour un rôle **durable**.
+
+### Ce qui ne change pas
+- **Aucun** agent existant du registre n'est supprimé ni modifié (c'est le
+  propriétaire qui supprime) — la règle le **dit** et en fait l'argument du
+  « dans le doute, ne crée rien ».
+- Les agents **durables** fonctionnent exactement comme avant.
+- Les agents jetables étaient déjà exécutables (`ephemeral-agents.js`) : la
+  règle ne change que la **consigne** donnée au modèle.
+
+---
+
+## Documentation et aide intégrée mises à jour
+
+| Document | Contenu |
+|---|---|
+| `spec_modes_ecran_vocal.md` § 6quater.1 | mots de réveil : clé unique, défaut vide, nom toujours accepté, ordre des règles |
+| Bloc `<!-- HELP:vocal-garde-du-nom -->` | dit le champ « Mots de réveil », l'exemple, et que le nom reste accepté |
+| `spec_super_agent.md` (genre) + `<!-- HELP:super-agent-genre-modele -->` | trois valeurs, défaut sans effet, priorité du personnage |
+| `spec_super_agent.md` (agent jetable) + `<!-- HELP:super-agent-agent-jetable -->` | jetable par défaut, permanent réservé aux rôles durables |
+| `help/handbook.md` | **régénéré** (`npm run build:handbook`, 48 blocs, 343 132 octets) — jamais édité à la main |
+
+---
+
+## Résultats des tests (chiffres réels, sortie brute)
+
+| Suite | Commande | Résultat |
+|---|---|---|
+| Front (vitest) | `npm test` | **300 fichiers, 5 594 tests passés, 0 échec** (15,6 s) |
+| Rust desktop | `cargo test --manifest-path src-tauri/Cargo.toml --lib` | **902 passés, 3 ignorés, 0 échec** (10,7 s) |
+| Espace de travail complet | `cargo test --workspace` | **1 075 passés, 14 ignorés, 0 échec** (12,7 s) |
+
+Tests ciblés des trois points (exécutés d'abord, avant les suites longues) :
+`src/js/mots-de-reveil.test.js`, `src/js/vocal-nom-garde.test.js`,
+`src/js/genre-et-modele-par-personnage.test.js`,
+`src/js/agents-jetables-par-defaut.test.js`, `src/js/agent-jetable.test.js`
+⇒ **104 tests passés, 0 échec**.
+
+Aucun test existant n'a été assoupli. Aucun numéro de version n'a été modifié.
+Aucun fichier n'a été écrit dans `G:\IA_PL\Presences`.
