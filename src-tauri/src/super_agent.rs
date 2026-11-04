@@ -267,13 +267,9 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
 /// l'assistant), et `pilot-choices` fournit les outils de question (ask_choice,
 /// ask_input, ask_confirm, ask_multi_choice). Pas de skill. Canal dédié.
 pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) -> Result<(), String> {
-    let (pi_path, chosen, dedicated_default) = {
+    let pi_path = {
         let cfg = state.config.lock().unwrap();
-        (
-            cfg.rpc_pi_path.clone(),
-            cfg.super_agent_model.clone(),
-            cfg.super_agent_default_model.clone(),
-        )
+        cfg.rpc_pi_path.clone()
     };
     // T6 : niveau de réflexion de l'Assistant — réglage dédié puis réglage
     // général de Pilot ; `None` = rien à envoyer (défaut du moteur conservé).
@@ -291,17 +287,54 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
         .unwrap()
         .clone()
         .unwrap_or_default();
-    // Modèle de la session : modèle choisi (persisté) s'il est encore
-    // disponible → réglage dédié (#88) → défaut global du backend.
-    let default_model = resolve_super_agent_model(
-        &chosen,
-        &dedicated_default,
-        default_model_from_config(&pi_path),
-        crate::agents::available_model_specs(&pi_path).ok().as_deref(),
-    );
+    // Modèle de la session (tâche 403) : MODÈLE DU PERSONNAGE ACTIF s'il est
+    // renseigné et encore installé → modèle choisi (persisté) → réglage dédié
+    // (#88) → défaut global du backend. La décision entière (et sa priorité) vit
+    // dans `assistant_identity::decide_assistant_model`, seule autorité testable.
+    // La fiche du personnage est lue légèrement (trois petits fichiers texte,
+    // jamais le portrait) et FAIL-OPEN : aucune fiche = chaîne de Pilot.
+    let default_model = assistant_session_model(app, state, &pi_path).model;
     state
         .agent_service
         .start_superagent(app, &cwd, &pi_path, default_model, &thinking_level)
+}
+
+/// Modèle EFFECTIF de la session de l'assistant, avec la FICHE DU PERSONNAGE
+/// ACTIF en tête (tâche 403). Point d'entrée UNIQUE des deux chemins qui
+/// démarrent un tour de l'assistant (session `AgentService` et appel bloquant
+/// hérité `ask_super_agent`) : la priorité des modèles n'est écrite qu'une fois,
+/// dans `assistant_identity::decide_assistant_model`.
+///
+/// La fiche est lue LÉGÈREMENT (nom, genre, modèle — jamais le portrait) et
+/// FAIL-OPEN : aucune fiche, champ absent, fichier illisible ⇒ chaîne de modèles
+/// de Pilot, exactement comme avant ce lot.
+pub(crate) fn assistant_session_model(
+    app: &AppHandle,
+    state: &AppState,
+    pi_path: &str,
+) -> crate::assistant_identity::AssistantModelDecision {
+    let (chosen, dedicated) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.super_agent_model.clone(), cfg.super_agent_default_model.clone())
+    };
+    let persona_model = crate::persona::read_active_persona_identity(app)
+        .model
+        .unwrap_or_default();
+    let available = crate::agents::available_model_specs(pi_path).ok();
+    let decision = crate::assistant_identity::decide_assistant_model(
+        &persona_model,
+        &chosen,
+        &dedicated,
+        default_model_from_config(pi_path),
+        available.as_deref(),
+    );
+    // Trace LISIBLE quand la fiche cite un modèle introuvable ou mal formé : le
+    // repli est dit, jamais silencieux — et il n'empêche jamais le démarrage.
+    if let Some(trace) = decision.trace.as_deref() {
+        eprintln!("[assistant] modele du personnage : {}", trace);
+        let _ = app.emit("pilot-assistant-model-trace", trace.to_string());
+    }
+    decision
 }
 
 /// Résout le modèle par défaut du backend actif depuis `model-switch.json`
@@ -520,7 +553,50 @@ fn available_agents_context(state: &AppState, app: &AppHandle) -> String {
 /// `ask_multi_choice`, `ask_confirm`, `ask_input`) et le caractère FACULTATIF du
 /// flux « plan-maker » : l'agent de planification n'est jamais lancé de sa propre
 /// initiative (mission 381 — l'agent lancé est exactement l'agent demandé).
-const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de DEUX familles de délégation : `run_agents(agent_ids, task, project)` (agents d'un projet : le travail se fait dans un projet, avec le projet comme contexte ; `project` omis = projet actif) et `run_assistant_agents(agent_ids, task)` (agents hors projet, créés pour toi, tournant dans `~/.pilot/assistant/` : recherche, analyse, rédaction interne — aucun contexte de projet). Les deux acceptent `resume` (phrase courte, ≤ 120 car., dite en premier). Tu disposes aussi de `create_agent(...)` (agent sur mesure si nécessaire), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent à la fois par projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin.\n\nExécute le travail via des agents spécifiques (`run_agents`/`run_assistant_agents`/`create_agent`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), puis lance.\n\nNe lance jamais d'agent de planification de ta propre initiative : `plan-maker` (plan JSON) uniquement si l'utilisateur demande explicitement un plan ; sinon délègue directement au codeur.\n";
+const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de DEUX familles de délégation : `run_agents(agent_ids, task, project)` (agents d'un projet : le travail se fait dans un projet, avec le projet comme contexte ; `project` omis = projet actif) et `run_assistant_agents(agent_ids, task)` (agents hors projet, créés pour toi, tournant dans `~/.pilot/assistant/` : recherche, analyse, rédaction interne — aucun contexte de projet). Les deux acceptent `agents` (agent JETABLE décrit dans la demande : nom + rôle, aucune écriture en base) et `resume` (phrase courte, ≤ 120 car., dite en premier). Tu disposes aussi de `create_agent(...)` (RÉSERVÉ aux rôles DURABLES — voir la règle des agents ci-dessous), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent à la fois par projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin.\n\nExécute le travail via des agents spécifiques (`run_agents`/`run_assistant_agents`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), puis lance.\n\nNe lance jamais d'agent de planification de ta propre initiative : `plan-maker` (plan JSON) uniquement si l'utilisateur demande explicitement un plan ; sinon délègue directement au codeur.\n";
+
+/// SOURCE UNIQUE de la règle « agent JETABLE par défaut » : le module pur
+/// `src/js/agent-lifespan-rule.js`, embarqué ici ENTIER et lu par
+/// `extract_agent_lifespan_rule`. Le même fichier est importé par l'extension
+/// `pilot-assistant-actions.ts` (descriptions et consignes d'outils
+/// `create_agent` / `run_agents` / `run_assistant_agents`) et écrit sur disque
+/// par `AgentService::write_agent_lifespan_rule` : la règle n'est écrite qu'à UN
+/// seul endroit du dépôt, jamais recopiée.
+const AGENT_LIFESPAN_RULE_SOURCE: &str = include_str!("../../src/js/agent-lifespan-rule.js");
+
+/// Délimiteurs du CONTRAT avec le module JS : la déclaration de la constante
+/// `AGENT_LIFESPAN_RULE` ouvrant un gabarit de chaîne, et la fermeture de ce
+/// gabarit. Le texte de la règle ne contient ni accent grave ni `${`, donc le
+/// premier « `; » rencontré après le début est bien la fin de la consigne.
+const AGENT_LIFESPAN_RULE_OPEN: &str = "export const AGENT_LIFESPAN_RULE = `";
+const AGENT_LIFESPAN_RULE_CLOSE: &str = "`;";
+
+/// Extrait la consigne de la SOURCE UNIQUE. Fonction PURE (aucune I/O) : un
+/// délimiteur absent rend `None` (et les tests le refusent bruyamment) plutôt
+/// que d'injecter une règle vide sans le dire.
+fn extract_agent_lifespan_rule(src: &str) -> Option<String> {
+    let start = src.find(AGENT_LIFESPAN_RULE_OPEN)? + AGENT_LIFESPAN_RULE_OPEN.len();
+    let rest = &src[start..];
+    let end = rest.find(AGENT_LIFESPAN_RULE_CLOSE)?;
+    let rule = rest[..end].trim();
+    if rule.is_empty() {
+        None
+    } else {
+        Some(rule.to_string())
+    }
+}
+
+/// Bloc injecté dans le prompt système de l'Assistant : le titre, puis la
+/// consigne extraite de la source unique. Aucune phrase de la règle n'est
+/// écrite ici (elle vit dans `src/js/agent-lifespan-rule.js`).
+fn agent_lifespan_rule_prompt() -> String {
+    match extract_agent_lifespan_rule(AGENT_LIFESPAN_RULE_SOURCE) {
+        Some(rule) => format!(
+            "\n\n## Règle des agents — un agent jetable par défaut\n{rule}"
+        ),
+        None => String::new(),
+    }
+}
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : règles
 /// de résilience / anti-blocage ET anti-boucle de `run_agents` (fusionnées : une
@@ -632,7 +708,7 @@ Ce que tu fais TOI-MÊME, et rien d'autre :
 DEUX FAMILLES D'AGENTS — choisis toujours la bonne :
 1. AGENTS D'UN PROJET (le projet est le contexte) : `run_agents(agent_ids, task, project)`. Le travail se fait DANS un projet (code, documentation, tests, état du dépôt). `project` = chemin absolu du projet cible ; omis = projet actif.
 2. AGENTS HORS PROJET (créés pour toi, rattachés à aucun projet) : `run_assistant_agents(agent_ids, task)`. Le travail ne dépend d'AUCUN projet (recherche, analyse, rédaction interne) ; l'agent tourne dans ton espace `~/.pilot/assistant/`, sans contexte de projet. N'utilise pas `run_agents` pour ce cas, ni l'inverse.
-Si aucun agent ne convient, crée-le d'abord avec `create_agent`, puis lance.
+Si aucun agent du registre ne convient, applique la règle des agents (ci-dessus) : un besoin ponctuel se traite avec un agent JETABLE décrit dans la demande, jamais avec une nouvelle entrée permanente du registre.
 
 Marche à suivre obligatoire à chaque demande :
 1. Choisis la famille (projet ou hors projet) et les agents adaptés.
@@ -716,6 +792,11 @@ fn build_project_context(active: Option<&str>, working: Option<&str>) -> String 
 /// garde-fou anti-regonflement) sans dépendre de `AppState`/`AppHandle`.
 struct SuperAgentPromptBlocks<'a> {
     role: &'a str,
+    /// Genre du personnage qui parle (tâche 402), sous forme de CONSIGNE déjà
+    /// construite par `assistant_identity` (aucun texte de genre ici). Bloc VIDE quand
+    /// aucun genre n'est défini : le prompt est alors exactement celui d'avant.
+    /// Il est construit à UN SEUL endroit (`assistant_identity`), jamais ici.
+    identity: &'a str,
     project_context: &'a str,
     known_projects: &'a str,
     available_agents: &'a str,
@@ -737,10 +818,17 @@ struct SuperAgentPromptBlocks<'a> {
 /// mesure / anti-regonflement, afin que le total mesuré soit bien le total réel.
 fn assemble_super_agent_system_prompt(blocks: &SuperAgentPromptBlocks) -> String {
     let mut full_system = String::from(blocks.role);
+    // Identité (genre) juste après le rôle : elle dit COMMENT parle l'assistant,
+    // pas ce qu'il doit faire. Vide = aucune ligne ajoutée (comportement actuel).
+    full_system.push_str(blocks.identity);
     full_system.push_str(blocks.project_context);
     full_system.push_str(blocks.known_projects);
     full_system.push_str(blocks.available_agents);
     full_system.push_str(SUPER_AGENT_TOOLS_PROMPT);
+    // Règle « agent jetable par défaut » : juste après la description des outils
+    // d'agents, puisque c'est CETTE décision (jetable ou registre) qu'elle
+    // tranche. Texte extrait de la source unique `src/js/agent-lifespan-rule.js`.
+    full_system.push_str(&agent_lifespan_rule_prompt());
     full_system.push_str(SUPER_AGENT_RESILIENCE_PROMPT);
     full_system.push_str(SUPER_AGENT_AGENTSMD_PROMPT);
     full_system.push_str(SUPER_AGENT_NO_WAIT_PROMPT);
@@ -852,6 +940,21 @@ pub(crate) fn do_send_super_agent_prompt(
     };
     let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
     let role_text = SUPER_AGENT_ROLE_TEMPLATE.replacen("{}", &name, 1);
+    // IDENTITÉ (tâche 402) : le GENRE de l'assistant, quand l'utilisateur en a
+    // réglé un (ou quand la fiche du personnage actif en porte un). Le bloc est
+    // construit à UN SEUL endroit (`assistant_identity::assistant_identity_block`)
+    // et vaut `""` quand rien n'est réglé : le prompt reste alors exactement
+    // celui d'avant. Lecture LÉGÈRE de la fiche (nom, genre, modèle — jamais le
+    // portrait) et fail-open : aucune fiche lisible = réglage de Pilot.
+    let configured_gender = {
+        let cfg = state.config.lock().unwrap();
+        cfg.assistant_gender.clone()
+    };
+    let persona_identity = crate::persona::read_active_persona_identity(app);
+    let identity = crate::assistant_identity::assistant_identity_block(
+        persona_identity.gender.as_deref().unwrap_or(""),
+        &configured_gender,
+    );
     // Contexte projet : le projet actuellement actif dans Pilot + le projet sur
     // lequel l'assistant travaillait (dernier projet ouvert via `open_project`).
     // Le projet ACTIF est TOUJOURS la cible par défaut (issue #40).
@@ -879,6 +982,7 @@ pub(crate) fn do_send_super_agent_prompt(
     // fonction pure partagée avec les tests de mesure / anti-regonflement.
     let blocks = SuperAgentPromptBlocks {
         role: &role_text,
+        identity: &identity,
         project_context: &project_context,
         known_projects: &known_projects,
         available_agents: &available_agents,
@@ -932,10 +1036,11 @@ pub struct SuperAgentTurn {
 #[tauri::command]
 pub async fn ask_super_agent(
     state: State<'_, AppState>,
+    app: AppHandle,
     message: String,
     history: Vec<SuperAgentTurn>,
 ) -> Result<String, String> {
-    let (pi_path, mut model, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly) = {
+    let (pi_path, mut model, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly, configured_gender) = {
         let cfg = state.config.lock().unwrap();
         (
             cfg.rpc_pi_path.clone(),
@@ -947,28 +1052,24 @@ pub async fn ask_super_agent(
             cfg.super_agent_adaptive_personality,
             cfg.super_agent_personality.clone(),
             cfg.super_agent_user_friendly,
+            cfg.assistant_gender.clone(),
         )
     };
 
-    // Modèle effectif : modèle choisi s'il est encore disponible, sinon repli
-    // sur le réglage dédié de l'assistant (issue #88) puis sur le modèle par
-    // défaut du backend (pi --no-session n'a pas de modèle par défaut).
-    {
-        let dedicated = state
-            .config
-            .lock()
-            .unwrap()
-            .super_agent_default_model
-            .clone();
-        if let Some((p, id)) = resolve_super_agent_model(
-            &model,
-            &dedicated,
-            default_model_from_config(&pi_path),
-            crate::agents::available_model_specs(&pi_path).ok().as_deref(),
-        ) {
-            model = format!("{}/{}", p, id);
-        }
+    // Modèle effectif : MÊME décision que la session vivante de l'assistant
+    // (`assistant_session_model` : fiche du personnage → modèle choisi → réglage
+    // dédié #88 → défaut du backend). `pi --no-session` n'a pas de modèle par
+    // défaut : il en faut un explicite, et c'est le même que dans l'onglet 🧭.
+    if let Some((p, id)) = assistant_session_model(&app, state.inner(), &pi_path).model {
+        model = format!("{}/{}", p, id);
     }
+    // IDENTITÉ (tâche 402) : le MÊME bloc de genre que la session vivante,
+    // construit par la même fonction unique, fiche du personnage comprise.
+    let persona_identity = crate::persona::read_active_persona_identity(&app);
+    let identity = crate::assistant_identity::assistant_identity_block(
+        persona_identity.gender.as_deref().unwrap_or(""),
+        &configured_gender,
+    );
 
     let cwd = state
         .project_path
@@ -984,6 +1085,10 @@ pub async fn ask_super_agent(
     if !system_prompt.trim().is_empty() {
         prompt.push_str(&format!("{}\n\n", system_prompt.trim()));
     }
+    // Consigne de genre (tâche 402), construite par `assistant_identity` :
+    // chaîne VIDE si rien n'est réglé, donc
+    // aucun changement pour qui n'a rien demandé.
+    prompt.push_str(&identity);
     // A17 : mémoire utilisateur persistée (profil/notes sur l'utilisateur).
     if !user_memory.trim().is_empty() {
         prompt.push_str(&format!(
@@ -9180,6 +9285,7 @@ mod tests {
         let session_memory = String::from("Chantier en cours : alléger le prompt de l'assistant.");
         let blocks = super::SuperAgentPromptBlocks {
             role: &role,
+            identity: "",
             project_context: &project_context,
             known_projects: &known_projects,
             available_agents: &available_agents,
@@ -9198,6 +9304,7 @@ mod tests {
             super::SUPER_AGENT_SESSION_MEMORY_PROMPT, session_memory
         );
         let fixed = super::SUPER_AGENT_TOOLS_PROMPT.chars().count()
+            + super::agent_lifespan_rule_prompt().chars().count()
             + super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count()
             + super::SUPER_AGENT_AGENTSMD_PROMPT.chars().count()
             + super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count()
@@ -9206,6 +9313,10 @@ mod tests {
             + super::voice_guideline().chars().count();
         let fixed_parts: Vec<(&str, usize)> = vec![
             ("TOOLS", super::SUPER_AGENT_TOOLS_PROMPT.chars().count()),
+            (
+                "REGLE AGENTS (jetable par defaut)",
+                super::agent_lifespan_rule_prompt().chars().count(),
+            ),
             (
                 "RESILIENCE+ANTILOOP",
                 super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count(),
@@ -9291,6 +9402,7 @@ mod tests {
     fn assistant_prompt_designates_no_doc_files() {
         let blocks = super::SuperAgentPromptBlocks {
             role: "",
+            identity: "",
             project_context: "",
             known_projects: "",
             available_agents: "",
@@ -9320,8 +9432,9 @@ mod tests {
         // être exactement leur concaténation (toute insertion silencieuse, dont
         // un bloc de doc, fait échouer ce test).
         let expected = format!(
-            "{}{}{}{}{}{}{}",
+            "{}{}{}{}{}{}{}{}",
             super::SUPER_AGENT_TOOLS_PROMPT,
+            super::agent_lifespan_rule_prompt(),
             super::SUPER_AGENT_RESILIENCE_PROMPT,
             super::SUPER_AGENT_AGENTSMD_PROMPT,
             super::SUPER_AGENT_NO_WAIT_PROMPT,
@@ -9333,6 +9446,80 @@ mod tests {
             full, expected,
             "avec des blocs dynamiques vides, le prompt doit être exactement les textes figés connus"
         );
+    }
+
+    /// VERROU (tâche 402) : le genre de l'assistant s'injecte dans le prompt par
+    /// le bloc `identity` UNIQUEMENT, et une seule fois. Ce test ÉCHOUE si une
+    /// autre phrase de genre est ajoutée ailleurs, si le bloc disparaît du prompt,
+    /// ou si le défaut (« non précisé ») cesse de n'ajouter RIEN.
+    #[test]
+    fn le_genre_s_injecte_dans_le_prompt_une_seule_fois() {
+        let avec = |identity: &'static str| {
+            let blocks = super::SuperAgentPromptBlocks {
+                role: "Tu es « Assistant ».",
+                identity,
+                project_context: "",
+                known_projects: "",
+                available_agents: "",
+                custom_prompt: "",
+                user_memory: "",
+                session_memory: "",
+                concise: false,
+                coordinator: false,
+                user_friendly: false,
+                adaptive_personality: false,
+                personality: "",
+            };
+            super::assemble_super_agent_system_prompt(&blocks)
+        };
+        // Défaut : aucune phrase de genre, prompt strictement inchangé.
+        let sans_genre = avec("");
+        assert!(!sans_genre.contains("Identité de genre"));
+        // Réglé : la phrase est présente UNE fois, et le prompt est plus long.
+        let feminin = avec("
+
+Identité de genre : au féminin.");
+        assert_eq!(
+            feminin.matches("Identité de genre").count(),
+            1,
+            "la consigne de genre doit être injectée exactement une fois"
+        );
+        assert!(feminin.len() > sans_genre.len());
+        // La phrase de genre ne vient QUE du module d'identité : aucune autre
+        // consigne du prompt ne parle d'accord au féminin / masculin.
+        assert!(
+            !sans_genre.contains("au féminin") && !sans_genre.contains("au masculin"),
+            "aucune phrase de genre en dur dans les textes figés du prompt"
+        );
+        // Et la vraie phrase (celle du module) contient bien la consigne.
+        let reelle = crate::assistant_identity::assistant_gender_instruction(
+            crate::assistant_identity::AssistantGender::Feminine,
+        );
+        assert!(reelle.contains("féminin"));
+    }
+
+    /// VERROU (tâche 403) : le modèle effectif de l'assistant passe par la fiche
+    /// du personnage, et une fiche MUETTE ou CITANT UN MODÈLE ABSENT retombe
+    /// toujours sur la chaîne de Pilot. Ce test ÉCHOUE si le repli disparaît.
+    #[test]
+    fn le_modele_du_personnage_replie_toujours_sur_pilot() {
+        use crate::assistant_identity::{
+            decide_assistant_model, AssistantModelSource,
+        };
+        let disponible = vec!["plh/rapide".to_string()];
+        let global = Some(("plh".to_string(), "global".to_string()));
+        // Fiche muette : comportement actuel (modèle choisi, aucun message).
+        let muet = decide_assistant_model("", "plh/rapide", "", global.clone(), Some(&disponible));
+        assert_eq!(muet.source, AssistantModelSource::Chosen);
+        assert_eq!(muet.trace, None);
+        // Fiche citant un modèle absent du registre : repli + trace lisible.
+        let absent =
+            decide_assistant_model("plh/parti", "plh/rapide", "", global.clone(), Some(&disponible));
+        assert_eq!(absent.source, AssistantModelSource::Chosen);
+        assert!(absent.trace.is_some(), "le repli doit être dit, jamais silencieux");
+        // Et sans modèle choisi : le défaut global reste le dernier filet.
+        let dernier = decide_assistant_model("plh/parti", "", "", global, Some(&disponible));
+        assert_eq!(dernier.source, AssistantModelSource::Global);
     }
 
     /// Garde-fou anti-regonflement : le total des textes FIXES injectés à chaque
@@ -9414,11 +9601,119 @@ mod tests {
             on.contains("Ce que tu fais TOI-MÊME, et rien d'autre"),
             "la consigne doit delimiter ce que l'assistant fait lui-meme"
         );
+        // Le mode coordinateur renvoie à la règle des agents (jetable / permanent)
+        // et ne pousse JAMAIS à créer un agent permanent pour un besoin ponctuel.
+        assert!(
+            !on.contains(concat!("crée-le d'abord avec", " `create_agent`")),
+            "le mode coordinateur ne doit pas pousser a creer un agent permanent"
+        );
+        assert!(
+            on.contains("règle des agents") && on.contains("JETABLE"),
+            "le mode coordinateur doit renvoyer a la regle des agents (agent jetable)"
+        );
         // Le bloc de description des outils doit lui aussi nommer les deux outils
         // (sinon l'outil hors projet resterait invisible).
         assert!(
             super::SUPER_AGENT_TOOLS_PROMPT.contains("run_assistant_agents"),
             "le bloc outils doit mentionner run_assistant_agents (agents hors projet)"
+        );
+    }
+
+    /// VERROU — AGENT JETABLE PAR DÉFAUT (décision du propriétaire).
+    ///
+    /// Ce que ce test tient, et qui doit FAIRE ÉCHOUER la suite si l'un de ces
+    /// points disparaît :
+    ///   1. la règle existe EN CLAIR dans sa SOURCE UNIQUE
+    ///      (`src/js/agent-lifespan-rule.js`) : besoin ponctuel → agent jetable,
+    ///      `create_agent` réservé aux rôles durables, jamais de création dans le
+    ///      doute (l'Assistant ne peut pas supprimer une entrée du registre) ;
+    ///   2. le texte INJECTÉ dans le prompt système de l'Assistant EST celui de
+    ///      la source unique (extrait par `extract_agent_lifespan_rule`) ;
+    ///   3. il est réellement présent dans le prompt assemblé, modes par défaut
+    ///      ET mode coordinateur (le mode le plus incitatif à créer des agents) ;
+    ///   4. AUCUN autre texte du prompt ne pousse à créer un agent permanent dans
+    ///      le doute (création immédiate recommandée, rôle « sur mesure » présenté
+    ///      comme la réponse par défaut à une demande) ;
+    ///   5. l'extraction est FERME : une source sans délimiteurs, ou avec une
+    ///      consigne vide, ne fabrique pas une règle par défaut silencieuse.
+    #[test]
+    fn la_regle_de_l_agent_jetable_est_injectee_dans_le_prompt() {
+        // 1. La source unique donne la règle en clair.
+        let rule = super::extract_agent_lifespan_rule(super::AGENT_LIFESPAN_RULE_SOURCE)
+            .expect("la consigne doit etre extractible de src/js/agent-lifespan-rule.js");
+        for attendu in [
+            "agent JETABLE",
+            "create_agent est RÉSERVÉ aux rôles DURABLES",
+            "Aucun agent du registre ne convient",
+            "ne crée RIEN",
+            "supprimer une entrée du registre",
+            "besoin ponctuel",
+        ] {
+            assert!(
+                rule.contains(attendu),
+                "la source unique doit dire « {attendu} » : {rule}"
+            );
+        }
+        // 2. Le texte injecté EST celui de la source unique (aucune divergence).
+        let injected = super::agent_lifespan_rule_prompt();
+        assert!(
+            injected.contains(&rule),
+            "le bloc injecte doit contenir la consigne de la source unique"
+        );
+        assert!(
+            injected.contains("Règle des agents"),
+            "le bloc injecte doit etre annonce par son titre"
+        );
+        // 3. Présent dans le prompt assemblé, y compris en mode coordinateur.
+        for coordinator in [false, true] {
+            let blocks = super::SuperAgentPromptBlocks {
+                role: "role",
+                identity: "",
+                project_context: "",
+                known_projects: "",
+                available_agents: "",
+                custom_prompt: "",
+                user_memory: "",
+                session_memory: "",
+                concise: false,
+                coordinator,
+                user_friendly: false,
+                adaptive_personality: false,
+                personality: "",
+            };
+            let full = super::assemble_super_agent_system_prompt(&blocks);
+            assert!(
+                full.contains(&rule),
+                "la regle des agents doit etre dans le prompt systeme (coordinator={coordinator})"
+            );
+            // 4. Aucun texte ne pousse a creer un agent permanent dans le doute.
+            for interdit in [
+                concat!("crée-le d'abord avec", " `create_agent`"),
+                concat!("agent sur mesure", " si nécessaire"),
+                concat!("create_agent(...) (agent", " sur mesure"),
+            ] {
+                assert!(
+                    !full.contains(interdit),
+                    "le prompt ne doit plus pousser a creer un agent permanent (« {interdit} »)"
+                );
+            }
+        }
+        // 5. Le bloc outils réserve explicitement `create_agent` aux rôles durables.
+        assert!(
+            super::SUPER_AGENT_TOOLS_PROMPT.contains("RÉSERVÉ aux rôles DURABLES")
+                && super::SUPER_AGENT_TOOLS_PROMPT.contains("agents` (agent JETABLE"),
+            "le bloc outils doit nommer l'agent jetable et reserver create_agent aux roles durables"
+        );
+        // 6. Extraction fermée : aucun délimiteur ⇒ aucune règle inventée.
+        assert_eq!(super::extract_agent_lifespan_rule("export const AUTRE = 1;"), None);
+        assert_eq!(
+            super::extract_agent_lifespan_rule("export const AGENT_LIFESPAN_RULE = `  `;"),
+            None,
+            "une consigne vide ne doit pas passer pour une regle"
+        );
+        assert_eq!(
+            super::extract_agent_lifespan_rule("export const AGENT_LIFESPAN_RULE = `texte`;"),
+            Some("texte".to_string())
         );
     }
 

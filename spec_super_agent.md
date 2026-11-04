@@ -78,6 +78,34 @@ apprend et répond.
   n'y a plus de personnage actif.
 <!-- /HELP:super-agent-personnage -->
 
+<!-- HELP:super-agent-genre-modele -->
+### Le genre de la voix de l'Assistant (masculin / féminin)
+- **Options ⚙️ → onglet « Assistant » → « Genre de l'Assistant »** : trois
+  choix — **« Non précisé (aucune indication) »** (le défaut), **Féminin**,
+  **Masculin**.
+- Ce réglage ne change **ni les réponses ni les décisions** de l'Assistant : il
+  lui demande seulement de **parler de lui** au genre choisi (accords,
+  adjectifs, pronoms) — « je suis prêt » ou « je suis prête ».
+- **« Non précisé » n'ajoute rien du tout** : l'Assistant garde exactement la
+  façon de parler qu'il avait avant.
+- **Le personnage actif passe avant** : si votre personnage (déposé par
+  Présences) indique son propre genre, c'est **le sien** qui s'applique — un
+  personnage est plus précis qu'un réglage général. Sans personnage, c'est le
+  réglage ci-dessus qui compte.
+
+### Un modèle par défaut propre à chaque personnage
+- Un personnage peut avoir **son propre modèle** : quand il est actif,
+  l'Assistant travaille avec ce modèle, sans que vous ayez à le changer à la
+  main.
+- **Si le personnage n'en définit pas, rien ne change** : l'Assistant utilise le
+  modèle que vous avez réglé dans Pilot (le modèle choisi dans l'onglet 🧭, ou
+  le modèle par défaut de l'Assistant, ou le modèle par défaut des agents) —
+  sans erreur et sans message.
+- Si le modèle prévu par le personnage **n'est plus installé**, Pilot vous le
+  dit **en une ligne** et repart sur vos réglages : l'Assistant démarre
+  toujours.
+<!-- /HELP:super-agent-genre-modele -->
+
 ### Si l'assistant affiche « Connexion au super-agent perdue »
 - Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).
   Les **causes les plus fréquentes** : le chemin de l'agent (Options → Agent)
@@ -354,7 +382,9 @@ apprend et répond.
   2. **Agents hors projet** (créés pour l'Assistant, rattachés à aucun projet) :
      `run_assistant_agents(agent_ids, task, resume)` — travail qui ne dépend
      d'AUCUN projet (recherche, analyse, rédaction interne), l'agent tourne dans
-     `~/.pilot/assistant/`. Si aucun agent ne convient : `create_agent` d'abord.
+     `~/.pilot/assistant/`. Si aucun agent du registre ne convient : un agent
+     **JETABLE** décrit dans la demande (règle des agents ci-dessous),
+     `create_agent` **uniquement** pour un rôle DURABLE.
      `resume` (les deux outils, **facultatif**) : **phrase courte (≤ 120
      caractères)** qui dit ce que la tâche fait réellement — c'est le texte lu
      **en premier** dans le panneau des tâches ; à renseigner **toujours**, dans
@@ -824,8 +854,9 @@ uniquement un bloc d'instructions dans le prompt système.
 - Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
   lui-même : il **délègue la demande à un agent du projet**.
 - **Méthode par défaut — agents spécifiques** : l'Assistant exécute le travail
-  via des **agents spécifiques** (`run_agents` sur un agent du registre, ou
-  `create_agent` pour un agent sur mesure), **pas** via l'agent standard du
+  via des **agents spécifiques** (`run_agents` sur un agent du registre, ou un
+  agent **jetable** décrit dans la demande via `agents` ; `create_agent`
+  uniquement pour un rôle durable), **pas** via l'agent standard du
   projet. Avant de déléguer, il **reformule/affine la demande** et, si elle est
   floue ou imprécise, **pose des questions** (`ask_input` / `ask_multi_choice`)
   pour obtenir le contexte nécessaire. Il construit une demande **claire et
@@ -1016,10 +1047,13 @@ uniquement un bloc d'instructions dans le prompt système.
 
 <!-- HELP:super-agent-agent-jetable -->
 ### Un agent jetable, juste pour une tâche
+- **C'est la façon par défaut de travailler de l'Assistant** : quand votre demande
+  est **ponctuelle** (un diagnostic, une analyse, une vérification, une rédaction
+  de circonstance), il ne crée **aucun** agent permanent — il **décrit lui-même
+  l'agent dans sa demande** (un nom et un rôle). Cet agent **jetable** existe
+  **seulement le temps de la tâche**.
 - Vous pouvez demander un travail « comme le ferait un auditeur de sécurité »
-  sans créer d'agent : l'Assistant **décrit lui-même l'agent dans sa demande**
-  (un nom et un rôle). Cet agent **jetable** existe **seulement le temps de la
-  tâche**.
+  sans rien créer : c'est exactement ce fonctionnement.
 - Il **n'apparaît jamais** dans votre liste d'agents, ne s'ajoute **pas** au
   registre et **ne modifie aucun** agent existant : rien n'est enregistré, ni
   avant ni après.
@@ -1035,7 +1069,11 @@ uniquement un bloc d'instructions dans le prompt système.
   interne (`eph-…`). Si aucun nom n'est fourni, l'identifiant s'affiche comme
   avant ; rien ne change pour les agents du registre ni pour l'Assistant.
 - Un agent **réutilisable** (que vous voulez retrouver plus tard) se crée
-  toujours normalement : c'est l'agent « sur mesure » du registre.
+  toujours normalement : c'est l'agent « sur mesure » du registre. L'Assistant
+  ne le crée que lorsqu'un rôle doit **vraiment resservir** dans le temps, car
+  **il ne peut jamais supprimer** une entrée de votre liste d'agents : c'est
+  vous qui le faites. Un agent permanent créé pour rien reste donc visible chez
+  vous — c'est pourquoi, dans le doute, il n'en crée pas.
 <!-- /HELP:super-agent-agent-jetable -->
 
 <!-- HELP:super-agent-livrable -->
@@ -1328,11 +1366,58 @@ son tour arrive, avec le contexte de **sa** tâche).
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les
 agents du registre global (base SQLite). Il peut :
 
-1. **Créer un agent sur mesure** (outil `create_agent`) s'il estime que les
-   agents disponibles ne conviennent pas à la tâche : il définit lui-même le
-   rôle (system prompt), le nom, l'icône, la description, les modèles (pi/plh),
-   la lecture seule, le budget et la profondeur. L'agent est ajouté au registre
-   global et devient aussitôt sélectionnable.
+1. **Créer un agent DURABLE** (outil `create_agent`) — **RÉSERVÉ** aux rôles
+   qui vont **resservir** dans le temps (un métier confié encore dans plusieurs
+   semaines) : il définit le rôle (system prompt), le nom, l'icône, la
+   description, les modèles (pi/plh), la lecture seule, le budget et la
+   profondeur. L'agent est ajouté au registre global et devient aussitôt
+   sélectionnable. Pour un besoin **ponctuel**, il ne crée **rien** : il décrit
+   un agent **jetable** (§ « Agent jetable (mémoire seule) ») — voir la règle
+   ci-dessous, qui est **injectée** dans son prompt système.
+
+### Règle « agent jetable par défaut » (source unique, injectée)
+
+Décision du propriétaire : un besoin **ponctuel** (diagnostic, analyse,
+vérification, rédaction de circonstance) se traite avec un agent **jetable**
+décrit dans la demande, **jamais** avec une nouvelle entrée permanente du
+registre. `create_agent` est **RÉSERVÉ aux rôles durables**. Raison structurelle :
+l'Assistant ne peut **jamais supprimer** une entrée du registre (c'est le
+propriétaire qui le fait), donc toute création inutile reste **visible chez lui**.
+Dans le doute : ne rien créer.
+
+- **Écrite à UN SEUL endroit** : `src/js/agent-lifespan-rule.js` (module **PUR**,
+sans import) — constante `AGENT_LIFESPAN_RULE` (la consigne en clair),
+`AGENT_LIFESPAN_RULE_GUIDELINE` (la même règle en une phrase, pour les
+consignes d'outils), `AGENT_LIFESPAN_RULE_SNIPPET` (résumé court) et la pure
+`decideAgentKind(need)` (le doute joue **toujours** en faveur du jetable).
+- **Injectée dans le prompt système** : `super_agent.rs` embarque le fichier
+entier (`include_str!`) et en extrait la consigne (`extract_agent_lifespan_rule`,
+délimiteurs `AGENT_LIFESPAN_RULE_OPEN` / `_CLOSE` = déclaration de la constante
+et fermeture du gabarit de chaîne), puis pousse le bloc
+`## Règle des agents — un agent jetable par défaut` juste après le bloc « Outils
+d'agents » (`assemble_super_agent_system_prompt`). Aucune phrase de la règle
+n'est écrite côté Rust : tout écart fait échouer les verrous.
+- **Citée par les outils** : `pilot-assistant-actions.ts` **importe** le même
+module (`./agent-lifespan-rule.js`) pour la description de `create_agent` et les
+consignes de `create_agent` / `run_agents` / `run_assistant_agents` ; il ne
+recopie aucune formulation.
+- **Écrite sur disque** : `AgentService::write_agent_lifespan_rule` dépose le
+module à côté des extensions, dans les **deux** chemins d'écriture (agents
+d'assistant et session de l'Assistant) — sans ce fichier, l'extension des
+actions ne se charge plus (import).
+- **Textes contradictoires supprimés** : « Si aucun agent ne convient, crée-le
+d'abord avec `create_agent`, puis lance. » et la consigne d'outil « Use
+`create_agent` when the available agents do not fit the task » ont été
+remplacées ; le mode coordinateur **renvoie** désormais à la règle des agents.
+- **Verrous** : `src/js/agents-jetables-par-defaut.test.js` (règle en clair,
+contrat d'extraction, citations sans recopie, injection dans l'assemblage,
+absence de texte contradictoire, écriture sur disque) ; côté Rust
+`la_regle_de_l_agent_jetable_est_injectee_dans_le_prompt` (`super_agent.rs`,
+présence dans le prompt par défaut **et** en mode coordinateur, extraction
+fermée) et `write_agent_lifespan_rule_ecrit_la_source_unique`
+(`agent_service.rs`). Le garde-fou de budget du prompt
+(`super_agent_fixed_prompt_stays_under_budget`) compte ce bloc.
+
 2. **Choisir quels agents utiliser** (outil `run_agents`) : il sélectionne les
    agents disponibles (par leur id) qui lui semblent les plus adaptés et leur
    confie une tâche. Pilot les lance et renvoie le résultat agrégé
@@ -2266,6 +2351,93 @@ que Pilot **lit seulement** :
   recherche, image du dépôt historique jamais utilisée, dossier personnel vide
   qui fait autorité, empreinte qui suit les changements).
   Rapport : `docs/rapports/RAPPORT-personnage-actif-et-desactivation-complete.md`.
+
+---
+
+## Technique — genre de l'assistant et modèle par personnage (tâches 402 et 403)
+
+Deux réglages **additifs**, **une seule règle chacun**, décidés dans un module
+**pur** et injectés à **un seul endroit** du prompt / du démarrage de session.
+
+**Source unique des deux décisions** : `src-tauri/src/assistant_identity.rs`
+(module pur : reçoit des chaînes déjà lues, rend une décision ; aucun accès
+disque, aucun état). Il ne lit jamais lui-même la configuration ni la fiche —
+c'est ce qui rend les deux règles testables et impossibles à contourner.
+
+### Genre (tâche 402)
+
+- **Réglage** : `AppConfig.assistant_gender` (`#[serde(default)]`, défaut
+  `""`), champ **unique** ; valeurs canoniques `""` (non précisé), `"feminin"`,
+  `"masculin"` (constantes `ASSISTANT_GENDER_UNSPECIFIED`,
+  `ASSISTANT_GENDER_FEMININE`, `ASSISTANT_GENDER_MASCULINE`). Interface :
+  Options ⚙️ → onglet Assistant → « Genre de l'Assistant » (`#setting-assistant-gender`,
+  trois options), lue et enregistrée par `src/js/settings.js` via
+  `src/js/assistant-genre.js` (`normalizeAssistantGender`, module **pur**).
+- **Priorité** (`effective_assistant_gender`) : fiche du personnage actif
+  (`genre.txt`, Présences) **puis** réglage de Pilot **puis** rien. Une valeur
+  inconnue, vide ou illisible vaut « rien » — jamais un genre imposé.
+- **Texte injecté** : une **phrase unique** (`assistant_gender_instruction`),
+  vide quand le genre n'est pas précisé. Elle est donc **absente du prompt par
+  défaut** : prompt strictement identique à avant ce lot.
+- **Branchement unique** : `SuperAgentPromptBlocks.identity`, poussé par
+  `assemble_super_agent_system_prompt` juste après le rôle et avant le contexte
+  projet ; rempli par `do_send_super_agent_prompt` (réglage + identité du
+  personnage, lue par `persona::read_active_persona_identity`). Un test Rust
+  vérifie que la consigne n'apparaît **qu'une fois** ; un test front vérifie
+  qu'**aucune autre phrase de genre** n'existe dans `super_agent.rs`.
+- **Ce que la fenêtre ne fait pas** : elle ne compose **aucune** phrase de genre
+  (pas de seconde source de vérité) ; elle ne normalise qu'une valeur.
+
+### Modèle par personnage (tâche 403)
+
+- **Fiche du personnage** (`src-tauri/src/persona.rs`) : deux fichiers
+  **optionnels** de plus, lus en **première ligne utile** —
+  `genre.txt` (voir ci-dessus) et `modele.txt` (`fournisseur/modèle`, les lignes
+  `#` et tout ce qui n'est pas une spécification de modèle étant ignorés) — et
+  exposés par la commande `read_assistant_persona` (`{ name, portrait, gender,
+  model }`, champs **additifs** : `null` quand absents, donc aucune fiche
+  existante ne casse).
+- **Lecture légère** : `read_persona_identity` / `read_active_persona_identity`
+  ne lisent **que** les trois petits fichiers texte et **jamais** le portrait
+  (sinon plusieurs Mo en base64 à chaque message). Test dédié.
+- **Dépôt historique** (`<app_data_dir>/.pilot/portrait`) : **nom seulement**,
+  ni genre ni modèle — aucune fiche périmée ne les impose.
+- **Décision** (`decide_assistant_model`, renvoyant `model` + `source` +
+  `trace`) : **fiche du personnage** (acceptée seulement si la spécification est
+  bien formée **et** présente dans le registre des modèles disponibles) →
+  modèle **choisi** (`super_agent_model`) → **réglage dédié** de l'assistant
+  (`super_agent_default_model`, issue #88) → **défaut global** → aucun.
+- **Repli toujours présent** : fiche muette, fichier absent, valeur mal formée
+  ou modèle désinstallé ⇒ chaîne de Pilot (comportement d'avant le lot), et dans
+  les deux derniers cas une **trace lisible** (`[assistant] modele du
+  personnage : …` + évènement `pilot-assistant-model-trace`). Jamais un échec de
+  démarrage : une fiche périmée ne peut pas empêcher l'assistant de parler.
+- **Un seul point d'entrée** : `assistant_session_model(app, state, pi_path)`,
+  appelé par `do_start_super_agent_session` **et** par l'appel hérité
+  `ask_super_agent` — les deux chemins retiennent donc le même modèle réel
+  (aucune règle recopiée).
+- **Inchangé** : la sélection de modèle par couple (projet, agent) (C4), le
+  modèle actif `super_agent_model`, et le sélecteur de modèle de l'onglet 🧭.
+
+### Reste à faire côté Présences (aucune obligation)
+
+Pilot **lit seulement** : il ne crée ni le dossier ni les fichiers, ne les
+modifie ni ne les supprime. Pour porter un genre et un modèle, la fiche du
+personnage n'a qu'à contenir `genre.txt` (`feminin` / `masculin`, casse et
+accents tolérés) et `modele.txt` (`fournisseur/modèle`). **Tant que ces
+fichiers n'existent pas, tout fonctionne avec les réglages de Pilot** — aucune
+modification de Présences n'est requise pour ce lot.
+
+Couverture : tests unitaires de `assistant_identity.rs` (genre tolérant, défaut
+muet, fiche prioritaire, chaîne de modèles, repli avec trace) et de
+`persona.rs` (fiche sans genre ni modèle, normalisations, identité sans
+portrait, dépôt historique, empreinte), verrous Rust dans `super_agent.rs`
+(consigne injectée une seule fois, repli du modèle toujours présent) et
+`src/js/genre-et-modele-par-personnage.test.js` (15 tests : les trois valeurs,
+la valeur inconnue jamais un genre, une seule phrase de genre, `#[serde(default)]`,
+réglage présent à l'écran et enregistré, lecture sans erreur, ordre des étages
+de modèle + trace, démarrage par la décision unique). Rapport :
+`docs/rapports/RAPPORT-genre-et-modele-par-personnage.md`.
 
 ---
 

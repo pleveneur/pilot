@@ -16,6 +16,15 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+// RÈGLE « agent jetable par défaut » : elle est écrite à UN SEUL endroit
+// (`src/js/agent-lifespan-rule.js`, module pur, embarqué lui aussi par Rust pour
+// le prompt système de l'Assistant). Aucune reformulation ici : les descriptions
+// et consignes d'outils `create_agent` / `run_agents` / `run_assistant_agents`
+// n'en sont que des citations.
+import {
+  AGENT_LIFESPAN_RULE_GUIDELINE,
+  AGENT_LIFESPAN_RULE_SNIPPET,
+} from "./agent-lifespan-rule.js";
 
 // Sentinel préfixant le message d'un confirm d'action. Pilot le détecte dans le
 // `confirm` reçu et exécute l'action au lieu d'afficher des boutons Oui/Non.
@@ -140,10 +149,11 @@ export default function (pi: ExtensionAPI) {
     name: "create_agent",
     label: "Create Agent",
     description:
-      "Créer un agent sur mesure dans le registre global (base SQLite `pilot.db`) quand les agents disponibles ne conviennent pas à la tâche. Tu définis toi-même son rôle (system prompt), son nom, son icône, sa description, ses modèles (pi/plh), sa lecture seule, son budget et sa profondeur. L'agent devient aussitôt disponible pour être sélectionné via run_agents. Bloque jusqu'à ce que Pilot ait créé l'agent.",
-    promptSnippet: "create_agent: créer un agent sur mesure (rôle construit selon le besoin)",
+      "Créer un agent DURABLE dans le registre global (base SQLite `pilot.db`). RÉSERVÉ aux rôles qui vont RESSERVIR dans le temps (un métier confié encore dans plusieurs semaines) : pour un besoin PONCTUEL (diagnostic, analyse, vérification, rédaction de circonstance), ne crée rien et décris un agent JETABLE via `agents` de run_agents / run_assistant_agents — aucune écriture en base, aucune entrée dans la liste des agents. L'Assistant ne peut jamais supprimer une entrée du registre : une création inutile reste visible chez le propriétaire. Tu définis toi-même son rôle (system prompt), son nom, son icône, sa description, ses modèles (pi/plh), sa lecture seule, son budget et sa profondeur. L'agent devient aussitôt disponible pour être sélectionné via run_agents. Bloque jusqu'à ce que Pilot ait créé l'agent.",
+    promptSnippet: `create_agent: créer un agent DURABLE du registre (${AGENT_LIFESPAN_RULE_SNIPPET})`,
     promptGuidelines: [
-      "Use create_agent when the available agents do not fit the task and you need a custom role. Define a precise role (system prompt) describing exactly what the agent must do, its constraints, and its output format.",
+      AGENT_LIFESPAN_RULE_GUIDELINE,
+      "Use create_agent only for a DURABLE role, and define a precise role (system prompt) describing exactly what the agent must do, its constraints, and its output format.",
       "Provide a unique kebab-case id, a display name, an optional emoji icon, a short functional description (used for routing), and the role text.",
       "Set readonly=true if the agent must never modify files. Set keep_context=true if it should keep its context between calls. Set max_calls_per_run and call_depth (1 = worker).",
       "For models, provide provider/modelId for pi and/or plh. If you omit them, Pilot will fall back to the backend default model.",
@@ -187,7 +197,7 @@ export default function (pi: ExtensionAPI) {
       "A single launch per task is enough. Never relaunch the same delegation, and never use stop_agent on an agent you have just launched: stopping the agent kills its work.",
       "Provide a clear, atomic task description.",
       "Prefer selecting the most appropriate agents rather than delegating everything to the standard coder. You are the coordinator: you choose the team.",
-      "If no suitable agent exists, prefer an AGENT JETABLE: pass `agents` (objects with `name` + `role`) instead of creating a permanent agent. A throwaway agent exists only for the duration of this task, is never written to the agents database, never appears in the user's agent list, and disappears when the task ends (its work — messages, report — stays visible). Use create_agent only when the role must be reused later.",
+      AGENT_LIFESPAN_RULE_GUIDELINE,
       "Pass the absolute path of the target project in `project` when the work must be done on a project that differs from the active one (e.g. the user is on 'pilot' but asks for changes on 'PLh'). If omitted, the active project is used.",
       "ALWAYS pass `resume`: a SHORT phrase (max 120 characters, e.g. 'Corrige l'affichage du panneau des tâches') that says what the task really does. The user reads it FIRST in Pilot's task panel, so write it for a human, in the user's language, not as a copy of the technical task text. It must never be invented or vague ('traiter la demande').",
       "If the task MUST produce a file, pass `expected_files` (paths relative to the project): Pilot checks at the end of the mission that each declared file exists, and reports an explicit FAILURE naming the missing file instead of a false 'done'. Never declare a file you are not sure is expected.",
@@ -234,6 +244,7 @@ export default function (pi: ExtensionAPI) {
       "Use run_assistant_agents when you need to execute work that is NOT tied to a specific project: research, analysis, internal coordination tasks for the assistant itself. The agents run in the reserved assistant workspace (~/.pilot/assistant/), without any project context.",
       "Select the agent ids that best fit the task (e.g. a custom agent you created for analysis). Provide a clear, atomic task description.",
       "Do NOT use this tool for work that must happen inside a project — use run_agents (with the project path) instead.",
+      "If no registered assistant agent fits, do NOT create a permanent one: describe a THROWAWAY agent with `agents` (name + role) — same rule as run_agents (see the agent-lifespan rule). Use create_agent only for a DURABLE role.",
       "ALWAYS pass `resume`: a SHORT phrase (max 120 characters) that says what the task really does. The user reads it FIRST in Pilot's task panel: write it for a human, in the user's language. Never invent it, never just repeat the technical task text.",
       "If the task MUST produce a file in the assistant workspace, pass `expected_files` (paths relative to the workspace): Pilot verifies their existence at the end and reports an explicit FAILURE naming any missing file. Do not ask a READ-ONLY agent to write a file: Pilot refuses the launch.",
     ],

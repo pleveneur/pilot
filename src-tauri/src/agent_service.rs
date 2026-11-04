@@ -3217,6 +3217,12 @@ impl AgentService {
         ) {
             eprintln!("[extensions] face-gateway.js non écrit : {}", e);
         }
+        // Règle « agent jetable par défaut » (source unique), importée par
+        // `pilot-assistant-actions.ts` (`./agent-lifespan-rule.js`). Échec
+        // REMONTÉ : sans ce module, l'extension des actions ne se charge plus.
+        if let Err(e) = Self::write_agent_lifespan_rule(&dir) {
+            report.failures.push(e);
+        }
         // Service Laya : l'outil `laya_classify` doit aussi être disponible pour
         // les agents d'assistant (tâche #140), qui tournent dans
         // `~/.pilot/assistant/` et non dans un projet.
@@ -3465,6 +3471,11 @@ impl AgentService {
                         include_str!("../../src/js/face-gateway.js"),
                     ) {
                         eprintln!("[extensions] face-gateway.js non écrit : {}", e);
+                    }
+                    // Règle « agent jetable par défaut » (source unique),
+                    // importée par `pilot-assistant-actions.ts`.
+                    if let Err(e) = Self::write_agent_lifespan_rule(&dir) {
+                        report.failures.push(e);
                     }
                     // Service Laya : l'outil `laya_classify` doit être disponible
                     // pour la session de l'assistant comme pour tout autre agent.
@@ -3765,6 +3776,21 @@ impl AgentService {
         crate::extension_write::write_embedded(&pdf_file, include_str!("../extensions/pilot-pdf.ts"))
             .map_err(|e| format!("pilot-pdf.ts : {}", e))?;
         Ok(pdf_file.to_string_lossy().to_string())
+    }
+
+    /// Écrit le module de règle PARTAGÉ `agent-lifespan-rule.js` (SOURCE UNIQUE
+    /// de la règle « agent jetable par défaut ») à côté des extensions. Il est
+    /// importé par `pilot-assistant-actions.ts` (`./agent-lifespan-rule.js`) :
+    /// sans ce fichier, l'extension ne se charge pas et l'Assistant perd ses
+    /// outils d'action. Le MÊME fichier est embarqué par `super_agent.rs` pour le
+    /// prompt système : la règle n'existe qu'à un seul endroit du dépôt.
+    fn write_agent_lifespan_rule(dir: &std::path::Path) -> Result<(), String> {
+        crate::extension_write::write_embedded(
+            &dir.join("agent-lifespan-rule.js"),
+            include_str!("../../src/js/agent-lifespan-rule.js"),
+        )
+        .map(|_| ())
+        .map_err(|e| format!("agent-lifespan-rule.js : {}", e))
     }
 
     fn spawn_session(app: &AppHandle, project: &str, agent_id: &str) -> Result<rpc_manager::RpcSession, String> {
@@ -7128,6 +7154,31 @@ mod tests {
             std::fs::read_to_string(dir.join("laya-gateway.js"))
                 .expect("cœur lisible")
                 .contains("askLaya")
+        );
+    }
+
+    /// La règle « agent jetable par défaut » est écrite À CÔTÉ des extensions
+    /// (module importé par `pilot-assistant-actions.ts`) : sans ce fichier, les
+    /// outils d'action de l'Assistant ne se chargent plus. Le contenu écrit est
+    /// exactement la SOURCE UNIQUE embarquée (aucune copie divergente).
+    #[test]
+    fn write_agent_lifespan_rule_ecrit_la_source_unique() {
+        let dir = crate::test_util::TempDir::new("pilot-agent-lifespan-rule");
+        AgentService::write_agent_lifespan_rule(&dir).expect("module de regle ecrit");
+        let ecrit = std::fs::read_to_string(dir.join("agent-lifespan-rule.js"))
+            .expect("module lisible");
+        assert_eq!(
+            ecrit,
+            include_str!("../../src/js/agent-lifespan-rule.js"),
+            "le module ecrit doit etre la source unique, a l'identique"
+        );
+        assert!(
+            ecrit.contains("export const AGENT_LIFESPAN_RULE = `"),
+            "la consigne doit rester extractible par le prompt systeme"
+        );
+        assert!(
+            ecrit.contains("AGENT_LIFESPAN_RULE_GUIDELINE"),
+            "la consigne d'outil doit rester disponible pour l'extension"
         );
     }
 
