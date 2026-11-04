@@ -206,3 +206,25 @@ version n'a été touché.
 npx vitest run src/js/vocal-enveloppe-rythme.test.js src/js/vocal-enveloppe-aigu.test.js
 npm test          # suite front complète
 ```
+
+---
+
+## 8. Re-vérification du 2026-11-04 (chiffres réels, mutation rejouée)
+
+Le correctif est en place au commit `6850cb2` (`fix(vocal): le halo ne se fige
+plus sur une parole longue`). Nouvelle passe de vérification, sans rien changer
+au code :
+
+| Point vérifié | Preuve |
+|---|---|
+| La position est bien ramenée dans le texte | `src/js/vocal-enveloppe-aigu.js:845` → `return ecoule % total;` |
+| L'horloge repart du premier son | `src/js/super-agent.js:7799` → `vocalRhythmMeter.reancrer()` dans `onVocalReadAloudSound` |
+| Le verrou échoue sur le code d'avant | mutation temporaire `return ecoule;` → **1 failed \| 24 passed** (« au-delà de la fin du plan, l'enveloppe CONTINUE de respirer » : `expected 8.56e-13 to be greater than 0.1`), puis fichier restauré (`git status` propre, la ligne `% total` est revenue) |
+| Tests ciblés | `npx vitest run src/js/vocal-enveloppe-rythme.test.js src/js/vocal-enveloppe-aigu.test.js` → **59** tests, **0** échec (25 rythme + 34 aigu) |
+| Suite front complète | `npm test` → **300** fichiers, **5594** tests, **0** échec |
+| Suite Rust complète | `cargo test --workspace` → **1075** passés, **14** ignorés, **0** échec (6 suites) |
+| Aide intégrée | `npm run build:handbook` → 48 blocs, 343 347 octets, **aucun diff** : la précision ajoutée à `spec_modes_ecran_vocal.md` vit hors des blocs `<!-- HELP:* -->`, l'aide utilisateur reste donc inchangée |
+
+Aucun numéro de version, aucun tag, aucune publication touchés ; aucun test
+existant modifié ou assoupli ; aucun seuil audio changé ; apparence du halo
+(taille, couleurs, forme, peintre) inchangée.
