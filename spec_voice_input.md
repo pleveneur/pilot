@@ -3,6 +3,9 @@
 > Document de spécification — Statut : ✅ **Implémenté (2026-07)** sur les **deux** interfaces : desktop (bouton 🎙️ de l'onglet π et de l'Assistant, micro débloqué par le patch local de wry, voir §8) et web remote (micro Chrome HTTPS via Tailscale Serve).
 > Décisions validées par l'utilisateur le 10/07/2026.
 > Suivi : voir « Évolution 8 » dans `Bugs et Evolutions.md`.
+> **Oreille locale (2026-11-04)** : le pont machine vers la transcription LOCALE
+> est livré (§9). **L'écran n'est pas encore branché dessus** : le son de la
+> dictée part toujours vers Google/Microsoft (§3, « Confidentialité »).
 
 ---
 
@@ -445,6 +448,91 @@ minuteur, réévaluation à l'échéance, `rec.stop()` réutilisé, un seul
   Tauri/wry, récupérer la nouvelle source wry, réappliquer la modification du handler
   dans `src/webview2/mod.rs` (bloc « Permission handler (patched for Pilot) »), et
   ajuster la version dans `[patch.crates-io]` si besoin.
+
+---
+
+## 9. Oreille locale — étape 1 : le pont machine (2026-11-04)
+
+> **Décision du propriétaire** : la dictée doit pouvoir être transcrite **sur
+> l'ordinateur**, par le logiciel de voix local (VoiceStudio), au lieu d'envoyer
+> le son à Google/Microsoft. **Étape 1 = le pont machine seulement** : aucun
+> écran, aucun bouton, aucun réglage ne change. **Tant que l'étape 2 n'est pas
+> faite, le son de la dictée part toujours vers le service en ligne** — ce
+> document ne prétend pas le contraire.
+
+### Une seule porte, un module frère de la voix imitée
+
+`src-tauri/src/asr_voicestudio.rs` est le **frère** de `tts_voicestudio.rs` :
+lui **donne** une voix, celui-ci **reçoit** une parole. Mêmes conventions, mêmes
+messages, même journal (`voix-locale.log`), même adresse (`BASE_URL` de
+`tts_voicestudio.rs`, jamais recopiée). **La fenêtre ne joint jamais le service**
+(verrou `src/js/oreille-locale-etape1.test.js`).
+
+| Commande | Rôle |
+|---|---|
+| `asr_voicestudio_status()` | La dictée locale est-elle possible ? Sinon **pourquoi**, en une phrase (`hint`) + un code stable (`reason`) : `disponible`, `service-absent`, `service-muet`, `aucun-modele-francais`, `modele-non-accepte`, `dictee-non-prete`. |
+| `asr_voicestudio_start(model?)` | Ouvre **une** dictée et rend `session_id`, le modèle **retenu**, `sample_rate` (16 000). Refus explicite sinon. |
+| `asr_voicestudio_send(session_id, chunk)` | Reçoit un morceau de son (PCM 16 kHz mono 16 bits, ≤ `MAX_CHUNK_BYTES`). Ne bloque jamais : le morceau part dans la session. |
+| `asr_voicestudio_stop(session_id)` | Ferme proprement : le service rend son **texte final** (évènement `final`). |
+| `asr_voicestudio_cancel(session_id)` | Interrompt **en pleine dictée** : rien n'est gardé, rien n'est promis. Interrompre une session déjà finie n'est pas une erreur. |
+
+Les cinq commandes sont `pub async fn` + `spawn_blocking` (règle « aucune
+commande ne fige l'écran », `commandes-agent-non-bloquantes.test.js`).
+
+### Ce que la fenêtre reçoit
+
+Un seul évènement, au nom stable, `asr-voicestudio-transcript` :
+
+| `kind` | Contenu |
+|---|---|
+| `started` | `engine` = le moteur **réellement** retenu par le service |
+| `partial` | `text` provisoire (le texte s'écrit au fur et à mesure) |
+| `final` | `text` définitif + `final_kind` (`summary` = la phrase entière) |
+| `error` | `message` en français + `kind` stable (jamais un code brut) |
+| `ended` | la session est refermée côté machine |
+
+### Le modèle français est IMPOSÉ, jamais celui du service
+
+- Le modèle est imposé dans l'adresse (`?model=…`) : sans cela le service prend
+  **son** défaut (le plus petit modèle).
+- Le modèle préféré est `sherpa-parakeet-tdt-v3` (européen, 25 langues, installé) ;
+  sinon le premier modèle **installé** capable de français (libellés « french »,
+  « european », « multilingual », « 90+ »…).
+- Un modèle **absent** est une erreur dite : **aucun téléchargement** n'est
+  jamais déclenché par ce module.
+- **Aucune licence n'est acceptée à la place de l'utilisateur.** Le service
+  refuse un modèle installé dont la licence n'a pas été acceptée : le module
+  **lit** cet état (`GET /models/licenses/acceptance/<repo>`), écarte le modèle
+  et dit exactement où l'accepter. Une licence **illisible** ne condamne jamais
+  un modèle.
+
+### Preuves réelles (mesurées, pas estimées)
+
+Phrase française contenant des accents, transformée en son puis transcrite par le
+service local (VoiceStudio 0.5.7, GPU RTX 5080) :
+
+- modèle **réellement** utilisé : `sherpa-whisper-tiny` — `sherpa-parakeet-tdt-v3`
+  est **refusé** par le service (licence non acceptée) et le module le dit ;
+- session ouverte en ~30 ms après la sonde ; **premier partiel à ~0,9 s** du
+  premier morceau, partiels ensuite toutes les ~1 s ; **texte final à ~9,5 s**
+  (dont ~5,7 s de son) ;
+- texte obtenu : « Bonjour, ceci est un essaye de dicter local avec des accents,
+  ou déjà être ça très français. » — accents, « où », « déjà », « ça » justes ;
+  erreurs observées : *essaye* (essai), *dicter* au lieu de *dictée* ;
+- **service arrêté** : l'application de l'utilisateur n'a **pas** été tuée ; la
+  même voie a été éprouvée vers un **port fermé** (vrai refus de connexion) :
+  constat en ~2 s, phrase « le logiciel de voix (VoiceStudio) n'est pas ouvert »,
+  aucune exception.
+
+Rapport complet : `docs/rapports/RAPPORT-oreille-locale-etape1-pont-machine.md`.
+
+### Ce qui reste (étape 2, pas commencée)
+
+Brancher la dictée de l'écran sur ces commandes (envoyer le son du micro capté
+par la fenêtre, écrire les partiels dans la zone, garder la garde du nom de
+l'écran Vocal et l'envoi automatique **inchangés**), et n'annoncer au
+propriétaire « le son ne part plus » **qu'après** l'avoir constaté.
+
 ---
 
 <!-- HELP:dictee-vocale -->

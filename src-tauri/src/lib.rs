@@ -91,6 +91,11 @@ mod tts_local_download;
 // deuxième moteur de lecture, à côté de Piper, jamais à sa place. Aucun moteur
 // téléchargé, aucun fichier audio écrit, appels sur la boucle locale seulement.
 mod tts_voicestudio;
+// Oreille LOCALE de la dictée (étape 1 de `spec_voice_input.md`) : la parole est
+// transcrite par le MÊME service local VoiceStudio, en flux. Frère de
+// `tts_voicestudio.rs`, jamais à sa place. Aucun modèle téléchargé, aucun fichier
+// audio écrit, boucle locale seulement.
+mod asr_voicestudio;
 mod pi_update;
 mod project_agents;
 mod db;
@@ -3714,6 +3719,9 @@ pub fn run() {
                 gds_pool: Mutex::new(None),
             }
         })
+        // Sessions de l'OREILLE LOCALE (dictée transcrite par le service local) :
+        // une seule dictée à la fois, tenue côté machine.
+        .manage(asr_voicestudio::AsrSessions::default())
         .invoke_handler(tauri::generate_handler![
             open_project_path,
             set_active_project,
@@ -3744,6 +3752,12 @@ pub fn run() {
             tts_voicestudio::tts_voicestudio_synthesize,
             tts_voicestudio::tts_voicestudio_warmup,
             tts_voicestudio::tts_voicestudio_log,
+            asr_voicestudio::asr_voicestudio_status,
+            asr_voicestudio::asr_voicestudio_start,
+            asr_voicestudio::asr_voicestudio_send,
+            asr_voicestudio::asr_voicestudio_stop,
+            asr_voicestudio::asr_voicestudio_cancel,
+            asr_voicestudio::asr_voicestudio_log,
             persona::read_assistant_persona,
             persona::read_assistant_persona_stamp,
             tts_local_download::tts_local_download,

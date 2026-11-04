@@ -63,6 +63,13 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 # ── Context Engine V2 (RAG embeddings) ──
 rusqlite = { version = "0.31", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# ── Oreille LOCALE de la dictée (spec_voice_input.md, étape 1) : le service local
+# VoiceStudio est joint en WebSocket (flux `voicestudio.speech.v1`). Les deux
+# caisses sont DÉJÀ dans `Cargo.lock` (tirées par `axum`/`reqwest`) — aucun
+# téléchargement nouveau. `futures-util` fournit `split()`/`SinkExt` sur la
+# socket ; `tokio-tungstenite` est construit sans TLS (boucle locale seulement).
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 tree-sitter = "0.26.11"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-typescript = "0.23.2"
