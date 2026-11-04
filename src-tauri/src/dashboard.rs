@@ -1074,6 +1074,20 @@ fn super_agent_client_for(app: &AppHandle, project_path: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Une tâche du suivi est-elle encore À FAIRE ?
+///
+/// Règle UNIQUE, jamais recopiée : `classify_task_status` (`super_agent.rs`,
+/// miroir de `normalizeTaskStatus` côté interface). Ouvertes = « à faire », « en
+/// cours » et « à valider ». Une tâche close, annulée ou à qualifier n'est PAS
+/// ouverte — quel que soit l'orthographe libre de son statut (« terminee »,
+/// « livree », « annulee », « en attente_oubli_volontaire »…).
+fn is_open_task_status(status: &str) -> bool {
+    matches!(
+        crate::super_agent::classify_task_status(status),
+        "todo" | "progress" | "review"
+    )
+}
+
 #[tauri::command]
 pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
     let config = state.config_snapshot();
@@ -1117,25 +1131,38 @@ pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Va
     };
 
     // Tâches + statut depuis la base de l'assistant (super-agent).
+    // Le nombre de tâches OUVERTES n'est PAS compté en SQL : les statuts de la
+    // base sont du texte libre, le plus souvent FRANÇAIS (« demande »,
+    // « en_cours », « terminee », « annulee »…). L'ancien
+    // `NOT IN ('done','cancelled','closed')` ne reconnaissait donc presque aucune
+    // tâche close et annonçait « ouvertes » des tâches terminées
+    // (docs/rapports/RAPPORT-liste-taches-affichee.md). La règle appliquée est
+    // celle du Suivi, la seule : `classify_task_status` (miroir de
+    // `normalizeTaskStatus`).
     let mut task_counts: HashMap<String, (u64, u64, String)> = HashMap::new();
     if let Ok(conn) = crate::super_agent::open_db(&app) {
         if let Ok(mut stmt) = conn.prepare(
-            "SELECT p.path, p.status, COUNT(t.id), \
-             SUM(CASE WHEN t.status NOT IN ('done','cancelled','closed') THEN 1 ELSE 0 END) \
-             FROM projects p LEFT JOIN tasks t ON t.project_id = p.id \
-             GROUP BY p.path",
+            "SELECT p.path, p.status, t.id, t.status \
+             FROM projects p LEFT JOIN tasks t ON t.project_id = p.id",
         ) {
             let rows = stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
-                    r.get::<_, String>(1).unwrap_or_default(),
-                    r.get::<_, i64>(2).unwrap_or(0) as u64,
-                    r.get::<_, i64>(3).unwrap_or(0) as u64,
+                    r.get::<_, Option<String>>(1).unwrap_or(None),                    r.get::<_, Option<i64>>(2).unwrap_or(None),
+                    r.get::<_, Option<String>>(3).unwrap_or(None),
                 ))
             });
             if let Ok(rows) = rows {
-                for row in rows.flatten() {
-                    task_counts.insert(row.0, (row.2, row.3, row.1));
+                for (path, project_status, task_id, task_status) in rows.flatten() {
+                    let entry = task_counts
+                        .entry(path)
+                        .or_insert((0, 0, project_status.unwrap_or_default()));
+                    if task_id.is_some() {
+                        entry.0 += 1;
+                        if is_open_task_status(task_status.as_deref().unwrap_or("")) {
+                            entry.1 += 1;
+                        }
+                    }
                 }
             }
         }
@@ -1594,6 +1621,39 @@ pub fn purge_project_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Le nombre de tâches OUVERTES affiché par le tableau de bord suit la règle
+    /// du Suivi, pas une liste de statuts anglais. Défaut corrigé : la requête
+    /// comparait à `('done','cancelled','closed')` alors que la base contient des
+    /// statuts français — presque toutes les tâches étaient donc annoncées
+    /// « ouvertes » (docs/rapports/RAPPORT-liste-taches-affichee.md). Échoue si
+    /// la règle redevient une comparaison de chaînes.
+    #[test]
+    fn une_tache_ouverte_suit_la_regle_du_suivi() {
+        // Ouvertes : libellés réels de la base.
+        for s in ["demande", "en_cours", "a_valider", "todo", "progress"] {
+            assert!(is_open_task_status(s), "{s} doit compter comme ouverte");
+        }
+        // Closes / annulées / à qualifier : jamais comptées ouvertes.
+        for s in [
+            "terminee",
+            "terminee - corrige et verifie",
+            "livree",
+            "livre_a_tester",
+            "fermee",
+            "annulee",
+            "abandonne",
+            "reporte",
+            "en_attente_oubli_volontaire",
+            "done",
+            "cancelled",
+            "closed",
+            "aqualifier",
+            "",
+        ] {
+            assert!(!is_open_task_status(s), "{s} ne doit pas compter comme ouverte");
+        }
+    }
 
     /// Le résumé de supervision porte un champ ADDITIF `name` (nom lisible),
     /// SANS changer le sens de `agent` (identité technique). Échoue si le nom

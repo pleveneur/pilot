@@ -2141,6 +2141,22 @@ apprend et répond.
   reçoit un prompt système par défaut qui rappelle son rôle (suivi de plusieurs
   projets par client, lecture seule).
 
+### Voir les tâches suivies dans le panneau « Travail »
+- Dans le panneau du travail (cercle en haut à droite), l'onglet **« Tâches »**
+  montre d'abord **ce qui travaille** (« En cours », « Démarrage ») puis **ce qui
+  attend** (« En attente »). Sous ces listes, un groupe **« Suivi (n) »** montre
+  les **tâches de votre suivi qui restent à faire**, chacune avec son état
+  (« À faire », « En cours », « À valider »).
+- Ce groupe dit lui-même qu'**aucun agent ne travaille dessus** : une tâche
+  simplement **suivie** ne peut donc plus être confondue avec une tâche en cours
+  ou en attente.
+- Il **suit vos changements** : créer, déplacer, clôturer ou supprimer une tâche
+  dans l'onglet **Kanban** se voit aussitôt ; une tâche créée **par l'Assistant**
+  apparaît dès la fin de sa réponse. Une tâche **terminée ou annulée** n'y
+  figure jamais, et une tâche n'y apparaît **jamais deux fois**.
+- Rien ne s'affiche quand votre suivi n'a **aucune tâche à faire** : le panneau
+  reste identique.
+
 <!-- HELP:super-agent-personnage -->
 ### Le personnage actif (nom et portrait)
 - Quand un **personnage est activé** dans Présences, l'Assistant **prend son
@@ -2308,6 +2324,24 @@ apprend et répond.
     horodatage, espacements), sans aucune valeur de style recopiée : réglages
     uniques dans les variables `--agent-activity-panel-*` et gabarits de liste
     partagés (verrou `src/js/taille-et-style-panneau.test.js`).
+  - **Tâches du SUIVI dans le volet « Tâches »** : sous les missions, un
+    troisième groupe **« Suivi (n) »** liste les tâches de la base de suivi qui
+    **restent à faire**, chacune avec son statut en clair (« À faire », « En
+    cours », « À valider »), et dit explicitement qu'**aucun agent ne travaille
+    dessus** — une tâche seulement suivie n'est donc plus confondue avec un
+    travail en cours ou en attente. Aucun en-tête quand la liste est vide (le
+    volet reste identique à lui-même). Le compte suit la **même règle « ouverte
+    ou close »** que l'onglet Kanban (`isOpenTaskStatus`, source unique) : une
+    tâche terminée / annulée / à qualifier n'y figure jamais et une tâche n'y
+    figure **jamais deux fois** (dédoublonnage par identifiant). La liste se
+    **rafraîchit d'elle-même** : toute écriture du Kanban, la fin d'un tour de
+    l'Assistant et l'ouverture du volet déclenchent une relecture (mémoire
+    courte de 5 s, une seule requête en vol, panne ⇒ dernière liste connue) —
+    plus de photo périmée. Le **compteur** du bouton « Travail » continue de
+    compter les **missions** (en cours + en attente) : les tâches du suivi ont
+    leur propre nombre. Module unique `src/js/taches-suivies-ecran.js`, verrou
+    `src/js/taches-suivies-affichees.test.js`, rapport
+    `docs/rapports/RAPPORT-liste-taches-affichee.md`.
   - Liste **chronologique** (plus récent en haut), pastille colorée par
     sévérité (succès / avertissement / erreur / info), horodatage discret.
   - Bouton **« tout effacer »** 🗑️ (dans l'onglet « Événements ») pour vider la

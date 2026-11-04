@@ -157,6 +157,16 @@ projet (ouverture, fermeture, bascule).
   grâce `ACTIVITY_GRACE_SECS`), `task_count` / `open_tasks` (depuis la base de
   l'assistant `super_agent::open_db`), `status` et `last_session` (dernier
   horodatage indexé via `session_history::read_session_index`).
+  - **`open_tasks` suit la règle UNIQUE du Suivi** (`is_open_task_status`, qui
+    délègue à `super_agent::classify_task_status`, miroir de
+    `normalizeTaskStatus`) : ouvertes = « à faire », « en cours », « à valider ».
+    Le compte n'est **plus** fait en SQL contre une liste de statuts anglais
+    (`NOT IN ('done','cancelled','closed')`) alors que la base stocke des statuts
+    français en texte libre : presque toutes les tâches étaient annoncées
+    « ouvertes ». Une tâche close, annulée ou à qualifier n'est plus comptée
+    ouverte, quel que soit son libellé. Verrou :
+    `dashboard::tests::une_tache_ouverte_suit_la_regle_du_suivi`, rapport
+    `docs/rapports/RAPPORT-liste-taches-affichee.md`.
 - **Commande Rust** `get_super_agent_tracking` (`src-tauri/src/super_agent.rs`) :
   le suivi de l'Assistant (clients → projets, décisions et sessions récentes).
   Elle sert **deux** usages, sans duplication : le contexte des tâches déléguées

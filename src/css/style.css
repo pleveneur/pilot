@@ -5855,6 +5855,20 @@ body.zen-mode #project-footer {
   color: var(--text-secondary);
 }
 .sa-task-item.running { cursor: pointer; }
+/* Groupe « Suivi » du volet « Taches » : les taches du suivi qui restent a faire
+   ne sont ni en cours ni en attente — aucune ligne n'est cliquable (rien a
+   ouvrir ici), d'ou le curseur par defaut et une teinte neutre. */
+.sa-task-client.sa-missions-group.suivi {
+  --sa-group-tone: #94a3b8;
+  color: var(--sa-group-tone, var(--text-secondary));
+  border-left-color: var(--sa-group-tone, var(--text-secondary));
+}
+.sa-task-item.suivi { cursor: default; }
+.sa-task-more {
+  padding: 2px 8px 6px;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
 .sa-task-item.waiting { border-left: 2px dotted var(--border-color, #334155); padding-left: 6px; }
 .sa-task-item {
   padding: 6px 8px;

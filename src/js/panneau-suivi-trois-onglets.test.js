@@ -566,7 +566,9 @@ describe("(c) les trois volets sont reellement alimentes", () => {
     expect(fin).toBeGreaterThan(debut);
     expect(html.slice(debut, fin)).toContain('class="sa-tasks-list"');
     expect(jsSuper).toMatch(/buildRunningMissions\(getAgentActivitySnapshot\(\)\.list, collectQueuedMissions\(\)\)/);
-    expect(jsSuper).toMatch(/superTasksList\.innerHTML = renderMissionsPanelHtml\(missions\)/);
+    expect(jsSuper).toMatch(
+      /superTasksList\.innerHTML =\s*renderMissionsPanelHtml\(missions\)\s*\+\s*renderSuperTrackedTasksHtml\(\)/
+    );
     // Sans mission : message explicite (jamais une liste vide trompeuse).
     expect(renderMissionsPanelHtml([])).toContain("Aucune mission en cours");
 

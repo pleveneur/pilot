@@ -20,6 +20,12 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
+// Le suivi est lu AUSSI par le volet « Tâches » du panneau du suivi : chaque
+// écriture d'ici publie l'UNIQUE signal « le suivi a changé » (le volet ne peut
+// donc pas rester sur une photo périmée), et cette vue relit la base quand le
+// signal vient d'ailleurs (Assistant, autre vue) — jamais en boucle sur ses
+// propres écritures (drapeau de suppression).
+import { notifyTrackedTasksChanged, onTrackedTasksChanged } from "./taches-suivies-ecran.js";
 import { ALL_PROJECTS, IDEAS_GROUP_LABEL, normalizeTaskStatus, columnToStatus,
   toggleSelection, selectionCount, canCloseSelection, bulkCloseConfirmMessage,
   planBulkClose, buildBulkUndoPlan,
@@ -367,7 +373,7 @@ export function createSuperKanban(container) {
     if (refused.length) await showKanbanNotice("Clôture refusée", refused.join(" "));
     lastBulkClose = applied.length ? { changes: applied } : null;
     selectedTaskIds = new Set();
-    loadSuperKanban();
+    reloadAfterTrackingWrite();
   }
 
   /** Rétablit le statut précédent des tâches du dernier lot clôturé (réversible). */
@@ -381,7 +387,7 @@ export function createSuperKanban(container) {
       }
     }
     lastBulkClose = null;
-    loadSuperKanban();
+    reloadAfterTrackingWrite();
   }
 
   /**
@@ -863,6 +869,28 @@ export function createSuperKanban(container) {
     }
   }
 
+  // ── Le suivi a changé : un seul signal, deux effets ─────────────────────
+  // 1. toute ÉCRITURE d'ici (`reloadAfterTrackingWrite`) prévient le volet
+  //    « Tâches » : il ne peut plus rester sur une photo périmée ;
+  // 2. tout changement venu d'AILLEURS (Assistant, autre vue) fait relire la base
+  //    par cette vue, sans attendre une bascule d'onglet.
+  // Le drapeau empêche la boucle : le signal émis par nos propres écritures ne
+  // déclenche pas un second chargement (le premier est déjà en cours).
+  let suppressTrackingNotify = false;
+  function reloadAfterTrackingWrite() {
+    suppressTrackingNotify = true;
+    try {
+      notifyTrackedTasksChanged();
+    } finally {
+      suppressTrackingNotify = false;
+    }
+    loadSuperKanban();
+  }
+  const unlistenTracking = onTrackedTasksChanged(() => {
+    if (suppressTrackingNotify) return;
+    loadSuperKanban();
+  });
+
   // ── Pilotage CRUD de la vue Kanban (création/édition/déplacement/suppression) ──
   // Les écritures vont UNIQUEMENT dans la base de suivi de l'Assistant
   // (~/.pilot/super-agent.db), jamais sur les fichiers projets.
@@ -872,14 +900,14 @@ export function createSuperKanban(container) {
   // confirmation + UNE relance forcée en mode « rappel », refus affiché tel quel
   // en mode bloquant (aucune règle dupliquée ici, cf. `handleChecklistGate`).
   async function moveKanbanTask(taskId, status) {
-    if (await updateTaskStatusWithGate(taskId, status)) loadSuperKanban();
+    if (await updateTaskStatusWithGate(taskId, status)) reloadAfterTrackingWrite();
   }
 
   // Supprime une carte (bouton en deux temps : 1er clic « arme », 2e clic confirme).
   async function deleteKanbanTask(taskId, title) {
     try {
       await invoke("super_agent_delete_task", { taskId });
-      loadSuperKanban();
+      reloadAfterTrackingWrite();
     } catch (err) {
       console.error("Erreur suppression carte:", err);
     }
@@ -1022,7 +1050,7 @@ export function createSuperKanban(container) {
           });
         }
         close();
-        loadSuperKanban();
+        reloadAfterTrackingWrite();
       } catch (err) {
         console.error("Erreur création/édition carte:", err);
       }
@@ -1283,6 +1311,7 @@ export function createSuperKanban(container) {
       // Les listeners sont délégués sur le conteneur (détruit avec l'onglet).
       dragTaskId = null;
       kanbanTasksById.clear();
+      unlistenTracking();
     },
   };
 }

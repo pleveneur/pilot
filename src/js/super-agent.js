@@ -357,6 +357,18 @@ import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnap
 // sur un projet sont une famille d'attente a part entiere (elles n'etaient
 // comptees nulle part, donc le total affiche etait faux).
 import { listAllProjectCommands } from "./project-task-queue.js";
+// Les TÂCHES DU SUIVI dans le volet « Tâches » : le volet ne lisait que le store
+// d'activité, donc une tâche créée / annulée / regroupée dans le suivi n'y
+// changeait rien, le nombre affiché ne pouvait pas correspondre aux tâches
+// ouvertes, et une tâche seulement suivie était indistinguable d'un travail en
+// cours (docs/rapports/RAPPORT-liste-taches-affichee.md). Une seule règle
+// « ouverte ou close » (super-agent-kanban.js), un seul signal de changement.
+import {
+  loadTrackedTasks,
+  renderTrackedTasksGroupHtml,
+  onTrackedTasksChanged,
+  notifyTrackedTasksChanged,
+} from "./taches-suivies-ecran.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames, addConcernedBadge, badgeNameFromProjectPath } from "./super-agent-badges.js";
@@ -615,6 +627,11 @@ const SUPER_EVENTS_MAX = 150; // tampon mémoire (évite un panneau illisible)
 // volet (renderSuperMissions) : aucun travail d'affichage inutile.
 let superMissionsUnsub = null;      // désabonnement du store d'activité (missions)
 let superMissionsPanelUnsub = null; // désabonnement du suivi des onglets du panneau global
+// TÂCHES SUIVIES : dernière liste connue (base de suivi) + dernier HTML peint.
+// Le HTML mémorisé évite une boucle de rendu (comparer avant de repeindre).
+let superTrackedTasks = [];
+let superTrackedHtml = "";
+let superTrackedUnsub = null;       // désabonnement du signal « le suivi a changé »
 
 // ── Overlay plein écran des événements (tâche #160) ──
 // Quand le réglage `super_agent_events_overlay_enabled` est actif, chaque
@@ -3958,6 +3975,9 @@ function applySuperEventsTabsVisibility() {
 function onPanelTabChanged(state) {
   if (!state || !state.open || state.tab !== "tasks") return;
   loadSuperMissions();
+  // Ouvrir le volet vaut une relecture FRAICHE du suivi : la memoire courte (5 s)
+  // ne doit jamais faire apparaitre une tache creee entre-temps comme absente.
+  refreshSuperTrackedTasks({ force: true });
 }
 
 /**
@@ -4038,8 +4058,37 @@ function renderSuperMissions() {
   if (!isAgentPanelPaneVisible("tasks")) return;
   const superTasksList = agentPanelTasksListElement();
   if (!superTasksList) return;
-  superTasksList.innerHTML = renderMissionsPanelHtml(missions);
+  // DEUX familles distinctes, jamais melangees : les MISSIONS (ce qui travaille
+  // ou attend, avec rang et duree) puis les TACHES SUIVIES (suivi seul, chacune
+  // avec son statut). Le groupe « Suivi » ne rend RIEN quand il n'y a aucune
+  // tache a faire : le volet reste identique a lui-meme.
+  superTasksList.innerHTML =
+    renderMissionsPanelHtml(missions) + renderSuperTrackedTasksHtml();
   refreshIcons(superTasksList);
+  // La liste des taches suivies vient de la BASE : elle est relue ici (memoire
+  // courte). Le rendu ne l'attend pas — et un re-rendu identique ne repeint pas.
+  refreshSuperTrackedTasks();
+}
+
+/** HTML du groupe « Suivi » (chaîne vide quand il n'y a rien à suivre). */
+function renderSuperTrackedTasksHtml() {
+  return renderTrackedTasksGroupHtml(superTrackedTasks);
+}
+
+/**
+ * Relit les taches suivies et repeint le volet SEULEMENT si la liste a change.
+ * Fail-open : une lecture impossible laisse la derniere liste connue.
+ * @param {{force?:boolean}} [options]
+ */
+function refreshSuperTrackedTasks(options = {}) {
+  loadTrackedTasks({ force: options.force === true }).then((tasks) => {
+    if (!tasks) return;
+    const html = renderTrackedTasksGroupHtml(tasks);
+    if (html === superTrackedHtml) return; // rien a repeindre (aucune boucle)
+    superTrackedHtml = html;
+    superTrackedTasks = tasks;
+    renderSuperMissions();
+  });
 }
 
 /** Libellé lisible d'un projet (« Assistant » pour les espaces réservés). */
@@ -4144,6 +4193,14 @@ export function startSuperMissionsWatch() {
   }
   if (!superMissionsUnsub) {
     superMissionsUnsub = subscribeAgentActivity(renderSuperMissions);
+    posed = true;
+  }
+  // Le SUIVI change sans passer par le store d'activité (creation, statut,
+  // regroupement — depuis le Kanban, l'Assistant ou une autre vue) : un seul
+  // signal, pose une fois, force une relecture. Sans lui, le volet restait sur
+  // une photo perimee.
+  if (!superTrackedUnsub) {
+    superTrackedUnsub = onTrackedTasksChanged(() => refreshSuperTrackedTasks({ force: true }));
     posed = true;
   }
   // Premier rendu : la donnée est déjà là (store), donc à l'ouverture le volet
@@ -9004,6 +9061,10 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   }
   if (type === "agent_end") {
     statusEl.textContent = "Prêt";
+    // LE SUIVI A PU CHANGER PENDANT CE TOUR (creation, statut, regroupement par
+    // l'Assistant) : un seul signal, et le volet « Taches » comme le Kanban
+    // relisent la base. Fin de tour reelle -> aucun sondage, aucun delai.
+    notifyTrackedTasksChanged();
     // MÉNAGE DES RAPPELS : le tour déclenché par un rappel peut être relancé par
     // le backend (willRetry). Seule une fin RÉELLE permet de conclure à une
     // exécution stérile — sinon on ne compte rien (« en cas de doute : on garde »).
