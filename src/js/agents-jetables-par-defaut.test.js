@@ -20,6 +20,10 @@
 //   5. le module est écrit SUR DISQUE à côté des extensions
 //      (`agent_service.rs`), sans quoi `pilot-assistant-actions.ts` ne se
 //      chargerait plus (import `./agent-lifespan-rule.js`).
+//   6. la consigne ne peut pas REDEVENIR AMBIGUË : `findAmbiguousLifespanWording`
+//      (pure, dans la source unique) refuse les formulations qui laissent croire
+//      qu'un agent permanent est acceptable par défaut — et ce refus est
+//      lui-même éprouvé sur des variantes fautives (test de mutation).
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -29,7 +33,9 @@ import {
   AGENT_LIFESPAN_RULE,
   AGENT_LIFESPAN_RULE_GUIDELINE,
   AGENT_LIFESPAN_RULE_SNIPPET,
+  AMBIGUOUS_LIFESPAN_MARKERS,
   decideAgentKind,
+  findAmbiguousLifespanWording,
 } from "./agent-lifespan-rule.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +50,27 @@ const SOURCE = read("src/js/agent-lifespan-rule.js");
 const EXTENSION = read("src-tauri/extensions/pilot-assistant-actions.ts");
 const PROMPT = read("src-tauri/src/super_agent.rs");
 const AGENT_SERVICE = read("src-tauri/src/agent_service.rs");
+
+/** Le bloc « Outils d'agents » du prompt système (une seule ligne du source). */
+const TOOLS_PROMPT =
+  PROMPT.split("\n").find((line) => line.includes("## Outils d'agents")) || "";
+
+/**
+ * Le passage du mode coordinateur qui parle de la création d'agents : c'est LÀ
+ * que l'ancienne consigne poussait à créer un agent permanent.
+ */
+const COORDINATOR_PROMPT =
+  PROMPT.split("\n").find((line) => line.includes("applique la règle des agents")) ||
+  "";
+
+/** La description de l'outil `create_agent` (jusqu'au `registerTool` suivant). */
+function extensionToolBlock(name) {
+  const start = EXTENSION.indexOf(`name: "${name}"`);
+  if (start < 0) return "";
+  const rest = EXTENSION.slice(start);
+  const next = rest.indexOf("pi.registerTool(", 1);
+  return next < 0 ? rest : rest.slice(0, next);
+}
 
 describe("règle « agent jetable par défaut » — la source unique", () => {
   it("dit les trois règles en clair : jetable, durable, jamais dans le doute", () => {
@@ -153,5 +180,85 @@ describe("règle « agent jetable par défaut » — le prompt système l'inject
     // d'assistant et session de l'Assistant) doivent l'écrire.
     const ecritures = AGENT_SERVICE.split("Self::write_agent_lifespan_rule(&dir)").length - 1;
     expect(ecritures).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("règle « agent jetable par défaut » — le verrou a des dents", () => {
+  it("reconnaît une formulation qui rend le permanent acceptable par défaut", () => {
+    // Ces variantes sont EXACTEMENT celles qui ont produit l'incident (un agent
+    // permanent créé pour un diagnostic ponctuel).
+    const fautes = [
+      "Tu disposes aussi de create_agent (agent sur mesure si nécessaire).",
+      "Si aucun agent ne convient, crée-le d'abord avec create_agent.",
+      "Utilise create_agent quand les agents disponibles ne conviennent pas.",
+      "Use create_agent when the available agents do not fit the task.",
+      "Crée un agent au besoin.",
+      "Create an agent if needed.",
+    ];
+    for (const faute of fautes) {
+      expect(findAmbiguousLifespanWording(faute)).not.toEqual([]);
+    }
+  });
+
+  it("n'est pas trompé par la casse, les accents ni les espaces", () => {
+    expect(findAmbiguousLifespanWording("AGENT SUR MESURE SI NÉCESSAIRE")).not.toEqual(
+      [],
+    );
+    expect(findAmbiguousLifespanWording("si   necessaire")).not.toEqual([]);
+  });
+
+  it("ne signale PAS une consigne qui déconseille la création", () => {
+    // Les formulations correctes citent le permanent pour l'ÉCARTER : elles ne
+    // doivent jamais être prises pour une ambiguïté (sinon le verrou serait
+    // inutilisable et on le désactiverait).
+    expect(
+      findAmbiguousLifespanWording(
+        "« Aucun agent du registre ne convient » n'est PAS une raison suffisante pour créer un agent permanent.",
+      ),
+    ).toEqual([]);
+    expect(
+      findAmbiguousLifespanWording(
+        "Dans le doute, ne crée RIEN : tu ne peux jamais supprimer une entrée du registre.",
+      ),
+    ).toEqual([]);
+    expect(findAmbiguousLifespanWording("")).toEqual([]);
+  });
+
+  it("laisse les textes RÉELS du dépôt sans ambiguïté", () => {
+    // Si l'un de ces contrôles casse, c'est la consigne qui est redevenue
+    // ambiguë : la règle dit « un besoin ponctuel → un agent jetable » sans
+    // jamais présenter le permanent comme le réflexe par défaut.
+    expect(AMBIGUOUS_LIFESPAN_MARKERS.length).toBeGreaterThan(5);
+    expect(findAmbiguousLifespanWording(AGENT_LIFESPAN_RULE)).toEqual([]);
+    expect(findAmbiguousLifespanWording(AGENT_LIFESPAN_RULE_GUIDELINE)).toEqual([]);
+    expect(findAmbiguousLifespanWording(AGENT_LIFESPAN_RULE_SNIPPET)).toEqual([]);
+    expect(findAmbiguousLifespanWording(extensionToolBlock("create_agent"))).toEqual(
+      [],
+    );
+    expect(findAmbiguousLifespanWording(extensionToolBlock("run_agents"))).toEqual([]);
+    expect(
+      findAmbiguousLifespanWording(extensionToolBlock("run_assistant_agents")),
+    ).toEqual([]);
+    expect(findAmbiguousLifespanWording(TOOLS_PROMPT)).toEqual([]);
+    expect(findAmbiguousLifespanWording(COORDINATOR_PROMPT)).toEqual([]);
+    // Les blocs réellement contrôlés ne sont pas vides (sinon on ne testerait
+    // rien).
+    expect(extensionToolBlock("create_agent")).toContain("create_agent");
+    expect(TOOLS_PROMPT).toContain("Outils d'agents");
+    expect(COORDINATOR_PROMPT).toContain("règle des agents");
+  });
+
+  it("dit qu'un agent jetable naît à la volée et n'est JAMAIS dans la liste", () => {
+    expect(AGENT_LIFESPAN_RULE).toContain("créé à la volée");
+    expect(AGENT_LIFESPAN_RULE).toContain("pour la seule durée de la tâche");
+    expect(AGENT_LIFESPAN_RULE).toContain(
+      "l'agent n'apparaît PAS dans la liste des agents du propriétaire",
+    );
+    // La consigne d'outil dit la même chose (une seule formulation, citée).
+    expect(AGENT_LIFESPAN_RULE_GUIDELINE).toContain("DEFAULT IS A THROWAWAY AGENT");
+    expect(AGENT_LIFESPAN_RULE_GUIDELINE).toContain(
+      "it never appears in the owner's agent list",
+    );
+    expect(AGENT_LIFESPAN_RULE_GUIDELINE).toContain("ONLY for a DURABLE role");
   });
 });

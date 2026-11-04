@@ -28,8 +28,9 @@ Nouveau module **pur** (`src/js/`, aucun import, aucune I/O) :
 - `AGENT_LIFESPAN_RULE` — la consigne en clair, trois règles ordonnées :
   1. besoin **ponctuel** (diagnostic, analyse, vérification, rédaction de
      circonstance) → **agent jetable** via `agents` (nom + rôle) de
-     `run_agents` / `run_assistant_agents` : rien en base, aucune entrée dans la
-     liste des agents, la définition disparaît à la fin (le travail reste) ;
+     `run_agents` / `run_assistant_agents` : **créé à la volée pour la seule
+     durée de la tâche**, rien en base, aucune entrée dans la liste des agents,
+     la définition disparaît à la fin (le travail reste) ;
   2. `create_agent` **RÉSERVÉ aux rôles DURABLES** ; « aucun agent du registre ne
      convient » n'est **pas** une raison suffisante ;
   3. dans le doute, **ne rien créer** : l'Assistant ne peut pas supprimer
@@ -40,6 +41,9 @@ Nouveau module **pur** (`src/js/`, aucun import, aucune I/O) :
 - `decideAgentKind(need)` — décision **pure** : seul `need.durable === true`
   autorise `"create_agent"` ; tout le reste (dont le doute) donne
   `"throwaway"`.
+- `findAmbiguousLifespanWording` + `AMBIGUOUS_LIFESPAN_MARKERS` — le verrou
+  d'**ambiguïté** (voir § 5 bis) : il refuse les formulations qui laisseraient
+  croire qu'un agent permanent est acceptable par défaut.
 
 Aucune phrase de la règle n'est écrite ailleurs.
 
@@ -82,13 +86,46 @@ règle au lieu de créer.
 
 ## 5. Verrous
 
-**Front** — `src/js/agents-jetables-par-defaut.test.js` (11 tests, 100 % verts) :
+**Front** — `src/js/agents-jetables-par-defaut.test.js` (16 tests, 100 % verts) :
 règle en clair (trois règles), contrat d'extraction (une seule déclaration, pas
 d'accent grave ni `${` — sinon Rust ne saurait plus extraire), décision pure
 (le doute → jetable), extension qui **cite sans recopier**, injection réelle
 dans l'assemblage (`push_str(&agent_lifespan_rule_prompt())`, mesuré ≥ 4 fois),
 absence de texte contradictoire dans `super_agent.rs`, écriture sur disque dans
-les deux chemins.
+les deux chemins, et **ambiguïté** (§ 5 bis).
+
+### 5 bis. Le verrou d'ambiguïté — une consigne qui ne peut plus se relâcher
+
+Un verrou de présence (« la bonne phrase est là ») ne suffit pas : il laisse
+passer une consigne qui **ajoute** une permission. La source unique porte donc
+la décision inverse, **pure** :
+
+- `AMBIGUOUS_LIFESPAN_MARKERS` — les fragments qui font croire qu'un agent
+  permanent est acceptable **par défaut** : « si nécessaire » / « si necessaire »,
+  « au besoin », « agent sur mesure », « aucun agent ne convient », « agents
+  disponibles ne conviennent pas », « crée-le d'abord », « if needed », « when
+  necessary », « do not fit the task ».
+- `findAmbiguousLifespanWording(text)` — compare sans casse, sans accents et
+  sans espaces superflus, et rend les marqueurs trouvés (vide = consigne nette).
+
+Le test l'applique aux textes **réellement envoyés au modèle** : la consigne, la
+consigne d'outil, le résumé, les blocs `create_agent` / `run_agents` /
+`run_assistant_agents` de l'extension, le bloc « Outils d'agents » et le passage
+du mode coordinateur de `super_agent.rs`. Trois garde-fous pour qu'il reste
+utilisable :
+
+1. **mutation** — six variantes fautives réelles (dont « agent sur mesure si
+   nécessaire » et « Use create_agent when the available agents do not fit the
+   task », les deux textes de l'incident) doivent être **détectées** ;
+2. **non-régression inverse** — une consigne qui **déconseille** la création
+   (« n'est PAS une raison suffisante… », « ne crée RIEN ») n'est **jamais**
+   signalée : sinon le verrou serait désactivé à la première alerte inutile ;
+3. **anti-vide** — les blocs contrôlés doivent être non vides, pour qu'un bloc
+   vidé ne fasse pas passer le test en silence.
+
+Éprouvé par mutation manuelle : en réinjectant « agent sur mesure si nécessaire »
+dans `AGENT_LIFESPAN_RULE`, la suite **échoue** (« laisse les textes RÉELS du
+dépôt sans ambiguïté ») ; restaurée, elle repasse verte.
 
 **Rust** :
 - `la_regle_de_l_agent_jetable_est_injectee_dans_le_prompt` (`super_agent.rs`) :
@@ -129,11 +166,18 @@ compte désormais le nouveau bloc ; mesuré **5 947 caractères** pour un plafon
 
 ## 7. Résultats des tests
 
+Vérifiés à nouveau sur `main` après le durcissement du verrou :
+
 ```
-npx vitest run                      → 5517 passés, 0 échec
+npx vitest run                      → 5540 passés, 0 échec
 cargo test --manifest-path src-tauri/Cargo.toml --lib
                                     → 900 passés, 3 ignorés, 0 échec
 ```
+
+Le texte de la consigne gagne « créé à la volée pour la seule durée de la
+tâche » (une quarantaine de caractères) : le garde-fou de budget du prompt
+(`super_agent_fixed_prompt_stays_under_budget`) reste **vert**, aucun plafond
+n'a été relevé.
 
 ## 8. Ce qui n'a pas été touché (interdits respectés)
 

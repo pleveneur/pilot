@@ -34,7 +34,7 @@
 export const AGENT_LIFESPAN_RULE = `
 Par défaut, un besoin ponctuel se traite avec un agent JETABLE, pas avec un agent permanent.
 
-1. Besoin PONCTUEL (diagnostic, analyse, vérification, rédaction de circonstance — une tâche qui ne reviendra pas) : décris un AGENT JETABLE et lance-le, en renseignant « agents » (un nom + un rôle) dans run_agents ou run_assistant_agents. Rien n'est écrit dans le registre, l'agent n'apparaît PAS dans la liste des agents du propriétaire, et sa définition disparaît à la fin de la tâche (son travail — session, compte rendu — reste visible).
+1. Besoin PONCTUEL (diagnostic, analyse, vérification, rédaction de circonstance — une tâche qui ne reviendra pas) : décris un AGENT JETABLE, créé à la volée pour la seule durée de la tâche, et lance-le, en renseignant « agents » (un nom + un rôle) dans run_agents ou run_assistant_agents. Rien n'est écrit dans le registre, l'agent n'apparaît PAS dans la liste des agents du propriétaire, et sa définition disparaît à la fin de la tâche (son travail — session, compte rendu — reste visible).
 2. create_agent est RÉSERVÉ aux rôles DURABLES : un rôle que tu confieras encore dans plusieurs semaines, à plusieurs reprises. « Aucun agent du registre ne convient » n'est PAS une raison suffisante pour créer un agent permanent.
 3. Dans le doute, ne crée RIEN : tu ne peux jamais supprimer une entrée du registre (c'est le propriétaire qui le fait), donc toute création inutile reste visible chez lui. Un agent jetable couvre le besoin ponctuel, sans laisser de trace.`;
 
@@ -60,4 +60,57 @@ export const AGENT_LIFESPAN_RULE_SNIPPET =
  */
 export function decideAgentKind(need) {
   return need && need.durable === true ? "create_agent" : "throwaway";
+}
+
+/**
+ * Formulations qui LAISSENT CROIRE qu'un agent permanent est acceptable par
+ * défaut. Elles sont interdites dans la règle, dans la consigne d'outil et dans
+ * la description de `create_agent` : le verrou
+ * `agents-jetables-par-defaut.test.js` échoue si l'une réapparaît.
+ *
+ * Une entrée = un fragment incitatif, jamais une formulation correcte :
+ * « n'est PAS une raison suffisante pour créer un agent permanent » n'est pas
+ * visé (il DÉCOURAGE la création), « agent sur mesure si nécessaire » l'est.
+ */
+export const AMBIGUOUS_LIFESPAN_MARKERS = [
+  "si nécessaire",
+  "si necessaire",
+  "au besoin",
+  "agent sur mesure",
+  "aucun agent ne convient",
+  "agents disponibles ne conviennent pas",
+  "crée-le d'abord",
+  "cree-le d'abord",
+  "if needed",
+  "when necessary",
+  "do not fit the task",
+];
+
+/**
+ * Compare sans casse, sans accents et sans espaces superflus : « SI NÉCESSAIRE »
+ * et « si  necessaire » sont la même ambiguïté.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function foldForScan(text) {
+  return String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Décision PURE : ce texte contient-il une formulation AMBIGUË (qui rendrait un
+ * agent permanent acceptable par défaut) ?
+ *
+ * @param {string} text texte à contrôler (règle, consigne, description d'outil)
+ * @returns {string[]} les marqueurs trouvés, tels quels (vide = aucune ambiguïté)
+ */
+export function findAmbiguousLifespanWording(text) {
+  const folded = foldForScan(text);
+  return AMBIGUOUS_LIFESPAN_MARKERS.filter((marker) =>
+    folded.includes(foldForScan(marker)),
+  );
 }

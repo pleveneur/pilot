@@ -3510,12 +3510,19 @@ d'abord avec `create_agent`, puis lance. » et la consigne d'outil « Use
 remplacées ; le mode coordinateur **renvoie** désormais à la règle des agents.
 - **Verrous** : `src/js/agents-jetables-par-defaut.test.js` (règle en clair,
 contrat d'extraction, citations sans recopie, injection dans l'assemblage,
-absence de texte contradictoire, écriture sur disque) ; côté Rust
+absence de texte contradictoire, écriture sur disque, **ambiguïté**) ; côté Rust
 `la_regle_de_l_agent_jetable_est_injectee_dans_le_prompt` (`super_agent.rs`,
 présence dans le prompt par défaut **et** en mode coordinateur, extraction
 fermée) et `write_agent_lifespan_rule_ecrit_la_source_unique`
 (`agent_service.rs`). Le garde-fou de budget du prompt
 (`super_agent_fixed_prompt_stays_under_budget`) compte ce bloc.
+- **Verrou d'ambiguïté** : `findAmbiguousLifespanWording` est appliquée par le
+test à la règle, à la consigne d'outil, au résumé, aux trois blocs d'outils de
+l'extension, au bloc « Outils d'agents » et au passage du mode coordinateur :
+réintroduire une formulation permissive fait **échouer** la suite. Le test
+comprend un cas de **mutation** (des variantes fautives réelles doivent être
+détectées) et un cas de **non-régression inverse** (une consigne qui
+**déconseille** la création n'est jamais signalée).
 
 2. **Choisir quels agents utiliser** (outil `run_agents`) : il sélectionne les
    agents disponibles (par leur id) qui lui semblent les plus adaptés et leur
