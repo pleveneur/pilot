@@ -188,3 +188,64 @@ n'a été relevé.
 - Aucun refactor global : quatre fichiers de code touchés (un module pur
   nouveau, une extension, deux fichiers Rust), la logique d'exécution
   (`run_agents`, `create_agent`, agents jetables) est **inchangée**.
+
+## 9. Re-vérification (2026-11-15, demande reçue une seconde fois)
+
+La même demande est revenue alors que la règle était déjà livrée (`09ac19d` +
+`3fd5bba`, ce rapport). Rien n'a été réécrit : les points ont été **revérifiés
+sur le disque**, puis la suite complète relancée.
+
+**Où la règle est écrite (un seul endroit)** : `src/js/agent-lifespan-rule.js`
+(`AGENT_LIFESPAN_RULE` + `AGENT_LIFESPAN_RULE_GUIDELINE`), injectée dans le
+prompt système par `super_agent.rs` (`include_str!` + `extract_agent_lifespan_rule`)
+et **citée** par `pilot-assistant-actions.ts` (jamais recopiée) ; écrite sur
+disque par `AgentService::write_agent_lifespan_rule` dans les **deux** chemins
+d'extensions (`agent_service.rs` 3221 et 3477).
+
+**Comment un test le tient** : `src/js/agents-jetables-par-defaut.test.js`
+(16 tests) échoue si (a) une formulation qui rend le permanent acceptable par
+défaut réapparaît (`findAmbiguousLifespanWording` sur les textes réellement
+envoyés au modèle), (b) le bloc n'est plus injecté dans le prompt assemblé,
+(c) l'extension recopie la règle au lieu de la citer, (d) le module n'est plus
+écrit à côté des extensions. Côté Rust :
+`la_regle_de_l_agent_jetable_est_injectee_dans_le_prompt` et
+`write_agent_lifespan_rule_ecrit_la_source_unique`.
+
+**Aucune écriture en base, aucune entrée dans la liste** — vérifié aux deux
+étages, sans code nouveau :
+- JS (`src/js/ephemeral-agents.js`) : magasin `ephemeralAgents` **en mémoire
+  seule**, identifiants préfixés `eph-` (impossible de collisionner une entrée du
+  registre), purgé des deux étages à la fin de la tâche ; aucune commande de
+  persistance n'y est appelée (seuls `register_ephemeral_agent` /
+  `clear_ephemeral_agent`).
+- Rust : `register_ephemeral_agent` force `visible = false` et
+  `agent_jetable_vit_en_memoire_et_disparait_a_la_purge` (`agent_service.rs`)
+  prouve qu'il n'y a **pas de ligne** : résolution en mémoire pour son projet,
+  `None` pour un autre projet, plus rien après `clear_ephemeral_agent`.
+  Le repli de `get_agent` (`ephemeral_agent`) empêche `start` de « seeder » une
+  ligne en base.
+
+**Ce que l'utilisateur voit malgré tout** (et qui n'est pas le registre) : un
+agent jetable qui **travaille** figure dans la **liste d'activité** (c'est une
+liste de travail, pas la liste des agents du propriétaire) et y porte son nom
+significatif ; sa session et son compte rendu restent lisibles après la purge.
+
+**Documentation / aide intégrée** : `spec_super_agent.md` § « Règle « agent
+jetable par défaut » (source unique, injectée) » + § « Agent jetable (mémoire
+seule) » ; bloc utilisateur `<!-- HELP:super-agent-agent-jetable -->` (dit que
+c'est « la façon par défaut de travailler », avec la raison) ; `AGENTS.md`
+(arborescence) ; `help/handbook.md` **régénéré et à jour** (`npm run
+build:handbook` → 48 blocs, 343 132 octets, aucun diff).
+
+**Chiffres réels de la re-vérification** :
+
+```
+npx vitest run (ciblé : agents-jetables-par-defaut + agent-jetable)
+                            → 26 passés, 0 échec
+npx vitest run              → 5594 passés, 0 échec
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+                            → 902 passés, 3 ignorés, 0 échec
+```
+
+Aucun numéro de version touché, aucun agent du registre supprimé, aucun test
+existant assoupli.
