@@ -36,10 +36,12 @@ import {
   ALLOW_MISSING_NOTES_ENV,
   CRITICAL_PLATFORMS,
   EXIT_RELEASE_REFUSED,
+  MACOS_PLATFORMS,
   OPTIONAL_PLATFORMS,
   evaluateDelivery,
   evaluateReleaseNotes,
   flagEnabled,
+  macosMissingNotice,
   notesPathForTag,
 } from "./release-gates.js";
 
@@ -306,14 +308,11 @@ function accept(reason) {
   if (notesDecision.accepted) accept(notesDecision.reason);
   else console.log(`✓ ${notesDecision.reason}`);
 
-  // Génère le changelog depuis les commits et met à jour le body de la
-  // release GitHub (visible sur la page release). On utilise ce même
-  // body comme `notes` dans latest.json — pas de re-fetch de l'API, donc
-  // pas de condition de course entre la mise à jour du body et sa lecture.
+  // Génère le changelog depuis les commits. RIEN N'EST ENCORE ÉCRIT : le body
+  // de la release n'est patché qu'APRÈS le verdict de livraison, plus bas — une
+  // publication refusée ne doit pas laisser la release à moitié réécrite.
   const { body: changelogBody, prev } = buildChangelogBody();
   const { assets, id: releaseId } = await getRelease();
-  await patchReleaseBody(releaseId, changelogBody);
-  console.log(`✓ Body de la release mis à jour${prev ? ` (depuis ${prev})` : ""} — ${changelogBody.length} car.`);
 
   // Index des assets par nom pour une lookup rapide.
   const byName = new Map(assets.map((a) => [a.name, a]));
@@ -378,10 +377,16 @@ function accept(reason) {
   // jamais la mise à jour, sans que rien ne soit rouge). Les cibles Linux, dont
   // la fabrication est un job séparé et optionnel, ne sont pas exigées ici
   // (cf. `CRITICAL_PLATFORMS` dans release-gates.js).
+  //
+  // PORTÉE de l'autorisation (`allowIncompleteScope`) : seule l'absence des
+  // deux paquets macOS peut être couverte par `ALLOW_INCOMPLETE_RELEASE`
+  // (décision du propriétaire du 2026-11-15). Un Windows manquant reste un
+  // ÉCHEC, même drapeau posé.
   const delivery = evaluateDelivery({
     platforms,
     expected: CRITICAL_PLATFORMS,
     allowIncomplete: flagEnabled(process.env[ALLOW_INCOMPLETE_ENV]),
+    allowIncompleteScope: MACOS_PLATFORMS,
   });
   if (!delivery.ok) refuse(delivery.reason);
   if (delivery.accepted) accept(delivery.reason);
@@ -394,10 +399,30 @@ function accept(reason) {
     );
   }
 
+  // ── Annonce de l'absence de macOS (jamais une tolérance muette) ────────
+  // La phrase est écrite dans le corps de la release ET dans les notes de
+  // latest.json (donc dans la modale de mise à jour des utilisateurs). Elle
+  // n'existe que si macOS manque réellement : `macosMissingNotice` rend null
+  // dès qu'une cible macOS est présente, si bien qu'aucune plateforme absente
+  // ne peut être ANNONCÉE à tort (et aucune cible macOS n'est jamais inscrite
+  // dans `platforms` : cet objet n'est rempli que par les artefacts réels).
+  const macosNotice = macosMissingNotice(delivery.missing);
+  if (macosNotice) accept(`macOS n'est pas servi cette fois (${delivery.missing.join(", ")}).`);
+  const releaseBody = macosNotice ? `${changelogBody}\n\n${macosNotice}` : changelogBody;
+
+  // Body de la release GitHub (visible sur la page release), patché une seule
+  // fois, après tous les verdicts. Ce MÊME texte sert de `notes` dans
+  // latest.json — pas de re-fetch de l'API, donc pas de condition de course
+  // entre la mise à jour du body et sa lecture.
+  await patchReleaseBody(releaseId, releaseBody);
+  console.log(
+    `✓ Body de la release mis à jour${prev ? ` (depuis ${prev})` : ""} — ${releaseBody.length} car.`
+  );
+
   // Changelog de la release : le body généré depuis le résumé humain (déjà
   // patché sur la release GitHub ci-dessus). Plus de repli silencieux à une
   // ligne : la porte 1 a déjà refusé une publication sans changelog lisible.
-  const notes = changelogBody.trim();
+  const notes = releaseBody.trim();
 
   const out = {
     version: VERSION,

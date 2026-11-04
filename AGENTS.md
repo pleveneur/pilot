@@ -155,9 +155,11 @@ pilot/
 │   ├── build-mcp-extension.js # Bundles esbuild de l'extension MCP (SDK embarqué) → pilot-mcp-client.ts
 │   ├── mcp-test-server.js     # Serveur MCP stdio de test (outil `echo`) pour le POC MCP
 │   ├── create-release.js      # Crée la GitHub Release (idempotent) avant les builds ; REFUSE un tag déjà publié, et refuse sans changelog lisible (décisions pures dans release-gates.js)
+│   ├── detect-macos-gap.js    # macOS absent : seule source de `ALLOW_INCOMPLETE_RELEASE` — lit les fichiers déposés, applique la règle pure `evaluateMacosGap`, n'autorise la livraison incomplète QUE si seul macOS manque, et annonce l'absence (journal + phrase de release)
+│   ├── publication-sans-macos.test.js # Verrous : une annulation de machine Apple ne peut plus faire sauter la publication ; une livraison incomplète ne repart jamais sans autorisation explicite ni sans annonce
 │   ├── gen-latest-json.js     # Génère latest.json (updater) depuis les assets + changelog (git ou release-notes/vX.Y.Z.md) + met à jour le body + upload ; REFUSE une livraison incomplète sur le chemin critique
 │   ├── latest-json-platforms.js # Logique PURE de gen-latest-json.js : artefact → cible d'updater (NSIS retenu, MSI écarté pour `windows-x86_64`)
-│   └── release-gates.js       # DÉCISIONS PURES de publication (source unique) : changelog obligatoire, livraison complète, tag déjà publié — chaque refus nomme sa sortie de secours explicite (ALLOW_*_RELEASE)
+│   └── release-gates.js       # DÉCISIONS PURES de publication (source unique) : changelog obligatoire, livraison complète (portée de l'autorisation = `MACOS_PLATFORMS` seulement : l'absence de macOS peut être autorisée, pas celle de Windows), tag déjà publié, phrase d'annonce de l'absence de macOS (`macosMissingNotice`) — chaque refus nomme sa sortie de secours explicite (ALLOW_*_RELEASE)
 ├── release-notes/            # Changelog utilisateur (vX.Y.Z.md) rédigé à chaque release (option A)
 ├── .github/workflows/
 │   ├── release.yml            # Build + publication multi-plateforme (tag v*)
@@ -446,8 +448,17 @@ Quand l'utilisateur demande la publication :
 
 ### Chaîne d'intégration — topologie à ne pas casser
 
+- Job `test` (Ubuntu + Windows) = **chemin critique** : c'est lui que
+  `create-release` attend. Il ne contient **aucune machine Apple**.
+- Job `test-macos` = les **mêmes tests** sur `macos-latest`, hors chaîne
+  critique : `continue-on-error: true` et **aucun job ne le déclare dans ses
+  `needs`**. Une machine Apple jamais attribuée (job annulé par GitHub après
+  ~15 min) ne fait donc sauter ni la Release, ni la fabrication, ni
+  `latest.json` — c'était la panne des 0.6.16 / 0.6.17 / 0.6.18.
 - Job `build` (Windows + macOS) = **chemin critique** de `latest-json`, donc de la
-  mise à jour automatique. `latest-json` ne dépend **que** de lui.
+  mise à jour automatique. `latest-json` ne dépend **que** de lui. Les deux
+  cibles macOS y sont tolérées (`continue-on-error` par plateforme) : un échec
+  **ou une annulation** macOS ne met plus le job en `cancelled`.
 - Job `build-linux` = séparé : plafond **90 min**, `continue-on-error`, aucun job
   ne dépend de lui. Il ne retarde et ne bloque jamais une publication.
 - Job `latest-json-linux` = seconde passe optionnelle : si (et seulement si) Linux
@@ -456,6 +467,30 @@ Quand l'utilisateur demande la publication :
   `prepare:laya`) et les paquets npm sont mis en cache par système (`~/.npm`).
   Ne pas réintroduire de `cargo build` manuel ni d'étape `prepare:laya` explicite.
 - Ces règles sont sous clé : `scripts/release-workflow.test.js` (`npx vitest run`).
+
+### Publier quand macOS n'est pas disponible (décision du 2026-11-15)
+
+Le dépôt est **public** : le manque de machines Apple n'est pas une affaire de
+minutes, c'est GitHub qui n'en attribue pas. Décision appliquée :
+**« Contourne sans macOS »** — une version peut sortir sans installateurs macOS,
+**mais jamais en silence**.
+
+- L'autorisation de livraison incomplète n'est **jamais** posée à la main dans le
+  workflow : l'étape `scripts/detect-macos-gap.js` constate l'absence sur les
+  fichiers réellement déposés et n'écrit `ALLOW_INCOMPLETE_RELEASE=1` que si
+  **seul macOS manque** (une annotation `::warning::` le dit dans le journal).
+  Windows manquant = échec, même drapeau posé (`allowIncompleteScope`).
+- L'absence est **annoncée** : phrase en français dans le corps de la Release et
+  dans les notes de `latest.json` (donc dans la modale de mise à jour), source
+  unique `macosMissingNotice()` dans `scripts/release-gates.js`.
+- `latest.json` ne liste que les plateformes dont l'artefact signé existe :
+  aucune cible macOS n'y est jamais inventée, Windows reste servi.
+- Le refus par défaut reste : sans autorisation, une livraison incomplète
+  échoue (code 2). Sortie de secours manuelle : `ALLOW_INCOMPLETE_RELEASE=1`.
+- Ne JAMAIS remettre `macos-latest` dans la matrice du job `test` : le verrou
+  `scripts/publication-sans-macos.test.js` échoue alors (c'est voulu).
+- Détail, mesures et preuves par mutation :
+  `docs/rapports/RAPPORT-publication-sans-macos.md`.
 
 Ne jamais republier un tag déjà existant (créer un nouveau numéro de version à la place).
 C'est désormais **refusé net** par `scripts/create-release.js` (code de sortie 2) ;
@@ -467,9 +502,12 @@ build échoue à la signature).
 la Release n'est créée qu'après un verdict de tests favorable (`create-release`
 `needs: [test]`), un changelog lisible est obligatoire, une livraison incomplète sur
 le chemin critique (Windows + les deux macOS) est un ÉCHEC et non un avertissement
-(`ALLOW_INCOMPLETE_RELEASE=1` pour forcer), et `.github/workflows/quality-gate.yml`
+(`ALLOW_INCOMPLETE_RELEASE=1` pour forcer, portée limitée à macOS par
+`allowIncompleteScope`), et `.github/workflows/quality-gate.yml`
 fait échouer toute proposition de modification ou poussée sur `main` dont les tests
-front ou Rust échouent. Détail et preuves : `docs/rapports/RAPPORT-verrous-livraison-lot-b.md`.
+front ou Rust échouent. Détail et preuves : `docs/rapports/RAPPORT-verrous-livraison-lot-b.md`
++ `docs/rapports/RAPPORT-publication-sans-macos.md` (verrou
+`scripts/publication-sans-macos.test.js`).
 
 ```bash
 # Lancer en mode développement

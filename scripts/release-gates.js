@@ -10,6 +10,14 @@
 //      chemin critique) est un ÉCHEC, plus un avertissement ;
 //   3. republier un tag qui a déjà une Release est REFUSÉ, bruyamment.
 //
+// S'y ajoute (décision du propriétaire du 2026-11-15, « Contourne sans macOS »)
+// la PORTÉE de la porte 2 : l'absence des deux paquets macOS est la SEULE
+// livraison incomplète que la chaîne peut autoriser, et elle n'est autorisée
+// que par `ALLOW_INCOMPLETE_RELEASE`, posée par le workflow après constat
+// (seul macOS manque) — jamais par défaut, jamais en silence : la release
+// porte alors une phrase en français qui dit que macOS n'est pas servi.
+// (`evaluateMacosGap`, `macosMissingNotice`.)
+//
 // Chaque refus a une porte de sortie EXPLICITE, par variable d'environnement :
 // une acceptation délibérée laisse une trace nommée dans le journal du run,
 // jamais un silence.
@@ -47,6 +55,20 @@ export const CRITICAL_PLATFORMS = Object.freeze([
 
 /** Cibles possibles mais NON critiques (fabrication séparée, donc optionnelle). */
 export const OPTIONAL_PLATFORMS = Object.freeze(["linux-x86_64", "linux-aarch64"]);
+
+/**
+ * Cibles macOS du chemin critique. Elles sont les SEULES dont l'absence peut
+ * être autorisée nommément (décision du propriétaire du 2026-11-15 :
+ * « Contourne sans macOS »). Aucune autre cible n'est jamais couverte par cette
+ * autorisation : un Windows manquant reste un ÉCHEC (cf. `evaluateDelivery`).
+ */
+export const MACOS_PLATFORMS = Object.freeze(["darwin-aarch64", "darwin-x86_64"]);
+
+/** Nom lisible d'une cible macOS (jamais une clé technique dans un texte utilisateur). */
+const MACOS_LABELS = Object.freeze({
+  "darwin-aarch64": "Mac Apple Silicon",
+  "darwin-x86_64": "Mac Intel",
+});
 
 /**
  * Chemin du changelog humain d'un tag : `release-notes/v<version>.md`, la
@@ -113,24 +135,121 @@ export function evaluateDelivery({
   platforms = {},
   expected = CRITICAL_PLATFORMS,
   allowIncomplete = false,
+  allowIncompleteScope = null,
 } = {}) {
   const present = platforms || {};
   const missing = expected.filter((k) => !present[k]);
   if (missing.length === 0) {
-    return { ok: true, accepted: false, missing: [], reason: `${expected.length} cible(s) du chemin critique présentes` };
+    return { ok: true, accepted: false, missing: [], blocking: [], reason: `${expected.length} cible(s) du chemin critique présentes` };
   }
+  // PORTÉE de l'autorisation. Par défaut (aucune portée fournie), le
+  // propriétaire autorise explicitement TOUTE la livraison incomplète — c'est
+  // la sortie de secours historique, inchangée. Les appelants qui n'ont le
+  // droit d'autoriser QUE l'absence de macOS passent `MACOS_PLATFORMS` : une
+  // cible hors portée manquante reste alors un refus, MÊME si le drapeau est
+  // posé. C'est ce qui empêche « macOS absent » de couvrir un Windows manquant.
+  const scope = allowIncomplete
+    ? Array.isArray(allowIncompleteScope)
+      ? allowIncompleteScope
+      : expected
+    : [];
+  const blocking = missing.filter((k) => !scope.includes(k));
   const reason =
     `Livraison INCOMPLÈTE : ${missing.length}/${expected.length} cible(s) du chemin critique ` +
     `sans artefact signé (${missing.join(", ")}).`;
-  if (allowIncomplete) {
+  if (blocking.length > 0) {
+    const horsPortee = scope.length
+      ? ` Hors de la portée autorisée (${scope.join(", ")}) : ${blocking.join(", ")}.`
+      : "";
+    return { ok: false, accepted: false, missing, blocking, reason: `${reason}${horsPortee}` };
+  }
+  return {
+    ok: true,
+    accepted: true,
+    missing,
+    blocking: [],
+    reason:
+      `${reason} Publication ACCEPTÉE explicitement (${ALLOW_INCOMPLETE_ENV})` +
+      ` pour la seule cible autorisée (${scope.join(", ")}).`,
+  };
+}
+
+/**
+ * Phrase d'annonce, en français, de l'absence de macOS dans la livraison.
+ * `null` quand macOS est servi : aucune phrase n'est alors ajoutée.
+ *
+ * Elle dit UNIQUEMENT ce qui est vrai : les paquets macOS manquent, donc les
+ * postes macOS ne reçoivent pas cette mise à jour. Elle ne promet rien sur les
+ * autres plateformes (ni Windows ni Linux), qui sont de toute façon visibles
+ * dans la liste des fichiers de la release.
+ * @param {string[]} missing cibles absentes (`evaluateDelivery().missing`)
+ * @returns {string|null}
+ */
+export function macosMissingNotice(missing = []) {
+  const absents = MACOS_PLATFORMS.filter((k) => (missing || []).includes(k));
+  if (absents.length === 0) return null;
+  const quels = absents.map((k) => MACOS_LABELS[k] || k).join(" et ");
+  return (
+    "> ⚠️ **macOS n'est pas servi cette fois.** " +
+    `Aucun paquet d'installation macOS (${quels}) n'accompagne cette version : ` +
+    "les postes macOS ne recevront pas cette mise à jour et resteront sur leur " +
+    "version actuelle. Les fichiers publiés ci-dessous restent, eux, " +
+    "téléchargeables et fonctionnels."
+  );
+}
+
+/**
+ * Décide si le workflow peut accorder l'autorisation de livraison incomplète
+ * POUR CETTE RELEASE, à partir des noms des fichiers réellement déposés.
+ *
+ * Règle (une seule) : l'autorisation n'est accordée que lorsque le SEUL trou
+ * est macOS — c'est-à-dire quand un artefact d'updater d'une AUTRE plateforme
+ * est présent. Sans cela, le trou n'est pas « macOS absent », c'est une
+ * livraison cassée, et le refus par défaut doit jouer.
+ *
+ * Pure : reçoit les noms de fichiers, ne joint rien.
+ * @param {{assetNames?: string[], mapper?: (name: string) => (string|null)}} o
+ * @returns {{allowIncomplete: boolean, macosMissing: boolean, otherPresent: boolean, notice: string|null, reason: string}}
+ */
+export function evaluateMacosGap({ assetNames = [], mapper } = {}) {
+  const map = typeof mapper === "function" ? mapper : null;
+  const keys = new Set();
+  for (const name of assetNames || []) {
+    const key = map ? map(name) : null;
+    if (key) keys.add(key);
+  }
+  const macosMissing = MACOS_PLATFORMS.every((k) => !keys.has(k));
+  const otherPresent = [...keys].some((k) => !MACOS_PLATFORMS.includes(k));
+  if (!macosMissing) {
     return {
-      ok: true,
-      accepted: true,
-      missing,
-      reason: `${reason} Publication ACCEPTÉE explicitement (${ALLOW_INCOMPLETE_ENV}).`,
+      allowIncomplete: false,
+      macosMissing: false,
+      otherPresent,
+      notice: null,
+      reason: "macOS est présent dans les fichiers de cette release.",
     };
   }
-  return { ok: false, accepted: false, missing, reason };
+  if (!otherPresent) {
+    return {
+      allowIncomplete: false,
+      macosMissing: true,
+      otherPresent: false,
+      notice: macosMissingNotice([...MACOS_PLATFORMS]),
+      reason:
+        "Aucun artefact d'updater d'aucune plateforme : ce n'est pas une absence " +
+        "de macOS mais une livraison cassée, l'autorisation n'est PAS accordée.",
+    };
+  }
+  return {
+    allowIncomplete: true,
+    macosMissing: true,
+    otherPresent: true,
+    notice: macosMissingNotice([...MACOS_PLATFORMS]),
+    reason:
+      "Seul macOS manque : autorisation de livraison incomplète accordée " +
+      `explicitement pour cette release (${ALLOW_INCOMPLETE_ENV}), et annoncée ` +
+      "dans la release.",
+  };
 }
 
 /**
