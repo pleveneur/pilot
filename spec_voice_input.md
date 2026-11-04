@@ -55,6 +55,17 @@ rec.start(); / rec.stop();
 - `continuous: true` → la reconnaissance ne s'arrête pas automatiquement à la fin
   d'une phrase (l'utilisateur arrête lui-même).
 
+### 3quater. Une seule exception : la garde du nom de l'écran Vocal
+
+La dictée décrite ici n'exige **aucun** mot d'appel : partout (éditeur, onglet
+agent π, Assistant 🧭, web distant), ce que vous dictez est écrit puis envoyé.
+La **seule** exception est l'**écran Vocal**, où le propriétaire a demandé que
+l'assistante ne fasse rien tant que son nom n'a pas été prononcé. Cette garde est
+un module **pur** de l'écran (`src/js/vocal-nom-garde.js`), appliqué **dans
+`super-agent.js` seulement** — le module de dictée partagé (`voice-auto-send.js`,
+`applyVoiceEnd`) et le web distant n'en connaissent rien. Spécification
+complète : `spec_modes_ecran_vocal.md` § 6quater.
+
 ### 3bis. Traitement des résultats — anti-doublon Android
 
 **Problème observé (Chrome Android, `continuous=true`)** : le moteur finalise des
@@ -479,4 +490,11 @@ texte à la voix.
   sensible** (dictée cloud), l'écran Vocal ne dicte pas. Si la dictée ne peut pas
   démarrer (micro refusé, occupé, réseau absent), la phrase s'affiche **dans la
   ligne d'état de l'écran** et vous continuez au clavier.
+- **Dans l'écran Vocal seulement, la dictée n'obéit qu'à son nom** : une phrase
+  qui ne contient pas le nom de l'assistante ne part pas, ne s'écrit pas et ne
+  s'affiche pas (le micro, lui, reste ouvert). Le bouton **« Réveiller <Nom> »**
+  lève cette garde pour **une** phrase, et le **clavier** n'est jamais filtré.
+  Détail : `spec_modes_ecran_vocal.md` § 6quater. **Partout ailleurs, rien ne
+  change** : la dictée de l'éditeur, de l'onglet agent π, de l'Assistant 🧭 et du
+  web distant n'exige aucun nom.
 <!-- /HELP:dictee-vocale -->

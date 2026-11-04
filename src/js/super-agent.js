@@ -191,6 +191,22 @@ import {
   vocalRestartText,
   VOCAL_RESTART_VERB,
 } from "./vocal-restart.js";
+// L'ÉCRAN VOCAL N'OBÉIT QU'À SON NOM (décision du propriétaire, spec
+// `spec_modes_ecran_vocal.md` § 6quater) : une phrase prononcée dans le mode
+// Vocal ne déclenche rien — ni envoi, ni texte conservé, ni affichage — tant que
+// le nom de l'assistante n'a pas été entendu. Les DÉCISIONS (les cinq règles,
+// la comparaison étroite, la phrase de la ligne d'état) sont PURES et vivent dans
+// ce module ; ce fichier ne fait que les appliquer aux deux seuls endroits qui
+// terminent une phrase (les résultats du moteur, puis sa fin d'écoute) et à la
+// ligne d'état (`vocalStatusLine`). Le micro, la transcription et le service de voix ne sont
+// pas touchés : l'écoute continue, seule la CONSÉQUENCE de la phrase change.
+import {
+  decideVocalNameGate,
+  mentionsAssistantName,
+  vocalNameGateArmed,
+  vocalNameSentence,
+  VOCAL_GATE_JETER,
+} from "./vocal-nom-garde.js";
 // LE BAS DE L'ECRAN S'EFFACE AU REPOS (CONCEPTION-ecran-vocal-cercle-et-bas.md
 // §2) : la DECISION est PURE et vit dans vocal-chrome.js (les quatre
 // circonstances qui interdisent le masquage, le seuil de 4 px, la touche
@@ -4876,6 +4892,15 @@ export async function createSuperAgent(container) {
 // zéro à la fermeture de la session ; l'état le combine de toute façon à
 // `voiceActive`, donc un drapeau périmé est sans effet.
 let vocalDicteeParGeste = false;
+// RÉVEILLÉ POUR UNE PHRASE (garde du nom, `vocal-nom-garde.js`) : `true` quand
+// l'utilisateur vient de RECLAMER l'écoute par un geste — le bouton de secours
+// « Réveiller <Nom> » du cercle, ou le bouton 🎙️ de la barre, qui empruntent la
+// MÊME voie (`toggleVoiceInput` → `startVoiceInput`). La phrase suivante part
+// alors SANS exiger le nom ; le drapeau est CONSOMMÉ à cette phrase (il ne vaut
+// jamais pour la session entière, sinon un seul clic rouvrirait l'envoi pour
+// toujours). Remis à zéro par la seule décision qui le consomme, jamais par un
+// délai. Hors du mode Vocal, il est ignoré : la garde ne s'applique pas.
+let vocalReveilUnePhrase = false;
   if (inputEl) {
     inputEl.addEventListener("input", () => {
       if (voiceActive) voiceUserTookOver = true;
@@ -4938,6 +4963,11 @@ let vocalDicteeParGeste = false;
     // GESTE explicite (et non armement automatique) : la session qui s'ouvre
     // n'est jamais refermée par l'arrivée d'une question (regle 4b).
     vocalDicteeParGeste = true;
+    // GESTE EXPLICITE = RÉVEIL : la phrase qui suit part sans exiger le nom
+    // (garde du nom, `vocal-nom-garde.js`, règle 4). Le bouton de secours
+    // « Réveiller <Nom> » du cercle arrive par la MÊME voie : il reste donc un
+    // vrai secours, sans second chemin de démarrage.
+    vocalReveilUnePhrase = true;
     startVoiceInput();
     applyVocalState();
   }
@@ -5007,6 +5037,22 @@ let vocalDicteeParGeste = false;
         transcript = finalText;
       }
       if (voiceUserTookOver) return; // l'utilisateur a repris la main : sa saisie prime
+      // GARDE DU NOM (mode Vocal) : tant que le nom de l'assistante n'a pas été
+      // entendu, RIEN ne s'écrit dans la zone et aucun mot ne repousse
+      // l'échéance du silence — donc rien ne part. Le micro, lui, n'est pas
+      // fermé : l'écoute continue, l'écran continue de s'animer et de se
+      // réarmer. Décision et comparaison dans `vocal-nom-garde.js` ; le nom
+      // vient de la SEULE source existante (`superAgentDisplayLabel`).
+      const nomAttendu = superAgentDisplayLabel();
+      if (
+        vocalNameGateArmed({ modeOuvert: vocalOverlay !== null, nom: nomAttendu, reveil: vocalReveilUnePhrase === true }) &&
+        !mentionsAssistantName(transcript, nomAttendu)
+      ) {
+        // Rien n'est conservé : la zone reste exactement ce qu'elle était.
+        if (inputEl.value !== preText) inputEl.value = preText;
+        vocalSyncChrome();
+        return;
+      }
       const sep = preText && !preText.endsWith(" ") ? " " : "";
       inputEl.value = preText + sep + transcript;
       resizeInput();
@@ -5063,6 +5109,37 @@ let vocalDicteeParGeste = false;
       // Arret DEMANDE par l'application (bouton 🎙️, envoi, sortie du mode) : lu
       // avant le traitement, la fin qui suit ne doit pas etre comptee.
       const arretDemande = voiceStopVoulu;
+      // GARDE DU NOM (mode Vocal, `vocal-nom-garde.js`) : une phrase qui ne
+      // contient pas le nom n'est NI envoyée, NI conservée, NI affichée. Elle
+      // n'est pas comptée comme un silence non plus (ce n'est pas une panne du
+      // moteur) : le plafond des sessions vides n'est pas alimenté, donc le
+      // réarmement automatique repart — l'écoute continue. Le seul état qui
+      // change est celui du réveil, consommé par la phrase qu'il a ouverte.
+      if (wasActive === true) {
+        const gardeNom = decideVocalNameGate({
+          modeOuvert: vocalOverlay !== null,
+          texte: finalText,
+          nom: superAgentDisplayLabel(),
+          repriseMain: voiceUserTookOver === true,
+          reveil: vocalReveilUnePhrase === true,
+        });
+        if (gardeNom.consommeReveil === true) vocalReveilUnePhrase = false;
+        if (gardeNom.action === VOCAL_GATE_JETER) {
+          // La session se referme comme une fin normale, mais rien ne part : la
+          // zone redevient ce qu'elle était avant la phrase, et aucune échéance
+          // de silence ne lui survit.
+          voiceActive = false;
+          voiceRec = null;
+          vocalMotRecu = false;
+          // Aucune échéance de silence ne survit à une phrase jetée.
+          clearVocalSilenceTimer();
+          vocalSessionsVides = [];
+          if (inputEl.value !== preText) { inputEl.value = preText; resizeInput(); }
+          if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
+          applyVocalState();
+          return;
+        }
+      }
       // Décision et ORDRE (refermer → écrire → envoyer) délégués au module PARTAGÉ
       // `applyVoiceEnd` — le même que l'onglet agent π. L'envoi emprunte le chemin
       // EXISTANT (Entrée / bouton Envoyer, fonction `send`) : aucun second
@@ -5843,6 +5920,12 @@ let vocalDicteeParGeste = false;
     // promet pas l'ecoute et ne parie pas sur « projet libre ». Il dit quoi
     // faire — et le bouton 🎙️ fonctionne, c'est l'utilisateur qui decide.
     if (raison === "sensibilite-indisponible") return VOCAL_MESSAGE_SENSIBILITE_INCONNUE;
+    // GARDE DU NOM (mode Vocal) : la ligne dit lequel des DEUX états est actif,
+    // et nulle part ailleurs. Garde ARMÉE → la phrase qui demande le nom (rien
+    // ne partira sans lui) ; RÉVEILLÉ pour une phrase → la phrase EXISTANTE du
+    // repos (« Je vous écoute. »), qui n'est pas recopiée ici. Aucun nouvel
+    // élément d'interface, aucun réglage nouveau.
+    if (vocalReveilUnePhrase !== true) return vocalNameSentence(superAgentDisplayLabel());
     return vocalStatusText(state);
   }
 
@@ -6935,6 +7018,10 @@ let vocalDicteeParGeste = false;
       // avec le mode, comme l'armement.
       clearVocalSilenceTimer();
       if (voiceActive) stopVoiceInput();
+      // LE RÉVEIL D'UNE PHRASE ne survit pas à l'écran : hors du mode Vocal la
+      // garde du nom ne s'applique pas, mais un drapeau oublié ferait passer la
+      // première phrase de la prochaine entrée sans le nom. Il meurt donc ici.
+      vocalReveilUnePhrase = false;
       vocalApresLecture = false;
       vocalArretManuel = false;
       vocalDictationErreur = "";

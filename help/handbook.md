@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-11-04 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-11-04 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1456,6 +1456,13 @@ texte à la voix.
   sensible** (dictée cloud), l'écran Vocal ne dicte pas. Si la dictée ne peut pas
   démarrer (micro refusé, occupé, réseau absent), la phrase s'affiche **dans la
   ligne d'état de l'écran** et vous continuez au clavier.
+- **Dans l'écran Vocal seulement, la dictée n'obéit qu'à son nom** : une phrase
+  qui ne contient pas le nom de l'assistante ne part pas, ne s'écrit pas et ne
+  s'affiche pas (le micro, lui, reste ouvert). Le bouton **« Réveiller <Nom> »**
+  lève cette garde pour **une** phrase, et le **clavier** n'est jamais filtré.
+  Détail : `spec_modes_ecran_vocal.md` § 6quater. **Partout ailleurs, rien ne
+  change** : la dictée de l'éditeur, de l'onglet agent π, de l'Assistant 🧭 et du
+  web distant n'exige aucun nom.
 
 ---
 
@@ -1549,6 +1556,41 @@ colonne des tâches s'effacent avec elle : il ne reste pas un rectangle vide aut
 personnage. La **barre de saisie**, elle, n'est pas concernée :
 elle reste affichée et utilisable, même quand tout le reste est masqué. Aucune mémoire :
 on entre **toujours** avec tout visible.
+
+---
+
+<!-- HELP-TOPIC:vocal-garde-du-nom -->
+### L'écran Vocal n'obéit qu'à son nom
+
+Dans l'écran Vocal, Pilot **ne fait rien tant que vous ne l'avez pas appelé par
+son nom**. Vous pouvez parler librement à côté : une phrase qui ne contient pas
+son nom **ne part pas**, **ne s'écrit pas** dans la zone de saisie et
+**ne s'affiche nulle part**. Aucun message, aucun avertissement : l'écran
+continue simplement de vous écouter.
+
+- **Le nom, où vous voulez** : au début, au milieu ou à la fin de la phrase —
+  « Nova, range le projet » comme « range le projet, Nova ».
+- **Il est reconnu malgré les petites différences** : majuscules, accents,
+  ponctuation et espaces n'ont aucune importance, et quelques prononciations
+  très proches passent (« Bernar » pour « Bernard »).
+- **Quel nom ?** Celui que Pilot affiche déjà : le **personnage** déposé par le
+  projet Présences, sinon le **nom réglé** de votre assistant, sinon son nom
+  habituel. Rien de nouveau à régler.
+- **La ligne d'état vous dit où vous en êtes** : « Dites « Nova » pour me
+  parler. » quand il attend son nom, et « Je vous écoute. » quand la phrase
+  suivante partira sans le nom.
+- **Le bouton « Réveiller <Nom> »** (dans le cercle) reste votre secours : un
+  clic, et **la phrase suivante part sans que vous ayez à redire le nom**. Il
+  ne vaut que pour **une** phrase.
+- **Le clavier n'est jamais filtré** : ce que vous **tapez** part comme avant,
+  sans aucune vérification.
+- **Ailleurs, rien ne change** : l'onglet de l'agent, l'Assistant en mode
+  détaillé et l'accès web distant fonctionnent exactement comme avant.
+
+**Si Pilot ne réagit pas alors que vous l'avez appelé**, c'est que la
+reconnaissance a écrit son nom autrement : redites-le clairement, cliquez
+**« Réveiller <Nom> »**, ou tapez votre demande au clavier. Pilot préfère ne
+rien faire que se déclencher pour une phrase qui ne lui était pas adressée.
 
 ---
 
