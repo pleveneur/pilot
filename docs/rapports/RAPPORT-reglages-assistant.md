@@ -197,7 +197,7 @@ n'est utilisé que pour un rôle **durable**.
 | Bloc `<!-- HELP:vocal-garde-du-nom -->` | dit le champ « Mots de réveil », l'exemple, et que le nom reste accepté |
 | `spec_super_agent.md` (genre) + `<!-- HELP:super-agent-genre-modele -->` | trois valeurs, défaut sans effet, priorité du personnage |
 | `spec_super_agent.md` (agent jetable) + `<!-- HELP:super-agent-agent-jetable -->` | jetable par défaut, permanent réservé aux rôles durables |
-| `help/handbook.md` | **régénéré** (`npm run build:handbook`, 48 blocs, 343 132 octets) — jamais édité à la main |
+| `help/handbook.md` | **régénéré** (`npm run build:handbook`, 48 blocs, 343 347 octets) — jamais édité à la main |
 
 ---
 
@@ -213,7 +213,9 @@ Tests ciblés des trois points (exécutés d'abord, avant les suites longues) :
 `src/js/mots-de-reveil.test.js`, `src/js/vocal-nom-garde.test.js`,
 `src/js/genre-et-modele-par-personnage.test.js`,
 `src/js/agents-jetables-par-defaut.test.js`, `src/js/agent-jetable.test.js`
-⇒ **104 tests passés, 0 échec**.
+⇒ **104 tests passés, 0 échec**. Les suites **front** et **Rust** ont été
+relancées **après** les mises à jour de documentation ci-dessus : mêmes chiffres
+(5 594 / 902 / 1 075, 0 échec).
 
 Aucun test existant n'a été assoupli. Aucun numéro de version n'a été modifié.
 Aucun fichier n'a été écrit dans `G:\IA_PL\Presences`.
