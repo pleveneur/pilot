@@ -148,6 +148,11 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   la touche **Échap**, ou la **fermeture de l'onglet**. Deux pleins écrans ne se
   superposent jamais : passer en « Assistant seul » ou en « Vocal » sort d'abord
   de l'autre.
+- **Votre conversation reste là où vous l'avez laissée** : en revenant en
+  « Détaillé », elle se retrouve **en bas** si vous suiviez le fil (même si la
+  réponse est arrivée pendant que vous étiez dans l'écran), ou **exactement au
+  passage que vous étiez en train de relire**. Rien ne remonte tout seul, rien
+  n'est à refaire défiler.
 - Le **trait de niveau suit votre voix** : il s'allonge quand vous parlez et
   retombe doucement au silence, sans sautillement.
 - **Le micro et la dictée restent ouverts pendant tout le mode** — c'est ce qui

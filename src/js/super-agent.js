@@ -9,6 +9,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import markdownit from "markdown-it";
 import { refreshIcons, setIcon } from "./icons.js";
+// POSITION DE LA CONVERSATION AU RETOUR D'UN PLEIN ECRAN (defaut corrige : la
+// conversation revenait TOUT EN HAUT). La DECISION (« quelle position rendre »,
+// et le seuil du « deja en bas ») est PURE et vit dans ce module ; ce fichier ne
+// prend qu'une photographie avant le deplacement des noeuds et la rend apres.
+// `SUPER_SCROLL_BOTTOM_THRESHOLD` lit la MEME valeur : aucun second seuil.
+import {
+  CONVERSATION_SCROLL_BOTTOM_THRESHOLD,
+  conversationAtBottom,
+  conversationScrollSnapshot,
+  conversationScrollTarget,
+} from "./conversation-scroll.js";
 // L'ETAT NU DE L'ECRAN VOCAL (decision 9 du 2026-10-29, section 6 de la
 // CONCEPTION-ecran-vocal-portrait-et-colonnes.md) : un SEUL bouton discret
 // masque tout sauf le portrait, puis remet tout. Les DECISIONS (les deux
@@ -565,8 +576,10 @@ const md = markdownit({
 
 // Seuil (px) : on ne force le scroll en bas que si l'utilisateur est déjà en
 // bas (ou proche), pour ne pas l'empêcher de remonter pendant que l'assistant
-// écrit (issue #60).
-const SUPER_SCROLL_BOTTOM_THRESHOLD = 60;
+// écrit (issue #60). La VALEUR vit dans `conversation-scroll.js` : le retour
+// d'un plein écran applique le même seuil que le suivi automatique, et deux
+// copies finiraient par diverger.
+const SUPER_SCROLL_BOTTOM_THRESHOLD = CONVERSATION_SCROLL_BOTTOM_THRESHOLD;
 
 // Ordonnancement chronologique des messages d'info de l'assistant (#20).
 // Chaque message d'info reçoit un `seq` unique à l'émission ; les messages
@@ -683,7 +696,9 @@ function hideSuperEventOverlay() {
  * est déjà en bas (ou presque, seuil `threshold`). Ne force pas le bas si
  * l'utilisateur a volontairement remonté pour relire (issue #60). */
 export function shouldScrollSuperToBottom(scrollTop, clientHeight, scrollHeight, threshold = SUPER_SCROLL_BOTTOM_THRESHOLD) {
-  return scrollTop + clientHeight >= scrollHeight - threshold;
+  // La règle elle-même vit dans le module pur (source unique), avec la
+  // restauration de position au retour d'un plein écran.
+  return conversationAtBottom(scrollTop, clientHeight, scrollHeight, threshold);
 }
 
 /**
@@ -933,6 +948,49 @@ function scrollSuperToBottom(messagesEl) {
   if (superAtBottom) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
+}
+
+// ── POSITION DE LA CONVERSATION AU RETOUR D'UN PLEIN ÉCRAN ──
+// Le défaut corrigé : sortir d'un plein écran (mode Vocal, mode Assistant seul)
+// remet la conversation TOUT EN HAUT. La cause n'est pas l'écran lui-même mais
+// la restitution des nœuds : déplacer un nœud défilable dans le DOM remet son
+// `scrollTop` à 0 (`exitImmersive` déplace `messagesEl`, et pour atteindre le
+// mode Vocal le bouton des modes passe par « Assistant seul »).
+// Deux fonctions seulement, et une photographie prise AVANT le déplacement :
+// après, l'information n'existe plus. La DÉCISION (« quelle position rendre »)
+// est pure et vit dans `conversation-scroll.js` ; ici il n'y a que le geste.
+let superScrollMemo = null;
+
+/** Photographie la position RÉELLE de la conversation (à appeler avant tout
+ *  déplacement de ses nœuds). */
+function memoizeSuperScroll(messagesEl) {
+  superScrollMemo = messagesEl
+    ? conversationScrollSnapshot(
+        messagesEl.scrollTop,
+        messagesEl.clientHeight,
+        messagesEl.scrollHeight,
+      )
+    : null;
+  return superScrollMemo;
+}
+
+/** Rend à la conversation la position décidée par le module pur, une seule fois
+ *  (la photographie est consommée : aucune restauration tardive, aucun saut
+ *  répété). Le suivi automatique du bas reprend ensuite la main, ré-armé quand
+ *  l'utilisateur était en bas — comme si l'écran n'avait jamais changé. */
+function restoreSuperScroll(messagesEl) {
+  const memo = superScrollMemo;
+  superScrollMemo = null;
+  if (!messagesEl || !memo) return null;
+  const cible = conversationScrollTarget(
+    memo,
+    messagesEl.clientHeight,
+    messagesEl.scrollHeight,
+  );
+  if (cible === null) return null;
+  messagesEl.scrollTop = cible;
+  superAtBottom = memo.atBottom;
+  return cible;
 }
 
 /** État global de l'assistant (nom, clients, prompt, options) — cache sync. */
@@ -5608,6 +5666,9 @@ let vocalReveilUnePhrase = false;
 
   function exitImmersive() {
     if (!immersiveOverlay) return;
+    // POSITION DE LA CONVERSATION : photographiée AVANT les déplacements de
+    // nœuds ci-dessous (le premier remet `scrollTop` à 0), rendue à la fin.
+    memoizeSuperScroll(messagesEl);
     // Résumé des agents : désabonnement au store partagé.
     if (immersiveAgentsUnsubscribe) {
       immersiveAgentsUnsubscribe();
@@ -5658,6 +5719,11 @@ let vocalReveilUnePhrase = false;
     // Ajustements A19 : si l'assistant réfléchissait encore, reporter
     // l'indicateur sur la barre de saisie (comportement du mode standard).
     applyReflecting();
+    // LA CONVERSATION RETROUVE SA PLACE (défaut corrigé) : elle était en bas →
+    // elle est en bas ; l'utilisateur avait remonté pour relire → il retrouve
+    // exactement son passage. La restitution est la DERNIÈRE écriture : la
+    // mise en page de « Détaillé » est alors complète, donc la mesure est juste.
+    restoreSuperScroll(messagesEl);
   }
 
   // ── LOT 2 : ecran du mode Vocal (RAPPORT-trois-modes-ecran-vocal.md §2 a §4) ──
@@ -7218,6 +7284,10 @@ let vocalReveilUnePhrase = false;
 
   function exitVocal() {
     if (!vocalOverlay) return;
+    // POSITION DE LA CONVERSATION : photographiée AVANT la restitution des
+    // nœuds (la sortie de « Assistant seul » a pu la remettre à 0), rendue à la
+    // toute fin, une fois le mode « Détaillé » réellement réaffiché.
+    memoizeSuperScroll(messagesEl);
     // ── LA SORTIE NE DEPEND PAS DU SUCCES DU DEMONTAGE (issue #381) ──
     // Le calque plein ecran n'est retire QU'A LA FIN de cette fonction : une
     // exception levee au milieu du demontage (arret de la lecture, du micro,
@@ -7375,6 +7445,11 @@ let vocalReveilUnePhrase = false;
     // La teinte de reflexion de la zone de saisie (desormais revenue dans
     // l'onglet) est resynchronisee sur l'etat reel.
     applyReflecting();
+    // LA CONVERSATION RETROUVE SA PLACE (défaut corrigé) : même règle que pour
+    // la sortie de « Assistant seul » — le même module pur décide, il n'y a pas
+    // deux comportements. Écrit en tout dernier : l'écran « Détaillé » est
+    // alors de nouveau peint et mesurable.
+    restoreSuperScroll(messagesEl);
   }
 
   /**

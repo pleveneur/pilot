@@ -841,6 +841,11 @@ texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que c
 tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
 cliquable dans la colonne : on la lit, on ne la manipule pas.
 
+Et en quittant le mode, la conversation de l'onglet **se retrouve là où vous
+l'aviez laissée** : en bas si vous suiviez le fil (même si la réponse est arrivée
+pendant que vous étiez dans l'écran), ou exactement au passage que vous étiez en
+train de relire. Aucun saut, rien à refaire défiler.
+
 La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis la **liste des
 tâches en cours** — l'agent et le projet, puis ce qu'il fait. Le texte d'une tâche est
 **celui de la mission qui tourne vraiment** : dès que vous envoyez une demande, la colonne
@@ -2204,6 +2209,61 @@ section Vocal, après tous les blocs qu'elle nomme. Posée juste après
 `.pilot-vocal`, le nom de ses sélecteurs tomberait avant ces blocs et les tests
 qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 
+## 8ter. La conversation retrouve sa place au retour (défaut corrigé)
+
+**Le défaut** : en quittant un plein écran (« Vocal » ou « Assistant seul ») pour
+« Détaillé », la conversation réapparaissait **tout en haut** de la liste, et il
+fallait redescendre à la main pour retrouver le fil.
+
+**La cause, en une phrase** : le plein écran ne déplace pas la conversation (le
+mode Vocal la rend seulement **invisible**, `visibility: hidden`, ce qui préserve
+ses mesures), mais **sortir de « Assistant seul » déplace son nœud**
+(`wrapper.insertBefore(messagesEl, toolbar)`) — et **déplacer un nœud défilable
+remet son `scrollTop` à 0**. Or le bouton des modes étant un **cycle**
+(Détaillé → Assistant seul → Vocal → Détaillé), on **traverse** « Assistant
+seul » pour atteindre « Vocal » : la position était donc déjà perdue avant même
+que l'écran Vocal ne s'affiche.
+
+**La règle appliquée** (les deux cas de l'utilisateur, dans l'ordre) :
+
+| Il était… | Au retour, il retrouve… |
+|---|---|
+| **en bas** (dans le seuil) | **le bas**, y compris si des messages sont arrivés pendant le plein écran |
+| **remonté pour relire** | **sa position exacte** : ni saut en haut, ni saut en bas arbitraire |
+
+**La décision est pure** et vit dans `src/js/conversation-scroll.js` (aucun DOM,
+aucun import, aucun minuteur, aucun stockage) : `conversationScrollSnapshot`
+(photographie : position + « déjà en bas »), `conversationAtBottom` (le seuil
+**unique**, `CONVERSATION_SCROLL_BOTTOM_THRESHOLD` = 60 — c'est la valeur que lit
+`SUPER_SCROLL_BOTTOM_THRESHOLD` dans `super-agent.js`, il n'y a plus deux
+seuils), `conversationScrollMax` et `conversationScrollTarget` (la seule décision
+« quelle position rendre », qui **borne** une position devenue hors d'atteinte et
+rend `null` quand il n'y a rien à restaurer).
+
+**Les deux seules écritures**, symétriques pour les **deux** pleins écrans et
+sans second mécanisme de mode :
+
+- `memoizeSuperScroll(messagesEl)` — la photographie, prise **avant** les
+déplacements de nœuds (après, l'information n'existe plus) ;
+- `restoreSuperScroll(messagesEl)` — la restitution, **une seule fois**,
+  **dernière écriture** de `exitImmersive()` **et** de `exitVocal()` (donc après
+  le retrait de l'overlay et de la classe de mode, quand la mise en page de
+  « Détaillé » est complète et mesurable).
+
+Elle **ré-arme le suivi automatique du bas** (`superAtBottom`) avec la valeur
+réelle : en bas, les messages suivants continuent de défiler ; en relecture, rien
+ne pousse. Aucun `scrollTo`, aucun `smooth`, aucune minuterie : la position est
+**posée** avant la peinture — donc **aucun saut visible, aucun clignotement**.
+
+**Ce qui ne change pas** : l'entrée en « Assistant seul » continue de forcer le
+bas (issue #82), l'apparence et la disposition sont intactes, aucun réglage n'est
+créé et rien n'est mémorisé. Verrou :
+`src/js/conversation-scroll.test.js` (les deux règles, le seuil unique, le
+branchement réel — photographie avant le déplacement, restitution après le
+retrait de l'overlay — et **aucun déplacement supplémentaire** de la
+conversation) ; il échoue si la restitution disparaît. Rapport :
+`docs/rapports/RAPPORT-retour-mode-conversation-en-bas.md`.
+
 ## 9. Ce qui n'est pas fait (et n'est pas simulé)
 
 - **La réorientation de l'agent** quand on le coupe : la coupure arrête la
@@ -2221,6 +2281,7 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | Fichier | Rôle |
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
+| `src/js/conversation-scroll.js` | **source unique** de la position de la conversation au retour d'un plein écran (§8ter), pure : `CONVERSATION_SCROLL_BOTTOM_THRESHOLD` (60, valeur **unique**), `conversationAtBottom`, `conversationScrollMax`, `conversationScrollSnapshot` (photographie), `conversationScrollTarget` (la décision : bas réel / position exacte bornée / `null`). Aucun DOM, aucun minuteur. **Écritures** dans `super-agent.js` : `memoizeSuperScroll` (avant les déplacements de nœuds) et `restoreSuperScroll` (dernière écriture de `exitImmersive` **et** `exitVocal`, ré-arme `superAtBottom` depuis la photographie) |
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal` (pose et retrait des quatre écouteurs et de l'unique minuteur du bas, §4bis), `vocalSyncChrome` (**seul** point d'écriture de `.vocal-chrome-hidden`), `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
 | `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, **reprise bornée d'un armement refusé pour une raison passagère** (`vocalResumeRetry` + `VOCAL_RESUME_RETRY_MS` / `VOCAL_RESUME_MAX_RETRIES` / `VOCAL_RESUME_TRANSIENT_REASONS`), désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur **instantanée** — durée mesurée < `VOICE_EMPTY_SESSION_INSTANT_MS` (1 s) —, jamais une erreur affichée, un arrêt demandé, une reprise en main, et **jamais un silence d'une durée réelle**) |
@@ -2234,7 +2295,11 @@ qui découpent la feuille à partir d'un nom liraient le mauvais fragment.
 | `src/js/main.js` | câblage du bouton, ouverture de l'onglet 🧭 quand un mode plein écran est mémorisé |
 | `index.html` · `src/css/style.css` | le bouton unique — le logo `#mode-logo` et son `data-screen-mode` —, l'écran `.pilot-vocal` et ses jetons `--vocal-*` |
 
-Verrous : `trois-modes-ecran.test.js` (lot 1), `ecran-vocal-lot2.test.js` (écran,
+Verrous : `trois-modes-ecran.test.js` (lot 1), `conversation-scroll.test.js`
+(**la conversation retrouve sa place au retour**, §8ter : deux règles, seuil
+unique, photographie avant le déplacement, restitution après le retrait de
+l'overlay, aucun déplacement ajouté — il échoue si la restitution disparaît),
+`ecran-vocal-lot2.test.js` (écran,
 états, trois sorties, symétrie), `ecran-vocal-lot3.test.js` (micro, arrêt réel,
 messages), `ecran-vocal-lot4a.test.js` (garde anti-auto-coupure, chiffres),
 `vocal-couper-la-reflexion.test.js` (lot 4b : chemin d'arrêt **réutilisé**, une
