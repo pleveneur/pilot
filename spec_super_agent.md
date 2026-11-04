@@ -102,8 +102,8 @@ apprend et répond.
   le modèle par défaut de l'Assistant, ou le modèle par défaut des agents) —
   sans erreur et sans message.
 - Si le modèle prévu par le personnage **n'est plus installé**, Pilot vous le
-  dit **en une ligne** et repart sur vos réglages : l'Assistant démarre
-  toujours.
+  dit **en une ligne** (volet « Événements » de l'onglet Assistant) et repart
+  sur vos réglages : l'Assistant démarre toujours.
 <!-- /HELP:super-agent-genre-modele -->
 
 ### Si l'assistant affiche « Connexion au super-agent perdue »
@@ -2410,14 +2410,20 @@ c'est ce qui rend les deux règles testables et impossibles à contourner.
 - **Repli toujours présent** : fiche muette, fichier absent, valeur mal formée
   ou modèle désinstallé ⇒ chaîne de Pilot (comportement d'avant le lot), et dans
   les deux derniers cas une **trace lisible** (`[assistant] modele du
-  personnage : …` + évènement `pilot-assistant-model-trace`). Jamais un échec de
-  démarrage : une fiche périmée ne peut pas empêcher l'assistant de parler.
+  personnage : …` + évènement `pilot-assistant-model-trace`, **affiché dans le
+  volet « Événements »** de l'onglet 🧭 par `initAssistantModelTraceWatch`, une
+  écoute unique enregistrée au démarrage : la trace n'est jamais silencieuse).
+  Jamais un échec de démarrage : `assistant_session_model` ne renvoie aucun
+  `Result` — une fiche périmée ne peut pas empêcher l'assistant de parler.
 - **Un seul point d'entrée** : `assistant_session_model(app, state, pi_path)`,
   appelé par `do_start_super_agent_session` **et** par l'appel hérité
   `ask_super_agent` — les deux chemins retiennent donc le même modèle réel
   (aucune règle recopiée).
 - **Inchangé** : la sélection de modèle par couple (projet, agent) (C4), le
   modèle actif `super_agent_model`, et le sélecteur de modèle de l'onglet 🧭.
+  L'identité du personnage n'est lue que par `super_agent.rs` (aucune couche
+  agent ne la consulte) et le modèle d'un agent se règle toujours sur **sa**
+  session (`set_agent_process_model` → `set_model`), comme avant.
 
 ### Reste à faire côté Présences (aucune obligation)
 
@@ -2433,10 +2439,12 @@ muet, fiche prioritaire, chaîne de modèles, repli avec trace) et de
 `persona.rs` (fiche sans genre ni modèle, normalisations, identité sans
 portrait, dépôt historique, empreinte), verrous Rust dans `super_agent.rs`
 (consigne injectée une seule fois, repli du modèle toujours présent) et
-`src/js/genre-et-modele-par-personnage.test.js` (15 tests : les trois valeurs,
+`src/js/genre-et-modele-par-personnage.test.js` (19 tests : les trois valeurs,
 la valeur inconnue jamais un genre, une seule phrase de genre, `#[serde(default)]`,
 réglage présent à l'écran et enregistré, lecture sans erreur, ordre des étages
-de modèle + trace, démarrage par la décision unique). Rapport :
+de modèle + trace, démarrage par la décision unique, décision sans `Result`
+(donc jamais bloquante), trace réellement affichée, et sélection par couple
+(projet, agent) intacte). Rapport :
 `docs/rapports/RAPPORT-genre-et-modele-par-personnage.md`.
 
 ---

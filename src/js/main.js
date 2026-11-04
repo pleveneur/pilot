@@ -15,7 +15,7 @@ import { initUpdater, checkForUpdate, getLastCheckStatus, formatLastCheckStatus,
 // installée ICI, au seul endroit qui connaît à la fois le bus d'agents (runs en
 // cours) et l'activité RÉELLE des sessions (agent qui travaille sans run).
 import { isRunInProgress } from "./agents-bus.js";
-import { isProjectAgentBusy, initOwnerEngagementWatch, startTaskCounter, startSuperMissionsWatch, refreshAssistantPersonaAndApply, startPersonaWatch } from "./super-agent.js";
+import { isProjectAgentBusy, initOwnerEngagementWatch, initAssistantModelTraceWatch, startTaskCounter, startSuperMissionsWatch, refreshAssistantPersonaAndApply, startPersonaWatch } from "./super-agent.js";
 import { getAgentActivitySnapshot, subscribeAgentActivity, isAgentWorking, initAgentActivity } from "./agent-activity.js";
 // Bande de contexte supprimee (docs/proposition-bande-contexte-allegee.md) :
 // le fil « Projet > projet > onglet » n'existe plus. L'entree « Travail » vit
@@ -693,6 +693,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     void initOwnerEngagementWatch();
   } catch (e) {
     console.warn("Écoute de l'engagement du propriétaire indisponible:", e);
+  }
+
+  // 3d-ter. Trace du MODÈLE PAR PERSONNAGE (tâche 403) : quand la fiche du
+  // personnage actif cite un modèle introuvable, Rust repart sur la chaîne de
+  // Pilot et publie le motif — il doit être LISIBLE, jamais silencieux. Écoute
+  // enregistrée ici, comme l'engagement ci-dessus : elle ne dépend pas de
+  // l'ouverture de l'onglet 🧭 (un démarrage de session peut venir du web).
+  try {
+    void initAssistantModelTraceWatch();
+  } catch (e) {
+    console.warn("Écoute de la trace de modèle du personnage indisponible:", e);
   }
 
   // 3d-bis. SURFACE DE SECOURS DES QUESTIONS D'AGENT (défaut protégé : une

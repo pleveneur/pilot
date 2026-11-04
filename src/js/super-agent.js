@@ -8410,6 +8410,40 @@ export async function initOwnerEngagementWatch() {
   }
 }
 
+// TRACE DU MODÈLE PAR PERSONNAGE (tâche 403) — le repli doit être DIT.
+// Quand la fiche du personnage actif cite un modèle introuvable (ou mal formé),
+// Rust écarte ce modèle et repart sur la chaîne de Pilot : jamais un échec de
+// démarrage. Le motif est publié par `super_agent::assistant_session_model`
+// (`pilot-assistant-model-trace`) ; sans écoute il ne serait lisible nulle part.
+// On l'affiche donc dans le volet « Événements » existant : aucune fenêtre, aucun
+// message bloquant, et l'Assistant continue de parler.
+//
+// Écoute UNIQUE pour toute l'exécution (même raison que l'engagement du
+// propriétaire ci-dessus) : le repli se produit aussi quand l'onglet 🧭 n'est pas
+// ouvert — un démarrage de session peut venir du web distant.
+let assistantModelTraceWatchInstalled = false;
+export async function initAssistantModelTraceWatch() {
+  if (assistantModelTraceWatchInstalled) return;
+  assistantModelTraceWatchInstalled = true;
+  try {
+    await listen("pilot-assistant-model-trace", (event) => {
+      try {
+        const trace = typeof event.payload === "string" ? event.payload : String(event.payload || "");
+        if (!trace.trim()) return;
+        pushSuperAgentSystemEvent("warn", `🤖 ${trace.trim()}`);
+      } catch (err) {
+        // Affichage impossible : le journal Rust garde la trace, rien ne casse.
+        console.warn("[super-agent] trace de modèle illisible:", err);
+      }
+    });
+  } catch (e) {
+    // Écoute indisponible : on ne garde pas l'état « installée » (une nouvelle
+    // tentative reste possible) et le reste de Pilot continue normalement.
+    assistantModelTraceWatchInstalled = false;
+    console.warn("[super-agent] écoute de la trace de modèle indisponible:", e);
+  }
+}
+
 // DÉFAUT 2 — Échecs CONSÉCUTIFS d'envoi par rappel, EN MÉMOIRE (aucune écriture
 // en base). Sert à faire tourner les rappels : celui qui vient d'échouer passe
 // après les autres, et au-delà de `REMINDER_MAX_CONSECUTIVE_FAILURES` il est

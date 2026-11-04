@@ -2201,8 +2201,8 @@ apprend et répond.
   le modèle par défaut de l'Assistant, ou le modèle par défaut des agents) —
   sans erreur et sans message.
 - Si le modèle prévu par le personnage **n'est plus installé**, Pilot vous le
-  dit **en une ligne** et repart sur vos réglages : l'Assistant démarre
-  toujours.
+  dit **en une ligne** (volet « Événements » de l'onglet Assistant) et repart
+  sur vos réglages : l'Assistant démarre toujours.
 <!-- /HELP:super-agent-genre-modele -->
 
 ### Si l'assistant affiche « Connexion au super-agent perdue »

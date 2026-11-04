@@ -68,6 +68,14 @@ pub const PERSONA_SUBDIR: &str = "portrait";
 pub const PERSONA_NAME_FILE: &str = "nom.txt";
 /// Fichier de l'IMAGE affichée.
 pub const PERSONA_IMAGE_FILE: &str = "portrait.png";
+/// Fichier du GENRE du personnage (tâche 402) : « féminin », « masculin » ou
+/// rien. ABSENT = aucun genre porté par la fiche, le réglage de Pilot s'applique
+/// (comportement actuel) : ce n'est ni une erreur ni une panne.
+pub const PERSONA_GENDER_FILE: &str = "genre.txt";
+/// Fichier du MODÈLE par défaut du personnage (tâche 403), au format
+/// `fournisseur/modèle`. ABSENT = le modèle réglé dans Pilot s'applique
+/// (comportement actuel), sans erreur ni message.
+pub const PERSONA_MODEL_FILE: &str = "modele.txt";
 /// Longueur maximale du nom retenu (un nom plus long est tronqué proprement).
 pub const PERSONA_NAME_MAX_CHARS: usize = 60;
 /// Taille maximale de l'image retenue (8 Mio) : au-delà, repli sur l'icône
@@ -121,6 +129,25 @@ pub struct Persona {
     pub name: Option<String>,
     /// Portrait prêt à afficher (`data:image/png;base64,…`) ou `None`.
     pub portrait: Option<String>,
+    /// Genre porté par la fiche (`genre.txt`), canonique : `"feminin"` ou
+    /// `"masculin"`. `None` = aucun genre porté par la fiche (défaut) — c'est le
+    /// réglage de Pilot qui s'applique alors, comme avant ce lot.
+    pub gender: Option<String>,
+    /// Modèle par défaut du personnage (`modele.txt`), `"fournisseur/modèle"`.
+    /// `None` = aucun modèle porté par la fiche → chaîne de modèles de Pilot.
+    pub model: Option<String>,
+}
+
+/// Identité SEULE du personnage actif (nom, genre, modèle), sans l'image.
+///
+/// C'est ce que lit l'assemblage du prompt de l'assistant : relire un portrait
+/// de plusieurs mégaoctets à chaque message pour connaître un genre serait un
+/// gaspillage pur (l'image est mise en base64, donc encore plus lourde).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PersonaIdentity {
+    pub name: Option<String>,
+    pub gender: Option<String>,
+    pub model: Option<String>,
 }
 
 /// Dossier du personnage actif sous un dossier applicatif de Pilot donné.
@@ -195,10 +222,14 @@ pub fn read_persona_from_sources(sources: &[PersonaSource]) -> Persona {
         return match source.depot {
             PersonaDepot::Personal => persona,
             // Dépôt historique : NOM seulement. Une vieille image résiduelle ne
-            // peut plus jamais réapparaître (elle n'est ni lue ni supprimée).
+            // peut plus jamais réapparaître (elle n'est ni lue ni supprimée), et
+            // aucune fiche périmée n'impose un genre ni un modèle à l'assistant :
+            // ces deux champs restent `None` → réglages de Pilot, comme avant.
             PersonaDepot::Legacy => Persona {
                 name: persona.name,
                 portrait: None,
+                gender: None,
+                model: None,
             },
         };
     }
@@ -269,10 +300,12 @@ fn file_stamp(path: &Path) -> String {
     }
 }
 
-/// Empreinte de l'ENSEMBLE des dépôts : existence du dossier + date et taille de
-/// `nom.txt` et `portrait.png`. Elle change dès qu'un personnage est activé,
-/// désactivé, remplacé — c'est ce qui permet au front de relire SANS redémarrer
-/// Pilot, et sans relire plusieurs mégaoctets à chaque fois.
+/// Empreinte de l'ENSEMBLE des dépôts : existence du dossier + date et taille
+/// des fichiers de la fiche (`nom.txt`, `portrait.png`, `genre.txt`,
+/// `modele.txt`). Elle change dès qu'un personnage est activé, désactivé,
+/// remplacé, ou que sa fiche change de genre / de modèle — c'est ce qui permet au
+/// front de relire SANS redémarrer Pilot, et sans relire plusieurs mégaoctets à
+/// chaque fois.
 ///
 /// Fonction PURE de lecture de métadonnées : aucun contenu de fichier lu, aucune
 /// écriture (le dossier du personnage reste en lecture seule).
@@ -280,11 +313,13 @@ pub fn persona_stamp_from_sources(sources: &[PersonaSource]) -> String {
     let mut morceaux: Vec<String> = Vec::new();
     for source in sources {
         morceaux.push(format!(
-            "{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}",
             source.dir.display(),
             if source.dir.is_dir() { "dir" } else { "-" },
             file_stamp(&source.dir.join(PERSONA_NAME_FILE)),
             file_stamp(&source.dir.join(PERSONA_IMAGE_FILE)),
+            file_stamp(&source.dir.join(PERSONA_GENDER_FILE)),
+            file_stamp(&source.dir.join(PERSONA_MODEL_FILE)),
         ));
     }
     morceaux.join(";")
@@ -340,7 +375,11 @@ pub fn png_data_url(bytes: &[u8]) -> Option<String> {
 ///
 /// - dossier absent → `Persona::default()` (aucun personnage actif) ;
 /// - `nom.txt` absent / vide / illisible → `name: None` ;
-/// - `portrait.png` absent / vide / trop gros / pas un PNG → `portrait: None`.
+/// - `portrait.png` absent / vide / trop gros / pas un PNG → `portrait: None` ;
+/// - `genre.txt` absent / vide / inconnu → `gender: None` (le réglage de Pilot
+///   s'applique, comportement actuel) ;
+/// - `modele.txt` absent / vide / mal formé → `model: None` (chaîne de modèles de
+///   Pilot, comportement actuel).
 ///
 /// Aucun `create_dir_all`, aucun `remove_*`, aucun `write` : le dossier de
 /// Présences n'est jamais touché en écriture.
@@ -361,7 +400,120 @@ pub fn read_persona(dir: &Path) -> Persona {
         _ => None,
     };
 
-    Persona { name, portrait }
+    Persona {
+        name,
+        portrait,
+        gender: read_fiche_line(&dir.join(PERSONA_GENDER_FILE))
+            .and_then(|ligne| normalize_gender_line(&ligne)),
+        model: read_fiche_line(&dir.join(PERSONA_MODEL_FILE))
+            .and_then(|ligne| normalize_model_line(&ligne)),
+    }
+}
+
+/// Première ligne utile d'un PETIT fichier texte de la fiche (nom, genre,
+/// modèle). Fichier absent, vide, illisible ou non UTF-8 → `None`, jamais une
+/// erreur : une fiche incomplète n'est pas une panne.
+pub fn read_fiche_line(path: &Path) -> Option<String> {
+    let raw = std::fs::read(path).ok()?;
+    let texte = String::from_utf8(raw).ok()?;
+    let normalise = texte.replace("\r\n", "\n").replace('\r', "\n");
+    normalise
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .map(|l| l.to_string())
+}
+
+/// Contenu de `genre.txt` → valeur CANONIQUE (`"feminin"` / `"masculin"`) ou
+/// `None`. Une valeur inconnue (« autre », un prénom…) ne vaut pas un genre :
+/// `None`, donc le réglage de Pilot, donc le comportement actuel.
+///
+/// La reconnaissance des mots appartient à `assistant_identity` : une seule
+/// autorité pour « qu'est-ce qu'un genre ».
+pub fn normalize_gender_line(raw: &str) -> Option<String> {
+    match crate::assistant_identity::canonical_assistant_gender(raw) {
+        "" => None,
+        canonique => Some(canonique.to_string()),
+    }
+}
+
+/// Contenu de `modele.txt` → `"fournisseur/modèle"` ou `None`. Tout ce qui n'est
+/// pas une spécification de modèle est ignoré (le modèle de Pilot s'applique),
+/// sans retirer les lignes de commentaire éventuelles : seule la première ligne
+/// utile est considérée.
+pub fn normalize_model_line(raw: &str) -> Option<String> {
+    let ligne = raw.trim();
+    if ligne.is_empty() || ligne.starts_with('#') {
+        return None;
+    }
+    let (provider, model_id) = crate::super_agent::parse_model_spec(ligne)?;
+    Some(format!("{}/{}", provider, model_id))
+}
+
+/// Identité du personnage (nom, genre, modèle) dans un dossier — sans image.
+/// Même règle d'absence que `read_persona` : tout champ manquant donne `None`.
+pub fn read_persona_identity(dir: &Path) -> PersonaIdentity {
+    // Aucun appel à `read_persona` ici : il lirait le portrait (jusqu'à 8 Mio)
+    // pour le mettre en base64, à CHAQUE message de l'assistant. L'identité ne
+    // lit que les trois petits fichiers texte, et n'ouvre jamais l'image.
+    PersonaIdentity {
+        name: std::fs::read(dir.join(PERSONA_NAME_FILE))
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|raw| normalize_name(&raw)),
+        gender: read_fiche_line(&dir.join(PERSONA_GENDER_FILE))
+            .and_then(|ligne| normalize_gender_line(&ligne)),
+        model: read_fiche_line(&dir.join(PERSONA_MODEL_FILE))
+            .and_then(|ligne| normalize_model_line(&ligne)),
+    }
+}
+
+/// Identité du personnage actif, en appliquant la MÊME règle de priorité entre
+/// dépôts que `read_persona_from_sources` : le premier dépôt qui existe répond.
+pub fn read_persona_identity_from_sources(sources: &[PersonaSource]) -> PersonaIdentity {
+    for source in sources {
+        if !source.dir.is_dir() {
+            continue;
+        }
+        let identite = read_persona_identity(&source.dir);
+        return match source.depot {
+            PersonaDepot::Personal => identite,
+            // Dépôt historique : aucune identité imposée (nom seul, pas de genre
+            // ni de modèle) — même raison que pour l'image (règle c).
+            PersonaDepot::Legacy => PersonaIdentity {
+                name: identite.name,
+                gender: None,
+                model: None,
+            },
+        };
+    }
+    PersonaIdentity::default()
+}
+
+/// Dossiers candidats résolus par Tauri (dossier de données, dossier personnel)
+/// et par l'environnement (`PRESENCES_PILOT_DIR`).
+///
+/// POINT UNIQUE de résolution : les trois commandes qui lisent le personnage
+/// (`read_assistant_persona`, `read_assistant_persona_stamp` et la lecture
+/// légère d'identité) passent par ici, pour qu'aucune ne puisse interroger un
+/// dossier que les autres ignorent.
+pub fn persona_sources_for(app: &tauri::AppHandle) -> Vec<PersonaSource> {
+    use tauri::Manager as _;
+    let app_data = app.path().app_data_dir().ok();
+    let home = app.path().home_dir().ok();
+    let racine = std::env::var(PRESENCES_PILOT_DIR_ENV)
+        .ok()
+        .map(|v| PathBuf::from(v.trim()))
+        .filter(|p| !p.as_os_str().is_empty());
+    persona_sources(app_data.as_deref(), home.as_deref(), racine.as_deref())
+}
+
+/// Identité du personnage actif pour l'assemblage du prompt de l'assistant et
+/// pour le choix de son modèle : LECTURE LÉGÈRE (nom, genre, modèle), sans
+/// jamais charger le portrait. Fail-open : aucune source résoluble → identité
+/// vide, donc réglages de Pilot, donc comportement actuel.
+pub fn read_active_persona_identity(app: &tauri::AppHandle) -> PersonaIdentity {
+    read_persona_identity_from_sources(&persona_sources_for(app))
 }
 
 /// Commande Tauri : personnage actif de l'Assistant (`{ name, portrait }`).
@@ -384,15 +536,7 @@ pub fn read_persona(dir: &Path) -> Persona {
 /// habituels, sans erreur et sans message.
 #[tauri::command]
 pub fn read_assistant_persona(app: tauri::AppHandle) -> Persona {
-    use tauri::Manager as _;
-    let app_data = app.path().app_data_dir().ok();
-    let home = app.path().home_dir().ok();
-    let racine = std::env::var(PRESENCES_PILOT_DIR_ENV)
-        .ok()
-        .map(|v| PathBuf::from(v.trim()))
-        .filter(|p| !p.as_os_str().is_empty());
-    let sources = persona_sources(app_data.as_deref(), home.as_deref(), racine.as_deref());
-    read_persona_from_sources(&sources)
+    read_persona_from_sources(&persona_sources_for(&app))
 }
 
 /// Commande Tauri : EMPREINTE du personnage actif (chaîne courte, sans image).
@@ -407,15 +551,7 @@ pub fn read_assistant_persona(app: tauri::AppHandle) -> Persona {
 /// exception.
 #[tauri::command]
 pub fn read_assistant_persona_stamp(app: tauri::AppHandle) -> String {
-    use tauri::Manager as _;
-    let app_data = app.path().app_data_dir().ok();
-    let home = app.path().home_dir().ok();
-    let racine = std::env::var(PRESENCES_PILOT_DIR_ENV)
-        .ok()
-        .map(|v| PathBuf::from(v.trim()))
-        .filter(|p| !p.as_os_str().is_empty());
-    let sources = persona_sources(app_data.as_deref(), home.as_deref(), racine.as_deref());
-    persona_stamp_from_sources(&sources)
+    persona_stamp_from_sources(&persona_sources_for(&app))
 }
 
 #[cfg(test)]
@@ -475,6 +611,159 @@ mod tests {
         assert_eq!(persona.name.as_deref(), Some("Aurelia"));
         assert_eq!(persona.portrait, None, "pas d'image : repli sur l'icone");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Genre et modèle portés par la fiche (tâches 402 et 403) ─────────────
+
+    /// Une fiche SANS `genre.txt` ni `modele.txt` (donc toute fiche écrite avant
+    /// ce lot, dont celles que Présences dépose aujourd'hui) reste lisible :
+    /// aucun des deux champs n'est renseigné, AUCUNE erreur, comportement actuel.
+    #[test]
+    fn fiche_sans_genre_ni_modele_ne_change_rien_et_ne_casse_rien() {
+        let dir = dossier_de_test("fiche-sans-identite");
+        std::fs::write(dir.join(PERSONA_NAME_FILE), "Aurelia
+").expect("nom.txt");
+        let persona = read_persona(&dir);
+        assert_eq!(persona.name.as_deref(), Some("Aurelia"));
+        assert_eq!(persona.gender, None, "genre absent = reglage de Pilot");
+        assert_eq!(persona.model, None, "modele absent = chaine de modeles de Pilot");
+        // La commande publique renvoie EXACTEMENT la meme chose (champs additifs
+        // serialises a `null`, jamais une erreur de deserialisation).
+        let json = serde_json::to_value(&persona).expect("serialisation");
+        assert_eq!(json.get("gender"), Some(&serde_json::Value::Null));
+        assert_eq!(json.get("model"), Some(&serde_json::Value::Null));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn genre_de_la_fiche_est_lu_et_normalise() {
+        let dir = dossier_de_test("genre");
+        std::fs::write(dir.join(PERSONA_GENDER_FILE), "  Féminin
+").expect("genre.txt");
+        assert_eq!(read_persona(&dir).gender.as_deref(), Some("feminin"));
+        std::fs::write(dir.join(PERSONA_GENDER_FILE), "Homme
+").expect("genre.txt");
+        assert_eq!(read_persona(&dir).gender.as_deref(), Some("masculin"));
+        // Valeur inconnue ou vide : AUCUN genre, donc le reglage de Pilot.
+        std::fs::write(dir.join(PERSONA_GENDER_FILE), "autre
+").expect("genre.txt");
+        assert_eq!(read_persona(&dir).gender, None);
+        std::fs::write(dir.join(PERSONA_GENDER_FILE), "
+
+").expect("genre.txt");
+        assert_eq!(read_persona(&dir).gender, None);
+        // Fichier non UTF-8 : ignore, aucune panne.
+        std::fs::write(dir.join(PERSONA_GENDER_FILE), [0xffu8, 0xfe]).expect("genre.txt");
+        assert_eq!(read_persona(&dir).gender, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn modele_de_la_fiche_est_lu_et_normalise() {
+        let dir = dossier_de_test("modele");
+        std::fs::write(dir.join(PERSONA_MODEL_FILE), "plh/rapide
+").expect("modele.txt");
+        assert_eq!(read_persona(&dir).model.as_deref(), Some("plh/rapide"));
+        std::fs::write(dir.join(PERSONA_MODEL_FILE), "  anthropic / claude-sonnet 
+")
+            .expect("modele.txt");
+        assert_eq!(
+            read_persona(&dir).model.as_deref(),
+            Some("anthropic/claude-sonnet")
+        );
+        // Ce qui n'est pas une specification de modele est ignore.
+        for invalide in ["", "   ", "# commentaire", "sans-slash", "/manque-fournisseur"] {
+            std::fs::write(dir.join(PERSONA_MODEL_FILE), invalide).expect("modele.txt");
+            assert_eq!(
+                read_persona(&dir).model,
+                None,
+                "« {invalide} » ne doit imposer aucun modele"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// L'IDENTITÉ (ce que lit le prompt de l'assistant a chaque message) ne
+    /// charge JAMAIS le portrait : un portrait de plusieurs megaoctets ne doit pas
+    /// etre lu ni encode en base64 pour connaitre un genre.
+    #[test]
+    fn identite_ne_lit_jamais_le_portrait() {
+        let dir = dossier_de_test("identite-legere");
+        std::fs::write(dir.join(PERSONA_NAME_FILE), "Aurelia
+").expect("nom.txt");
+        std::fs::write(dir.join(PERSONA_GENDER_FILE), "feminin
+").expect("genre.txt");
+        std::fs::write(dir.join(PERSONA_MODEL_FILE), "plh/fin
+").expect("modele.txt");
+        std::fs::write(dir.join(PERSONA_IMAGE_FILE), png_minimal()).expect("portrait.png");
+        let identite = read_persona_identity(&dir);
+        assert_eq!(identite.name.as_deref(), Some("Aurelia"));
+        assert_eq!(identite.gender.as_deref(), Some("feminin"));
+        assert_eq!(identite.model.as_deref(), Some("plh/fin"));
+        // Un portrait ILLISIBLE (dossier a la place du fichier) ne gene pas
+        // l'identite : la preuve que l'image n'est pas ouverte ici.
+        std::fs::remove_file(dir.join(PERSONA_IMAGE_FILE)).expect("retrait image");
+        std::fs::create_dir(dir.join(PERSONA_IMAGE_FILE)).expect("dossier a la place du PNG");
+        let identite = read_persona_identity(&dir);
+        assert_eq!(identite.gender.as_deref(), Some("feminin"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Le dépôt HISTORIQUE (`<app_data_dir>/.pilot/portrait`) ne fournit QUE le
+    /// nom : aucun genre ni modèle périmé ne vient s'imposer à l'assistant.
+    #[test]
+    fn depot_historique_ne_porte_ni_genre_ni_modele() {
+        let racine = dossier_de_test("historique");
+        let legacy = racine.join("legacy");
+        std::fs::create_dir_all(&legacy).expect("dossier");
+        std::fs::write(legacy.join(PERSONA_NAME_FILE), "Ancien
+").expect("nom.txt");
+        std::fs::write(legacy.join(PERSONA_GENDER_FILE), "masculin
+").expect("genre.txt");
+        std::fs::write(legacy.join(PERSONA_MODEL_FILE), "plh/vieux
+").expect("modele.txt");
+        let sources = vec![PersonaSource { dir: legacy, depot: PersonaDepot::Legacy }];
+        let identite = read_persona_identity_from_sources(&sources);
+        assert_eq!(identite.name.as_deref(), Some("Ancien"));
+        assert_eq!(identite.gender, None);
+        assert_eq!(identite.model, None);
+        // Le dépôt PERSONNEL, lui, porte bien les deux champs.
+        let perso = racine.join("perso");
+        std::fs::create_dir_all(&perso).expect("dossier");
+        std::fs::write(perso.join(PERSONA_GENDER_FILE), "féminin
+").expect("genre.txt");
+        std::fs::write(perso.join(PERSONA_MODEL_FILE), "plh/fin
+").expect("modele.txt");
+        let sources = vec![
+            PersonaSource { dir: perso, depot: PersonaDepot::Personal },
+            PersonaSource { dir: racine.join("legacy"), depot: PersonaDepot::Legacy },
+        ];
+        let identite = read_persona_identity_from_sources(&sources);
+        assert_eq!(identite.gender.as_deref(), Some("feminin"));
+        assert_eq!(identite.model.as_deref(), Some("plh/fin"));
+        let _ = std::fs::remove_dir_all(&racine);
+    }
+
+    /// L'empreinte couvre les deux nouveaux fichiers : deposer un `genre.txt`
+    /// change l'empreinte, donc la fiche est relue sans redemarrer Pilot.
+    #[test]
+    fn empreinte_suit_les_fichiers_de_genre_et_de_modele() {
+        let racine = dossier_de_test("empreinte-identite");
+        let dir = racine.join("portrait");
+        std::fs::create_dir_all(&dir).expect("dossier");
+        std::fs::write(dir.join(PERSONA_NAME_FILE), "Aurelia
+").expect("nom.txt");
+        let sources = vec![PersonaSource { dir: dir.clone(), depot: PersonaDepot::Personal }];
+        let avant = persona_stamp_from_sources(&sources);
+        std::fs::write(dir.join(PERSONA_GENDER_FILE), "feminin
+").expect("genre.txt");
+        let apres_genre = persona_stamp_from_sources(&sources);
+        assert_ne!(avant, apres_genre, "le genre doit changer l'empreinte");
+        std::fs::write(dir.join(PERSONA_MODEL_FILE), "plh/fin
+").expect("modele.txt");
+        let apres_modele = persona_stamp_from_sources(&sources);
+        assert_ne!(apres_genre, apres_modele, "le modele doit changer l'empreinte");
+        let _ = std::fs::remove_dir_all(&racine);
     }
 
     #[test]

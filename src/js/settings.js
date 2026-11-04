@@ -35,6 +35,10 @@ import { layaStatusMessage, layaOutcomeMessage, layaModelStateMessage, layaModel
 import { listen } from "@tauri-apps/api/event";
 // T6 : contenu des sélecteurs de niveau de réflexion (socle pur, testé sous Node).
 import { thinkingLevelOptions } from "./thinking-levels.js";
+// Tâche 402 : genre de l'Assistant. Module PUR (aucun DOM, aucun appel) : il
+// normalise la valeur du champ et fournit ses trois choix ; la phrase injectée
+// dans le prompt est décidée côté Rust, à un seul endroit.
+import { normalizeAssistantGender, ASSISTANT_GENDER_KEY } from "./assistant-genre.js";
 // Lot A idée 3 (tranche 3.5) : réglages de la checklist de livraison. Fonctions
 // PURES (normalisation du mode, lecture/découpage du modèle) partagées avec la
 // fiche de tâche du Kanban — testées dans super-agent-checklist.test.js.
@@ -625,6 +629,8 @@ export async function initSettings() {
 const chkGraphIncludeCalls = document.getElementById("setting-graph-include-calls");
   // ── Super-agent (spec_super_agent.md) ──
   const inputSuperAgentName = document.getElementById("setting-superagent-name");
+  // Tâche 402 : genre de l'Assistant (masculin / féminin / non précisé).
+  const selectAssistantGender = document.getElementById("setting-assistant-gender");
   const taSuperAgentClients = document.getElementById("setting-superagent-clients");
 
   /**
@@ -2048,6 +2054,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     if (inputTelegramChatId) inputTelegramChatId.value = currentConfig.telegram_chat_id || "";
     inputPdfMdModel.value = currentConfig.pdf_md_model || "";
     if (inputSuperAgentDefaultModel) inputSuperAgentDefaultModel.value = currentConfig.super_agent_default_model || "";
+    // Tâche 402 : le genre se relit TOUJOURS par la normalisation (une valeur
+    // inconnue retombe sur « non précisé », jamais sur un genre imposé).
+    if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
     chkAutoSave.checked = currentConfig.auto_save || false;
     inputAutoSaveDelay.value = currentConfig.auto_save_delay || 3000;
     chkWordWrap.checked = currentConfig.word_wrap || false;
@@ -2127,6 +2136,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     if (chkGraphIncludeCalls) chkGraphIncludeCalls.checked = currentConfig.graph_include_calls !== false;
   // ── Super-agent (spec_super_agent.md) ──
   if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
+  if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
   await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
   if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
   if (chkSuperAgentThinking) chkSuperAgentThinking.checked = currentConfig.super_agent_show_thinking !== false;
@@ -2899,6 +2909,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
           selectTheme.value = currentConfig.theme || "dark";
           populateSubthemeSelect(selectSubtheme, currentConfig.theme || "dark", currentConfig.subtheme || "default");
           if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
+          if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
           await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
           if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
           if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
@@ -3163,6 +3174,11 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         agent_max_turns: parseInt(inputAgentMaxTurns.value, 10) || 200,
         // ── Super-agent (spec_super_agent.md) ──
         super_agent_name: (inputSuperAgentName ? inputSuperAgentName.value : "Assistant").trim() || "Assistant",
+        // Tâche 402 : genre de l'Assistant. Toujours normalisé (`""` si rien n'est
+        // réglé) : une valeur inconnue n'impose aucun genre au prompt.
+        assistant_gender: normalizeAssistantGender(
+          selectAssistantGender ? selectAssistantGender.value : (currentConfig && currentConfig[ASSISTANT_GENDER_KEY]),
+        ),
         super_agent_clients: taSuperAgentClients
           ? taSuperAgentClients.value.split(/\n+/).map((s) => s.trim()).filter(Boolean)
           : [],

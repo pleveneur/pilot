@@ -104,6 +104,11 @@ mod mcp_config;
 // `nom.txt` + `portrait.png` dans `<app_data_dir>/.pilot/portrait/` ; Pilot ne
 // fait que LIRE (voir persona.rs, commande `read_assistant_persona`).
 mod persona;
+// IDENTITÉ de l'Assistant : son GENRE (tâche 402) et son MODÈLE par défaut
+// porté par la fiche du personnage (tâche 403). Décisions PURES (aucune lecture
+// disque, aucune session) : une seule autorité pour la phrase de genre et pour
+// la priorité des modèles, donc une seule chose à tester.
+mod assistant_identity;
 mod agent;
 mod agent_service;
 // Écriture fiable des extensions embarquées (tâche 361) : ne réécrit rien si
@@ -632,6 +637,14 @@ struct AppConfig {
     // projets, tâches, décisions) vit dans `~/.pilot/super-agent.db` (SQLite).
     #[serde(default = "default_super_agent_name")]
     super_agent_name: String,
+    // Genre de l'Assistant (tâche 402) : `"feminin"`, `"masculin"` ou vide
+    // (« non précisé », défaut). Vide = AUCUNE phrase de genre ajoutée au prompt
+    // (comportement historique strictement inchangé) ; une valeur inconnue est
+    // traitée comme vide (jamais une erreur). Lu à un seul endroit :
+    // `assistant_identity::assistant_identity_block`. La fiche du personnage
+    // actif (Présences, `genre.txt`) passe avant ce réglage.
+    #[serde(default)]
+    assistant_gender: String,
     #[serde(default)]
     super_agent_clients: Vec<String>,
     #[serde(default)]
@@ -1274,6 +1287,7 @@ impl Default for AppConfig {
             agent_max_turns: default_agent_max_turns(),
             // ── Super-agent (spec_super_agent.md) ──
             super_agent_name: default_super_agent_name(),
+            assistant_gender: String::new(),
             super_agent_clients: Vec::new(),
             super_agent_project_client: HashMap::new(),
             super_agent_model: String::new(),

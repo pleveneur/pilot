@@ -1216,6 +1216,18 @@
               <label for="setting-superagent-name" title="Nom de votre assistant de suivi (affiché dans l'onglet 🧭 et ses réponses).">Nom de l'assistant :</label>
               <input type="text" id="setting-superagent-name" placeholder="Assistant" style="width:220px;" />
             </div>
+            <!-- Tâche 402 : genre de l'Assistant. « Non précisé » (défaut) = AUCUNE
+                 consigne de genre ajoutée au prompt (comportement inchangé). Le
+                 personnage actif déposé par Présences peut porter son propre
+                 genre : il passe alors avant ce réglage. -->
+            <div class="setting-row setting-row-indent">
+              <label for="setting-assistant-gender" title="L'Assistant parle de lui au masculin ou au féminin (accords, adjectifs, pronoms). « Non précisé » n'ajoute aucune consigne. Si le personnage actif (Présences) porte son propre genre, c'est le sien qui s'applique.">Genre de l'Assistant :</label>
+              <select id="setting-assistant-gender">
+                <option value="">Non précisé (aucune indication)</option>
+                <option value="feminin">Féminin</option>
+                <option value="masculin">Masculin</option>
+              </select>
+            </div>
             <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
               L'Assistant est <b>lecture seule</b> : il suit vos projets (par client) de la demande à la livraison, apprend des sessions d'agents et répond à vos questions. Il ne modifie jamais vos fichiers.
             </div>
