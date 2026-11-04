@@ -1459,6 +1459,19 @@
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
               <span id="local-dictation-state" role="status" aria-live="polite"></span>
             </div>
+            <!-- MOTS DE RÉVEIL de la garde du nom (§ 6quater) : UN champ texte,
+                 UNE clé (`vocal_wake_words`, défaut vide). Vide = le
+                 comportement d'avant, strictement (le nom seul). Rempli, ces
+                 mots s'AJOUTENT au nom, qui reste toujours accepté. La
+                 normalisation (virgules, doublons, casse, accents) est celle du
+                 module pur `vocal-nom-garde.js` : rien n'est découpé ici. -->
+            <div class="setting-row">
+              <label for="setting-vocal-wake-words" title="D'autres façons d'appeler Pilot en mode Vocal, en plus de son nom. Séparez-les par des virgules : «&nbsp;Nova, hey Nova&nbsp;». Une phrase qui contient UN SEUL de ces mots part, et son nom reste toujours accepté. Champ vide : seul son nom compte, comme avant.">Mots de réveil&nbsp;:</label>
+              <input type="text" id="setting-vocal-wake-words" placeholder="Nova, hey Nova" style="flex:1;max-width:320px;" aria-describedby="vocal-wake-words-note" />
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="vocal-wake-words-note" role="note">En mode Vocal, Pilot ne fait rien tant que vous ne l'avez pas appelé par son nom. Ce champ ajoute d'autres façons de l'appeler&nbsp;: séparez-les par des virgules («&nbsp;Nova, hey Nova&nbsp;») et une phrase qui en contient <b>un seul</b> part toute seule. Son nom reste toujours accepté, et les majuscules comme les accents n'ont aucune importance. Champ vide&nbsp;: seul son nom compte, exactement comme avant.</span>
+            </div>
           </div>
           <div class="settings-section">
             <h3 class="settings-section-title"><i data-lucide="building-2" class="icon-sm"></i> Clients</h3>

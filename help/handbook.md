@@ -1499,6 +1499,11 @@ texte s'efface **par le haut**, vers le titre, et quand il y a plus ancien que c
 tient, la ligne **« … et N échange(s) plus haut »** le dit franchement. Rien n'est
 cliquable dans la colonne : on la lit, on ne la manipule pas.
 
+Et en quittant le mode, la conversation de l'onglet **se retrouve là où vous
+l'aviez laissée** : en bas si vous suiviez le fil (même si la réponse est arrivée
+pendant que vous étiez dans l'écran), ou exactement au passage que vous étiez en
+train de relire. Aucun saut, rien à refaire défiler.
+
 La colonne de droite parle du **travail** : le titre **« TÂCHES »**, puis la **liste des
 tâches en cours** — l'agent et le projet, puis ce qu'il fait. Le texte d'une tâche est
 **celui de la mission qui tourne vraiment** : dès que vous envoyez une demande, la colonne
@@ -1587,9 +1592,16 @@ continue simplement de vous écouter.
 - **Il est reconnu malgré les petites différences** : majuscules, accents,
   ponctuation et espaces n'ont aucune importance, et quelques prononciations
   très proches passent (« Bernar » pour « Bernard »).
+- **Vous pouvez régler d'autres mots de réveil** : ⚙️ **Options → onglet
+  « Assistant » → section « Mode Vocal »**, champ **« Mots de réveil »**.
+  Écrivez-les séparés par des virgules (« Nova, hey Nova ») : une phrase qui
+  contient **un seul** de ces mots part, où qu'il soit, et les majuscules comme
+  les accents n'ont aucune importance. **Son nom reste toujours accepté en
+  plus.** Champ **vide** : seul son nom compte, exactement comme avant. Le
+  réglage s'applique **tout de suite**, sans redémarrer Pilot.
 - **Quel nom ?** Celui que Pilot affiche déjà : le **personnage** déposé par le
   projet Présences, sinon le **nom réglé** de votre assistant, sinon son nom
-  habituel. Rien de nouveau à régler.
+  habituel. Rien de nouveau à régler — les mots de réveil **s'ajoutent** à ce nom.
 - **La ligne d'état vous dit où vous en êtes** : « Dites « Nova » pour me
   parler. » quand il attend son nom, et « Je vous écoute. » quand la phrase
   suivante partira sans le nom.
@@ -1604,7 +1616,9 @@ continue simplement de vous écouter.
 **Si Pilot ne réagit pas alors que vous l'avez appelé**, c'est que la
 reconnaissance a écrit son nom autrement : redites-le clairement, cliquez
 **« Réveiller <Nom> »**, ou tapez votre demande au clavier. Pilot préfère ne
-rien faire que se déclencher pour une phrase qui ne lui était pas adressée.
+rien faire que se déclencher pour une phrase qui ne lui était pas adressée. Un
+**mot de réveil plus simple à reconnaître** (« hey Nova ») est souvent le
+remède : c'est à cela qu'il sert.
 
 ---
 
@@ -2157,6 +2171,34 @@ apprend et répond.
   n'y a plus de personnage actif.
 <!-- /HELP:super-agent-personnage -->
 
+<!-- HELP:super-agent-genre-modele -->
+### Le genre de la voix de l'Assistant (masculin / féminin)
+- **Options ⚙️ → onglet « Assistant » → « Genre de l'Assistant »** : trois
+  choix — **« Non précisé (aucune indication) »** (le défaut), **Féminin**,
+  **Masculin**.
+- Ce réglage ne change **ni les réponses ni les décisions** de l'Assistant : il
+  lui demande seulement de **parler de lui** au genre choisi (accords,
+  adjectifs, pronoms) — « je suis prêt » ou « je suis prête ».
+- **« Non précisé » n'ajoute rien du tout** : l'Assistant garde exactement la
+  façon de parler qu'il avait avant.
+- **Le personnage actif passe avant** : si votre personnage (déposé par
+  Présences) indique son propre genre, c'est **le sien** qui s'applique — un
+  personnage est plus précis qu'un réglage général. Sans personnage, c'est le
+  réglage ci-dessus qui compte.
+
+### Un modèle par défaut propre à chaque personnage
+- Un personnage peut avoir **son propre modèle** : quand il est actif,
+  l'Assistant travaille avec ce modèle, sans que vous ayez à le changer à la
+  main.
+- **Si le personnage n'en définit pas, rien ne change** : l'Assistant utilise le
+  modèle que vous avez réglé dans Pilot (le modèle choisi dans l'onglet 🧭, ou
+  le modèle par défaut de l'Assistant, ou le modèle par défaut des agents) —
+  sans erreur et sans message.
+- Si le modèle prévu par le personnage **n'est plus installé**, Pilot vous le
+  dit **en une ligne** et repart sur vos réglages : l'Assistant démarre
+  toujours.
+<!-- /HELP:super-agent-genre-modele -->
+
 ### Si l'assistant affiche « Connexion au super-agent perdue »
 - Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).
   Les **causes les plus fréquentes** : le chemin de l'agent (Options → Agent)
@@ -2433,7 +2475,9 @@ apprend et répond.
   2. **Agents hors projet** (créés pour l'Assistant, rattachés à aucun projet) :
      `run_assistant_agents(agent_ids, task, resume)` — travail qui ne dépend
      d'AUCUN projet (recherche, analyse, rédaction interne), l'agent tourne dans
-     `~/.pilot/assistant/`. Si aucun agent ne convient : `create_agent` d'abord.
+     `~/.pilot/assistant/`. Si aucun agent du registre ne convient : un agent
+     **JETABLE** décrit dans la demande (règle des agents ci-dessous),
+     `create_agent` **uniquement** pour un rôle DURABLE.
      `resume` (les deux outils, **facultatif**) : **phrase courte (≤ 120
      caractères)** qui dit ce que la tâche fait réellement — c'est le texte lu
      **en premier** dans le panneau des tâches ; à renseigner **toujours**, dans
@@ -2903,8 +2947,9 @@ uniquement un bloc d'instructions dans le prompt système.
 - Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
   lui-même : il **délègue la demande à un agent du projet**.
 - **Méthode par défaut — agents spécifiques** : l'Assistant exécute le travail
-  via des **agents spécifiques** (`run_agents` sur un agent du registre, ou
-  `create_agent` pour un agent sur mesure), **pas** via l'agent standard du
+  via des **agents spécifiques** (`run_agents` sur un agent du registre, ou un
+  agent **jetable** décrit dans la demande via `agents` ; `create_agent`
+  uniquement pour un rôle durable), **pas** via l'agent standard du
   projet. Avant de déléguer, il **reformule/affine la demande** et, si elle est
   floue ou imprécise, **pose des questions** (`ask_input` / `ask_multi_choice`)
   pour obtenir le contexte nécessaire. Il construit une demande **claire et
@@ -3095,10 +3140,13 @@ uniquement un bloc d'instructions dans le prompt système.
 
 <!-- HELP:super-agent-agent-jetable -->
 ### Un agent jetable, juste pour une tâche
+- **C'est la façon par défaut de travailler de l'Assistant** : quand votre demande
+  est **ponctuelle** (un diagnostic, une analyse, une vérification, une rédaction
+  de circonstance), il ne crée **aucun** agent permanent — il **décrit lui-même
+  l'agent dans sa demande** (un nom et un rôle). Cet agent **jetable** existe
+  **seulement le temps de la tâche**.
 - Vous pouvez demander un travail « comme le ferait un auditeur de sécurité »
-  sans créer d'agent : l'Assistant **décrit lui-même l'agent dans sa demande**
-  (un nom et un rôle). Cet agent **jetable** existe **seulement le temps de la
-  tâche**.
+  sans rien créer : c'est exactement ce fonctionnement.
 - Il **n'apparaît jamais** dans votre liste d'agents, ne s'ajoute **pas** au
   registre et **ne modifie aucun** agent existant : rien n'est enregistré, ni
   avant ni après.
@@ -3114,7 +3162,11 @@ uniquement un bloc d'instructions dans le prompt système.
   interne (`eph-…`). Si aucun nom n'est fourni, l'identifiant s'affiche comme
   avant ; rien ne change pour les agents du registre ni pour l'Assistant.
 - Un agent **réutilisable** (que vous voulez retrouver plus tard) se crée
-  toujours normalement : c'est l'agent « sur mesure » du registre.
+  toujours normalement : c'est l'agent « sur mesure » du registre. L'Assistant
+  ne le crée que lorsqu'un rôle doit **vraiment resservir** dans le temps, car
+  **il ne peut jamais supprimer** une entrée de votre liste d'agents : c'est
+  vous qui le faites. Un agent permanent créé pour rien reste donc visible chez
+  vous — c'est pourquoi, dans le doute, il n'en crée pas.
 <!-- /HELP:super-agent-agent-jetable -->
 
 <!-- HELP:super-agent-livrable -->
@@ -3407,11 +3459,58 @@ son tour arrive, avec le contexte de **sa** tâche).
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les
 agents du registre global (base SQLite). Il peut :
 
-1. **Créer un agent sur mesure** (outil `create_agent`) s'il estime que les
-   agents disponibles ne conviennent pas à la tâche : il définit lui-même le
-   rôle (system prompt), le nom, l'icône, la description, les modèles (pi/plh),
-   la lecture seule, le budget et la profondeur. L'agent est ajouté au registre
-   global et devient aussitôt sélectionnable.
+1. **Créer un agent DURABLE** (outil `create_agent`) — **RÉSERVÉ** aux rôles
+   qui vont **resservir** dans le temps (un métier confié encore dans plusieurs
+   semaines) : il définit le rôle (system prompt), le nom, l'icône, la
+   description, les modèles (pi/plh), la lecture seule, le budget et la
+   profondeur. L'agent est ajouté au registre global et devient aussitôt
+   sélectionnable. Pour un besoin **ponctuel**, il ne crée **rien** : il décrit
+   un agent **jetable** (§ « Agent jetable (mémoire seule) ») — voir la règle
+   ci-dessous, qui est **injectée** dans son prompt système.
+
+### Règle « agent jetable par défaut » (source unique, injectée)
+
+Décision du propriétaire : un besoin **ponctuel** (diagnostic, analyse,
+vérification, rédaction de circonstance) se traite avec un agent **jetable**
+décrit dans la demande, **jamais** avec une nouvelle entrée permanente du
+registre. `create_agent` est **RÉSERVÉ aux rôles durables**. Raison structurelle :
+l'Assistant ne peut **jamais supprimer** une entrée du registre (c'est le
+propriétaire qui le fait), donc toute création inutile reste **visible chez lui**.
+Dans le doute : ne rien créer.
+
+- **Écrite à UN SEUL endroit** : `src/js/agent-lifespan-rule.js` (module **PUR**,
+sans import) — constante `AGENT_LIFESPAN_RULE` (la consigne en clair),
+`AGENT_LIFESPAN_RULE_GUIDELINE` (la même règle en une phrase, pour les
+consignes d'outils), `AGENT_LIFESPAN_RULE_SNIPPET` (résumé court) et la pure
+`decideAgentKind(need)` (le doute joue **toujours** en faveur du jetable).
+- **Injectée dans le prompt système** : `super_agent.rs` embarque le fichier
+entier (`include_str!`) et en extrait la consigne (`extract_agent_lifespan_rule`,
+délimiteurs `AGENT_LIFESPAN_RULE_OPEN` / `_CLOSE` = déclaration de la constante
+et fermeture du gabarit de chaîne), puis pousse le bloc
+`## Règle des agents — un agent jetable par défaut` juste après le bloc « Outils
+d'agents » (`assemble_super_agent_system_prompt`). Aucune phrase de la règle
+n'est écrite côté Rust : tout écart fait échouer les verrous.
+- **Citée par les outils** : `pilot-assistant-actions.ts` **importe** le même
+module (`./agent-lifespan-rule.js`) pour la description de `create_agent` et les
+consignes de `create_agent` / `run_agents` / `run_assistant_agents` ; il ne
+recopie aucune formulation.
+- **Écrite sur disque** : `AgentService::write_agent_lifespan_rule` dépose le
+module à côté des extensions, dans les **deux** chemins d'écriture (agents
+d'assistant et session de l'Assistant) — sans ce fichier, l'extension des
+actions ne se charge plus (import).
+- **Textes contradictoires supprimés** : « Si aucun agent ne convient, crée-le
+d'abord avec `create_agent`, puis lance. » et la consigne d'outil « Use
+`create_agent` when the available agents do not fit the task » ont été
+remplacées ; le mode coordinateur **renvoie** désormais à la règle des agents.
+- **Verrous** : `src/js/agents-jetables-par-defaut.test.js` (règle en clair,
+contrat d'extraction, citations sans recopie, injection dans l'assemblage,
+absence de texte contradictoire, écriture sur disque) ; côté Rust
+`la_regle_de_l_agent_jetable_est_injectee_dans_le_prompt` (`super_agent.rs`,
+présence dans le prompt par défaut **et** en mode coordinateur, extraction
+fermée) et `write_agent_lifespan_rule_ecrit_la_source_unique`
+(`agent_service.rs`). Le garde-fou de budget du prompt
+(`super_agent_fixed_prompt_stays_under_budget`) compte ce bloc.
+
 2. **Choisir quels agents utiliser** (outil `run_agents`) : il sélectionne les
    agents disponibles (par leur id) qui lui semblent les plus adaptés et leur
    confie une tâche. Pilot les lance et renvoie le résultat agrégé

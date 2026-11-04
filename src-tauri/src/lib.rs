@@ -755,6 +755,17 @@ struct AppConfig {
     // le choix du modèle et le repli sont décidés à l'exécution, jamais réglés.
     #[serde(default)]
     local_dictation: bool,
+    // Mode Vocal (écran vocal) : MOTS DE RÉVEIL de la garde du nom (§ 6quater de
+    // `spec_modes_ecran_vocal.md`). UN seul champ texte, UNE clé, VIDE par
+    // défaut (« Nova, hey Nova »). Vide, le comportement historique est
+    // inchangé : seul le nom de l'assistante ouvre la phrase. Rempli, ces mots
+    // s'AJOUTENT au nom — qui reste toujours accepté — et une phrase qui en
+    // contient un seul part. La séparation, les doublons, la casse et les
+    // accents sont traités par la source unique (`vocal-nom-garde.js`,
+    // `wakeWordsFrom`) : ce champ n'est qu'un texte libre, jamais un tableau, et
+    // un fichier de configuration ancien (champ absent) ne change rien.
+    #[serde(default)]
+    vocal_wake_words: String,
     // Évolution 3 : assistant « réponses courtes » — quand activé, l'assistant
     // informe et décide sans détailler tout ce qui se fait, sauf demande
     // explicite. Défaut off. Injecté dans le prompt système.
@@ -1284,6 +1295,7 @@ impl Default for AppConfig {
             vocal_silence_send_ms: default_vocal_silence_send_ms(),
             vocal_brevity_level: default_vocal_brevity_level(),
             local_dictation: false,
+            vocal_wake_words: String::new(),
             super_agent_concise: false,
             super_agent_adaptive_personality: false,
             super_agent_personality: String::new(),

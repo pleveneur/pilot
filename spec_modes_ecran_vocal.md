@@ -2028,8 +2028,10 @@ sans que personne ne se soit adressé à Pilot.
 - **Les deux états, sur la ligne qui existe déjà** : la garde est **ARMÉE** →
   `Dites « Nova » pour me parler.` (le nom réel de l'assistante) ; l'écran a été
   **RÉVEILLÉ** pour une phrase → la phrase **existante** du repos
-  (« Je vous écoute. »). **Aucun nouvel élément d'interface, aucun réglage
-  nouveau** : c'est l'unique phrase de la ligne d'état qui bascule.
+  (« Je vous écoute. »). **Aucun nouvel élément d'interface** : c'est l'unique
+  phrase de la ligne d'état qui bascule. La ligne continue de nommer
+  l'assistante même quand des mots de réveil sont réglés — c'est **vrai** : son
+  nom marche toujours.
 - **Le bouton de secours reste un vrai secours (point le plus facile à
   casser)** : le bouton **« Réveiller <Nom> »** du cercle (et le bouton 🎙️ de la
   barre, qui emprunte la même voie) **lève la garde pour la phrase suivante** —
@@ -2044,8 +2046,50 @@ sans que personne ne se soit adressé à Pilot.
   n'agit que si l'écran Vocal est réellement affiché).
 - **Ce qui n'est pas touché** : le délai de silence de 2 s (§6bis.1) et son
   réglage, le micro (`vocal-mic.js`), la transcription, le service de voix local
-  et la voix imitée. Aucune dépendance ajoutée, aucun réglage utilisateur
-  ajouté.
+  et la voix imitée. Aucune dépendance ajoutée.
+
+### 6quater.1 Les mots de réveil (réglage unique, `vocal_wake_words`)
+
+**Décision du propriétaire** : à côté de son nom, l'écran Vocal doit pouvoir
+obéir à des **mots de réveil libres** (« Nova, hey Nova »), réglés à **un seul
+endroit** — le champ texte ajouté dans la section **« Mode Vocal »** des
+Paramètres (onglet Assistant), juste sous la dictée locale.
+
+- **Une seule clé, additive, vide par défaut** : `vocal_wake_words` (chaîne,
+  `#[serde(default)]` = `""`). **Champ vide ⇒ comportement STRICTEMENT
+  inchangé** : seul le nom (personnage actif, sinon nom réglé, sinon défaut)
+  ouvre la phrase. Aucune migration, aucun ancien fichier de configuration
+  modifié.
+- **Rempli ⇒ une phrase est acceptée si elle contient AU MOINS UN des mots**
+  saisis. La séparation est la **virgule** (ou le point-virgule, ou le saut de
+  ligne) ; un mot peut contenir des espaces (« hey Nova ») ; les entrées vides
+  et les doublons (à la casse ou aux accents près) sont ignorés. Un mot isolé
+  suffit, n'importe où dans la phrase.
+- **Le nom de l'assistante reste TOUJOURS accepté en plus** : le réglage
+  **s'ajoute**, il ne remplace jamais. C'est pourquoi la ligne d'état continue
+  de nommer l'assistante, et pourquoi le bouton « Réveiller <Nom> » est
+  inchangé (il vaut toujours pour **une** phrase).
+- **Même tolérance que le nom, ni plus ni moins** : casse, accents,
+  ponctuation, espaces sont ignorés, et les **mêmes** variantes évidentes de
+  prononciation passent (`ph`/`f`, `qu`/`k`, `y`/`i`, consonne finale muette) —
+  la comparaison est **la fonction existante** `mentionsAssistantName`, jamais
+  une seconde règle. Un mot de réveil **inutilisable** (vide, ou fait uniquement
+  de ponctuation) est **ignoré** : il n'ouvre rien et ne fonde aucun refus.
+- **La règle du fail-open est préservée** (`nom-inutilisable`) : elle ne joue
+  que si **aucun mot de réveil utilisable** n'est réglé. Un nom illisible **et**
+  des mots de réveil lisibles ⇒ ce sont eux qui filtrent.
+- **Rien d'autre ne change** : la phrase sans mot ni nom reste **ni envoyée, ni
+  conservée, ni affichée** ; le clavier n'est jamais filtré ; hors de l'écran
+  Vocal, **rien** (l'agent π et le web distant n'importent pas la garde).
+- **Réglage relu à chaud** : `refreshVocalMotsDeReveil()` dans `super-agent.js`,
+  **fail-open** (configuration illisible ⇒ liste vide ⇒ comportement d'avant),
+  au montage de l'onglet et dans le gestionnaire `pilot-config-changed` **déjà
+  existant** (aucun second écouteur).
+- **Verrou** : `src/js/mots-de-reveil.test.js` (mot accepté, nom toujours
+  accepté, phrase sans mot refusée, champ vide = nom seul, plusieurs mots dont
+  un seul prononcé, casse/accents ignorés, mots inutilisables, un seul point
+  d'application et aucune seconde voie d'envoi), à côté de
+  `src/js/vocal-nom-garde.test.js` qui reste **inchangé** et vert.
 
 <!-- HELP:vocal-garde-du-nom -->
 ### L'écran Vocal n'obéit qu'à son nom
@@ -2061,9 +2105,16 @@ continue simplement de vous écouter.
 - **Il est reconnu malgré les petites différences** : majuscules, accents,
   ponctuation et espaces n'ont aucune importance, et quelques prononciations
   très proches passent (« Bernar » pour « Bernard »).
+- **Vous pouvez régler d'autres mots de réveil** : ⚙️ **Options → onglet
+  « Assistant » → section « Mode Vocal »**, champ **« Mots de réveil »**.
+  Écrivez-les séparés par des virgules (« Nova, hey Nova ») : une phrase qui
+  contient **un seul** de ces mots part, où qu'il soit, et les majuscules comme
+  les accents n'ont aucune importance. **Son nom reste toujours accepté en
+  plus.** Champ **vide** : seul son nom compte, exactement comme avant. Le
+  réglage s'applique **tout de suite**, sans redémarrer Pilot.
 - **Quel nom ?** Celui que Pilot affiche déjà : le **personnage** déposé par le
   projet Présences, sinon le **nom réglé** de votre assistant, sinon son nom
-  habituel. Rien de nouveau à régler.
+  habituel. Rien de nouveau à régler — les mots de réveil **s'ajoutent** à ce nom.
 - **La ligne d'état vous dit où vous en êtes** : « Dites « Nova » pour me
   parler. » quand il attend son nom, et « Je vous écoute. » quand la phrase
   suivante partira sans le nom.
@@ -2078,7 +2129,9 @@ continue simplement de vous écouter.
 **Si Pilot ne réagit pas alors que vous l'avez appelé**, c'est que la
 reconnaissance a écrit son nom autrement : redites-le clairement, cliquez
 **« Réveiller <Nom> »**, ou tapez votre demande au clavier. Pilot préfère ne
-rien faire que se déclencher pour une phrase qui ne lui était pas adressée.
+rien faire que se déclencher pour une phrase qui ne lui était pas adressée. Un
+**mot de réveil plus simple à reconnaître** (« hey Nova ») est souvent le
+remède : c'est à cela qu'il sert.
 <!-- /HELP:vocal-garde-du-nom -->
 
 **Le point de franchise (à dire à l'utilisateur)** : la garde est **étroite par
@@ -2090,16 +2143,22 @@ passe sans le nom), ou **taper** la demande au clavier (jamais filtrée). Aucun
 réglage ne cherche à deviner : *un déclenchement de trop est pire qu'un silence*.
 
 **Où c'est dans le code** : décisions **pures** dans `src/js/vocal-nom-garde.js`
-(`decideVocalNameGate` — les cinq règles dans l'ordre : hors mode, texte vide,
-reprise en main, réveil, nom ; `mentionsAssistantName` ; `vocalNameSentence` ;
+(`decideVocalNameGate` — les **six** règles dans l'ordre : hors mode, texte vide,
+reprise en main, réveil, nom **ou mot de réveil**, puis fail-open ;
+`mentionsAssistantName` ; `mentionsWakeWord` / `wakeWordsFrom` / `wakeWordsText`
+— les **mots de réveil** du réglage `vocal_wake_words` ; `vocalNameSentence` ;
 `vocalNameGateArmed`), appliquées à **un seul endroit** dans `super-agent.js` —
-les résultats du moteur (rien ne s'écrit tant que le nom n'est pas entendu),
-la fin d'écoute (la phrase est jetée **avant** le chemin d'envoi unique
-`applyVoiceEnd` → `send`, qui n'a donc **pas** été dupliqué), et la ligne d'état.
+les résultats du moteur (rien ne s'écrit tant que le nom ou un mot de réveil
+n'est pas entendu), la fin d'écoute (la phrase est jetée **avant** le chemin
+d'envoi unique `applyVoiceEnd` → `send`, qui n'a donc **pas** été dupliqué), et la
+ligne d'état. Les mots de réveil sont relus à chaud par
+`refreshVocalMotsDeReveil()` (fail-open, aucun second écouteur).
 **Verrou** : `src/js/vocal-nom-garde.test.js` (les cinq règles et leur ordre, la
 largeur **et** l'étroitesse de la comparaison, le branchement, le réveil, la
 ligne d'état, et l'absence de tout changement hors de l'écran Vocal — ce test
-échoue si la garde disparaît).
+échoue si la garde disparaît) et `src/js/mots-de-reveil.test.js` (réglage
+additif : mot accepté, nom toujours accepté, phrase sans mot refusée, champ vide
+= nom seul, un seul des mots suffit, casse/accents ignorés).
 
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 
@@ -2286,7 +2345,7 @@ conversation) ; il échoue si la restitution disparaît. Rapport :
 | `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, **reprise bornée d'un armement refusé pour une raison passagère** (`vocalResumeRetry` + `VOCAL_RESUME_RETRY_MS` / `VOCAL_RESUME_MAX_RETRIES` / `VOCAL_RESUME_TRANSIENT_REASONS`), désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur **instantanée** — durée mesurée < `VOICE_EMPTY_SESSION_INSTANT_MS` (1 s) —, jamais une erreur affichée, un arrêt demandé, une reprise en main, et **jamais un silence d'une durée réelle**) |
 | `src/js/vocal-brevity.js` | **source unique** de la **réponse courte du mode Vocal** : les **quatre niveaux** de longueur (`VOCAL_BREVITY_LEVELS`, `normalizeVocalBrevityLevel`, `vocalBrevityLabel`), la consigne d'un niveau (`vocalBrevityInstruction`) et son **seul assemblage** (`composeVocalPrompt`, qui rend le texte **inchangé** hors du mode). Aucune troncature |
-| `src/js/vocal-nom-garde.js` | **source unique de la garde du nom** (§6quater), pure, sans import : `foldSpoken` / `phoneticKey` / `mentionsAssistantName` (comparaison **tolérante mais étroite** : casse, accents, ponctuation, `ph`/`f`, `qu`/`k`, `y`/`i`, consonne finale muette, nom coupé en deux — **aucune** distance d'édition, **aucun** dictionnaire, **aucune** réduction des lettres doublées), `decideVocalNameGate` (les **cinq règles dans l'ordre** : hors mode, texte vide, reprise en main, réveil, nom — et `nom-inutilisable` en **fail-open**), `vocalNameSentence` (la phrase `Dites « Nom » pour me parler.`), `vocalNameGateArmed`. Le nom est **reçu**, jamais calculé ici |
+| `src/js/vocal-nom-garde.js` | **source unique de la garde du nom** (§6quater), pure, sans import : `foldSpoken` / `phoneticKey` / `mentionsAssistantName` (comparaison **tolérante mais étroite** : casse, accents, ponctuation, `ph`/`f`, `qu`/`k`, `y`/`i`, consonne finale muette, nom coupé en deux — **aucune** distance d'édition, **aucun** dictionnaire, **aucune** réduction des lettres doublées), **les MOTS DE RÉVEIL du réglage unique `vocal_wake_words`** (`VOCAL_WAKE_WORDS_KEY`, `wakeWordsFrom` = séparation par virgule/point-virgule/retour à la ligne, doublons et vides ignorés, `wakeWordsText` = **seule** forme mémorisée, `mentionsWakeWord` = même comparaison que le nom ; champ **vide** ⇒ rien ne change), `decideVocalNameGate` (les **six règles dans l'ordre** : hors mode, texte vide, reprise en main, réveil, **nom** puis **mot de réveil** — le nom restant **toujours** accepté —, et `nom-inutilisable` en **fail-open**, qui ne joue que si aucun mot de réveil utilisable n'est réglé), `vocalNameSentence` (la phrase `Dites « Nom » pour me parler.`), `vocalNameGateArmed`. Le nom est **reçu**, jamais calculé ici |
 | `src/js/vocal-mic.js` | **seul** endroit où le micro est ouvert : capture, niveau lissé, arrêt réel, messages de panne, garde anti-auto-coupure (`stepSpeechGate`, `bargeInArmed`, `setSpeaking` / `setThinking`) |
 | `src/js/vocal-restart.js` | **source unique** du bouton de relance (§3bis), pures : `vocalRestartVisible` (transcription dispo · dictée fermée · aucun armement programmé · état `idle`), `vocalRestartName` (repli sur `DEFAULT_ASSISTANT_NAME`), `vocalRestartText` (« Réveiller <Nom> » borné à 24 car., coupe sur fin de mot), `vocalRestartLabel` (libellé complet : infobulle + nom accessible), `VOCAL_RESTART_VERB`. Aucun DOM, aucun micro, aucun état gardé |
 | `src/js/vocal-chrome.js` | **source unique du bas effacé au repos** (§4bis), pure : `VOCAL_CHROME_IDLE_MS` (10 000), `VOCAL_CHROME_MOVE_PX` (4), `VOCAL_CHROME_HIDDEN_CLASS`, `vocalChromeVisible` (les **quatre** règles **dans l'ordre** : micro fermé, champ rempli, pointeur en geste, question en attente — **aucun état de conversation**, cf. 2026-11-13), `vocalChromeClass`, `vocalChromeWakeKey` (`Échap` excepté), `vocalChromeMoved`. Aucun DOM, aucune minuterie |
@@ -2327,6 +2386,12 @@ est accepté **et refusé** par la comparaison, le branchement sur les deux seul
 points qui terminent une phrase, **le réveil qui ne vaut qu'une phrase**, la
 ligne d'état, et **aucun changement hors de l'écran Vocal** — il échoue si la
 garde disparaît),
+`mots-de-reveil.test.js` (**mots de réveil** §6quater.1 : le mot réglé est
+accepté, **le nom reste toujours accepté**, une phrase sans mot ni nom est
+**refusée**, un champ **vide** ne laisse passer que le nom, **un seul** des mots
+suffit, casse/accents ignorés, mot de réveil inutilisable ignoré, la règle
+du fail-open préservée, un **seul** point d'application dans `super-agent.js`,
+**aucune** seconde voie d'envoi et **aucun** import hors de l'écran Vocal),
 `dictee-vocale-se-rearme.test.js` (défaut « le micro est coupé, la dictée n'a pas
 fonctionné » : **un silence n'est pas une panne** — une fin d'écoute d'une durée
 réelle n'alimente pas le plafond et n'affiche aucun message, la dictée se réarme

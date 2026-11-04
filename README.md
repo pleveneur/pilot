@@ -185,6 +185,20 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   rouvre pas contre votre volonté. Si Pilot ne peut pas dicter (micro refusé ou
   occupé, pas de réseau, dictée indisponible sur ce poste, projet **sensible**),
   la ligne d'état **le dit** et vous continuez au clavier.
+- **Pilot ne répond qu'à son nom** : une phrase qui **ne le nomme pas** ne
+  part pas, ne s'écrit pas dans la zone et ne s'affiche nulle part — parler à
+  côté, la télévision, une conversation voisine ne déclenchent rien. Le nom
+  peut être dit **n'importe où** dans la phrase ; les majuscules, les accents et
+  la ponctuation n'ont aucune importance. Le bouton **« Réveiller <Nom> »** du
+  cercle lève cette règle pour **une** phrase, et le **clavier n'est jamais
+  filtré** : ce que vous tapez part comme avant.
+- **Vous pouvez régler d'autres mots de réveil** (par exemple « hey Nova ») :
+  ⚙️ **Options → onglet « Assistant » → section « Mode Vocal »**, champ
+  **« Mots de réveil »**, mots séparés par des virgules. Une phrase qui contient
+  **un seul** de ces mots part toute seule, où qu'il soit, et **son nom reste
+  toujours accepté en plus**. Champ **vide** (le réglage de départ) : seul son
+  nom compte, exactement comme avant. Le réglage s'applique **tout de suite**,
+  sans redémarrer Pilot.
 - **Un silence n'arrête rien** : quand vous vous taisez un moment, l'écoute se
   referme et **se rouvre toute seule**, sans message d'échec — vous reprenez la
   parole quand vous voulez. Pilot ne cesse de rouvrir le micro tout seul que si

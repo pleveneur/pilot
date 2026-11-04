@@ -106,6 +106,11 @@ import {
 // donc jamais recopiés ici, et l'écran des Paramètres dit exactement ce que dit
 // la ligne d'état du mode Vocal.
 import { planLocalEar, localDictationRequested } from "./oreille-locale.js";
+// MOTS DE RÉVEIL de la garde du nom (§ 6quater) : la clé et la normalisation
+// (séparateurs, doublons, casse, accents) viennent du module PUR de la garde —
+// jamais une seconde règle écrite ici, et jamais un texte mémorisé que la garde
+// relirait autrement.
+import { wakeWordsText } from "./vocal-nom-garde.js";
 // Voix française LOCALE (Piper, hors ligne) : le statut du moteur et le libellé
 // de son choix viennent d'un seul module — aucune valeur recopiée ici.
 import {
@@ -698,6 +703,20 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   }
 
   /**
+   * Affiche les MOTS DE RÉVEIL réglés (section « Mode Vocal »).
+   *
+   * Une seule forme mémorisée (`wakeWordsText`) : les mots retenus, séparés par
+   * « , ». Un champ vide affiche une chaîne vide — donc son exemple en
+   * placeholder, et le comportement d'avant (le nom seul).
+   * @param {string} [value] valeur mémorisée (défaut : la configuration)
+   */
+  function refreshVocalWakeWords(value) {
+    if (!inputVocalWakeWords) return;
+    const brut = value == null ? currentConfig && currentConfig.vocal_wake_words : value;
+    inputVocalWakeWords.value = wakeWordsText(brut);
+  }
+
+  /**
    * Affiche la LONGUEUR réglée des réponses orales (section « Mode Vocal »).
    *
    * Les quatre entrées sont construites à partir de la SOURCE UNIQUE
@@ -1255,6 +1274,12 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   // le modèle annoncé est celui que le service dit employer.
   const chkLocalDictation = document.getElementById("setting-local-dictation");
   const localDictationStateEl = document.getElementById("local-dictation-state");
+  // MOTS DE RÉVEIL de la garde du nom (même section, même mécanisme) : UN
+  // champ texte, UNE clé (`vocal_wake_words`). La normalisation (séparateurs,
+  // doublons, casse, accents) vient du module pur `vocal-nom-garde.js` : rien
+  // n'est découpé ici, donc la valeur écrite est exactement celle que la garde
+  // relira.
+  const inputVocalWakeWords = document.getElementById("setting-vocal-wake-words");
   // Dernier etat de lecture connu : la ligne d'etat de la section « Lecture des
   // reponses » le reprend a chaque ouverture de la modale.
   let lastReadAloudState = "";
@@ -2126,6 +2151,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   // c'est le seul moyen de dire la vérité sur le modèle employé.
   if (chkLocalDictation) chkLocalDictation.checked = localDictationRequested(currentConfig);
   refreshLocalDictationStatus();
+  // Meme section : les MOTS DE REVEIL de la garde du nom (champ vide par
+  // defaut ⇒ le nom seul, comportement inchange).
+  refreshVocalWakeWords(currentConfig && currentConfig.vocal_wake_words);
   // État du DERNIER téléchargement de modèle : relu, jamais relancé (aucun geste
   // ici — un téléchargement ne part que d'un clic ou d'un choix de voix).
   refreshLocalVoiceDownloadState().then((state) => {
@@ -3171,6 +3199,12 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         // cochee : la valeur par defaut (absente) garde la dictee du navigateur,
         // donc le comportement historique, sans migration.
         local_dictation: chkLocalDictation ? chkLocalDictation.checked === true : false,
+        // MOTS DE REVEIL (garde du nom) : la valeur enregistree passe par la
+        // normalisation de la source unique — un champ vide reste vide, donc
+        // le comportement historique (le nom seul), sans migration.
+        vocal_wake_words: wakeWordsText(
+          inputVocalWakeWords ? inputVocalWakeWords.value : ""
+        ),
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
         super_agent_coordinator: chkSuperAgentCoordinator ? chkSuperAgentCoordinator.checked === true : false,
         super_agent_user_friendly: chkSuperAgentUserFriendly ? chkSuperAgentUserFriendly.checked === true : false,

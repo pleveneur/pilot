@@ -13,7 +13,7 @@
 // `rec.onresult`, `rec.onend` et `vocalStatusLine`) — aucun second envoi, aucun
 // second moteur n'est créé ici.
 //
-// ── LES CINQ RÈGLES, DANS L'ORDRE (c'est la spécification) ──────────────────
+// ── LES SIX RÈGLES, DANS L'ORDRE (c'est la spécification) ───────────────────
 //   1. **Hors de l'écran Vocal** (`modeOuvert !== true`) : rien ne change. Le
 //      chat de l'agent π, la barre de l'onglet 🧭 hors mode et le web distant ne
 //      passent pas par cette garde — leur comportement est celui d'avant.
@@ -27,10 +27,25 @@
 //      une phrase, jamais pour la session entière — l'écran se réarme tout seul
 //      après chaque réponse, et c'est le nom qui rouvre l'envoi.
 //   5. Le nom est-il **entendu** ? Oui ⇒ `nom-entendu` (la phrase part par le
-//      chemin d'envoi existant). Non ⇒ `nom-absent` ⇒ la phrase est **jetée**.
+//      chemin d'envoi existant).
+//   6. Un **mot de réveil** réglé est-il entendu ? Oui ⇒ `mot-reveil` (même
+//      chemin d'envoi). Non ⇒ `nom-absent` ⇒ la phrase est **jetée**.
 // Un nom **inutilisable** (vide, ou entièrement composé de caractères que la
 // comparaison ne sait pas lire) fait **laisser passer** (`nom-inutilisable`) :
-// une garde qui ne sait pas reconnaître son nom ne doit pas murer l'écran.
+// une garde qui ne sait pas reconnaître son nom ne doit pas murer l'écran. Cette
+// règle ne vaut que si **aucun mot de réveil utilisable** n'est réglé : un mot de
+// réveil lisible suffit à fonder le refus.
+//
+// ── LES MOTS DE RÉVEIL (réglage unique, `vocal_wake_words`) ─────────────────
+// Décision du propriétaire : à côté de son nom, l'écran Vocal obéit à des MOTS
+// DE RÉVEIL libres (« Nova, hey Nova »). Le réglage est UN champ texte, UNE clé,
+// de défaut **vide** : tant qu'il est vide, le comportement est **exactement**
+// celui d'avant (le nom seul). Rempli, une phrase est acceptée dès qu'elle
+// contient **au moins un** des mots saisis, avec la **même** tolérance que le
+// nom (`mentionsAssistantName`, donc casse/accents/ponctuation et les seules
+// variantes évidentes de prononciation). Le **nom de l'assistante reste
+// toujours accepté en plus** : le réglage s'ajoute, il ne remplace pas. Un mot
+// de réveil inutilisable (vide, ou fait uniquement de ponctuation) est ignoré.
 //
 // ── LA COMPARAISON, ET POURQUOI ELLE EST ÉTROITE ────────────────────────────
 // Tolérante sur ce que la reconnaissance vocale ne restitue jamais à
@@ -64,6 +79,12 @@ export const VOCAL_GATE_LAISSER = "laisser";
 
 /** En dessous de cette longueur, la comparaison « au son » est trop grossière. */
 export const VOCAL_GATE_MIN_KEY = 3;
+
+/** La clé de configuration des mots de réveil (additive, défaut vide). */
+export const VOCAL_WAKE_WORDS_KEY = "vocal_wake_words";
+
+/** Ce qui sépare deux mots de réveil dans le champ unique. */
+export const VOCAL_WAKE_SEPARATORS = /[,;\n]+/;
 
 const DIACRITICS = /[\u0300-\u036f]/g;
 
@@ -105,6 +126,63 @@ export function phoneticKey(mot) {
 function wordsOf(texte) {
   const plie = foldSpoken(texte);
   return plie ? plie.split(" ") : [];
+}
+
+/**
+ * Les mots de réveil d'une saisie libre, nettoyés et dédoublonnés.
+ *
+ * Une saisie = un champ texte : la virgule (ou le point-virgule, ou le saut de
+ * ligne) sépare deux mots, et un mot peut contenir des espaces (« hey Nova »).
+ * Les entrées vides et les doublons (même à la casse ou aux accents près) sont
+ * ignorés, l'ordre saisi est conservé. PURE, ne lève jamais.
+ * @param {unknown} saisie texte du réglage, ou liste de mots
+ * @returns {string[]} mots de réveil utilisables (jamais vides)
+ */
+export function wakeWordsFrom(saisie) {
+  const morceaux = Array.isArray(saisie)
+    ? saisie
+    : String(saisie == null ? "" : saisie).split(VOCAL_WAKE_SEPARATORS);
+  const vus = new Set();
+  const mots = [];
+  for (const morceau of morceaux) {
+    const mot = String(morceau == null ? "" : morceau).replace(/\s+/g, " ").trim();
+    const cle = foldSpoken(mot);
+    if (!cle || vus.has(cle)) continue;
+    vus.add(cle);
+    mots.push(mot);
+  }
+  return mots;
+}
+
+/**
+ * La forme MÉMORISÉE d'une saisie de mots de réveil : les mots retenus, joints
+ * par « , ». Une seule normalisation pour l'écriture et pour la relecture, donc
+ * jamais deux textes pour le même réglage. PURE.
+ * @param {unknown} saisie
+ * @returns {string}
+ */
+export function wakeWordsText(saisie) {
+  return wakeWordsFrom(saisie).join(", ");
+}
+
+/**
+ * Un des mots de réveil est-il prononcé **quelque part** dans la phrase ?
+ *
+ * La comparaison est CELLE DU NOM (`mentionsAssistantName`) : même tolérance
+ * (casse, accents, ponctuation, variantes évidentes, mot coupé en deux) et même
+ * étroitesse. PURE, ne lève jamais.
+ * @param {unknown} phrase texte transcrit (ou saisi) à examiner
+ * @param {unknown} motsDeReveil texte du réglage, ou liste de mots
+ * @returns {boolean} vrai si au moins un mot de réveil est entendu
+ */
+export function mentionsWakeWord(phrase, motsDeReveil) {
+  const mots = wakeWordsFrom(motsDeReveil);
+  if (mots.length === 0) return false;
+  const texte = String(phrase == null ? "" : phrase);
+  for (const mot of mots) {
+    if (mentionsAssistantName(texte, mot)) return true;
+  }
+  return false;
 }
 
 /** Clés « au son » d'une liste de mots, dans l'ordre. */
@@ -160,16 +238,18 @@ export function mentionsAssistantName(phrase, nom) {
  *
  * L'ORDRE des règles est la spécification (voir l'en-tête) : il se teste tel
  * quel. Aucune règle ne consulte le micro, la transcription ni le réseau.
- * @param {{modeOuvert?: boolean, texte?: string, nom?: string, repriseMain?: boolean, reveil?: boolean}} [etats]
+ * @param {{modeOuvert?: boolean, texte?: string, nom?: string, motsDeReveil?: string|string[], repriseMain?: boolean, reveil?: boolean}} [etats]
  * @returns {{action: string, raison: string, consommeReveil: boolean}}
  *   `action` : `VOCAL_GATE_LAISSER` ou `VOCAL_GATE_JETER` ;
  *   `raison` : `hors-mode`, `sans-texte`, `reprise-main`, `reveil`,
- *   `nom-inutilisable`, `nom-entendu`, `nom-absent`.
+ *   `nom-entendu`, `mot-reveil`, `nom-inutilisable`, `nom-absent`.
  */
 export function decideVocalNameGate(etats) {
   const e = etats || {};
   const texte = String(e.texte == null ? "" : e.texte).trim();
   const nom = String(e.nom == null ? "" : e.nom).trim();
+  // Mot de réveil (réglage unique) : lu UNE fois, jamais recopié ailleurs.
+  const reveils = wakeWordsFrom(e.motsDeReveil);
   const laisser = (raison, consommeReveil) => ({
     action: VOCAL_GATE_LAISSER,
     raison,
@@ -184,9 +264,14 @@ export function decideVocalNameGate(etats) {
   if (e.repriseMain === true) return laisser("reprise-main");
   // 4. Réveillé (bouton « Réveiller », geste 🎙️) : une phrase, pas une session.
   if (e.reveil === true) return laisser("reveil", true);
-  // 5. Un nom qu'on ne sait pas lire ne peut pas fonder un refus.
-  if (wordsOf(nom).length === 0) return laisser("nom-inutilisable");
+  // 5. Le nom de l'assistante est TOUJOURS accepté : le réglage des mots de
+  //    réveil s'ajoute à lui, il ne le remplace jamais.
   if (mentionsAssistantName(texte, nom)) return laisser("nom-entendu");
+  // 6. Un mot de réveil réglé, n'importe où dans la phrase — un seul suffit.
+  if (mentionsWakeWord(texte, reveils)) return laisser("mot-reveil");
+  // 7. Un nom qu'on ne sait pas lire ne peut pas fonder un refus — mais
+  //    seulement s'il n'y a AUCUN mot de réveil utilisable pour le faire.
+  if (wordsOf(nom).length === 0 && reveils.length === 0) return laisser("nom-inutilisable");
   return { action: VOCAL_GATE_JETER, raison: "nom-absent", consommeReveil: false };
 }
 
@@ -213,12 +298,16 @@ export function vocalNameSentence(nom) {
  * entendu, rien ne s'écrit dans la zone et aucun mot ne repousse l'échéance du
  * silence (donc rien ne part). La décision, elle, reste celle de
  * `decideVocalNameGate` : cette fonction ne fait que la résumer.
- * @param {{modeOuvert?: boolean, nom?: string, reveil?: boolean}} [etats]
+ * Un MOT DE RÉVEIL utilisable garde la garde armée même quand le nom est
+ * illisible : c'est lui qui fonde le refus, et sans lui la règle du fail-open
+ * laisserait tout passer (comportement d'avant, intact).
+ * @param {{modeOuvert?: boolean, nom?: string, motsDeReveil?: string|string[], reveil?: boolean}} [etats]
  * @returns {boolean}
  */
 export function vocalNameGateArmed(etats) {
   const e = etats || {};
   if (e.modeOuvert !== true) return false;
   if (e.reveil === true) return false;
-  return wordsOf(e.nom).length > 0;
+  if (wordsOf(e.nom).length > 0) return true;
+  return wakeWordsFrom(e.motsDeReveil).length > 0;
 }

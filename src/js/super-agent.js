@@ -223,18 +223,26 @@ import {
 // L'ÉCRAN VOCAL N'OBÉIT QU'À SON NOM (décision du propriétaire, spec
 // `spec_modes_ecran_vocal.md` § 6quater) : une phrase prononcée dans le mode
 // Vocal ne déclenche rien — ni envoi, ni texte conservé, ni affichage — tant que
-// le nom de l'assistante n'a pas été entendu. Les DÉCISIONS (les cinq règles,
+// le nom de l'assistante n'a pas été entendu. Les DÉCISIONS (les six règles,
 // la comparaison étroite, la phrase de la ligne d'état) sont PURES et vivent dans
 // ce module ; ce fichier ne fait que les appliquer aux deux seuls endroits qui
 // terminent une phrase (les résultats du moteur, puis sa fin d'écoute) et à la
 // ligne d'état (`vocalStatusLine`). Le micro, la transcription et le service de voix ne sont
 // pas touchés : l'écoute continue, seule la CONSÉQUENCE de la phrase change.
+
+// MOTS DE RÉVEIL (réglage unique `vocal_wake_words`, défaut vide) : la même
+// garde accepte AUSSI les mots saisis par l'utilisateur, sans jamais cesser
+// d'accepter le nom. Le réglage est relu à chaud (`refreshVocalMotsDeReveil`)
+// et passé à la décision existante — aucun second chemin d'envoi, aucune
+// seconde garde.
 import {
   decideVocalNameGate,
   mentionsAssistantName,
+  mentionsWakeWord,
   vocalNameGateArmed,
   vocalNameSentence,
   VOCAL_GATE_JETER,
+  wakeWordsFrom,
 } from "./vocal-nom-garde.js";
 // LE BAS DE L'ECRAN S'EFFACE AU REPOS (CONCEPTION-ecran-vocal-cercle-et-bas.md
 // §2) : la DECISION est PURE et vit dans vocal-chrome.js (les quatre
@@ -4185,6 +4193,9 @@ export async function createSuperAgent(container) {
     // La LONGUEUR des reponses orales se relit au meme endroit (aucun second
     // ecouteur) : le reglage prend effet a la demande suivante.
     refreshVocalLongueurNiveau();
+    // MOTS DE REVEIL (garde du nom) : relus ICI, avec les autres reglages du
+    // mode Vocal — meme ecouteur, aucun second.
+    refreshVocalMotsDeReveil();
     // OREILLE LOCALE (etape 2) : la case « Transcrire avec le service de voix
     // local » se relit ICI, au meme endroit que les autres reglages du mode
     // Vocal — et le pont est reinterroge, parce que le service a pu etre lance ou
@@ -4213,6 +4224,9 @@ export async function createSuperAgent(container) {
   // Meme premiere lecture pour la LONGUEUR des reponses orales : sans elle,
   // l'onglet ouvert avant tout changement de reglage utiliserait le defaut.
   refreshVocalLongueurNiveau();
+  // Meme premiere lecture pour les MOTS DE REVEIL (garde du nom) : sans elle,
+  // l'onglet ouvert avant tout changement de reglage n'obeirait qu'au nom.
+  refreshVocalMotsDeReveil();
   // L'oreille locale (etape 2) se relit plus bas, une fois le bouton 🎙️
   // construit : sa premiere sonde decide aussi de sa visibilite.
 
@@ -5055,6 +5069,12 @@ let vocalDicteeParGeste = false;
 // toujours). Remis à zéro par la seule décision qui le consomme, jamais par un
 // délai. Hors du mode Vocal, il est ignoré : la garde ne s'applique pas.
 let vocalReveilUnePhrase = false;
+// MOTS DE RÉVEIL (réglage unique `vocal_wake_words`, Paramètres → onglet
+// Assistant → section « Mode Vocal ») : la liste NORMALISÉE des mots saisis,
+// relue à chaud (`refreshVocalMotsDeReveil`). Vide = le comportement d'avant,
+// strictement (le nom seul). Ces mots s'AJOUTENT au nom, ils ne le remplacent
+// jamais : la garde n'est pas dupliquée ici, la décision reste celle du module.
+let vocalMotsDeReveil = [];
   if (inputEl) {
     inputEl.addEventListener("input", () => {
       if (voiceActive) voiceUserTookOver = true;
@@ -5267,8 +5287,14 @@ let vocalReveilUnePhrase = false;
       // vient de la SEULE source existante (`superAgentDisplayLabel`).
       const nomAttendu = superAgentDisplayLabel();
       if (
-        vocalNameGateArmed({ modeOuvert: vocalOverlay !== null, nom: nomAttendu, reveil: vocalReveilUnePhrase === true }) &&
-        !mentionsAssistantName(transcript, nomAttendu)
+        vocalNameGateArmed({
+          modeOuvert: vocalOverlay !== null,
+          nom: nomAttendu,
+          motsDeReveil: vocalMotsDeReveil,
+          reveil: vocalReveilUnePhrase === true,
+        }) &&
+        !mentionsAssistantName(transcript, nomAttendu) &&
+        !mentionsWakeWord(transcript, vocalMotsDeReveil)
       ) {
         // Rien n'est conservé : la zone reste exactement ce qu'elle était.
         if (inputEl.value !== preText) inputEl.value = preText;
@@ -5356,6 +5382,7 @@ let vocalReveilUnePhrase = false;
           modeOuvert: vocalOverlay !== null,
           texte: finalText,
           nom: superAgentDisplayLabel(),
+          motsDeReveil: vocalMotsDeReveil,
           repriseMain: voiceUserTookOver === true,
           reveil: vocalReveilUnePhrase === true,
         });
@@ -6671,6 +6698,25 @@ let vocalReveilUnePhrase = false;
       // decision retombe sur la valeur par defaut (2 s).
       delaiMs: vocalSilenceSendMs,
     };
+  }
+
+  /**
+   * Relit les MOTS DE RÉVEIL réglés (au montage de l'onglet et à chaque
+   * changement de réglage : aucun redémarrage nécessaire).
+   *
+   * FAIL-OPEN : configuration illisible ou champ absent ⇒ liste VIDE, donc le
+   * comportement historique (le nom seul), à l'identique. La normalisation est
+   * celle du module pur (`wakeWordsFrom`) : aucun mot n'est découpé ni comparé
+   * ici.
+   * @returns {Promise<void>}
+   */
+  async function refreshVocalMotsDeReveil() {
+    try {
+      const cfg = await invoke("get_config");
+      vocalMotsDeReveil = wakeWordsFrom(cfg && cfg.vocal_wake_words);
+    } catch (_) {
+      vocalMotsDeReveil = [];
+    }
   }
 
   /**
