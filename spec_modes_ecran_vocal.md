@@ -2369,16 +2369,55 @@ Le geste reste la **dernière instruction** de `exitImmersive()` **et** de
 `exitVocal()` — donc identique pour les **trois** voies de sortie (le logo,
 `Échap`, la fermeture de l'onglet), qui passent toutes par `exitVocal()`.
 
+### Le troisième temps : la position n'existait plus au bon moment (défaut revenu)
+
+**Le défaut, signalé une troisième fois** : la conversation ne repartait plus en
+haut, mais **ramenait en bas** celui qui était en train de **relire un passage**.
+
+**La cause** : les deux photographies ci-dessus sont prises à la **sortie** du
+plein écran. Or le cycle du logo **traverse** « Assistant seul », dont l'entrée
+**force le bas** (issue #82, décision conservée) : ce bas est écrit **avant**
+toute photographie. Pour celui qui relisait, la photographie de sortie dit donc
+« il était en bas » — c'est exact, mais c'est **nous** qui l'y avons mis. La
+position qu'il avait en quittant « Détaillé » était **déjà perdue**.
+
+**La règle ajoutée** — deux photographies, une décision pure,
+`conversationScrollReturnSnapshot(detaille, pleinEcran, geste)` :
+
+| Cas | La position rendue |
+|---|---|
+| il était **en bas** | le **bas** (y compris la fin arrivée pendant le plein écran) |
+| il **relisait** et n'a pas touché au plein écran | **sa position de « Détaillé »** — celle photographiée en quittant « Détaillé » |
+| il a **remonté la conversation pendant** le plein écran | **sa position du moment** : sa main l'emporte toujours |
+| une seule photographie disponible | celle-là (aucune position inventée) |
+
+`memoizeSuperDetailScroll(messagesEl)` prend la seconde photographie **au moment
+on l'on quitte « Détaillé »** : dans `enterImmersive`, après la sortie de
+l'écran Vocal et **avant** le bas forcé de l'issue #82 et avant le déplacement
+de `messagesEl`. `enterVocal` n'en prend pas — cet écran ne déplace pas la
+conversation et le cycle du logo l'atteint toujours après « Assistant seul »,
+dont la sortie vient de rendre la bonne position ; il ouvre seulement
+l'**observation du geste** (`superPleinEcranOuvert`).
+
+Le **geste** est le seul fait nouveau observé, et il l'est sans écouteur
+supplémentaire : `superAtBottom` ne peut passer de **vrai à faux** que par une
+main humaine (les écritures de l'application posent la valeur **avant**
+d'écrire). `restoreSuperScroll` **confronte** les deux photographies par la
+fonction pure, les consomme toutes les deux, et remet le drapeau de geste à
+zéro : aucune restauration tardive ne peut rejouer une position périmée.
+
 **Ce qui ne change pas** : l'entrée en « Assistant seul » continue de forcer le
 bas (issue #82), l'apparence et la disposition sont intactes, aucun réglage n'est
 créé et rien n'est mémorisé. Verrou :
 `src/js/conversation-scroll.test.js` (les deux règles, le seuil unique, le
 branchement réel — photographie avant le déplacement, restitution après le
 retrait de l'overlay — et **aucun déplacement supplémentaire** de la
-conversation) **et** `src/js/retour-mode-conversation-en-bas.test.js` (le cas
-transitoire : la décision rend 0, le rendu la corrige ; la relecture jamais
-écrasée ; le branchement, l'absence de minuteur et de défilement animé) ; les
-deux échouent si la restitution disparaît. Rapport :
+conversation) **et** `src/js/retour-mode-conversation-en-bas.test.js` (les cas
+transitoire et **relecture** : la décision rend 0, le rendu la corrige ; la
+relecture jamais écrasée ; **la photographie de « Détaillé » l'emporte sur un
+bas forcé** — section 4 — et elle est prise **au bon moment** — section 5 ; le
+branchement, l'absence de minuteur et de défilement animé) ; les deux échouent si
+la restitution disparaît. Rapport :
 `docs/rapports/RAPPORT-retour-mode-conversation-en-bas.md`.
 
 ## 9. Ce qui n'est pas fait (et n'est pas simulé)
@@ -2398,7 +2437,7 @@ deux échouent si la restitution disparaît. Rapport :
 | Fichier | Rôle |
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
-| `src/js/conversation-scroll.js` | **source unique** de la position de la conversation au retour d'un plein écran (§8ter), pure : `CONVERSATION_SCROLL_BOTTOM_THRESHOLD` (60, valeur **unique**), `conversationAtBottom`, `conversationScrollMax`, `conversationScrollSnapshot` (photographie), `conversationScrollTarget` (la décision : bas réel / position exacte bornée / `null`), `conversationScrollReplayTarget` (le **deuxième temps** : la même décision rejouée sur la géométrie réelle au premier signal de rendu ; `null` quand la position est déjà juste ou quand l'utilisateur a repris la main). Aucun DOM, aucun minuteur. **Écritures** dans `super-agent.js` : `memoizeSuperScroll` (avant les déplacements de nœuds), `restoreSuperScroll` (dernière instruction de `exitImmersive` **et** `exitVocal`, ré-arme `superAtBottom` depuis la photographie) et `replaySuperScrollAfterLayout` (**une** demande de rendu, aucune boucle, annulée si l'onglet est démonté) |
+| `src/js/conversation-scroll.js` | **source unique** de la position de la conversation au retour d'un plein écran (§8ter), pure : `CONVERSATION_SCROLL_BOTTOM_THRESHOLD` (60, valeur **unique**), `conversationAtBottom`, `conversationScrollMax`, `conversationScrollSnapshot` (photographie), `conversationScrollTarget` (la décision : bas réel / position exacte bornée / `null`), `conversationScrollReplayTarget` (le **deuxième temps** : la même décision rejouée sur la géométrie réelle au premier signal de rendu ; `null` quand la position est déjà juste ou quand l'utilisateur a repris la main) et `conversationScrollReturnSnapshot` (le **troisième temps** : quelle photographie rendre — celle de « Détaillé », prise en le quittant, l'emporte sur un bas forcé par l'entrée en « Assistant seul », sauf si l'utilisateur a remonté la conversation pendant le plein écran). Aucun DOM, aucun minuteur. **Écritures** dans `super-agent.js` : `memoizeSuperScroll` (avant les déplacements de nœuds), `memoizeSuperDetailScroll` (au moment où l'on quitte « Détaillé », depuis `enterImmersive`), `restoreSuperScroll` (dernière instruction de `exitImmersive` **et** `exitVocal`, confronte les deux photographies puis ré-arme `superAtBottom` depuis celle qui est rendue) et `replaySuperScrollAfterLayout` (**une** demande de rendu, aucune boucle, annulée si l'onglet est démonté) |
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal` (pose et retrait des quatre écouteurs et de l'unique minuteur du bas, §4bis), `vocalSyncChrome` (**seul** point d'écriture de `.vocal-chrome-hidden`), `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
 | `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, **reprise bornée d'un armement refusé pour une raison passagère** (`vocalResumeRetry` + `VOCAL_RESUME_RETRY_MS` / `VOCAL_RESUME_MAX_RETRIES` / `VOCAL_RESUME_TRANSIENT_REASONS`), désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur **instantanée** — durée mesurée < `VOICE_EMPTY_SESSION_INSTANT_MS` (1 s) —, jamais une erreur affichée, un arrêt demandé, une reprise en main, et **jamais un silence d'une durée réelle**) |

@@ -178,3 +178,81 @@ npm run build:handbook                                          # 48 blocs, hand
   `help/handbook.md` généré est committé avec le reste).
 
 Aucun numéro de version, aucun tag, aucune publication n'a été touché.
+
+---
+
+# Troisième temps — la conversation ne repart ni en haut, ni de force en bas
+
+**Date** : 2026-11-17 (troisième passage) · **Signalé une TROISIÈME fois**.
+La demande du propriétaire tient en quatre points : nommer la cause, corriger,
+le faire pour les **trois** sorties (logo, `Échap`, fermeture de l'onglet), et
+**ne pas forcer à redescendre** celui qui avait volontairement remonté.
+
+## 10. La cause restante (lue dans le code)
+
+Les deux premiers correctifs (§2 et §4) sont bien en place et tiennent le cas
+« il était en bas ». Il en restait un, plus discret, de **mauvais instant de
+photographie** :
+
+1. Pour passer en mode Vocal, le cycle du logo **traverse** « Assistant seul »,
+   dont l'entrée force le bas (`enterImmersive` : `superAtBottom = true;`
+   puis `scrollSuperToBottom(messagesEl)`, correctif de l'issue #82 — décision
+   conservée, on n'y touche pas).
+2. Ce bas est écrit **avant** la moindre photographie : les deux photographies
+   existantes sont prises à la **sortie** des pleins écrans (`exitImmersive`,
+   `exitVocal`).
+3. Donc, pour l'utilisateur qui **relisait un passage**, la photographie de
+   sortie dit « il était en bas » — c'est exact à cet instant, mais c'est nous
+   qui l'y avons mis. Il est donc ramené **en bas**, contre son gré : il doit
+   remonter à nouveau pour retrouver son passage.
+
+Autrement dit : la position de « Détaillé » était **perdue au moment même où on
+quittait « Détaillé »**, et rien ne la conservait. Le défaut ne se voyait pas,
+parce que dans le cas « il était en bas » la conclusion (aller en bas) est la
+bonne par hasard.
+
+## 11. La correction (une décision pure, une photographie, un fait observé)
+
+| Élément | Ce qui est fait |
+|---|---|
+| `src/js/conversation-scroll.js` | **nouvelle décision pure** `conversationScrollReturnSnapshot(detaille, pleinEcran, geste)` : 1) une seule photographie disponible → c'est elle (rien d'inventé) ; 2) l'utilisateur a **repris la main pendant le plein écran** → sa position du moment l'emporte ; 3) sinon → la position qu'il avait **en quittant « Détaillé »**. Aucun DOM, aucun minuteur. |
+| `super-agent.js` → `memoizeSuperDetailScroll` | **photographie la position de « Détaillé » au moment où on le quitte**, avant tout déplacement de nœud et avant le bas forcé. Appelée depuis `enterImmersive`, **seul** écran qui force le bas (`enterVocal` ne déplace pas la conversation : il n'y a rien à y photographier, et le cycle du logo l'atteint toujours après « Assistant seul », dont la sortie vient de rendre la bonne position). |
+| `super-agent.js` → `restoreSuperScroll` | la restitution ne lit plus une seule photographie : elle **confronte les deux** par la décision pure, puis consomme les deux et le drapeau de geste. Reste la **dernière instruction** de `exitImmersive()` **et** de `exitVocal()` : les **trois** voies de sortie (logo, `Échap`, fermeture de l'onglet) ont donc exactement le même comportement. |
+| `super-agent.js` → écouteur `scroll` | **un seul fait nouveau**, déjà observé : le passage de `superAtBottom` de **vrai à faux pendant un plein écran**. Les écritures de l'application posent cette valeur **avant** d'écrire et ne la font jamais passer de vrai à faux : cette transition ne peut venir que d'un **geste réel**. C'est le seul cas où la position du plein écran l'emporte. |
+
+Ce qui **n'est pas** fait : aucun nouveau défilement, aucun `scrollTo`, aucun
+`smooth`, aucune minuterie, aucun écouteur supplémentaire dans le DOM, aucune
+clé de stockage, aucun réglage. La disposition des trois écrans est intacte et
+l'entrée en « Assistant seul » continue de forcer le bas (issue #82).
+
+## 12. Ce que le propriétaire verra
+
+| Il était… | Il revient à « Détaillé » sur… |
+|---|---|
+| en **bas** | **les derniers échanges** — et sur la fin de la réponse si elle a continué pendant le plein écran |
+| en train de **relire** un passage | **son passage**, sans avoir à le rechercher : il n'est plus ramené en bas de force |
+| en train de **relire** dans un plein écran (il a remonté la conversation là aussi) | **sa position du plein écran** : sa main l'emporte toujours |
+| dans un plein écran sans toucher à rien | la position qu'il avait **en quittant « Détaillé »** |
+
+Le même comportement pour les **trois** sorties : le **logo** (le bouton des
+modes), **`Échap`**, et la **fermeture de l'onglet 🧭**.
+
+## 13. Le verrou
+
+`src/js/retour-mode-conversation-en-bas.test.js`, section « 4 » (**nouvelle**) :
+
+- `conversationScrollReturnSnapshot` : la photographie de « Détaillé » gagne sur
+  une photographie tardive de bas **quand l'utilisateur n'a pas touché au plein
+  écran** — puis `conversationScrollTarget` rend **son passage** et **pas** le
+  bas (c'est le test qui échoue si le retour le ramène en bas) ;
+- un **geste** dans le plein écran fait gagner la photographie du moment ;
+- une seule photographie disponible → c'est elle (aucune position inventée) ;
+- le **branchement réel** : `memoizeSuperDetailScroll` est appelée dans
+  `enterImmersive` **avant** le bas forcé de l'issue #82 et avant le déplacement
+  de `messagesEl`, `enterVocal` n'en prend pas (il ne déplace pas la
+  conversation) mais ouvre l'observation du geste, et `restoreSuperScroll`
+  confronte bien les deux photographies par la fonction pure.
+
+Il échoue si la photographie de « Détaillé » disparaît, si elle est prise trop
+tard (après le bas forcé), ou si la restitution revient à une photographie
+unique.

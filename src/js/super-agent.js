@@ -18,6 +18,7 @@ import {
   CONVERSATION_SCROLL_BOTTOM_THRESHOLD,
   conversationAtBottom,
   conversationScrollReplayTarget,
+  conversationScrollReturnSnapshot,
   conversationScrollSnapshot,
   conversationScrollTarget,
 } from "./conversation-scroll.js";
@@ -987,6 +988,31 @@ function scrollSuperToBottom(messagesEl) {
 // est pure et vit dans `conversation-scroll.js` ; ici il n'y a que le geste.
 let superScrollMemo = null;
 
+// ── LA POSITION DE « DÉTAILLÉ » AVANT D'EN SORTIR (troisième cause du défaut
+// « au retour du mode Vocal, la conversation repart tout en haut ») ──
+// `superScrollMemo` (ci-dessus) est une photographie TARDIVE : elle est prise au
+// moment de la SORTIE du plein écran. Or l'entrée dans « Assistant seul » force
+// le bas (issue #82) — donc, pour l'utilisateur qui RELISAIT un passage, la
+// position réelle n'existe déjà plus à cet instant : il était en bas sans
+// l'avoir demandé, et il y était ramené au retour.
+// Cette seconde photographie est prise AU MOMENT OÙ L'ON QUITTE « Détaillé »,
+// avant le moindre déplacement de nœud : c'est la seule où l'information existe
+// encore. Elle est confrontée à la photographie tardive par une décision PURE
+// (`conversationScrollReturnSnapshot`) ; ce fichier ne fait que la prendre et la
+// rendre. Aucune minuterie, aucun écouteur supplémentaire, aucun réglage.
+let superDetailScrollMemo = null;
+// L'UTILISATEUR A REPRIS LA MAIN DANS LE PLEIN ÉCRAN : il a remonté la
+// conversation alors qu'elle suivait le bas. Seul un geste RÉEL peut faire
+// passer `superAtBottom` de vrai à faux (les écritures de l'application posent
+// la valeur avant d'écrire, jamais après) : ce drapeau dit donc autre chose que
+// « il est en haut », il dit « il l'a fait lui-même ». Il est remis à zéro à
+// chaque entrée (`memoizeSuperDetailScroll`) et consommé à chaque sortie.
+let superGestePleinEcran = false;
+// Un plein écran est-il ouvert ? Lu par l'écouteur `scroll` (déclaré avant les
+// deux overlays, donc sans risque de zone morte temporelle) pour n'observer que
+// les gestes faits PENDANT un plein écran.
+let superPleinEcranOuvert = false;
+
 /** Photographie la position RÉELLE de la conversation (à appeler avant tout
  *  déplacement de ses nœuds). */
 function memoizeSuperScroll(messagesEl) {
@@ -1000,13 +1026,41 @@ function memoizeSuperScroll(messagesEl) {
   return superScrollMemo;
 }
 
+/** Photographie la position de « DÉTAILLÉ » AU MOMENT OÙ ON LE QUITTE, et
+ *  ouvre la visite d'un plein écran. À appeler AVANT tout déplacement de nœud
+ *  (le premier remet `scrollTop` à 0) et avant le bas forcé de l'entrée en
+ *  « Assistant seul » (issue #82), sinon l'information est perdue. */
+function memoizeSuperDetailScroll(messagesEl) {
+  superGestePleinEcran = false;
+  superPleinEcranOuvert = true;
+  superDetailScrollMemo = messagesEl
+    ? conversationScrollSnapshot(
+        messagesEl.scrollTop,
+        messagesEl.clientHeight,
+        messagesEl.scrollHeight,
+      )
+    : null;
+  return superDetailScrollMemo;
+}
+
 /** Rend à la conversation la position décidée par le module pur, une seule fois
  *  (la photographie est consommée : aucune restauration tardive, aucun saut
  *  répété). Le suivi automatique du bas reprend ensuite la main, ré-armé quand
  *  l'utilisateur était en bas — comme si l'écran n'avait jamais changé. */
 function restoreSuperScroll(messagesEl) {
-  const memo = superScrollMemo;
+  // LAQUELLE DES DEUX PHOTOGRAPHIES : la décision est pure et vit dans
+  // `conversation-scroll.js`. Elle répare le cas de l'utilisateur qui RELISAIT
+  // (l'entrée en plein écran avait forcé le bas sans qu'il le demande) ; les
+  // deux photographies sont consommées, le drapeau de geste aussi.
+  const memo = conversationScrollReturnSnapshot(
+    superDetailScrollMemo,
+    superScrollMemo,
+    superGestePleinEcran,
+  );
   superScrollMemo = null;
+  superDetailScrollMemo = null;
+  superGestePleinEcran = false;
+  superPleinEcranOuvert = false;
   if (!messagesEl || !memo) return null;
   const cible = conversationScrollTarget(
     memo,
@@ -4344,11 +4398,21 @@ export async function createSuperAgent(container) {
   // est désactivé (issue #60) ; dès qu'il redescend tout en bas, le suivi est
   // ré-armé → les prochains messages le suivront à nouveau à 100 %.
   const onSuperScroll = () => {
+    const avant = superAtBottom;
     superAtBottom = computeSuperAtBottomFlag(
       messagesEl.scrollTop,
       messagesEl.clientHeight,
       messagesEl.scrollHeight
     );
+    // L'UTILISATEUR A REPRIS LA MAIN DANS UN PLEIN ÉCRAN (troisième cause du
+    // défaut « la conversation repart tout en haut ») : il a REMONTÉ la
+    // conversation alors qu'elle suivait le bas. Les écritures de
+    // l'application posent `superAtBottom` avant d'écrire, et ne le font
+    // jamais passer de vrai à faux ; cette transition ne peut donc venir que
+    // d'un geste réel. C'est le seul fait qui donne à sa position du moment la
+    // priorité sur la position qu'il avait en quittant « Détaillé »
+    // (`conversationScrollReturnSnapshot`).
+    if (avant && !superAtBottom && superPleinEcranOuvert) superGestePleinEcran = true;
   };
   messagesEl.addEventListener("scroll", onSuperScroll, { passive: true });
 
@@ -5707,6 +5771,11 @@ let vocalMotsDeReveil = [];
     // d'abord, meme si l'appelant (raccourci, bascule, restauration) a oublie
     // de le faire. La garde est ici, au seul endroit qui cree l'overlay.
     if (vocalOverlay) exitVocal();
+    // POSITION DE « DÉTAILLÉ », PHOTOGRAPHIÉE AVANT D'EN SORTIR : le bas est
+    // force juste apres (issue #82), et le deplacement de `messagesEl` remet son
+    // `scrollTop` a 0. Sans cette photographie prise MAINTENANT, l'utilisateur
+    // qui relisait un passage serait ramene en bas au retour.
+    memoizeSuperDetailScroll(messagesEl);
     immersiveOverlay = buildImmersiveOverlay();
     // Résumé des agents : replié en un point qui respire quand un agent ou
     // l'assistant travaille ; un clic déploie la liste, un second replie.
@@ -7245,6 +7314,16 @@ let vocalMotsDeReveil = [];
     // REGLE DE COORDINATION (§3.2) : deux pleins ecrans ne se superposent
     // jamais. On sort d'abord de « Assistant seul ».
     if (immersiveOverlay) exitImmersive();
+    // POSITION DE LA CONVERSATION : rien à photographier ICI, et c'est une
+    // décision. Cet écran CACHE la conversation sans la déplacer
+    // (`visibility: hidden`, mesures préservées) et ne force jamais le bas ; la
+    // photographie qui compte est celle prise en quittant « Détaillé »
+    // (`enterImmersive`), que le cycle du logo traverse toujours avant d'arriver
+    // ici (Détaillé → Assistant seul → Vocal), et qui vient d'être rendue par
+    // `exitImmersive`. Ce qui est ouvert ici, c'est seulement l'OBSERVATION du
+    // geste : remonter la conversation pendant cet écran compte comme pendant
+    // l'autre plein écran.
+    superPleinEcranOuvert = true;
     vocalOverlay = buildVocalOverlay();
     // Barre de saisie de l'onglet Assistant : DEPLACEE (meme noeud, meme envoi,
     // meme dictee). Sa place d'origine est memorisee pour une restitution

@@ -109,6 +109,54 @@ export function conversationScrollTarget(snapshot, clientHeight, scrollHeight) {
 }
 
 /**
+ * LAQUELLE DES DEUX PHOTOGRAPHIES RENDRE EN REVENANT À « DÉTAILLÉ ».
+ *
+ * TROISIÈME CAUSE DU MÊME DÉFAUT (mission « au retour du mode Vocal, la
+ * conversation repart tout en haut »), et la plus discrète : la photographie
+ * prise dans `exitVocal` / `exitImmersive` est trop TARDIVE pour une seule
+ * situation — celle de l'utilisateur qui RELISAIT un passage.
+ *
+ * Pourquoi : l'entrée dans « Assistant seul » force le bas (issue #82, décision
+ * conservée). Cette écriture a lieu AVANT tout plein écran, donc avant les
+ * photographies de sortie : au retour, la photographie dit « il était en bas »
+ * alors qu'il lisait un passage, et il est ramené en bas contre son gré.
+ *
+ * La position qu'il avait réellement en QUITTANT « Détaillé » existe pourtant :
+ * elle est photographiée à ce moment-là (`memoizeSuperDetailScroll`, avant le
+ * moindre déplacement de nœud). Le choix entre les deux est donc une décision,
+ * et elle est ici :
+ *   1. une seule photographie disponible → c'est elle (rien n'est inventé) ;
+ *   2. l'utilisateur a REPRIS LA MAIN pendant le plein écran (il a remonté la
+ *      conversation : geste observé sur l'écran où il se trouvait) → sa
+ *      position du moment l'emporte, elle est plus récente et volontaire ;
+ *   3. sinon → la position qu'il avait en quittant « Détaillé » : le bas s'il
+ *      était en bas (il retrouve la fin, contenu nouveau compris), son passage
+ *      s'il relisait (il n'est pas ramené en bas).
+ *
+ * @param {{top: number, atBottom: boolean}|null|undefined} snapshotDetaille
+ *   photographie de « Détaillé » prise AVANT de le quitter
+ * @param {{top: number, atBottom: boolean}|null|undefined} snapshotPleinEcran
+ *   photographie prise à l'instant de la sortie du plein écran
+ * @param {boolean} gesteDansLePleinEcran l'utilisateur a-t-il remonté la
+ *   conversation PENDANT le plein écran ?
+ * @returns {{top: number, atBottom: boolean}|null}
+ */
+export function conversationScrollReturnSnapshot(
+  snapshotDetaille,
+  snapshotPleinEcran,
+  gesteDansLePleinEcran,
+) {
+  const detaille =
+    snapshotDetaille && typeof snapshotDetaille === "object" ? snapshotDetaille : null;
+  const pleinEcran =
+    snapshotPleinEcran && typeof snapshotPleinEcran === "object" ? snapshotPleinEcran : null;
+  if (!detaille) return pleinEcran;
+  if (!pleinEcran) return detaille;
+  if (gesteDansLePleinEcran === true) return pleinEcran;
+  return detaille;
+}
+
+/**
  * Faut-il REPOSER la position au premier signal de RENDU (la correction du
  * défaut « la conversation repart tout en haut », revenu une seconde fois) ?
  *

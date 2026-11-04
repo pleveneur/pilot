@@ -19,6 +19,13 @@
 // soit elle rend `null` (donc n'écrit rien) dans le cas transitoire, soit le
 // branchement est retiré de `restoreSuperScroll`.
 //
+// 3. TROISIÈME CAUSE (sections 4 et 5) : la position de « Détaillé » n'existait
+//    plus au moment où on la cherchait. Le cycle du logo TRAVERSE « Assistant
+//    seul », dont l'entrée FORCE le bas (issue #82) AVANT toute photographie :
+//    celui qui RELISAIT un passage était donc ramené en bas. Une seconde
+//    photographie, prise en quittant « Détaillé », et une décision PURE entre
+//    les deux (`conversationScrollReturnSnapshot`) le laissent où il lisait.
+//
 // Rapport : docs/rapports/RAPPORT-retour-mode-conversation-en-bas.md.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -26,9 +33,11 @@ import { describe, it, expect } from "vitest";
 import {
   conversationAtBottom,
   conversationScrollReplayTarget,
+  conversationScrollReturnSnapshot,
   conversationScrollSnapshot,
   conversationScrollTarget,
 } from "./conversation-scroll.js";
+import { sliceSource } from "./source-slice.js";
 
 const SUPER = readFileSync(fileURLToPath(new URL("./super-agent.js", import.meta.url)), "utf8").replace(
   /\r\n/g,
@@ -199,5 +208,154 @@ describe("3. le geste est réellement branché (sinon le module pur est un déco
     const rejeu = corpsFonction(SUPER, "function replaySuperScrollAfterLayout(messagesEl, memo, applique) {");
     expect(rejeu).not.toMatch(/\b(60|1900)\b/);
     expect(SUPER).toContain("conversationScrollReplayTarget,");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// 4. TROISIÈME CAUSE (défaut signalé une troisième fois) : la position de
+//    « Détaillé » n'existait plus au moment où on la cherchait.
+//
+//    Pour atteindre le mode Vocal, le cycle du logo TRAVERSE « Assistant seul »,
+//    dont l'entrée FORCE le bas (issue #82, décision conservée). Ce bas est écrit
+//    AVANT la moindre photographie : pour l'utilisateur qui RELISAIT un passage,
+//    la photographie de sortie dit « il était en bas » — c'est vrai, mais c'est
+//    nous qui l'y avons mis. Il était donc ramené en bas contre son gré.
+//
+//    La correction : une SECONDE photographie, prise au moment où l'on QUITTE
+//    « Détaillé » (avant le bas forcé, avant tout déplacement de nœud), et une
+//    décision PURE entre les deux. Ces tests échouent si le retour le ramène en
+//    bas, si la photographie est prise trop tard, ou si la restitution revient à
+//    une photographie unique.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("4. il relisait un passage : le retour ne le ramène plus en bas", () => {
+  // Il lisait à 220 px quand il a changé de mode.
+  const detaille = conversationScrollSnapshot(220, CLIENT, HAUTEUR_REELLE);
+  // Au moment de sortir du plein écran, la conversation est EN BAS : c'est le
+  // bas forcé par l'entrée en « Assistant seul » (issue #82), pas son choix.
+  const pleinEcran = conversationScrollSnapshot(BAS, CLIENT, HAUTEUR_REELLE);
+
+  it("la photographie de « Détaillé » gagne sur un bas forcé qu'il n'a pas demandé", () => {
+    expect(detaille.atBottom).toBe(false);
+    expect(pleinEcran.atBottom).toBe(true);
+    const rendu = conversationScrollReturnSnapshot(detaille, pleinEcran, false);
+    expect(rendu).toEqual(detaille);
+    // LA décision du retour : son passage (220), jamais le bas (1900).
+    const cible = conversationScrollTarget(rendu, CLIENT, HAUTEUR_REELLE);
+    expect(cible).toBe(220);
+    expect(cible).not.toBe(BAS);
+  });
+
+  it("il était en bas : il retrouve ses derniers échanges (le défaut d'origine reste corrigé)", () => {
+    const ilEtaitEnBas = conversationScrollSnapshot(BAS, CLIENT, HAUTEUR_REELLE);
+    const rendu = conversationScrollReturnSnapshot(ilEtaitEnBas, pleinEcran, false);
+    expect(conversationScrollTarget(rendu, CLIENT, HAUTEUR_REELLE)).toBe(BAS);
+    // Contenu agrandi pendant le plein écran : la fin RÉELLE, pas l'ancienne.
+    expect(conversationScrollTarget(rendu, CLIENT, 3000)).toBe(2500);
+  });
+
+  it("il a remonté la conversation DANS le plein écran : sa position du moment l'emporte", () => {
+    // Il est à 900 px de la conversation, geste réel observé pendant l'overlay.
+    const geste = conversationScrollSnapshot(900, CLIENT, HAUTEUR_REELLE);
+    const rendu = conversationScrollReturnSnapshot(detaille, geste, true);
+    expect(rendu).toEqual(geste);
+    expect(conversationScrollTarget(rendu, CLIENT, HAUTEUR_REELLE)).toBe(900);
+  });
+
+  it("une seule photographie disponible : c'est elle, aucune position inventée", () => {
+    expect(conversationScrollReturnSnapshot(null, pleinEcran, false)).toEqual(pleinEcran);
+    expect(conversationScrollReturnSnapshot(undefined, pleinEcran, true)).toEqual(pleinEcran);
+    expect(conversationScrollReturnSnapshot(detaille, null, false)).toEqual(detaille);
+    expect(conversationScrollReturnSnapshot(detaille, undefined, true)).toEqual(detaille);
+    // Aucune des deux : rien du tout (aucune écriture ne sera faite).
+    expect(conversationScrollReturnSnapshot(null, null, false)).toBe(null);
+    expect(conversationScrollReturnSnapshot(undefined, undefined, true)).toBe(null);
+  });
+
+  it("le module est PUR : aucune écriture, aucune lecture du DOM", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./conversation-scroll.js", import.meta.url)),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    const corps = corpsFonction(source, "export function conversationScrollReturnSnapshot(");
+    for (const interdit of ["document", "window", "scrollTop =", "setTimeout", "requestAnimationFrame"]) {
+      expect(corps, interdit).not.toContain(interdit);
+    }
+  });
+});
+
+describe("5. la photographie de « Détaillé » est prise AU BON MOMENT", () => {
+  it("elle est prise AVANT le bas forcé de l'issue #82 (sinon elle photographie notre écriture)", () => {
+    const entree = corpsFonction(SUPER, "function enterImmersive() {");
+    const photo = entree.indexOf("memoizeSuperDetailScroll(messagesEl)");
+    expect(photo).toBeGreaterThan(-1);
+    // Le bas forcé de l'issue #82 (décision conservée, on n'y touche pas)…
+    const basForce = entree.indexOf("superAtBottom = true;");
+    expect(basForce).toBeGreaterThan(-1);
+    // …et le déplacement du nœud défilable, qui remet `scrollTop` à 0.
+    const deplacement = entree.indexOf('.sa-immersive-messages").appendChild(messagesEl)');
+    expect(deplacement).toBeGreaterThan(-1);
+    expect(photo).toBeLessThan(basForce);
+    expect(photo).toBeLessThan(deplacement);
+  });
+
+  it("l'écran Vocal n'a rien à photographier : il ne déplace pas la conversation", () => {
+    const entree = corpsFonction(SUPER, "function enterVocal() {");
+    // Le cycle du logo le traverse TOUJOURS après « Assistant seul », dont la
+    // sortie vient de rendre la bonne position : la photographie de « Détaillé »
+    // n'a pas à être reprise ici.
+    expect(entree).not.toContain("memoizeSuperDetailScroll(");
+    // Ce qui est ouvert ici, c'est l'OBSERVATION du geste : remonter la
+    // conversation pendant cet écran compte comme pendant l'autre plein écran
+    // (sans quoi le geste serait ignoré et la position écraserait la sienne).
+    expect(entree).toContain("superPleinEcranOuvert = true;");
+    // Deux pleins écrans ne se superposent jamais : la sortie de « Assistant
+    // seul » précède l'ouverture (elle a déjà rendu SA position).
+    const sortieAssistantSeul = entree.indexOf("exitImmersive()");
+    const ouverture = entree.indexOf("superPleinEcranOuvert = true;");
+    expect(sortieAssistantSeul).toBeGreaterThan(-1);
+    expect(ouverture).toBeGreaterThan(-1);
+    expect(sortieAssistantSeul).toBeLessThan(ouverture);
+  });
+
+  it("l'écouteur `scroll` ne signale QUE le geste réel (vrai → faux pendant un plein écran)", () => {
+    const ecouteur = sliceSource(
+      SUPER,
+      "const onSuperScroll = () => {",
+      'messagesEl.addEventListener("scroll", onSuperScroll',
+    );
+    expect(ecouteur).toContain("const avant = superAtBottom;");
+    expect(ecouteur).toContain("superGestePleinEcran = true;");
+    // Les deux gardes : la transition vrai → faux, ET l'ouverture d'un plein
+    // écran. Sans elles, un simple agrandissement du contenu compterait comme
+    // un geste et l'utilisateur qui relisait serait ramené en bas.
+    expect(ecouteur).toContain("avant && !superAtBottom && superPleinEcranOuvert");
+  });
+
+  it("la restitution confronte les DEUX photographies par la décision pure", () => {
+    const restitution = corpsFonction(SUPER, "function restoreSuperScroll(messagesEl) {");
+    expect(restitution).toContain("conversationScrollReturnSnapshot(");
+    // Les deux photographies sont consommées, et le drapeau de geste avec elles :
+    // aucune restauration tardive ne peut rejouer une position périmée.
+    expect(restitution).toContain("superDetailScrollMemo = null;");
+    expect(restitution).toContain("superScrollMemo = null;");
+    expect(restitution).toContain("superGestePleinEcran = false;");
+    // Le suivi automatique du bas reste ré-armé selon la position rendue.
+    expect(restitution).toContain("superAtBottom = memo.atBottom;");
+  });
+
+  it("les trois voies de sortie rendent la même chose (logo, Échap, fermeture de l'onglet)", () => {
+    const sortieVocal = corpsFonction(SUPER, "function exitVocal() {");
+    // Toutes passent par exitVocal(), dont la DERNIÈRE écriture est la restitution.
+    expect(sortieVocal).toContain("memoizeSuperScroll(messagesEl)");
+    expect(derniereInstruction(sortieVocal)).toBe("restoreSuperScroll(messagesEl);");
+    // La photographie de « Détaillé » est prise à l'entrée (les deux entrées),
+    // jamais dans une sortie : une sortie est déjà trop tard.
+    expect(SUPER).toContain("function memoizeSuperDetailScroll(messagesEl) {");
+    const photo = corpsFonction(SUPER, "function memoizeSuperDetailScroll(messagesEl) {");
+    expect(photo).toContain("conversationScrollSnapshot(");
+    // Aucun réglage, aucune clé de stockage, aucune temporisation ajoutés.
+    expect(photo).not.toContain("setTimeout");
+    expect(photo).not.toContain("localStorage");
   });
 });
