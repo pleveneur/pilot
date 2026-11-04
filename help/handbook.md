@@ -3564,6 +3564,9 @@ réintroduire une formulation permissive fait **échouer** la suite. Le test
 comprend un cas de **mutation** (des variantes fautives réelles doivent être
 détectées) et un cas de **non-régression inverse** (une consigne qui
 **déconseille** la création n'est jamais signalée).
+- **Rapport** : `docs/rapports/RAPPORT-agents-jetables-par-defaut.md` (détail) et
+  `docs/rapports/RAPPORT-reglages-assistant.md` § POINT 3 (les trois réglages du
+  comportement de l'assistant revérifiés ensemble).
 
 2. **Choisir quels agents utiliser** (outil `run_agents`) : il sélectionne les
    agents disponibles (par leur id) qui lui semblent les plus adaptés et leur

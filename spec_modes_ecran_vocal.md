@@ -2186,6 +2186,9 @@ ligne d'état, et l'absence de tout changement hors de l'écran Vocal — ce tes
 échoue si la garde disparaît) et `src/js/mots-de-reveil.test.js` (réglage
 additif : mot accepté, nom toujours accepté, phrase sans mot refusée, champ vide
 = nom seul, un seul des mots suffit, casse/accents ignorés).
+**Rapports** : `docs/rapports/RAPPORT-mots-de-reveil.md` (détail du réglage) et
+`docs/rapports/RAPPORT-reglages-assistant.md` § POINT 1 (les trois réglages du
+comportement de l'assistant, revérifiés ensemble le 2026-11-16).
 
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 
