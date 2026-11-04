@@ -549,6 +549,21 @@ export function rmsOf(echantillons) {
  *   now?: () => number,
  * }} [options]
  */
+// ── L'OREILLE LOCALE (étape 2) : LE ROBINET D'ÉCOUTE ────────────────────────
+// Le micro du mode Vocal n'est capté qu'ICI (`getUserMedia`, une seule fois),
+// et cette capture sert DEUX choses : la mesure du niveau (l'écran, l'enveloppe)
+// et, si l'utilisateur l'a demandé, son envoi vers l'oreille locale.
+// local. Le robinet (`setAudioTap`) rend au demandeur les mêmes échantillons que
+// ceux déjà mesurés : il n'ouvre AUCUNE seconde capture, ne touche à aucun
+// réglage du micro, et n'existe pas tant que personne ne l'a demandé (le
+// comportement historique est donc rigoureusement inchangé).
+//
+// Un `ScriptProcessorNode` est utilisé (et non un `AudioWorklet`) : c'est le seul
+// nœud disponible dans tous les moteurs embarqués sans fichier de processeur
+// séparé à charger, et il permet de tenir la promesse « un seul flux, deux
+// consommateurs ». Il est branché sur un gain MUET (`gain = 0`) pour être tiré
+// par le moteur audio sans jamais rien faire sortir des haut-parleurs : le
+// robinet écoute, il ne parle pas.
 export function createVocalMic(options = {}) {
   const surNiveau = typeof options.onLevel === "function" ? options.onLevel : () => {};
   const surEcoute = typeof options.onListening === "function" ? options.onListening : () => {};
@@ -580,6 +595,11 @@ export function createVocalMic(options = {}) {
   let flux = null;
   let contexte = null;
   let analyseur = null;
+  // ── Robinet d'ecoute (oreille locale) ──
+  let sourceFlux = null;
+  let robinet = null;
+  let noeudRobinet = null;
+  let muetRobinet = null;
   let tampon = null;
   let boucle = 0;
   let niveau = 0;
@@ -641,6 +661,8 @@ export function createVocalMic(options = {}) {
         }
       }
     }
+    fermerRobinet();
+    sourceFlux = null;
     const c = contexte;
     contexte = null;
     analyseur = null;
@@ -725,6 +747,7 @@ export function createVocalMic(options = {}) {
     let source = null;
     try {
       source = contexte.createMediaStreamSource(flux);
+      sourceFlux = source;
       analyseur = contexte.createAnalyser();
       analyseur.fftSize = 1024;
       // Lissage de l'analyseur volontairement bas : le lissage FIN est fait par
@@ -735,9 +758,77 @@ export function createVocalMic(options = {}) {
       source.connect(analyseur);
     } catch (_) {
       analyseur = null;
+      sourceFlux = null;
+      return false;
+    }
+    // Le robinet, s'il a ete demande AVANT l'ouverture du micro : il se branche
+    // sur le meme flux, au meme moment. Un echec ne coupe jamais la mesure (le
+    // niveau, l'ecran et le mode Vocal continuent de fonctionner) : il est dit a
+    // l'appelant, qui decidera de la suite.
+    brancherRobinet();
+    return true;
+  }
+
+  /**
+   * Ouvre le robinet sur le flux DEJA capture. Retourne `true` seulement si le
+   * son sort vraiment du peripherique vers l'appelant : sans contexte audio, sans
+   * `ScriptProcessorNode` ou sans source, il n'y a rien a promettre.
+   */
+  function brancherRobinet() {
+    if (!robinet || noeudRobinet || !contexte || !sourceFlux) return false;
+    if (
+      typeof contexte.createScriptProcessor !== "function" ||
+      typeof contexte.createGain !== "function"
+    ) {
+      return false;
+    }
+    try {
+      noeudRobinet = contexte.createScriptProcessor(4096, 1, 1);
+      muetRobinet = contexte.createGain();
+      muetRobinet.gain.value = 0;
+      noeudRobinet.onaudioprocess = (evenement) => {
+        const entree = evenement && evenement.inputBuffer;
+        const donnees =
+          entree && typeof entree.getChannelData === "function" ? entree.getChannelData(0) : null;
+        if (!donnees || !robinet) return;
+        const taux = contexte && contexte.sampleRate ? contexte.sampleRate : 0;
+        try {
+          robinet(donnees, taux);
+        } catch (_) {
+          /* un consommateur qui echoue n'arrete pas la mesure ni la capture */
+        }
+      };
+      sourceFlux.connect(noeudRobinet);
+      noeudRobinet.connect(muetRobinet);
+      muetRobinet.connect(contexte.destination);
+    } catch (_) {
+      fermerRobinet();
       return false;
     }
     return true;
+  }
+
+  /** Referme le robinet : plus aucun echantillon ne sort, la mesure reste. */
+  function fermerRobinet() {
+    const noeud = noeudRobinet;
+    noeudRobinet = null;
+    if (noeud) {
+      noeud.onaudioprocess = null;
+      try {
+        noeud.disconnect();
+      } catch (_) {
+        /* un noeud deja deconnecte n'a rien a deconnecter */
+      }
+    }
+    const muet = muetRobinet;
+    muetRobinet = null;
+    if (muet) {
+      try {
+        muet.disconnect();
+      } catch (_) {
+        /* idem */
+      }
+    }
   }
 
   /**
@@ -968,9 +1059,31 @@ export function createVocalMic(options = {}) {
     };
   }
 
+  /**
+   * LE ROBINET D'ECOUTE (oreille locale). `fn(samples, sampleRate)` reçoit les
+   * échantillons du micro DÉJÀ ouvert, ou `null` referme. Retourne `true` si des
+   * échantillons sortiront vraiment (micro ouvert et nœud branché) : `false`
+   * signifie « pas d'oreille locale par ce chemin », et c'est à l'appelant de le
+   * dire à l'écran — jamais de silence sur ce point.
+   *
+   * Ce n'est PAS une seconde capture : le flux est celui de la mesure du niveau.
+   * @param {null|function(Float32Array, number): void} fn
+   * @returns {boolean}
+   */
+  function setAudioTap(fn) {
+    robinet = typeof fn === "function" ? fn : null;
+    if (!robinet) {
+      fermerRobinet();
+      return false;
+    }
+    if (noeudRobinet) return true;
+    return brancherRobinet();
+  }
+
   return {
     demander,
     fermer,
+    setAudioTap,
     setSpeaking,
     setSoundStarted,
     setThinking,

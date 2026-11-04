@@ -1463,6 +1463,20 @@ texte à la voix.
   Détail : `spec_modes_ecran_vocal.md` § 6quater. **Partout ailleurs, rien ne
   change** : la dictée de l'éditeur, de l'onglet agent π, de l'Assistant 🧭 et du
   web distant n'exige aucun nom.
+- **Dicter sans qu'aucun son ne parte vers Internet** : ⚙️ Options → onglet
+  **« Assistant »**, cocher **« Transcrire avec le service de voix local »**.
+  **Dans l'écran Vocal**, la transcription est alors faite **sur cet ordinateur**
+  par le logiciel de voix local (VoiceStudio) ; ailleurs (fenêtre d'édition,
+  onglet agent), la dictée reste celle du navigateur et Pilot le dit. La case
+  indique sous elle **quel modèle** est employé
+  (choisi tout seul parmi ceux qui sont installés) : Pilot n'installe rien, ne
+  télécharge rien et n'accepte aucune licence à votre place. Laisser la case
+  décochée garde la dictée habituelle (moteur du navigateur, donc un service en
+  ligne). **Si le logiciel local est absent, ou s'il s'arrête en pleine dictée,
+  Pilot revient à la dictée du navigateur et vous le dit à l'écran** — il ne
+  bascule jamais en silence. Limite connue : la transcription locale est plus
+  lente (le texte définitif arrive quelques secondes après votre dernier mot) ;
+  le texte s'écrit au fur et à mesure, vous n'avez pas à attendre pour parler.
 
 ---
 

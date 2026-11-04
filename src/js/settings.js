@@ -100,6 +100,12 @@ import {
   normalizeVocalBrevityLevel,
   vocalBrevityLabel,
 } from "./vocal-brevity.js";
+// OREILLE LOCALE (étape 2) : la case unique de la dictée locale et les phrases
+// qui l'accompagnent viennent du module PARTAGÉ avec l'écran Vocal
+// (`oreille-locale.js`, pur) : la clé, la décision et le texte du modèle ne sont
+// donc jamais recopiés ici, et l'écran des Paramètres dit exactement ce que dit
+// la ligne d'état du mode Vocal.
+import { planLocalEar, localDictationRequested } from "./oreille-locale.js";
 // Voix française LOCALE (Piper, hors ligne) : le statut du moteur et le libellé
 // de son choix viennent d'un seul module — aucune valeur recopiée ici.
 import {
@@ -717,6 +723,46 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   }
 
   /**
+   * Affiche l'état de l'OREILLE LOCALE sous sa case à cocher : quel modèle
+   * transcrit, et — s'il ne peut pas servir — pourquoi, en français.
+   *
+   * Les phrases viennent du module PARTAGÉ (`oreille-locale.js`) : les mêmes que
+   * celles de la ligne d'état de l'écran Vocal, donc jamais deux textes pour la
+   * même chose. Rien n'est affiché quand la case est décochée (comportement
+   * historique inchangé, aucune information en plus).
+   * @param {object|null} status réponse de `asr_voicestudio_status`
+   */
+  function refreshLocalDictationState(status) {
+    if (!localDictationStateEl) return;
+    const plan = planLocalEar({
+      requested: !!(chkLocalDictation && chkLocalDictation.checked),
+      status: status || null,
+    });
+    localDictationStateEl.textContent = plan.use === true ? plan.sentence : plan.fallback;
+  }
+
+  /**
+   * Interroge le pont machine de l'étape 1 (jamais le service directement : la
+   * fenêtre ne connaît aucune adresse) et met la phrase à jour. Silencieux en
+   * cas d'échec : la phrase du repli est alors celle du service absent.
+   * @returns {Promise<void>}
+   */
+  async function refreshLocalDictationStatus() {
+    if (!localDictationStateEl) return;
+    if (!chkLocalDictation || chkLocalDictation.checked !== true) {
+      localDictationStateEl.textContent = "";
+      return;
+    }
+    let status = null;
+    try {
+      status = await invoke("asr_voicestudio_status");
+    } catch (_) {
+      status = null;
+    }
+    refreshLocalDictationState(status);
+  }
+
+  /**
    * Remplit le CHOIX DE LA VOIX (section « Lecture des réponses » de l'onglet
    * Assistant) : « automatique » d'abord, puis la voix française LOCALE, puis
    * chaque voix installée.
@@ -1203,6 +1249,12 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   // Longueur des reponses a l'oral (meme section, meme champ de configuration
   // voisin : `vocal_brevity_level`). Les quatre libelles viennent du module pur.
   const selectVocalBrevityLevel = document.getElementById("setting-vocal-brevity-level");
+  // OREILLE LOCALE (étape 2) : LA seule case à cocher de la dictée locale
+  // (`local_dictation`). Le libellé de son état vient du module partagé avec
+  // l'écran Vocal (`oreille-locale.js`) : aucune phrase n'est recopiée ici, et
+  // le modèle annoncé est celui que le service dit employer.
+  const chkLocalDictation = document.getElementById("setting-local-dictation");
+  const localDictationStateEl = document.getElementById("local-dictation-state");
   // Dernier etat de lecture connu : la ligne d'etat de la section « Lecture des
   // reponses » le reprend a chaque ouverture de la modale.
   let lastReadAloudState = "";
@@ -2069,6 +2121,11 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   // Meme section : la LONGUEUR des reponses a l'oral (valeur inconnue ou
   // absente ⇒ « courtes », le comportement historique).
   refreshVocalBrevityLevel(currentConfig && currentConfig.vocal_brevity_level);
+  // Meme section : l'OREILLE LOCALE (une case, une cle). L'état affiché dessous
+  // est demandé SANS clic à l'ouverture (le service a pu être lancé ou fermé) :
+  // c'est le seul moyen de dire la vérité sur le modèle employé.
+  if (chkLocalDictation) chkLocalDictation.checked = localDictationRequested(currentConfig);
+  refreshLocalDictationStatus();
   // État du DERNIER téléchargement de modèle : relu, jamais relancé (aucun geste
   // ici — un téléchargement ne part que d'un clic ou d'un choix de voix).
   refreshLocalVoiceDownloadState().then((state) => {
@@ -2272,6 +2329,14 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   if (inputVocalSilenceSend) {
     inputVocalSilenceSend.addEventListener("input", () => {
       refreshVocalSilenceSend(parseInt(inputVocalSilenceSend.value, 10));
+    });
+  }
+  // OREILLE LOCALE : la case cochee relit l'etat du service (le modele annonce
+  // peut avoir change depuis la derniere ouverture). La valeur elle-meme est
+  // memorisee par l'enregistrement des Parametres (cle `local_dictation`).
+  if (chkLocalDictation) {
+    chkLocalDictation.addEventListener("change", () => {
+      refreshLocalDictationStatus();
     });
   }
   if (btnAssistantSoundTest) {
@@ -3102,6 +3167,10 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         vocal_brevity_level: normalizeVocalBrevityLevel(
           selectVocalBrevityLevel ? selectVocalBrevityLevel.value : null
         ),
+        // OREILLE LOCALE : UNE case, UNE cle. `=== true` seulement quand elle est
+        // cochee : la valeur par defaut (absente) garde la dictee du navigateur,
+        // donc le comportement historique, sans migration.
+        local_dictation: chkLocalDictation ? chkLocalDictation.checked === true : false,
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
         super_agent_coordinator: chkSuperAgentCoordinator ? chkSuperAgentCoordinator.checked === true : false,
         super_agent_user_friendly: chkSuperAgentUserFriendly ? chkSuperAgentUserFriendly.checked === true : false,

@@ -94,6 +94,24 @@ import {
   shouldAskVocalMic,
   MIC_FERME,
 } from "./vocal-mic.js";
+// OREILLE LOCALE (étape 2) : LA DICTÉE TRANSCRITE SUR CET ORDINATEUR. Une seule
+// case à cocher (`local_dictation`), une seule clé, et le pont machine de
+// l'étape 1 comme unique porte (aucune adresse du service de voix n'entre dans
+// la fenêtre). Les DÉCISIONS — qui consomme le son, ce que dit la ligne d'état,
+// ce qu'on annonce en cas de repli — sont PURES et vivent dans
+// `oreille-locale.js` ; l'appareillage avec le pont (démarrage, morceaux de son,
+// texte cumulatif, pannes) vit dans `oreille-locale-moteur.js`, qui rend un objet
+// de la MÊME FORME qu'une session de reconnaissance du navigateur. Ce fichier ne
+// fait donc que choisir le fournisseur du texte : la garde du nom, l'envoi sur
+// silence, la reprise en main et l'envoi automatique restent écrits UNE fois,
+// exactement là où ils l'étaient déjà.
+import {
+  planLocalEar,
+  localDictationRequested,
+  localEarStatusLine,
+  localEarFailureMessage,
+} from "./oreille-locale.js";
+import { createLocalEar } from "./oreille-locale-moteur.js";
 // Envoi AUTOMATIQUE a la fin d'une dictee vocale : la decision et l'ORDRE
 // (refermer la session -> ecrire la zone -> envoyer) vivent dans CE module, le
 // meme que celui de l'onglet agent pi — aucune copie de logique ici, et le
@@ -4109,6 +4127,11 @@ export async function createSuperAgent(container) {
     // La LONGUEUR des reponses orales se relit au meme endroit (aucun second
     // ecouteur) : le reglage prend effet a la demande suivante.
     refreshVocalLongueurNiveau();
+    // OREILLE LOCALE (etape 2) : la case « Transcrire avec le service de voix
+    // local » se relit ICI, au meme endroit que les autres reglages du mode
+    // Vocal — et le pont est reinterroge, parce que le service a pu etre lance ou
+    // ferme pendant que les parametres etaient ouverts.
+    refreshLocalDictation();
     refreshSuperAgentConfig().then(() => {
       // Réglage global de l'onglet « Tâches » : activation/désactivation à chaud,
       // sans redémarrer (le panneau du suivi du travail suit immédiatement).
@@ -4132,6 +4155,8 @@ export async function createSuperAgent(container) {
   // Meme premiere lecture pour la LONGUEUR des reponses orales : sans elle,
   // l'onglet ouvert avant tout changement de reglage utiliserait le defaut.
   refreshVocalLongueurNiveau();
+  // L'oreille locale (etape 2) se relit plus bas, une fois le bouton 🎙️
+  // construit : sa premiere sonde decide aussi de sa visibilite.
 
   const wrapper = document.createElement("div");
   wrapper.className = "agent-chat-container superagent-wrapper";
@@ -4606,6 +4631,14 @@ export async function createSuperAgent(container) {
   // la meme ligne d'etat que les pannes de micro, parce que la conversation
   // n'est pas affichee dans cet ecran : sans elle, un echec serait invisible.
   let vocalDictationErreur = "";
+  // `localEarModele` : le modèle RÉELLEMENT ouvert par le pont pour la dictée en
+  // cours (`model_id` / `model_label` de la session). Il ne sert qu'à la phrase
+  // du modèle ; il n'est jamais choisi ni préféré ici.
+  let localEarModele = null;
+  // `localEarRepliAnnonce` : la phrase de repli déjà dite. Une panne se dit UNE
+  // fois — jamais à chaque dictée — et la mémoire se lève dès que le service
+  // local répond de nouveau (ou que le réglage change).
+  let localEarRepliAnnonce = "";
   // `vocalArretManuel` : l'utilisateur a ARRETE la dictee lui-meme (bouton 🎙️).
   // Un geste explicite prime sur l'armement automatique, sinon la dictee se
   // rouvrirait 350 ms plus tard contre sa volonte.
@@ -4861,10 +4894,73 @@ export async function createSuperAgent(container) {
   const VOICE_LANG = "fr-FR";
   const voiceSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   const micBtn = inputBar.querySelector(".agent-mic-btn");
-  if (micBtn && !voiceSupported) micBtn.style.display = "none";
+  // Le bouton 🎙️ se voit dès qu'UNE oreille peut transcrire : celle du
+  // navigateur, ou le service de voix local quand il est actif, réglé et
+  // disponible. La visibilité est donc (re)calculée aussi APRÈS la sonde du
+  // service local (`refreshLocalDictation`) : sans cela, un poste sans
+  // reconnaissance navigateur masquerait une dictée locale qui fonctionne.
+  function applyMicButtonVisibility() {
+    if (!micBtn) return;
+    micBtn.style.display = dictationPossible() ? "" : "none";
+  }
   // Libellé au repos du bouton micro (rétabli à chaque fin de dictée : aucun
   // bouton ne doit rester affiché « Arrêter la dictée » sans écoute).
   const MIC_TITLE_IDLE = "Dictée vocale (transcription cloud)";
+  // Même libellé, dit avec la vérité du moment : quand la dictée passe par le
+  // service local, le son ne part pas sur Internet et le bouton ne doit pas
+  // prétendre le contraire. Le MODÈLE est nommé là dès qu'il est connu (celui
+  // RÉELLEMENT ouvert par le pont, sinon celui que le service annonce) : il est
+  // ainsi affiché sur l'écran Vocal sans ajouter un seul élément d'interface.
+  // La phrase complète du modèle, elle, vit dans les Paramètres (`plan.sentence`).
+  function micTitleIdle() {
+    if (!(localEarPlan && localEarPlan.use === true)) return MIC_TITLE_IDLE;
+    const modele =
+      (localEarModele && localEarModele.modelLabel) || localEarPlan.modelLabel || "";
+    return modele
+      ? `Dictée vocale (transcription sur cet ordinateur avec « ${modele} »)`
+      : "Dictée vocale (transcription sur cet ordinateur)";
+  }
+  // ── OREILLE LOCALE (étape 2) : trois états, aucune décision recopiée ──
+  // `localDictationOn` : ce que dit le réglage (`local_dictation`).
+  // `localEarStatus` : la dernière réponse du pont machine (`asr_voicestudio_status`),
+  //   ou `null` quand on n'a AUCUNE preuve qu'il répond. `null` ne vaut jamais
+  //   « disponible » : on ne promet pas une oreille qu'on n'a pas vue.
+  // `localEarPlan` : la décision (qui consomme le son, ce que dit l'écran),
+  //   recalculée à chaque relecture par `planLocalEar` — jamais écrite à la main.
+  let localDictationOn = false;
+  let localEarStatus = null;
+  let localEarPlan = planLocalEar({ requested: false });
+  // `localEarVerifie` : la réponse du pont pour le réglage COURANT est arrivée.
+  // Faux = on ne sait pas encore laquelle des deux oreilles écoutera ; l'écoute
+  // automatique attend alors cette réponse au lieu de basculer en ligne.
+  let localEarVerifie = true;
+  /**
+   * Une dictée est-elle possible sur ce poste, par N'IMPORTE laquelle des deux
+   * oreilles ? C'est la seule question que posent le bouton 🎙️ et l'armement
+   * automatique : le réglage local ne doit pas masquer une dictée qui marche, et
+   * un poste sans reconnaissance navigateur ne doit pas perdre la dictée locale.
+   * @returns {boolean}
+   */
+  function dictationPossible() {
+    return voiceSupported === true || (localEarPlan && localEarPlan.use === true);
+  }
+  /**
+   * L'oreille LOCALE peut-elle servir MAINTENANT ? Seconde source RÉELLE de la
+   * dictée, à côté de `voiceSupported` : elle est lue par l'état du mode Vocal
+   * (`transcription`) au même titre que le moteur du navigateur, et non déduite
+   * d'un drapeau tenu à côté. Aucune décision propre : c'est `planLocalEar` qui
+   * a tranché, ici on ne fait que lire le plan.
+   * @returns {boolean}
+   */
+  function localDictationDisponible() {
+    return !!(localEarPlan && localEarPlan.use === true);
+  }
+  // PREMIÈRE SONDE DE L'OREILLE LOCALE, à l'ouverture de l'onglet : le réglage
+  // est relu et le pont machine interrogé (aucun appel réseau — la fenêtre ne
+  // parle qu'au pont de l'étape 1). Placée ici, après la construction du bouton
+  // 🎙️, parce que la réponse décide aussi de sa visibilité.
+  applyMicButtonVisibility();
+  refreshLocalDictation();
   let voiceActive = false;
   let voiceRec = null;
   // Arret DEMANDE par l'application (bouton 🎙️, envoi, sortie du mode) : la fin
@@ -4921,7 +5017,7 @@ let vocalReveilUnePhrase = false;
     // d'être (une demande ne part jamais d'une dictée fermée).
     clearVocalSilenceTimer();
     if (voiceRec) { try { voiceRec.stop(); } catch (_) {} }
-    if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
+    if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = micTitleIdle(); }
   }
 
   /**
@@ -4939,7 +5035,7 @@ let vocalReveilUnePhrase = false;
   }
 
   function toggleVoiceInput() {
-    if (!voiceSupported) return;
+    if (!dictationPossible()) return;
     if (voiceActive) { stopVoiceInput(); vocalArretManuel = true; applyVocalState(); return; }
     // Projet sensible : la dictee cloud reste bloquee (regle inchangee), et le
     // refus se VOIT (ligne d'etat en mode Vocal, conversation sinon).
@@ -4973,6 +5069,66 @@ let vocalReveilUnePhrase = false;
   }
 
   /**
+   * QUELLE OREILLE TRANSCRIT CETTE DICTÉE (étape 2 de l'oreille locale).
+   *
+   * Deux fournisseurs possibles, UN SEUL contrat : celui d'une session de
+   * reconnaissance du navigateur (`start` / `stop` / `onresult` / `onerror` /
+   * `onend`). Tout ce qui décide ensuite (garde du nom, envoi sur silence,
+   * reprise en main, envoi automatique, plafond des sessions vides) reste donc
+   * écrit une seule fois dans `startVoiceInput`, à l'identique.
+   *
+   * Le repli est VISIBLE (mission de l'étape 2) : quand le réglage demande le
+   * service local et qu'il ne peut pas servir, une phrase française le dit —
+   * dans la conversation hors du mode Vocal, dans l'unique ligne d'état du mode
+   * Vocal (qui annonce aussi que la voix repart vers un service en ligne, donc
+   * jamais un basculement silencieux).
+   * Le moteur du navigateur (`SR`) est FOURNI par l'appelant (`startVoiceInput`) :
+   * la voie de démarrage reste unique, et le repli n'ouvre aucun second chemin.
+   * @param {Function} SR constructeur de reconnaissance du navigateur
+   * @returns {object} session de dictée, jamais nulle
+   */
+  function createDictationSession(SR) {
+    if (localEarPlan && localEarPlan.use === true) {
+      if (!vocalMic) {
+        // Sans le micro de l'écran (mode Vocal non monté), il n'y a pas de son à
+        // diriger : on le dit et on garde la dictée du navigateur.
+        annoncerRepliLocal(
+          "Le service de voix local ne peut pas recevoir le son du micro hors du mode " +
+            "Vocal. Ici, la dictée passe par le navigateur, donc par un service en ligne.",
+        );
+      } else {
+        return createLocalEar({
+          invoke,
+          listen,
+          mic: vocalMic,
+          onModel: (modele) => {
+            localEarModele = modele && typeof modele === "object" ? modele : null;
+          },
+        });
+      }
+    } else {
+      annoncerRepliLocal(localEarPlan && localEarPlan.fallback ? localEarPlan.fallback : "");
+    }
+    return new SR();
+  }
+
+  /**
+   * LE repli se dit — une fois par panne, jamais en boucle, jamais en silence.
+   * Dans le mode Vocal, la ligne d'état le dit déjà (`localEarStatusLine`) : rien
+   * n'est donc ajouté à l'écran nu. Hors du mode Vocal, la conversation est le
+   * seul endroit où la phrase peut être lue.
+   * @param {string} phrase phrase française du repli ("" = rien à dire)
+   */
+  function annoncerRepliLocal(phrase) {
+    const texte = String(phrase || "").trim();
+    if (!texte) return;
+    if (vocalOverlay) return;
+    if (localEarRepliAnnonce === texte) return;
+    localEarRepliAnnonce = texte;
+    appendSystemMessage(messagesEl, "🎙️ " + texte);
+  }
+
+  /**
    * SEULE VOIE de demarrage d'une dictee : le bouton 🎙️ et l'armement
    * automatique de l'ecran Vocal passent tous les deux par ici (aucun second
    * moteur de transcription). Ne DECIDE rien : les gardes (mode, tour en cours,
@@ -4981,7 +5137,15 @@ let vocalReveilUnePhrase = false;
    * @returns {boolean} vrai si une session est ouverte a la sortie
    */
   function startVoiceInput() {
-    if (!voiceSupported) return false;
+    // N'IMPORTE laquelle des deux oreilles suffit : le réglage local ne doit pas
+    // fermer la dictée d'un poste qui n'a que le moteur du navigateur, et un
+    // poste sans moteur navigateur doit garder la dictée locale.
+    if (!dictationPossible()) return false;
+    // RÉGLAGE LOCAL DEMANDÉ, RÉPONSE PAS ENCORE ARRIVÉE : on n'ouvre pas une
+    // oreille au hasard. La sonde dure quelques millisecondes ;
+    // `refreshLocalDictation` réapplique l'état et l'écoute s'ouvre juste après,
+    // avec la bonne oreille.
+    if (localDictationOn && !localEarVerifie) return false;
     // Une nouvelle session efface l'erreur precedente : la ligne d'etat revient
     // au repos, et un echec qui persiste se reaffiche aussitot.
     clearVocalDictationError();
@@ -4992,7 +5156,7 @@ let vocalReveilUnePhrase = false;
     // mesure, aucune horloge partagee.
     const debutSession = Date.now();
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const rec = new SR();
+    const rec = createDictationSession(SR);
     rec.lang = VOICE_LANG;
     rec.interimResults = true;
     rec.continuous = true;
@@ -5082,7 +5246,21 @@ let vocalReveilUnePhrase = false;
       // Session refermée ICI : la fin d'écoute qui suit (onend) ne doit RIEN
       // envoyer (erreur de reconnaissance, refus de permission, panne réseau).
       voiceActive = false; voiceRec = null;
-      if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
+      if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = micTitleIdle(); }
+      // OREILLE LOCALE (étape 2) : le service de voix local s'est arrêté pendant
+      // la dictée. Sa phrase est DITE (ligne d'état en mode Vocal, message dans
+      // la conversation ailleurs), et la prochaine dictée repart sur le moteur
+      // du navigateur — annoncé par la ligne d'état, jamais en silence.
+      const phraseLocale = localEarFailureMessage(ev);
+      if (phraseLocale) {
+        erreurAffichee = true;
+        // Plus aucune preuve que le service répond : la décision est recalculée
+        // SANS statut, ce qui vaut « service absent » et le fait dire à l'écran.
+        localEarStatus = null;
+        localEarPlan = planLocalEar({ requested: localDictationOn, status: null });
+        reportVoiceFailure(phraseLocale, phraseLocale);
+        return;
+      }
       if (vocalOverlay) {
         // Mode Vocal : la conversation n'est pas affichee. L'erreur prend donc
         // l'UNIQUE ligne d'etat, en une phrase — jamais une zone invisible.
@@ -5135,7 +5313,7 @@ let vocalReveilUnePhrase = false;
           clearVocalSilenceTimer();
           vocalSessionsVides = [];
           if (inputEl.value !== preText) { inputEl.value = preText; resizeInput(); }
-          if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
+          if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = micTitleIdle(); }
           applyVocalState();
           return;
         }
@@ -5167,7 +5345,7 @@ let vocalReveilUnePhrase = false;
         arretDemande,
         dureeMs: Date.now() - debutSession,
       });
-      if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = MIC_TITLE_IDLE; }
+      if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = micTitleIdle(); }
       // CONVERSATION PARLEE : une fin d'ecoute (silence, arret du moteur, demande
       // envoyee) reapplique l'etat de l'ecran, sinon la dictee resterait fermee
       // jusqu'au prochain changement d'etat. En mode Vocal, elle se RARME donc
@@ -5920,6 +6098,32 @@ let vocalReveilUnePhrase = false;
     // promet pas l'ecoute et ne parie pas sur « projet libre ». Il dit quoi
     // faire — et le bouton 🎙️ fonctionne, c'est l'utilisateur qui decide.
     if (raison === "sensibilite-indisponible") return VOCAL_MESSAGE_SENSIBILITE_INCONNUE;
+    // OREILLE LOCALE (étape 2) : quand le réglage est actif, la ligne dit la
+    // VÉRITÉ de l'oreille qui écoute — « J'écoute avec le service local » quand
+    // il sert, « Le service local est absent : je dicte autrement » quand il ne
+    // sert pas (la phrase dit aussi que la voix repart vers un service en
+    // ligne : le repli n'est jamais silencieux). Elle n'est écrite QUE si la
+    // dictée est réellement armée ou ouverte : dans tous les autres cas c'est
+    // une autre vérité (micro fermé, erreur, projet sensible) et ce sont les
+    // lignes existantes qui parlent. La phrase du NOM n'est pas recopiée : elle
+    // est composée depuis la source unique (`vocalNameSentence`), et rien n'est
+    // affiché quand le réglage est inactif (`""` ⇒ écran inchangé).
+    const oreilleArmee =
+      raison === "au-repos" ||
+      raison === "tour-en-cours" ||
+      raison === "apres-lecture" ||
+      raison === "deja-ouverte";
+    if (oreilleArmee) {
+      const ligneOreille = localEarStatusLine({
+        plan: localEarPlan,
+        verification: localDictationOn && !localEarVerifie,
+        // Le NOM est reçu de la source unique (`superAgentDisplayLabel`) : la
+        // phrase est composée par le module de l'oreille, depuis la phrase de la
+        // garde du nom — aucune seconde phrase, aucun second texte n'est écrit ici.
+        nom: vocalReveilUnePhrase === true ? "" : superAgentDisplayLabel(),
+      });
+      if (ligneOreille) return ligneOreille;
+    }
     // GARDE DU NOM (mode Vocal) : la ligne dit lequel des DEUX états est actif,
     // et nulle part ailleurs. Garde ARMÉE → la phrase qui demande le nom (rien
     // ne partira sans lui) ; RÉVEILLÉ pour une phrase → la phrase EXISTANTE du
@@ -6237,7 +6441,7 @@ let vocalReveilUnePhrase = false;
     const bouton = vocalOverlay.querySelector(".vocal-restart");
     if (!bouton) return;
     const visible = vocalRestartVisible({
-      transcription: voiceSupported === true,
+      transcription: voiceSupported === true || localDictationDisponible(),
       dicteeOuverte: voiceActive === true,
       armementProgramme: !!vocalArmTimer,
       etat: state,
@@ -6443,6 +6647,48 @@ let vocalReveilUnePhrase = false;
   }
 
   /**
+   * OREILLE LOCALE (étape 2) : relit le réglage, interroge le pont machine de
+   * l'étape 1, puis recalcule la DÉCISION (`planLocalEar`) — une seule fois, au
+   * même endroit, pour l'écran et pour le bouton 🎙️.
+   *
+   * Appelée au montage de l'onglet, à chaque changement de réglage, et à
+   * l'ENTRÉE du mode Vocal (le service a pu être lancé ou fermé entre-temps).
+   * Fail-open : une configuration illisible ou un pont muet laisse le
+   * comportement historique (dictée du navigateur) — mais alors le repli est DIT
+   * par la ligne d'état et par la conversation, jamais subi en silence.
+   * @returns {Promise<void>}
+   */
+  async function refreshLocalDictation() {
+    let demande = false;
+    try {
+      const cfg = await invoke("get_config");
+      demande = localDictationRequested(cfg);
+    } catch (_) {
+      demande = false;
+    }
+    localDictationOn = demande;
+    // L'écoute automatique attend la réponse : ouvrir l'oreille du navigateur
+    // pendant la vérification serait basculer en ligne sans le dire.
+    localEarVerifie = !demande;
+    let statut = null;
+    if (demande) {
+      try {
+        statut = await invoke("asr_voicestudio_status");
+      } catch (_) {
+        statut = null;
+      }
+    }
+    localEarStatus = statut && typeof statut === "object" ? statut : null;
+    localEarPlan = planLocalEar({ requested: demande, status: localEarStatus });
+    localEarVerifie = true;
+    // Une oreille locale redevenue utilisable efface la mémoire du repli : une
+    // panne se dit UNE fois, pas à chaque dictée.
+    if (localEarPlan.use === true) localEarRepliAnnonce = "";
+    applyMicButtonVisibility();
+    applyVocalState();
+  }
+
+  /**
    * Ferme la dictee pour que la demande PARTE — par la voie qui existe deja.
    *
    * On n'appelle PAS `stopVoiceInput()` : il referme la session avant l'arret du
@@ -6606,7 +6852,7 @@ let vocalReveilUnePhrase = false;
       // leve par un geste de l'utilisateur seulement.
       sessionsVides: vocalDicteeSuspendue === true,
       erreur: vocalDictationErreur,
-      transcription: voiceSupported === true,
+      transcription: voiceSupported === true || localDictationDisponible(),
       apresLecture: vocalApresLecture === true,
       // La MESURE du niveau est REELLEMENT ouverte : la dictee vient APRES elle
       // (regle 7c). Une panne de mesure laisse donc la dictee fermee — et c'est
@@ -6843,6 +7089,11 @@ let vocalReveilUnePhrase = false;
       // LOT 4a : voix detectee par-dessus la lecture -> Pilot se tait.
       onSpeechStart: vocalBargeIn,
     });
+    // OREILLE LOCALE (étape 2) : le service de voix a pu être lancé ou fermé
+    // depuis le montage de l'onglet — on le redemande à l'ENTRÉE du mode, pour
+    // que la ligne d'état dise la vérité de cet instant et que la dictée prenne
+    // la bonne oreille (aucun appel réseau : uniquement le pont machine).
+    refreshLocalDictation();
     // Si Pilot lit DEJA au moment ou le micro s'ouvre, la garde part armee :
     // l'etat de la lecture est repose, jamais devine.
     vocalSyncMicSpeaking();

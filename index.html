@@ -1444,6 +1444,21 @@
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
               <span id="vocal-brevity-note" role="note">En mode Vocal, Pilot r&eacute;pond en deux phrases (&laquo;&nbsp;Courtes&nbsp;&raquo;). Choisissez plus court pour une conversation tr&egrave;s vive, ou plus long pour entendre le d&eacute;tail. Demander de d&eacute;velopper (&laquo;&nbsp;d&eacute;taille&nbsp;&raquo;, &laquo;&nbsp;explique&nbsp;&raquo;, &laquo;&nbsp;pourquoi&nbsp;&raquo;) passe avant le niveau choisi, et une panne, un refus, une erreur ou une demande de confirmation sont toujours dits en entier.</span>
             </div>
+            <!-- OREILLE LOCALE : UNE seule case a cocher, UNE seule cle
+                 (`local_dictation`). Cocher = la dictee de l'ECRAN VOCAL est
+                 transcrite sur cet ordinateur par le service de voix local ;
+                 decocher = la dictee du navigateur, exactement comme avant. Le modele employe n'est
+                 pas choisi ici (il est lu dans la reponse du service) et il est
+                 ANNONCE dans la ligne d'etat ci-dessous. -->
+            <div class="setting-row">
+              <label for="setting-local-dictation" title="Cocher : dans l'ecran Vocal, votre dictee est transcrite sur cet ordinateur par le service de voix local (VoiceStudio), sans qu'aucun son ne parte vers Internet. Decocher : la dictee utilise le moteur du navigateur, donc un service en ligne. Ailleurs que dans l'ecran Vocal (editeur, onglet agent), la dictee reste celle du navigateur : c'est dit. Si le service local est absent ou s'arrete, Pilot revient a la dictee du navigateur et le dit a l'ecran."><input type="checkbox" id="setting-local-dictation" aria-describedby="local-dictation-note local-dictation-state" /> Transcrire avec le service de voix local</label>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="local-dictation-note" role="note">Coch&eacute;e, <b>dans l'&eacute;cran Vocal</b>, la dict&eacute;e est transcrite <b>sur cet ordinateur</b> par le logiciel de voix local&nbsp;: aucun son ne part vers Internet. Ailleurs (fen&ecirc;tre d'&eacute;dition, onglet agent), la dict&eacute;e reste celle du navigateur. Le mod&egrave;le employ&eacute; est choisi automatiquement parmi ceux qui sont install&eacute;s&nbsp;; Pilot n'installe rien, ne t&eacute;l&eacute;charge rien et n'accepte aucune licence &agrave; votre place. Si le service local est absent ou s'arr&ecirc;te, Pilot revient &agrave; la dict&eacute;e du navigateur, donc &agrave; un service en ligne, et le dit &agrave; l'&eacute;cran.</span>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="local-dictation-state" role="status" aria-live="polite"></span>
+            </div>
           </div>
           <div class="settings-section">
             <h3 class="settings-section-title"><i data-lucide="building-2" class="icon-sm"></i> Clients</h3>

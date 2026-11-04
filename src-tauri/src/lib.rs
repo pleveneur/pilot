@@ -745,6 +745,16 @@ struct AppConfig {
     // comportement.
     #[serde(default = "default_vocal_brevity_level")]
     vocal_brevity_level: String,
+    // Mode Vocal : TRANSCRIRE AVEC LE SERVICE DE VOIX LOCAL. Une seule case à
+    // cocher (Paramètres → onglet « Assistant » → section « Mode Vocal ») et une
+    // seule clé : activée, la dictée est transcrite sur cet ordinateur par le
+    // logiciel de voix local (le pont de l'étape 1, `asr_voicestudio.rs`) ;
+    // désactivée (défaut), le comportement historique est inchangé (moteur du
+    // navigateur, même langue, même envoi automatique). Un fichier de
+    // configuration ancien ne change donc rien. Aucun autre réglage n'existe :
+    // le choix du modèle et le repli sont décidés à l'exécution, jamais réglés.
+    #[serde(default)]
+    local_dictation: bool,
     // Évolution 3 : assistant « réponses courtes » — quand activé, l'assistant
     // informe et décide sans détailler tout ce qui se fait, sauf demande
     // explicite. Défaut off. Injecté dans le prompt système.
@@ -1273,6 +1283,7 @@ impl Default for AppConfig {
             character_voices: HashMap::new(),
             vocal_silence_send_ms: default_vocal_silence_send_ms(),
             vocal_brevity_level: default_vocal_brevity_level(),
+            local_dictation: false,
             super_agent_concise: false,
             super_agent_adaptive_personality: false,
             super_agent_personality: String::new(),

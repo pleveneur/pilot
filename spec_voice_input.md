@@ -451,14 +451,17 @@ minuteur, réévaluation à l'échéance, `rec.stop()` réutilisé, un seul
 
 ---
 
-## 9. Oreille locale — étape 1 : le pont machine (2026-11-04)
+## 9. Oreille locale — le pont machine (étape 1, 2026-11-04) et l'écran branché (étape 2, 2026-11-15)
 
 > **Décision du propriétaire** : la dictée doit pouvoir être transcrite **sur
 > l'ordinateur**, par le logiciel de voix local (VoiceStudio), au lieu d'envoyer
-> le son à Google/Microsoft. **Étape 1 = le pont machine seulement** : aucun
-> écran, aucun bouton, aucun réglage ne change. **Tant que l'étape 2 n'est pas
-> faite, le son de la dictée part toujours vers le service en ligne** — ce
-> document ne prétend pas le contraire.
+> le son à Google/Microsoft.
+>
+> **Étape 1** = le pont machine (ci-dessous). **Étape 2 = FAITE** : la dictée de
+> l'écran passe par ce pont quand la case **« Transcrire avec le service de voix
+> local »** est cochée (⚙️ Options → onglet **Assistant**), et le repli vers la
+> dictée du navigateur est **toujours annoncé à l'écran** — jamais silencieux.
+> Décochée (défaut), la dictée reste exactement celle d'avant.
 
 ### Une seule porte, un module frère de la voix imitée
 
@@ -526,12 +529,53 @@ service local (VoiceStudio 0.5.7, GPU RTX 5080) :
 
 Rapport complet : `docs/rapports/RAPPORT-oreille-locale-etape1-pont-machine.md`.
 
-### Ce qui reste (étape 2, pas commencée)
+### Étape 2 — l'écran est branché (faite le 2026-11-15)
 
-Brancher la dictée de l'écran sur ces commandes (envoyer le son du micro capté
-par la fenêtre, écrire les partiels dans la zone, garder la garde du nom de
-l'écran Vocal et l'envoi automatique **inchangés**), et n'annoncer au
-propriétaire « le son ne part plus » **qu'après** l'avoir constaté.
+**Un seul réglage, une seule clé** : la case « Transcrire avec le service de voix
+local » (onglet Assistant) écrit `local_dictation` (`AppConfig`, `#[serde(default)]`,
+**faux** par défaut ⇒ un fichier de configuration ancien ne change rien).
+
+**Périmètre : la dictée de l'écran Vocal** — c'est là que le micro de l'application
+est ouvert. Ailleurs (fenêtre d'édition, onglet agent π) la dictée reste celle du
+navigateur, et la phrase de repli le dit au lieu de le laisser croire.
+
+**Le micro ne bouge pas** : une seule capture dans tout le projet (`vocal-mic.js`).
+L'oreille locale **consomme** le son déjà capté (robinet `setAudioTap`, muet), elle
+n'ouvre ni second flux ni second `getUserMedia`.
+
+**Aucun second chemin de dictée** : `oreille-locale-moteur.js` fabrique un objet de
+la **même forme** qu'une session `SpeechRecognition` (`start/stop/onresult/onerror/onend`,
+résultat final cumulatif). `createDictationSession(SR)` choisit le fournisseur ; tout le
+reste (garde du nom, envoi sur silence, reprise en main, envoi automatique) est écrit
+**une seule fois** dans `super-agent.js` et s'applique au texte local comme au texte du
+navigateur.
+
+**Le modèle est choisi par le pont, jamais par l'écran**, et il est affiché en clair :
+note de la case (phrase de `planLocalEar`) + infobulle du bouton 🎙️ (« transcription sur
+cet ordinateur avec « … » »). Un meilleur modèle installé plus tard change la phrase,
+pas le code ; Pilot n'installe rien, ne télécharge rien, n'accepte aucune licence.
+
+**Le repli est visible, jamais silencieux** — c'est la règle non négociable :
+
+| Cas | Ce que l'écran dit |
+|---|---|
+| Case décochée | rien de plus (comportement historique) |
+| Service absent / muet / sans modèle français / dictée non prête | phrase dans la conversation **ou** ligne d'état du mode Vocal, disant qu'on **dicte autrement** et que le son repart vers un **service en ligne** |
+| Pendant l'écoute (service qui s'arrête) | phrase immédiate, décision **recalculée sans statut** (donc « absent »), retour au navigateur **annoncé** |
+| Réglage coché au démarrage | « Je vérifie si la dictée locale peut servir… » avant toute dictée ; l'écoute automatique **attend** la réponse du pont au lieu de partir en ligne |
+
+**La ligne d'état ne ment pas** : elle dit laquelle des deux oreilles écoute
+(« J'écoute avec le service local. » / « Le service local est absent : je dicte
+autrement. »), dans la ligne **existante**, sans nouvel élément d'interface.
+
+**Limite connue, dite telle quelle** : la latence du service local reste de l'ordre de
+**~9,5 s de texte final pour ~5,6 s de parole** (mesurée à l'étape 1). La dictée reste
+utilisable (les partiels s'écrivent au fil de l'eau), mais elle **n'est pas fluide** et
+ce document ne prétend pas le contraire.
+
+Verrous : `src/js/oreille-locale-etape2.test.js` (28 verrous) + `oreille-locale-etape1.test.js`
+(la porte unique) + `vocal-nom-garde.test.js` (la garde du nom, intacte).
+Rapport : `docs/rapports/RAPPORT-oreille-locale-etape2-ecran-branche.md`.
 
 ---
 
@@ -585,4 +629,18 @@ texte à la voix.
   Détail : `spec_modes_ecran_vocal.md` § 6quater. **Partout ailleurs, rien ne
   change** : la dictée de l'éditeur, de l'onglet agent π, de l'Assistant 🧭 et du
   web distant n'exige aucun nom.
+- **Dicter sans qu'aucun son ne parte vers Internet** : ⚙️ Options → onglet
+  **« Assistant »**, cocher **« Transcrire avec le service de voix local »**.
+  **Dans l'écran Vocal**, la transcription est alors faite **sur cet ordinateur**
+  par le logiciel de voix local (VoiceStudio) ; ailleurs (fenêtre d'édition,
+  onglet agent), la dictée reste celle du navigateur et Pilot le dit. La case
+  indique sous elle **quel modèle** est employé
+  (choisi tout seul parmi ceux qui sont installés) : Pilot n'installe rien, ne
+  télécharge rien et n'accepte aucune licence à votre place. Laisser la case
+  décochée garde la dictée habituelle (moteur du navigateur, donc un service en
+  ligne). **Si le logiciel local est absent, ou s'il s'arrête en pleine dictée,
+  Pilot revient à la dictée du navigateur et vous le dit à l'écran** — il ne
+  bascule jamais en silence. Limite connue : la transcription locale est plus
+  lente (le texte définitif arrive quelques secondes après votre dernier mot) ;
+  le texte s'écrit au fur et à mesure, vous n'avez pas à attendre pour parler.
 <!-- /HELP:dictee-vocale -->
