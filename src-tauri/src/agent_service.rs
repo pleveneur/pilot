@@ -3224,6 +3224,12 @@ impl AgentService {
             Ok(laya_file) => report.paths.push(laya_file),
             Err(e) => report.failures.push(e),
         }
+        // Export PDF sans impression : l'outil `export_markdown_pdf`. Disponible
+        // dans toute session, comme Laya (aucune fenêtre d'impression).
+        match Self::write_pdf_extension(&dir) {
+            Ok(pdf_file) => report.paths.push(pdf_file),
+            Err(e) => report.failures.push(e),
+        }
         report
     }
 
@@ -3466,6 +3472,12 @@ impl AgentService {
                         Ok(laya_file) => report.paths.push(laya_file),
                         Err(e) => report.failures.push(e),
                     }
+                    // Export PDF sans impression (outil `export_markdown_pdf`) :
+                    // l'assistant peut produire un vrai PDF, sans dialogue.
+                    match Self::write_pdf_extension(&dir) {
+                        Ok(pdf_file) => report.paths.push(pdf_file),
+                        Err(e) => report.failures.push(e),
+                    }
                     Self::log_extension_failures("super-agent", &report);
                     extensions = report.paths;
                 } else {
@@ -3611,6 +3623,13 @@ impl AgentService {
                         Ok(laya_file) => report.paths.push(laya_file),
                         Err(e) => report.failures.push(e),
                     }
+                    // Export PDF sans impression (outil `export_markdown_pdf`) :
+                    // disponible pour tout agent lancé par l'assistant, y compris
+                    // les agents multi-rôles — comme l'outil Laya.
+                    match Self::write_pdf_extension(&dir) {
+                        Ok(pdf_file) => report.paths.push(pdf_file),
+                        Err(e) => report.failures.push(e),
+                    }
                     Self::log_extension_failures("agent multi-rôles", &report);
                     extensions = report.paths;
                 } else {
@@ -3722,6 +3741,32 @@ impl AgentService {
         Ok(laya_file.to_string_lossy().to_string())
     }
 
+    /// Écrit le couple de l'export PDF SANS IMPRESSION : l'extension
+    /// `pilot-pdf.ts` (l'outil `export_markdown_pdf` pour les agents) et son
+    /// cœur `pdf-gateway.js`, importé par `./pdf-gateway.js`. Partagé par TOUS
+    /// les chemins de session (chat du projet, agents multi-rôles, assistant,
+    /// agents lancés par l'assistant) : sans cela, un agent ne reçoit pas
+    /// l'outil.
+    ///
+    /// L'outil n'imprime rien : il demande une conversion à la fenêtre
+    /// (sentinelle `PILOT_PDF_EXPORT::`), qui exécute la commande Rust
+    /// `markdown_to_pdf` (moteur embarqué, hors fil d'affichage) et renvoie le
+    /// rapport. Tâche 361 : l'écriture passe par l'écriture fiabilisée et un
+    /// échec est REMONTÉ, jamais avalé (sinon la session tournerait sans
+    /// l'outil, sans que rien ne le signale).
+    fn write_pdf_extension(dir: &std::path::Path) -> Result<String, String> {
+        let gateway_file = dir.join("pdf-gateway.js");
+        crate::extension_write::write_embedded(
+            &gateway_file,
+            include_str!("../../src/js/pdf-gateway.js"),
+        )
+        .map_err(|e| format!("pdf-gateway.js : {}", e))?;
+        let pdf_file = dir.join("pilot-pdf.ts");
+        crate::extension_write::write_embedded(&pdf_file, include_str!("../extensions/pilot-pdf.ts"))
+            .map_err(|e| format!("pilot-pdf.ts : {}", e))?;
+        Ok(pdf_file.to_string_lossy().to_string())
+    }
+
     fn spawn_session(app: &AppHandle, project: &str, agent_id: &str) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
         let (pi_path, no_session, session_dir, qg_enabled, confirm_file_edits, mcp_enabled) = {
@@ -3818,6 +3863,13 @@ impl AgentService {
                     // surveillé par Pilot — aucun modèle chargé par la session.
                     match Self::write_laya_extension(&dir) {
                         Ok(laya_file) => report.paths.push(laya_file),
+                        Err(e) => report.failures.push(e),
+                    }
+                    // Export PDF sans impression (outil `export_markdown_pdf`) :
+                    // le chat du projet dispose donc du MÊME outil que les agents
+                    // lancés par l'assistant, par le même chemin d'écriture.
+                    match Self::write_pdf_extension(&dir) {
+                        Ok(pdf_file) => report.paths.push(pdf_file),
                         Err(e) => report.failures.push(e),
                     }
                     Self::log_extension_failures("session d'agent", &report);
@@ -7077,5 +7129,33 @@ mod tests {
                 .expect("cœur lisible")
                 .contains("askLaya")
         );
+    }
+
+    /// L'extension de l'export PDF SANS IMPRESSION est écrite avec son cœur, et
+    /// son contenu porte bien l'outil, la sentinelle et AUCUNE impression :
+    /// c'est ce test qui empêche un retour silencieux au chemin bloquant
+    /// (fenêtre d'impression) dans la session d'un agent.
+    #[test]
+    fn write_pdf_extension_ecrit_extension_et_coeur_sans_impression() {
+        let dir = crate::test_util::TempDir::new("pilot-pdf-ext");
+
+        let ext = AgentService::write_pdf_extension(&dir).expect("extension PDF écrite");
+        assert!(ext.ends_with("pilot-pdf.ts"), "chemin attendu : {ext}");
+        let source = std::fs::read_to_string(&ext).expect("extension lisible");
+        assert!(source.contains("export_markdown_pdf"), "outil nommé dans l'extension");
+        assert!(
+            source.contains("pdf-gateway.js"),
+            "l'extension importe le cœur partagé"
+        );
+        for interdit in ["window.print", "contentWindow.print", "printDialog"] {
+            assert!(
+                !source.contains(interdit),
+                "aucune impression dans l'extension (trouvé : {interdit})"
+            );
+        }
+        let gateway = std::fs::read_to_string(dir.join("pdf-gateway.js"))
+            .expect("cœur lisible");
+        assert!(gateway.contains("PILOT_PDF_EXPORT::"), "sentinelle dans le cœur");
+        assert!(gateway.contains("formatPdfToolResult"), "mise en forme du rapport");
     }
 }

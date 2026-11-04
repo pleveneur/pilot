@@ -2841,8 +2841,29 @@ body.pilot-vocal-active #mode-logo {
 }
 .pdf-export-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .pdf-export-btn:hover:not(:disabled) { background: var(--bg-hover, #2a2a3e); }
-.pdf-export-frame-wrap { flex: 1; position: relative; background: white; min-height: 0; }
-.pdf-export-frame { width: 100%; height: 100%; border: none; background: white; }
+/* --- Export PDF : rapport de ce qui a été ÉCRIT (aucun aperçu à imprimer) ---
+   Le panneau ne sert plus à prévisualiser puis imprimer : il dit ce qui a été
+   produit sur le disque, source par source. Il se ferme d'un clic ou avec
+   Échap, même pendant une conversion (bouton « Fermer » toujours actif). */
+.pdf-export-report {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-primary, #e0e0e0);
+  background: var(--bg-primary, #1a1a2e);
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.pdf-export-line { padding: 2px 0; }
+.pdf-export-line-head { font-weight: 600; margin-top: 6px; }
+.pdf-export-line-ok { color: var(--text-primary, #e0e0e0); }
+.pdf-export-line-fail { color: var(--danger, #e06c75); }
 
 /* --- Editor Container --- */
 #editor-container {

@@ -55,7 +55,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Multi-projets (gestionnaire de projets) | `spec_multiprojects.md` |
 | Discussion inter-projets (liens + dépôt de tâche) | `spec_interproject.md` |
 | Sous-projets liés (ouverture groupée, local-first + GDS) | `spec_subprojects.md` |
-| Conversion PDF → MD | `spec_pdf2md.md` |
+| Conversion PDF → MD **et export Markdown → PDF** (sans impression) | `spec_pdf2md.md` |
 | Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` + `spec_orchestration_autotest.md` + `spec_orchestration_snapshots.md` + `spec_orchestration_reviewer.md` |
 | Accès distant web | `spec_web_remote.md` |
 | Dictée vocale | `spec_voice_input.md` |
@@ -188,6 +188,8 @@ pilot/
 │       ├── editor.js          # Éditeur CodeMirror 6
 │       ├── preview.js         # Prévisualisation Markdown (markdown-it)
 │       ├── pdf-preview.js     # Prévisualisation PDF (PDF.js)
+│       ├── pdf-export.js     # Export Markdown → PDF SANS fenêtre d'impression : modale locale (#pdf-export-overlay, « Fermer » jamais désactivé, Échap) + DEUX points uniques — `runPdfExportRequest` (invoke `markdown_to_pdf`, ne lève jamais) et `runPdfSentinelRequest` (même appel pour les trois canaux agents) ; plus d'iframe, plus de `contentWindow.print()`
+│       ├── pdf-gateway.js     # CŒUR PUR de l'export PDF partagé fenêtre ↔ extension agent ↔ Vitest : `normalizePdfRequest` (dédoublonnage, sources vides refusées), `formatPdfReport` (une ligne par fichier, succès/échec nommé), `PDF_SOURCE_EXTENSIONS`, messages ; aucun DOM, aucun import Tauri
 │       ├── image-viewer.js    # Prévisualisation d'images
 │       ├── csv-preview.js     # Prévisualisation CSV
 │       ├── image-paste.js     # Drag & drop / Ctrl+V d'images dans l'éditeur
@@ -273,6 +275,7 @@ pilot/
     │   ├── pilot-skills.ts    # D6 : filtrage strict des compétences par agent (before_agent_start)
     │   ├── pilot-chrome.ts    # Navigateur : autorise les outils chrome_* (pi-chrome) dans les sessions d'agents
     │   ├── pilot-choices.ts   # Issue #30 : boutons choix/confirmation/saisie (ask_choice, ask_confirm, ask_input, ask_multi_choice)
+    │   ├── pilot-pdf.ts       # Outil `export_markdown_pdf` (sources .md → PDF sur disque, sans impression, `executionMode: "sequential"`) ; délai d'attente LITTÉRAL (`PILOT_UI_OPTS = { timeout: 180_000 }`, garde-fou statique) ; importe le cœur `./pdf-gateway.js`
     │   ├── pilot-assistant-files.ts # 🧭 : espace d'écriture restreint ~/.pilot/assistant/ (lecture seule projets)
     │   ├── pilot-assistant-actions.ts # 🧭 : open_project / delegate_to_coder / purge_agent_conversation / run_agents(mcp_server) / mcp_state (actions Pilot via sentinel)
     │   ├── pilot-assistant-db.ts # 🧭 : db_query / db_execute (accès contrôlé à la base de suivi de l'assistant)
@@ -288,7 +291,8 @@ pilot/
         ├── git.rs            # Git intégré (C1) : status, diff visuel, snapshots/annulation (A1)
         ├── terminal.rs       # Terminal intégré (portable-pty)
         ├── files.rs          # Opérations fichiers pures (I/O, encodage, mtime)
-        ├── pdf.rs            # Export Markdown → HTML (impression PDF)
+        ├── pdf.rs            # Export Markdown → HTML (impression PDF) — chemin HTML, distinct de l'export PDF direct
+        ├── pdf_export.rs     # ÉCRIVAIN PDF EN RUST PUR (sans fenêtre d'impression, sans dépendance nouvelle) : Markdown → PDF A4 par `pulldown-cmark`, polices base 14 + WinAnsi (largeurs AFM réelles pour ASCII et latin-1), listes en pile d'index de blocs, tableaux alignés par rangée, images JPEG/PNG 8 bits (flate2) sinon ligne visible « image non incorporée » ; commande `markdown_to_pdf(sources, out_dir)` en `spawn_blocking` (aucun gel de l'interface), lot fichier par fichier, PDF RELU après écriture (`%PDF` + taille réelle) ; une ligne = UN SEUL objet texte (le moteur PDF avance entre les morceaux : aucun décalage cumulé) ; verrous `src/js/pdf-gateway.test.js` + tests du module (23)
         ├── models_config.rs  # Édition registres modèles (models.json / model-switch.json)
         ├── search.rs         # Recherche / remplacement global dans les fichiers (B3)
         ├── code_check.rs     # Vérification syntaxe / lint / tests de projet (E2)

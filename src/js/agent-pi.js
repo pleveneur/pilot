@@ -40,6 +40,13 @@ import {
 // inconnue. Module pur, appliqué ici au moment de peindre (chat d'agent et
 // relais), voir docs/rapports/RAPPORT-sentinelle-brute-confirmation.md.
 import { readableMachineText } from "./machine-sentinel.js";
+// EXPORT PDF SANS IMPRESSION (outil `export_markdown_pdf`) : le chat du projet
+// porte la même extension que l'assistant. Sa demande (`PILOT_PDF_EXPORT::<JSON>`)
+// s'EXÉCUTE ici, par le point unique `runPdfSentinelRequest` — aucune fenêtre
+// d'impression, et le rapport (chemins produits, échecs nommés) repart vers le
+// moteur comme `value`.
+import { isPdfExportRequest } from "./pdf-gateway.js";
+import { runPdfSentinelRequest } from "./pdf-export.js";
 import { animateModalOpen, animatePanelOpen } from "./modal-anim.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { agentSelectorIds, findModelSelect } from "./agent-model-selector.js";
@@ -9089,6 +9096,22 @@ async function handleExtensionUiRequest(payload, container, state) {
       }).catch(() => {});
     }
   } else if (method === "input") {
+    const rawInputTitle = typeof payload.title === "string" ? payload.title : "";
+    // EXPORT PDF SANS IMPRESSION : la demande ne monte JAMAIS à l'écran (aucun
+    // champ de saisie, aucune fenêtre d'impression). Elle s'exécute hors du fil
+    // d'affichage et le rapport JSON part comme réponse au moteur.
+    if (isPdfExportRequest(rawInputTitle)) {
+      let answer = "";
+      try {
+        answer = await runPdfSentinelRequest(rawInputTitle);
+      } catch (err) {
+        answer = JSON.stringify({ error: String(err) });
+      }
+      await invoke("send_rpc_command", {
+        command: { type: "extension_ui_response", id, value: answer },
+      }).catch(() => {});
+      return;
+    }
     // Mode Orchestration autonome : pas de saisie utilisateur → annuler.
     if (state.orchestrationRunning) {
       await invoke("send_rpc_command", {

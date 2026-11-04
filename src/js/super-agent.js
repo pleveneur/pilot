@@ -64,6 +64,12 @@ import {
   readableMachineText,
   scheduleRequestFrom,
 } from "./machine-sentinel.js";
+// EXPORT PDF SANS IMPRESSION (outil `export_markdown_pdf`) : la sentinelle, la
+// décision « est-ce une demande d'export ? » et la mise en forme du rapport sont
+// dans `pdf-gateway.js` (module PUR, aussi importé par l'extension d'agent et
+// par la fenêtre) ; l'exécution unique est `runPdfSentinelRequest`.
+import { isPdfExportRequest } from "./pdf-gateway.js";
+import { runPdfSentinelRequest } from "./pdf-export.js";
 // SURFACE DES QUESTIONS D'AGENT (défaut protégé : une question posée sans onglet
 // 🧭 restait sans réponse). La décision « qui peint » et la prise en charge
 // vivent dans ce module PUR, partagé avec la surface de secours de
@@ -9979,6 +9985,16 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       }
       return;
     }
+    if (isPdfExportRequest(title)) {
+      // Outil `export_markdown_pdf` : l'assistant convertit un ou plusieurs
+      // Markdown en PDF RÉELS sur le disque, sans fenêtre d'impression. Le titre
+      // porte la sentinelle `PILOT_PDF_EXPORT::<JSON>`. Le point d'exécution est
+      // UNIQUE (`runPdfSentinelRequest`) : le relais des questions d'agents et le
+      // chat du projet passent par le même — le rapport est identique quel que
+      // soit le canal, et l'échec est toujours nommé.
+      await respondSuperAgent(id, await runPdfSentinelRequest(title), false);
+      return;
+    }
     if (title.startsWith(SCHEDULE_SENTINEL)) {
       // Outil schedule (chantier #13) : l'assistant programme des relances
       // différées/périodiques. Le titre contient un JSON {op, name, prompt,
@@ -11271,6 +11287,15 @@ async function relayAgentChoiceRequest(payload, agentId, projectPath, messagesEl
   // deux boutons Valider / Annuler.
   if (method === "input") {
     const rawTitle = typeof payload.title === "string" ? payload.title : "";
+    if (isPdfExportRequest(rawTitle)) {
+      // Export PDF SANS IMPRESSION (outil `export_markdown_pdf`) : un agent
+      // lancé en arrière-plan porte la même extension que l'assistant, sa
+      // demande remonte donc par le RELAIS. Elle ne demande rien à
+      // l'utilisateur : elle s'exécute (point unique `runPdfSentinelRequest`,
+      // aucune fenêtre d'impression) et la réponse part vers la BONNE session.
+      await responder(await runPdfSentinelRequest(rawTitle), false);
+      return;
+    }
     if (rawTitle.startsWith(SCHEDULE_SENTINEL)) {
       const req = scheduleRequestFrom(rawTitle);
       const answer = req

@@ -65,6 +65,10 @@ mod terminal;
 mod files;
 mod models_config;
 mod pdf;
+// Conversion Markdown → PDF SANS aucune fenêtre d'impression : compose le PDF
+// ici (moteur embarqué, aucun accès à l'imprimante) et l'écrit sur le disque,
+// hors du fil d'affichage. Voir `pdf_export.rs`.
+mod pdf_export;
 mod search;
 mod code_check;
 mod plan;
@@ -3761,6 +3765,7 @@ pub fn run() {
             open_explorer,
             files::open_in_browser,
             pdf::export_pdf,
+            pdf_export::markdown_to_pdf,
             rename_file_or_dir,
             copy_image_to_project,
             terminal::spawn_terminal,

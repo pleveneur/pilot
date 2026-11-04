@@ -91,6 +91,15 @@ import { stopAgentWithTrace } from "./agent-stop-funnel.js";
 // base). Le bus doit les AJOUTER à sa map après chaque lecture du registre
 // persistant, sinon ils seraient « inconnus » au moment du lancement.
 import { listEphemeralAgents } from "./ephemeral-agents.js";
+// EXPORT PDF SANS IMPRESSION (outil `export_markdown_pdf`) : la demande d'un
+// agent n'est PAS une question à poser à l'utilisateur — c'est une action
+// interne de Pilot. Le bus l'EXÉCUTE donc ici (point unique
+// `runPdfSentinelRequest`, aucune fenêtre d'impression) et rend le rapport à la
+// session de l'agent ; l'utilisateur en voit le résultat par une notification
+// explicite. Sans cela, la demande resterait en attente et l'agent n'aurait
+// jamais son PDF.
+import { isPdfExportRequest, pdfReportStatus, pdfToolErrorAnswer } from "./pdf-gateway.js";
+import { runPdfSentinelRequest } from "./pdf-export.js";
 import {
   enqueueExclusivity,
   dequeueExclusivity,
@@ -3225,6 +3234,48 @@ async function handleExtensionUiRequest(agentId, event, ctx) {
 
   if (method === "setStatus" || method === "setWidget" || method === "setTitle" || method === "set_editor_text") {
     return; // fire-and-forget
+  }
+
+  // ── EXPORT PDF SANS IMPRESSION (outil `export_markdown_pdf`) ──
+  // Action INTERNE : elle s'EXÉCUTE (aucune fenêtre d'impression, aucun
+  // dialogue), et le rapport part vers la session de l'agent. Aucune question
+  // n'est posée à l'utilisateur, et rien n'est décidé à sa place : la conversion
+  // est exactement ce que l'agent a demandé.
+  if (isPdfExportRequest(event.title)) {
+    const projectPath = ctx.agentProject[agentId] || ctx.project || "";
+    let answer = "";
+    try {
+      answer = await runPdfSentinelRequest(event.title);
+    } catch (err) {
+      answer = pdfToolErrorAnswer(err);
+    }
+    try {
+      await invoke("send_agent_command_to", {
+        projectPath,
+        agentId,
+        command: { type: "extension_ui_response", id, value: answer },
+      });
+    } catch (e) {
+      console.error("[agents-bus] réponse export PDF non transmise", agentId, e);
+    }
+    // Retour LISIBLE pour l'utilisateur : ce qui a été écrit, ce qui a échoué.
+    let parsed = null;
+    try {
+      parsed = JSON.parse(answer);
+    } catch (_) {
+      parsed = null;
+    }
+    const produced = parsed && Array.isArray(parsed.results)
+      ? parsed.results.filter((r) => r && r.ok && typeof r.output === "string").map((r) => r.output)
+      : [];
+    emit("notify", {
+      agentId,
+      notifyType: parsed && Number(parsed.failed) > 0 ? "warning" : "info",
+      message: parsed
+        ? `📄 Export PDF de l'agent ${agentId} : ${pdfReportStatus(parsed)}${produced.length ? ` — ${produced.join(", ")}` : ""}`
+        : `📄 Export PDF de l'agent ${agentId} : réponse illisible, vérifiez le disque.`,
+    });
+    return;
   }
 
   if (isRelayableAgentChoice(event)) {

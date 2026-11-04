@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-11-03 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-11-04 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1560,8 +1560,20 @@ on entre **toujours** avec tout visible.
   Pilot extrait le texte du PDF puis le fait restructurer en Markdown propre par
   l'IA (agent Pi). Le fichier `.md` est créé à côté du PDF et s'ouvre dans un
   onglet. Modèle utilisé : Options ⚙️ → « Modèle de conversion PDF → MD ».
-- **Export PDF** : dans l'explorateur, **clic-droit sur un fichier `.md`** →
-  « 📕 Exporter en PDF ». Génère un PDF rendu de la prévisualisation Markdown.
+- **Export PDF** : dans l'explorateur, **clic-droit sur un fichier `.md`**
+  (ou `.markdown`, `.mdx`) → « 📕 Exporter en PDF ». Pilot écrit un **vrai
+  fichier PDF** à côté du document, **sans fenêtre d'impression et sans
+  dialogue** : la conversion se fait en arrière-plan, vous pouvez continuer à
+  travailler pendant ce temps, et le bouton **Fermer** de la fenêtre de compte
+  rendu répond toujours. À la fin, un compte rendu dit **ce qui a été produit**
+  (chemin, taille, nombre de pages) et **ce qui a échoué**, fichier par fichier ;
+  l'échec d'un fichier **n'annule pas** les autres.
+- **Demandez-le à l'agent** : l'outil « export_markdown_pdf » est à la
+  disposition des agents. « Convertis ces trois notes en PDF » → l'agent demande
+  votre accord, écrit les fichiers et vous montre **où** ils sont.
+- **Mise en page** : A4, titres, listes, tableaux, citations, blocs de code,
+  images PNG et JPEG. Une image qui ne peut pas être incorporée **n'arrête
+  jamais** la conversion : une ligne visible dit laquelle et pourquoi.
 
 ---
 

@@ -27,6 +27,17 @@
  *  `pilot-assistant-schedule.ts`). */
 export const SCHEDULE_SENTINEL = "PILOT_ASSISTANT_SCHEDULE::";
 
+/** Sentinelle de l'export PDF sans impression (outil `export_markdown_pdf`,
+ *  extension `pilot-pdf.ts`). Famille PROPRE (pas `PILOT_ASSISTANT_`) : l'outil
+ *  est disponible dans TOUTES les sessions d'agent, pas seulement celle de
+ *  l'assistant. */
+export const PDF_EXPORT_SENTINEL = "PILOT_PDF_EXPORT::";
+
+/** Phrase lisible de l'export PDF (aucune fenêtre d'impression : c'est le
+ *  moteur embarqué qui écrit le fichier). */
+export const PDF_EXPORT_SENTENCE =
+  "Je vais convertir le document en PDF et l'enregistrer sur cet ordinateur, sans fenêtre d'impression. Je continue ?";
+
 /** Préfixe des sentinelles de l'assistant (famille `PILOT_ASSISTANT_*`). */
 export const ASSISTANT_SENTINEL_PREFIX = "PILOT_ASSISTANT_";
 
@@ -106,7 +117,9 @@ export function scheduleRequestFrom(title) {
  * l'utilisateur : il n'y a donc aucune question à lui poser, et le message
  * d'attente ne doit pas prétendre le contraire. Aujourd'hui : la famille
  * planification (`input` portant `PILOT_ASSISTANT_SCHEDULE::`), exécutée par
- * `runSuperAgentScheduleOp` dans la conversation de l'assistant.
+ * `runSuperAgentScheduleOp` dans la conversation de l'assistant, et la famille
+ * export PDF (`input` portant `PILOT_PDF_EXPORT::`), exécutée par
+ * `runPdfExportRequest` (même point unique pour la fenêtre et le relais).
  * @param {{method?:string, title?:string}} payload
  * @returns {boolean}
  */
@@ -114,7 +127,10 @@ export function isSelfAnsweredMachineRequest(payload) {
   const p = payload || {};
   if (p.method !== "input") return false;
   const title = typeof p.title === "string" ? p.title : "";
-  return title.startsWith(SCHEDULE_SENTINEL);
+  // Planification ET export PDF : le relais EXÉCUTE la demande (le résultat
+  // part vers la session de l'agent), il n'y a donc rien à demander à
+  // l'utilisateur.
+  return title.startsWith(SCHEDULE_SENTINEL) || title.startsWith(PDF_EXPORT_SENTINEL);
 }
 
 /**
@@ -166,6 +182,9 @@ export function sentinelSentenceFor(text) {
       req = null;
     }
     return scheduleSentence(req && typeof req === "object" ? req : null);
+  }
+  if (found.name === PDF_EXPORT_SENTINEL) {
+    return PDF_EXPORT_SENTENCE;
   }
   // Sentinelles de PRÉSENTATION : elles portent elles-mêmes le texte de la
   // question. Si le JSON est exploitable, on garde la question de l'auteur.

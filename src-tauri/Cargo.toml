@@ -21,6 +21,11 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pulldown-cmark = "0.12"
+# Conversion Markdown → PDF SANS fenêtre d'impression (`pdf_export.rs`) : sert à
+# décompresser les images PNG pour les incorporer au PDF, et à les recompresser
+# en zlib. Dépendance DÉJÀ présente dans `Cargo.lock` (transitive) — aucun
+# téléchargement nouveau n'est déclenché par cette ligne.
+flate2 = "1"
 open = "5"
 portable-pty = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
