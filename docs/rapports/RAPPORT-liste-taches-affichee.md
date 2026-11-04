@@ -173,3 +173,44 @@ français réels contre liste anglaise).
 | `npx vitest run` (front) | **5560 tests passés, 0 échec** |
 | `cargo test --manifest-path src-tauri/Cargo.toml --lib` | **901 passés, 3 ignorés, 0 échec** |
 | `node ./node_modules/vite/bin/vite.js build` | build OK |
+
+## 7. Re-vérification (2026-11-04)
+
+Le lien entre l'affichage et le suivi est relu sur le code réellement présent,
+puis éprouvé par MUTATION (le verrou doit tomber) ; rien n'a été modifié dans le
+code, la correction est en place telle que décrite ci-dessus.
+
+**Les quatre branchements existent, un seul point chacun :**
+
+| Point | Emplacement |
+|---|---|
+| composition du volet | `super-agent.js` — `renderMissionsPanelHtml(missions) + renderSuperTrackedTasksHtml()` (missions PUIS suivi, un seul `innerHTML`) |
+| relecture de la base | `super-agent.js` — `refreshSuperTrackedTasks` → `loadTrackedTasks` (mémoire 5 s, une requête en vol) |
+| signal unique | `super-agent.js` (abonnement `onTrackedTasksChanged`, fin de tour `agent_end`) + `super-agent-kanban-view.js` (chaque écriture → `notifyTrackedTasksChanged`) |
+| règle « ouverte ou close » | `taches-suivies-ecran.js` (`isOpenTaskStatus`) et `dashboard.rs` (`is_open_task_status` → `classify_task_status`) |
+
+**Mutation mesurée** — retirer le groupe « Suivi » de la composition du volet
+(`renderMissionsPanelHtml(missions) + renderSuperTrackedTasksHtml();` →
+`renderMissionsPanelHtml(missions);`) fait ÉCHOUER le verrou :
+
+```
+AssertionError: expected '// super-agent.js — Assistant de suiv…'
+  to contain 'renderMissionsPanelHtml(missions) + r…'
+  at src/js/taches-suivies-affichees.test.js:250:17
+FAIL (1) — PASS (18)
+```
+
+Le fichier a été restauré aussitôt (`git diff --stat` vide) : l'écran ne peut
+donc pas cesser de refléter le suivi sans que la suite le dise.
+
+**Chiffres réels du jour :**
+
+| Suite | Résultat |
+|---|---|
+| `npx vitest run` (front, complet) | **5594 passés, 0 échec** |
+| `npx vitest run src/js/taches-suivies-affichees.test.js` | **19 passés, 0 échec** |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | **902 passés, 3 ignorés, 0 échec** |
+
+Les deux verrous du symptôme 4 (file conservée à l'arrêt ciblé, demande perdue
+journalisée et annoncée à l'arrêt global) sont présents et verts :
+`src/js/file-attente-arret-conserve.test.js`, `src/js/regle-4-file-jamais-perdue.test.js`.
