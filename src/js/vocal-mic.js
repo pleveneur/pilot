@@ -112,6 +112,92 @@ export function micFailureMessage(nom) {
   }
 }
 
+// ── LA CAPTURE SE ROUVRE SEULE (correctif « le micro s'arrete en pleine
+// conversation », docs/rapports/RAPPORT-micro-arret-mode-vocal.md) ────────────
+// Le micro de cet ecran etait ouvert UNE fois, par l'appelant. Une perte
+// SPONTANEE du peripherique (piste `ended` : casque debranche, peripherique
+// change dans Windows, autre application qui prend le micro, session audio
+// interrompue — ou analyseur devenu muet) fermait donc la capture POUR DE BON :
+// rien ne la rouvrait, et la seule voie de demande de l'ecran se refusait
+// elle-meme (`vocalMicDemande`), donc seul le bouton « Autoriser le micro »
+// ramenait le son. La dictee locale, qui consomme le ROBINET de cette capture,
+// tombait avec elle, et son erreur bloquait en plus tout rearment.
+//
+// Regle tenue ici, et nulle part ailleurs : tant que l'ECRAN tient le micro
+// (`setKeepOpen(true)`, pose a l'entree du mode, retire a la sortie), une perte
+// PASSAGERE se reessaie toute seule, avec un delai qui s'allonge jusqu'a un
+// plafond. Une cause DEFINITIVE ne se reessaie JAMAIS (refus de l'utilisateur :
+// redemander une permission en boucle serait pire que la panne ; aucun
+// peripherique branche ; API absente) : celles-la restent dites a l'ecran et
+// rendues au geste « Autoriser le micro ». Aucun seuil audio n'est touche.
+
+/** Premier delai avant de reessayer d'ouvrir la capture (ms). */
+export const MIC_REOPEN_BASE_MS = 400;
+
+/** Plafond du delai entre deux tentatives de reouverture (ms). */
+export const MIC_REOPEN_MAX_MS = 5000;
+
+/**
+ * Cette cause de panne peut-elle se RESORBER toute seule ? PURE.
+ *
+ * `true` = passagere (micro occupe par une autre application, peripherique
+ * debranche puis rebranche, piste terminee par le systeme, analyseur muet) :
+ * l'ecran tient le micro, on reessaie. `false` = definitive : redemander serait
+ * inutile (refus explicite, aucun peripherique, API absente) ou malhonnete
+ * (une demande de permission en boucle).
+ * @param {string} nom nom d'erreur du navigateur (`err.name`) ou cause connue
+ * @returns {boolean}
+ */
+export function micFailureIsRecoverable(nom) {
+  switch (String(nom || "")) {
+    case "NotAllowedError":
+    case "SecurityError":
+    case "PermissionDeniedError":
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+    case "OverconstrainedError":
+      return false;
+    case "":
+      return false;
+    default:
+      // Cause inconnue : elle est traitee comme passagere — mieux vaut reessayer
+      // que laisser le proprietaire sans oreille — et le message de l'ecran, lui,
+      // ne change pas.
+      return true;
+  }
+}
+
+/**
+ * Delai avant la tentative de reouverture numero `essai` (0 = la premiere).
+ * PURE : 400, 800, 1600, 3200, puis 5000 ms a chaque fois (plafond).
+ * Le plafond existe pour qu'un peripherique durablement occupe ne produise pas
+ * une tentative toutes les 400 ms pendant une conversation entiere.
+ * @param {number} essai
+ * @returns {number} millisecondes, toujours entre BASE et MAX
+ */
+export function micReopenDelay(essai) {
+  const n = Number.isFinite(essai) ? Math.max(0, Math.floor(Number(essai))) : 0;
+  const delai = MIC_REOPEN_BASE_MS * Math.pow(2, Math.min(n, 4));
+  return Math.min(MIC_REOPEN_MAX_MS, Math.max(MIC_REOPEN_BASE_MS, delai));
+}
+
+/**
+ * FAUT-IL rouvrir la capture ? PURE — l'unique regle de la reprise.
+ * @param {{gardeOuvert?: boolean, ferme?: boolean, actif?: boolean, cause?: string}} [faits]
+ * @returns {boolean}
+ */
+export function shouldReopenVocalMic(faits = {}) {
+  const f = faits || {};
+  // 1. L'ecran a quitte le mode : la fermeture est DECIDEE, on n'y touche pas.
+  if (f.ferme === true) return false;
+  // 2. Personne ne tient ce micro : aucune reprise ne part toute seule.
+  if (f.gardeOuvert !== true) return false;
+  // 3. Il capte deja : rien a rouvrir.
+  if (f.actif === true) return false;
+  // 4. La cause decide : passagere -> on reessaie ; definitive -> non.
+  return micFailureIsRecoverable(f.cause);
+}
+
 /**
  * Lissage du niveau : MONTEE rapide, DESCENTE lente. C'est ce qui evite le
  * sautillement d'un trait colle a chaque mesure, sans retarder la reaction de
@@ -547,6 +633,9 @@ export function rmsOf(echantillons) {
  *   requestAnimationFrame?: (cb: Function) => number,
  *   cancelAnimationFrame?: (id: number) => void,
  *   now?: () => number,
+ *   setTimeout?: (cb: Function, ms: number) => any,
+ *   clearTimeout?: (id: any) => void,
+ *   keepOpen?: boolean,
  * }} [options]
  */
 // ── L'OREILLE LOCALE (étape 2) : LE ROBINET D'ÉCOUTE ────────────────────────
@@ -620,6 +709,27 @@ export function createVocalMic(options = {}) {
   // `setSoundStarted`) : la fenetre de mesure a alors ete ouverte sur le son.
   let sonCommence = false;
   let dernierTemps = 0;
+  // ── LA CAPTURE SE ROUVRE SEULE (voir `shouldReopenVocalMic`) ──
+  // `gardeOuvert` = l'ECRAN tient ce micro (pose par `setKeepOpen`) ;
+  // `reouverture` = l'unique minuterie de reprise en attente ;
+  // `essaisReouverture` = rang de la prochaine tentative (pour le delai) ;
+  // `demandeEnCours` = une seule ouverture a la fois (jamais deux captures).
+  let gardeOuvert = options.keepOpen === true;
+  let reouverture = null;
+  let essaisReouverture = 0;
+  let demandeEnCours = null;
+  const minuteur =
+    typeof options.setTimeout === "function"
+      ? options.setTimeout
+      : typeof setTimeout === "function"
+        ? setTimeout
+        : null;
+  const annuleMinuteur =
+    typeof options.clearTimeout === "function"
+      ? options.clearTimeout
+      : typeof clearTimeout === "function"
+        ? clearTimeout
+        : null;
 
   function arreterBoucle() {
     if (boucle && typeof caf === "function") {
@@ -630,6 +740,55 @@ export function createVocalMic(options = {}) {
       }
     }
     boucle = 0;
+  }
+
+  /** Annule la reprise en attente : une seule minuterie, jamais orpheline. */
+  function annulerReouverture() {
+    if (reouverture == null) return;
+    const id = reouverture;
+    reouverture = null;
+    if (typeof annuleMinuteur === "function") {
+      try {
+        annuleMinuteur(id);
+      } catch (_) {
+        /* une minuterie deja passee n'a rien a annuler */
+      }
+    }
+  }
+
+  /**
+   * Une panne de CAPTURE : elle est DITE a l'ecran, le peripherique est rendu,
+   * et — si l'ecran tient encore ce micro et que la cause est passagere — la
+   * capture se rouvrira TOUTE SEULE. Aucune decision n'est prise ici : elle est
+   * pure (`shouldReopenVocalMic`) et testee separement.
+   * @param {string} cause nom d'erreur / cause (voir `micFailureMessage`)
+   * @param {{reouvrable?: boolean}} [reglages] `reouvrable: false` pour une
+   *   panne LOCALE que reessayer ne peut pas resoudre (pas de contexte audio)
+   */
+  function panneCapture(cause, reglages = {}) {
+    liberer();
+    surPanne(micFailureMessage(cause));
+    if (reglages && reglages.reouvrable === false) return;
+    planifierReouverture(cause);
+  }
+
+  /**
+   * Programme UNE tentative de reouverture, si la regle pure l'autorise.
+   * Le fait qu'une tentative soit deja en attente suffit a ne pas en poser une
+   * seconde : jamais deux demandes en vol, jamais deux minuteries.
+   */
+  function planifierReouverture(cause) {
+    if (reouverture != null) return;
+    if (typeof minuteur !== "function") return;
+    if (!shouldReopenVocalMic({ gardeOuvert, ferme, actif, cause })) return;
+    const delai = micReopenDelay(essaisReouverture);
+    essaisReouverture += 1;
+    reouverture = minuteur(() => {
+      reouverture = null;
+      // L'etat a pu changer pendant l'attente : la decision est REEVALUEE.
+      if (!shouldReopenVocalMic({ gardeOuvert, ferme, actif, cause })) return;
+      void demander();
+    }, delai);
   }
 
   /**
@@ -691,9 +850,9 @@ export function createVocalMic(options = {}) {
     try {
       analyseur.getFloatTimeDomainData(tampon);
     } catch (_) {
-      // Analyseur devenu muet (peripherique retire) : on s'arrete proprement.
-      liberer();
-      surPanne(micFailureMessage("TrackStartError"));
+      // Analyseur devenu muet (peripherique retire) : on s'arrete proprement, et
+      // la capture se rouvrira seule si l'ecran la tient encore.
+      panneCapture("TrackStartError");
       return;
     }
     niveau = smoothLevel(niveau, rmsOf(tampon));
@@ -832,16 +991,31 @@ export function createVocalMic(options = {}) {
   }
 
   /**
-   * Demande le micro. L'APPELANT decide QUAND (entree du mode, ou geste de
-   * reprise) : ce module ne connait ni le mode ni les gestes. Resout `true` si
-   * le micro capte, `false` sinon — ne rejette jamais.
+   * Demande le micro. L'APPELANT decide QUAND (entree du mode, geste de reprise,
+   * ou la reprise AUTOMATIQUE de ce module quand l'ecran tient la capture).
+   * Resout `true` si le micro capte, `false` sinon — ne rejette jamais, et ne
+   * lance JAMAIS deux captures en parallele (une demande en vol est rendue telle
+   * quelle : une reprise ne peut pas doubler un geste de l'utilisateur).
    * @returns {Promise<boolean>}
    */
   async function demander() {
+    if (demandeEnCours) return demandeEnCours;
+    const p = demanderLaCapture();
+    demandeEnCours = p;
+    try {
+      return await p;
+    } finally {
+      if (demandeEnCours === p) demandeEnCours = null;
+    }
+  }
+
+  /** L'ouverture elle-meme : une seule capture, tous les cas de panne dits. */
+  async function demanderLaCapture() {
     if (ferme) return false;
     if (actif) return true;
     const md = nav && nav.mediaDevices;
     if (!md || typeof md.getUserMedia !== "function") {
+      // Aucune API micro : rien ne se rouvrira tout seul (cause definitive).
       surPanne(micFailureMessage("NotFoundError"));
       return false;
     }
@@ -870,7 +1044,15 @@ export function createVocalMic(options = {}) {
     if (!brut) {
       // Le mode a pu etre quitte pendant la demande : l'echec ne concerne plus
       // aucun ecran, il n'est donc pas signale.
-      if (!ferme) surPanne(micFailureMessage(echec && echec.name ? echec.name : ""));
+      if (!ferme) {
+        const cause = echec && echec.name ? echec.name : "";
+        surPanne(micFailureMessage(cause));
+        // Micro occupe par une autre application, peripherique qui revient : la
+        // reprise a lieu toute seule tant que l'ecran tient le micro (une cause
+        // definitive, elle, ne se reessaie jamais : voir
+        // `micFailureIsRecoverable`).
+        planifierReouverture(cause);
+      }
       return false;
     }
     // PREUVE de l'annulation d'echo, lue sur la piste REELLEMENT obtenue : c'est
@@ -888,8 +1070,9 @@ export function createVocalMic(options = {}) {
     }
     flux = brut;
     if (!brancher()) {
-      liberer();
-      surPanne(micFailureMessage("TrackStartError"));
+      // Panne LOCALE (pas de contexte audio / d'analyseur) : la reessayer ne la
+      // resoudrait pas — elle est dite, et rendue au geste « Autoriser le micro ».
+      panneCapture("TrackStartError", { reouvrable: false });
       return false;
     }
     // Une panne du peripherique en cours d'ecoute (debranche, pris par une autre
@@ -905,8 +1088,11 @@ export function createVocalMic(options = {}) {
         if (typeof piste.addEventListener === "function") {
           piste.addEventListener("ended", () => {
             if (!actif) return; // arret DECIDE par nous (sortie du mode)
-            liberer();
-            surPanne(micFailureMessage("TrackStartError"));
+            // Piste terminee par le SYSTEME (materiel debranche, peripherique
+            // change dans Windows, autre application qui prend le micro, session
+            // audio interrompue) : la capture se rouvre SEULE si l'ecran tient
+            // encore ce micro. C'est le cas d'usage du correctif.
+            panneCapture("TrackStartError");
           });
         }
       } catch (_) {
@@ -915,6 +1101,11 @@ export function createVocalMic(options = {}) {
     }
     actif = true;
     niveau = 0;
+    // La capture est ouverte : plus rien a reprogrammer, et le prochain delai de
+    // reprise repart de la valeur la plus courte (une nouvelle perte est un
+    // nouvel episode, pas la suite du precedent).
+    annulerReouverture();
+    essaisReouverture = 0;
     surEcoute(true);
     // Premiere mesure a l'image SUIVANTE (jamais dans l'appel) : la demande se
     // termine proprement, et l'arret peut annuler la boucle sans image en vol.
@@ -926,10 +1117,28 @@ export function createVocalMic(options = {}) {
     return true;
   }
 
-  /** Quitte l'ecran : le micro est coupe pour de bon (aucun flux residuel). */
+  /**
+   * Quitte l'ecran : le micro est coupe pour de bon (aucun flux residuel), et
+   * AUCUNE reprise ne le rouvrira — c'est la decision de l'utilisateur, aucune
+   * minuterie ne la defait.
+   */
   function fermer() {
     ferme = true;
+    gardeOuvert = false;
+    annulerReouverture();
     liberer();
+  }
+
+  /**
+   * L'ECRAN TIENT-IL CE MICRO ? (correctif « le micro s'arrete en pleine
+   * conversation »). `true` a l'entree du mode, `false` a la sortie : c'est la
+   * seule chose qui autorise une reprise automatique — et elle ne remplace
+   * jamais la decision de l'appelant.
+   * @param {boolean} actif
+   */
+  function setKeepOpen(actif) {
+    gardeOuvert = actif === true;
+    if (!gardeOuvert) annulerReouverture();
   }
 
   /**
@@ -1083,6 +1292,7 @@ export function createVocalMic(options = {}) {
   return {
     demander,
     fermer,
+    setKeepOpen,
     setAudioTap,
     setSpeaking,
     setSoundStarted,

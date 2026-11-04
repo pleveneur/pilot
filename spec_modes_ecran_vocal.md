@@ -1562,6 +1562,17 @@ même moment — c'est la distinction qui manquait :
   (écrire, envoyer, écouter). Les messages sont : « Le micro est fermé. » ·
   « Aucun micro n'est branché. » · « Le micro est occupé par une autre
   application. » · « Le micro n'a pas répondu. »
+- **Une panne PASSAGÈRE se répare toute seule (correctif du 2026-11-15) :** tant
+  que vous êtes dans le mode, le micro de mesure **se rouvre seul** quand le
+  système le lui retire (casque débranché, micro changé dans Windows, autre
+  application qui prend le micro). Le délai s'allonge (400 ms, puis jusqu'à
+  **5 s au plus**) et le message disparaît **dès que la capture est revenue** :
+  plus besoin de cliquer. Une cause **définitive** (refus, aucun micro branché)
+  n'est **jamais** redemandée — elle reste dite, et le bouton reste le geste.
+  Une **sortie du mode** n'est jamais défaite : aucune minuterie ne rallume un
+  micro après la sortie. Détail et preuve :
+  `docs/rapports/RAPPORT-micro-arret-mode-vocal.md`, verrou
+  `src/js/micro-reste-ouvert-mode-vocal.test.js`.
 - **Le niveau affiché** est le volume mesuré, **lissé** (montée rapide, retombée
   lente) et projeté sur le rayon du halo intérieur (0 au silence, 82 px au fort).
   Le halo ne saute donc pas d'une image à l'autre. **Le même niveau décide de

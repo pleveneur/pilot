@@ -563,7 +563,13 @@ En mode **Vocal** :
 - **Si vous refusez**, si aucun micro n'est branché, s'il est occupé ou s'il
   tombe en panne : l'écran le **dit en une phrase** et propose **« Autoriser le
   micro »**. Le mode reste **entièrement utilisable** (écrire, envoyer, écouter)
-  — rien n'est bloqué, et Pilot ne redemande pas tout seul.
+  — rien n'est bloqué, et Pilot ne redemande pas un refus tout seul.
+- **Un micro qui lâche en cours de conversation se rétablit tout seul** : si le
+  système retire le micro (casque débranché, micro changé dans Windows, autre
+  application qui le prend), Pilot le **rouvre de lui-même** en restant dans
+  l'écran — le message disparaît dès que le micro revient, sans que vous ayez à
+  cliquer. Un refus ou un micro absent, eux, ne sont jamais redemandés : c'est
+  le bouton **« Autoriser le micro »** qui les relance.
 - **Sur un projet marqué sensible** (🔒), la dictée reste **bloquée** : l'écran
   attend de savoir si le projet est marqué avant d'ouvrir la dictée, et il
   repose la question à chaque changement de projet. La transcription (qui passe

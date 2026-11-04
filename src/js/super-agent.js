@@ -6040,6 +6040,13 @@ let vocalMotsDeReveil = [];
       // Micro ferme : il ne capte plus rien, la detection repart du silence.
       vocalMicCapte = false;
       vocalClearLevel();
+    } else if (vocalMicFerme) {
+      // LA CAPTURE EST REVENUE (correctif « le micro s'arrete en pleine
+      // conversation ») : la phrase qui disait « le micro est ferme » n'est plus
+      // vraie, elle est donc retiree — c'est la seule chose ecrite ici. Une
+      // ERREUR DE DICTEE, elle, reste affichee : c'est un autre fait, avec son
+      // propre bouton, et la ligne d'etat doit continuer de le dire.
+      vocalMicFerme = vocalDictationErreur;
     }
     if (etait !== vocalMicListening) applyVocalState();
   }
@@ -6961,6 +6968,14 @@ let vocalMotsDeReveil = [];
     const texte = String(message || "");
     if (!texte) return;
     if (vocalOverlay) {
+      // UNE PANNE DE DICTEE DONT LA CAUSE EST LA CAPTURE FERMEE ne prend pas la
+      // ligne pour de bon (correctif « le micro s'arrete en pleine
+      // conversation ») : la phrase du micro est deja affichee, et la garde
+      // `mesure-fermee` bloque deja tout rearment. La memoriser comme erreur
+      // bloquerait la dictee (regle 6 de `vocal-conversation.js`) MEME APRES le
+      // retour du micro — c'est exactement « il faut rouvrir a la main ». Le
+      // message reste donc a l'ecran le temps de la panne, et rien de plus.
+      if (vocalMicListening !== true && vocalMicFerme) return;
       vocalDictationErreur = String(ecranMessage || "") || texte;
       vocalMicFerme = vocalDictationErreur;
       applyVocalState();
@@ -7296,6 +7311,11 @@ let vocalMotsDeReveil = [];
       // LOT 4a : voix detectee par-dessus la lecture -> Pilot se tait.
       onSpeechStart: vocalBargeIn,
     });
+    // L'ECRAN TIENT CE MICRO : tant que c'est vrai, une perte PASSAGERE de la
+    // capture (casque debranche, peripherique change, application qui prend le
+    // micro) se reessaie toute seule, dans le module micro. Pose ici et retire
+    // a la sortie (`exitVocal`), jamais ailleurs.
+    vocalMic.setKeepOpen(true);
     // OREILLE LOCALE (étape 2) : le service de voix a pu être lancé ou fermé
     // depuis le montage de l'onglet — on le redemande à l'ENTRÉE du mode, pour
     // que la ligne d'état dise la vérité de cet instant et que la dictée prenne
@@ -7491,6 +7511,11 @@ let vocalMotsDeReveil = [];
       // contexte audio ferme, boucle de mesure annulee. Pas seulement « ignore » :
       // aucun peripherique ne reste ouvert derriere l'ecran.
       if (vocalMic) {
+        // L'ECRAN NE TIENT PLUS CE MICRO (les deux intentions sont ecrites
+        // ensemble) : `setKeepOpen(false)` interdit toute reprise automatique,
+        // `fermer()` ARRETE la capture. Aucune minuterie ne rouvrira un micro
+        // apres la sortie du mode.
+        vocalMic.setKeepOpen(false);
         vocalMic.fermer();
         vocalMic = null;
       }
