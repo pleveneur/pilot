@@ -17,6 +17,7 @@ import { refreshIcons, setIcon } from "./icons.js";
 import {
   CONVERSATION_SCROLL_BOTTOM_THRESHOLD,
   conversationAtBottom,
+  conversationScrollReplayTarget,
   conversationScrollSnapshot,
   conversationScrollTarget,
 } from "./conversation-scroll.js";
@@ -998,7 +999,44 @@ function restoreSuperScroll(messagesEl) {
   if (cible === null) return null;
   messagesEl.scrollTop = cible;
   superAtBottom = memo.atBottom;
+  // La mise en page de « Détaillé » n'est pas toujours DÉFINITIVE à cet instant
+  // (voir `replaySuperScrollAfterLayout`) : la même décision est vérifiée une
+  // fois, avant la première peinture, sur la géométrie réelle.
+  replaySuperScrollAfterLayout(messagesEl, memo, cible);
   return cible;
+}
+
+/** LE SECOND TEMPS DE LA RESTITUTION — vérification sur la mise en page RÉELLE.
+ *
+ *  Défaut rapporté une seconde fois : « la conversation repart tout en haut ».
+ *  `restoreSuperScroll` lit `clientHeight` / `scrollHeight` à l'instant de la
+ *  sortie du plein écran, pendant que « Détaillé » se remet en place (barre de
+ *  saisie, rangée des questions et nœuds du chat réinsérés dans le même tour).
+ *  Cette géométrie peut être TRANSITOIRE : si le contenu est alors mesuré comme
+ *  non débordant, la décision rend 0 et la conversation est écrite tout en
+ *  haut, sans que rien ne la corrige ensuite.
+ *
+ *  Le signal utilisé est le RENDU (`requestAnimationFrame`, exécuté juste AVANT
+ *  la peinture) — pas une temporisation arbitraire, et pas un second avis : le
+ *  module pur rejoue la MÊME décision (`conversationScrollReplayTarget`). La
+ *  correction est donc invisible (jamais peinte), ne s'écrit que si la position
+ *  est réellement fausse, et ne ramène jamais quelqu'un qui a repris la main.
+ *  Un seul tour de rendu, aucune boucle, aucun défilement animé. */
+function replaySuperScrollAfterLayout(messagesEl, memo, applique) {
+  if (!messagesEl || !memo) return;
+  if (typeof requestAnimationFrame !== "function") return; // sans rendu, la 1re écriture suffit
+  requestAnimationFrame(() => {
+    if (!messagesEl.isConnected) return; // onglet démonté : rien à repointer
+    const cible = conversationScrollReplayTarget(
+      memo,
+      applique,
+      messagesEl.scrollTop,
+      messagesEl.clientHeight,
+      messagesEl.scrollHeight,
+    );
+    if (cible === null) return;
+    messagesEl.scrollTop = cible;
+  });
 }
 
 /** État global de l'assistant (nom, clients, prompt, options) — cache sync. */

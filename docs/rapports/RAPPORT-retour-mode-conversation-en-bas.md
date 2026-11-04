@@ -1,132 +1,180 @@
 # Rapport — la conversation retrouve sa place au retour d'un plein écran
 
-**Date** : 2026-11-16
+**Date** : 2026-11-16 (premier correctif) · **2026-11-17** (deuxième correctif)
 **Symptôme rapporté par le propriétaire** : en passant du mode **Vocal** au mode
-**Détaillé** (ou à « Assistant seul »), la conversation se réaffichait **tout en
-haut** de la liste ; il fallait faire défiler jusqu'en bas pour retrouver où il
-en était.
+**Détaillé**, la conversation se réaffichait **tout en haut** de la liste ; il
+fallait faire défiler jusqu'en bas pour retrouver les derniers échanges.
+**Signalé une seconde fois après le premier correctif** — d'où ce rapport en deux
+temps, qui dit aussi pourquoi le premier ne tenait pas dans l'application réelle.
 
 ---
 
-## 1. La cause réelle (lue dans le code, pas devinée)
+## 1. Première cause (lue dans le code, pas devinée)
 
 Le plein écran **ne déplace pas** la conversation : `enterVocal()` / `exitVocal()`
 ne touchent jamais au nœud `messagesEl`. En mode Vocal, `.agent-chat-messages`
 est simplement rendu **invisible** (`visibility: hidden`, `src/css/style.css`),
-ce qui **préserve ses mesures** — c'était même écrit noir sur blanc dans la
-feuille de style (« aucun saut de l'historique à la sortie »).
+ce qui **préserve ses mesures**.
 
-Le défaut vient d'ailleurs, et de deux faits qui se combinent :
+Le défaut venait d'ailleurs, de deux faits qui se combinent :
 
 1. **Le bouton des modes est un cycle** : Détaillé → Assistant seul → Vocal →
-   Détaillé. Pour atteindre le mode Vocal, on **traverse** donc « Assistant
-   seul », dont la sortie exécute `exitImmersive()`.
+   Détaillé. Pour atteindre le mode Vocal, on **traverse** « Assistant seul »,
+   dont la sortie exécute `exitImmersive()`.
 2. **`exitImmersive()` déplace `messagesEl`** (`wrapper.insertBefore(messagesEl,
    toolbar)`). Or **déplacer un nœud défilable dans le DOM remet son `scrollTop`
    à 0** : la position de lecture est perdue à cet instant précis, pendant que
-   l'écran Vocal est encore affiché (elle est donc invisible pour l'utilisateur).
-   À la sortie du mode Vocal, `exitVocal()` ne restituait rien : la conversation
-   réapparaissait avec `scrollTop = 0`, c'est-à-dire **tout en haut**.
+   l'écran Vocal est encore affiché. À la sortie du mode Vocal, `exitVocal()` ne
+   restituait rien : la conversation réapparaissait avec `scrollTop = 0`, c'est-à-dire
+   **tout en haut**.
 
 L'entrée en « Assistant seul » était déjà corrigée à la main (issue #82 : on
-force le bas à l'entrée), mais **aucune sortie** ne restituait quoi que ce soit —
-et le mode Vocal, lui, n'avait aucune restitution du tout.
+force le bas à l'entrée), mais **aucune sortie** ne restituait quoi que ce soit.
 
-## 2. Le correctif, et pourquoi il est à cet endroit
-
-La décision de mode et la restitution des nœuds existaient déjà : **aucun second
-mécanisme de mode n'a été créé**. Le correctif s'ajoute exactement là où la
-position se perd, et une seule fois :
+## 2. Premier correctif (toujours en place, il reste nécessaire)
 
 | Endroit | Ce qui est fait |
 |---|---|
-| `exitImmersive()` | **photographie** de la position AVANT les déplacements de nœuds, **restitution** en dernière écriture (après le retrait de l'overlay) |
-| `exitVocal()` | même chose, en dernière écriture (après le retrait du calque et la classe de mode) |
+| `exitImmersive()` | **photographie** de la position AVANT les déplacements de nœuds, **restitution** en dernière instruction (après le retrait de l'overlay) |
+| `exitVocal()` | même chose, en dernière instruction (après le retrait du calque et de la classe de mode) |
 
-Deux fonctions seulement dans `super-agent.js` :
-
-- `memoizeSuperScroll(messagesEl)` — prend la photographie **avant** que
+- `memoizeSuperScroll(messagesEl)` — la photographie, prise **avant** que
   l'information n'existe plus (après le déplacement, `scrollTop` vaut 0) ;
-- `restoreSuperScroll(messagesEl)` — rend la position **une seule fois** (la
-  photographie est consommée, aucune restauration tardive), et **ré-arme le
-  suivi automatique du bas** (`superAtBottom`) avec la valeur réelle : si
-  l'utilisateur était en bas, les messages suivants continuent de le suivre ;
-  s'il relisait un passage, rien ne le pousse.
+- `restoreSuperScroll(messagesEl)` — la position rendue **une seule fois** (la
+  photographie est consommée), et le suivi automatique du bas (`superAtBottom`)
+  **ré-armé** avec la valeur réelle.
 
-**La décision elle-même est pure et vit dans un module dédié** :
-`src/js/conversation-scroll.js` (aucun DOM, aucun import, aucun minuteur,
-aucun stockage). C'est le seul endroit où l'on décide *quelle* position rendre.
-
-## 3. Les deux règles de l'utilisateur (décisions pures)
+La décision (« quelle position rendre ») est **pure** et vit dans
+`src/js/conversation-scroll.js` (aucun DOM, aucun import, aucun minuteur, aucun
+stockage).
 
 | Situation | Décision | Effet |
 |---|---|---|
-| il était **en bas** (dans le seuil de 60 px) | on rend **le bas réel du contenu d'aujourd'hui** | il retrouve le fil, **même** si des messages sont arrivés pendant le plein écran |
+| il était **en bas** (seuil de 60 px) | on rend **le bas réel du contenu d'aujourd'hui** | il retrouve le fil, **même** si des messages sont arrivés pendant le plein écran |
 | il avait **remonté** pour relire | on rend **sa position exacte**, bornée à ce qui est encore atteignable | ni saut en haut, ni saut en bas arbitraire |
 | aucune photographie | `null` | on ne touche à rien : aucun saut inventé |
 
-`CONVERSATION_SCROLL_BOTTOM_THRESHOLD` (60 px) est désormais la **seule** valeur
-du seuil : `SUPER_SCROLL_BOTTOM_THRESHOLD` (super-agent.js) la lit, et
-`shouldScrollSuperToBottom` délègue à `conversationAtBottom` du module pur. La
-règle historique (« ne pas forcer le bas si l'utilisateur a remonté », issue #60)
-est **inchangée**, à l'identique — ses tests passent sans modification.
+`CONVERSATION_SCROLL_BOTTOM_THRESHOLD` (60 px) est la **seule** valeur du seuil :
+`SUPER_SCROLL_BOTTOM_THRESHOLD` la lit, et `shouldScrollSuperToBottom` délègue à
+`conversationAtBottom`. La règle de l'issue #60 (« ne pas forcer le bas si
+l'utilisateur a remonté ») est **inchangée**.
 
-Aucun défilement animé (`scrollTo`, `behavior: smooth`), aucun minuteur, aucun
-`requestAnimationFrame` : la position est **posée** en une écriture, avant la
-peinture — donc sans clignotement ni saut visible.
+---
 
-## 4. Ce qui n'a pas changé
+## 3. Deuxième cause — la mise en page n'est pas finie à l'instant de l'écriture
 
-- L'apparence, la disposition, la barre de saisie, les boutons, les trois sorties
-  du mode Vocal (§8), l'état nu (§4ter), le bas qui s'efface (§4bis) : **rien**.
-- L'entrée en « Assistant seul » continue de forcer le bas (issue #82) : c'était
-  une décision explicite, elle est conservée.
-- Aucun réglage, aucune clé de stockage, aucun nouveau bouton.
-- Le défilement en mode Vocal pendant qu'il est affiché (`.pilot-vocal-active {
-  overflow: hidden }`) : inchangé.
+Le premier correctif décidait la position sur `clientHeight` / `scrollHeight` lus
+**à l'instant même** de la sortie. Or cet instant **n'est pas** celui de la mise
+en page **définitive** : dans le même tour, « Détaillé » remet en place la barre
+de saisie (`wrapper.appendChild(inputBar)`), la rangée des questions
+(`wrapper.appendChild(pendingBar)`), la conversation elle-même, le logo et
+l'entrée « Travail » (sortis de l'overlay), puis retire l'overlay et la classe de
+mode.
 
-## 5. Le verrou (il échoue sans le correctif, c'est vérifié)
+**Conséquence** : si la géométrie est encore **transitoire** — typiquement le
+contenu mesuré comme **non débordant** (`scrollHeight <= clientHeight`, donc
+`conversationScrollMax()` = 0) —, la décision rend **`0`** et la conversation est
+écrite **tout en haut**. Une fois la mise en page stabilisée, **plus rien ne la
+corrige** : elle reste en haut. C'est exactement le symptôme rapporté la seconde
+fois.
 
-`src/js/conversation-scroll.test.js` — 12 tests :
+C'est un défaut de **timing**, pas de décision : la décision est juste, elle est
+calculée sur une géométrie qui ne sera pas celle qui sera peinte.
 
-1. **La décision pure** : seuil unique (60) et une seule valeur dans le dépôt ;
-   « en bas » à l'identique (dont le contenu qui ne déborde pas) ; « était en
-   bas » rend le bas **d'un contenu qui a grandi** ; « avait remonté » rend sa
-   position exacte (0 assumé) ; position devenue hors d'atteinte bornée ; aucune
-   photographie ⇒ `null` ; valeurs absentes/`NaN` sans exception.
-2. **Le branchement réel** (lecture du source de `super-agent.js`) : la
-   photographie est prise **avant** `wrapper.insertBefore(messagesEl, toolbar)`
-   dans `exitImmersive` ; la restitution est **après** `immersiveOverlay.remove()`
-   et n'est suivie d'aucun déplacement ; `exitVocal` fait la même chose, avec la
-   photographie avant la restitution des nœuds et le rendu après le retrait du
-   calque et de `VOCAL_ACTIVE_CLASS` ; le geste appelle bien le module pur (pas
-   de recalcul local), ré-arme `superAtBottom` depuis la photographie, et
-   n'introduit ni `scrollTo`, ni `smooth`, ni `setTimeout`, ni
-   `requestAnimationFrame` ; enfin, **aucun déplacement supplémentaire** de la
-   conversation n'a été ajouté (toujours exactement les trois existants :
-   montage, entrée, sortie).
+## 4. Deuxième correctif — la même décision, rejouée sur la géométrie réelle
 
-**Preuve que le verrou est réel** : avec les deux appels `restoreSuperScroll`
-neutralisés, le fichier de test **échoue sur 2 tests** (`la sortie de « Assistant
-seul » rend la position APRÈS avoir retiré l'overlay`, idem pour l'écran Vocal) ;
-avec le correctif, il passe. Les 4 tests de `super-agent-scroll.test.js`
-(issue #60, #82, suivi automatique) passent **sans aucune modification**.
+Rien n'a été dupliqué : la **même** fonction pure tranche, à un second moment.
 
-## 6. Documentation
+- **Nouvelle fonction pure** dans `src/js/conversation-scroll.js` :
+  `conversationScrollReplayTarget(snapshot, applied, currentTop, clientHeight,
+  scrollHeight)`. Trois règles, dans l'ordre :
+  1. rien à restaurer / aucune position atteignable → `null` (aucune écriture
+     inventée) ;
+  2. la position déjà écrite est **déjà** celle que la mise en page demande →
+     `null` (aucune écriture inutile, donc aucun clignotement) ;
+  3. elle est fausse **et** l'utilisateur a déplacé la conversation depuis notre
+     écriture alors qu'il ne cherchait pas le bas → `null` (sa main l'emporte).
+     S'il cherchait le bas, le bas reste sa position.
+- **Nouveau geste** dans `super-agent.js` : `replaySuperScrollAfterLayout(...)`,
+  appelé en fin de `restoreSuperScroll`, sur le **signal de rendu**
+  `requestAnimationFrame` (exécuté **juste avant la peinture** — ce n'est ni une
+  temporisation arbitraire, ni un second avis, et un signal existait : c'est
+  celui qu'utilise déjà le rendu du flux de texte, `text_delta`).
+  - **une seule** demande de rendu : aucune boucle, aucun `setTimeout`, aucun
+    `setInterval` ;
+  - **aucun défilement animé** (`scrollTo`, `behavior: smooth`) : la position est
+    posée, la correction est donc **invisible** (elle n'est jamais peinte) ;
+  - **annulée** si l'onglet a été démonté entre-temps (`isConnected`) ou si
+    l'environnement n'a pas de rendu ;
+  - `restoreSuperScroll` reste la **dernière instruction** de `exitImmersive()`
+    **et** de `exitVocal()` : les **trois** voies de sortie du mode Vocal (le
+    logo, `Échap`, la fermeture de l'onglet 🧭) passent toutes par `exitVocal()`
+    et ont donc **exactement** le même comportement.
 
-- `spec_modes_ecran_vocal.md` : nouvelle section **§8ter** (« La conversation
-  retrouve sa place au retour »), une ligne dans le tableau du §10 et le verrou
-  nommé dans la liste des tests ;
-- bloc d'aide intégrée **`<!-- HELP:vocal-colonnes-portrait -->`** : une phrase
-  ajoutée côté utilisateur (« en quittant le mode, la conversation se retrouve là
-  où vous l'aviez laissée »), puis `npm run build:handbook` ;
-- `README.md` : une puce dans « Trois modes d'écran ».
+## 5. Ce qui n'a pas changé
 
-## 7. Vérifications lancées
+- L'apparence, la disposition, le portrait, les colonnes, la barre de saisie, les
+  boutons, l'état nu, le bas qui s'efface : **rien**.
+- L'entrée en « Assistant seul » continue de forcer le bas (issue #82).
+- Aucun réglage, aucune clé de stockage, aucun nouveau bouton, aucune version
+  touchée (ni `package.json`, ni `Cargo.toml`, ni `tauri.conf.json`, ni `Cargo.lock`).
+- Le réglage des mots de réveil et la garde du nom : **non touchés**.
+- Le défilement manuel de l'utilisateur : **jamais** écrasé (règle 3 ci-dessus,
+  et le verrou le vérifie).
+
+## 6. Les verrous (ils échouent sans le correctif, c'est vérifié)
+
+| Fichier | Ce qu'il tient |
+|---|---|
+| `src/js/conversation-scroll.test.js` (12 tests, inchangé) | la décision pure et le branchement photographie/restitution des deux sorties, seuil unique, aucun déplacement ajouté |
+| `src/js/retour-mode-conversation-en-bas.test.js` (14 tests, **nouveau**) | le cas **géométrie transitoire** (la décision rend 0 → le rendu rend le bas), le contenu qui a grandi, la mise en page déjà juste (aucune réécriture), l'absence de photographie, la **relecture jamais écrasée**, le seuil unique conservé, le **branchement réel**, le **signal de rendu au lieu d'un minuteur**, l'annulation si l'onglet est démonté, et les trois voies de sortie |
+
+**Preuve que le verrou est réel** (mutation faite puis annulée) : en retirant
+l'appel `replaySuperScrollAfterLayout(messagesEl, memo, cible);` de
+`restoreSuperScroll`, le nouveau fichier **échoue** sur
+« la restitution appelle la vérification de rendu » ; avec l'appel, il passe.
+De même, neutraliser les `restoreSuperScroll` fait échouer deux tests de
+`conversation-scroll.test.js`.
+
+## 7. Éprouver à la main (le geste exact)
+
+1. `npm run tauri dev`, ouvrir l'onglet 🧭, avoir une conversation **assez longue
+   pour défiler** (au moins deux écrans).
+2. **Voie du logo** : descendre jusqu'aux derniers échanges → cliquer le logo
+   (→ « Assistant seul ») → cliquer (→ « Vocal ») → cliquer (→ « Détaillé »).
+   La conversation doit être **sur les derniers échanges**, posée sans saut et
+   sans clignotement.
+3. **Voie `Échap`** : entrer en « Vocal », appuyer sur `Échap` → même résultat.
+4. **Voie « fermer l'onglet »** : entrer en « Vocal », fermer l'onglet 🧭, le
+   rouvrir → même résultat.
+5. **Contre-épreuve — il relisait** : remonter dans la conversation, changer de
+   mode, revenir : on retrouve **le passage**, ni en haut ni en bas.
+6. **Contre-épreuve — il lit, il ne change pas de mode** : remonter, laisser
+   arriver des messages (l'agent travaille) : rien ne doit bouger (issue #60).
+7. **Contre-épreuve — le contenu grandit** : entrer en « Vocal » pendant que
+   l'assistant écrit, attendre la fin de la réponse, sortir : on arrive **sur le
+   bas**, dernière réponse comprise.
+
+## 8. Vérifications lancées (cette session)
 
 ```
-npx vitest run src/js/conversation-scroll.test.js   # 12/12
-npm test                                            # suite complète, verte
+npx vitest run src/js/retour-mode-conversation-en-bas.test.js   # 14/14
+npx vitest run src/js/conversation-scroll.test.js \
+              src/js/super-agent-scroll.test.js                 # vert
+npm test                                                        # 298 fichiers, 5531 tests, tous verts
+cargo test --manifest-path src-tauri/Cargo.toml --lib             # 900 passés, 3 ignorés
+npm run build:handbook                                          # 48 blocs, handbook régénéré
 ```
 
-Aucun numéro de version, aucun tag, aucun commit de release n'a été touché.
+## 9. Documentation mise à jour
+
+- `spec_modes_ecran_vocal.md` §8ter : nouvelle sous-section « Le deuxième temps :
+  la mise en page n'est pas toujours finie (défaut revenu) » (cause, règles,
+  garde-fous) ; ligne du module dans le tableau du §10 ; verrou nommé dans la
+  liste des tests ;
+- bloc d'aide intégrée **`<!-- HELP:modes-ecran -->`** (`help/overview.md`) : le
+  paragraphe utilisateur « Au retour à l'écran habituel, la conversation est là
+  où vous l'aviez laissée… », suivi de `npm run build:handbook` (le
+  `help/handbook.md` généré est committé avec le reste).
+
+Aucun numéro de version, aucun tag, aucune publication n'a été touché.

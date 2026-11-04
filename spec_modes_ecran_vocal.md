@@ -2314,13 +2314,44 @@ réelle : en bas, les messages suivants continuent de défiler ; en relecture, r
 ne pousse. Aucun `scrollTo`, aucun `smooth`, aucune minuterie : la position est
 **posée** avant la peinture — donc **aucun saut visible, aucun clignotement**.
 
+### Le deuxième temps : la mise en page n'est pas toujours finie (défaut revenu)
+
+**Le défaut, signalé une seconde fois** : la conversation repartait malgré tout
+tout en haut. **La cause** : la restitution lit `clientHeight` / `scrollHeight`
+**à l'instant de la sortie**, pendant que « Détaillé » se remet en place (barre de
+saisie, rangée des questions et nœuds du chat réinsérés dans le même tour). Cette
+mesure peut être **transitoire** : si le contenu est alors vu comme **non
+débordant** (`scrollHeight <= clientHeight`), la décision rend `0` et la
+conversation est écrite **tout en haut** — et rien ne la corrigeait ensuite.
+
+**La règle ajoutée** : la **même** décision est rejouée **une seule fois**, sur la
+**géométrie réelle**, au premier **signal de rendu** (`requestAnimationFrame`,
+exécuté juste avant la peinture — ce n'est **pas** une temporisation arbitraire,
+ni un second avis : c'est `conversationScrollReplayTarget`, fonction pure du même
+module). Trois garde-fous :
+
+| Cas | Ce qui est écrit |
+|---|---|
+| la position déjà écrite est **celle que la mise en page demande** | **rien** (aucune écriture inutile, donc aucun clignotement) |
+| elle est **fausse** (géométrie transitoire) et l'utilisateur cherchait le **bas** | le **bas réel** de la conversation |
+| elle est **fausse** et l'utilisateur relisait un passage **mais** a déplacé la conversation depuis | **rien** : sa main l'emporte |
+
+Un seul tour de rendu, aucune boucle, aucun défilement animé, aucun minuteur, et
+l'écriture est **annulée** si l'onglet a été démonté entre-temps (`isConnected`).
+Le geste reste la **dernière instruction** de `exitImmersive()` **et** de
+`exitVocal()` — donc identique pour les **trois** voies de sortie (le logo,
+`Échap`, la fermeture de l'onglet), qui passent toutes par `exitVocal()`.
+
 **Ce qui ne change pas** : l'entrée en « Assistant seul » continue de forcer le
 bas (issue #82), l'apparence et la disposition sont intactes, aucun réglage n'est
 créé et rien n'est mémorisé. Verrou :
 `src/js/conversation-scroll.test.js` (les deux règles, le seuil unique, le
 branchement réel — photographie avant le déplacement, restitution après le
 retrait de l'overlay — et **aucun déplacement supplémentaire** de la
-conversation) ; il échoue si la restitution disparaît. Rapport :
+conversation) **et** `src/js/retour-mode-conversation-en-bas.test.js` (le cas
+transitoire : la décision rend 0, le rendu la corrige ; la relecture jamais
+écrasée ; le branchement, l'absence de minuteur et de défilement animé) ; les
+deux échouent si la restitution disparaît. Rapport :
 `docs/rapports/RAPPORT-retour-mode-conversation-en-bas.md`.
 
 ## 9. Ce qui n'est pas fait (et n'est pas simulé)
@@ -2340,7 +2371,7 @@ conversation) ; il échoue si la restitution disparaît. Rapport :
 | Fichier | Rôle |
 |---|---|
 | `src/js/screen-mode.js` | **source unique** des trois modes : cycle, libellé, infobulle, clé `pilot_screen_mode`, migration, `screenModeScreen()` (mode → écran) |
-| `src/js/conversation-scroll.js` | **source unique** de la position de la conversation au retour d'un plein écran (§8ter), pure : `CONVERSATION_SCROLL_BOTTOM_THRESHOLD` (60, valeur **unique**), `conversationAtBottom`, `conversationScrollMax`, `conversationScrollSnapshot` (photographie), `conversationScrollTarget` (la décision : bas réel / position exacte bornée / `null`). Aucun DOM, aucun minuteur. **Écritures** dans `super-agent.js` : `memoizeSuperScroll` (avant les déplacements de nœuds) et `restoreSuperScroll` (dernière écriture de `exitImmersive` **et** `exitVocal`, ré-arme `superAtBottom` depuis la photographie) |
+| `src/js/conversation-scroll.js` | **source unique** de la position de la conversation au retour d'un plein écran (§8ter), pure : `CONVERSATION_SCROLL_BOTTOM_THRESHOLD` (60, valeur **unique**), `conversationAtBottom`, `conversationScrollMax`, `conversationScrollSnapshot` (photographie), `conversationScrollTarget` (la décision : bas réel / position exacte bornée / `null`), `conversationScrollReplayTarget` (le **deuxième temps** : la même décision rejouée sur la géométrie réelle au premier signal de rendu ; `null` quand la position est déjà juste ou quand l'utilisateur a repris la main). Aucun DOM, aucun minuteur. **Écritures** dans `super-agent.js` : `memoizeSuperScroll` (avant les déplacements de nœuds), `restoreSuperScroll` (dernière instruction de `exitImmersive` **et** `exitVocal`, ré-arme `superAtBottom` depuis la photographie) et `replaySuperScrollAfterLayout` (**une** demande de rendu, aucune boucle, annulée si l'onglet est démonté) |
 | `src/js/super-agent.js` | `enterVocal` / `exitVocal` (pose et retrait des quatre écouteurs et de l'unique minuteur du bas, §4bis), `vocalSyncChrome` (**seul** point d'écriture de `.vocal-chrome-hidden`), `applyVocalState`, `vocalBargeIn`, `stopSuperAgentTurn` (arrêt partagé bouton Stop / voix), `vocalSyncMicSpeaking` / `vocalSyncMicThinking`, `autoReadVocalReply`, `vocalScreenState` / `vocalStateClass` / `vocalStatusText` / `vocalReducedMotion` / `vocalInterruptTarget` (pures) ; **conversation parlée** : `startVoiceInput` (seule voie de démarrage), `armVoiceInput`, `vocalSyncConversation`, `reportVoiceFailure`, `refreshVocalSensitivity` |
 | `src/js/vocal-conversation.js` | **source unique des décisions de la conversation parlée** (pures) : armer au repos, réarmer après la lecture, **reprise bornée d'un armement refusé pour une raison passagère** (`vocalResumeRetry` + `VOCAL_RESUME_RETRY_MS` / `VOCAL_RESUME_MAX_RETRIES` / `VOCAL_RESUME_TRANSIENT_REASONS`), désarmer pendant la parole (replis compris) / le travail / hors du mode / sur projet sensible / après un arrêt manuel / **quand le statut du projet n'a pas pu être vérifié** (`sensibilite-indisponible`), **plafond des sessions vides** (`noteEmptyVocalSession`), **la demande qui part deux secondes après le dernier mot** (`VOCAL_SILENCE_SEND_MS` en valeur par defaut + `decideVocalSilenceSend`, delai reglable de 1 a 5 s), et **l'unique phrase** à afficher pour chaque panne de dictée |
 | `src/js/voice-auto-send.js` | **seule détection du vide** d'une dictée (`normalizedVoiceText`, `VOICE_END_*`) et **seule décision** « cette fin alimente-t-elle le plafond ? » (`isSilentEmptyVoiceEnd` : fin normale et vide OU fin silencieuse du moteur **instantanée** — durée mesurée < `VOICE_EMPTY_SESSION_INSTANT_MS` (1 s) —, jamais une erreur affichée, un arrêt demandé, une reprise en main, et **jamais un silence d'une durée réelle**) |
@@ -2358,6 +2389,10 @@ Verrous : `trois-modes-ecran.test.js` (lot 1), `conversation-scroll.test.js`
 (**la conversation retrouve sa place au retour**, §8ter : deux règles, seuil
 unique, photographie avant le déplacement, restitution après le retrait de
 l'overlay, aucun déplacement ajouté — il échoue si la restitution disparaît),
+`retour-mode-conversation-en-bas.test.js` (§8ter, **deuxième temps** : le cas
+GÉOMÉTRIE TRANSITOIRE — la décision rend 0, le rendu la corrige —, la relecture
+jamais écrasée, le signal de rendu au lieu d'un minuteur, les trois voies de
+sortie — il échoue si le retour en haut revient),
 `ecran-vocal-lot2.test.js` (écran,
 états, trois sorties, symétrie), `ecran-vocal-lot3.test.js` (micro, arrêt réel,
 messages), `ecran-vocal-lot4a.test.js` (garde anti-auto-coupure, chiffres),

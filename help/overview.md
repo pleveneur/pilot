@@ -442,6 +442,12 @@ Trois autres façons de changer de mode :
 Aucun de ces modes ne change le contenu de votre projet : ils ne font que choisir
 ce qui est affiché.
 
+**Au retour à l'écran habituel, la conversation est là où vous l'aviez
+laissée** : sur vos derniers échanges si vous étiez en bas — et si la réponse a
+continué pendant le plein écran, vous arrivez sur la fin —, ou sur le passage
+que vous étiez en train de relire si vous aviez remonté. Rien ne défile tout
+seul et rien ne saute : ce que vous lisiez ne bouge pas.
+
 - **Détaillé** : l'écran habituel (explorateur, onglets, éditeur, agent).
 - **Assistant seul** : uniquement la conversation de l'assistant 🧭, en plein
   écran.
