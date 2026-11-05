@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-11-04 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-11-05 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -2147,21 +2147,18 @@ apprend et répond.
   reçoit un prompt système par défaut qui rappelle son rôle (suivi de plusieurs
   projets par client, lecture seule).
 
-### Voir les tâches suivies dans le panneau « Travail »
+### Le panneau « Travail » ne montre que le travail des agents
 - Dans le panneau du travail (cercle en haut à droite), l'onglet **« Tâches »**
-  montre d'abord **ce qui travaille** (« En cours », « Démarrage ») puis **ce qui
-  attend** (« En attente »). Sous ces listes, un groupe **« Suivi (n) »** montre
-  les **tâches de votre suivi qui restent à faire**, chacune avec son état
-  (« À faire », « En cours », « À valider »).
-- Ce groupe dit lui-même qu'**aucun agent ne travaille dessus** : une tâche
-  simplement **suivie** ne peut donc plus être confondue avec une tâche en cours
-  ou en attente.
-- Il **suit vos changements** : créer, déplacer, clôturer ou supprimer une tâche
-  dans l'onglet **Kanban** se voit aussitôt ; une tâche créée **par l'Assistant**
-  apparaît dès la fin de sa réponse. Une tâche **terminée ou annulée** n'y
-  figure jamais, et une tâche n'y apparaît **jamais deux fois**.
-- Rien ne s'affiche quand votre suivi n'a **aucune tâche à faire** : le panneau
-  reste identique.
+  montre **uniquement** le travail des agents : ceux qui **travaillent**
+  (« En cours », « Démarrage ») et ceux qui **attendent leur tour**
+  (« En attente »), avec leur rang et leur libellé.
+- Quand **aucun agent** ne travaille, le volet l'écrit noir sur blanc
+  (« **Aucune mission en cours.** ») : jamais un volet vide, jamais autre chose à
+  la place.
+- Les **tâches de votre suivi** (ce que vous suivez dans l'onglet **Kanban**)
+  ne s'affichent **pas** ici : elles gardent leur onglet, avec leurs statuts et
+  leurs filtres. Créer, déplacer ou clôturer une tâche ne fait donc **jamais**
+  apparaître ce travail-là dans la liste des agents.
 
 <!-- HELP:super-agent-personnage -->
 ### Le personnage actif (nom et portrait)
@@ -2331,24 +2328,19 @@ apprend et répond.
     horodatage, espacements), sans aucune valeur de style recopiée : réglages
     uniques dans les variables `--agent-activity-panel-*` et gabarits de liste
     partagés (verrou `src/js/taille-et-style-panneau.test.js`).
-  - **Tâches du SUIVI dans le volet « Tâches »** : sous les missions, un
-    troisième groupe **« Suivi (n) »** liste les tâches de la base de suivi qui
-    **restent à faire**, chacune avec son statut en clair (« À faire », « En
-    cours », « À valider »), et dit explicitement qu'**aucun agent ne travaille
-    dessus** — une tâche seulement suivie n'est donc plus confondue avec un
-    travail en cours ou en attente. Aucun en-tête quand la liste est vide (le
-    volet reste identique à lui-même). Le compte suit la **même règle « ouverte
-    ou close »** que l'onglet Kanban (`isOpenTaskStatus`, source unique) : une
-    tâche terminée / annulée / à qualifier n'y figure jamais et une tâche n'y
-    figure **jamais deux fois** (dédoublonnage par identifiant). La liste se
-    **rafraîchit d'elle-même** : toute écriture du Kanban, la fin d'un tour de
-    l'Assistant et l'ouverture du volet déclenchent une relecture (mémoire
-    courte de 5 s, une seule requête en vol, panne ⇒ dernière liste connue) —
-    plus de photo périmée. Le **compteur** du bouton « Travail » continue de
-    compter les **missions** (en cours + en attente) : les tâches du suivi ont
-    leur propre nombre. Module unique `src/js/taches-suivies-ecran.js`, verrou
-    `src/js/taches-suivies-affichees.test.js`, rapport
-    `docs/rapports/RAPPORT-liste-taches-affichee.md`.
+  - **Le volet « Tâches » ne montre QUE le travail des agents** (décision du
+    propriétaire, 2026-11-05, sans appel) : les missions qui travaillent et
+    celles qui attendent dans la file. **Aucune tâche du suivi** n'y est
+    insérée — elle vit dans l'onglet **Kanban**, son seul écran. Rien à montrer ⇒
+    « **Aucune mission en cours.** » (`renderMissionsPanelHtml`), jamais une
+    liste vide muette et jamais le suivi en remplacement. La composition du
+    volet vaut `superTasksList.innerHTML = renderMissionsPanelHtml(missions);`
+    — une seule famille. Le module `src/js/taches-suivies-ecran.js` reste
+    **intact** (règle « ouverte ou close » `isOpenTaskStatus`, mémoire courte,
+    signal « le suivi a changé ») et n'est plus importé ici que pour ce signal,
+    que le Kanban écoute. Verrou : `src/js/taches-suivies-affichees.test.js`
+    (il ÉCHOUE si le groupe revient), rapport
+    `docs/rapports/RAPPORT-liste-travail-sans-suivi.md`.
   - Liste **chronologique** (plus récent en haut), pastille colorée par
     sévérité (succès / avertissement / erreur / info), horodatage discret.
   - Bouton **« tout effacer »** 🗑️ (dans l'onglet « Événements ») pour vider la

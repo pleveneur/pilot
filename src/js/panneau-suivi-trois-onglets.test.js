@@ -567,8 +567,12 @@ describe("(c) les trois volets sont reellement alimentes", () => {
     expect(html.slice(debut, fin)).toContain('class="sa-tasks-list"');
     expect(jsSuper).toMatch(/buildRunningMissions\(getAgentActivitySnapshot\(\)\.list, collectQueuedMissions\(\)\)/);
     expect(jsSuper).toMatch(
-      /superTasksList\.innerHTML =\s*renderMissionsPanelHtml\(missions\)\s*\+\s*renderSuperTrackedTasksHtml\(\)/
+      /superTasksList\.innerHTML = renderMissionsPanelHtml\(missions\);/
     );
+    // Le volet ne compose QUE les missions d'agents : le groupe des taches du
+    // suivi n'y est plus insere (decision du proprietaire, 2026-11-05 — verrou
+    // dedie : src/js/taches-suivies-affichees.test.js).
+    expect(jsSuper).not.toContain("renderSuperTrackedTasksHtml()");
     // Sans mission : message explicite (jamais une liste vide trompeuse).
     expect(renderMissionsPanelHtml([])).toContain("Aucune mission en cours");
 

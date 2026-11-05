@@ -1,24 +1,39 @@
-// VERROU — « la liste de tâches affichée reflète le suivi réel ».
+// VERROU — « le volet Tâches du panneau Travail ne montre QUE le travail des
+// agents ».
 //
-// Défaut corrigé (docs/rapports/RAPPORT-liste-taches-affichee.md) : le volet
-// « Tâches » du panneau du suivi ne lisait QUE le store d'activité des agents. Il
-// ne lisait jamais la base de suivi, donc :
-//   - créer / annuler / regrouper une tâche dans le suivi ne changeait rien à
-//     l'écran ;
-//   - le nombre affiché ne pouvait pas correspondre aux tâches ouvertes ;
-//   - une tâche SEULEMENT SUIVIE était indistinguable d'un travail en cours ou en
-//     attente (elle n'apparaissait nulle part).
-// La règle « ouverte ou close » (`isOpenTaskStatus`) et ses filtres existaient
-// déjà mais n'avaient AUCUN appelant en production — le pont manquait.
+// Décision du propriétaire (2026-11-05, réaffirmée, sans appel) :
+// docs/rapports/RAPPORT-liste-travail-sans-suivi.md. Le panneau « Travail »
+// (bouton `#agent-activity` : onglets Agents / Tâches / Événements, en mode
+// Détaillé COMME en mode Vocal) est le PLAN DE TRAVAIL DES AGENTS : il montre
+// les missions qui tournent et celles qui attendent dans la file, jamais les
+// tâches du suivi multi-projets de l'Assistant (elles ont leur onglet Kanban).
 //
-// Ces preuves échouent si le défaut revient : une tâche close / annulée / à
-// qualifier réapparaît comme « suivie », une tâche peut apparaître deux fois, le
-// volet cesse de composer le groupe « Suivi » après les missions, ou le Kanban
-// cesse de signaler ses écritures / de réagir au signal.
-import { describe, it, expect, beforeEach } from "vitest";
+// Historique : un correctif antérieur avait INSÉRÉ sous les missions un groupe
+// « Suivi (n) — suivi seul, aucun agent ne travaille dessus », alimenté par
+// `get_super_agent_kanban`. Le propriétaire y voyait défiler ses tâches internes,
+// anciennes et terminées : c'était une régression. Le groupe a donc été RETIRÉ
+// du volet. Le module `taches-suivies-ecran.js` reste INTACT (aucune donnée, aucune
+// fonctionnalité de suivi supprimée) et le Kanban continue de l'utiliser pour
+// l'unique signal « le suivi a changé ».
+//
+// Ce que ces preuves interdisent désormais :
+//   (i)  réinsérer le groupe « Suivi » dans le volet « Tâches » (appel, import de
+//        rendu, état ou abonnement) — le test ÉCHOUE ;
+//   (ii) remplacer les missions par le suivi quand le volet est vide : la seule
+//        chose affichée est « Aucune mission en cours. » ;
+//   (iii) casser la règle unique « ouverte ou close » du suivi, sa mémoire courte
+//        ou son signal (le Kanban en dépend toujours).
+//
+// Les verrous de source lisent le fichier (fins de ligne normalisées — piège CI
+// Windows, cf. quality-gate § 3.4).
+
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => ({})) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 
 import {
   openTrackedTasks,
@@ -32,6 +47,7 @@ import {
   TACHES_SUIVIES_MAX,
   TACHES_SUIVIES_TTL_MS,
 } from "./taches-suivies-ecran.js";
+import { renderMissionsPanelHtml } from "./agent-activity.js";
 
 const ICI = dirname(fileURLToPath(import.meta.url));
 const lire = (nom) => readFileSync(join(ICI, nom), "utf8").replace(/\r\n/g, "\n");
@@ -64,6 +80,109 @@ const BASE = kanban([
     tasks: [T(8, "Autre projet", "demande", { project_name: "Autre", project_path: "G:/autre" })],
   },
 ]);
+
+/** Missions d'agents telles que le volet les reçoit (`buildRunningMissions`). */
+const MISSIONS = [
+  { agent: "codeur-1", project: "Pilot", mission: "Verifier le volet", waiting: false },
+  { agent: "Assistant", project: "IA_PL", mission: "Faire le point", waiting: true },
+];
+
+describe("verrou — le volet « Tâches » ne compose QUE les missions d'agents", () => {
+  it("le volet peint les missions, et RIEN d'autre (une seule expression)", () => {
+    const src = lire("super-agent.js");
+    // La composition réelle du volet : `renderMissionsPanelHtml(missions)`, seule.
+    expect(src).toContain("superTasksList.innerHTML = renderMissionsPanelHtml(missions);");
+    // Aucun ajout après les missions (c'est là que le groupe de suivi était
+    // concaténé : `renderMissionsPanelHtml(missions) + renderSuperTrackedTasksHtml()`).
+    expect(src).not.toContain("renderMissionsPanelHtml(missions) +");
+  });
+
+  it("AUCUNE trace du groupe de suivi dans l'écran du volet (appel, état, abonnement)", () => {
+    const src = lire("super-agent.js");
+    for (const interdit of [
+      "renderTrackedTasksGroupHtml",
+      "renderSuperTrackedTasksHtml",
+      "refreshSuperTrackedTasks",
+      "loadTrackedTasks",
+      "onTrackedTasksChanged",
+      "superTrackedTasks",
+      "superTrackedHtml",
+      "superTrackedUnsub",
+      // la phrase du groupe : si elle réapparaît dans l'écran, le groupe est revenu
+      "aucun agent ne travaille dessus",
+    ]) {
+      expect(src, `« ${interdit} » est revenu dans le volet « Tâches »`).not.toContain(interdit);
+    }
+  });
+
+  it("le module de suivi reste INTACT (aucune donnée, aucune fonction retirée)", () => {
+    // Le retrait est celui de l'INSERTION à l'écran, pas du module : la règle
+    // « ouverte ou close » et le rendu du groupe existent toujours.
+    expect(openTrackedTasks(BASE).map((t) => t.id)).toEqual([1, 2, 7, 8]);
+    const groupe = renderTrackedTasksGroupHtml(openTrackedTasks(BASE));
+    expect(groupe).toContain(`${TACHES_SUIVIES_GROUP_LABEL} (4)`);
+    expect(groupe).toContain("Écrire le rapport");
+    expect(groupe).toContain("aucun agent ne travaille dessus");
+  });
+
+  it("une tâche du suivi n'apparaît JAMAIS dans le HTML du volet, même ouverte", () => {
+    // Composition identique à celle de `renderSuperMissions` (missions seules).
+    const volet = renderMissionsPanelHtml(MISSIONS);
+    // les missions, elles, sont bien là (avec leur rang)
+    expect(volet).toContain("En cours (1)");
+    expect(volet).toContain("Verifier le volet");
+    expect(volet).toContain("En attente (1)");
+    // et AUCUNE tâche du suivi n'y figure — alors que le groupe, s'il était
+    // concaténé, les afficherait (preuve que l'absence est bien un choix).
+    const groupe = renderTrackedTasksGroupHtml(openTrackedTasks(BASE));
+    for (const titre of ["Écrire le rapport", "Corriger la file", "En validation", "Autre projet"]) {
+      expect(groupe).toContain(titre);
+      expect(volet).not.toContain(titre);
+    }
+    // ni l'en-tête du groupe, ni sa mention rassurante
+    expect(volet).not.toContain(TACHES_SUIVIES_GROUP_LABEL);
+    expect(volet).not.toContain("aucun agent ne travaille dessus");
+    expect(volet).not.toContain("data-task-id");
+  });
+
+  it("sans aucune mission, le volet dit « Aucune mission en cours. » (jamais le suivi en remplacement)", () => {
+    const volet = renderMissionsPanelHtml([]);
+    expect(volet).toContain("Aucune mission en cours.");
+    // jamais une liste vide muette
+    expect(volet.trim()).not.toBe("");
+    // et surtout jamais les tâches du suivi pour « remplir »
+    expect(volet).not.toContain("Écrire le rapport");
+    expect(volet).not.toContain(TACHES_SUIVIES_GROUP_LABEL);
+  });
+
+  it("le compteur « Travail » continue de compter les missions (jamais les tâches du suivi)", () => {
+    const src = lire("super-agent.js");
+    // une seule source de calcul pour le bouton et le volet
+    expect(src).toContain("buildRunningMissions(getAgentActivitySnapshot().list, collectQueuedMissions())");
+    expect(src).not.toContain('invoke("get_super_agent_kanban")');
+    expect(src).not.toContain("TACHES_SUIVIES_MAX");
+  });
+});
+
+describe("le suivi garde son écran (Kanban) : le signal reste branché", () => {
+  it("l'Assistant signale la fin de son tour, le Kanban signale ses écritures et écoute", () => {
+    const superSrc = lire("super-agent.js");
+    expect(superSrc).toContain("from \"./taches-suivies-ecran.js\"");
+    expect(superSrc).toContain("notifyTrackedTasksChanged();");
+
+    const kanbanSrc = lire("super-agent-kanban-view.js");
+    expect(kanbanSrc).toContain("from \"./taches-suivies-ecran.js\"");
+    expect(kanbanSrc).toContain("function reloadAfterTrackingWrite()");
+    expect(kanbanSrc).toContain("notifyTrackedTasksChanged();");
+    expect(kanbanSrc).toContain("onTrackedTasksChanged(() =>");
+    // TOUTES les écritures passent par le même point (aucune n'oublie le signal) :
+    // plus aucun `loadSuperKanban()` sec après une écriture.
+    expect(kanbanSrc.split("reloadAfterTrackingWrite();").length - 1).toBe(5);
+    expect(kanbanSrc.split("loadSuperKanban();").length - 1).toBe(3);
+    // et l'abonnement est retiré avec l'onglet
+    expect(kanbanSrc).toContain("unlistenTracking();");
+  });
+});
 
 describe("openTrackedTasks — la règle unique « ouverte ou close »", () => {
   it("ne garde QUE les tâches qui restent à faire", () => {
@@ -104,7 +223,7 @@ describe("openTrackedTasks — la règle unique « ouverte ou close »", () => {
   });
 });
 
-describe("renderTrackedTasksGroupHtml — le groupe « Suivi » du volet", () => {
+describe("renderTrackedTasksGroupHtml — le groupe du suivi (onglet Kanban)", () => {
   it("ne rend RIEN quand il n'y a aucune tâche suivie (aucun en-tête vide)", () => {
     expect(renderTrackedTasksGroupHtml([])).toBe("");
     expect(renderTrackedTasksGroupHtml(null)).toBe("");
@@ -240,36 +359,6 @@ describe("le signal « le suivi a changé »", () => {
     expect(recu).toBe(1);
     off1();
     off2();
-  });
-});
-
-describe("branchement à l'écran (aucune photo périmée)", () => {
-  it("le volet « Tâches » compose les MISSIONS puis le SUIVI", () => {
-    const src = lire("super-agent.js");
-    expect(src).toContain("from \"./taches-suivies-ecran.js\"");
-    expect(src).toContain(
-      "renderMissionsPanelHtml(missions) + renderSuperTrackedTasksHtml()"
-    );
-    // le groupe suit la même règle que la liste qu'il complète
-    expect(src).toContain("renderTrackedTasksGroupHtml(superTrackedTasks)");
-    // l'abonnement au signal est posé dans la surveillance permanente
-    expect(src).toContain("onTrackedTasksChanged(() => refreshSuperTrackedTasks({ force: true }))");
-    // la fin de tour de l'Assistant (qui a pu écrire dans le suivi) signale
-    expect(src).toContain("notifyTrackedTasksChanged();");
-  });
-
-  it("le Kanban signale ses écritures et relit la base sur signal venu d'ailleurs", () => {
-    const src = lire("super-agent-kanban-view.js");
-    expect(src).toContain("from \"./taches-suivies-ecran.js\"");
-    expect(src).toContain("function reloadAfterTrackingWrite()");
-    expect(src).toContain("notifyTrackedTasksChanged();");
-    expect(src).toContain("onTrackedTasksChanged(() =>");
-    // TOUTES les écritures passent par le même point (aucune n'oublie le signal) :
-    // plus aucun `loadSuperKanban()` sec après une écriture.
-    expect(src.split("reloadAfterTrackingWrite();").length - 1).toBe(5);
-    expect(src.split("loadSuperKanban();").length - 1).toBe(3);
-    // et l'abonnement est retiré avec l'onglet
-    expect(src).toContain("unlistenTracking();");
   });
 });
 
