@@ -162,3 +162,24 @@ besoin de l'être : les deux sont réellement présentes ici.
 - Aucun réglage d'un autre projet, aucun moteur vidéo touché.
 
 <!-- RAPPORT:publication-v0.6.20 -->
+
+---
+
+## 8. Deux remarques d'honnêteté
+
+- **La phrase sur les installateurs macOS est conditionnelle et reste vraie.**
+  Le changelog a été rédigé avant de savoir qu'une machine Apple serait
+  attribuée ; il dit « *si* cette page ne les propose pas encore ». Les deux
+  fichiers macOS **sont bien sur la page**, donc la réserve ne s'applique pas.
+  Le texte publié n'a **pas** été retouché après coup : le modifier aurait fait
+  diverger le contenu de l'étiquette `v0.6.20` de ce que la page affiche.
+- **Le run `release` apparaît encore « in_progress »** au moment de clore, parce
+  que `build-linux` et `latest-json-linux` tournent encore. Ces deux jobs sont
+  **hors du chemin critique** : la Release, ses 11 fichiers et `latest.json`
+  étaient déjà tous en place et vérifiés avant cette clôture.
+
+## 9. Preuves conservées sur disque
+
+`.pilot/tmp-pub/` : `vitest-0.6.20.log`, `cargo-test-0.6.20.log`,
+`gds-image-0.6.20.log`, `runs.json`, `runs2.json`, `jobs.json`, `rel620.json`,
+`latest.json` (copie du manifeste servi).
