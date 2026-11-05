@@ -86,34 +86,62 @@ utilisé ici ; aucun envoi vers lui.
 
 ---
 
-## 5. Fichiers de la release
+## 5. Fichiers de la release (déposés — vérifiés par l'API)
 
-Le workflow `.github/workflows/release.yml` a été déclenché par le tag et tournait
-au moment de ce rapport (`run` nommé `release`, branche `v0.6.20`,
-`status: in_progress`). Il construit, signe et dépose lui-même les fichiers, puis
-génère `latest.json`. Fichiers attendus :
+Le workflow `.github/workflows/release.yml` a été déclenché par le tag
+(`run` id `42025121233`, branche `v0.6.20`). **Release publiée** :
+`Pilot v0.6.20`, `draft=false`, `prerelease=false`, publiée le 2026-11-05 à
+12:19:14Z. **11 fichiers déposés** :
 
-- Windows : installateur NSIS `Pilot_0.6.20_x64-setup.exe` + `.sig`, et le MSI
-  (le MSI est écarté de `latest.json`, qui retient NSIS) ;
-- macOS (x86_64 et aarch64) : `.app.tar.gz` + `.sig` — **uniquement si une
-  machine Apple est attribuée** ;
-- Linux (optionnel, hors chemin critique) : `AppImage`/`.deb` + `.sig` ;
-- `latest.json` (manifeste de mise à jour automatique).
+| Fichier | Taille |
+|---|---|
+| `latest.json` | manifeste |
+| `Pilot_0.6.20_x64-setup.exe` | 62,0 Mo |
+| `Pilot_0.6.20_x64-setup.exe.sig` | signature |
+| `Pilot_0.6.20_x64_en-US.msi` | 80,8 Mo |
+| `Pilot_0.6.20_x64_en-US.msi.sig` | signature |
+| `Pilot_0.6.20_x64.dmg` | 37,6 Mo |
+| `Pilot_0.6.20_aarch64.dmg` | 99,0 Mo |
+| `Pilot_x64.app.tar.gz` | 37,9 Mo |
+| `Pilot_x64.app.tar.gz.sig` | signature |
+| `Pilot_aarch64.app.tar.gz` | 101,4 Mo |
+| `Pilot_aarch64.app.tar.gz.sig` | signature |
+
+**macOS a été compilé cette fois** (contrairement à 0.6.19, qui n'avait que
+Windows) : une machine Apple a bien été attribuée aux deux cibles.
+
+Jobs du run `release` : `test (ubuntu-22.04)` ✅, `test (windows-latest)` ✅,
+`test-macos` ✅, `create-release` ✅, `build` Windows ✅, `build` macOS x86_64 ✅,
+`build` macOS aarch64 ✅. `build-linux` (hors chemin critique) et
+`latest-json-linux` (seconde passe optionnelle) ne bloquent rien.
+
+**`latest.json` contrôlé** — `version : 0.6.20`, trois cibles, toutes signées :
+
+| Cible | Fichier servi |
+|---|---|
+| `windows-x86_64` | `Pilot_0.6.20_x64-setup.exe` (NSIS retenu, MSI écarté — règle du projet) |
+| `darwin-aarch64` | `Pilot_aarch64.app.tar.gz` |
+| `darwin-x86_64` | `Pilot_x64.app.tar.gz` |
+
+Les notes de mise à jour reprennent bien le texte de `release-notes/v0.6.20.md`
+(le propriétaire lira dans la modale « Modification depuis v0.6.19 » puis le
+contenu de la version). Aucune cible macOS n'a été inventée, et aucune n'a
+besoin de l'être : les deux sont réellement présentes ici.
 
 ---
 
 ## 6. Ce que le propriétaire doit vérifier à la main
 
 1. **La page de la release** `v0.6.20` sur GitHub : le titre, le texte
-   (repris de `release-notes/v0.6.20.md`) et la liste des fichiers déposés.
-   Si macOS n'apparaît pas, la page doit le **dire explicitement** — c'est voulu
-   et automatique (phrase `macosMissingNotice`), ce n'est pas un oubli.
-2. **La fin du workflow `release`** : les trois jobs du chemin critique
-   (`test`, `build`, `latest-json`) doivent être verts. Linux et `test-macos` sont
-   hors chaîne : leur échec ou annulation ne bloque rien.
-3. **`latest.json`** : la version `0.6.20` et la cible `windows-x86_64` doivent y
-   figurer pour que la mise à jour automatique des postes installés se déclenche.
-   Aucune cible macOS ne doit y être inventée.
+   (repris de `release-notes/v0.6.20.md`) et la liste des 11 fichiers ci-dessus.
+   Ces éléments ont été relus par l'API, mais une relecture humaine de la page
+   reste la dernière vérification.
+2. **La fin du workflow `release`** : les jobs du chemin critique (`test`,
+   `create-release`, `build` Windows + macOS, `latest-json`) sont verts. Seul
+   `build-linux` peut encore tourner ou échouer sans conséquence.
+3. **L'installation réelle** : lancer la mise à jour depuis un poste installé en
+   0.6.19 et vérifier que la version affichée devient **0.6.20**. C'est la seule
+   preuve que la chaîne de mise à jour est vivante de bout en bout.
 4. **Le conteneur GDS** : l'image `pilot-gds:local` est reconstruite mais
    **pas chargée**. Si vous voulez que le service tourne sur cette image, c'est
    `npm run gds:reload` — décision qui vous appartient, non prise ici.
