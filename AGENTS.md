@@ -54,6 +54,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Agent Pi / RPC | `spec_rpc.md` |
 | Multi-projets (gestionnaire de projets) | `spec_multiprojects.md` |
 | Discussion inter-projets (liens + dépôt de tâche) | `spec_interproject.md` |
+| Case « Discussion seulement via llama » (personnage : conversation seule, modèle local, sans aucun outil) | `spec_super_agent.md` § Discussion seulement via llama + `docs/conceptions/CONCEPTION-personnage-discussion-seule-via-llama.md` |
 | Sous-projets liés (ouverture groupée, local-first + GDS) | `spec_subprojects.md` |
 | Conversion PDF → MD **et export Markdown → PDF** (sans impression) | `spec_pdf2md.md` |
 | Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` + `spec_orchestration_autotest.md` + `spec_orchestration_snapshots.md` + `spec_orchestration_reviewer.md` |

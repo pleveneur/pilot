@@ -313,6 +313,25 @@ import { buildDelegationContext, prefixDelegationContext } from "./super-agent-c
 // viennent de `<app_data_dir>/.pilot/portrait/` (lu côté Rust, jamais écrit par
 // Pilot). Fichier absent = nom et icône habituels, sans bruit. Source unique :
 // assistant-persona.js — aucun second mécanisme de nom n'est créé ici.
+// « Discussion seulement via llama » : décisions d'ÉCRAN pures (pastille,
+// phrase de la ligne d'état, sentinelle de la fiche, délais d'attente et de
+// refus). Les PHRASES et la décision d'activation vivent côté socle
+// (`discussion_seule.rs`) : la fenêtre les REÇOIT par `discussion_seule_state`.
+import {
+  DISCUSSION_ONLY_BADGE,
+  FICHE_SENTINEL,
+  badgeVisible,
+  emptyDiscussionState,
+  ficheRequestPayload,
+  ficheToolValue,
+  isNoLocalModelError,
+  noLocalModelSentence,
+  normalizeDiscussionState,
+  interruptionPlan,
+  refusalSentence,
+  sessionNotice,
+  waitingPlan,
+} from "./discussion-seule.js";
 import {
   DEFAULT_ASSISTANT_NAME,
   getAssistantPersonaName,
@@ -3058,8 +3077,149 @@ function vocalSyncSides() {
  * `refreshAssistantPersona`), n'écrit rien, ne lève jamais. Appelée à
  * l'ouverture de l'onglet et à chaque retour de focus de la fenêtre.
  */
+/** État du mode « Discussion seulement via llama » (mémoire seulement). */
+let discussionSeuleState = emptyDiscussionState();
+
+/** Timers d'attente et de refus du mode (un seul jeu à la fois). */
+let discussionSeuleTimers = { wait: null, timeout: null };
+
+/**
+ * Texte de la dernière demande faite en discussion seule : il est REMIS dans la
+ * barre si le modèle local ne répond pas (conception §2.2 — rien n'est perdu).
+ */
+let discussionSeuleDraft = "";
+
+/**
+ * REFUS NET du mode : le texte revient dans la barre s'il n'y est plus, la
+ * phrase affichée est celle du socle (écrite ou orale selon le canal), et aucun
+ * moteur de secours n'est utilisé. Un seul point pour les deux voies de panne
+ * (envoi refusé, tour terminé en erreur).
+ * @param {Element} messagesEl conversation
+ * @param {string} [erreur] message d'erreur du moteur (pour choisir la phrase)
+ */
+function applyDiscussionSeuleRefusal(messagesEl, erreur) {
+  // UN SEUL refus par tour : le refus des 60 s et l'erreur du moteur peuvent
+  // arriver tous les deux (l'arrêt provoque un compte rendu d'erreur) — le
+  // second ne redit rien.
+  if (discussionSeuleRefusalPosed) return;
+  discussionSeuleRefusalPosed = true;
+  clearDiscussionSeuleTimers();
+  if (pendingInputEl && !pendingInputEl.value.trim() && discussionSeuleDraft) {
+    pendingInputEl.value = discussionSeuleDraft;
+    pendingInputEl.style.height = "auto";
+  }
+  const phrase = isNoLocalModelError(discussionSeuleState, String(erreur || ""))
+    ? noLocalModelSentence(discussionSeuleState)
+    : refusalSentence(discussionSeuleState, vocalOverlay !== null);
+  appendSystemMessage(
+    messagesEl,
+    phrase || noLocalModelSentence(discussionSeuleState) || refusalSentence(discussionSeuleState),
+  );
+}
+
+/** Un refus (écrit ou de délai) a-t-il déjà été dit pour ce tour ? */
+let discussionSeuleRefusalPosed = false;
+
+/** Arrête les deux minuteries du mode (fin de tour, arrêt, nouveau message). */
+function clearDiscussionSeuleTimers() {
+  if (discussionSeuleTimers.wait) clearTimeout(discussionSeuleTimers.wait);
+  if (discussionSeuleTimers.timeout) clearTimeout(discussionSeuleTimers.timeout);
+  discussionSeuleTimers = { wait: null, timeout: null };
+}
+
+/** Peint ce que le mode doit montrer : la pastille de l'en-tête. */
+export function applyDiscussionSeuleUi() {
+  try {
+    const badge = document.getElementById("superagent-conversation-only-badge");
+    if (!badge) return;
+    badge.hidden = !badgeVisible(discussionSeuleState);
+    badge.textContent = DISCUSSION_ONLY_BADGE;
+    badge.title =
+      "Ce personnage parle uniquement avec son modèle local (llama) : il ne lance aucun agent et ne touche à aucun projet.";
+  } catch (_) {
+    /* DOM absent (test, panneau non monté) : rien à peindre */
+  }
+}
+
+/**
+ * Relit l'état du mode auprès du socle, puis peint la pastille. Fail-open : une
+ * panne laisse le mode INACTIF — l'affichage reste celui d'avant.
+ * @returns {Promise<object>} état retenu
+ */
+let discussionSeuleListening = false;
+
+/** Lignes grises déjà dites dans CETTE session de conversation (une seule fois). */
+let discussionSeuleNoticeShown = false;
+let discussionSeulePersonaSeen = "";
+let discussionSeuleDisabledShown = false;
+
+export async function refreshDiscussionSeule() {
+  // Un SEUL écouteur pour tout le produit : les Options préviennent quand la
+  // coche change (`pilot-discussion-seule-changed`), l'en-tête se repeint.
+  if (!discussionSeuleListening) {
+    discussionSeuleListening = true;
+    try {
+      window.addEventListener("pilot-discussion-seule-changed", () => {
+        refreshDiscussionSeule().catch(() => {});
+      });
+    } catch (_) {
+      /* environnement sans évènements : la pastille suit l'ouverture d'onglet */
+    }
+  }
+  try {
+    discussionSeuleState = normalizeDiscussionState(await invoke("discussion_seule_state"));
+  } catch (_) {
+    discussionSeuleState = emptyDiscussionState();
+  }
+  applyDiscussionSeuleUi();
+  // LIGNES GRISES DE LA CONVERSATION : « sans consigne » (fiche absente, vide ou
+  // illisible) et « Personnage actif : <Nom> » (changement en cours de session).
+  // Chacune UNE fois par session (`sessionNotice` décide ; ici on ne fait que
+  // marquer ce qui a été dit). Le tout premier chargement ne dit rien du
+  // personnage : il n'a pas changé, il était déjà là.
+  if (discussionSeuleState.persona && !discussionSeulePersonaSeen) {
+    discussionSeulePersonaSeen = discussionSeuleState.persona;
+  }
+  const deja = {
+    notice: discussionSeuleNoticeShown,
+    persona: discussionSeulePersonaSeen === discussionSeuleState.persona,
+    // « Désactivé » n'est DÛ que si un personnage était là et qu'il n'y en a
+    // plus : sans ce passé, il n'y a rien eu à désactiver (démarrage sans
+    // personnage = aucune ligne, l'écran reste celui d'avant).
+    disabled: discussionSeuleDisabledShown || !discussionSeulePersonaSeen,
+  };
+  for (let i = 0; i < 3; i += 1) {
+    const dire = sessionNotice(discussionSeuleState, deja);
+    if (!dire.text) break;
+    if (superMessagesEl) appendSystemMessage(superMessagesEl, dire.text);
+    if (dire.key === "notice") {
+      discussionSeuleNoticeShown = true;
+      deja.notice = true;
+    } else if (dire.key === "persona") {
+      discussionSeulePersonaSeen = discussionSeuleState.persona;
+      deja.persona = true;
+    } else if (dire.key === "disabled") {
+      discussionSeuleDisabledShown = true;
+      deja.disabled = true;
+    }
+  }
+  return discussionSeuleState;
+}
+
+/** État courant (copie) — pour les tests et l'écran des Options. */
+export function getDiscussionSeuleState() {
+  return { ...discussionSeuleState };
+}
+
 export function applyAssistantPersonaUi() {
   const label = superAgentDisplayLabel();
+  // La CASE des Options et la pastille suivent le MÊME moment : un changement de
+  // personnage prévient l'écran des réglages (aucun second détecteur).
+  try {
+    window.dispatchEvent(new CustomEvent("pilot-assistant-persona-changed"));
+  } catch (_) {
+    /* environnement sans évènements : rien à prévenir */
+  }
   try {
     const tabs = window._pilotTabs;
     if (tabs && typeof tabs.updateSuperAgentLabel === "function") {
@@ -3131,6 +3291,11 @@ export async function refreshAssistantPersonaAndApply() {
   } catch (_) {
     /* refreshAssistantPersona ne lève pas ; garde-fou si son contrat changeait */
   }
+  // Le MODE « Discussion seulement via llama » est propre au personnage : il se
+  // relit au même moment que lui (ouverture de l'onglet, retour de focus,
+  // activation ou désactivation dans Présences). Fail-open : une panne le laisse
+  // inactif, et rien ne change à l'écran.
+  refreshDiscussionSeule().catch(() => {});
   return applyAssistantPersonaUi();
 }
 
@@ -4476,8 +4641,16 @@ export async function createSuperAgent(container) {
     <button class="agent-btn" data-action="telegram-dialog" id="superagent-telegram-btn" title="Communication Telegram" aria-label="Communication Telegram" hidden><i data-lucide="message-circle" class="icon-sm"></i></button>
     <select class="agent-model-select" id="superagent-model-select" title="Changer de modèle"></select>
     <span class="agent-status" id="superagent-status">Prêt</span>
+    <span class="superagent-conversation-only-badge" id="superagent-conversation-only-badge" hidden></span>
   `;
   wrapper.appendChild(toolbar);
+  // La pastille « Discussion seule » vit dans cette barre : elle est peinte une
+  // fois le nœud monté (l'état a déjà été relu en haut de cette fonction).
+  applyDiscussionSeuleUi();
+  // Nouvelle session de conversation : les lignes grises du mode (une seule
+  // fois chacune) redeviennent dues.
+  discussionSeuleNoticeShown = false;
+  discussionSeuleDisabledShown = false;
 
   // ── Telegram (étape 2, lot 3, spec_telegram.md) : communication du dialogue ──
   // Bouton d'activation dans l'onglet 🧭. Il est TOTALEMENT invisible tant que la
@@ -7910,6 +8083,9 @@ let vocalMotsDeReveil = [];
     // la surface « superagent » restée active ne retarde plus de 12 s le son
     // de la prochaine mission.
     resetDeferredSound();
+    // Un arrêt (bouton Stop, prise de parole) met fin à l'attente du mode
+    // « Discussion seulement via llama » : plus rien à annoncer.
+    clearDiscussionSeuleTimers();
     // R3-EXCEPTION-MANUEL : arrêt demandé EXPLICITEMENT par un geste de
     // l'utilisateur (bouton Stop, ou prise de parole en mode Vocal) — ce n'est
     // pas un arrêt automatique, donc aucune trace d'arrêt automatique n'est
@@ -8154,6 +8330,11 @@ let vocalMotsDeReveil = [];
       modeVocal: vocalOverlay !== null,
       niveau: vocalLongueurNiveau,
     });
+    // « DISCUSSION SEULEMENT VIA LLAMA » : le texte de l'utilisateur est gardé
+    // pour pouvoir le REMETTRE dans la barre si le modèle local ne répond pas
+    // (conception §2.2 : rien n'est perdu, aucun moteur de secours).
+    const discussionSeule = badgeVisible(discussionSeuleState);
+    const texteGarde = text;
     inputEl.value = "";
     inputEl.style.height = "auto";
     // L'ENGAGEMENT du propriétaire (défaut 1 de la relecture) n'est PAS posé ici :
@@ -8186,6 +8367,41 @@ let vocalMotsDeReveil = [];
     backendBusy = true;
     statusEl.textContent = "Réfléchit…";
     setReflecting(true);
+    if (discussionSeule) {
+      // Attente annoncée APRÈS le délai du socle (3 s), et refus seulement au
+      // bout du délai long (60 s) : la console ne prétend jamais que le modèle
+      // local travaille quand il ne répond pas. Les deux minuteries sont
+      // arrêtées par la fin de tour réelle (`agent_end`) ou par un arrêt.
+      discussionSeuleDraft = texteGarde;
+      discussionSeuleRefusalPosed = false;
+      clearDiscussionSeuleTimers();
+      discussionSeuleTimers.wait = setTimeout(() => {
+        // Le tour est-il encore en cours ? (`agent_end` a pu arriver avant.)
+        // `waitingPlan` garantit qu'on n'écrit pas une ligne vide.
+        if (
+          isStreaming &&
+          waitingPlan(discussionSeuleState, discussionSeuleState.waitingNoticeMs).showWaiting
+        ) {
+          statusEl.textContent = discussionSeuleState.waitingLine;
+        }
+      }, discussionSeuleState.waitingNoticeMs);
+      // REFUS À 60 SECONDES (une seule valeur, les deux canaux — §2.3) : le tour
+      // est arrêté par le geste d'arrêt EXISTANT (aucun second mécanisme), le
+      // texte est remis dans la barre et la phrase du socle est dite. Aucune
+      // reprise automatique : le geste de réessayer reste celui de l'utilisateur.
+      discussionSeuleTimers.timeout = setTimeout(() => {
+        if (!isStreaming) return;
+        if (!waitingPlan(discussionSeuleState, discussionSeuleState.waitingTimeoutMs).showRefusal) {
+          return;
+        }
+        applyDiscussionSeuleRefusal(messagesEl, "");
+        void stopSuperAgentTurn();
+        isStreaming = false;
+        backendBusy = false;
+        setReflecting(false);
+        statusEl.textContent = "Prêt";
+      }, discussionSeuleState.waitingTimeoutMs);
+    }
     try {
       await invoke("send_super_agent_prompt", { message: messageAgent });
       // LA DEMANDE VIENT D'ETRE ECRITE COMME MISSION DE LA SESSION : la vue
@@ -8201,7 +8417,14 @@ let vocalMotsDeReveil = [];
       // La réponse arrive en streaming via le canal rpc-event-superagent
       // (handleSuperAgentEvent). On ne fait rien ici : on attend agent_end.
     } catch (err) {
-      appendSystemMessage(messagesEl, `❌ ${err}`);
+      clearDiscussionSeuleTimers();
+      if (discussionSeule) {
+        // Le message est GARDÉ dans la barre (jamais perdu), la phrase est celle
+        // du socle : ni bascule vers un autre moteur, ni bulle de réponse.
+        applyDiscussionSeuleRefusal(messagesEl, String(err));
+      } else {
+        appendSystemMessage(messagesEl, `❌ ${err}`);
+      }
       isStreaming = false;
       backendBusy = false;
       statusEl.textContent = "Prêt";
@@ -9063,6 +9286,13 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       if (currentTextSection) currentTextSection.dataset.closed = "true";
       pendingText = "";
     } else if (delta.type === "thinking_start") {
+      // DISCUSION SEULE : la réflexion du modèle local n'est JAMAIS montrée à
+      // l'écran (exigence du propriétaire). Aucun bloc n'est créé, donc rien à
+      // replier ni à déplier : seul le texte de la réponse existe.
+      if (badgeVisible(discussionSeuleState)) {
+        currentThinkingBlock = null;
+        return;
+      }
       if (!currentBody) {
         currentBody = createSuperAgentBlock(messagesEl);
         currentFlow = currentBody.querySelector(".agent-stream-flow");
@@ -9078,6 +9308,10 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       maybeDetectSuperAgentLoop(messagesEl);
       // La réflexion affichée compte aussi comme du texte en cours d'écriture.
       noteSoundRenderActivity("superagent");
+      // DISCUSION SEULE : rien de la réflexion n'est peint (même quand l'option
+      // « afficher la réflexion » est active) — le buffer ci-dessus sert
+      // uniquement à la détection de boucle, qui reste inchangée.
+      if (badgeVisible(discussionSeuleState)) return;
       if (currentThinkingBlock) {
         if (superShowThinking) {
           const content = currentThinkingBlock.querySelector(".agent-thinking-content");
@@ -9177,6 +9411,34 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     const msg = payload.message;
     if (msg && msg.role === "assistant") {
       if (msg.stopReason === "error" && msg.errorMessage) {
+        // « Discussion seulement via llama » : une panne du modèle local n'est
+        // JAMAIS un « ❌ » technique — c'est le refus écrit par le socle, le
+        // texte est remis dans la barre et rien ne bascule sur un autre moteur.
+        if (badgeVisible(discussionSeuleState)) {
+          // Refus DÉJÀ dit pour ce tour (délai de 60 s) : l'erreur qui suit
+          // l'arrêt ne redit rien.
+          if (discussionSeuleRefusalPosed) {
+            statusEl.textContent = "Prêt";
+            onEnd();
+            return;
+          }
+          // Une réponse DÉJÀ reçue est gardée telle quelle ; seule la ligne grise
+          // du socle est ajoutée (§2.3). Sans rien de reçu, c'est le refus.
+          const plan = interruptionPlan(
+            discussionSeuleState,
+            lastAssistantRawText,
+            vocalOverlay !== null,
+          );
+          if (plan.keepAnswer) {
+            clearDiscussionSeuleTimers();
+            if (plan.sentence) appendSystemMessage(messagesEl, plan.sentence);
+          } else {
+            applyDiscussionSeuleRefusal(messagesEl, msg.errorMessage);
+          }
+          statusEl.textContent = "Prêt";
+          onEnd();
+          return;
+        }
         appendSystemMessage(messagesEl, `❌ ${msg.errorMessage}`);
         statusEl.textContent = "Erreur";
         onEnd();
@@ -9218,6 +9480,11 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   }
   if (type === "agent_end") {
     statusEl.textContent = "Prêt";
+    // Le tour est fini : les minuteries d'attente et de refus du mode
+    // « Discussion seulement via llama » n'ont plus rien à dire, et le texte de
+    // la dernière demande n'a plus à être gardé pour un refus.
+    clearDiscussionSeuleTimers();
+    discussionSeuleDraft = "";
     // LE SUIVI A PU CHANGER PENDANT CE TOUR (creation, statut, regroupement par
     // l'Assistant) : un seul signal, et le volet « Travaux » comme le Kanban
     // relisent la base. Fin de tour reelle -> aucun sondage, aucun delai.
@@ -9635,7 +9902,34 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     // L'assistant ne voit jamais la file : il designe la demande par son rang
     // affiche (`/file`) ou par son numero de mission.
     const QUEUE_REMOVE_SENTINEL = "PILOT_ASSISTANT_QUEUE_REMOVE::";
+    // « Discussion seulement via llama » : ÉCRITURE DE SA PROPRE FICHE (outil
+    // `ecrire_ma_fiche`). Le titre porte la sentinelle + les valeurs voulues des
+    // champs. Pilot écrit par la commande du socle et renvoie le compte rendu —
+    // le modèle n'écrit jamais lui-même, et la fenêtre ne compose aucune phrase
+    // du mode : elle rend celle que Rust a produite.
     const title = payload.title || "";
+    if (title.startsWith(FICHE_SENTINEL)) {
+      const body = ficheRequestPayload(FICHE_SENTINEL, title);
+      try {
+        // Rust écrit (champs de contenu seulement, passage du propriétaire
+        // protégé, version précédente gardée) et rend le compte rendu : c'est
+        // LUI qui le rédige, jamais la fenêtre, et il repart tel quel au modèle.
+        const res = await invoke("persona_fiche_write", {
+          payload: body || "{}",
+          vocal: vocalOverlay !== null,
+          // Le personnage qui DEMANDE : c'est ce qui permet au socle de refuser
+          // proprement si le personnage a été désactivé entre-temps (§4.6).
+          persona: discussionSeuleState.persona || "",
+        });
+        // La pastille et le lien de retour suivent l'écriture (une version de
+        // plus, donc un retour en arrière possible).
+        refreshDiscussionSeule().catch(() => {});
+        await respondSuperAgent(id, ficheToolValue(res), false);
+      } catch (e) {
+        await respondSuperAgent(id, ficheToolValue(String(e)), false);
+      }
+      return;
+    }
     if (title.startsWith(QUEUE_REMOVE_SENTINEL)) {
       let info = {};
       try {

@@ -4240,6 +4240,54 @@ garde `z-index: 100001` et reste peint **au-dessus**, à la même place. La barr
 
 ---
 
+## Discussion seulement via llama (case par personnage)
+
+- **Une case, dans Options ⚙️ → Assistant, sous le modèle du personnage** :
+  « Discussion seulement via llama ». Propre à **chaque personnage** (clé = son
+  nom), gardée au redémarrage, **masquée sans personnage actif**. Cochée, la
+  conversation — écrite **et** orale — passe par le **modèle du personnage**
+  servi par le llama local : aucun agent, aucune tâche, aucun accès aux projets,
+  **aucun outil de travail**.
+- **Identité lue dans la fiche** (Présences) et **nulle part ailleurs** : le nom,
+  ce qu'il est, son ton, comment il appelle le propriétaire, ce qu'il fait, ce
+  qu'il ne fait jamais. Aucun rôle de Pilot, aucun contexte projet, aucune
+  mémoire, aucun prompt personnalisé. Palier de relation et description visuelle
+  **non** transmis. Fiche absente, vide ou illisible ⇒ il parle avec son nom
+  seul, une ligne grise **une fois par session** ; fiche incomplète ⇒ aucun
+  message.
+- **Refus net, jamais de bascule** : sans modèle de personnage utilisable la
+  session n'est pas démarrée ; si le local ne répond pas (ou pas avant 60 s) le
+  message **reste dans la barre** et la phrase du socle s'affiche (ou se dit).
+  Un local qui se coupe en pleine réponse : la réponse reçue est gardée, une
+  ligne grise le dit. Attente > 3 s : ligne d'état « J'attends le modèle local… ».
+- **Un seul droit d'écriture : sa propre fiche.** Champs de contenu seulement,
+  reste du fichier préservé, **aucune création de fiche**. Un passage écrit par
+  le propriétaire n'est **jamais** écrasé (fail-closed ; en Vocal, aucune
+  question, la modification est abandonnée). Chaque écriture **copie la version
+  précédente** dans `historique/` (20 au plus, la fiche en vigueur n'est jamais
+  tronquée) et le retour en arrière est un lien des Options (réversible).
+- **La réflexion du modèle n'apparaît jamais** à l'écran, même si l'option
+  « afficher la réflexion » est active, et n'entre jamais dans la fiche.
+- **Trois lignes grises, une seule fois chacune, toutes écrites côté socle** :
+  « sans consigne » (fiche), « Personnage actif : <Nom>. » (changement en cours
+  de session), « Le personnage a été désactivé : l'assistant reprend son
+  fonctionnement habituel. » Changer la case en cours de session **relance la
+  session** de l'Assistant (les extensions sont fixées au lancement) : le fil
+  affiché reste, la mémoire du processus repart.
+- Technique : `src-tauri/src/discussion_seule.rs` (décisions + phrases, module
+  **pur**, source unique), `src-tauri/src/persona_fiche.rs` (lecture/écriture de
+  `fiche.json`, historique, commandes), `src-tauri/extensions/pilot-persona-fiche.ts`
+  (outil `ecrire_ma_fiche`, seul outil du mode), `src/js/discussion-seule.js`
+  (ce que l'écran montre — aucune phrase recopiée). Champs de configuration
+  **additifs** `character_conversation_only` et `character_fiche_authors` ;
+  décocher **retire l'entrée**. Couverture : `src/js/discussion-seule.test.js`,
+  tests Rust de `discussion_seule.rs` et `persona_fiche.rs`, verrous de `lib.rs`,
+  `agent_service.rs` et `super_agent.rs`. Rapport :
+  `docs/rapports/RAPPORT-discussion-seule-via-llama.md` ; conception :
+  `docs/conceptions/CONCEPTION-personnage-discussion-seule-via-llama.md`.
+
+---
+
 *Voir aussi : `plan_dev.md` (roadmap), `spec_multiprojects.md` (gestionnaire de
 projets), `spec_session_history.md` (historique H9), `spec_gestion_agents.md`
 (agents multi-rôles).*

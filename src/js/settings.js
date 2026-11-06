@@ -64,6 +64,19 @@ import { normalizeAssistantGender, ASSISTANT_GENDER_KEY } from "./assistant-genr
 // souvenir) et phrase d'aide. Le modèle EFFECTIF n'est pas décidé ici : il l'est
 // par `assistant_identity::decide_assistant_model`, et l'écriture de la fiche
 // passe par une commande dédiée, sur geste seulement.
+// « Discussion seulement via llama » : décisions d'ÉCRAN pures (case visible ou
+// non, pastille, lien de retour, délais d'attente). Les PHRASES du mode (refus,
+// attente) et la décision d'activation vivent côté socle : ce module ne fait que
+// lire l'état servi par `discussion_seule_state`.
+import {
+  DISCUSSION_ONLY_LABEL,
+  ROLLBACK_LABEL,
+  emptyDiscussionState,
+  normalizeDiscussionState,
+  optionsNotice,
+  rollbackVisible,
+  checkboxVisible,
+} from "./discussion-seule.js";
 import {
   ASSISTANT_MODEL_KEY,
   ASSISTANT_MODEL_NONE,
@@ -670,6 +683,14 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const btnAssistantModelSave = document.getElementById("btn-assistant-model-save");
   const btnAssistantModelClear = document.getElementById("btn-assistant-model-clear");
   const assistantModelStatus = document.getElementById("assistant-model-status");
+  // Case « Discussion seulement via llama » (conception) : visible SEULEMENT
+  // quand un personnage est actif, jamais sans lui.
+  const rowConversationOnly = document.getElementById("assistant-conversation-only-row");
+  const chkConversationOnly = document.getElementById("setting-assistant-conversation-only");
+  const conversationOnlyStatus = document.getElementById("assistant-conversation-only-status");
+  const rowFicheRollback = document.getElementById("assistant-fiche-rollback-row");
+  const btnFicheRollback = document.getElementById("btn-assistant-fiche-rollback");
+  const ficheRollbackStatus = document.getElementById("assistant-fiche-rollback-status");
   const taSuperAgentClients = document.getElementById("setting-superagent-clients");
 
   /**
@@ -811,6 +832,64 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         model: affiche,
       });
     }
+  }
+
+  // ── CASE « Discussion seulement via llama » ──────────────────────────────
+  /** Dernier état lu du mode (mémoire d'écran, aucune persistance ici). */
+  let discussionState = emptyDiscussionState();
+
+  /**
+   * Relit l'état du mode auprès du socle et applique ce que l'écran doit
+   * montrer : la case (seulement avec un personnage actif), sa coche, la ligne
+   * grise « fiche absente / fiche vide », et le lien de retour quand une version
+   * d'avant existe. Fail-open : une panne laisse la case CACHÉE — sans
+   * personnage, l'écran reste exactement celui d'avant.
+   */
+  async function refreshConversationOnly() {
+    try {
+      discussionState = normalizeDiscussionState(await invoke("discussion_seule_state"));
+    } catch (_) {
+      discussionState = emptyDiscussionState();
+    }
+    const visible = checkboxVisible(discussionState);
+    if (rowConversationOnly) rowConversationOnly.hidden = !visible;
+    // La ligne du dessous (phrase sur la fiche) disparaît AVEC la case : sans
+    // personnage, aucune ligne vide ne subsiste dans le panneau.
+    const rowConversationOnlyNote = document.getElementById("assistant-conversation-only-note");
+    if (rowConversationOnlyNote) rowConversationOnlyNote.hidden = !visible;
+    if (chkConversationOnly) {
+      chkConversationOnly.checked = visible && discussionState.active === true;
+      const label = document.querySelector('label[for="setting-assistant-conversation-only"]');
+      if (label) label.textContent = DISCUSSION_ONLY_LABEL;
+    }
+    if (conversationOnlyStatus) {
+      conversationOnlyStatus.textContent = optionsNotice(discussionState);
+    }
+    if (rowFicheRollback) rowFicheRollback.hidden = !rollbackVisible(discussionState);
+    if (btnFicheRollback) btnFicheRollback.textContent = ROLLBACK_LABEL;
+    if (ficheRollbackStatus) ficheRollbackStatus.textContent = "";
+  }
+
+  /**
+   * Coche ou décoche. L'écriture appartient au socle (`set_discussion_seule`) :
+   * décocher RETIRE l'entrée de configuration au lieu d'écrire `false`. Aucun
+   * enregistrement des Options n'est nécessaire, et rien d'autre n'est modifié.
+   */
+  async function applyConversationOnly(active) {
+    const nom = discussionState.persona;
+    if (!nom) return;
+    try {
+      discussionState = normalizeDiscussionState(
+        await invoke("set_discussion_seule", { name: nom, active }),
+      );
+    } catch (_) {
+      /* panne : l'état affiché reste le précédent, aucun message d'erreur */
+    }
+    if (chkConversationOnly) chkConversationOnly.checked = discussionState.active === true;
+    if (conversationOnlyStatus) conversationOnlyStatus.textContent = optionsNotice(discussionState);
+    if (rowFicheRollback) rowFicheRollback.hidden = !rollbackVisible(discussionState);
+    // Le changement doit se voir tout de suite dans l'onglet 🧭 (pastille).
+    window.dispatchEvent(new CustomEvent("pilot-discussion-seule-changed"));
   }
 
   /**
@@ -2299,6 +2378,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
   if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
   await refreshAssistantModel(currentConfig);
+  // La case « Discussion seulement via llama » suit le personnage actif : elle
+  // apparaît avec lui, disparaît sans lui, et dit ce qu'il en est de sa fiche.
+  await refreshConversationOnly();
   await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
   if (taSuperAgentPrompt) {
     taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
@@ -3076,6 +3158,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
           if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
           if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
           await refreshAssistantModel(currentConfig);
+          await refreshConversationOnly();
           await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
           if (taSuperAgentPrompt) {
             taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
@@ -3122,6 +3205,36 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
       applyAssistantModel(ASSISTANT_MODEL_NONE);
     });
   }
+
+  // Case « Discussion seulement via llama » : la coche est écrite à l'instant
+  // par le socle (aucun « Enregistrer » nécessaire), le retour en arrière est un
+  // geste unique et réversible.
+  if (chkConversationOnly) {
+    chkConversationOnly.addEventListener("change", () => {
+      applyConversationOnly(chkConversationOnly.checked === true);
+    });
+  }
+  if (btnFicheRollback) {
+    btnFicheRollback.addEventListener("click", async () => {
+      try {
+        const res = await invoke("persona_fiche_rollback");
+        if (ficheRollbackStatus) {
+          ficheRollbackStatus.textContent =
+            res && typeof res.message === "string" && res.message
+              ? res.message
+              : "Aucune version précédente à remettre.";
+        }
+      } catch (e) {
+        if (ficheRollbackStatus) ficheRollbackStatus.textContent = String(e);
+      }
+      await refreshConversationOnly();
+    });
+  }
+  // Le personnage peut changer pendant que les Options sont ouvertes : la case
+  // suit (apparaît, disparaît, se recoche) sans redémarrer Pilot.
+  window.addEventListener("pilot-assistant-persona-changed", () => {
+    refreshConversationOnly().catch(() => {});
+  });
 
   // Tâche 416 — RÉPARER : le SEUL chemin de nettoyage du texte qui fige un
   // personnage. Un clic, sur un texte que l'on voit ; rien ne part tant que

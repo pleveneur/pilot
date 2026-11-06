@@ -191,6 +191,12 @@ pub struct AgentService {
     // RpcSession orphelin ferme ses pipes → `process_exit` fantôme
     // (« Connexion au super-agent perdue ») et relance en boucle.
     superagent_start_lock: Mutex<()>,
+    // CASE « Discussion seulement via llama » : le MODE avec lequel la session
+    // vivante a été lancée (`None` = jamais lancée). Il décide d'une SEULE chose :
+    // si le mode demandé n'est plus le sien, la session est RELANCÉE — sans quoi
+    // décocher la case laisserait une session sans outils (ou l'inverse), et le
+    // retour au comportement habituel exigerait un redémarrage de Pilot.
+    superagent_conversation_only: Mutex<Option<bool>>,
     // 5.1 : handle d'application posé au setup, nécessaire pour émettre les
     // événements `agent-state-changed` depuis les transitions de session
     // (start/pause/stop) qui ne reçoivent pas `app` en paramètre.
@@ -556,6 +562,7 @@ impl AgentService {
                 blocked_until: None,
             }),
             superagent_start_lock: Mutex::new(()),
+            superagent_conversation_only: Mutex::new(None),
             superagent_ext: Mutex::new(None),
             anomaly_map: Mutex::new(None),
             last_prompts: Mutex::new(HashMap::new()),
@@ -2648,6 +2655,7 @@ impl AgentService {
         pi_path: &str,
         default_model: Option<(String, String)>,
         thinking_level: &str,
+        conversation_only: bool,
     ) -> Result<(), String> {
         // Anti-course : sérialise le démarrage. Plusieurs commandes concurrentes
         // (start_super_agent_session, get_super_agent_state, send_super_agent_prompt)
@@ -2659,6 +2667,36 @@ impl AgentService {
         // d'erreur `?`) est relâché à la fin de la fonction.
         let _start_guard = self.superagent_start_lock.lock().unwrap();
         let key = Self::session_key("", SUPERAGENT_ID);
+        // MÊME MODE ? Une session VIVANTE n'est réutilisée que si elle a été
+        // lancée dans le mode demandé. Cocher ou décocher « Discussion seulement
+        // via llama » en pleine session doit s'appliquer au message SUIVANT :
+        // sans cette comparaison, la session garderait ses extensions (aucun
+        // outil de travail, ou tous) et son modèle d'avant, et revenir au
+        // comportement habituel exigerait de redémarrer Pilot (contraire à la
+        // conception §3.4 et §1.5). L'arrêt passe par `stop_superagent`, qui
+        // retire l'entrée du registre : la suite redevient le chemin de création,
+        // sans être comptée comme un plantage par la politique anti-boucle.
+        let mode_vivant = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let vivante = sessions
+                .get_mut(&key)
+                .map(|e| {
+                    e.session
+                        .child
+                        .try_wait()
+                        .map(|s| s.is_none())
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            if vivante {
+                *self.superagent_conversation_only.lock().unwrap()
+            } else {
+                None
+            }
+        };
+        if superagent_mode_mismatch(mode_vivant, conversation_only) {
+            self.stop_superagent()?;
+        }
         {
             let mut sessions = self.sessions.lock().unwrap();
             if let Some(entry) = sessions.get_mut(&key) {
@@ -2710,7 +2748,7 @@ impl AgentService {
         }
         // P0 (issue #84) : sur échec de spawn, enrichir le diagnostic avec
         // l'hypothèse d'extensions projet (.pi/extensions) si présentes.
-        let session = match Self::spawn_superagent_session(app, cwd, pi_path) {
+        let session = match Self::spawn_superagent_session(app, cwd, pi_path, conversation_only) {
             Ok(s) => s,
             Err(e) => return Err(append_ext_diag_hint(cwd, e)),
         };
@@ -2728,6 +2766,9 @@ impl AgentService {
         }
         // Enregistrer l'instant de démarrage pour la détection de crash rapide.
         *self.superagent_last_start.lock().unwrap() = Some(Instant::now());
+        // Mode de la session qui vient de naître : c'est lui, et lui seul, qui
+        // autorise la réutilisation au message suivant (voir `mode_a_change`).
+        *self.superagent_conversation_only.lock().unwrap() = Some(conversation_only);
         // Démarrer une nouvelle session (contexte vierge) puis appliquer le
         // modèle par défaut (registre global) pour répondre au 1er prompt.
         let cmd = serde_json::json!({ "type": "new_session" });
@@ -3411,6 +3452,7 @@ impl AgentService {
         app: &AppHandle,
         cwd: &str,
         pi_path: &str,
+        conversation_only: bool,
     ) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
         let mcp_enabled = state.config_snapshot().mcp_enabled;
@@ -3451,10 +3493,22 @@ impl AgentService {
                         // par Pilot (aucun processus externe, ni Node ni MCP).
                         ("pilot-face.ts", include_str!("../extensions/pilot-face.ts")),
                     ];
+                    // CASE « Discussion seulement via llama » : le personnage
+                    // n'a AUCUN outil de travail (aucun agent, aucun fichier de
+                    // projet, aucune base de suivi, aucun réseau) — seulement le
+                    // droit d'écrire dans sa propre fiche. La liste est
+                    // REMPLACÉE, jamais complétée : ce qui n'est pas listé ici
+                    // n'existe pas dans cette session.
+                    if conversation_only {
+                        files = vec![(
+                            "pilot-persona-fiche.ts",
+                            include_str!("../extensions/pilot-persona-fiche.ts"),
+                        )];
+                    }
                     // Assistant piloté MCP (brique A) : si MCP est activé, l'assistant
                     // charge l'extension client MCP (comme l'agent standard) pour
                     // découvrir les serveurs avec ses outils mcp_<serveur>_<outil>.
-                    if mcp_enabled {
+                    if mcp_enabled && !conversation_only {
                         files.push((
                             "pilot-mcp-client.ts",
                             include_str!("../extensions/pilot-mcp-client.ts"),
@@ -3474,20 +3528,26 @@ impl AgentService {
                     }
                     // Règle « agent jetable par défaut » (source unique),
                     // importée par `pilot-assistant-actions.ts`.
-                    if let Err(e) = Self::write_agent_lifespan_rule(&dir) {
-                        report.failures.push(e);
-                    }
-                    // Service Laya : l'outil `laya_classify` doit être disponible
-                    // pour la session de l'assistant comme pour tout autre agent.
-                    match Self::write_laya_extension(&dir) {
-                        Ok(laya_file) => report.paths.push(laya_file),
-                        Err(e) => report.failures.push(e),
-                    }
-                    // Export PDF sans impression (outil `export_markdown_pdf`) :
-                    // l'assistant peut produire un vrai PDF, sans dialogue.
-                    match Self::write_pdf_extension(&dir) {
-                        Ok(pdf_file) => report.paths.push(pdf_file),
-                        Err(e) => report.failures.push(e),
+                    //
+                    // En « Discussion seulement », aucun de ces trois outils de
+                    // travail n'est écrit NI transmis : ni règle d'agents, ni
+                    // classifieur Laya, ni export PDF.
+                    if !conversation_only {
+                        if let Err(e) = Self::write_agent_lifespan_rule(&dir) {
+                            report.failures.push(e);
+                        }
+                        // Service Laya : l'outil `laya_classify` doit être disponible
+                        // pour la session de l'assistant comme pour tout autre agent.
+                        match Self::write_laya_extension(&dir) {
+                            Ok(laya_file) => report.paths.push(laya_file),
+                            Err(e) => report.failures.push(e),
+                        }
+                        // Export PDF sans impression (outil `export_markdown_pdf`) :
+                        // l'assistant peut produire un vrai PDF, sans dialogue.
+                        match Self::write_pdf_extension(&dir) {
+                            Ok(pdf_file) => report.paths.push(pdf_file),
+                            Err(e) => report.failures.push(e),
+                        }
                     }
                     Self::log_extension_failures("super-agent", &report);
                     extensions = report.paths;
@@ -3528,6 +3588,7 @@ impl AgentService {
         // activés (plus de « un seul serveur à la fois »), donc chaque serveur
         // reçoit SA clé via la table `PILOT_MCP_SECRETS`, jamais une clé unique.
         let mcp_env_vars: Option<Vec<(String, String)>> = if mcp_enabled
+            && !conversation_only
             && extensions.iter().any(|e| e.contains("pilot-mcp-client.ts"))
         {
             app.path().app_data_dir().ok().map(|d| {
@@ -4640,6 +4701,25 @@ pub fn list_common_skills() -> Vec<CommonSkillInfo> {
         .unwrap_or_default()
 }
 
+/// LA SESSION VIVANTE SERT-ELLE ENCORE POUR LE MODE DEMANDÉ ? Décision PURE,
+/// testable sans lancer aucun processus.
+///
+/// `live` = le mode de la session VIVANTE (`None` : aucune session vivante, ou
+/// mode inconnu parce qu'elle n'a jamais été lancée par ce chemin).
+///
+/// Réponse : on ne relance QUE si une session vit et que son mode n'est plus
+/// celui demandé. Deux conséquences voulues :
+///   - aucune session vivante → rien à relancer (le chemin de création s'en
+///     charge), donc jamais un arrêt inutile ;
+///   - mode inconnu (`None`) → on ne tue rien : c'est le cas d'une session
+///     héritée d'un état antérieur, elle reste utilisable (fail-open).
+pub(crate) fn superagent_mode_mismatch(live: Option<bool>, wanted: bool) -> bool {
+    match live {
+        Some(mode) => mode != wanted,
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5488,6 +5568,31 @@ mod tests {
         assert!(svc.stop_owned(proj, agent, Some(1)).is_ok());
         assert!(svc.session_of(proj, agent).is_err());
         assert_eq!(svc.session_uid(proj, agent), None, "uid purgé avec la session");
+    }
+
+    /// CASE « Discussion seulement via llama » : la session vivante n'est
+    /// réutilisée QUE dans le mode pour lequel elle a été lancée. Sans cette
+    /// règle, décocher la case laissait une session sans outils de travail (ou
+    /// cochée, une session avec tous les outils) jusqu'au redémarrage de Pilot —
+    /// exactement ce que la conception interdit (§3.4, §1.5).
+    #[test]
+    fn la_session_de_l_assistant_est_relancee_quand_le_mode_change() {
+        // Aucune session vivante : rien à relancer, le chemin de création s'en
+        // charge (une session inexistante n'est jamais « arrêtée »).
+        assert!(!superagent_mode_mismatch(None, true));
+        assert!(!superagent_mode_mismatch(None, false));
+        // Mode inchangé : réutilisation (idempotence d'origine préservée).
+        assert!(!superagent_mode_mismatch(Some(false), false));
+        assert!(!superagent_mode_mismatch(Some(true), true));
+        // Mode changé : relance, dans les deux sens (cocher ET décocher).
+        assert!(superagent_mode_mismatch(Some(false), true));
+        assert!(superagent_mode_mismatch(Some(true), false));
+        // Le mode est MÉMORISÉ au lancement, et inconnu avant tout lancement :
+        // c'est ce qui rend la comparaison possible sans variable parallèle.
+        let svc = AgentService::new();
+        assert_eq!(*svc.superagent_conversation_only.lock().unwrap(), None);
+        *svc.superagent_conversation_only.lock().unwrap() = Some(true);
+        assert_eq!(*svc.superagent_conversation_only.lock().unwrap(), Some(true));
     }
 
     /// La session du super-agent (Assistant 🧭) vit dans le registre

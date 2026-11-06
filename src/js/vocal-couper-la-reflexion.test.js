@@ -225,10 +225,16 @@ describe("1. le chemin d'arret est REUTILISE, pas duplique", () => {
     // par le bouton Stop et par la voix. Le lot 4b n'en ajoute pas un 4e : il
     // rejoint le troisieme.
     expect(combien(SUPER, /invoke\("abort_super_agent"\)/g)).toBe(3);
-    // Une SEULE definition, et exactement deux appelants (bouton Stop, prise de
-    // parole) : un troisieme appelant serait un second mecanisme d'arrete.
+    // Une SEULE definition, et trois appelants qui passent TOUS par elle :
+    //   (1) le bouton Stop,
+    //   (2) la prise de parole en mode Vocal,
+    //   (3) le REFUS À 60 SECONDES de « Discussion seulement via llama »
+    //       (conception §2.3 : au-delà du délai long, le tour est arrete et le
+    //       message garde).
+    // Ce qui reste interdit, et que ce test tient : un arrete ECRIT AILLEURS
+    // (aucun 4e `invoke("abort_super_agent")`), donc aucun second mecanisme.
     expect(combien(SUPER, /async function stopSuperAgentTurn\(\)/g)).toBe(1);
-    expect(combien(SUPER, /(?:await |void )stopSuperAgentTurn\(\)/g)).toBe(2);
+    expect(combien(SUPER, /(?:await |void )stopSuperAgentTurn\(\)/g)).toBe(3);
   });
 
   it("la coupure vocale ne contient AUCUN IPC et n'arrete que ce qu'il faut", () => {

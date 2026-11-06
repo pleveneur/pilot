@@ -264,15 +264,20 @@ describe("modèle par personnage — jamais bloquant, toujours dit, jamais impos
   });
 
   it("la fiche n'est lue que sur le chemin de l'Assistant", () => {
-    // Un seul fichier Rust APPELLE la lecture de l'identité du personnage actif :
-    // le prompt et le modèle de l'ASSISTANT (`persona.rs` la DÉFINIT, il ne
-    // l'appelle pas). Aucune couche agent ne la consulte.
+    // La lecture de l'identité du personnage actif n'appartient qu'au chemin de
+    // l'ASSISTANT (`persona.rs` la DÉFINIT, il ne l'appelle pas). Aucune couche
+    // agent ne la consulte. Deux appelants, tous deux sur ce chemin :
+    //   - `super_agent.rs` (prompt, nom affiché, modèle du personnage) ;
+    //   - `persona_fiche.rs` (lot « Discussion seulement via llama ») : la
+    //     commande qui écrit la fiche doit savoir QUEL personnage écrire, et il
+    //     n'existe qu'UN résolveur de personnage actif — en ouvrir un second
+    //     ferait diverger la réponse d'avec celle de l'écran.
     const fichiers = readdirSync("src-tauri/src").filter((f) => f.endsWith(".rs"));
     const appelants = fichiers.filter((f) => {
       if (f === "persona.rs") return false; // définition, pas un appel
       return read(`src-tauri/src/${f}`).includes("read_active_persona_identity");
     });
-    expect(appelants).toEqual(["super_agent.rs"]);
+    expect(appelants.sort()).toEqual(["persona_fiche.rs", "super_agent.rs"]);
   });
 
   it("la sélection de modèle par couple (projet, agent) reste sur SA session", () => {

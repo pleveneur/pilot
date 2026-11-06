@@ -104,6 +104,12 @@ mod mcp_config;
 // `nom.txt` + `portrait.png` dans `<app_data_dir>/.pilot/portrait/` ; Pilot ne
 // fait que LIRE (voir persona.rs, commande `read_assistant_persona`).
 mod persona;
+// CASE « Discussion seulement via llama » (conception du 2026-11) : décisions
+// PURES du mode (case par personnage, phrases de refus, cadre du personnage) et
+// LECTURE/ÉCRITURE de la fiche du personnage actif dans Présences (§ 4 : la
+// seule écriture autorisée). Aucun autre module ne décide ni n'écrit cela.
+mod discussion_seule;
+mod persona_fiche;
 // IDENTITÉ de l'Assistant : son GENRE (tâche 402) et son MODÈLE par défaut
 // porté par la fiche du personnage (tâche 403). Décisions PURES (aucune lecture
 // disque, aucune session) : une seule autorité pour la phrase de genre et pour
@@ -748,6 +754,22 @@ struct AppConfig {
     // lecture) vit côté fenêtre dans `character-voices.js`.
     #[serde(default)]
     character_voices: HashMap<String, String>,
+    // CASE « Discussion seulement via llama », PROPRE À CHAQUE PERSONNAGE (clé =
+    // son nom) : `true` = le personnage discute seulement, avec son modèle local,
+    // sans aucun outil de travail. Une clé absente (ou `false`) = fonctionnement
+    // habituel, à l'octet près. Champ absent d'une configuration existante ⇒
+    // carte vide, aucune migration, aucun comportement changé. Désactiver RETIRE
+    // l'entrée ; la décision (une seule) vit dans `discussion_seule::is_active`.
+    #[serde(default)]
+    character_conversation_only: HashMap<String, bool>,
+    // PROVENANCE de l'écriture de la fiche (§ 4.3), PROPRE À CHAQUE PERSONNAGE :
+    // nom → (champ de contenu → dernière valeur que le personnage a écrite
+    // lui-même). Un passage dont la valeur actuelle ne correspond pas à cette
+    // trace est réputé écrit par le propriétaire : il n'est jamais réécrit sans
+    // accord explicite. Trace gardée dans la configuration de PILOT, jamais dans
+    // le dossier de Présences (qui ne la connaît pas).
+    #[serde(default)]
+    character_fiche_authors: HashMap<String, HashMap<String, String>>,
     // Mode Vocal (écran vocal) : DÉLAI D'ENVOI après le dernier mot transcrit,
     // en millisecondes. Réglé UNIQUEMENT dans Paramètres → onglet « Assistant »
     // → section « Mode Vocal » (curseur de 1 à 5 s, pas de 0,5 s). Défaut 2000
@@ -1317,6 +1339,8 @@ impl Default for AppConfig {
             assistant_sound_volume: default_assistant_sound_volume(),
             read_aloud_voice: String::new(),
             character_voices: HashMap::new(),
+            character_conversation_only: HashMap::new(),
+            character_fiche_authors: HashMap::new(),
             vocal_silence_send_ms: default_vocal_silence_send_ms(),
             vocal_brevity_level: default_vocal_brevity_level(),
             local_dictation: false,
@@ -3823,6 +3847,13 @@ pub fn run() {
             persona::read_assistant_persona_stamp,
             persona::read_assistant_persona_model,
             persona::write_assistant_persona_model,
+            // CASE « Discussion seulement via llama » : état du mode (une seule
+            // source pour la case, la pastille et les phrases), activation par
+            // personnage, écriture de la fiche, retour à la version précédente.
+            persona_fiche::discussion_seule_state,
+            persona_fiche::set_discussion_seule,
+            persona_fiche::persona_fiche_write,
+            persona_fiche::persona_fiche_rollback,
             tts_local_download::tts_local_download,
             tts_local_download::tts_local_cancel_download,
             tts_local_download::tts_local_download_state,
@@ -4402,6 +4433,80 @@ mod tests {
         let reloaded: AppConfig =
             serde_json::from_str(r#"{"super_agent_schedule_interval_secs":900}"#).unwrap();
         assert_eq!(reloaded.super_agent_schedule_interval_secs, 900);
+    }
+
+    #[test]
+    fn character_conversation_only_field_is_additive_and_backward_compatible() {
+        // Configuration EXISTANTE (champ absent) : carte vide, donc AUCUN
+        // personnage en discussion seule — le comportement habituel, à l'octet
+        // près (c'est le cas normal, et il ne doit jamais changer).
+        let legacy: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(legacy.character_conversation_only.is_empty());
+        assert!(AppConfig::default().character_conversation_only.is_empty());
+        assert!(legacy.character_fiche_authors.is_empty());
+        // Carte écrite par la fenêtre : relue à l'identique, sans toucher au
+        // reste de la configuration.
+        let reloaded: AppConfig = serde_json::from_str(
+            r#"{"character_conversation_only":{"Sylvie":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(reloaded.character_conversation_only.get("Sylvie"), Some(&true));
+        let vide: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(reloaded.theme, vide.theme);
+        assert!(reloaded.character_voices.is_empty());
+    }
+
+    #[test]
+    fn la_case_desactivee_retire_l_entree_au_lieu_d_ecrire_false() {
+        // Décision de la conception : décocher REMET la configuration dans
+        // l'état d'avant (aucune entrée), sinon un `false` traînerait dans le
+        // fichier pour un personnage à qui on n'a jamais rien demandé.
+        let mut carte: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+        crate::discussion_seule::set_state(&mut carte, "Sylvie", true);
+        assert_eq!(carte.get("Sylvie"), Some(&true));
+        crate::discussion_seule::set_state(&mut carte, "sylvie ", true);
+        assert_eq!(carte.len(), 1, "une seule entrée par personnage, casse ignorée");
+        crate::discussion_seule::set_state(&mut carte, "Sylvie", false);
+        assert!(carte.is_empty(), "désactiver retire l'entrée");
+        assert!(!crate::discussion_seule::is_active(&carte, Some("Sylvie")));
+        // Le personnage VOISIN n'est jamais touché.
+        crate::discussion_seule::set_state(&mut carte, "Nova", true);
+        crate::discussion_seule::set_state(&mut carte, "Sylvie", true);
+        crate::discussion_seule::set_state(&mut carte, "Sylvie", false);
+        assert_eq!(carte.get("Nova"), Some(&true));
+    }
+
+    #[test]
+    fn la_sentinelle_et_l_outil_de_la_fiche_sont_ecrits_une_seule_fois() {
+        // Source unique : Rust rédige la sentinelle et le nom de l'outil, la
+        // fenêtre et l'extension les portent. Ce verrou échoue si l'un des
+        // deux textes diverge (une sentinelle recopiée à la main finirait par
+        // ne plus correspondre, et l'écriture de la fiche cesserait en
+        // silence).
+        let extension = include_str!("../extensions/pilot-persona-fiche.ts");
+        assert!(extension.contains(crate::discussion_seule::FICHE_SENTINEL));
+        assert!(extension.contains(&format!("name: \"{}\"", crate::discussion_seule::FICHE_TOOL_NAME)));
+        // L'extension n'est PAS une extension de travail : elle ne déclare
+        // qu'un outil, celui de la fiche.
+        assert_eq!(extension.matches("pi.registerTool(").count(), 1);
+        assert!(!extension.contains("bash"));
+        assert!(!extension.contains("write_file"));
+    }
+
+    #[test]
+    fn les_phrases_du_mode_sont_celles_de_la_conception() {
+        // Refus (mode écrit) : le message est GARDÉ, aucune bascule silencieuse.
+        assert!(crate::discussion_seule::REFUSAL_TEXT.contains("ton message est gardé"));
+        assert!(crate::discussion_seule::REFUSAL_TEXT.contains("décoche"));
+        assert!(crate::discussion_seule::REFUSAL_VOCAL.contains("ton message est gardé"));
+        // La pastille est exactement le libellé prévu.
+        assert_eq!(crate::discussion_seule::BADGE_LABEL, "Discussion seule");
+        // La seule addition textuelle du lot, et elle dit où régler le modèle.
+        assert!(crate::discussion_seule::NO_LOCAL_MODEL_SENTENCE.contains("Modèle du personnage"));
+        assert!(crate::discussion_seule::NO_LOCAL_MODEL_SENTENCE.contains("Rien n'est parti vers un autre moteur"));
+        // Délais de la ligne d'attente et du refus.
+        assert_eq!(crate::discussion_seule::WAITING_NOTICE_MS, 3_000);
+        assert_eq!(crate::discussion_seule::WAITING_TIMEOUT_MS, 60_000);
     }
 
     #[test]

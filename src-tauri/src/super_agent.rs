@@ -293,10 +293,45 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
     // dans `assistant_identity::decide_assistant_model`, seule autorité testable.
     // La fiche du personnage est lue légèrement (trois petits fichiers texte,
     // jamais le portrait) et FAIL-OPEN : aucune fiche = chaîne de Pilot.
-    let default_model = assistant_session_model(app, state, &pi_path).model;
-    state
-        .agent_service
-        .start_superagent(app, &cwd, &pi_path, default_model, &thinking_level)
+    // CASE « Discussion seulement via llama » : décidée par la source unique
+    // `discussion_seule`, sur la carte de la CONFIGURATION (clé = nom du
+    // personnage actif). Case décochée ou aucun personnage ⇒ `false` ⇒ la suite
+    // est EXACTEMENT celle d'avant, à l'octet près.
+    let conversation_only = discussion_seule_is_active(state, app);
+    let default_model = if conversation_only {
+        // Le personnage ne parle QU'AVEC le modèle de sa fiche, servi par le
+        // llama local. Aucun repli : sans modèle de personnage utilisable, la
+        // session n'est pas démarrée du tout et la phrase le dit.
+        let decision = assistant_session_model(app, state, &pi_path);
+        match (decision.model, decision.source) {
+            (Some((provider, model_id)), crate::assistant_identity::AssistantModelSource::Persona) => {
+                Some((provider, model_id))
+            }
+            _ => return Err(crate::discussion_seule::NO_LOCAL_MODEL_SENTENCE.to_string()),
+        }
+    } else {
+        assistant_session_model(app, state, &pi_path).model
+    };
+    state.agent_service.start_superagent(
+        app,
+        &cwd,
+        &pi_path,
+        default_model,
+        &thinking_level,
+        conversation_only,
+    )
+}
+
+/// Vrai quand la case du PERSONNAGE ACTIF est cochée (source unique :
+/// `discussion_seule::is_active`). Fail-open : toute panne de lecture du nom ou
+/// de la configuration rend `false`, donc le comportement habituel.
+pub(crate) fn discussion_seule_is_active(state: &AppState, app: &AppHandle) -> bool {
+    let nom = crate::persona::read_active_persona_identity(app).name;
+    let carte = {
+        let cfg = state.config.lock().unwrap();
+        cfg.character_conversation_only.clone()
+    };
+    crate::discussion_seule::is_active(&carte, nom.as_deref())
 }
 
 /// Modèle EFFECTIF de la session de l'assistant, avec la FICHE DU PERSONNAGE
@@ -926,92 +961,105 @@ pub(crate) fn do_send_super_agent_prompt(
 ) -> Result<(), String> {
     // Démarrage paresseux : garantit qu'une session existe avant d'envoyer.
     do_start_super_agent_session(state, app)?;
-    // T4 : au début d'un envoi réel, rejouer les résumés en attente (couvre le
-    // web remote et le premier envoi). Fire-and-forget : un échec de rejeu ne
-    // bloque pas le message utilisateur.
-    let _ = replay_pending_superagent_summaries(state, app);
-    // Prompt système : nom de l'assistant + rôle de suivi multi-projets + prompt
-    // personnalisé (configurable). Le nom est toujours injecté pour que
-    // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
-    // prompt personnalisé.
-    let (configured_name, custom_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly) = {
-        let cfg = state.config.lock().unwrap();
-        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_coordinator, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly)
+    // CASE « Discussion seulement via llama » : le personnage ne reçoit QUE sa
+    // fiche + le cadre du mode + la demande, mot pour mot. Aucun rôle de suivi,
+    // aucun contexte projet, aucune mémoire, aucun prompt personnalisé : c'est
+    // la SEULE composition de ce mode (`discussion_seule::build_message`).
+    //
+    // DEUX compositions possibles, UN SEUL envoi : la commande, le
+    // `send_superagent` et le signal d'engagement restent ci-dessous, à un
+    // seul endroit, pour les deux modes (verrou `relances-relecture`).
+    let full_message = if discussion_seule_is_active(state, app) {
+        discussion_seule_full_message(app, &message)
+    } else {
+        // T4 : au début d'un envoi réel, rejouer les résumés en attente (couvre le
+        // web remote et le premier envoi). Fire-and-forget : un échec de rejeu ne
+        // bloque pas le message utilisateur. Jamais en discussion seule : le
+        // personnage ne suit rien, il n'a aucun résumé à recevoir.
+        let _ = replay_pending_superagent_summaries(state, app);
+        // Prompt système : nom de l'assistant + rôle de suivi multi-projets + prompt
+        // personnalisé (configurable). Le nom est toujours injecté pour que
+        // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
+        // prompt personnalisé.
+        let (configured_name, custom_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly) = {
+            let cfg = state.config.lock().unwrap();
+            (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_coordinator, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly)
+        };
+        // La fiche du personnage est lue LÉGÈREMENT (trois petits fichiers texte,
+        // jamais le portrait) et UNE fois par message : rien de l'identité n'est
+        // mémoïsé, donc un personnage activé ou désactivé s'applique dès le message
+        // suivant, sans redémarrage.
+        let persona_identity = crate::persona::read_active_persona_identity(app);
+        // NOM : règle UNIQUE, celle de la fenêtre (`assistant_display_name` :
+        // personnage actif → nom réglé → « Assistant »). L'ancien code composait le
+        // rôle avec le seul nom réglé : un personnage actif n'était donc pas nommé
+        // côté moteur, et le texte d'instructions pouvait imposer un autre nom.
+        let name = crate::assistant_identity::assistant_display_name(
+            persona_identity.name.as_deref(),
+            &configured_name,
+        );
+        let role_text = SUPER_AGENT_ROLE_TEMPLATE.replacen("{}", &name, 1);
+        // Les instructions du propriétaire RÉFÉRENCENT le nom (`{nom}`) au lieu de le
+        // recopier : la référence est résolue ICI, à chaque message, par la même
+        // règle. Un texte sans jeton est rendu inchangé, à l'octet près.
+        let system_prompt = crate::assistant_identity::resolve_instruction_name(&custom_prompt, &name);
+        // IDENTITÉ (tâche 402) : le GENRE de l'assistant, quand l'utilisateur en a
+        // réglé un (ou quand la fiche du personnage actif en porte un). Le bloc est
+        // construit à UN SEUL endroit (`assistant_identity::assistant_identity_block`)
+        // et vaut `""` quand rien n'est réglé : le prompt reste alors exactement
+        // celui d'avant. Lecture LÉGÈRE de la fiche (nom, genre, modèle — jamais le
+        // portrait) et fail-open : aucune fiche lisible = réglage de Pilot.
+        let configured_gender = {
+            let cfg = state.config.lock().unwrap();
+            cfg.assistant_gender.clone()
+        };
+        let identity = crate::assistant_identity::assistant_identity_block(
+            persona_identity.gender.as_deref().unwrap_or(""),
+            &configured_gender,
+        );
+        // Contexte projet : le projet actuellement actif dans Pilot + le projet sur
+        // lequel l'assistant travaillait (dernier projet ouvert via `open_project`).
+        // Le projet ACTIF est TOUJOURS la cible par défaut (issue #40).
+        let active_project = state.active_project.lock().unwrap().clone();
+        let working_project = state.working_project.lock().unwrap().clone();
+        let project_context =
+            build_project_context(active_project.as_deref(), working_project.as_deref());
+        // Apprendre où se trouvent les projets : injecter la liste des projets
+        // connus de la base (s'enrichit au fil des discussions / sessions).
+        let known_projects = known_projects_context(app);
+        // Agents du registre + outils d'agents + flux « plan-maker » : l'assistant
+        // doit connaître les agents disponibles et la procédure de planification
+        // avant délégation au codeur.
+        let available_agents = available_agents_context(state, app);
+        // Mémoire de session (reprise) : après un redémarrage de Pilot, la session
+        // repart de zéro. On réinjecte le résumé de la dernière session pour que
+        // l'assistant reprenne naturellement là où on en était dès le premier
+        // message. Fail-open : sans mémoire, on n'injecte rien.
+        let session_memory = read_session_memory(app)
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_default();
+        // Assemblage du prompt système : les règles figées (outils, résilience,
+        // AGENTS.md, anti-boucle, supervision, anti-attente, schedule) et les
+        // guidelines de style vivent dans `assemble_super_agent_system_prompt`,
+        // fonction pure partagée avec les tests de mesure / anti-regonflement.
+        let blocks = SuperAgentPromptBlocks {
+            role: &role_text,
+            identity: &identity,
+            project_context: &project_context,
+            known_projects: &known_projects,
+            available_agents: &available_agents,
+            custom_prompt: &system_prompt,
+            user_memory: &user_memory,
+            session_memory: &session_memory,
+            concise,
+            coordinator,
+            user_friendly,
+            adaptive_personality,
+            personality: &personality,
+        };
+        let full_system = assemble_super_agent_system_prompt(&blocks);
+        format!("{}\n\n{}", full_system, message)
     };
-    // La fiche du personnage est lue LÉGÈREMENT (trois petits fichiers texte,
-    // jamais le portrait) et UNE fois par message : rien de l'identité n'est
-    // mémoïsé, donc un personnage activé ou désactivé s'applique dès le message
-    // suivant, sans redémarrage.
-    let persona_identity = crate::persona::read_active_persona_identity(app);
-    // NOM : règle UNIQUE, celle de la fenêtre (`assistant_display_name` :
-    // personnage actif → nom réglé → « Assistant »). L'ancien code composait le
-    // rôle avec le seul nom réglé : un personnage actif n'était donc pas nommé
-    // côté moteur, et le texte d'instructions pouvait imposer un autre nom.
-    let name = crate::assistant_identity::assistant_display_name(
-        persona_identity.name.as_deref(),
-        &configured_name,
-    );
-    let role_text = SUPER_AGENT_ROLE_TEMPLATE.replacen("{}", &name, 1);
-    // Les instructions du propriétaire RÉFÉRENCENT le nom (`{nom}`) au lieu de le
-    // recopier : la référence est résolue ICI, à chaque message, par la même
-    // règle. Un texte sans jeton est rendu inchangé, à l'octet près.
-    let system_prompt = crate::assistant_identity::resolve_instruction_name(&custom_prompt, &name);
-    // IDENTITÉ (tâche 402) : le GENRE de l'assistant, quand l'utilisateur en a
-    // réglé un (ou quand la fiche du personnage actif en porte un). Le bloc est
-    // construit à UN SEUL endroit (`assistant_identity::assistant_identity_block`)
-    // et vaut `""` quand rien n'est réglé : le prompt reste alors exactement
-    // celui d'avant. Lecture LÉGÈRE de la fiche (nom, genre, modèle — jamais le
-    // portrait) et fail-open : aucune fiche lisible = réglage de Pilot.
-    let configured_gender = {
-        let cfg = state.config.lock().unwrap();
-        cfg.assistant_gender.clone()
-    };
-    let identity = crate::assistant_identity::assistant_identity_block(
-        persona_identity.gender.as_deref().unwrap_or(""),
-        &configured_gender,
-    );
-    // Contexte projet : le projet actuellement actif dans Pilot + le projet sur
-    // lequel l'assistant travaillait (dernier projet ouvert via `open_project`).
-    // Le projet ACTIF est TOUJOURS la cible par défaut (issue #40).
-    let active_project = state.active_project.lock().unwrap().clone();
-    let working_project = state.working_project.lock().unwrap().clone();
-    let project_context =
-        build_project_context(active_project.as_deref(), working_project.as_deref());
-    // Apprendre où se trouvent les projets : injecter la liste des projets
-    // connus de la base (s'enrichit au fil des discussions / sessions).
-    let known_projects = known_projects_context(app);
-    // Agents du registre + outils d'agents + flux « plan-maker » : l'assistant
-    // doit connaître les agents disponibles et la procédure de planification
-    // avant délégation au codeur.
-    let available_agents = available_agents_context(state, app);
-    // Mémoire de session (reprise) : après un redémarrage de Pilot, la session
-    // repart de zéro. On réinjecte le résumé de la dernière session pour que
-    // l'assistant reprenne naturellement là où on en était dès le premier
-    // message. Fail-open : sans mémoire, on n'injecte rien.
-    let session_memory = read_session_memory(app)
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_default();
-    // Assemblage du prompt système : les règles figées (outils, résilience,
-    // AGENTS.md, anti-boucle, supervision, anti-attente, schedule) et les
-    // guidelines de style vivent dans `assemble_super_agent_system_prompt`,
-    // fonction pure partagée avec les tests de mesure / anti-regonflement.
-    let blocks = SuperAgentPromptBlocks {
-        role: &role_text,
-        identity: &identity,
-        project_context: &project_context,
-        known_projects: &known_projects,
-        available_agents: &available_agents,
-        custom_prompt: &system_prompt,
-        user_memory: &user_memory,
-        session_memory: &session_memory,
-        concise,
-        coordinator,
-        user_friendly,
-        adaptive_personality,
-        personality: &personality,
-    };
-    let full_system = assemble_super_agent_system_prompt(&blocks);
-    let full_message = format!("{}\n\n{}", full_system, message);
     // MISSION COURTE : déduite de la DEMANDE (`message`), jamais du prompt
     // système de règles qui la précède dans le message envoyé. Sans cela, le
     // panneau des tâches affichait un extrait des règles de l'assistant.
@@ -1019,12 +1067,32 @@ pub(crate) fn do_send_super_agent_prompt(
     let sent = state.agent_service.send_superagent(cmd);
     // SIGNAL UNIQUE d'engagement : le propriétaire a réellement écrit. Émis
     // seulement si l'envoi a réussi (un envoi raté ne prouve pas qu'il a parlé),
-    // donc après le `send_superagent`.
+    // donc après le `send_superagent`. Il vaut pour les DEUX modes.
     if sent.is_ok() {
         emit_owner_engaged(app);
     }
     sent
 }
+
+
+/// COMPOSITION « DISCUSSION SEULE » : la demande part avec l'identité de la
+/// fiche et le cadre du mode, rien d'autre. Aucune mémoire de session, aucun
+/// contexte projet, aucun résumé en attente (le personnage ne suit rien).
+/// Aucun prompt personnalisé, aucun rôle de suivi : la fiche SEULE fait
+/// l'identité (`discussion_seule::build_message`, source unique).
+fn discussion_seule_full_message(app: &AppHandle, message: &str) -> String {
+    let nom = crate::persona::read_active_persona_identity(app)
+        .name
+        .unwrap_or_default();
+    let fiche = match crate::persona_fiche::presences_root_from_env(
+        app.path().home_dir().ok().as_deref(),
+    ) {
+        Some(root) => crate::persona_fiche::read_fiche(&root, Some(nom.as_str())),
+        None => crate::persona_fiche::FicheEtat::absente(&nom),
+    };
+    crate::discussion_seule::build_message(&fiche, message)
+}
+
 
 #[tauri::command]
 pub async fn send_super_agent_prompt(state: State<'_, AppState>, app: AppHandle, message: String) -> Result<(), String> {

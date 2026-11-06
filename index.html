@@ -1247,6 +1247,29 @@
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
               <span id="assistant-model-note" role="note">Le modèle est écrit dans la fiche du personnage actif, à côté de son genre. Vide, l'Assistant suit ses propres réglages : rien n'est imposé et aucune erreur ne s'affiche. Un modèle devenu introuvable ne bloque jamais rien : il est signalé dans le volet Événements de l'onglet 🧭.</span>
             </div>
+            <!-- CASE « Discussion seulement via llama » : propre à CHAQUE
+                 personnage, gardée au redémarrage, et SANS EFFET tant qu'aucun
+                 personnage n'est actif — la ligne entière est alors masquée et
+                 l'écran est exactement celui d'avant. Cochée, la conversation
+                 (écrite et orale) passe par le modèle du personnage servi par le
+                 llama local, sans aucun agent et sans aucun accès aux projets.
+                 La coche est écrite à l'instant par le socle : aucun
+                 enregistrement n'est nécessaire, et décocher remet la
+                 configuration dans son état d'avant. -->
+            <div class="setting-row setting-row-checkbox setting-row-indent" id="assistant-conversation-only-row" hidden>
+              <input type="checkbox" id="setting-assistant-conversation-only" />
+              <label for="setting-assistant-conversation-only" title="Le personnage parle uniquement avec son modèle local servi par le llama de cet ordinateur, à l'écrit comme à l'oral. Il ne lance aucun agent, n'ouvre aucun projet et ne touche à aucun fichier de projet : son seul droit d'écriture est sa propre fiche. Si le modèle local ne répond pas, le message est gardé et rien ne part vers un autre moteur.">Discussion seulement via llama</label>
+            </div>
+            <div class="setting-row setting-row-indent" id="assistant-conversation-only-note" style="font-size:11px;color:var(--text-muted);">
+              <span id="assistant-conversation-only-status" role="status" aria-live="polite"></span>
+            </div>
+            <!-- Retour en arrière de la fiche : visible seulement quand une
+                 version précédente existe. Un clic la remet, un second revient
+                 en avant. Aucune fenêtre de confirmation. -->
+            <div class="setting-row setting-row-indent" id="assistant-fiche-rollback-row" hidden>
+              <button type="button" id="btn-assistant-fiche-rollback" class="web-btn" title="Remettre la version précédente de la fiche de ce personnage. L'opération est réversible : recliquer remet la version d'avant.">Revenir à la version précédente de la fiche</button>
+              <span id="assistant-fiche-rollback-status" role="status" aria-live="polite" style="font-size:11px;color:var(--text-muted);"></span>
+            </div>
             <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
               L'Assistant est <b>lecture seule</b> : il suit vos projets (par client) de la demande à la livraison, apprend des sessions d'agents et répond à vos questions. Il ne modifie jamais vos fichiers.
             </div>
