@@ -37,6 +37,20 @@ import { layaStatusMessage, layaOutcomeMessage, layaModelStateMessage, layaModel
 // par le chemin DÉDIÉ (qui tient l'historique), jamais par la réécriture globale
 // de la configuration — sinon une ancienne version revenait en silence.
 import { promptNeedsDedicatedSave } from "./assistant-instructions.js";
+// Tâche 416 : un texte d'instructions DURABLE peut encore FIGER un personnage
+// (prénom écrit en dur, genre, voix, ton imposés) alors qu'aucun personnage
+// n'est actif — le mécanisme livré ne protégeait que les textes LIVRÉS. Ce
+// module PUR dit ce qui fige un personnage et propose un texte nettoyé ; il
+// n'est appliqué que par le GESTE explicite « Nettoyer ce texte », jamais tout
+// seul (ni à l'ouverture, ni à l'enregistrement).
+import {
+  findFrozenPersonaSigns,
+  frozenPersonaNotice,
+  frozenPersonaExcerpt,
+  cleanFrozenPersonaText,
+  frozenPersonaCleanSummary,
+  FROZEN_PERSONA_MESSAGES,
+} from "./personnage-fige-dans-le-texte.js";
 import { listen } from "@tauri-apps/api/event";
 // T6 : contenu des sélecteurs de niveau de réflexion (socle pur, testé sous Node).
 import { thinkingLevelOptions } from "./thinking-levels.js";
@@ -707,6 +721,56 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     }
   }
   const taSuperAgentPrompt = document.getElementById("setting-superagent-prompt");
+  // Tâche 416 : le signalement « ce texte fige un personnage » et son geste de
+  // nettoyage, juste sous le champ du prompt (module pur : voir l'import).
+  const blockAssistantPromptFrozen = document.getElementById("assistant-prompt-frozen");
+  const titleAssistantPromptFrozen = document.getElementById("assistant-prompt-frozen-title");
+  const noticeAssistantPromptFrozen = document.getElementById("assistant-prompt-frozen-notice");
+  const listAssistantPromptFrozen = document.getElementById("assistant-prompt-frozen-list");
+  const footAssistantPromptFrozen = document.getElementById("assistant-prompt-frozen-foot");
+  const btnAssistantPromptClean = document.getElementById("btn-assistant-prompt-clean");
+  const statusAssistantPromptFrozen = document.getElementById("assistant-prompt-frozen-status");
+
+  /**
+   * Tâche 416 — VOIR : le texte du champ fige-t-il un personnage ?
+   *
+   * Montre ou masque l'encart, nomme les passages en français simple et laisse
+   * le bouton de nettoyage à disposition. Ne touche JAMAIS au texte lui-même.
+   * Après un nettoyage, l'encart reste visible tant que le retour du geste est
+   * affiché (« 5 passages retirés… Relisez, puis enregistrez ») : sinon le
+   * résultat du bouton disparaîtrait avec les passages qu'il vient de retirer.
+   */
+  function refreshAssistantPromptFrozen() {
+    if (!blockAssistantPromptFrozen || !taSuperAgentPrompt) return;
+    const signs = findFrozenPersonaSigns(taSuperAgentPrompt.value || "");
+    const hasSigns = signs.length > 0;
+    const keepStatus = !!(statusAssistantPromptFrozen && statusAssistantPromptFrozen.textContent);
+    if (hasSigns && statusAssistantPromptFrozen) statusAssistantPromptFrozen.textContent = "";
+    blockAssistantPromptFrozen.hidden = !hasSigns && !keepStatus;
+    if (titleAssistantPromptFrozen) titleAssistantPromptFrozen.hidden = !hasSigns;
+    if (noticeAssistantPromptFrozen) {
+      noticeAssistantPromptFrozen.hidden = !hasSigns;
+      noticeAssistantPromptFrozen.textContent = hasSigns ? frozenPersonaNotice(signs) || "" : "";
+    }
+    if (footAssistantPromptFrozen) footAssistantPromptFrozen.hidden = !hasSigns && !keepStatus;
+    if (btnAssistantPromptClean) btnAssistantPromptClean.hidden = !hasSigns;
+    if (!listAssistantPromptFrozen) return;
+    listAssistantPromptFrozen.replaceChildren();
+    listAssistantPromptFrozen.hidden = !hasSigns;
+    if (!hasSigns) return;
+    for (const sign of signs.slice(0, 6)) {
+      const li = document.createElement("li");
+      li.textContent = `${FROZEN_PERSONA_MESSAGES[sign.kind] || sign.kind} : « ${frozenPersonaExcerpt(
+        sign.sentence
+      )} »`;
+      listAssistantPromptFrozen.appendChild(li);
+    }
+    if (signs.length > 6) {
+      const li = document.createElement("li");
+      li.textContent = `… et ${signs.length - 6} autre(s) passage(s) du même genre.`;
+      listAssistantPromptFrozen.appendChild(li);
+    }
+  }
 
   // ── Tâche 403 (suite) : MODÈLE IA DU PERSONNAGE ACTIF ─────────────────────
   //
@@ -2236,7 +2300,10 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
   await refreshAssistantModel(currentConfig);
   await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
-  if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
+  if (taSuperAgentPrompt) {
+    taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
+    refreshAssistantPromptFrozen();
+  }
   if (chkSuperAgentThinking) chkSuperAgentThinking.checked = currentConfig.super_agent_show_thinking !== false;
   await refreshAssistantThinkingLevels(currentConfig, selectSuperAgentThinkingLevel, superAgentThinkingLevelNote);
   if (chkSuperAgentTools) chkSuperAgentTools.checked = currentConfig.super_agent_show_tools === true;
@@ -3010,7 +3077,10 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
           if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
           await refreshAssistantModel(currentConfig);
           await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
-          if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
+          if (taSuperAgentPrompt) {
+            taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
+            refreshAssistantPromptFrozen();
+          }
           if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
           if (chkSuperAgentUserFriendly) chkSuperAgentUserFriendly.checked = currentConfig.super_agent_user_friendly === true;
           if (chkSuperAgentQualityGate) chkSuperAgentQualityGate.checked = currentConfig.super_agent_quality_gate !== false;
@@ -3050,6 +3120,25 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     btnAssistantModelClear.addEventListener("click", () => {
       if (inputAssistantModel) inputAssistantModel.value = ASSISTANT_MODEL_NONE;
       applyAssistantModel(ASSISTANT_MODEL_NONE);
+    });
+  }
+
+  // Tâche 416 — RÉPARER : le SEUL chemin de nettoyage du texte qui fige un
+  // personnage. Un clic, sur un texte que l'on voit ; rien ne part tant que
+  // l'on n'enregistre pas (et l'enregistrement passe par `set_super_agent_prompt`,
+  // qui conserve la version remplacée dans `prompt-history.md`).
+  if (taSuperAgentPrompt) {
+    taSuperAgentPrompt.addEventListener("input", refreshAssistantPromptFrozen);
+  }
+  if (btnAssistantPromptClean) {
+    btnAssistantPromptClean.addEventListener("click", () => {
+      if (!taSuperAgentPrompt) return;
+      const result = cleanFrozenPersonaText(taSuperAgentPrompt.value || "");
+      if (result.changed) taSuperAgentPrompt.value = result.text;
+      if (statusAssistantPromptFrozen) {
+        statusAssistantPromptFrozen.textContent = frozenPersonaCleanSummary(result);
+      }
+      refreshAssistantPromptFrozen();
     });
   }
 

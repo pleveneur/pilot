@@ -320,6 +320,15 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   référence **mal écrite est refusée** (un message le dit) : une faute de frappe ne peut ni
   inventer un modèle ni en effacer un. Si le modèle du personnage **n'est plus installé**, Pilot
   le dit en une ligne dans le volet « Événements » de l'onglet 🧭 et repart sur vos réglages.
+- **Un texte d'instructions qui fige encore un personnage est signalé** (onglet
+  « Assistant », sous le champ « Prompt système ») : si votre texte nomme encore un
+  personnage en dur, impose un genre, une voix ou un ton, un encart apparaît et liste
+  les passages en français simple. Le bouton **« Nettoyer ce texte »** propose alors un
+  texte nettoyé : le prénom en tête devient `{nom}`, les phrases de genre, de voix et de
+  ton sont retirées, **tout le reste est conservé au mot près** (vos règles de travail,
+  la lecture seule, le cadre, le style). Rien n'est appliqué sans votre clic, et rien
+  n'est enregistré avant « Enregistrer » — la version remplacée reste dans l'historique
+  du prompt.
 - **Rappels de l'assistant** : sous le compteur « n sur 20 rappels de surveillance
   actifs », le bouton **« Supprimer les rappels inutiles »** fait le ménage
   (rappels désactivés et périmés, rappels uniques déjà consommés, rappels

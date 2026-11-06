@@ -110,10 +110,46 @@ occurrence de `configured_name.clone()`), aucune différence avec la copie de s�
 - Aide intégrée régénérée : `npm run build:handbook` → 49 blocs, `help/handbook.md`.
 - Le plafond anti-bloat du prompt système est **inchangé** : aucun texte livré n'a été modifié
   (seuls des commentaires, des exemples d'aide et le branchement ont bougé).
-- Effet visible immédiat : l'assistant de ce poste porte le nom **« Nova »** dans ses réglages ;
-  son texte d'instructions, écrit avant ce correctif, reste celui de l'utilisateur (Pilot ne
-  réécrit jamais un prompt qu'il n'a pas écrit). Ce qui change pour lui : ce texte peut désormais
-  dire `{nom}` pour suivre le personnage, et **aucune** version ancienne ne reviendra en silence.
+- Effet visible **immédiat : aucun**, et c'était la limite de ce lot. L'assistant de ce poste
+  porte le nom « Nova » dans ses réglages ; son texte d'instructions, écrit **avant** ce
+  correctif, n'était **pas** réécrit (Pilot ne réécrit jamais un prompt qu'il n'a pas écrit) et
+  continuait donc à nommer un personnage et à imposer un genre. Ce lot ne changeait que les
+  textes livrés et la règle d'injection : il rendait le défaut **réparable** (le texte peut
+  désormais dire `{nom}`, et aucune version ancienne ne revient en silence), il ne le réparait
+  pas. La suite est traitée au § 8.
+
+## 8. Tâche 416 — la suite : le texte DÉJÀ en vigueur (2026-11-16)
+
+Le lot précédent protégeait les textes **livrés**. Il laissait intact le texte **durable déjà
+réglé** par le propriétaire, qui nommait encore « Sylvie » alors qu'aucun personnage n'était
+actif, imposait « au FÉMININ », une « voix féminine » et un « Ton chaleureux ». Rien, à l'écran,
+ne le disait : le défaut était invisible et sans geste de réparation.
+
+| Point | Ce qui est fait |
+|---|---|
+| **Voir** | Module **pur** `src/js/personnage-fige-dans-le-texte.js` : `findFrozenPersonaSigns` nomme les passages qui figent un personnage (prénom en dur ou entre guillemets, genre imposé, voix imposée, ton de personnage imposé), en français simple (`frozenPersonaNotice`). Aucune décision dans l'interface. |
+| **Réparer** | `cleanFrozenPersonaText` rend un texte **nettoyé** : le prénom en tête devient `{nom}`, l'occurrence entre guillemets part, les phrases de genre / voix / ton tombent. Le retrait est **ciblé** : les règles de travail, la lecture seule, le cadre et le style général sont conservés **au mot près**, la typographie française (espace avant `:` `;` `»`) n'est pas retouchée, et un texte déjà sain est rendu **à l'identique**. |
+| **Le geste** | Encart sous le champ « Prompt système » (Options → Assistant) avec la liste des passages et **un** bouton « Nettoyer ce texte ». Rien n'est appliqué sans le clic, rien n'est enregistré sans « Enregistrer » — et l'enregistrement passe par `set_super_agent_prompt`, donc l'ancienne version reste dans `prompt-history.md`. |
+| **Le texte du poste** | Nettoyé sur le disque (14 630 → 14 290 caractères, **une seule** clé modifiée : `super_agent_prompt` ; `super_agent_name` = « Nova » et `assistant_gender` = "" inchangés ; copie de sécurité `config.json.bak-tache416-personnage`). L'ancienne version y était **déjà** dans `prompt-history.md` : rien n'a été ajouté à la main dans cet historique (il n'a qu'un écrivain, côté Rust). |
+| **Le verrou** | `src/js/personnage-fige-dans-le-texte.test.js` (19 tests) : détection des quatre familles, **aucun** faux signalement d'un mot produit entre guillemets (« Pilot », « Présences »), conservation **au mot près** de neuf consignes de travail, typographie française intacte, idempotence, et **interdiction du nettoyage automatique** (un seul appel de `cleanFrozenPersonaText`, dans le gestionnaire du clic). |
+
+### Preuves par mutation (tâche 416)
+
+| Mutation | Verrou qui a échoué |
+|---|---|
+| exclusion des mots produits retirée dans `markersOf` + dans `leadingNameOf` | « ne signale pas un mot produit entre guillemets (**aucun** faux signalement) » |
+| `GENDER` retiré des phrases qui tombent en entier | « retire le genre, la voix et le ton imposés » |
+| `cleanFrozenPersonaText` appelé dans le rafraîchissement de l'affichage (nettoyage **automatique**) | « le nettoyage n'est JAMAIS automatique : un seul appel, dans le clic » |
+| `id="assistant-prompt-frozen"` renommé dans `index.html` | « l'encart et son bouton existent là où le prompt se règle » |
+
+Après restauration : verrou vert (19), `git diff` sans reste.
+
+### Limite assumée
+
+L'instance de Pilot **déjà lancée** garde en mémoire le texte d'avant : un enregistrement des
+Options depuis cette instance pourrait le réécrire sur le disque. Le nettoyage prend effet au
+**redémarrage** — et, si le texte revenait, l'encart du § 416 le dirait de nouveau, avec le même
+bouton. Aucun nettoyage n'est fait dans le dos de l'utilisateur.
 
 ## 6. Tests à lancer
 

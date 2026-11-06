@@ -2257,6 +2257,15 @@ apprend et répond.
   reste (un seul écrivain, un seul historique), et n'écrase plus le prompt en
   vigueur par une copie plus vieille. L'historique reste consultable à un seul
   endroit.
+- **Un texte déjà écrit qui fige un personnage vous est SIGNALÉ** : si votre
+  prompt contient encore un prénom écrit en dur, un genre imposé (« au
+  féminin »), une voix imposée ou un ton de personnage imposé, un encart
+  apparaît **sous le champ du prompt** (Options ⚙️ → Assistant) et liste les
+  passages en français simple. Un bouton, **« Nettoyer ce texte »**, propose un
+  texte nettoyé : le prénom en tête devient `{nom}`, les phrases de genre, de
+  voix et de ton sont retirées, et **tout le reste est conservé au mot près**
+  (règles de travail, lecture seule, cadre, style). Rien n'est appliqué sans
+  votre clic, et rien n'est enregistré avant « Enregistrer ».
 - **Au changement de personnage** (activation comme désactivation), l'Assistant
   relit **tout de suite** son identité : nom, portrait, genre et **modèle du
   personnage**. Le modèle est appliqué à la session **vivante** ; il n'est

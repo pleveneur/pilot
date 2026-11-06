@@ -152,6 +152,15 @@ apprend et répond.
   reste (un seul écrivain, un seul historique), et n'écrase plus le prompt en
   vigueur par une copie plus vieille. L'historique reste consultable à un seul
   endroit.
+- **Un texte déjà écrit qui fige un personnage vous est SIGNALÉ** : si votre
+  prompt contient encore un prénom écrit en dur, un genre imposé (« au
+  féminin »), une voix imposée ou un ton de personnage imposé, un encart
+  apparaît **sous le champ du prompt** (Options ⚙️ → Assistant) et liste les
+  passages en français simple. Un bouton, **« Nettoyer ce texte »**, propose un
+  texte nettoyé : le prénom en tête devient `{nom}`, les phrases de genre, de
+  voix et de ton sont retirées, et **tout le reste est conservé au mot près**
+  (règles de travail, lecture seule, cadre, style). Rien n'est appliqué sans
+  votre clic, et rien n'est enregistré avant « Enregistrer ».
 - **Au changement de personnage** (activation comme désactivation), l'Assistant
   relit **tout de suite** son identité : nom, portrait, genre et **modèle du
   personnage**. Le modèle est appliqué à la session **vivante** ; il n'est
@@ -3361,6 +3370,21 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   jeton brut). Les textes livrés (`SUPER_AGENT_*`, consignes d'outils) sont
   contrôlés par un verrou : aucun nom de personnage, aucun genre imposé —
   `src/js/personnage-jamais-fige-dans-les-instructions.test.js`.
+- **Un texte DURABLE qui fige un personnage est vu et réparable (tâche 416)** :
+  les textes **livrés** étaient neutres, mais le prompt **déjà réglé** pouvait
+  encore nommer « Sylvie » et imposer « au FÉMININ », une « voix féminine » et
+  un « Ton chaleureux ». Module **pur** `src/js/personnage-fige-dans-le-texte.js`
+  — `findFrozenPersonaSigns` (familles `nom` / `genre` / `voix` / `ton`, liste
+  `QUOTED_WORD_NEVER_A_NAME` pour ne jamais signaler un mot produit entre
+  guillemets), `frozenPersonaNotice`, `cleanFrozenPersonaText` (prénom en tête
+  → `{nom}`, occurrence entre guillemets retirée, phrases de genre / voix / ton
+  retirées ; **rien d'autre** n'est touché : un texte sain ressort **à
+  l'identique**, la typographie française reste intacte) et
+  `frozenPersonaCleanSummary`. **Aucun nettoyage automatique** : `settings.js`
+  affiche l'encart sous le champ du prompt et n'applique le texte nettoyé que
+  dans le gestionnaire du bouton « Nettoyer ce texte » ; l'enregistrement reste
+  le chemin dédié `set_super_agent_prompt` (ancienne version dans
+  `prompt-history.md`). Verrou : `src/js/personnage-fige-dans-le-texte.test.js`.
 - **Changement de personnage = identité relue** : commande Rust
   `refresh_assistant_identity` (nom, `assistant_session_model`), appelée par
   `startPersonaWatch` ; le modèle du personnage est appliqué à la session

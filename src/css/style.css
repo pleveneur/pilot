@@ -5449,6 +5449,59 @@ body.zen-mode #project-footer {
   line-height: 1.4;
 }
 
+/* Tâche 416 — SIGNALEMENT DU TEXTE QUI FIGE UN PERSONNAGE (Options → Assistant).
+   Affiché juste sous le champ « Prompt système », là où le texte se règle :
+   encart d'avertissement lisible, liste courte des passages trouvés, UN bouton
+   de nettoyage explicite. La teinte vient des jetons du thème (aucune couleur
+   fixe) : il suit le thème clair comme le thème sombre. */
+.assistant-prompt-frozen-box {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.assistant-prompt-frozen-title {
+  font-weight: 600;
+  color: var(--warning);
+  margin-bottom: 4px;
+}
+
+.assistant-prompt-frozen-text {
+  margin: 0 0 6px 0;
+  color: var(--text-primary);
+}
+
+.assistant-prompt-frozen-list {
+  margin: 0 0 6px 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+}
+
+.assistant-prompt-frozen-list li {
+  margin: 0 0 2px 0;
+}
+
+.assistant-prompt-frozen-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.assistant-prompt-frozen-status {
+  color: var(--success, var(--text-secondary));
+}
+
+.assistant-prompt-frozen-foot {
+  margin: 6px 0 0 0;
+  color: var(--text-muted);
+}
+
 /* Tâche #136 — bannière d'anomalie « l'assistant n'a aucun outil ».
    Affichée dans l'onglet 🧭 quand les extensions assistant n'ont pas été
    chargées (ex: porte probe_extension_support qui échoue sur PLh) : sans

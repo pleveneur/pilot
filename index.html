@@ -1257,6 +1257,24 @@
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
               <span id="instruction-name-note" role="note">Écrivez <b>{nom}</b> là où vous voulez désigner l'Assistant : ce jeton est remplacé à chaque message par son nom du moment — celui du personnage actif, sinon le nom réglé ci-dessus, sinon « Assistant ». Un nom écrit en dur, lui, ne suivrait pas le personnage : il resterait après sa désactivation. Le genre, quand il est réglé, vient de son propre champ et de la fiche du personnage, jamais de ce texte.</span>
             </div>
+            <!-- Tâche 416 : LE TEXTE QUI FIGE UN PERSONNAGE EST VISIBLE ET RÉPARABLE ICI,
+                 là où le prompt se règle. Aucun nettoyage automatique : on signale,
+                 on nomme le geste, et c'est l'utilisateur qui décide — puis il
+                 enregistre, ce qui envoie l'ancienne version dans l'historique.
+                 Les décisions (détection + retrait ciblé) vivent dans le module PUR
+                 src/js/personnage-fige-dans-le-texte.js, testable sans interface. -->
+            <div class="setting-row setting-row-indent" id="assistant-prompt-frozen" hidden>
+              <div class="assistant-prompt-frozen-box">
+                <div class="assistant-prompt-frozen-title" id="assistant-prompt-frozen-title">⚠️ Ce texte fige un personnage</div>
+                <p class="assistant-prompt-frozen-text" id="assistant-prompt-frozen-notice"></p>
+                <ul class="assistant-prompt-frozen-list" id="assistant-prompt-frozen-list"></ul>
+                <div class="assistant-prompt-frozen-actions">
+                  <button type="button" id="btn-assistant-prompt-clean" class="web-btn" title="Retirer de ce texte les passages qui figent un personnage (prénom écrit en dur, genre, voix, ton) et ne garder que {nom} pour le nom : le reste de vos consignes est conservé. Rien n'est enregistré tant que vous ne cliquez pas sur Enregistrer.">Nettoyer ce texte</button>
+                  <span class="assistant-prompt-frozen-status" id="assistant-prompt-frozen-status" role="status" aria-live="polite"></span>
+                </div>
+                <p class="assistant-prompt-frozen-foot" id="assistant-prompt-frozen-foot">Aucune autre option n'est modifiée, et la version actuelle du texte reste dans l'historique des versions du prompt.</p>
+              </div>
+            </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-thinking" />
               <label for="setting-superagent-thinking" title="Afficher la réflexion de l'Assistant (pensée) dans la conversation — même rendu que l'agent standard.">Afficher la réflexion de l'Assistant</label>
