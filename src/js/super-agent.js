@@ -367,7 +367,16 @@ import { listAllProjectCommands } from "./project-task-queue.js";
 import { notifyTrackedTasksChanged } from "./taches-suivies-ecran.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
-import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames, addConcernedBadge, badgeNameFromProjectPath } from "./super-agent-badges.js";
+import { captureProjectBadgeNames, pathTailName, addConcernedBadge, badgeNameFromProjectPath } from "./super-agent-badges.js";
+// ÉTIQUETTE DE PROJET DES BULLES : la RÈGLE de décision (quelle provenance, quel
+// nom, quel projet principal, et la correction en fin de tour) vit dans un
+// module dédié, pur — `super-agent-project-label.js` — source unique.
+import {
+  decideMessageProjectLabel,
+  decideFinalBubbleProjectLabel,
+  projectLabelBadgeTitles,
+  PROJECT_LABEL_SOURCE,
+} from "./super-agent-project-label.js";
 import { periodBounds, periodKindLabel, formatPeriodReport, weekBounds } from "./period-report.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
@@ -3227,6 +3236,13 @@ let currentTurnConcernedBadges = [];
 // d'ETENDRE la bulle de reponse (#15) sans perdre les noms deja figes (nommes,
 // concernes, ou en dernier recours projet ouvert fige a la creation).
 const bubbleBadgeSnapshots = new WeakMap();
+// PROVENANCE des badges figes de chaque bulle (`PROJECT_LABEL_SOURCE`). C'est
+// elle qui permet de corriger une etiquette en fin de tour : un badge de simple
+// DERNIER RECOURS (projet ouvert, information non prouvee) s'efface devant le
+// projet reellement vise par la mission, alors qu'un nom PROUVE ne bouge pas.
+// Sans elle, la fin de tour ne pouvait qu'AJOUTER des noms — et le projet ouvert
+// restait en tete d'une mission lancee sur un AUTRE projet.
+const bubbleBadgeSources = new WeakMap();
 
 /** Note un projet REELLEMENT concerne par le tour en cours (regle 2). La regle
  * de normalisation (chemin -> nom, dedup) vit dans le module pur des badges. */
@@ -3584,8 +3600,8 @@ export function createSuperAgentBlock(messagesEl, explicitBadges = null) {
   el.className = "agent-message agent-message-assistant";
   const bubble = document.createElement("div");
   bubble.className = "agent-bubble agent-bubble-assistant";
-  // Badges projet (snapshot) : la regle de choix est UNIQUE et vit dans
-  // `resolveBubbleBadgeNames` (module pur super-agent-badges.js) :
+  // Badges projet (snapshot) : la regle de decision est UNIQUE et vit dans
+  // `super-agent-project-label.js` (`decideMessageProjectLabel`) :
   //   1. badges explicites (l'appelant connait le projet : relais d'un agent) ;
   //   2. projets nommes dans le texte de la demande (ordre d'apparition) ;
   //   3. projets REELLEMENT concernes par l'echange (mission/agents lances,
@@ -3594,23 +3610,24 @@ export function createSuperAgentBlock(messagesEl, explicitBadges = null) {
   //      (un nom utile vaut mieux qu'aucune etiquette) ;
   //   5. rien de tout cela → AUCUNE etiquette (jamais de nom invente).
   // Fige pour toujours : aucun recalcul ni rafraichissement retrospectif.
-  const badgeNames = resolveBubbleBadgeNames(
+  // La bulle de REPONSE est ensuite CORRIGEE une seule fois en fin de tour
+  // (`extendResponseBubbleBadges`) si le tour a revele un projet vise : la bulle
+  // est creee au `message_start` de l'assistant, donc AVANT l'appel d'outil qui
+  // porte le projet de la mission.
+  const labelDecision = decideMessageProjectLabel(
     explicitBadges,
     currentTurnProjectBadges,
     currentTurnConcernedBadges,
     currentOpenProjectBadges()
   );
-  // Snapshot fige de la bulle (sert a l'etendre a agent_end sans rien perdre).
+  const badgeNames = labelDecision.labels;
+  // Snapshot fige de la bulle (sert a l'etendre a agent_end sans rien perdre)
+  // et SA PROVENANCE (sert a savoir si l'etiquette est prouvee ou un simple
+  // dernier recours → voir `decideFinalBubbleProjectLabel`).
   bubbleBadgeSnapshots.set(el, badgeNames);
-  const color = projectColor(badgeNames[0]);
-  renderProjectBadgesInto(bubble, badgeNames);
-  if (color) {
-    // Border-left coloré par projet (Règle 3). Inline style pour primer sur
-    // la règle `.superagent-wrapper .agent-bubble-assistant` qui force
-    // `border-left: 3px solid var(--superagent-accent)`. Diluted tint for a
-    // soft pastel edge, still distinct per project in both themes.
-    bubble.style.borderLeftColor = `color-mix(in srgb, ${color} 40%, transparent)`;
-  }
+  bubbleBadgeSources.set(el, labelDecision.source);
+  applyProjectColorToBubble(bubble, badgeNames[0]);
+  renderProjectBadgesInto(bubble, badgeNames, projectLabelBadgeTitles(labelDecision));
   const flow = document.createElement("div");
   flow.className = "agent-stream-flow";
   bubble.appendChild(flow);
@@ -3631,19 +3648,28 @@ export function createSuperAgentBlock(messagesEl, explicitBadges = null) {
  * aux deux). Un seul nom → rangée à badge unique. Aucun nom → rien. La
  * couleur est STABLE par projet (hash → palette, `projectColor`), appliquée
  * en rendu pastel inline (même dilution que le rendering historique, lisible
- * en thème dark ET light). Les badges sont créés une fois : cette fonction
- * n'est PAS rappelée sur des bulles existantes (pas de retouche rétrospective).
+ * en thème dark ET light). Les badges sont figés : rendus à la création de la
+ * bulle, puis UNE seule retouche autorisée en fin de tour
+ * (`extendResponseBubbleBadges`, quand le tour a révélé le projet réellement
+ * visé) — jamais de retouche rétrospective au-delà.
  * @param {HTMLElement} bubble - élément bulle (assistant ou user).
  * @param {string[]} badgeNames - noms à afficher (snapshot, déjà dedupliqué).
+ * @param {string[]|null} [titles] - infobulle de chaque badge, alignée sur
+ *   `badgeNames` (le projet principal est dit « principal »). Absente → aucune
+ *   infobulle, comportement inchangé (bulles de l'utilisateur, messages
+ *   système, relais).
  */
-function renderProjectBadgesInto(bubble, badgeNames) {
+function renderProjectBadgesInto(bubble, badgeNames, titles = null) {
   if (!bubble || !Array.isArray(badgeNames) || badgeNames.length === 0) return;
   const stack = document.createElement("div");
   stack.className = "agent-project-badges";
-  for (const projectName of badgeNames) {
+  for (let i = 0; i < badgeNames.length; i++) {
+    const projectName = badgeNames[i];
     const badge = document.createElement("div");
     badge.className = "agent-project-badge";
     badge.textContent = "📁 " + projectName;
+    const title = Array.isArray(titles) ? String(titles[i] || "").trim() : "";
+    if (title) badge.title = title;
     const color = projectColor(projectName);
     if (color) {
       // Pastel rendering : couleur brute diluée à l'affichage pour rester
@@ -3655,6 +3681,23 @@ function renderProjectBadgesInto(bubble, badgeNames) {
     stack.appendChild(badge);
   }
   bubble.insertBefore(stack, bubble.firstChild);
+}
+
+/**
+ * Applique au bord gauche de la bulle la couleur STABLE du projet nommé (même
+ * dilution pastel que le rendu historique, lisible en thème dark ET light).
+ * Point unique : appelé à la création de la bulle ET à la correction de fin de
+ * tour, pour que la couleur ne raconte jamais un AUTRE projet que les badges.
+ * @param {HTMLElement} bubble
+ * @param {string} projectName
+ */
+function applyProjectColorToBubble(bubble, projectName) {
+  const color = projectColor(projectName);
+  if (!bubble || !color) return;
+  // Inline style pour primer sur la règle `.superagent-wrapper
+  // .agent-bubble-assistant` qui force `border-left: 3px solid
+  // var(--superagent-accent)`.
+  bubble.style.borderLeftColor = `color-mix(in srgb, ${color} 40%, transparent)`;
 }
 
 /**
@@ -3691,23 +3734,22 @@ function stripGdsSuffix(name) {
  * connus (list_super_agent_projects, {path, name}) ; dédupliqués par chemin.
  * AUCUN repli sur le projet actif : l'etiquette ne montre que les projets
  * reellement cites, rien quand aucun n'est cite (un nom faux est pire que pas
- * de nom). Fail-open : toute erreur ou lenteur → aucun badge a l'envoi, jamais
- * bloquant.
+ * de nom). Fail-open : toute erreur ou lenteur → aucun badge, jamais bloquant.
  *
- * Si `baseBadges` est fourni (bulle de RÉPONSE, chantier #15), on part de ces
- * badges (snapshot de la demande) et on les étend avec les projets nommés dans
- * `text` (texte de la réponse) via extendBadgesWithText, au lieu de repartir
- * de zéro : les noms corrects de la demande ne sont jamais perdus. Les
- * suffixes GDS sont retirés avant extension puis ré-appliqués une seule fois
- * sur le résultat.
+ * UN SEUL usage : détecter les projets CITÉS par un texte (demande de
+ * l'utilisateur, ou texte de la réponse). Ce module ne compose JAMAIS
+ * l'étiquette finale — c'est `decideMessageProjectLabel` /
+ * `decideFinalBubbleProjectLabel` (super-agent-project-label.js) qui décide, et
+ * `extendBadgesWithText` n'est plus utilisé ici : la réponse ne se contente pas
+ * d'étendre la demande, elle REMPLACE un badge de dernier recours quand le tour
+ * a révélé le projet réellement visé.
  * @param {string} text - texte à scanner (demande ou réponse de l'assistant).
- * @param {string[]|null} [baseBadges] - badges de base (null → snapshot classique).
  * @returns {Promise<string[]>} noms de badges (ordre d'apparition).
  */
-async function collectBubbleBadgeProjects(text, baseBadges = null) {
-  // Echec/lenteur : on conserve la base quand on en a une (noms corrects),
-  // sinon aucune etiquette. Jamais le projet ouvert a l'ecran.
-  const fallback = Array.isArray(baseBadges) ? baseBadges : [];
+async function collectBubbleBadgeProjects(text) {
+  // Echec/lenteur : aucune etiquette (jamais le projet ouvert a l'ecran). Les
+  // badges deja affiches, eux, sont conserves par l'appelant (decision).
+  const fallback = [];
   try {
     const resolved = await withTimeout((async () => {
       const [opened, tracked] = await Promise.allSettled([
@@ -3732,10 +3774,7 @@ async function collectBubbleBadgeProjects(text, baseBadges = null) {
           if (p && (p.path || p.name)) push(p.path || "", p.name || null);
         }
       }
-      // baseBadges fourni → on étend (réponse) ; sinon snapshot classique (demande).
-      const names = baseBadges
-        ? extendBadgesWithText((baseBadges || []).map(stripGdsSuffix), text, candidates)
-        : captureProjectBadgeNames(text, null, candidates);
+      const names = captureProjectBadgeNames(text, null, candidates);
       // Indicateur « (GDS) » : suffixe ajouté au nom du badge si le projet est
       // branché sur un GDS (config .pilot/gds.json activée). Fail-open : non
       // branché. Les invokes sont locaux/rapides ; toute lenteur → fallback.
@@ -3764,25 +3803,55 @@ async function collectBubbleBadgeProjects(text, baseBadges = null) {
 }
 
 /**
- * Chantier #15 : étend les badges de la bulle de RÉPONSE avec les projets
- * nommés dans le texte de la réponse de l'assistant. Appelé à `agent_end`,
- * quand le texte complet de la réponse est connu. Remplace la rangée de badges
- * existante de la bulle (celle du snapshot de la demande) par la version
- * étendue. Fire-and-forget (jamais bloquant) : en cas d'échec ou de lenteur,
- * la bulle garde ses badges de la demande (fail-open).
+ * CHANTIER « L'ÉTIQUETTE NOMME LE PROJET RÉELLEMENT CONCERNÉ » : recalcul UNIQUE
+ * de l'étiquette de la bulle de réponse à la FIN DU TOUR, quand ce que le tour a
+ * révélé est connu (projet visé par la mission / la délégation).
+ *
+ * POURQUOI CE RECALCUL : la bulle est créée au `message_start` de l'assistant,
+ * donc AVANT l'appel d'outil `run_agents` / `delegate_to_coder` qui porte le
+ * projet visé. À cet instant, seul le projet OUVERT est connu et il est figé
+ * comme « dernier recours » — l'étiquette nommait alors le projet de la fenêtre
+ * de conversation, jamais le projet réellement modifié (défaut constaté sur une
+ * autre installation, rapport docs/rapports/RAPPORT-etiquette-projet-des-bulles.md).
+ *
+ * La DÉCISION est entièrement déléguée à `decideFinalBubbleProjectLabel` (module
+ * pur, source unique) : la mission passe en tête (le premier nom est le projet
+ * principal, les autres sont signalés), un badge de simple dernier recours
+ * s'efface, un nom prouvé n'est jamais retiré, aucun projet non concerné n'est
+ * nommé. Ce module ne fait qu'APPLIQUER le résultat, en un seul endroit.
+ * Fire-and-forget (jamais bloquant) : en cas d'échec ou de lenteur, la bulle
+ * garde ses badges de la demande (fail-open).
  * @param {HTMLElement} bubble - bulle de réponse (élément .agent-message-assistant).
- * @param {string[]} baseBadges - badges du snapshot de la demande (peut être une
- *   liste vide : la réponse peut alors apporter des projets réellement cités).
+ * @param {string[]} baseBadges - badges figés de la bulle (peut être vide : la
+ *   réponse peut alors apporter des projets réellement cités).
+ * @param {string|null} baseSource - PROVENANCE de ces badges
+ *   (`PROJECT_LABEL_SOURCE`) : dit s'ils sont prouvés ou un simple dernier recours.
+ * @param {string[]|null} concernedBadges - projets réellement visés par le tour
+ *   (relevés au moment du lancement de la mission / de la délégation).
  * @param {string} text - texte complet de la réponse de l'assistant.
  */
-async function extendResponseBubbleBadges(bubble, baseBadges, text) {
-  if (!bubble || !Array.isArray(baseBadges)) return;
-  if (!text || !String(text).trim()) return;
-  const extended = await collectBubbleBadgeProjects(String(text), baseBadges);
-  if (!extended.length) return;
+async function extendResponseBubbleBadges(bubble, baseBadges, baseSource, concernedBadges, text) {
+  if (!bubble) return;
+  // Rien de nouveau à apprendre : ni texte de réponse à scanner, ni projet visé
+  // par le tour. La bulle garde ses badges figés (aucun invoke inutile).
+  const hasText = String(text || "").trim().length > 0;
+  const hasMission = Array.isArray(concernedBadges) && concernedBadges.length > 0;
+  if (!hasText && !hasMission) return;
+  // Les projets CITÉS par la réponse sont détectés sans IA (module pur des
+  // badges). `null` en base : on ne demande QUE les noms cités par le texte.
+  const cited = await collectBubbleBadgeProjects(String(text || ""), null);
+  const decision = decideFinalBubbleProjectLabel(baseBadges, baseSource, concernedBadges, cited);
+  if (!decision.labels.length) return;
   const old = bubble.querySelector(".agent-project-badges");
   if (old) old.remove();
-  renderProjectBadgesInto(bubble, extended);
+  // Écriture UNIQUE du libellé : la même fonction de rendu que la création.
+  renderProjectBadgesInto(bubble, decision.labels, projectLabelBadgeTitles(decision));
+  // La couleur du bord suit le projet PRINCIPAL de l'étiquette corrigée :
+  // laisser la couleur de l'ancien nom ferait dire au bord autre chose que le
+  // badge (même défaut, autre forme).
+  applyProjectColorToBubble(bubble, decision.main);
+  bubbleBadgeSnapshots.set(bubble, decision.labels);
+  bubbleBadgeSources.set(bubble, decision.source);
 }
 
 /** Ajoute (ou réutilise) une section texte rendue en Markdown. */
@@ -9138,15 +9207,30 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // exécution stérile — sinon on ne compte rien (« en cas de doute : on garde »).
     if (shouldFinalizeOnAgentEnd(payload)) noteReminderTurnOutcome();
     else if (reminderUtilityProbe) reminderUtilityProbe.doubtful = true;
-    // Chantier #15 : étendre les badges de la bulle de RÉPONSE avec les projets
-    // nommés dans le texte de la réponse (en plus du snapshot de la demande).
-    // On capture la bulle, les badges de base et le texte AVANT onEnd() (qui
-    // reset currentBody/currentTurnProjectBadges/lastAssistantRawText), puis on
-    // met à jour la bulle en fire-and-forget (jamais bloquant, fail-open).
+    // Chantier #15 + « l'étiquette nomme le projet réellement concerné » : la
+    // bulle de RÉPONSE est réétiquetée à la fin du tour, quand les projets cités
+    // par la réponse ET les projets réellement visés par le tour (mission,
+    // délégation) sont connus. On capture la bulle, les badges de base, leur
+    // PROVENANCE, les projets visés et le texte AVANT onEnd() (qui reset
+    // currentBody/currentTurnProjectBadges/currentTurnConcernedBadges/
+    // lastAssistantRawText), puis on met à jour la bulle en fire-and-forget
+    // (jamais bloquant, fail-open).
     const respBubble = currentBody;
     // Badges FIGES de la bulle (nommes + concernes + dernier recours) : la
-    // reponse peut y AJOUTER les projets qu'elle nomme, jamais en retirer.
+    // reponse peut y AJOUTER les projets qu'elle nomme, jamais en retirer un
+    // nom PROUVE ; un simple dernier recours (projet ouvert) est remplace par le
+    // projet vise par la mission (decision : decideFinalBubbleProjectLabel).
     const respBase = (respBubble && bubbleBadgeSnapshots.get(respBubble)) || currentTurnProjectBadges;
+    // Provenance : celle figée avec la bulle. À défaut (bulle créée hors du
+    // point de création), les badges du tour viennent du TEXTE ou d'un compte
+    // rendu : un nom prouvé, jamais un simple dernier recours.
+    const respBaseSource =
+      (respBubble && bubbleBadgeSources.get(respBubble)) ||
+      (respBase && respBase.length ? PROJECT_LABEL_SOURCE.NAMED : null);
+    // PROJETS RÉELLEMENT VISÉS PAR CE TOUR (relevés au lancement de la mission /
+    // de la délégation, projet de la session d'agent relayée) : c'est ce qui
+    // doit étiqueter la bulle, jamais le projet actif de la fenêtre.
+    const respConcerned = Array.isArray(currentTurnConcernedBadges) ? [...currentTurnConcernedBadges] : [];
     const respText = lastAssistantRawText;
     // Telegram (étape 2, lot 3) : l'Assistant « parle » — sa réponse finale est
     // reformulée en UNE phrase simple et transmise (les messages intermédiaires
@@ -9163,8 +9247,10 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // repos → le son de fin armé (délégation / run d'agents) peut être joué.
     // Ignoré si cet agent_end n'est pas terminal (la session reprend).
     flushSuperRenderThenSoundIdle(payload);
-    if (respBubble && respBase && respText && String(respText).trim()) {
-      extendResponseBubbleBadges(respBubble, respBase, respText).catch((e) => console.error("extendResponseBubbleBadges erreur:", e));
+    if (respBubble) {
+      extendResponseBubbleBadges(respBubble, respBase || [], respBaseSource, respConcerned, respText).catch((e) =>
+        console.error("extendResponseBubbleBadges erreur:", e)
+      );
     }
     // Bug 2 (UX) : à la fin de la génération, redescendre en bas si l'utilisateur
     // était en bas (le contenu a fini de grandir). Ne force pas si l'utilisateur

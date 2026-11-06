@@ -7,11 +7,12 @@
 // ET la bulle de reponse portent ces badges (figes pour toujours : aucun
 // rafraichissement retrospectif).
 //
-// Chantier #15 : la bulle de RÉPONSE est en plus étendue avec les projets
-// nommés dans le texte de la réponse de l'assistant (extendBadgesWithText),
-// pour refléter les projets réellement discutés même si la demande n'en nommait
-// aucun. Les badges de la demande restent en tête ; ceux détectés dans la
-// réponse s'ajoutent ensuite, dédupliqués.
+// Chantier #15 : la bulle de RÉPONSE peut en plus citer des projets qu'elle
+// nomme. L'ajout n'est jamais décidé ici : il passe par la décision unique
+// `decideFinalBubbleProjectLabel` (super-agent-project-label.js), qui sait en
+// plus REMPLACER un badge de dernier recours par le projet réellement visé par
+// la mission. `extendBadgesWithText` reste un utilitaire pur (ajout sans
+// retrait) conservé pour ses tests, il n'est plus branché sur l'écran.
 //
 // REGLE DE NOMMAGE (decision proprietaire 2026-10-22) : une bulle qui concerne
 // un projet porte son nom. Priorite, dans cet ordre :
@@ -21,7 +22,10 @@
 //   3. DERNIER RECOURS : le projet ouvert au moment ou la bulle est creee
 //      (snapshot fige a cet instant, jamais recalcule apres) ;
 //   4. sinon AUCUNE etiquette (jamais de nom invente).
-// La regle vit ICI, dans resolveBubbleBadgeNames, et nulle part ailleurs.
+// La regle vit dans `resolveBubbleBadgeNames` (qui DELEGUE a
+// decideMessageProjectLabel, super-agent-project-label.js) et la correction de
+// fin de tour dans `decideFinalBubbleProjectLabel` (meme module). Nulle part
+// ailleurs.
 //
 // Détection SANS IA : comparaison pure du texte à la liste des projets
 // connus/ouverts côté UI. Correspondance insensible à la casse sur
@@ -30,6 +34,11 @@
 // Un match exige des FRONTIÈRES DE MOTS (un texte qui parle de « pilotage »
 // ne doit pas matcher un projet « pilot »).
 // Module 100 % pur (aucun DOM, aucun invoke) → testable unitairement.
+
+// La RÈGLE DE DÉCISION elle-même (ordre des priorités, provenance du nom, et
+// correction en fin de tour) vit dans `super-agent-project-label.js` : ce
+// module-ci ne réalise que la DÉTECTION des projets cités dans un texte.
+import { decideMessageProjectLabel } from "./super-agent-project-label.js";
 
 /** Normalise les séparateurs de chemin (\ → /) — Windows/macOS/Linux. */
 function normalizeSeparators(p) {
@@ -247,19 +256,17 @@ export function addConcernedBadge(badges, pathOrName) {
  * @returns {string[]}
  */
 export function resolveBubbleBadgeNames(explicitBadges, turnBadges, concernedBadges, openProjectBadges) {
-  const candidates = [explicitBadges, turnBadges, concernedBadges, openProjectBadges];
-  for (const candidate of candidates) {
-    const names = normalizeBadgeNames(candidate);
-    if (names.length) return names;
-  }
-  return [];
+  // Délégation à la SOURCE UNIQUE de la règle (`super-agent-project-label.js`) :
+  // aucun ordre de priorité n'est réécrit ici (une seule décision, un seul
+  // endroit). L'API historique est conservée : elle rend les SEULS noms.
+  return decideMessageProjectLabel(explicitBadges, turnBadges, concernedBadges, openProjectBadges).labels;
 }
 
 /**
  * Etend une liste de badges existants avec les projets nommes dans un texte
- * (pur, testable). Utilise pour la bulle de REPONSE (chantier #15) : on part
- * des badges de la demande (projets cites) et on y ajoute les projets evoques
- * dans le texte de la reponse de l'assistant.
+ * (pur, testable). UTILITAIRE : ce n'est plus lui qui compose l'etiquette de la
+ * bulle de reponse (c'est `decideFinalBubbleProjectLabel`, qui peut en plus
+ * remplacer un badge de dernier recours par le projet vise par la mission).
  * Regle : on ne retire JAMAIS un nom de base (il est correct : le texte de la
  * demande le citait) et on n'ajoute que des projets reellement cites dans le
  * texte scanne. Les badges de base restent en tete (ordre preserve) ; les

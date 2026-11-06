@@ -277,8 +277,9 @@ apprend et répond.
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
 - **Badges projet par bulle (snapshot à l'envoi)** : chaque bulle de
   l'Assistant porte le nom du/des projet(s) **concerné(s)**, choisi dans cet
-  ordre (règle unique : `resolveBubbleBadgeNames`, module pur
-  `super-agent-badges.js`) : **(1)** les projets **explicitement nommés dans le
+  ordre (règle unique : `decideMessageProjectLabel` / `decideFinalBubbleProjectLabel`,
+  module pur `super-agent-project-label.js` — `resolveBubbleBadgeNames` y
+  délègue) : **(1)** les projets **explicitement nommés dans le
   texte**, dans leur **ordre d'apparition**, sans doublon ; **(2)** sinon, les
   projets **réellement concernés par l'échange** (mission / agents lancés,
   agent ciblé, projet transmis à un agent, projet ouvert par l'Assistant) ;
@@ -292,15 +293,27 @@ apprend et répond.
   du texte est **sans IA** : correspondance insensible à la casse sur le **nom
   affiché** du projet (ex: « PLh ») ou la **fin de son chemin** (ex:
   « ia_pl/plh »), avec **frontières de mots** (une demande qui parle de
-  « pilotage » n'étiquette pas le projet « pilot »). La réponse hérite des
-  badges **figés** de la demande qui l'a déclenchée et peut y **ajouter** les
-  projets réellement cités dans le texte de la réponse (jamais en retirer un
-  correct, jamais en inventer un). Les badges sont **figés pour toujours** :
+  « pilotage » n'étiquette pas le projet « pilot »).
+  **La décision est PAR MESSAGE, jamais au niveau de la fenêtre, et elle est
+  corrigée UNE fois en fin de tour.** La bulle de l'Assistant est créée au
+  début de son message, donc **avant** l'appel d'outil qui révèle le projet
+  visé : à cet instant, le seul projet connu peut être celui qui est **ouvert
+  à l'écran**, figé comme dernier recours. À `agent_end`, les projets
+  **réellement visés par le tour** (mission, délégation, agent relayé, projet
+  ouvert par l'Assistant) sont donc placés **en tête** — le premier est le
+  **projet principal de la mission**, les suivants sont **signalés** comme
+  autres projets concernés (infobulle du badge) — et un badge de simple
+  **dernier recours s'efface** (il n'était pas concerné : c'était le défaut
+  corrigé). Un nom **prouvé** (explicite, cité dans le message, projet d'une
+  mission) n'est **jamais retiré** ; la réponse peut seulement y ajouter les
+  projets qu'elle cite. Un badge de dernier recours cède aussi devant un projet
+  cité par la réponse. Les badges restent **figés ensuite pour toujours** :
   changer de projet actif (même via `open_project` pendant le tour) ne modifie
   **jamais** les badges déjà affichés, et aucune bulle n'est re-étiquetée
-  rétrospectivement. La **bulle de continuation** après une question posée à
-  l'utilisateur hérite des badges de la demande initiale (la paire
-  question/réponse porte les mêmes étiquettes).
+  rétrospectivement au-delà de cette unique correction de fin de tour. La
+  **bulle de continuation** après une question posée à l'utilisateur hérite des
+  badges de la demande initiale (la paire question/réponse porte les mêmes
+  étiquettes).
 - **Une bulle par tour d'agent par projet** : un « tour » = depuis que
   l'Assistant commence à répondre jusqu'à `agent_end` (fin du tour, c'est à
   l'utilisateur de parler). Pendant un tour, l'Assistant peut enchaîner

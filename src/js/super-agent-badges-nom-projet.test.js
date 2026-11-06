@@ -103,7 +103,13 @@ describe("(c) une mission visant un AUTRE projet n'affiche jamais le projet ouve
 
   it("integration : le projet vise (regle 2) est evalue AVANT le projet ouvert (regle 3)", () => {
     const src = readSource("./super-agent.js");
-    const start = src.indexOf("resolveBubbleBadgeNames(\n");
+    // ANCRE MISE A JOUR (chantier « l'etiquette nomme le projet reellement
+    // concerne », docs/rapports/RAPPORT-etiquette-projet-des-bulles.md) : l'ordre
+    // des priorites n'est plus ecrit dans `super-agent.js` (il y est inline) mais
+    // dans l'appel a la SOURCE UNIQUE `decideMessageProjectLabel`, module pur
+    // `super-agent-project-label.js`. L'INTENTION du controle est inchangee et
+    // reste verifiee : le projet vise est examine AVANT le projet ouvert.
+    const start = src.indexOf("decideMessageProjectLabel(\n");
     expect(start).toBeGreaterThan(-1);
     const call = src.slice(start, src.indexOf(");", start));
     expect(call.indexOf("currentTurnProjectBadges")).toBeLessThan(call.indexOf("currentTurnConcernedBadges"));
