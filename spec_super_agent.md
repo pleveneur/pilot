@@ -111,10 +111,22 @@ apprend et répond.
 - Un personnage peut avoir **son propre modèle** : quand il est actif,
   l'Assistant travaille avec ce modèle, sans que vous ayez à le changer à la
   main.
-- **Si le personnage n'en définit pas, rien ne change** : l'Assistant utilise le
-  modèle que vous avez réglé dans Pilot (le modèle choisi dans l'onglet 🧭, ou
-  le modèle par défaut de l'Assistant, ou le modèle par défaut des agents) —
-  sans erreur et sans message.
+- **Pour le régler, tout se passe dans Pilot** : **Options ⚙️ → onglet
+  « Assistant » → « Modèle du personnage »**. Tapez la référence du modèle au
+  format `fournisseur/modèle` (exemple `ollama/glm-5.2:cloud`), puis
+  **Enregistrer**. **Effacer le choix** retire le modèle propre au personnage.
+  Présences n'a pas d'écran pour cela : c'est ici, et nulle part ailleurs.
+- Le modèle est **écrit dans la fiche du personnage**, à côté de son genre — ce
+  n'est pas un réglage parallèle : c'est bien ce que l'Assistant lit.
+  **Rien d'autre n'est touché** dans la fiche (nom, portrait et genre restent
+  intacts), et sans personnage actif rien n'est créé.
+- **Si le personnage n'en définit pas (champ vide), rien ne change**
+  : l'Assistant utilise le modèle que vous avez réglé dans Pilot (le modèle
+  choisi dans l'onglet 🧭, ou le modèle par défaut de l'Assistant, ou le modèle
+  par défaut des agents) — sans erreur et sans message.
+- Une référence **mal écrite est refusée** (un message le dit) : rien n'est
+  écrit. Une faute de frappe ne peut donc ni inventer un modèle ni en effacer
+  un.
 - Si le modèle prévu par le personnage **n'est plus installé**, Pilot vous le
   dit **en une ligne** (volet « Événements » de l'onglet Assistant) et repart
   sur vos réglages : l'Assistant démarre toujours.
@@ -2475,14 +2487,84 @@ c'est ce qui rend les deux règles testables et impossibles à contourner.
   agent ne la consulte) et le modèle d'un agent se règle toujours sur **sa**
   session (`set_agent_process_model` → `set_model`), comme avant.
 
+### Saisie du modèle du personnage depuis les Options (tâche 403, suite)
+
+Présences n'a **aucun écran** : sans ce lot, le modèle d'un personnage ne
+pouvait être saisi nulle part. La saisie vit donc dans **Options ⚙️ → onglet
+Assistant**, **à côté du genre** — aucune fenêtre nouvelle, mêmes styles, aucun
+réglage inventé.
+
+- **Écran** (`index.html`) : une **ligne de réglage** (`#assistant-model-row`,
+  classe existante `setting-row setting-row-indent`) contenant un **champ
+  texte unique** `#setting-assistant-model` (format `fournisseur/modèle`), deux
+  boutons `#btn-assistant-model-save` (« Enregistrer ») et
+  `#btn-assistant-model-clear` (« Effacer le choix »), et **deux textes** :
+  `#assistant-model-status` (`role="status"`, `aria-live="polite"`) qui reçoit
+  la réponse de Rust, et `#assistant-model-note` (`role="note"`) qui dit l'état
+  réel (aucun personnage actif / vide = repli / modèle lu). Le champ est
+  **décrit** par ces deux textes (`aria-describedby`).
+- **Décisions côté fenêtre** (`src/js/assistant-model.js`, module **pur** :
+  aucun DOM, aucun import Tauri) : `ASSISTANT_MODEL_KEY` (`assistant_model`),
+  `normalizeAssistantModel` (caractères de contrôle retirés, rognage, borne
+  `ASSISTANT_MODEL_MAX_CHARS` = 120, non-chaîne ⇒ `""`),
+  `assistantModelPrefill(active, fiche, configured)` — **la fiche d'abord quand
+  un personnage est actif** (l'écran ne peut pas mentir sur le modèle qui
+  tourne), sinon le souvenir, sinon vide —, `assistantModelHelpText` (les trois
+  phrases d'état, la troisième nommant le volet « Événements »), et les **noms
+  des deux commandes** (`ASSISTANT_MODEL_READ_COMMAND`,
+  `ASSISTANT_MODEL_WRITE_COMMAND`) : aucun nom de commande en dur dans
+  `settings.js`.
+- **Branchement** (`src/js/settings.js`) : `refreshAssistantModel(config)`
+  relit la fiche (`read_assistant_persona_model`) et affiche la valeur qui
+  s'applique, **fail-open** (une panne n'affiche pas d'erreur) ;
+  `applyAssistantModel(value)` **n'écrit jamais elle-même** : elle appelle
+  `write_assistant_persona_model` et affiche **le message rendu par Rust**
+  (aucune phrase de repli recopiée côté fenêtre) ; elle est appelée par les deux
+  boutons, « Effacer » passant la valeur vide. `refreshAssistantModel` est
+  appelée aux **trois** remplissages du panneau, comme le genre.
+- **Clé de configuration ADDITIVE** : `AppConfig.assistant_model`
+  (`#[serde(default)]`, défaut `String::new()`), **à côté** de
+  `assistant_gender`, jamais à sa place. Elle ne **décide rien** : c'est le
+  souvenir du dernier choix, ce qui permet à l'écran d'être prérempli quand
+  aucun personnage n'est actif. Elle est **écrite explicitement** par
+  `settings.js` à l'enregistrement, parce que `save_config` réécrit **toute** la
+  configuration : une clé oubliée serait remise à vide à chaque « Enregistrer ».
+- **Écriture dans la fiche** (`persona.rs`, seul chemin d'écriture du module) :
+  `PERSONA_MODEL_FILE` (`modele.txt`), **à côté du genre** — il n'existe aucun
+  réglage parallèle. Trois garde-fous : `active_persona_dir` ne rend une cible
+  que pour le **dépôt personnel** qui **nomme un personnage**
+  (`PersonaDepot::Legacy => None`, aucun nom ⇒ `None`) ; le dossier **n'est
+  jamais créé** (dossier absent ⇒ refus explicite, rien d'écrit) ; **un seul**
+  fichier est touché (`nom.txt`, `portrait.png`, `genre.txt` jamais ouverts).
+  `decide_model_write` **refuse** une spécification mal formée
+  (message « Format attendu : fournisseur/modèle … Rien n'a été écrit. ») au
+  lieu de l'interpréter comme un effacement ; une valeur **vide efface** en
+  écrivant un fichier **vide** (jamais de suppression) pour que l'empreinte du
+  personnage change et déclenche la relecture à chaud du watcher.
+- **Contrat de la commande** `write_assistant_persona_model` : ne **panique
+  jamais**, répond toujours `PersonaModelWrite { written, active, model,
+  message }`. En cas de succès elle **réinterroge `assistant_session_model`** —
+  donc `decide_assistant_model` — uniquement pour **republier la trace
+  existante** (`pilot-assistant-model-trace`, déjà écoutée par
+  `initAssistantModelTraceWatch`) : aucun second canal de journal, **aucune
+  seconde décision de modèle**. `read_assistant_persona_model` est la lecture
+  **légère** (`PersonaModelState { active, model }`), sans le portrait.
+- **Amendement du « Pilot ne fait que LIRE »** : `persona.rs` documente
+  désormais **l'unique exception** — `modele.txt`, **sur geste de
+  l'utilisateur**, jamais le dossier, jamais le dépôt historique, jamais les
+  autres fichiers. La lecture, l'empreinte et la règle de priorité sont
+  **inchangées**.
+
 ### Reste à faire côté Présences (aucune obligation)
 
-Pilot **lit seulement** : il ne crée ni le dossier ni les fichiers, ne les
-modifie ni ne les supprime. Pour porter un genre et un modèle, la fiche du
-personnage n'a qu'à contenir `genre.txt` (`feminin` / `masculin`, casse et
-accents tolérés) et `modele.txt` (`fournisseur/modèle`). **Tant que ces
-fichiers n'existent pas, tout fonctionne avec les réglages de Pilot** — aucune
-modification de Présences n'est requise pour ce lot.
+Pilot **lit** la fiche — et depuis la tâche 403 (suite) il **écrit un seul
+fichier**, `modele.txt`, quand vous le lui demandez depuis les Options ; il ne
+crée ni le dossier ni les autres fichiers, ne les modifie ni ne les supprime.
+Pour porter un genre et un modèle, la fiche du personnage n'a qu'à contenir
+`genre.txt` (`feminin` / `masculin`, casse et accents tolérés) et `modele.txt`
+(`fournisseur/modèle`). **Tant que ces fichiers n'existent pas, tout fonctionne
+avec les réglages de Pilot** — aucune modification de Présences n'est requise
+pour ce lot.
 
 Couverture : tests unitaires de `assistant_identity.rs` (genre tolérant, défaut
 muet, fiche prioritaire, chaîne de modèles, repli avec trace) et de
@@ -2498,7 +2580,12 @@ de modèle + trace, démarrage par la décision unique, décision sans `Result`
 `docs/rapports/RAPPORT-genre-et-modele-par-personnage.md` (détail) et
 `docs/rapports/RAPPORT-reglages-assistant.md` § POINT 2 (les trois réglages du
 comportement de l'assistant revérifiés ensemble, et ce que Présences devra
-exposer pour porter le genre par fiche de personnage).
+exposer pour porter le genre par fiche de personnage), plus le verrou de la
+**saisie du modèle** `src/js/modele-du-personnage-dans-les-options.test.js`
+(champ et deux gestes présents dans la section Assistant, clé additive écrite à
+l'enregistrement complet, préremplissage qui suit la fiche, écriture d'un seul
+fichier sans création de dossier, refus d'une valeur mal formée, aucune seconde
+décision de modèle ni second canal de trace).
 
 ---
 

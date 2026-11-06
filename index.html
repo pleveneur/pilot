@@ -1228,6 +1228,25 @@
                 <option value="masculin">Masculin</option>
               </select>
             </div>
+            <!-- Tâche 403 (suite) : MODÈLE IA PROPRE AU PERSONNAGE ACTIF. Présences
+                 n'a aucun écran : ce champ est le SEUL endroit où le modèle d'un
+                 personnage peut être saisi. « Enregistrer » écrit `modele.txt`
+                 dans la fiche du personnage (le même dossier que `genre.txt`),
+                 « Effacer le choix » la vide. Vide = la chaîne de repli de Pilot
+                 s'applique, sans message d'erreur ; un modèle inconnu n'empêche
+                 jamais rien et se dit dans le volet Événements de l'onglet 🧭. -->
+            <div class="setting-row setting-row-indent" id="assistant-model-row">
+              <label for="setting-assistant-model" title="Modèle IA utilisé par l'Assistant quand ce personnage est actif, au format fournisseur/modèle (exemple : ollama/glm-5.2:cloud). Vide : l'Assistant utilise le modèle réglé pour lui, sinon le modèle par défaut des agents.">Modèle du personnage :</label>
+              <input type="text" id="setting-assistant-model" placeholder="fournisseur/modèle" style="width:220px;" aria-describedby="assistant-model-status assistant-model-note" />
+              <button type="button" id="btn-assistant-model-save" class="web-btn" title="Écrire ce modèle dans la fiche du personnage actif (le même dossier que son genre).">Enregistrer</button>
+              <button type="button" id="btn-assistant-model-clear" class="web-btn" title="Effacer le modèle propre au personnage : l'Assistant repart sur le modèle réglé pour lui, sinon sur le modèle par défaut des agents.">Effacer le choix</button>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="assistant-model-status" role="status" aria-live="polite"></span>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="assistant-model-note" role="note">Le modèle est écrit dans la fiche du personnage actif, à côté de son genre. Vide, l'Assistant suit ses propres réglages : rien n'est imposé et aucune erreur ne s'affiche. Un modèle devenu introuvable ne bloque jamais rien : il est signalé dans le volet Événements de l'onglet 🧭.</span>
+            </div>
             <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
               L'Assistant est <b>lecture seule</b> : il suit vos projets (par client) de la demande à la livraison, apprend des sessions d'agents et répond à vos questions. Il ne modifie jamais vos fichiers.
             </div>

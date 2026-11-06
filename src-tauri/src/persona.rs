@@ -18,8 +18,16 @@
 //   - fichier ABSENT = aucun personnage actif → l'Assistant garde son nom et son
 //     icône habituels ; ce n'est PAS une panne : aucune erreur, aucun message,
 //     aucune trace console ;
-//   - Pilot ne fait que LIRE : ce module ne crée ni le dossier, ni les fichiers,
-//     ne les nettoie jamais et n'y écrit pas un octet ;
+//   - Pilot LIT ce dossier, avec UNE SEULE EXCEPTION, ajoutée par la tâche 403 :
+//     le MODÈLE du personnage (`modele.txt`) est écrit ici quand l'utilisateur
+//     le saisit dans Options → Assistant (`write_assistant_persona_model`),
+//     parce que Présences n'a aucun écran pour le faire. Cette écriture est
+//     strictement encadrée (voir `write_persona_model`) : UN fichier, sur GESTE
+//     seulement, jamais de dossier créé, jamais le dépôt historique, et ni
+//     `nom.txt`, ni `portrait.png`, ni `genre.txt` ne sont touchés. Tout le
+//     reste du contrat ci-dessus est inchangé :
+//   - hors ce geste, ce module ne crée ni le dossier, ni les fichiers, ne les
+//     nettoie jamais et n'y écrit pas un octet ;
 //   - chemins portables (PathBuf::join) : Windows, macOS et Linux ;
 //   - toute lecture impossible est un repli silencieux (`None`), jamais une
 //     exception remontée à l'interface.
@@ -381,8 +389,9 @@ pub fn png_data_url(bytes: &[u8]) -> Option<String> {
 /// - `modele.txt` absent / vide / mal formé → `model: None` (chaîne de modèles de
 ///   Pilot, comportement actuel).
 ///
-/// Aucun `create_dir_all`, aucun `remove_*`, aucun `write` : le dossier de
-/// Présences n'est jamais touché en écriture.
+/// LECTURE SEULE : aucun `create_dir_all`, aucun `remove_*`, aucun `write` ici.
+/// Le dossier de Présences n'est écrit que par `write_persona_model`, sur geste
+/// de l'utilisateur, et seulement pour `modele.txt`.
 pub fn read_persona(dir: &Path) -> Persona {
     let name = std::fs::read(dir.join(PERSONA_NAME_FILE))
         .ok()
@@ -552,6 +561,208 @@ pub fn read_assistant_persona(app: tauri::AppHandle) -> Persona {
 #[tauri::command]
 pub fn read_assistant_persona_stamp(app: tauri::AppHandle) -> String {
     persona_stamp_from_sources(&persona_sources_for(&app))
+}
+
+// ── MODÈLE DU PERSONNAGE : SAISIE DEPUIS LES OPTIONS (tâche 403, suite) ─────
+//
+// Le modèle d'un personnage ne pouvait être saisi nulle part : Présences n'a
+// aucun écran, et ce module ne faisait que lire. La première marche de
+// l'escalier des modèles (fiche → modèle choisi → réglage dédié → défaut global)
+// restait donc toujours vide.
+//
+// Une seule écriture est ajoutée, et elle est encadrée :
+//   - UN fichier (`modele.txt`), à côté de `genre.txt` — jamais un réglage
+//     parallèle que la décision du modèle ne lirait pas ;
+//   - UNIQUEMENT sur geste de l'utilisateur (Options → Assistant) ;
+//   - JAMAIS de dossier créé : sans personnage actif, l'écriture est REFUSÉE
+//     avec un message (créer le dossier ferait apparaître un personnage
+//     fantôme) ;
+//   - JAMAIS le dépôt historique (`<app_data_dir>/.pilot/portrait`) : il ne
+//     porte pas de fiche, et n'est lu que pour le nom ;
+//   - une spécification MAL FORMÉE est refusée, jamais écrite : une faute de
+//     frappe ne doit ni inventer un modèle ni en effacer un.
+//
+// Ce que la commande ne décide PAS : le modèle effectif. Elle réutilise
+// `super_agent::assistant_session_model` — donc `decide_assistant_model` — pour
+// que la trace d'un modèle introuvable soit la MÊME que celle du démarrage de
+// session (un seul mécanisme, aucun second journal).
+
+/// Modèle porté par la fiche du personnage actif (lecture LÉGÈRE, sans image).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+pub struct PersonaModelState {
+    /// Un personnage est-il réellement actif (dossier personnel + nom) ?
+    pub active: bool,
+    /// Modèle lu dans `modele.txt` (`""` quand la fiche n'en porte pas).
+    pub model: String,
+}
+
+/// Résultat d'une écriture du modèle dans la fiche. Un REFUS est une décision
+/// (aucun personnage actif, format invalide), pas une panne : la commande ne
+/// lève jamais, elle répond.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+pub struct PersonaModelWrite {
+    /// Le fichier a-t-il été écrit (ou vidé) ?
+    pub written: bool,
+    /// Un personnage est-il actif sur cette machine ?
+    pub active: bool,
+    /// Modèle retenu après l'opération (`""` = aucun modèle propre).
+    pub model: String,
+    /// Phrase affichée à l'utilisateur (succès, effacement ou refus).
+    pub message: String,
+}
+
+/// Dossier du personnage ACTIF, s'il y en a un — seule cible d'écriture possible.
+///
+/// Fonction PURE (aucune entrée/sortie autre que la lecture des petits fichiers
+/// texte de la fiche) : elle applique la MÊME règle de priorité que
+/// `read_persona_from_sources` — le premier dépôt qui EXISTE a parlé — et n'en
+/// retient que les dépôts PERSONNELS. Un dossier sans nom (`nom.txt` absent,
+/// vide, ou déclaration « Aucun personnage ») n'est pas un personnage actif :
+/// rien n'est donc écrit.
+pub fn active_persona_dir(sources: &[PersonaSource]) -> Option<PathBuf> {
+    for source in sources {
+        if !source.dir.is_dir() {
+            continue;
+        }
+        return match source.depot {
+            // Un dossier personnel qui existe fait autorité, même vide : c'est
+            // la même règle que la lecture (un dépôt qui existe a « parlé »).
+            PersonaDepot::Personal => {
+                let nom = read_persona_identity(&source.dir).name;
+                if nom.is_some() {
+                    Some(source.dir.clone())
+                } else {
+                    None
+                }
+            }
+            // Le dépôt historique ne porte pas de fiche : jamais une cible.
+            PersonaDepot::Legacy => None,
+        };
+    }
+    None
+}
+
+/// Décide ce qu'il faut faire du texte saisi pour `modele.txt`.
+///
+/// Fonction PURE :
+///   - `Ok(Some("fournisseur/modèle"))` → écrire cette spécification ;
+///   - `Ok(None)` → EFFACER (champ vide : plus de modèle propre au personnage) ;
+///   - `Err(message)` → refuser, rien n'est écrit.
+///
+/// La grammaire n'est pas recopiée ici : `normalize_model_line` (donc
+/// `super_agent::parse_model_spec`) reste la seule autorité sur
+/// « qu'est-ce qu'une spécification de modèle ».
+pub fn decide_model_write(raw: &str) -> Result<Option<String>, String> {
+    let texte = raw.trim();
+    if texte.is_empty() {
+        return Ok(None);
+    }
+    match normalize_model_line(texte) {
+        Some(spec) => Ok(Some(spec)),
+        // Un champ rempli mais illisible n'est PAS un ordre d'effacement : on
+        // refuse, sinon une faute de frappe viderait la fiche en silence.
+        None => Err("Format attendu : fournisseur/modèle (exemple ollama/llama3). Rien n'a été écrit."
+            .to_string()),
+    }
+}
+
+/// Écrit (ou vide) `modele.txt` dans `dir` — UN seul fichier, jamais de dossier
+/// créé, jamais un autre fichier touché.
+///
+/// `Ok(Some(spec))` = le modèle est écrit ; `Ok(None)` = le fichier est vidé
+/// (aucun modèle propre) ; `Err(message)` = refus, le disque est intact.
+pub fn write_persona_model(dir: &Path, raw: &str) -> Result<Option<String>, String> {
+    let spec = decide_model_write(raw)?;
+    if !dir.is_dir() {
+        return Err(
+            "Aucun personnage actif : son dossier n'existe pas encore. Activez un personnage dans Présences, puis revenez ici. Rien n'a été écrit."
+                .to_string(),
+        );
+    }
+    let contenu = match &spec {
+        Some(spec) => format!("{}\n", spec),
+        // Fichier VIDE plutôt que supprimé : la fiche reste complète et
+        // l'empreinte du personnage change (le front relit donc l'identité).
+        None => String::new(),
+    };
+    std::fs::write(dir.join(PERSONA_MODEL_FILE), contenu)
+        .map_err(|e| format!("Écriture de {} impossible : {}", PERSONA_MODEL_FILE, e))?;
+    Ok(spec)
+}
+
+/// Commande Tauri : modèle porté par la fiche du personnage actif.
+///
+/// Lecture LÉGÈRE (les petits fichiers texte seulement, jamais le portrait) et
+/// fail-open : aucun dossier, aucun personnage → `{ active: false, model: "" }`.
+#[tauri::command]
+pub fn read_assistant_persona_model(app: tauri::AppHandle) -> PersonaModelState {
+    match active_persona_dir(&persona_sources_for(&app)) {
+        Some(dir) => PersonaModelState {
+            active: true,
+            model: read_fiche_line(&dir.join(PERSONA_MODEL_FILE))
+                .and_then(|ligne| normalize_model_line(&ligne))
+                .unwrap_or_default(),
+        },
+        None => PersonaModelState::default(),
+    }
+}
+
+/// Commande Tauri : écrit le modèle du personnage ACTIF dans sa fiche
+/// (`modele.txt`, le même dossier que `genre.txt`).
+///
+/// Jamais d'exception : un refus (aucun personnage, format invalide, disque) est
+/// rendu avec sa phrase, et l'interface l'affiche. Après une écriture RÉUSSIE,
+/// la décision unique du modèle est interrogée — `assistant_session_model` —
+/// pour que la trace d'un modèle introuvable publiée ici soit exactement celle
+/// du démarrage de session (évènement `pilot-assistant-model-trace`, déjà écouté
+/// par l'onglet 🧭 : aucun second journal, aucun second libellé).
+#[tauri::command]
+pub fn write_assistant_persona_model(
+    state: tauri::State<'_, crate::AppState>,
+    app: tauri::AppHandle,
+    model: String,
+) -> PersonaModelWrite {
+    let cible = active_persona_dir(&persona_sources_for(&app));
+    let Some(dir) = cible else {
+        return PersonaModelWrite {
+            written: false,
+            active: false,
+            model: String::new(),
+            message: "Aucun personnage actif : son dossier n'existe pas encore. Activez un personnage dans Présences, puis revenez ici. Rien n'a été écrit."
+                .to_string(),
+        };
+    };
+    match write_persona_model(&dir, &model) {
+        Err(message) => PersonaModelWrite {
+            written: false,
+            active: true,
+            model: read_assistant_persona_model(app).model,
+            message,
+        },
+        Ok(spec) => {
+            let pi_path = state.config.lock().unwrap().rpc_pi_path.clone();
+            let decision = crate::super_agent::assistant_session_model(&app, state.inner(), &pi_path);
+            let modele = spec.unwrap_or_default();
+            let message = match decision.trace.as_deref() {
+                Some(trace) => format!(
+                    "Modèle écrit dans la fiche du personnage, mais il est écarté : {}. \
+L'Assistant repart sur le modèle réglé pour lui, sinon sur le modèle par défaut des agents \
+(détail aussi dans le volet Événements de l'onglet 🧭).",
+                    trace
+                ),
+                None if modele.is_empty() => "Modèle propre au personnage effacé : l'Assistant \
+repart sur le modèle réglé pour lui, sinon sur le modèle par défaut des agents."
+                    .to_string(),
+                None => format!("Modèle écrit dans la fiche du personnage : {}.", modele),
+            };
+            PersonaModelWrite {
+                written: true,
+                active: true,
+                model: modele,
+                message,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1034,5 +1245,113 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    // ── MODÈLE DU PERSONNAGE : SAISIE DEPUIS LES OPTIONS (tâche 403, suite) ──
+
+    #[test]
+    fn la_decision_d_ecriture_efface_sur_vide_et_refuse_une_valeur_mal_formee() {
+        // Vide (ou blancs) = effacer : le personnage n'a plus de modèle propre, la
+        // chaîne de repli de Pilot s'applique en silence.
+        assert_eq!(decide_model_write(""), Ok(None));
+        assert_eq!(decide_model_write("   \n\t "), Ok(None));
+        // Une spécification valide est RETENUE, normalisée par la seule grammaire
+        // du projet (`normalize_model_line` → `parse_model_spec`).
+        assert_eq!(
+            decide_model_write("  ollama/glm-5.2:cloud \n"),
+            Ok(Some("ollama/glm-5.2:cloud".to_string()))
+        );
+        // Un champ rempli mais illisible est REFUSÉ, jamais interprété comme un
+        // ordre d'effacement (une faute de frappe ne doit pas vider la fiche).
+        let refus = decide_model_write("gpt4").expect_err("sans fournisseur, c'est refusé");
+        assert!(refus.contains("fournisseur/modèle"), "message clair : {}", refus);
+    }
+
+    #[test]
+    fn l_ecriture_ecrit_modele_txt_a_cote_du_genre_et_ne_touche_a_rien_d_autre() {
+        let racine = dossier_de_test("ecriture-modele");
+        let dir = racine.join(".pilot").join("portrait");
+        std::fs::create_dir_all(&dir).expect("depot");
+        std::fs::write(dir.join(PERSONA_NAME_FILE), "Sylvie\n").expect("nom.txt");
+        std::fs::write(dir.join(PERSONA_GENDER_FILE), "feminin\n").expect("genre.txt");
+        std::fs::write(dir.join(PERSONA_IMAGE_FILE), png_minimal()).expect("portrait.png");
+
+        // Écriture : le modèle est écrit dans `modele.txt`, à côté du genre.
+        assert_eq!(
+            write_persona_model(&dir, "ollama/glm-5.2:cloud"),
+            Ok(Some("ollama/glm-5.2:cloud".to_string()))
+        );
+        let ecrit = std::fs::read_to_string(dir.join(PERSONA_MODEL_FILE)).expect("modele.txt");
+        assert_eq!(ecrit.trim(), "ollama/glm-5.2:cloud");
+        // La fiche le relit (aucun réglage parallèle : c'est bien la fiche qui porte).
+        let persona = read_persona(&dir);
+        assert_eq!(persona.model.as_deref(), Some("ollama/glm-5.2:cloud"));
+        // Rien d'autre n'a bougé : nom, genre et portrait sont intacts.
+        assert_eq!(persona.name.as_deref(), Some("Sylvie"));
+        assert_eq!(persona.gender.as_deref(), Some("feminin"));
+        assert!(persona.portrait.is_some(), "le portrait reste affichable");
+
+        // Effacement : le fichier est vidé, la fiche ne porte plus de modèle et le
+        // repli de Pilot reprend — sans erreur.
+        assert_eq!(write_persona_model(&dir, "   "), Ok(None));
+        assert_eq!(read_persona(&dir).model, None);
+        assert_eq!(read_persona(&dir).name.as_deref(), Some("Sylvie"));
+
+        // Valeur mal formée : refus, et le disque reste EXACTEMENT tel qu'il était.
+        let avant = std::fs::read_to_string(dir.join(PERSONA_MODEL_FILE)).expect("modele.txt");
+        assert!(write_persona_model(&dir, "pas-un-modele").is_err());
+        assert_eq!(
+            std::fs::read_to_string(dir.join(PERSONA_MODEL_FILE)).expect("modele.txt"),
+            avant
+        );
+
+        let _ = std::fs::remove_dir_all(&racine);
+    }
+
+    #[test]
+    fn l_ecriture_refuse_de_creer_le_dossier_du_personnage() {
+        let racine = dossier_de_test("ecriture-sans-dossier");
+        let dir = racine.join(".pilot").join("portrait");
+        // Aucun personnage actif : rien ne doit être créé (un dossier créé ferait
+        // apparaître un personnage qui n'existe pas), et le refus est DIT.
+        let refus = write_persona_model(&dir, "ollama/glm-5.2:cloud")
+            .expect_err("sans dossier, l'écriture est refusée");
+        assert!(refus.contains("Aucun personnage actif"), "message clair : {}", refus);
+        assert!(!dir.exists(), "le dossier du personnage n'est jamais créé");
+        let _ = std::fs::remove_dir_all(&racine);
+    }
+
+    #[test]
+    fn seule_la_fiche_du_personnage_actif_est_une_cible_d_ecriture() {
+        // Un dossier SANS nom n'est pas un personnage : il n'est pas une cible.
+        let home = dossier_de_test("cible-sans-nom");
+        let vide = home.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        std::fs::create_dir_all(&vide).expect("depot vide");
+        let sources = persona_sources(None, Some(&home), None);
+        assert_eq!(active_persona_dir(&sources), None, "un dossier vide n'est pas un personnage");
+
+        // Avec un nom, le dossier personnel devient la cible (jamais le dépôt
+        // historique, qui n'est même pas examiné).
+        std::fs::write(vide.join(PERSONA_NAME_FILE), "Sylvie\n").expect("nom.txt");
+        assert_eq!(active_persona_dir(&sources), Some(vide.clone()));
+
+        // Déclaration d'absence de Présences : ce n'est pas un personnage actif.
+        std::fs::write(vide.join(PERSONA_NAME_FILE), "Aucun personnage").expect("nom.txt");
+        assert_eq!(active_persona_dir(&sources), None);
+
+        // Le dépôt HISTORIQUE n'est jamais une cible d'écriture, même nommé.
+        let app_data = dossier_de_test("cible-historique");
+        let historique = app_data.join(PERSONA_DIR).join(PERSONA_SUBDIR);
+        std::fs::create_dir_all(&historique).expect("depot historique");
+        std::fs::write(historique.join(PERSONA_NAME_FILE), "Ancienne\n").expect("nom.txt");
+        let sans_personnel = persona_sources(Some(&app_data), None, None);
+        assert_eq!(
+            active_persona_dir(&sans_personnel),
+            None,
+            "le dépôt historique n'est jamais écrit"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&app_data);
     }
 }

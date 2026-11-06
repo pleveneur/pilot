@@ -39,6 +39,21 @@ import { thinkingLevelOptions } from "./thinking-levels.js";
 // normalise la valeur du champ et fournit ses trois choix ; la phrase injectée
 // dans le prompt est décidée côté Rust, à un seul endroit.
 import { normalizeAssistantGender, ASSISTANT_GENDER_KEY } from "./assistant-genre.js";
+// Tâche 403 (suite) : MODÈLE IA propre au personnage actif (Présences n'a aucun
+// écran). Module PUR : clé de configuration ADDITIVE, normalisation du champ,
+// valeur réellement affichée (la fiche quand un personnage est actif, sinon le
+// souvenir) et phrase d'aide. Le modèle EFFECTIF n'est pas décidé ici : il l'est
+// par `assistant_identity::decide_assistant_model`, et l'écriture de la fiche
+// passe par une commande dédiée, sur geste seulement.
+import {
+  ASSISTANT_MODEL_KEY,
+  ASSISTANT_MODEL_NONE,
+  ASSISTANT_MODEL_READ_COMMAND,
+  ASSISTANT_MODEL_WRITE_COMMAND,
+  assistantModelHelpText,
+  assistantModelPrefill,
+  normalizeAssistantModel,
+} from "./assistant-model.js";
 // Lot A idée 3 (tranche 3.5) : réglages de la checklist de livraison. Fonctions
 // PURES (normalisation du mode, lecture/découpage du modèle) partagées avec la
 // fiche de tâche du Kanban — testées dans super-agent-checklist.test.js.
@@ -631,6 +646,11 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const inputSuperAgentName = document.getElementById("setting-superagent-name");
   // Tâche 402 : genre de l'Assistant (masculin / féminin / non précisé).
   const selectAssistantGender = document.getElementById("setting-assistant-gender");
+  // Tâche 403 (suite) : modèle IA du personnage actif — un champ, deux gestes.
+  const inputAssistantModel = document.getElementById("setting-assistant-model");
+  const btnAssistantModelSave = document.getElementById("btn-assistant-model-save");
+  const btnAssistantModelClear = document.getElementById("btn-assistant-model-clear");
+  const assistantModelStatus = document.getElementById("assistant-model-status");
   const taSuperAgentClients = document.getElementById("setting-superagent-clients");
 
   /**
@@ -682,6 +702,75 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     }
   }
   const taSuperAgentPrompt = document.getElementById("setting-superagent-prompt");
+
+  // ── Tâche 403 (suite) : MODÈLE IA DU PERSONNAGE ACTIF ─────────────────────
+  //
+  // Présences n'a aucun écran : c'est ici, dans la section Assistant, que le
+  // modèle d'un personnage peut être saisi. Deux règles seulement sont tenues
+  // par ces deux fonctions, et elles n'inventent rien :
+  //   - la valeur AFFICHÉE vient de `assistantModelPrefill` (module pur) : la
+  //     fiche quand un personnage est actif, sinon le souvenir de configuration ;
+  //   - ce qui s'ÉCRIT est décidé par la commande Rust : elle seule connaît la
+  //     grammaire `fournisseur/modèle`, refuse une valeur mal formée, refuse de
+  //     créer un dossier, et republie la trace EXISTANTE (`pilot-assistant-model-
+  //     trace`) d'un modèle introuvable. Aucune phrase de repli n'est composée ici.
+
+  /**
+   * Relit le modèle porté par la fiche et l'affiche. Fail-open : une panne de la
+   * commande laisse le champ et sa phrase d'aide tels quels — l'ouverture des
+   * Options ne montre jamais un message d'erreur pour ce réglage.
+   * @param {object|null} config configuration lue (souvenir du dernier choix)
+   */
+  async function refreshAssistantModel(config) {
+    if (!inputAssistantModel) return;
+    let etat = { active: false, model: ASSISTANT_MODEL_NONE };
+    try {
+      const lu = await invoke(ASSISTANT_MODEL_READ_COMMAND);
+      etat = {
+        active: Boolean(lu && lu.active === true),
+        model: normalizeAssistantModel(lu && lu.model),
+      };
+    } catch (_) {
+      // Aucune réponse : on garde la valeur mémorisée et l'aide précédente.
+    }
+    const memorise = normalizeAssistantModel(config && config[ASSISTANT_MODEL_KEY]);
+    const affiche = assistantModelPrefill(etat.active, etat.model, memorise);
+    inputAssistantModel.value = affiche;
+    if (assistantModelStatus) {
+      assistantModelStatus.textContent = assistantModelHelpText({
+        active: etat.active,
+        model: affiche,
+      });
+    }
+  }
+
+  /**
+   * Un GESTE explicite écrit (ou vide) `modele.txt` dans la fiche du personnage
+   * actif. Le résultat — écrit, effacé, ou refusé avec sa raison — est dit par la
+   * commande Rust et affiché tel quel ; en cas d'écriture, le champ montre la
+   * valeur réellement retenue et le souvenir de configuration suit (il sera
+   * enregistré par le bouton « Enregistrer » des Options, jamais tout seul).
+   * @param {string} value texte saisi, ou `ASSISTANT_MODEL_NONE` pour effacer
+   */
+  async function applyAssistantModel(value) {
+    if (!assistantModelStatus) return;
+    try {
+      const res = await invoke(ASSISTANT_MODEL_WRITE_COMMAND, {
+        model: normalizeAssistantModel(value),
+      });
+      assistantModelStatus.textContent =
+        res && typeof res.message === "string" && res.message
+          ? res.message
+          : "Modèle du personnage : rien n'a changé.";
+      if (res && res.written === true) {
+        if (inputAssistantModel) inputAssistantModel.value = normalizeAssistantModel(res.model);
+        if (currentConfig) currentConfig[ASSISTANT_MODEL_KEY] = normalizeAssistantModel(res.model);
+      }
+    } catch (e) {
+      assistantModelStatus.textContent = "Modèle du personnage : " + e;
+    }
+  }
+
 
   /** Affiche l'etat de la lecture (section « Lecture des reponses »). */
   function showReadAloudState(state) {
@@ -2057,6 +2146,9 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     // Tâche 402 : le genre se relit TOUJOURS par la normalisation (une valeur
     // inconnue retombe sur « non précisé », jamais sur un genre imposé).
     if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
+    // Tâche 403 (suite) : le modèle du personnage se relit dans la FICHE (valeur
+    // qui s'applique réellement), pas dans la configuration.
+    await refreshAssistantModel(currentConfig);
     chkAutoSave.checked = currentConfig.auto_save || false;
     inputAutoSaveDelay.value = currentConfig.auto_save_delay || 3000;
     chkWordWrap.checked = currentConfig.word_wrap || false;
@@ -2137,6 +2229,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   // ── Super-agent (spec_super_agent.md) ──
   if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
   if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
+  await refreshAssistantModel(currentConfig);
   await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
   if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
   if (chkSuperAgentThinking) chkSuperAgentThinking.checked = currentConfig.super_agent_show_thinking !== false;
@@ -2910,6 +3003,7 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
           populateSubthemeSelect(selectSubtheme, currentConfig.theme || "dark", currentConfig.subtheme || "default");
           if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
           if (selectAssistantGender) selectAssistantGender.value = normalizeAssistantGender(currentConfig[ASSISTANT_GENDER_KEY]);
+          await refreshAssistantModel(currentConfig);
           await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
           if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
           if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
@@ -2935,6 +3029,22 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
       } catch (e) {
         showToast("Modèle par défaut de l'Assistant : " + e, "error");
       }
+    });
+  }
+
+  // Tâche 403 (suite) : modèle IA du personnage actif. DEUX gestes explicites,
+  // aucun enregistrement automatique : écrire ici touche la fiche de Présences.
+  // « Effacer le choix » n'efface que le modèle propre au personnage (la chaîne
+  // de repli de Pilot prend alors le relais), jamais la fiche entière.
+  if (btnAssistantModelSave) {
+    btnAssistantModelSave.addEventListener("click", () => {
+      applyAssistantModel(inputAssistantModel ? inputAssistantModel.value : ASSISTANT_MODEL_NONE);
+    });
+  }
+  if (btnAssistantModelClear) {
+    btnAssistantModelClear.addEventListener("click", () => {
+      if (inputAssistantModel) inputAssistantModel.value = ASSISTANT_MODEL_NONE;
+      applyAssistantModel(ASSISTANT_MODEL_NONE);
     });
   }
 
@@ -3178,6 +3288,14 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         // réglé) : une valeur inconnue n'impose aucun genre au prompt.
         assistant_gender: normalizeAssistantGender(
           selectAssistantGender ? selectAssistantGender.value : (currentConfig && currentConfig[ASSISTANT_GENDER_KEY]),
+        ),
+        // Tâche 403 (suite) : modèle IA propre au personnage actif. Clé ADDITIVE,
+        // écrite EXPLICITEMENT parce que `save_config` réécrit TOUTE la
+        // configuration (une clé omise serait remise à vide à chaque
+        // enregistrement). Elle ne décide aucun modèle : ce qui s'applique est lu
+        // dans la fiche du personnage par `decide_assistant_model`.
+        assistant_model: normalizeAssistantModel(
+          inputAssistantModel ? inputAssistantModel.value : (currentConfig && currentConfig[ASSISTANT_MODEL_KEY]),
         ),
         super_agent_clients: taSuperAgentClients
           ? taSuperAgentClients.value.split(/\n+/).map((s) => s.trim()).filter(Boolean)

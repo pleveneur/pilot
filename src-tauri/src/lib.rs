@@ -645,6 +645,15 @@ struct AppConfig {
     // actif (Présences, `genre.txt`) passe avant ce réglage.
     #[serde(default)]
     assistant_gender: String,
+    // Modèle IA propre au PERSONNAGE ACTIF (tâche 403, suite) : dernière
+    // spécification `fournisseur/modèle` ÉCRITE dans la fiche du personnage
+    // depuis Options → Assistant. Champ ADDITIF (un ancien fichier de
+    // configuration reste lisible) : vide = aucun modèle propre, repli silencieux
+    // sur la chaîne de Pilot. Le modèle EFFECTIF reste lu dans la fiche par
+    // `assistant_identity::decide_assistant_model` — cette clé n'est qu'un
+    // souvenir du dernier choix, elle ne décide rien.
+    #[serde(default)]
+    assistant_model: String,
     #[serde(default)]
     super_agent_clients: Vec<String>,
     #[serde(default)]
@@ -1288,6 +1297,7 @@ impl Default for AppConfig {
             // ── Super-agent (spec_super_agent.md) ──
             super_agent_name: default_super_agent_name(),
             assistant_gender: String::new(),
+            assistant_model: String::new(),
             super_agent_clients: Vec::new(),
             super_agent_project_client: HashMap::new(),
             super_agent_model: String::new(),
@@ -3797,6 +3807,8 @@ pub fn run() {
             asr_voicestudio::asr_voicestudio_log,
             persona::read_assistant_persona,
             persona::read_assistant_persona_stamp,
+            persona::read_assistant_persona_model,
+            persona::write_assistant_persona_model,
             tts_local_download::tts_local_download,
             tts_local_download::tts_local_cancel_download,
             tts_local_download::tts_local_download_state,

@@ -311,6 +311,15 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   « je suis prête »). **« Non précisé » n'ajoute rien du tout** : l'Assistant parle exactement
   comme avant. Si le **personnage actif** (Présences) porte son propre genre, c'est **le sien**
   qui s'applique — un personnage est plus précis qu'un réglage général.
+- **Modèle du personnage** (onglet « Assistant », juste sous le genre) : tapez la référence du
+  modèle au format `fournisseur/modèle` (exemple `ollama/glm-5.2:cloud`), puis **Enregistrer** —
+  ou **Effacer le choix** pour retirer le modèle propre au personnage. Le modèle est écrit dans
+  la **fiche du personnage** (à côté de son genre) ; **rien d'autre n'est touché** (nom, portrait
+  et genre restent intacts) et sans personnage actif rien n'est créé. **Champ vide = rien ne
+  change** : l'Assistant reprend le modèle réglé dans Pilot, sans erreur et sans message. Une
+  référence **mal écrite est refusée** (un message le dit) : une faute de frappe ne peut ni
+  inventer un modèle ni en effacer un. Si le modèle du personnage **n'est plus installé**, Pilot
+  le dit en une ligne dans le volet « Événements » de l'onglet 🧭 et repart sur vos réglages.
 - **Rappels de l'assistant** : sous le compteur « n sur 20 rappels de surveillance
   actifs », le bouton **« Supprimer les rappels inutiles »** fait le ménage
   (rappels désactivés et périmés, rappels uniques déjà consommés, rappels

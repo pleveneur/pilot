@@ -2216,10 +2216,22 @@ apprend et répond.
 - Un personnage peut avoir **son propre modèle** : quand il est actif,
   l'Assistant travaille avec ce modèle, sans que vous ayez à le changer à la
   main.
-- **Si le personnage n'en définit pas, rien ne change** : l'Assistant utilise le
-  modèle que vous avez réglé dans Pilot (le modèle choisi dans l'onglet 🧭, ou
-  le modèle par défaut de l'Assistant, ou le modèle par défaut des agents) —
-  sans erreur et sans message.
+- **Pour le régler, tout se passe dans Pilot** : **Options ⚙️ → onglet
+  « Assistant » → « Modèle du personnage »**. Tapez la référence du modèle au
+  format `fournisseur/modèle` (exemple `ollama/glm-5.2:cloud`), puis
+  **Enregistrer**. **Effacer le choix** retire le modèle propre au personnage.
+  Présences n'a pas d'écran pour cela : c'est ici, et nulle part ailleurs.
+- Le modèle est **écrit dans la fiche du personnage**, à côté de son genre — ce
+  n'est pas un réglage parallèle : c'est bien ce que l'Assistant lit.
+  **Rien d'autre n'est touché** dans la fiche (nom, portrait et genre restent
+  intacts), et sans personnage actif rien n'est créé.
+- **Si le personnage n'en définit pas (champ vide), rien ne change**
+  : l'Assistant utilise le modèle que vous avez réglé dans Pilot (le modèle
+  choisi dans l'onglet 🧭, ou le modèle par défaut de l'Assistant, ou le modèle
+  par défaut des agents) — sans erreur et sans message.
+- Une référence **mal écrite est refusée** (un message le dit) : rien n'est
+  écrit. Une faute de frappe ne peut donc ni inventer un modèle ni en effacer
+  un.
 - Si le modèle prévu par le personnage **n'est plus installé**, Pilot vous le
   dit **en une ligne** (volet « Événements » de l'onglet Assistant) et repart
   sur vos réglages : l'Assistant démarre toujours.
