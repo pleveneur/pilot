@@ -50,6 +50,13 @@ Points de branchement, tous EXISTANTS (`src/js/super-agent.js`) :
 - `vocalStatusLine()` — l'accusé, sur la ligne d'état unique ;
 - `exitVocal()` — tout meurt avec l'écran.
 
+### Les deux constantes, et leur emplacement UNIQUE
+
+| Constante | Valeur | Seul emplacement | Recopiée ailleurs ? |
+|---|---|---|---|
+| `VOCAL_ECOUTE_LIBRE_MS` | `20000` (20 s) | `src/js/vocal-nom-garde.js` (l. 117) | **non** : `super-agent.js` l'importe (`import { …, VOCAL_ECOUTE_LIBRE_MS }`) et ne contient aucun littéral `20000` ; verrou « les 20 s sont UNE constante, et ils ne sont recopiés nulle part » |
+| `VOCAL_STOP_FORMULAS` | 12 formules (liste gelée) | `src/js/vocal-nom-garde.js` (l. 128) | **non** : aucune formule n'est écrite dans `super-agent.js` ; verrou « les formules d'arrêt sont UNE liste, dans le module seul » |
+
 **Décision tranchée et documentée** : l'arrêt de l'**écoute** n'est pas l'arrêt
 d'une **tâche**. Une veille ne prétend jamais avoir interrompu le travail : si
 une mission tourne, elle continue et l'écran le montre comme avant. La veille ne
