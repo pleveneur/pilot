@@ -20,7 +20,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
-// Le suivi est lu AUSSI par le volet « Tâches » du panneau du suivi : chaque
+// Le suivi est lu AUSSI par le volet « Travaux » du panneau du suivi : chaque
 // écriture d'ici publie l'UNIQUE signal « le suivi a changé » (le volet ne peut
 // donc pas rester sur une photo périmée), et cette vue relit la base quand le
 // signal vient d'ailleurs (Assistant, autre vue) — jamais en boucle sur ses
@@ -886,7 +886,7 @@ export function createSuperKanban(container) {
 
   // ── Le suivi a changé : un seul signal, deux effets ─────────────────────
   // 1. toute ÉCRITURE d'ici (`reloadAfterTrackingWrite`) prévient le volet
-  //    « Tâches » : il ne peut plus rester sur une photo périmée ;
+  //    « Travaux » : il ne peut plus rester sur une photo périmée ;
   // 2. tout changement venu d'AILLEURS (Assistant, autre vue) fait relire la base
   //    par cette vue, sans attendre une bascule d'onglet.
   // Le drapeau empêche la boucle : le signal émis par nos propres écritures ne

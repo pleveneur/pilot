@@ -590,7 +590,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
   // Suivi du travail (haut droite, a droite de la rangee d'onglets) : pastille
-  // respirante + UN SEUL panneau a trois onglets (Agents, Taches, Evenements)
+  // respirante + UN SEUL panneau a trois onglets (Agents, Travaux, Evenements)
   // + fiche agent. Unique endroit ou le travail se suit dans l'interface. Le
   // bouton « Afficher l'onglet » de la fiche appelle tabs._openAgent /
   // tabs.openFile.
@@ -630,7 +630,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   } catch (e) {
     console.warn("Compteur « Travail » indisponible:", e);
   }
-  // Volet « Tâches » du meme panneau : la surveillance des missions est posee
+  // Volet « Travaux » du meme panneau : la surveillance des missions est posee
   // ICI, avec l'application, et non dans la fabrique de l'onglet 🧭 Assistant.
   // Sans cela la liste n'etait vivante que tant que cet onglet existait : jamais
   // ouvert, le volet restait BLANC (le HTML ne porte aucun message par defaut) ;

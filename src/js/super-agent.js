@@ -624,7 +624,7 @@ let nextInfoSeq = 0;
 // propres à l'onglet Assistant. Le compteur de non-lus est porté par le cercle.
 // Les éléments interactifs (confirm/select/choice) restent au centre.
 const SUPER_EVENTS_MAX = 150; // tampon mémoire (évite un panneau illisible)
-// Filet de rejeu du volet « Tâches » : le volet est alimenté par le store
+// Filet de rejeu du volet « Travaux » : le volet est alimenté par le store
 // d'activité. L'abonnement est posé au DÉMARRAGE de Pilot (main.js) et vit
 // tant que l'application tourne : il ne dépend plus de l'existence de l'onglet
 // 🧭 Assistant (onglet jamais ouvert = volet blanc ; onglet fermé = photo
@@ -4064,8 +4064,8 @@ function flushPendingInfo() {
 
 /**
  * Applique le réglage global `super_agent_tasks_tab_enabled` (ACTIVÉ PAR DÉFAUT)
- * au panneau du suivi du travail : activé → onglet « Tâches » présent (ordre
- * définitif des onglets : Agents, Tâches, Événements) ;
+ * au panneau du suivi du travail : activé → onglet « Travaux » présent (ordre
+ * définitif des onglets : Agents, Travaux, Événements) ;
  * désactivé → panneau historique (Agents + Événements). Fail-open : réglage
  * illisible → onglet présent. Le panneau est GLOBAL (haut droite) : c'est
  * agent-activity.js qui l'applique, ici on ne fait que lui passer la config
@@ -4080,7 +4080,7 @@ function applySuperEventsTabsVisibility() {
  * Réagit au changement d'onglet du panneau du suivi du travail. La surveillance
  * des missions ne s'arrête PLUS sur un autre onglet : le compteur du bouton
  * « Travail » doit rester vrai (il se figerait dès qu'on regarde ailleurs). Le
- * RENDU de la liste, lui, n'a lieu que lorsque le volet « Tâches » est affiché
+ * RENDU de la liste, lui, n'a lieu que lorsque le volet « Travaux » est affiché
  * (voir renderSuperMissions) : aucun travail d'affichage inutile, aucune photo
  * périmée au retour (on repeint a l'affichage).
  * @param {{tab: string, open: boolean}} state
@@ -4164,7 +4164,7 @@ function renderSuperMissions() {
   // volet, seulement des mêmes données que lui. Le bouton et l'onglet ne
   // peuvent donc pas se contredire.
   const missions = publishSuperMissionsCount();
-  // Rendu de la liste : uniquement quand le volet « Tâches » est a l'ecran.
+  // Rendu de la liste : uniquement quand le volet « Travaux » est a l'ecran.
   if (!isAgentPanelPaneVisible("tasks")) return;
   const superTasksList = agentPanelTasksListElement();
   if (!superTasksList) return;
@@ -4262,11 +4262,11 @@ function collectQueuedMissions() {
  * soit le nombre d'appels (démarrage de Pilot via main.js, ouverture de l'onglet
  * 🧭 Assistant), il n'existe qu'UN abonnement au store d'activité et qu'UN
  * écouteur des changements d'onglet du panneau. Deux raisons :
- *  1. le volet « Tâches » n'était vivant QUE tant que l'onglet 🧭 existait :
+ *  1. le volet « Travaux » n'était vivant QUE tant que l'onglet 🧭 existait :
  *     jamais ouvert → volet BLANC (le HTML ne porte aucun message par défaut) ;
  *     fermé → photo périmée, alors que le compteur du bouton, lui, restait vrai ;
  *  2. l'écouteur d'onglets repeint le volet au moment EXACT où il devient
- *     visible (ouverture du panneau, bascule sur « Tâches »), sans dépendre de
+ *     visible (ouverture du panneau, bascule sur « Travaux »), sans dépendre de
  *     la création de l'onglet 🧭.
  * Store partagé : aucun polling propre, l'affichage suit le rafraîchissement
  * existant (2 s + push). Aucune surveillance n'est coupée : `renderSuperMissions`
@@ -4377,7 +4377,7 @@ export async function createSuperAgent(container) {
     // ferme pendant que les parametres etaient ouverts.
     refreshLocalDictation();
     refreshSuperAgentConfig().then(() => {
-      // Réglage global de l'onglet « Tâches » : activation/désactivation à chaud,
+      // Réglage global de l'onglet « Travaux » : activation/désactivation à chaud,
       // sans redémarrer (le panneau du suivi du travail suit immédiatement).
       applySuperEventsTabsVisibility();
       const tabs = window._pilotTabs;
@@ -4552,14 +4552,14 @@ export async function createSuperAgent(container) {
   // bouton « cloche » dans la barre de saisie, plus de panneau en bas à droite
   // (un seul endroit à l'écran pour suivre le travail). Ce module ne fait
   // qu'ALIMENTER ce panneau (événements poussés dans sa liste, missions
-  // rechargées quand son onglet « Tâches » s'affiche).
+  // rechargées quand son onglet « Travaux » s'affiche).
   // Compteur du bouton « Travail » ET surveillance du volet : elles vivent des
   // le DEMARRAGE de Pilot (main.js), sans attendre l'ouverture de cet onglet ni
-  // celle du volet « Taches » (sinon le bouton restait muet et la liste vide ou
+  // celle du volet « Travaux » (sinon le bouton restait muet et la liste vide ou
   // figee alors que des missions tournent). Appel idempotent : il ne cree ni un
   // second abonnement ni un second ecouteur.
   startSuperMissionsWatch();
-  // Réglage global : onglet « Tâches » présent ou non.
+  // Réglage global : onglet « Travaux » présent ou non.
   applySuperEventsTabsVisibility();
   // Indicateur discret « assistant occupé » (Bug 1 UX) : bandeau inséré au-dessus
   // de la barre de saisie. Visible uniquement quand l'utilisateur tente d'envoyer
@@ -8488,7 +8488,7 @@ let vocalMotsDeReveil = [];
       superMessagesEl = null;
       // Suivi du travail (haut droite) : le panneau est GLOBAL, il survit à la
       // fermeture de l'onglet Assistant. La surveillance des missions (liste du
-      // volet « Tâches ») et son ecouteur d'onglets sont desormais poses au
+      // volet « Travaux ») et son ecouteur d'onglets sont desormais poses au
       // DEMARRAGE de Pilot (main.js) et ne sont PLUS coupes ici : les couper
       // laissait une photo perimee (mission demarree jamais affichee, mission
       // finie restee « en cours ») alors que le compteur du bouton « Travail »
@@ -9199,7 +9199,7 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   if (type === "agent_end") {
     statusEl.textContent = "Prêt";
     // LE SUIVI A PU CHANGER PENDANT CE TOUR (creation, statut, regroupement par
-    // l'Assistant) : un seul signal, et le volet « Taches » comme le Kanban
+    // l'Assistant) : un seul signal, et le volet « Travaux » comme le Kanban
     // relisent la base. Fin de tour reelle -> aucun sondage, aucun delai.
     notifyTrackedTasksChanged();
     // MÉNAGE DES RAPPELS : le tour déclenché par un rappel peut être relancé par

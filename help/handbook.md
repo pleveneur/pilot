@@ -2148,7 +2148,7 @@ apprend et répond.
   projets par client, lecture seule).
 
 ### Le panneau « Travail » ne montre que le travail des agents
-- Dans le panneau du travail (cercle en haut à droite), l'onglet **« Tâches »**
+- Dans le panneau du travail (cercle en haut à droite), l'onglet **« Travaux »**
   montre **uniquement** le travail des agents : ceux qui **travaillent**
   (« En cours », « Démarrage ») et ceux qui **attendent leur tour**
   (« En attente »), avec leur rang et leur libellé.
@@ -2286,7 +2286,7 @@ apprend et répond.
   - **Trois onglets, dans cet ordre DÉFINITIF** (de gauche à droite ; décision
     propriétaire, qui prime sur l'ordre initialement demandé) : **« Agents »**
     (la liste des agents du suivi, inchangée : pastille respirante, projet,
-    état), **« Tâches »** (missions en cours et en attente), **« Événements »**
+    état), **« Travaux »** (missions en cours et en attente), **« Événements »**
     (historique système).
   - **Onglet par défaut** : à l'ouverture du panneau, on arrive sur **« Agents »**
     tant que l'utilisateur n'a **jamais** choisi d'onglet (aucune mémoire).
@@ -2304,7 +2304,7 @@ apprend et répond.
     attendent leur tour**. **Rien** ne s'affiche quand il n'y a aucun travail ;
     le chiffre s'**allume** quand au moins une tâche est **en cours** (aucune
     animation). Les **nombres réels** (et le plafond « 99+ » quand ils deviennent
-    grands) sont dans l'**infobulle**. Le compteur **et** le volet « Tâches »
+    grands) sont dans l'**infobulle**. Le compteur **et** le volet « Travaux »
     affichent **toujours les mêmes nombres**.
   - **Signal d'attention des événements non lus** (il ne se perd pas) : le
     **point du bouton** s'allume tant qu'il reste des événements non vus, et un
@@ -2328,7 +2328,7 @@ apprend et répond.
     horodatage, espacements), sans aucune valeur de style recopiée : réglages
     uniques dans les variables `--agent-activity-panel-*` et gabarits de liste
     partagés (verrou `src/js/taille-et-style-panneau.test.js`).
-  - **Le volet « Tâches » ne montre QUE le travail des agents** (décision du
+  - **Le volet « Travaux » ne montre QUE le travail des agents** (décision du
     propriétaire, 2026-11-05, sans appel) : les missions qui travaillent et
     celles qui attendent dans la file. **Aucune tâche du suivi** n'y est
     insérée — elle vit dans l'onglet **Kanban**, son seul écran. Rien à montrer ⇒
@@ -2356,10 +2356,10 @@ apprend et répond.
     (1-120 s, **5 s par défaut**). Le **dernier événement remplace** le
     précédent (jamais d'empilement) et le bandeau s'efface en douceur. Les
     **questions interactives** (choix, confirmations) ne sont **pas** concernées.
-- **Onglet « Tâches » du panneau du suivi du travail** : l'ordre définitif des
-  onglets est **« Agents », « Tâches », « Événements »** ; le panneau propose
-  donc l'onglet **« Tâches »** juste après « Agents » (**Options ⚙️ →
-  onglet « Assistant » → « Onglet « Tâches » dans le panneau du suivi du travail
+- **Onglet « Travaux » du panneau du suivi du travail** : l'ordre définitif des
+  onglets est **« Agents », « Travaux », « Événements »** ; le panneau propose
+  donc l'onglet **« Travaux »** juste après « Agents » (**Options ⚙️ →
+  onglet « Assistant » → « Onglet « Travaux » dans le panneau du suivi du travail
   (missions des agents) »**, **activé par défaut** ; décoché, l'onglet est
   **masqué** et le panneau reste sur les deux autres). Il liste les **missions
   réellement en cours** de vos agents : pour chacune, une **phrase courte** qui
@@ -2750,10 +2750,10 @@ uniquement un bloc d'instructions dans le prompt système.
   fichiers projets. C'est l'utilisateur qui pilote ces cartes directement dans
   la vue.
 
-### Onglet « Tâches » du panneau du suivi du travail (missions des agents)
+### Onglet « Travaux » du panneau du suivi du travail (missions des agents)
 - Le **panneau du suivi du travail** (#139, cercle en **haut à droite**, commun à
   toutes les vues) porte **trois onglets commutables** dans son en-tête, dans
-  l'ordre définitif : **« Agents »** (liste des agents), **« Tâches »** (missions
+  l'ordre définitif : **« Agents »** (liste des agents), **« Travaux »** (missions
   des agents) et **« Événements »** (historique en direct,
   inchangé). L'ancien panneau de la
   cloche de l'onglet 🧭 n'existe plus : ses **deux contenus** (événements et
@@ -2900,7 +2900,7 @@ uniquement un bloc d'instructions dans le prompt système.
   système + demande) : rien de son prompt n'est modifié.
 
 <!-- HELP:super-agent-panneau-taches -->
-- Le panneau du suivi (cercle en **haut à droite**, onglet « **Tâches** ») dit,
+- Le panneau du suivi (cercle en **haut à droite**, onglet « **Travaux** ») dit,
   sous chaque agent, **ce qu'il a à faire** en une phrase courte.
 - Trois groupes, dans cet ordre : « **En cours** » (l'agent travaille),
   « **Démarrage** » (la mission vient d'être **acceptée** et n'a **pas encore**

@@ -7,7 +7,7 @@
 // propriétaire, qui prime sur l'ordre initialement demandé) :
 //   1. « Agents »     — la liste des agents (pastille respirante, nom, projet)
 //                       puis la fiche de l'agent cliqué ;
-//   2. « Tâches »     — les missions réellement en cours et la file « en
+//   2. « Travaux »    — les missions réellement en cours et la file « en
 //                       attente » des agents ;
 //   3. « Événements » — le journal des événements système (délégations,
 //                       démarrages/arrêts, erreurs, connexions perdues).
@@ -133,7 +133,7 @@ export function rawAgentId(a) {
 /**
  * RÈGLE UNIQUE D'APPARTENANCE À LA LISTE DU TRAVAIL (point en haut à droite,
  * son volet « Agents », le résumé du mode « Assistant seul », le volet
- * « Tâches » et les compteurs qui en découlent) : aucune autre copie de cette
+ * « Travaux » et les compteurs qui en découlent) : aucune autre copie de cette
  * décision n'existe, ni ici, ni côté Rust.
  *
  * Elle répond à UNE question : « cette session doit-elle apparaître dans la
@@ -412,7 +412,7 @@ export function assistantWorkState(list) {
 // ── Travail effectif et travail SANS ONGLET (regle 1) ──
 // Une seule source de verite pour « cet agent travaille-t-il ? », partagee par
 // la liste deroulante (cercle en haut a droite), la fiche d'agent, le volet
-// « Tâches » du panneau du suivi du travail et le panneau « Activite » de
+// « Travaux » du panneau du suivi du travail et le panneau « Activite » de
 // l'onglet Agents : aucune logique de vivacite n'est dupliquee.
 
 /**
@@ -609,7 +609,7 @@ export function buildBackgroundWorkMissions(list) {
     }));
 }
 
-// ── Missions en cours (volet « Taches » du panneau du suivi du travail) ──
+// ── Missions en cours (volet « Travaux » du panneau du suivi du travail) ──
 
 /** Longueur maximale affichée du texte d'une mission (une phrase courte). */
 export const MISSION_MAX_CHARS = 120;
@@ -911,7 +911,7 @@ export function shortMission(text) {
 
 /**
  * Construit la liste des missions RÉELLEMENT en cours à afficher (volet
- * « Tâches » du panneau du suivi du travail). Fonction PURE.
+ * « Travaux » du panneau du suivi du travail). Fonction PURE.
  *
  * Règles (faux négatifs interdits) :
  *  - un agent RETENU si `busy` OU `toolInProgress` : un outil long et SILENCIEUX
@@ -1602,7 +1602,7 @@ export function renderBackgroundWorkersHtml(missions) {
 
 /**
  * Initialise le suivi du travail : le cercle d'activité (haut droite) ouvre UN
- * SEUL panneau à TROIS onglets — « Agents » (qui travaille), « Tâches »
+ * SEUL panneau à TROIS onglets — « Agents » (qui travaille), « Travaux »
  * (missions en cours et en attente) et « Événements » (journal système). Les deux
  * derniers volets sont ceux de l'ancien panneau de la cloche de l'onglet
  * Assistant, DÉPLACÉS ici (mêmes contenus, mêmes réglages, un seul endroit).
@@ -1750,7 +1750,7 @@ export function initAgentActivity(tabs) {
   const tasksList = agentPanelTasksListElement();
   if (tasksList) tasksList.addEventListener("click", () => closeAgentPanel());
 
-  // Réglage global « onglet Tâches » : appliqué dès le démarrage (le panneau est
+  // Réglage global « onglet Travaux » : appliqué dès le démarrage (le panneau est
   // global, il n'attend plus l'ouverture de l'onglet Assistant) et à chaque
   // changement de configuration.
   const applyTasksSetting = (cfg) => setAgentPanelTabsVisibility(cfg);
@@ -1787,13 +1787,13 @@ export function initAgentActivity(tabs) {
 /**
  * Onglets du panneau, dans l'ordre d'affichage de GAUCHE À DROITE.
  * ATTENTION : cet ordre est DÉFINITIF et verrouillé par test —
- * « Agents » puis « Tâches » puis « Événements ». La navigation au clavier
+ * « Agents » puis « Travaux » puis « Événements ». La navigation au clavier
  * (flèches ←/→) suit exactement ce tableau. Les volets correspondants de
  * index.html doivent être rangés dans le même ordre.
  */
 export const AGENT_PANEL_TABS = ["agents", "tasks", "events"];
 /** Libellés visibles (ordre et intitulés verrouillés par test). */
-export const AGENT_PANEL_TAB_LABELS = { agents: "Agents", events: "Événements", tasks: "Tâches" };
+export const AGENT_PANEL_TAB_LABELS = { agents: "Agents", events: "Événements", tasks: "Travaux" };
 /**
  * Onglet ouvert PAR DÉFAUT : « Agents » — à l'ouverture du panneau quand
  * l'utilisateur n'a encore jamais choisi d'onglet (aucune mémoire). Un onglet
@@ -1818,7 +1818,7 @@ function panelEl() {
 /**
  * Visibilité des onglets selon la configuration : le réglage global
  * `super_agent_tasks_tab_enabled` (ACTIVÉ PAR DÉFAUT) commande le seul onglet
- * « Tâches » ; les deux autres sont toujours là. Fail-open : réglage illisible
+ * « Travaux » ; les deux autres sont toujours là. Fail-open : réglage illisible
  * → onglet affiché.
  * @param {object|null} config
  * @returns {{agents: boolean, events: boolean, tasks: boolean}}
@@ -1848,7 +1848,7 @@ export function agentPanelBadgeText(count) {
 // Le bouton affiche « en cours / total » (ex. 2/5). Le total est celui demande
 // par le proprietaire : "les taches totales prevues = celles en cours + celles
 // en attente". Les deux nombres sortent de `splitMissions()` — LA MEME fonction
-// pure que les deux titres de groupes de l'onglet « Taches » — donc le bouton ne
+// pure que les deux titres de groupes de l'onglet « Travaux » — donc le bouton ne
 // peut pas contredire l'onglet (verrou : compteur-taches-travail.test.js).
 
 /** Derniers nombres publies (repeints quand la visibilite de l'onglet change). */
@@ -1914,7 +1914,7 @@ export function agentUnreadTooltip(count) {
 /**
  * Repeint le compteur de travail du bouton « Travail » (texte, `hidden`,
  * infobulle et `aria-label`). Le compteur SUIT le reglage de l'onglet
- * « Taches » : onglet absent, compteur absent (il renverrait a un volet qui
+ * « Travaux » : onglet absent, compteur absent (il renverrait a un volet qui
  * n'existe pas).
  */
 function paintAgentPanelTaskCount() {
@@ -1939,7 +1939,7 @@ function paintAgentPanelTaskCount() {
 }
 
 /**
- * Publie le compte de travail (appele par l'onglet « Taches », sur les memes
+ * Publie le compte de travail (appele par l'onglet « Travaux », sur les memes
  * donnees que lui). Fonction a effet de bord limite a l'affichage.
  * @param {number} running taches en cours
  * @param {number} waiting demandes en attente
@@ -1976,7 +1976,7 @@ export function agentPanelEventsListElement() {
   return document.querySelector("#agent-activity-pane-events .sa-events-list");
 }
 
-/** Liste des missions (volet Tâches) — null si l'interface n'est pas prête. */
+/** Liste des missions (volet Travaux) — null si l'interface n'est pas prête. */
 export function agentPanelTasksListElement() {
   return document.querySelector("#agent-activity-pane-tasks .sa-tasks-list");
 }

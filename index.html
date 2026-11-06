@@ -283,7 +283,7 @@
            posee a DROITE de la rangee d'onglets (bande de contexte supprimee,
            docs/proposition-bande-contexte-allegee.md §4), a TROIS onglets, dans
            l'ORDRE DÉFINITIF (de
-           gauche à droite) : « Agents » (qui travaille), « Tâches » (missions en
+           gauche à droite) : « Agents » (qui travaille), « Travaux » (missions en
            cours et en attente) et « Événements » (journal système). Le panneau
            s'ouvre sur « Agents » tant que l'utilisateur n'a pas choisi un autre
            onglet (mémoire). Unique endroit de l'interface où le travail se suit :
@@ -297,7 +297,7 @@
            COMPTEUR DE TRAVAIL (RAPPORT-compteur-taches.md) : a droite du mot, le
            bouton affiche « en cours / total » (ex. 2/5) — taches en cours des
            agents plus demandes en attente. Le compte sort de la MEME fonction
-           pure que les deux titres de groupes de l'onglet « Taches »
+           pure que les deux titres de groupes de l'onglet « Travaux »
            (splitMissions) : le bouton ne peut pas contredire l'onglet. Rien
            n'est affiche quand il n'y a aucun travail. L'ancien compteur
            d'evenements non lus quitte le bouton : son signal survit sur le
@@ -314,7 +314,7 @@
           <span class="sa-events-title">Travail</span>
           <div class="sa-events-tabs" role="tablist" aria-label="Suivi du travail">
             <button type="button" class="sa-events-tab active" role="tab" id="agent-activity-tab-agents" data-agent-panel-tab="agents" aria-controls="agent-activity-pane-agents" aria-selected="true" tabindex="0">Agents</button>
-            <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-tasks" data-agent-panel-tab="tasks" aria-controls="agent-activity-pane-tasks" aria-selected="false" tabindex="-1">Tâches</button>
+            <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-tasks" data-agent-panel-tab="tasks" aria-controls="agent-activity-pane-tasks" aria-selected="false" tabindex="-1">Travaux</button>
             <button type="button" class="sa-events-tab" role="tab" id="agent-activity-tab-events" data-agent-panel-tab="events" aria-controls="agent-activity-pane-events" aria-selected="false" tabindex="-1" aria-label="Événements">Événements<span id="agent-activity-events-unread" hidden></span></button>
           </div>
           <!-- LOT 5 : un SEUL bouton a droite de l'en-tete (le ×). « Tout
@@ -1332,7 +1332,7 @@
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-tasks-tab" />
-              <label for="setting-superagent-tasks-tab" title="Afficher l'onglet « Tâches » du panneau du suivi du travail (cercle en haut à droite) : il liste les MISSIONS RÉELLEMENT en cours de vos agents (projet, texte de la demande), un agent au repos n'y figure pas. Une mission qui attend qu'un agent se libère apparaît avec la mention « en attente ». Activé par défaut.">Onglet « Tâches » dans le panneau du suivi du travail (missions des agents)</label>
+              <label for="setting-superagent-tasks-tab" title="Afficher l'onglet « Travaux » du panneau du suivi du travail (cercle en haut à droite) : il liste les MISSIONS RÉELLEMENT en cours de vos agents (projet, texte de la demande), un agent au repos n'y figure pas. Une mission qui attend qu'un agent se libère apparaît avec la mention « en attente ». Activé par défaut.">Onglet « Travaux » dans le panneau du suivi du travail (missions des agents)</label>
             </div>
             <div class="setting-row setting-row-indent">
               <label for="setting-superagent-checklist-mode" title="Contrôle des points de checklist quand une tâche de suivi passe en « Terminé » : Désactivée = aucun contrôle ; Rappel simple (défaut) = un avertissement signale les points restants et la clôture reste possible ; Bloquante = la clôture est refusée tant que des points restent à cocher.">Checklist de livraison obligatoire :</label>

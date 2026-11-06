@@ -179,7 +179,7 @@ place relative que dans l'écran habituel. C'est **le même bouton** — le nœu
 `#agent-activity` est **déplacé** dans l'écran à l'entrée du mode et **restitué**
 à sa place exacte à la sortie (même patron que le logo et la barre de saisie) :
 même identifiant, même clic, même point d'état, même compteur « en cours /
-total », même panneau à trois onglets (Agents · Tâches · Événements), même fiche
+total », même panneau à trois onglets (Agents · Travaux · Événements), même fiche
 d'agent. **Rien n'est dupliqué** : aucun second bouton, aucun second panneau,
 aucun second calcul. Le mode Vocal ne fait donc que **rendre accessible** le
 suivi du travail qu'il masquait ; il n'affiche toujours **aucun** état d'agent

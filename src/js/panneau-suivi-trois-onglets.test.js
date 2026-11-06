@@ -265,13 +265,16 @@ describe("(a) plus de panneau cloche en bas a droite : un seul panneau", () => {
 // ════════════════════════════════════════════════════════════════════════════
 // (b) Les trois onglets existent, dans l'ordre, avec leurs libelles
 // ════════════════════════════════════════════════════════════════════════════
-describe("(b) trois onglets, ordre definitif : Agents, Taches, Evenements", () => {
+describe("(b) trois onglets, ordre definitif : Agents, Travaux, Evenements", () => {
   it("l'ordre et les libelles sont ceux demandes", () => {
     expect(AGENT_PANEL_TABS).toEqual(ORDRE_DEFINITIF);
     expect(AGENT_PANEL_TAB_LABELS).toEqual({
       agents: "Agents",
       events: "Événements",
-      tasks: "Tâches",
+      // L'onglet s'appelle « Travaux » depuis le 2026-11-15 (il ne montre que le
+      // travail des agents, jamais les taches du suivi) : voir le verrou
+      // libelle-onglet-travaux.test.ts.
+      tasks: "Travaux",
     });
   });
 
@@ -718,7 +721,10 @@ describe("(e) reglage « onglet Taches » : un seul reglage, effet reel", () => 
   it("les libelles des Parametres renvoient au panneau du suivi du travail", () => {
     const debut = html.indexOf('id="setting-superagent-tasks-tab"');
     const ligne = html.slice(html.lastIndexOf("<label", debut), html.indexOf("</label>", debut));
-    expect(ligne).toContain("Tâches");
+    // Le libelle nomme l'onglet tel qu'il apparait : « Travaux » (et plus
+    // « Tâches », qui le confondait avec les taches du suivi).
+    expect(ligne).toContain("Travaux");
+    expect(ligne).not.toContain("Tâches");
     expect(ligne).toContain("suivi du travail");
     expect(ligne).not.toContain("cloche");
   });

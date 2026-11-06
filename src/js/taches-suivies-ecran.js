@@ -1,7 +1,7 @@
-// LES TÂCHES DU SUIVI, VISIBLES À L'ÉCRAN (volet « Tâches » du panneau du suivi).
+// LES TÂCHES DU SUIVI, VISIBLES À L'ÉCRAN (volet « Travaux » du panneau du suivi).
 //
 // Défaut corrigé (docs/rapports/RAPPORT-liste-taches-affichee.md) : le volet
-// « Tâches » ne lisait QUE le store d'activité des agents (`buildRunningMissions`).
+// « Travaux » ne lisait QUE le store d'activité des agents (`buildRunningMissions`).
 // Il n'a jamais lu la base de suivi — alors que `super-agent-kanban.js` exportait
 // déjà la règle « ouverte ou close » (`isOpenTaskStatus`) et ses deux filtres,
 // sans aucun appelant. Conséquences : créer / annuler / regrouper une tâche dans
@@ -100,7 +100,7 @@ export function trackedTasksSignature(tasks) {
 }
 
 /**
- * Le groupe « Suivi » du volet « Tâches ».
+ * Le groupe « Suivi » du volet « Travaux ».
  *
  * Rien à afficher ⇒ chaîne VIDE : aucun en-tête orphelin, aucun message ajouté
  * (le volet garde exactement son apparence quand le suivi est vide). Sinon un

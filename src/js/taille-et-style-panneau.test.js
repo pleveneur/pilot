@@ -337,7 +337,7 @@ describe("panneau du suivi du travail — onglets sur une seule ligne (c)", () =
       .filter(Boolean);
 
   it("les trois libelles sont ceux de l'ordre definitif", () => {
-    expect(libelles()).toEqual(["Agents", "Tâches", "Événements"]);
+    expect(libelles()).toEqual(["Agents", "Travaux", "Événements"]);
   });
 
   it("la barre d'onglets ne se replie jamais sur deux lignes", () => {

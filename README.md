@@ -258,10 +258,10 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   aucun travail. Le détail exact (et les nombres réels quand ils deviennent grands, par exemple
   « 99+ ») est dans l'infobulle ; le chiffre s'allume quand au moins une tâche est **en cours**.
 - Le panneau a **trois onglets**, dans cet ordre : **« Agents »** (qui travaille, sur quel projet),
-  **« Tâches »** (les missions en cours et celles qui attendent leur tour, avec la mention « en attente » ;
+  **« Travaux »** (les missions en cours et celles qui attendent leur tour, avec la mention « en attente » ;
   les tâches de votre **suivi** ne s'y trouvent pas — elles gardent leur onglet **Kanban**) et
   **« Événements »** (démarrages, fins de tâche, erreurs, connexions). Le compteur du bouton et le
-  volet « Tâches » affichent **toujours les mêmes nombres** : ils sortent du même calcul.
+  volet « Travaux » affichent **toujours les mêmes nombres** : ils sortent du même calcul.
 - Les **événements que vous n'avez pas encore vus** sont signalés à **deux endroits** : le point du
   bouton « Travail » **s'allume**, et un **petit point** apparaît sur l'onglet « Événements » (son
   infobulle donne le nombre exact ; ouvrir l'onglet l'éteint). Le panneau s'ouvre sur **« Agents »**
