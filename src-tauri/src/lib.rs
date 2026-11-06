@@ -779,7 +779,8 @@ struct AppConfig {
     local_dictation: bool,
     // Mode Vocal (écran vocal) : MOTS DE RÉVEIL de la garde du nom (§ 6quater de
     // `spec_modes_ecran_vocal.md`). UN seul champ texte, UNE clé, VIDE par
-    // défaut (« Nova, hey Nova »). Vide, le comportement historique est
+    // défaut (vide ; à remplir par exemple avec « hey bonjour, allô »). Vide, le
+    // comportement historique est
     // inchangé : seul le nom de l'assistante ouvre la phrase. Rempli, ces mots
     // s'AJOUTENT au nom — qui reste toujours accepté — et une phrase qui en
     // contient un seul part. La séparation, les doublons, la casse et les
@@ -2305,6 +2306,19 @@ fn save_config(
     if let Some((clients, project_client)) = super_agent::read_clients_mirror(&app) {
         config.super_agent_clients = clients;
         config.super_agent_project_client = project_client;
+    }
+    // PROMPT DE L'ASSISTANT : il a son PROPRE écrivain, qui tient l'historique des
+    // versions (`super_agent::record_prompt_version`, appelé par
+    // `set_super_agent_prompt` — écran de réglages ET outil `update_my_prompt` de
+    // l'assistant). Une copie de la fenêtre peut être PÉRIMÉE (l'assistant a
+    // réécrit son prompt entre-temps) : la réécrire ici ferait revenir une
+    // ANCIENNE version en silence, sans passer par l'historique. La configuration
+    // vivante est donc la seule vérité, exactement comme pour le miroir des
+    // clients ci-dessus ; une modification faite dans les réglages part par le
+    // chemin dédié (`set_super_agent_prompt`), jamais par cette réécriture.
+    {
+        let en_vigueur = state.config.lock().unwrap().super_agent_prompt.clone();
+        config.super_agent_prompt = en_vigueur;
     }
     // Écrire sur le disque d'abord (opération lente), puis mettre à jour l'état
     save_config_disk(&app, &config)?;
@@ -3996,6 +4010,7 @@ pub fn run() {
             super_agent::ask_super_agent,
             super_agent::new_super_agent_session,
             super_agent::set_super_agent_model,
+            super_agent::refresh_assistant_identity,
             super_agent::set_super_agent_default_model,
             super_agent::set_super_agent_working_project,
             super_agent::super_agent_db_query,

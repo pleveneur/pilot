@@ -132,6 +132,33 @@ apprend et répond.
   sur vos réglages : l'Assistant démarre toujours.
 <!-- /HELP:super-agent-genre-modele -->
 
+<!-- HELP:super-agent-instructions -->
+### Les instructions de l'Assistant ne figent jamais un personnage
+- Les textes d'instructions livrés avec Pilot (son rôle, ses règles, ses
+  outils) sont **neutres** : ils ne nomment **aucun** personnage et n'imposent
+  **aucun** genre. Le nom y est écrit sous la forme d'un **emplacement**
+  (`{nom}`) ; il est **rempli à chaque envoi** avec le nom du moment — celui du
+  **personnage actif**, sinon votre **nom réglé**, sinon « Assistant ».
+- Conséquence : **changer de personnage suffit**. Le nom qui apparaît dans les
+  instructions suit le personnage — il n'est jamais recopié dans un texte, donc
+  il ne peut pas rester figé sur le précédent.
+- **Le prompt personnalisé peut aussi utiliser `{nom}`** (Options ⚙️ → onglet
+  « Assistant ») : écrivez « Tu es `{nom}`… » et la phrase suivra le personnage
+  actif. Un texte qui n'utilise pas `{nom}` reste **exactement** inchangé.
+- **Le genre ne vient que de son réglage** (« Genre de l'Assistant », vide par
+  défaut) ou de la **fiche du personnage** : jamais d'un texte livré.
+- **Une version ancienne du prompt ne peut plus revenir en silence** :
+  enregistrer les Options passe par le **même** chemin d'écriture que tout le
+  reste (un seul écrivain, un seul historique), et n'écrase plus le prompt en
+  vigueur par une copie plus vieille. L'historique reste consultable à un seul
+  endroit.
+- **Au changement de personnage** (activation comme désactivation), l'Assistant
+  relit **tout de suite** son identité : nom, portrait, genre et **modèle du
+  personnage**. Le modèle est appliqué à la session **vivante** ; il n'est
+  jamais écrit dans vos réglages, et un personnage retiré ne laisse donc rien
+  derrière lui.
+<!-- /HELP:super-agent-instructions -->
+
 ### Si l'assistant affiche « Connexion au super-agent perdue »
 - Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).
   Les **causes les plus fréquentes** : le chemin de l'agent (Options → Agent)
@@ -3318,6 +3345,26 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   (commande Rust `set_super_agent_prompt`, persistée dans la config + historique
   `prompt-history.md`). L'assistant l'utilise pour prendre systématiquement en
   compte ce qu'il apprend des discussions et des choix de l'utilisateur.
+  **Un seul écrivain, un seul historique** (correctif « un personnage figé dans
+  les instructions ») : `record_prompt_version` → `append_prompt_version` →
+  `<données de l'application>/prompt-history.md`, et c'est le **seul**
+  `.join("prompt-history.md")` du dépôt (verrou Rust). **Enregistrer les
+  Options ne réécrit plus le prompt** : `save_config` (Rust) remplace la copie
+  venue de la fenêtre par le prompt **en vigueur**, et `settings.js` envoie une
+  vraie modification par `set_super_agent_prompt` (décision pure
+  `promptNeedsDedicatedSave`). Une ancienne version ne peut donc plus revenir
+  en silence.
+- **Le nom des instructions n'est jamais recopié** : `assistant_identity::
+  assistant_display_name` (personnage → nom réglé → « Assistant ») fournit le nom
+  à chaque injection, et `resolve_instruction_name` remplace `{nom}` dans le
+  prompt personnalisé (texte sans `{nom}` rendu **à l'identique**, jamais de
+  jeton brut). Les textes livrés (`SUPER_AGENT_*`, consignes d'outils) sont
+  contrôlés par un verrou : aucun nom de personnage, aucun genre imposé —
+  `src/js/personnage-jamais-fige-dans-les-instructions.test.js`.
+- **Changement de personnage = identité relue** : commande Rust
+  `refresh_assistant_identity` (nom, `assistant_session_model`), appelée par
+  `startPersonaWatch` ; le modèle du personnage est appliqué à la session
+  **vivante** seulement (`should_reapply_session_model`), jamais persisté.
 - **Installation d'outils (validation utilisateur)** : si l'assistant a besoin
   d'installer des outils pour gérer certaines tâches, il **demande d'abord** à
   l'utilisateur, qui doit valider (via `ask_confirm` / `ask_choice`).
@@ -3883,7 +3930,9 @@ disque à chaque lancement de session.
   - `super_agent_db_query(sql)` / `super_agent_db_execute(sql)` (accès contrôlé à
     la base de suivi de l'assistant)
   - `set_super_agent_prompt(prompt)` (auto-adaptation du prompt personnalisé,
-    avec historique `prompt-history.md`)
+    avec historique `prompt-history.md` — écrivain unique)
+  - `refresh_assistant_identity()` (relit le nom et le modèle du personnage actif
+    et les applique à la session vivante, sans rien persister)
   - `query_super_agent(question)` (recherche dans la base + projets)
   - `list_agent_sessions()` (vue d'ensemble des sessions d'agents, P2 —
     AgentService)

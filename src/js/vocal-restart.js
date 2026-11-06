@@ -106,7 +106,7 @@ export function vocalRestartName(nom) {
  * ENTIER, meme quand l'affichage dans le cercle est abrege.
  *
  * @param {unknown} [nom] nom affiche de l'Assistant
- * @returns {string} « Réveiller Nova », « Réveiller Assistant », …
+ * @returns {string} « Réveiller <Nom> », « Réveiller Assistant », …
  */
 export function vocalRestartLabel(nom) {
   return `${VOCAL_RESTART_VERB} ${vocalRestartName(nom)}`;

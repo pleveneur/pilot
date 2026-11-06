@@ -38,7 +38,7 @@
 //
 // ── LES MOTS DE RÉVEIL (réglage unique, `vocal_wake_words`) ─────────────────
 // Décision du propriétaire : à côté de son nom, l'écran Vocal obéit à des MOTS
-// DE RÉVEIL libres (« Nova, hey Nova »). Le réglage est UN champ texte, UNE clé,
+// DE RÉVEIL libres (« hey bonjour, allô »). Le réglage est UN champ texte, UNE clé,
 // de défaut **vide** : tant qu'il est vide, le comportement est **exactement**
 // celui d'avant (le nom seul). Rempli, une phrase est acceptée dès qu'elle
 // contient **au moins un** des mots saisis, avec la **même** tolérance que le
@@ -132,7 +132,7 @@ function wordsOf(texte) {
  * Les mots de réveil d'une saisie libre, nettoyés et dédoublonnés.
  *
  * Une saisie = un champ texte : la virgule (ou le point-virgule, ou le saut de
- * ligne) sépare deux mots, et un mot peut contenir des espaces (« hey Nova »).
+ * ligne) sépare deux mots, et un mot peut contenir des espaces (« hey bonjour »).
  * Les entrées vides et les doublons (même à la casse ou aux accents près) sont
  * ignorés, l'ordre saisi est conservé. PURE, ne lève jamais.
  * @param {unknown} saisie texte du réglage, ou liste de mots
@@ -198,7 +198,8 @@ function keysOf(words) {
  *      (« nova », « marie claire ») ;
  *   2. **au son** : la même suite, comparée par `phoneticKey`, et seulement si
  *      la clé fait au moins `VOCAL_GATE_MIN_KEY` caractères. Le nom peut y être
- *      coupé en plusieurs mots par la reconnaissance (« no va » pour « Nova »).
+ *      coupé en plusieurs mots par la reconnaissance (le nom peut arriver en deux
+ *      morceaux).
  *
  * PURE. Ne lève jamais.
  * @param {unknown} phrase texte transcrit (ou saisi) à examiner
@@ -283,7 +284,7 @@ export function decideVocalNameGate(etats) {
  * L'autre état (réveillé pour une phrase) est dit par la phrase EXISTANTE du
  * repos (« Je vous écoute. »), qui n'est pas recopiée ici.
  * @param {unknown} nom nom attendu, tel qu'il doit être dit
- * @returns {string} `Dites « Nova » pour me parler.`
+ * @returns {string} `Dites « nom » pour me parler.`
  */
 export function vocalNameSentence(nom) {
   const affiche = String(nom == null ? "" : nom).replace(/\s+/g, " ").trim();

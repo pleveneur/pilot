@@ -44,7 +44,8 @@ import { listen } from "@tauri-apps/api/event";
 import { formatWorkingSince, formatWorkingSinceShort } from "./duree-travail.js";
 // PERSONNAGE ACTIF (Présences) : la liste des agents en haut a droite porte le
 // MEME nom que le titre de l'onglet. La supervision nomme la session de
-// l'assistant d'apres le nom REGLE (« Nova ») : sans ce branchement, le nom du
+// l'assistant d'apres le nom REGLE (celui des Options) : sans ce branchement,
+// le nom du
 // personnage etait ignore partout ailleurs que dans l'onglet. Une seule regle,
 // celle de `assistant-persona.js` — aucune copie de la priorite ici.
 import { getAssistantPersonaName, personaDisplayName } from "./assistant-persona.js";

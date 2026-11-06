@@ -1254,6 +1254,9 @@
               <label for="setting-superagent-prompt" title="Prompt système personnalisé : cadre le comportement de l'Assistant à chaque tour.">Prompt système :</label>
               <textarea id="setting-superagent-prompt" rows="6" placeholder="Tu es un assistant de suivi de projets. Tu suis chaque projet de la demande à la livraison, tu apprends des sessions d'agents et tu réponds aux questions. Tu es strictement en lecture seule : tu ne modifies jamais les fichiers des projets." style="width:100%;font-family:var(--font-mono);font-size:12px;"></textarea>
             </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="instruction-name-note" role="note">Écrivez <b>{nom}</b> là où vous voulez désigner l'Assistant : ce jeton est remplacé à chaque message par son nom du moment — celui du personnage actif, sinon le nom réglé ci-dessus, sinon « Assistant ». Un nom écrit en dur, lui, ne suivrait pas le personnage : il resterait après sa désactivation. Le genre, quand il est réglé, vient de son propre champ et de la fiche du personnage, jamais de ce texte.</span>
+            </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-thinking" />
               <label for="setting-superagent-thinking" title="Afficher la réflexion de l'Assistant (pensée) dans la conversation — même rendu que l'agent standard.">Afficher la réflexion de l'Assistant</label>
@@ -1497,11 +1500,11 @@
                  normalisation (virgules, doublons, casse, accents) est celle du
                  module pur `vocal-nom-garde.js` : rien n'est découpé ici. -->
             <div class="setting-row">
-              <label for="setting-vocal-wake-words" title="D'autres façons d'appeler Pilot en mode Vocal, en plus de son nom. Séparez-les par des virgules : «&nbsp;Nova, hey Nova&nbsp;». Une phrase qui contient UN SEUL de ces mots part, et son nom reste toujours accepté. Champ vide : seul son nom compte, comme avant.">Mots de réveil&nbsp;:</label>
-              <input type="text" id="setting-vocal-wake-words" placeholder="Nova, hey Nova" style="flex:1;max-width:320px;" aria-describedby="vocal-wake-words-note" />
+              <label for="setting-vocal-wake-words" title="D'autres façons d'appeler Pilot en mode Vocal, en plus de son nom. Séparez-les par des virgules : «&nbsp;hey bonjour, allô&nbsp;». Une phrase qui contient UN SEUL de ces mots part, et son nom reste toujours accepté. Champ vide : seul son nom compte, comme avant.">Mots de réveil&nbsp;:</label>
+              <input type="text" id="setting-vocal-wake-words" placeholder="hey bonjour, allô" style="flex:1;max-width:320px;" aria-describedby="vocal-wake-words-note" />
             </div>
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
-              <span id="vocal-wake-words-note" role="note">En mode Vocal, Pilot ne fait rien tant que vous ne l'avez pas appelé par son nom. Ce champ ajoute d'autres façons de l'appeler&nbsp;: séparez-les par des virgules («&nbsp;Nova, hey Nova&nbsp;») et une phrase qui en contient <b>un seul</b> part toute seule. Son nom reste toujours accepté, et les majuscules comme les accents n'ont aucune importance. Champ vide&nbsp;: seul son nom compte, exactement comme avant.</span>
+              <span id="vocal-wake-words-note" role="note">En mode Vocal, Pilot ne fait rien tant que vous ne l'avez pas appelé par son nom. Ce champ ajoute d'autres façons de l'appeler&nbsp;: séparez-les par des virgules («&nbsp;hey bonjour, allô&nbsp;») et une phrase qui en contient <b>un seul</b> part toute seule. Son nom reste toujours accepté, et les majuscules comme les accents n'ont aucune importance. Champ vide&nbsp;: seul son nom compte, exactement comme avant.</span>
             </div>
           </div>
           <div class="settings-section">

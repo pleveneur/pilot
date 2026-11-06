@@ -192,7 +192,7 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   la ponctuation n'ont aucune importance. Le bouton **« Réveiller <Nom> »** du
   cercle lève cette règle pour **une** phrase, et le **clavier n'est jamais
   filtré** : ce que vous tapez part comme avant.
-- **Vous pouvez régler d'autres mots de réveil** (par exemple « hey Nova ») :
+- **Vous pouvez régler d'autres mots de réveil** (par exemple « hey bonjour ») :
   ⚙️ **Options → onglet « Assistant » → section « Mode Vocal »**, champ
   **« Mots de réveil »**, mots séparés par des virgules. Une phrase qui contient
   **un seul** de ces mots part toute seule, où qu'il soit, et **son nom reste

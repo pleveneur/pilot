@@ -618,7 +618,7 @@ En mode **Vocal** :
 - **Le rond « Réveiller <votre personnage> » relance l'écoute.** Il **occupe
   tout l'intérieur du cercle** : quand il est là, il **est** le cercle, dont le
   contour lui sert de bord. Il porte « **Réveiller** » suivi du nom de votre
-  personnage (par exemple « Réveiller Nova » ; « Réveiller Assistant » s'il n'y
+  personnage (par exemple « Réveiller <Nom> » : c'est le nom affiché à ce moment-là, jamais une valeur écrite ; « Réveiller Assistant » s'il n'y
   a pas de personnage) : un clic relance l'écoute et la conversation, exactement
   comme le bouton 🎙️ de la barre de saisie. Il est **visible quand la dictée ne
   tourne pas** et **disparaît pendant l'écoute** — d'un coup d'œil, vous savez

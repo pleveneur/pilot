@@ -937,7 +937,7 @@ impossibles par construction. Priorité : **parole** > **réflexion** > **écout
 | **Parole** | Pilot lit la réponse | ambre (`--vocal-speak`) | lueur extérieure **au bord** du disque (pic à **34 %** d'alpha sur la couronne) qui **suit la voix de Pilot** : le son mesuré quand il l'est, le rythme de la phrase lue sinon (§4) | « Je réponds. » |
 
 > **Une exception, voulue** : au **repos**, la ligne d'état peut dire
-> `Dites « Nova » pour me parler.` au lieu de « Je vous écoute. » — c'est la
+> `Dites « <Nom> » pour me parler.` au lieu de « Je vous écoute. » — c'est la
 > garde du nom (§6quater), et c'est la **même** ligne d'état, aucun élément
 > nouveau. Elle redevient « Je vous écoute. » dès que l'écran a été réveillé
 > (bouton « Réveiller <Nom> », geste 🎙️).
@@ -2036,12 +2036,12 @@ sans que personne ne se soit adressé à Pilot.
   moteur). **Aucun message répété**, aucun avertissement : l'écran ne dit rien
   qui ne soit sa ligne d'état.
 - **Le nom est accepté n'importe où dans la phrase** : au début, au milieu, à la
-  fin (« Nova, range le projet », « range le projet, Nova »).
+  fin (« <Nom>, range le projet », « range le projet, <Nom> »).
 - **La comparaison est tolérante mais ÉTROITE** : casse, accents, ponctuation et
   espaces sont ignorés ; s'y ajoutent quelques **variantes évidentes de
   prononciation** (`ph`/`f`, `qu`/`k`, `y`/`i`, consonne finale muette
   française — « Bernar » pour « Bernard »), et la possibilité que la
-  reconnaissance coupe le nom en deux (« no va » pour « Nova »). **Rien de
+  reconnaissance coupe le nom en deux (le nom peut arriver en deux morceaux). **Rien de
   plus** : aucune distance d'édition, aucun dictionnaire de prénoms, aucune
   réduction des lettres doublées (elle faisait déclencher « bonne année » sur
   le prénom « Anne »). Conséquence assumée, dite en clair : **un nom mal
@@ -2053,7 +2053,7 @@ sans que personne ne se soit adressé à Pilot.
   n'est écrite pour cet écran : la fonction existante est appelée, jamais
   recopiée.
 - **Les deux états, sur la ligne qui existe déjà** : la garde est **ARMÉE** →
-  `Dites « Nova » pour me parler.` (le nom réel de l'assistante) ; l'écran a été
+  `Dites « <Nom> » pour me parler.` (le nom réel de l'assistante, jamais recopié) ; l'écran a été
   **RÉVEILLÉ** pour une phrase → la phrase **existante** du repos
   (« Je vous écoute. »). **Aucun nouvel élément d'interface** : c'est l'unique
   phrase de la ligne d'état qui bascule. La ligne continue de nommer
@@ -2078,7 +2078,7 @@ sans que personne ne se soit adressé à Pilot.
 ### 6quater.1 Les mots de réveil (réglage unique, `vocal_wake_words`)
 
 **Décision du propriétaire** : à côté de son nom, l'écran Vocal doit pouvoir
-obéir à des **mots de réveil libres** (« Nova, hey Nova »), réglés à **un seul
+obéir à des **mots de réveil libres** (« hey bonjour, allô »), réglés à **un seul
 endroit** — le champ texte ajouté dans la section **« Mode Vocal »** des
 Paramètres (onglet Assistant), juste sous la dictée locale.
 
@@ -2089,7 +2089,7 @@ Paramètres (onglet Assistant), juste sous la dictée locale.
   modifié.
 - **Rempli ⇒ une phrase est acceptée si elle contient AU MOINS UN des mots**
   saisis. La séparation est la **virgule** (ou le point-virgule, ou le saut de
-  ligne) ; un mot peut contenir des espaces (« hey Nova ») ; les entrées vides
+  ligne) ; un mot peut contenir des espaces (« hey bonjour ») ; les entrées vides
   et les doublons (à la casse ou aux accents près) sont ignorés. Un mot isolé
   suffit, n'importe où dans la phrase.
 - **Le nom de l'assistante reste TOUJOURS accepté en plus** : le réglage
@@ -2128,13 +2128,13 @@ son nom **ne part pas**, **ne s'écrit pas** dans la zone de saisie et
 continue simplement de vous écouter.
 
 - **Le nom, où vous voulez** : au début, au milieu ou à la fin de la phrase —
-  « Nova, range le projet » comme « range le projet, Nova ».
+  « <Nom>, range le projet » comme « range le projet, <Nom> ».
 - **Il est reconnu malgré les petites différences** : majuscules, accents,
   ponctuation et espaces n'ont aucune importance, et quelques prononciations
   très proches passent (« Bernar » pour « Bernard »).
 - **Vous pouvez régler d'autres mots de réveil** : ⚙️ **Options → onglet
   « Assistant » → section « Mode Vocal »**, champ **« Mots de réveil »**.
-  Écrivez-les séparés par des virgules (« Nova, hey Nova ») : une phrase qui
+  Écrivez-les séparés par des virgules (« hey bonjour, allô ») : une phrase qui
   contient **un seul** de ces mots part, où qu'il soit, et les majuscules comme
   les accents n'ont aucune importance. **Son nom reste toujours accepté en
   plus.** Champ **vide** : seul son nom compte, exactement comme avant. Le
@@ -2142,7 +2142,7 @@ continue simplement de vous écouter.
 - **Quel nom ?** Celui que Pilot affiche déjà : le **personnage** déposé par le
   projet Présences, sinon le **nom réglé** de votre assistant, sinon son nom
   habituel. Rien de nouveau à régler — les mots de réveil **s'ajoutent** à ce nom.
-- **La ligne d'état vous dit où vous en êtes** : « Dites « Nova » pour me
+- **La ligne d'état vous dit où vous en êtes** : « Dites « <Nom> » pour me
   parler. » quand il attend son nom, et « Je vous écoute. » quand la phrase
   suivante partira sans le nom.
 - **Le bouton « Réveiller <Nom> »** (dans le cercle) reste votre secours : un
@@ -2157,7 +2157,7 @@ continue simplement de vous écouter.
 reconnaissance a écrit son nom autrement : redites-le clairement, cliquez
 **« Réveiller <Nom> »**, ou tapez votre demande au clavier. Pilot préfère ne
 rien faire que se déclencher pour une phrase qui ne lui était pas adressée. Un
-**mot de réveil plus simple à reconnaître** (« hey Nova ») est souvent le
+**mot de réveil plus simple à reconnaître** (« hey bonjour ») est souvent le
 remède : c'est à cela qu'il sert.
 <!-- /HELP:vocal-garde-du-nom -->
 

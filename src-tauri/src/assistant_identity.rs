@@ -1,9 +1,17 @@
-// assistant_identity.rs — IDENTITÉ de l'Assistant : son GENRE et son MODÈLE.
+// assistant_identity.rs — IDENTITÉ de l'Assistant : son NOM, son GENRE et son MODÈLE.
 //
-// SOURCE UNIQUE des deux réglages (tâches 402 et 403), décidés ici, une seule
-// fois, et testés sans configuration ni session :
+// SOURCE UNIQUE de ces trois réglages (tâches 402 et 403, puis correctif du
+// personnage figé dans les instructions), décidés ici, une seule fois, et testés
+// sans configuration ni session :
 //
-//   1. GENRE (masculin / féminin / non précisé) — la phrase injectée dans le
+//   1. NOM — `assistant_display_name` : personnage actif → nom réglé → défaut.
+//      C'est la règle que la fenêtre applique déjà (`personaDisplayName`) ; le
+//      moteur n'en avait pas, et composait le rôle avec le seul nom réglé, si
+//      bien qu'un personnage actif n'était pas nommé. Un texte d'instructions ne
+//      RECOPIE plus le nom : il le RÉFÉRENCE par `{nom}`, résolu à chaque
+//      injection par `resolve_instruction_name`.
+//
+//   2. GENRE (masculin / féminin / non précisé) — la phrase injectée dans le
 //      prompt de l'assistant vient de `assistant_gender_instruction`, et de nulle
 //      part ailleurs. La valeur réglée dans Pilot (`AppConfig::assistant_gender`)
 //      n'est qu'une des deux entrées : le GENRE PORTÉ PAR LA FICHE DU PERSONNAGE
@@ -11,7 +19,7 @@
 //      plus précis que le réglage général. « Non précisé » n'injecte AUCUNE
 //      phrase : le comportement actuel est alors strictement préservé.
 //
-//   2. MODÈLE PAR DÉFAUT propre au personnage actif (fiche Présences,
+//   3. MODÈLE PAR DÉFAUT propre au personnage actif (fiche Présences,
 //      `modele.txt`) — `decide_assistant_model` dit quel modèle la session de
 //      l'Assistant utilise et D'OÙ il vient. Fiche sans modèle = la chaîne
 //      existante de Pilot (modèle choisi → réglage dédié #88 → défaut global),
@@ -39,6 +47,71 @@ pub const ASSISTANT_GENDER_UNSPECIFIED: &str = "";
 pub const ASSISTANT_GENDER_FEMININE: &str = "feminin";
 /// Valeur canonique du genre masculin (ce qui est ÉCRIT dans la configuration).
 pub const ASSISTANT_GENDER_MASCULINE: &str = "masculin";
+
+// ── 3. NOM : la règle unique, côté moteur ──────────────────────────────────
+
+/// Nom de l'Assistant quand RIEN n'est réglé et qu'aucun personnage n'est
+/// actif. Même valeur que le défaut de la fenêtre (`DEFAULT_ASSISTANT_NAME`,
+/// `src/js/assistant-persona.js`) : deux écritures de la MÊME constante, jamais
+/// deux règles (le verrou JS compare les deux).
+pub const ASSISTANT_DEFAULT_NAME: &str = "Assistant";
+
+/// Jeton par lequel un texte d'instructions RÉFÉRENCE le nom au lieu de le
+/// recopier. Il est remplacé à CHAQUE injection par `resolve_instruction_name`,
+/// avec le nom du moment (`assistant_display_name`).
+///
+/// Écrit ici, une seule fois : la fenêtre porte la même valeur
+/// (`INSTRUCTION_NAME_PLACEHOLDER`, `src/js/assistant-instructions.js`) et un
+/// verrou compare les deux, sinon le jeton tapé par l'utilisateur cesserait
+/// silencieusement de fonctionner.
+pub const INSTRUCTION_NAME_TOKEN: &str = "{nom}";
+
+/// Nom AFFICHÉ de l'Assistant — règle de priorité UNIQUE côté moteur :
+///   1. le nom du PERSONNAGE ACTIF (fiche de Présences, `nom.txt`) ;
+///   2. sinon le nom réglé dans Pilot (Options → Assistant) ;
+///   3. sinon « Assistant ».
+///
+/// C'est le miroir exact de `personaDisplayName` (fenêtre) : un même nom pour
+/// le titre de l'onglet, la ligne d'état du mode Vocal, la règle de réveil et le
+/// prompt système. Aucune autre fonction ne décide d'un nom.
+///
+/// Une DÉCLARATION D'ABSENCE (« Aucun personnage ») n'est jamais un nom : elle
+/// vaut absence de personnage (même règle que `persona::normalize_name`), donc
+/// repli sur le nom réglé. Une valeur vide ne prend jamais la place d'un nom.
+pub fn assistant_display_name(persona_name: Option<&str>, configured_name: &str) -> String {
+    if let Some(personnage) = persona_name.map(str::trim).filter(|n| !n.is_empty()) {
+        if !crate::persona::declares_no_character(personnage) {
+            return personnage.to_string();
+        }
+    }
+    let regle = configured_name.trim();
+    if !regle.is_empty() {
+        return regle.to_string();
+    }
+    ASSISTANT_DEFAULT_NAME.to_string()
+}
+
+/// Résout les RÉFÉRENCES au nom dans un texte d'instructions : chaque
+/// occurrence de `{nom}` devient le nom du moment.
+///
+/// - texte sans jeton (le cas de tous les textes livrés) → rendu **inchangé**, à
+///   l'octet près : personne qui n'utilise pas le jeton ne voit aucune
+///   différence ;
+/// - nom vide → le nom par défaut, jamais le jeton brut : une instruction ne
+///   peut pas arriver telle quelle dans le prompt du modèle ;
+/// - le remplacement porte sur TOUTES les occurrences (une consigne peut citer
+///   le nom plusieurs fois).
+pub fn resolve_instruction_name(text: &str, name: &str) -> String {
+    if text.is_empty() || !text.contains(INSTRUCTION_NAME_TOKEN) {
+        return text.to_string();
+    }
+    let nom = if name.trim().is_empty() {
+        ASSISTANT_DEFAULT_NAME
+    } else {
+        name.trim()
+    };
+    text.replace(INSTRUCTION_NAME_TOKEN, nom)
+}
 
 /// Genre retenu pour l'Assistant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,8 +197,8 @@ pub fn effective_assistant_gender(
 /// `Unspecified` rend `""` : rien n'est ajouté, le prompt reste exactement
 /// celui d'avant (un utilisateur qui n'a rien réglé ne voit aucun changement).
 /// La phrase ne nomme jamais l'assistant : le nom a son propre chemin unique
-/// (`personaDisplayName` côté fenêtre), et le figer ici créerait une seconde
-/// règle de nom.
+/// (`assistant_display_name` côté moteur, `personaDisplayName` côté fenêtre), et
+/// le figer ici créerait une seconde règle de nom.
 pub fn assistant_gender_instruction(gender: AssistantGender) -> String {
     let (adjectifs, exemple) = match gender {
         AssistantGender::Feminine => ("féminin", "je suis prête, je suis contente"),
@@ -267,6 +340,23 @@ pub fn decide_assistant_model(
             trace,
         },
     }
+}
+
+/// FAUT-IL RÉAPPLIQUER le modèle à la session VIVANTE après un changement de
+/// personnage ? Fonction PURE (aucune session, aucun disque) :
+///
+/// - session arrêtée → non (elle repartira de la décision unique de toute façon) ;
+/// - aucun modèle décidé → non (le moteur garde le sien) ;
+/// - sinon → oui.
+///
+/// Le modèle réappliqué n'est JAMAIS persisté : `super_agent_model` est le
+/// « modèle choisi » de Pilot, et y écrire le modèle d'un personnage ferait
+/// survivre celui-ci à sa désactivation — exactement le défaut corrigé ici.
+pub fn should_reapply_session_model(
+    session_alive: bool,
+    decided: Option<&(String, String)>,
+) -> bool {
+    session_alive && decided.is_some()
 }
 
 /// Spécification validée contre le registre : `None` si vide, mal formée, ou
@@ -462,5 +552,61 @@ mod tests {
         );
         assert_eq!(d.source, AssistantModelSource::Dedicated);
         assert_eq!(d.model, Some(("plh".to_string(), "fin".to_string())));
+    }
+
+    // ---------------------------------------------------------------------
+    // NOM : règle unique (personnage → réglé → défaut) et références `{nom}`.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn le_nom_suit_le_personnage_puis_le_reglage_puis_le_defaut() {
+        // Personnage actif : il gagne, comme dans la fenêtre.
+        assert_eq!(assistant_display_name(Some("Camille"), "Nova"), "Camille");
+        // Sans personnage : le nom réglé.
+        assert_eq!(assistant_display_name(None, "Nova"), "Nova");
+        assert_eq!(assistant_display_name(Some("   "), "Nova"), "Nova");
+        // Rien du tout : le défaut, jamais une chaîne vide dans le prompt.
+        assert_eq!(assistant_display_name(None, ""), ASSISTANT_DEFAULT_NAME);
+        assert_eq!(assistant_display_name(None, "   "), "Assistant");
+        // « Aucun personnage » est une ABSENCE, pas un nom (aucune régression du
+        // repli : c'est déjà la règle de `persona::normalize_name`).
+        assert_eq!(assistant_display_name(Some("Aucun personnage"), "Nova"), "Nova");
+        assert_eq!(assistant_display_name(Some("aucun personnage."), ""), "Assistant");
+    }
+
+    #[test]
+    fn les_instructions_referencent_le_nom_au_lieu_de_le_recopier() {
+        // Le jeton devient le nom du moment, partout, et seulement lui.
+        let texte = "{nom} suit les projets. {nom} ne modifie rien.";
+        let resolu = resolve_instruction_name(texte, "Camille");
+        assert_eq!(resolu, "Camille suit les projets. Camille ne modifie rien.");
+        assert!(!resolu.contains(INSTRUCTION_NAME_TOKEN));
+
+        // Changement de personnage : le MÊME texte donne un autre nom, sans
+        // qu'aucune écriture n'ait eu lieu (c'est tout l'objet du correctif).
+        assert_eq!(
+            resolve_instruction_name(texte, "Nova"),
+            "Nova suit les projets. Nova ne modifie rien."
+        );
+
+        // Un texte sans jeton est rendu INCHANGÉ, à l'octet près.
+        let neutre = "Tu suis chaque projet de la demande à la livraison.";
+        assert_eq!(resolve_instruction_name(neutre, "Camille"), neutre);
+        assert_eq!(resolve_instruction_name("", "Camille"), "");
+
+        // Jamais de jeton brut, jamais de trou : un nom vide donne le défaut.
+        assert_eq!(
+            resolve_instruction_name("{nom} parle.", "   "),
+            "Assistant parle."
+        );
+    }
+
+    #[test]
+    fn le_modele_du_personnage_n_est_reapplique_qu_a_une_session_vivante() {
+        let modele = ("plh".to_string(), "rapide".to_string());
+        assert!(should_reapply_session_model(true, Some(&modele)));
+        // Session arrêtée : elle repartira de la décision unique, rien à faire.
+        assert!(!should_reapply_session_model(false, Some(&modele)));
+        // Aucun modèle décidé : le moteur garde le sien.
+        assert!(!should_reapply_session_model(true, None));
     }
 }

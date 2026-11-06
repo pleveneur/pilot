@@ -626,7 +626,7 @@ En mode **Vocal** :
 - **Le rond « Réveiller <votre personnage> » relance l'écoute.** Il **occupe
   tout l'intérieur du cercle** : quand il est là, il **est** le cercle, dont le
   contour lui sert de bord. Il porte « **Réveiller** » suivi du nom de votre
-  personnage (par exemple « Réveiller Nova » ; « Réveiller Assistant » s'il n'y
+  personnage (par exemple « Réveiller <Nom> » : c'est le nom affiché à ce moment-là, jamais une valeur écrite ; « Réveiller Assistant » s'il n'y
   a pas de personnage) : un clic relance l'écoute et la conversation, exactement
   comme le bouton 🎙️ de la barre de saisie. Il est **visible quand la dictée ne
   tourne pas** et **disparaît pendant l'écoute** — d'un coup d'œil, vous savez
@@ -1600,13 +1600,13 @@ son nom **ne part pas**, **ne s'écrit pas** dans la zone de saisie et
 continue simplement de vous écouter.
 
 - **Le nom, où vous voulez** : au début, au milieu ou à la fin de la phrase —
-  « Nova, range le projet » comme « range le projet, Nova ».
+  « <Nom>, range le projet » comme « range le projet, <Nom> ».
 - **Il est reconnu malgré les petites différences** : majuscules, accents,
   ponctuation et espaces n'ont aucune importance, et quelques prononciations
   très proches passent (« Bernar » pour « Bernard »).
 - **Vous pouvez régler d'autres mots de réveil** : ⚙️ **Options → onglet
   « Assistant » → section « Mode Vocal »**, champ **« Mots de réveil »**.
-  Écrivez-les séparés par des virgules (« Nova, hey Nova ») : une phrase qui
+  Écrivez-les séparés par des virgules (« hey bonjour, allô ») : une phrase qui
   contient **un seul** de ces mots part, où qu'il soit, et les majuscules comme
   les accents n'ont aucune importance. **Son nom reste toujours accepté en
   plus.** Champ **vide** : seul son nom compte, exactement comme avant. Le
@@ -1614,7 +1614,7 @@ continue simplement de vous écouter.
 - **Quel nom ?** Celui que Pilot affiche déjà : le **personnage** déposé par le
   projet Présences, sinon le **nom réglé** de votre assistant, sinon son nom
   habituel. Rien de nouveau à régler — les mots de réveil **s'ajoutent** à ce nom.
-- **La ligne d'état vous dit où vous en êtes** : « Dites « Nova » pour me
+- **La ligne d'état vous dit où vous en êtes** : « Dites « <Nom> » pour me
   parler. » quand il attend son nom, et « Je vous écoute. » quand la phrase
   suivante partira sans le nom.
 - **Le bouton « Réveiller <Nom> »** (dans le cercle) reste votre secours : un
@@ -1629,7 +1629,7 @@ continue simplement de vous écouter.
 reconnaissance a écrit son nom autrement : redites-le clairement, cliquez
 **« Réveiller <Nom> »**, ou tapez votre demande au clavier. Pilot préfère ne
 rien faire que se déclencher pour une phrase qui ne lui était pas adressée. Un
-**mot de réveil plus simple à reconnaître** (« hey Nova ») est souvent le
+**mot de réveil plus simple à reconnaître** (« hey bonjour ») est souvent le
 remède : c'est à cela qu'il sert.
 
 ---
@@ -2236,6 +2236,33 @@ apprend et répond.
   dit **en une ligne** (volet « Événements » de l'onglet Assistant) et repart
   sur vos réglages : l'Assistant démarre toujours.
 <!-- /HELP:super-agent-genre-modele -->
+
+<!-- HELP:super-agent-instructions -->
+### Les instructions de l'Assistant ne figent jamais un personnage
+- Les textes d'instructions livrés avec Pilot (son rôle, ses règles, ses
+  outils) sont **neutres** : ils ne nomment **aucun** personnage et n'imposent
+  **aucun** genre. Le nom y est écrit sous la forme d'un **emplacement**
+  (`{nom}`) ; il est **rempli à chaque envoi** avec le nom du moment — celui du
+  **personnage actif**, sinon votre **nom réglé**, sinon « Assistant ».
+- Conséquence : **changer de personnage suffit**. Le nom qui apparaît dans les
+  instructions suit le personnage — il n'est jamais recopié dans un texte, donc
+  il ne peut pas rester figé sur le précédent.
+- **Le prompt personnalisé peut aussi utiliser `{nom}`** (Options ⚙️ → onglet
+  « Assistant ») : écrivez « Tu es `{nom}`… » et la phrase suivra le personnage
+  actif. Un texte qui n'utilise pas `{nom}` reste **exactement** inchangé.
+- **Le genre ne vient que de son réglage** (« Genre de l'Assistant », vide par
+  défaut) ou de la **fiche du personnage** : jamais d'un texte livré.
+- **Une version ancienne du prompt ne peut plus revenir en silence** :
+  enregistrer les Options passe par le **même** chemin d'écriture que tout le
+  reste (un seul écrivain, un seul historique), et n'écrase plus le prompt en
+  vigueur par une copie plus vieille. L'historique reste consultable à un seul
+  endroit.
+- **Au changement de personnage** (activation comme désactivation), l'Assistant
+  relit **tout de suite** son identité : nom, portrait, genre et **modèle du
+  personnage**. Le modèle est appliqué à la session **vivante** ; il n'est
+  jamais écrit dans vos réglages, et un personnage retiré ne laisse donc rien
+  derrière lui.
+<!-- /HELP:super-agent-instructions -->
 
 ### Si l'assistant affiche « Connexion au super-agent perdue »
 - Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).

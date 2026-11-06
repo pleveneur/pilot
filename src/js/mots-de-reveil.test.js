@@ -333,10 +333,15 @@ describe("7. le reglage vit a un seul endroit", () => {
     expect(section).toContain('aria-describedby="vocal-wake-words-note"');
     expect(section).toContain('id="vocal-wake-words-note"');
     expect(section).toContain('role="note"');
-    // L'exemple du proprietaire est visible, et la promesse du champ vide est
-    // ecrite noire sur blanc.
-    expect(section).toContain("Nova, hey Nova");
+    // L'EXEMPLE est visible, et la promesse du champ vide est ecrite noire sur
+    // blanc. L'exemple est NEUTRE : il ne nomme aucun personnage (un nom ecrit
+    // en dur dans un texte livre ne suivrait pas le personnage actif).
+    expect(section).toContain("hey bonjour");
     expect(section).toContain("Champ vide");
+    // Aucun prenom de personnage dans l'aide affichee.
+    for (const prenom of ["Nova", "Sylvie", "Camille", "Magnus"]) {
+      expect(section.includes(prenom), `l'aide nomme ${prenom}`).toBe(false);
+    }
     // Un seul champ pour ce reglage dans toute l'application.
     expect((HTML.match(/id="setting-vocal-wake-words"/g) || []).length).toBe(1);
   });

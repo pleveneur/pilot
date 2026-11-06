@@ -3153,6 +3153,13 @@ export function startPersonaWatch() {
   return startAssistantPersonaWatch({
     onChange: () => {
       refreshAssistantPersonaAndApply().catch(() => {});
+      // RIEN DU PERSONNAGE NE SURVIT À SON CHANGEMENT. Le nom et le genre sont
+      // relus à chaque message (aucune mémoïsation) ; le MODÈLE, lui, n'est décidé
+      // qu'au démarrage de la session : sans cette demande, désactiver un
+      // personnage laissait son modèle s'appliquer à la conversation en cours.
+      // Le moteur ne persiste rien (le modèle du personnage n'entre jamais dans
+      // les réglages de Pilot) et ne touche pas la conversation.
+      invoke("refresh_assistant_identity").catch(() => {});
     },
   });
 }

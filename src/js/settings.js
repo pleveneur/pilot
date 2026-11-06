@@ -32,6 +32,11 @@ import {
   CLEANUP_MAX_ACTIVE,
 } from "./super-agent-schedule-cleanup.js";
 import { layaStatusMessage, layaOutcomeMessage, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
+// Le NOM dans les instructions de l'Assistant : `{nom}` est une RÉFÉRENCE résolue
+// à chaque message, jamais un nom recopié ; et une modification du prompt part
+// par le chemin DÉDIÉ (qui tient l'historique), jamais par la réécriture globale
+// de la configuration — sinon une ancienne version revenait en silence.
+import { promptNeedsDedicatedSave } from "./assistant-instructions.js";
 import { listen } from "@tauri-apps/api/event";
 // T6 : contenu des sélecteurs de niveau de réflexion (socle pur, testé sous Node).
 import { thinkingLevelOptions } from "./thinking-levels.js";
@@ -3390,6 +3395,21 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         onboarding_seen: currentConfig?.onboarding_seen === true,
       };
     try {
+      // LE PROMPT DE L'ASSISTANT PASSE PAR SON PROPRE CHEMIN. `save_config`
+      // réécrit TOUTE la configuration depuis la copie de la fenêtre ; côté Rust
+      // elle PRÉSERVE désormais le prompt en vigueur (l'Assistant peut l'avoir
+      // réécrit lui-même entre-temps). Une modification réelle part donc par
+      // `set_super_agent_prompt`, seul écrivain, qui tient `prompt-history.md`.
+      if (
+        taSuperAgentPrompt &&
+        promptNeedsDedicatedSave(taSuperAgentPrompt.value, currentConfig?.super_agent_prompt)
+      ) {
+        const nouveauPrompt = taSuperAgentPrompt.value;
+        await invoke("set_super_agent_prompt", { prompt: nouveauPrompt });
+        // La copie locale suit l'écriture : un second « Enregistrer » sans
+        // modification ne doit pas ajouter une ligne de plus à l'historique.
+        if (currentConfig) currentConfig.super_agent_prompt = nouveauPrompt;
+      }
       await invoke("save_config", { config });
       // Les clients de l'assistant vivent dans la BASE DE SUIVI (source de vérité) :
       // la liste saisie y est appliquée via les commandes dédiées. La config

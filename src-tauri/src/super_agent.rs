@@ -934,12 +934,28 @@ pub(crate) fn do_send_super_agent_prompt(
     // personnalisé (configurable). Le nom est toujours injecté pour que
     // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
     // prompt personnalisé.
-    let (name, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly) = {
+    let (configured_name, custom_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly) = {
         let cfg = state.config.lock().unwrap();
         (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_coordinator, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly)
     };
-    let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
+    // La fiche du personnage est lue LÉGÈREMENT (trois petits fichiers texte,
+    // jamais le portrait) et UNE fois par message : rien de l'identité n'est
+    // mémoïsé, donc un personnage activé ou désactivé s'applique dès le message
+    // suivant, sans redémarrage.
+    let persona_identity = crate::persona::read_active_persona_identity(app);
+    // NOM : règle UNIQUE, celle de la fenêtre (`assistant_display_name` :
+    // personnage actif → nom réglé → « Assistant »). L'ancien code composait le
+    // rôle avec le seul nom réglé : un personnage actif n'était donc pas nommé
+    // côté moteur, et le texte d'instructions pouvait imposer un autre nom.
+    let name = crate::assistant_identity::assistant_display_name(
+        persona_identity.name.as_deref(),
+        &configured_name,
+    );
     let role_text = SUPER_AGENT_ROLE_TEMPLATE.replacen("{}", &name, 1);
+    // Les instructions du propriétaire RÉFÉRENCENT le nom (`{nom}`) au lieu de le
+    // recopier : la référence est résolue ICI, à chaque message, par la même
+    // règle. Un texte sans jeton est rendu inchangé, à l'octet près.
+    let system_prompt = crate::assistant_identity::resolve_instruction_name(&custom_prompt, &name);
     // IDENTITÉ (tâche 402) : le GENRE de l'assistant, quand l'utilisateur en a
     // réglé un (ou quand la fiche du personnage actif en porte un). Le bloc est
     // construit à UN SEUL endroit (`assistant_identity::assistant_identity_block`)
@@ -950,7 +966,6 @@ pub(crate) fn do_send_super_agent_prompt(
         let cfg = state.config.lock().unwrap();
         cfg.assistant_gender.clone()
     };
-    let persona_identity = crate::persona::read_active_persona_identity(app);
     let identity = crate::assistant_identity::assistant_identity_block(
         persona_identity.gender.as_deref().unwrap_or(""),
         &configured_gender,
@@ -1040,7 +1055,7 @@ pub async fn ask_super_agent(
     message: String,
     history: Vec<SuperAgentTurn>,
 ) -> Result<String, String> {
-    let (pi_path, mut model, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly, configured_gender) = {
+    let (pi_path, mut model, custom_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly, configured_gender, configured_name) = {
         let cfg = state.config.lock().unwrap();
         (
             cfg.rpc_pi_path.clone(),
@@ -1053,6 +1068,7 @@ pub async fn ask_super_agent(
             cfg.super_agent_personality.clone(),
             cfg.super_agent_user_friendly,
             cfg.assistant_gender.clone(),
+            cfg.super_agent_name.clone(),
         )
     };
 
@@ -1070,6 +1086,15 @@ pub async fn ask_super_agent(
         persona_identity.gender.as_deref().unwrap_or(""),
         &configured_gender,
     );
+    // NOM et RÉFÉRENCES `{nom}` : MÊME règle que la session vivante
+    // (`assistant_display_name` puis `resolve_instruction_name`). Ce chemin
+    // bloquant hérité n'injecte pas le rôle, mais un texte d'instructions qui
+    // cite `{nom}` doit y suivre le personnage exactement comme ailleurs.
+    let name = crate::assistant_identity::assistant_display_name(
+        persona_identity.name.as_deref(),
+        &configured_name,
+    );
+    let system_prompt = crate::assistant_identity::resolve_instruction_name(&custom_prompt, &name);
 
     let cwd = state
         .project_path
@@ -2071,6 +2096,74 @@ pub async fn set_super_agent_model(state: State<'_, AppState>, app: AppHandle, p
     .map_err(|e| format!("Erreur interne (join) set_super_agent_model: {}", e))?
 }
 
+/// RAFRAÎCHIT l'identité VIVANTE de l'Assistant après un changement de
+/// personnage (activation, désactivation, nom ou fiche modifiée).
+///
+/// Pourquoi cette commande existe : le nom et le genre sont relus à CHAQUE
+/// message (aucune mémoïsation), mais le MODÈLE n'est décidé qu'au démarrage de la
+/// session. Sans ce rafraîchissement, désactiver un personnage laissait son modèle
+/// s'appliquer à la conversation en cours : l'identité d'avant survivait.
+///
+/// Ce que la commande NE fait PAS :
+///   - elle n'écrit AUCUNE configuration (le modèle réappliqué est celui de la
+///     décision unique, jamais persisté dans `super_agent_model`, sinon le modèle
+///     d'un personnage survivrait à sa désactivation) ;
+///   - elle ne touche pas la conversation (aucune purge, aucun redémarrage) ;
+///   - elle n'échoue jamais pour un personnage absent : elle répond l'identité
+///     effective (repli sur les réglages de Pilot, comportement historique).
+#[tauri::command]
+pub async fn refresh_assistant_identity(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Value, String> {
+    let service = state.inner().agent_service.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = app.state::<AppState>();
+        let state = app_state.inner();
+        let (pi_path, configured_name) = {
+            let cfg = state.config.lock().unwrap();
+            (cfg.rpc_pi_path.clone(), cfg.super_agent_name.clone())
+        };
+        let persona = crate::persona::read_active_persona_identity(&app);
+        // NOM : règle unique (personnage → réglé → défaut), la même que l'injection.
+        let name = crate::assistant_identity::assistant_display_name(
+            persona.name.as_deref(),
+            &configured_name,
+        );
+        let decision = assistant_session_model(&app, state, &pi_path);
+        // Le modèle du personnage ne survit pas à sa désactivation : on le
+        // réapplique (ou on revient à la chaîne de Pilot) sur la session VIVANTE.
+        let reapplied = crate::assistant_identity::should_reapply_session_model(
+            service.superagent_alive(),
+            decision.model.as_ref(),
+        );
+        if reapplied {
+            if let Some((provider, model_id)) = decision.model.clone() {
+                let cmd = serde_json::json!({
+                    "type": "set_model",
+                    "provider": provider,
+                    "modelId": model_id
+                });
+                // Un échec n'est pas une panne : la session garde son modèle et le
+                // prochain démarrage repart de la décision unique.
+                let _ = service.send_superagent_sync(cmd);
+            }
+        }
+        Ok(serde_json::json!({
+            "name": name,
+            "active": persona.name.is_some(),
+            "model": decision
+                .model
+                .map(|(p, m)| format!("{}/{}", p, m))
+                .unwrap_or_default(),
+            "model_source": format!("{:?}", decision.source),
+            "reapplied": reapplied,
+        }))
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) refresh_assistant_identity: {}", e))?
+}
+
 /// Définit le modèle par défaut DÉDIÉ à l'assistant (issue #88), persisté en
 /// config (format `"provider/modelId"`). Une valeur vide efface le réglage →
 /// retour au modèle par défaut global des agents. Ne change PAS le modèle actif
@@ -2191,6 +2284,51 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
     }))
 }
 
+/// Point unique d'écriture de l'HISTORIQUE des versions du prompt de l'assistant.
+///
+/// Le prompt durable a UN SEUL historique (`prompt-history.md`, dans le dossier de
+/// données), et il est écrit ici — nulle part ailleurs. Aucun second journal, aucune
+/// copie : c'est ce qui rend une version revenue en silence IMPOSSIBLE à justifier.
+///
+/// Fail-open : un disque qui refuse l'écriture ne doit jamais empêcher d'enregistrer
+/// le prompt (le prompt lui-même reste la source de vérité).
+pub(crate) fn append_prompt_version(app: &AppHandle, prompt: &str) {
+    let Ok(dir) = app.path().app_data_dir() else {
+        return;
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let hist = dir.join("prompt-history.md");
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    let entry = format!("\n--- {ts} ---\n{prompt}\n");
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&hist)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, entry.as_bytes()));
+}
+
+/// Vrai si la version proposée est réellement une NOUVELLE version (pure).
+///
+/// Deux écritures du même texte — le cas de tous les enregistrements de réglages
+/// qui ne touchent pas au prompt — n'ajoutent rien à l'historique : sans cela, le
+/// fichier grossirait à chaque clic sur « Enregistrer » et noierait les vraies
+/// versions.
+pub(crate) fn prompt_version_changed(previous: &str, next: &str) -> bool {
+    previous != next
+}
+
+/// Enregistre une version du prompt SI elle est nouvelle. Rend `true` quand une
+/// entrée a été demandée (utile aux tests, sans lire le disque).
+pub(crate) fn record_prompt_version(app: &AppHandle, previous: &str, next: &str) -> bool {
+    if !prompt_version_changed(previous, next) {
+        return false;
+    }
+    append_prompt_version(app, next);
+    true
+}
+
 #[tauri::command]
 pub fn set_super_agent_config(
     state: State<AppState>,
@@ -2226,12 +2364,18 @@ pub fn set_super_agent_config(
         }
         refresh_clients_mirror(&state, &conn)?;
     }
+    let mut changed_prompt: Option<(String, String)> = None;
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
         cfg.super_agent_name = n;
     }
     if let Some(p) = prompt {
+        // Le prompt passe par le POINT UNIQUE d'historique (comme
+        // `set_super_agent_prompt` et l'enregistrement des réglages) : une version
+        // remplacée reste lisible dans `prompt-history.md`.
+        let previous = std::mem::take(&mut cfg.super_agent_prompt);
         cfg.super_agent_prompt = p;
+        changed_prompt = Some((previous, cfg.super_agent_prompt.clone()));
     }
     if let Some(v) = show_thinking {
         cfg.super_agent_show_thinking = v;
@@ -2272,6 +2416,12 @@ pub fn set_super_agent_config(
         cfg.super_agent_tasks_tab_enabled = v;
     }
     crate::save_config_disk(&app, &cfg)?;
+    drop(cfg);
+    // Historique APRÈS l'écriture réussie : une version qui n'a pas été enregistrée
+    // n'est pas une version.
+    if let Some((previous, next)) = changed_prompt {
+        record_prompt_version(&app, &previous, &next);
+    }
     Ok(())
 }
 
@@ -2282,21 +2432,13 @@ pub fn set_super_agent_config(
 #[tauri::command]
 pub fn set_super_agent_prompt(state: State<AppState>, app: AppHandle, prompt: String) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
+    let previous = std::mem::take(&mut cfg.super_agent_prompt);
     cfg.super_agent_prompt = prompt.clone();
     crate::save_config_disk(&app, &cfg)?;
-    // Historique des versions du prompt (traçabilité / réversibilité).
-    if let Ok(dir) = app.path().app_data_dir() {
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let hist = dir.join("prompt-history.md");
-            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-            let entry = format!("\n--- {ts} ---\n{prompt}\n");
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&hist)
-                .and_then(|mut f| std::io::Write::write_all(&mut f, entry.as_bytes()));
-        }
-    }
+    drop(cfg);
+    // Historique des versions du prompt (traçabilité / réversibilité) : POINT
+    // UNIQUE, partagé avec l'écran de réglages et `set_super_agent_config`.
+    record_prompt_version(&app, &previous, &prompt);
     Ok(())
 }
 
@@ -9759,6 +9901,84 @@ mod tests {
             full, expected,
             "avec des blocs dynamiques vides, le prompt doit être exactement les textes figés connus"
         );
+    }
+
+    /// VERROU (personnage figé dans les instructions) : AUCUN texte d'instructions
+    /// livré ne nomme un personnage, ne recopie un prénom et n'impose un genre.
+    ///
+    /// Ce test ÉCHOUE si un nom propre revient en dur dans les textes figés, ou si
+    /// une phrase d'accord au féminin / au masculin y est écrite par défaut : le
+    /// genre ne vient que de `assistant_gender` (vide = rien) et de la fiche du
+    /// personnage, et le nom ne vient que de `assistant_display_name`.
+    #[test]
+    fn les_textes_livres_ne_nomment_aucun_personnage_et_n_imposent_aucun_genre() {
+        let figes: Vec<(&str, String)> = vec![
+            ("role", super::SUPER_AGENT_ROLE_TEMPLATE.replace("{}", "")),
+            ("outils", super::SUPER_AGENT_TOOLS_PROMPT.to_string()),
+            ("regle-agent-jetable", super::agent_lifespan_rule_prompt()),
+            ("resilience", super::SUPER_AGENT_RESILIENCE_PROMPT.to_string()),
+            ("agentsmd", super::SUPER_AGENT_AGENTSMD_PROMPT.to_string()),
+            ("anti-boucle", super::SUPER_AGENT_NO_WAIT_PROMPT.to_string()),
+            ("mode-emploi", super::SUPER_AGENT_HOWTO_PROMPT.to_string()),
+            ("planification", super::SUPER_AGENT_SCHEDULE_PROMPT.to_string()),
+            ("voix", super::voice_guideline()),
+            ("memoire-session", super::SUPER_AGENT_SESSION_MEMORY_PROMPT.to_string()),
+        ];
+        // Prénoms de personnages : ceux du dossier personnel de l'auteur, ceux que
+        // porte la fiche d'exemple des tests, et le nom réglé par défaut. Aucun ne
+        // doit apparaître dans un texte livré.
+        let noms = ["Sylvie", "Nova", "Camille", "Magnus", "Présences"];
+        let genres = ["féminin", "FÉMININ", "masculin", "MASCULIN"];
+        for (bloc, texte) in &figes {
+            for nom in noms {
+                assert!(
+                    !texte.contains(nom),
+                    "le bloc « {bloc} » nomme un personnage ({nom}) : le nom doit être RÉFÉRENCÉ, jamais recopié"
+                );
+            }
+            // « Présences » est le nom d'un AUTRE projet, cité à titre d'explication
+            // dans certains blocs : c'est un renvoi lisible, pas une identité.
+            for genre in genres {
+                assert!(
+                    !texte.contains(genre),
+                    "le bloc « {bloc} » impose un genre ({genre}) : il ne vient que du réglage ou de la fiche"
+                );
+            }
+        }
+        // Le rôle est bien un GABARIT : un trou, jamais un nom.
+        assert!(super::SUPER_AGENT_ROLE_TEMPLATE.contains("{}"));
+    }
+
+    /// VERROU : le prompt de l'assistant n'a qu'UN écrivain et qu'UN historique.
+    ///
+    /// Ce test ÉCHOUE si une seconde écriture de `prompt-history.md` apparaît (deux
+    /// historiques concurrents), si `set_super_agent_prompt` n'emprunte plus le point
+    /// unique, ou si l'histoire est écrite AVANT l'enregistrement réussi.
+    #[test]
+    fn le_prompt_n_a_qu_un_seul_ecrivain_et_un_seul_historique() {
+        let src = include_str!("super_agent.rs").replace("\r\n", "\n");
+        let corps = src.split("#[cfg(test)]").next().unwrap_or("");
+        assert_eq!(
+            corps.matches(".join(\"prompt-history.md\")").count(),
+            1,
+            "un seul écrivain de l'historique du prompt est permis"
+        );
+        assert!(
+            corps.contains("pub(crate) fn record_prompt_version"),
+            "le point unique d'historique doit exister"
+        );
+        // Les deux chemins d'écriture du prompt passent par lui.
+        assert!(
+            corps.contains("record_prompt_version(&app, &previous, &prompt)"),
+            "set_super_agent_prompt doit passer par le point unique"
+        );
+        assert!(
+            corps.contains("record_prompt_version(&app, &previous, &next)"),
+            "set_super_agent_config doit passer par le point unique"
+        );
+        // Une écriture qui n'a pas eu lieu n'entre pas dans l'historique.
+        assert!(!super::prompt_version_changed("a", "a"));
+        assert!(super::prompt_version_changed("a", "b"));
     }
 
     /// VERROU (tâche 402) : le genre de l'assistant s'injecte dans le prompt par
