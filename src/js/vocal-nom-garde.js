@@ -13,7 +13,7 @@
 // `rec.onresult`, `rec.onend` et `vocalStatusLine`) — aucun second envoi, aucun
 // second moteur n'est créé ici.
 //
-// ── LES SIX RÈGLES, DANS L'ORDRE (c'est la spécification) ───────────────────
+// ── LES SEPT RÈGLES, DANS L'ORDRE (c'est la spécification) ─────────────────
 //   1. **Hors de l'écran Vocal** (`modeOuvert !== true`) : rien ne change. Le
 //      chat de l'agent π, la barre de l'onglet 🧭 hors mode et le web distant ne
 //      passent pas par cette garde — leur comportement est celui d'avant.
@@ -26,9 +26,14 @@
 //      nom (`reveil`). Le réveil est CONSOMMÉ (`consommeReveil`) : il vaut pour
 //      une phrase, jamais pour la session entière — l'écran se réarme tout seul
 //      après chaque réponse, et c'est le nom qui rouvre l'envoi.
-//   5. Le nom est-il **entendu** ? Oui ⇒ `nom-entendu` (la phrase part par le
-//      chemin d'envoi existant).
-//   6. Un **mot de réveil** réglé est-il entendu ? Oui ⇒ `mot-reveil` (même
+//   5. **L'écoute est LIBRE** (`ecouteLibre === true`) : le compte à rebours de
+//      silence (`VOCAL_ECOUTE_LIBRE_MS`, 20 s) n'est pas arrivé à son terme, la
+//      garde n'est donc **pas armée** et la phrase passe **sans nom**
+//      (`ecoute-libre`). C'est le cas NORMAL, celui de tous les jours (voir la
+//      « VEILLE » ci-dessous).
+//   6. La garde est ARMÉE : le nom est-il **entendu** ? Oui ⇒ `nom-entendu` (la
+//      phrase part par le chemin d'envoi existant).
+//   7. Un **mot de réveil** réglé est-il entendu ? Oui ⇒ `mot-reveil` (même
 //      chemin d'envoi). Non ⇒ `nom-absent` ⇒ la phrase est **jetée**.
 // Un nom **inutilisable** (vide, ou entièrement composé de caractères que la
 // comparaison ne sait pas lire) fait **laisser passer** (`nom-inutilisable`) :
@@ -71,6 +76,25 @@
 // Le nom attendu ne vient PAS d'ici : il est FOURNI par l'appelant, qui le lit à
 // la SEULE source existante (`superAgentDisplayLabel()` → personnage actif, sinon
 // nom réglé, sinon nom habituel). Aucune deuxième règle de nom n'est écrite ici.
+//
+// ── LA VEILLE : 20 SECONDES DE SILENCE (décision du propriétaire) ──────────
+// « Dès qu'on arrive en mode vocal, l'assistant écoute ce qu'on dit. Au bout
+// d'un moment donné (20 s) sans parler, le wakeword se met en place. »
+// Le compte à rebours vit dans une SEULE constante (`VOCAL_ECOUTE_LIBRE_MS`),
+// et la décision d'armer la garde à son terme dans une SEULE fonction
+// (`decideVocalVeille`). Tant que le compte n'est pas échu, `ecouteLibre` vaut
+// vrai ⇒ aucune phrase n'a besoin du nom. Une fois armée, la garde est un état
+// STABLE : elle ne se lève que par le nom, un mot de réveil, ou le geste de
+// secours — et c'est ce même événement qui fait repartir le compte.
+//
+// ── « ARRÊTE D'ÉCOUTER » (nouveau, décision du propriétaire) ───────────────
+// « Je veux aussi pouvoir dire à l'assistant d'arrêter d'écouter, donc il doit
+// pouvoir lui-même se mettre en mode attente du wakeword. »
+// La reconnaissance est **STRICTE** : la phrase normalisée ENTIÈRE doit être
+// égale à l'une des `VOCAL_STOP_FORMULAS` (courte liste, unique). Une phrase
+// ordinaire qui contient ces mots par hasard ne coupe **jamais** l'écoute : dans
+// le doute, on continue d'écouter (`pas-formule`). Une fois en veille, la
+// formule n'a plus d'effet (`deja-en-veille`) : rien ne se passe, aucun message.
 
 /** Le nom est absent (ou l'écran ne garde pas la phrase) : la phrase est jetée. */
 export const VOCAL_GATE_JETER = "jeter";
@@ -82,6 +106,56 @@ export const VOCAL_GATE_MIN_KEY = 3;
 
 /** La clé de configuration des mots de réveil (additive, défaut vide). */
 export const VOCAL_WAKE_WORDS_KEY = "vocal_wake_words";
+
+/**
+ * LE COMPTE À REBOURS DE SILENCE avant la mise en veille : 20 secondes
+ * (décision du propriétaire). **Seule valeur du dépôt** : elle est importée par
+ * l'écran (`super-agent.js`) et n'est jamais recopiée ailleurs. Toute parole
+ * détectée remet le compte à zéro, donc rien n'est exigé tant que l'utilisateur
+ * parle régulièrement.
+ */
+export const VOCAL_ECOUTE_LIBRE_MS = 20000;
+
+/**
+ * LES FORMULES D'ARRÊT — **la seule liste**, courte et en français courant.
+ *
+ * La comparaison porte sur la phrase **normalisée ENTIÈRE** (`foldSpoken`) :
+ * casse, accents, ponctuation et espaces multiples sont ignorés, mais AUCUN mot
+ * supplémentaire n'est toléré. « Silence, le dossier est vide » ne coupe donc
+ * rien : c'est le « dans le doute on continue d'écouter » de la décision.
+ * Ajouter une formule se fait ICI, nulle part ailleurs.
+ */
+export const VOCAL_STOP_FORMULAS = Object.freeze([
+  "arrête d'écouter",
+  "arrête l'écoute",
+  "arrête d'écouter s'il te plaît",
+  "stoppe l'écoute",
+  "stop l'écoute",
+  "n'écoute plus",
+  "tais-toi",
+  "silence",
+  "au repos",
+  "tu peux te reposer",
+  "mets-toi en veille",
+  "mode veille",
+]);
+
+/** La phrase demande RÉELLEMENT l'arrêt de l'écoute. */
+export const VOCAL_STOP_ARRETER = "arreter";
+/** La phrase ne demande rien : on continue d'écouter (ou on l'est déjà). */
+export const VOCAL_STOP_RIEN = "rien";
+
+/**
+ * Les formules d'arrêt, sous leur forme comparable — construite UNE fois, à la
+ * première utilisation (elle dépend de `foldSpoken`, défini plus bas).
+ */
+let vocalStopKeys = null;
+function vocalStopKeySet() {
+  if (!vocalStopKeys) {
+    vocalStopKeys = new Set(VOCAL_STOP_FORMULAS.map((formule) => foldSpoken(formule)));
+  }
+  return vocalStopKeys;
+}
 
 /** Ce qui sépare deux mots de réveil dans le champ unique. */
 export const VOCAL_WAKE_SEPARATORS = /[,;\n]+/;
@@ -120,6 +194,76 @@ export function phoneticKey(mot) {
   // Consonne finale muette du français (`t d s x p z`), une seule fois.
   m = m.replace(/[tdsxpz]$/, "");
   return m;
+}
+
+/**
+ * La phrase est-elle EXACTEMENT une formule d'arrêt ?
+ *
+ * Comparaison sur la phrase **entière** normalisée (voir `VOCAL_STOP_FORMULAS`) :
+ * aucun mot en plus, aucun mot en moins, aucune recherche « au milieu d'un
+ * discours ». PURE, ne lève jamais.
+ * @param {unknown} texte phrase transcrite
+ * @returns {boolean}
+ */
+export function isVocalStopFormula(texte) {
+  const cle = foldSpoken(texte);
+  if (!cle) return false;
+  return vocalStopKeySet().has(cle);
+}
+
+/**
+ * LA DÉCISION de l'arrêt demandé à la voix : la phrase met-elle l'écran en
+ * veille ?
+ *
+ * L'ordre des règles est la spécification :
+ *   1. hors de l'écran Vocal ⇒ rien (`hors-mode`) ;
+ *   2. pas de texte ⇒ rien (`sans-texte`) ;
+ *   3. la phrase n'est pas EXACTEMENT une formule d'arrêt ⇒ rien
+ *      (`pas-formule`) : c'est ici que « Silence, le dossier est vide » est
+ *      écarté, et c'est voulu ;
+ *   4. déjà en veille ⇒ rien (`deja-en-veille`), aucun message ;
+ *   5. sinon ⇒ `VOCAL_STOP_ARRETER`.
+ * PURE, ne lève jamais.
+ * @param {{modeOuvert?: boolean, texte?: string, veilleArmee?: boolean}} [etats]
+ * @returns {{action: string, raison: string}}
+ */
+export function decideVocalStopListening(etats) {
+  const e = etats || {};
+  const rien = (raison) => ({ action: VOCAL_STOP_RIEN, raison });
+  if (e.modeOuvert !== true) return rien("hors-mode");
+  const texte = String(e.texte == null ? "" : e.texte).trim();
+  if (!texte) return rien("sans-texte");
+  if (!isVocalStopFormula(texte)) return rien("pas-formule");
+  if (e.veilleArmee === true) return rien("deja-en-veille");
+  return { action: VOCAL_STOP_ARRETER, raison: "arret" };
+}
+
+/**
+ * LA DÉCISION de la veille : le compte à rebours de silence doit-il armer la
+ * garde MAINTENANT ?
+ *
+ * Utilisée à l'échéance du minuteur (l'écran repasse la durée réellement
+ * écoulée), et testable seule. L'ordre des règles est la spécification :
+ *   1. hors de l'écran Vocal ⇒ non (`hors-mode`) ;
+ *   2. déjà en veille ⇒ non (`deja-en-veille`) : l'état est stable ;
+ *   3. un réveil d'une phrase est en attente ⇒ non (`reveil`) : un geste
+ *      explicite vient de demander l'écoute ;
+ *   4. la durée écoulée n'atteint pas le délai ⇒ non (`silence-court`) ;
+ *   5. sinon ⇒ oui (`silence-atteint`).
+ * PURE, ne lève jamais.
+ * @param {{modeOuvert?: boolean, reveil?: boolean, veilleArmee?: boolean, ecouleMs?: number, delaiMs?: number}} [etats]
+ * @returns {{armer: boolean, raison: string}}
+ */
+export function decideVocalVeille(etats) {
+  const e = etats || {};
+  const non = (raison) => ({ armer: false, raison });
+  if (e.modeOuvert !== true) return non("hors-mode");
+  if (e.veilleArmee === true) return non("deja-en-veille");
+  if (e.reveil === true) return non("reveil");
+  const delai = Number.isFinite(e.delaiMs) && e.delaiMs > 0 ? e.delaiMs : VOCAL_ECOUTE_LIBRE_MS;
+  const ecoule = Number.isFinite(e.ecouleMs) ? Math.max(0, e.ecouleMs) : 0;
+  if (ecoule < delai) return non("silence-court");
+  return { armer: true, raison: "silence-atteint" };
 }
 
 /** Découpe un texte en mots repliés (jamais de mot vide). */
@@ -235,15 +379,34 @@ export function mentionsAssistantName(phrase, nom) {
 }
 
 /**
+ * LA PHRASE de la ligne d'état quand l'utilisateur a demandé l'arrêt à la voix.
+ *
+ * UNE seule phrase : elle accuse réception ET dit quoi faire, sur la ligne qui
+ * existe déjà. Elle n'est composée qu'ici, et n'est dite qu'une fois (la ligne
+ * reste tant que la veille dure) : aucun message répété à chaque silence.
+ * @param {unknown} nom nom attendu, tel qu'il doit être dit
+ * @returns {string}
+ */
+export function vocalVeilleSentence(nom) {
+  const affiche = String(nom == null ? "" : nom).replace(/\s+/g, " ").trim();
+  if (!affiche) return "Je me mets en veille — dites mon nom pour me parler.";
+  return `Je me mets en veille — dites « ${affiche} » pour me parler.`;
+}
+
+/**
  * LA DÉCISION : que fait-on de cette phrase ?
  *
  * L'ORDRE des règles est la spécification (voir l'en-tête) : il se teste tel
  * quel. Aucune règle ne consulte le micro, la transcription ni le réseau.
- * @param {{modeOuvert?: boolean, texte?: string, nom?: string, motsDeReveil?: string|string[], repriseMain?: boolean, reveil?: boolean}} [etats]
+ * @param {{modeOuvert?: boolean, texte?: string, nom?: string, motsDeReveil?: string|string[], repriseMain?: boolean, reveil?: boolean, ecouteLibre?: boolean}} [etats]
  * @returns {{action: string, raison: string, consommeReveil: boolean}}
  *   `action` : `VOCAL_GATE_LAISSER` ou `VOCAL_GATE_JETER` ;
  *   `raison` : `hors-mode`, `sans-texte`, `reprise-main`, `reveil`,
- *   `nom-entendu`, `mot-reveil`, `nom-inutilisable`, `nom-absent`.
+ *   `ecoute-libre`, `nom-entendu`, `mot-reveil`, `nom-inutilisable`,
+ *   `nom-absent`.
+ *   `ecouteLibre` **absent** = la garde est ARMÉE (comportement du §6quater) :
+ *   un appelant qui ne suit pas le silence garde donc exactement l'ancien
+ *   comportement.
  */
 export function decideVocalNameGate(etats) {
   const e = etats || {};
@@ -265,13 +428,16 @@ export function decideVocalNameGate(etats) {
   if (e.repriseMain === true) return laisser("reprise-main");
   // 4. Réveillé (bouton « Réveiller », geste 🎙️) : une phrase, pas une session.
   if (e.reveil === true) return laisser("reveil", true);
-  // 5. Le nom de l'assistante est TOUJOURS accepté : le réglage des mots de
+  // 5. L'ÉCOUTE LIBRE (le compte à rebours de silence n'est pas échu) : le nom
+  //    n'est pas exigé. C'est le cas normal, celui de tous les jours.
+  if (e.ecouteLibre === true) return laisser("ecoute-libre");
+  // 6. Le nom de l'assistante est TOUJOURS accepté : le réglage des mots de
   //    réveil s'ajoute à lui, il ne le remplace jamais.
   if (mentionsAssistantName(texte, nom)) return laisser("nom-entendu");
-  // 6. Un mot de réveil réglé, n'importe où dans la phrase — un seul suffit.
+  // 7. Un mot de réveil réglé, n'importe où dans la phrase — un seul suffit.
   if (mentionsWakeWord(texte, reveils)) return laisser("mot-reveil");
-  // 7. Un nom qu'on ne sait pas lire ne peut pas fonder un refus — mais
-  //    seulement s'il n'y a AUCUN mot de réveil utilisable pour le faire.
+  // L'EXCEPTION (fail-open) : un nom qu'on ne sait pas lire ne peut pas fonder
+  // un refus — mais seulement s'il n'y a AUCUN mot de réveil utilisable.
   if (wordsOf(nom).length === 0 && reveils.length === 0) return laisser("nom-inutilisable");
   return { action: VOCAL_GATE_JETER, raison: "nom-absent", consommeReveil: false };
 }
@@ -282,7 +448,9 @@ export function decideVocalNameGate(etats) {
  * aucun nouvel élément d'interface, aucun réglage.
  *
  * L'autre état (réveillé pour une phrase) est dit par la phrase EXISTANTE du
- * repos (« Je vous écoute. »), qui n'est pas recopiée ici.
+ * repos (« Je vous écoute. »), qui n'est pas recopiée ici. Celle de l'ATTENTE
+ * DEMANDÉE À LA VOIX (une seule phrase, accusé et consigne ensemble) vit dans
+ * `vocalVeilleSentence`.
  * @param {unknown} nom nom attendu, tel qu'il doit être dit
  * @returns {string} `Dites « nom » pour me parler.`
  */
@@ -302,13 +470,16 @@ export function vocalNameSentence(nom) {
  * Un MOT DE RÉVEIL utilisable garde la garde armée même quand le nom est
  * illisible : c'est lui qui fonde le refus, et sans lui la règle du fail-open
  * laisserait tout passer (comportement d'avant, intact).
- * @param {{modeOuvert?: boolean, nom?: string, motsDeReveil?: string|string[], reveil?: boolean}} [etats]
+ * @param {{modeOuvert?: boolean, nom?: string, motsDeReveil?: string|string[], reveil?: boolean, ecouteLibre?: boolean}} [etats]
  * @returns {boolean}
  */
 export function vocalNameGateArmed(etats) {
   const e = etats || {};
   if (e.modeOuvert !== true) return false;
   if (e.reveil === true) return false;
+  // L'ÉCOUTE LIBRE (compte à rebours de silence non échu) : la garde n'est pas
+  // armée, la phrase passe sans nom (cas normal).
+  if (e.ecouteLibre === true) return false;
   if (wordsOf(e.nom).length > 0) return true;
   return wakeWordsFrom(e.motsDeReveil).length > 0;
 }

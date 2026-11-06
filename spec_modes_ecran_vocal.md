@@ -2059,6 +2059,10 @@ sans que personne ne se soit adressé à Pilot.
   phrase de la ligne d'état qui bascule. La ligne continue de nommer
   l'assistante même quand des mots de réveil sont réglés — c'est **vrai** : son
   nom marche toujours.
+- **La garde ne s'arme qu'après 20 s de silence (§6quater.2)** : à l'entrée dans
+  l'écran, l'écoute est **libre** — on parle sans dire le nom, comme dans une
+  conversation ordinaire. La garde du nom est donc la règle du **repos
+  prolongé**, pas celle de l'arrivée.
 - **Le bouton de secours reste un vrai secours (point le plus facile à
   casser)** : le bouton **« Réveiller <Nom> »** du cercle (et le bouton 🎙️ de la
   barre, qui emprunte la même voie) **lève la garde pour la phrase suivante** —
@@ -2170,8 +2174,8 @@ passe sans le nom), ou **taper** la demande au clavier (jamais filtrée). Aucun
 réglage ne cherche à deviner : *un déclenchement de trop est pire qu'un silence*.
 
 **Où c'est dans le code** : décisions **pures** dans `src/js/vocal-nom-garde.js`
-(`decideVocalNameGate` — les **six** règles dans l'ordre : hors mode, texte vide,
-reprise en main, réveil, nom **ou mot de réveil**, puis fail-open ;
+(`decideVocalNameGate` — les **sept** règles dans l'ordre : hors mode, texte vide,
+reprise en main, réveil, **écoute libre**, nom **ou mot de réveil**, puis fail-open ;
 `mentionsAssistantName` ; `mentionsWakeWord` / `wakeWordsFrom` / `wakeWordsText`
 — les **mots de réveil** du réglage `vocal_wake_words` ; `vocalNameSentence` ;
 `vocalNameGateArmed`), appliquées à **un seul endroit** dans `super-agent.js` —
@@ -2189,6 +2193,75 @@ additif : mot accepté, nom toujours accepté, phrase sans mot refusée, champ v
 **Rapports** : `docs/rapports/RAPPORT-mots-de-reveil.md` (détail du réglage) et
 `docs/rapports/RAPPORT-reglages-assistant.md` § POINT 1 (les trois réglages du
 comportement de l'assistant, revérifiés ensemble le 2026-11-16).
+
+## 6quater.2 La veille : 20 secondes de silence, et l'arrêt demandé à la voix
+
+**Décision du propriétaire** : *« dès qu'on arrive en mode vocal, l'assistant
+écoute ce qu'on dit. Au bout d'un moment donné (20 s) sans parler, le wakeword
+se met en place : on est obligé d'appeler l'assistant ou le personnage par son
+nom pour le réveiller »*, puis : *« je veux aussi pouvoir dire à l'assistant
+d'arrêter d'écouter, donc il doit pouvoir lui-même se mettre en mode attente du
+wakeword »*.
+
+Défaut corrigé : la garde du nom (§6quater) s'appliquait **dès l'entrée** dans
+l'écran — il fallait dire le nom avant la moindre phrase, ce qui n'est pas une
+conversation.
+
+<!-- HELP:vocal-veille -->
+
+### La veille au bout de 20 secondes de silence
+
+- **À l'entrée dans l'écran Vocal, vous parlez librement** : aucune phrase n'a
+  besoin de contenir le nom. C'est le cas normal, celui de tous les jours.
+- **Après 20 secondes SANS PARLER**, l'écran se met en veille et attend son nom :
+  la ligne affiche « Dites « <Nom> » pour me parler. ». Une phrase qui ne
+  contient ni son nom ni un mot de réveil ne part plus.
+- **Toute parole remet le compte à zéro** — même un mot isolé, même une phrase
+  que vous n'adressez pas à Pilot. Une conversation suivie n'arme donc jamais la
+  veille.
+- **Son nom (ou un mot de réveil réglé) lève la veille** et le compte des 20
+  secondes repart. Le bouton **« Réveiller <Nom> »** reste le secours pour une
+  phrase.
+- **Vous pouvez la mettre en veille vous-même, à la voix** : dites
+  **« arrête d'écouter »** (ou « arrête l'écoute », « stoppe l'écoute »,
+  « n'écoute plus », « tais-toi », « silence », « au repos », « tu peux te
+  reposer », « mets-toi en veille », « mode veille »). L'écran répond une seule
+  fois « Je me mets en veille — dites « <Nom> » pour me parler. », et **rien
+  n'est envoyé** : la formule n'est pas une demande.
+- **La comparaison est stricte** : la phrase **entière** doit être la formule.
+  « Silence, le dossier est vide » ou « mets le projet au repos » partent
+  normalement — dans le doute, Pilot continue d'écouter.
+- **Répéter la formule en veille ne dit rien** : aucun message, aucun envoi.
+- **Ce n'est pas un arrêt de tâche** : une mission en cours continue. La veille
+  ne ferme pas le micro et ne coupe pas la lecture à voix haute.
+- **Le clavier n'est jamais filtré**, et sortir de l'écran (logo, Échap,
+  fermeture) remet tout à zéro : la prochaine entrée repart en écoute libre.
+
+<!-- /HELP:vocal-veille -->
+
+**Ce qui n'est pas touché** : le délai de silence de 2 s et son réglage, le
+micro, la transcription, le service de voix local, la voix imitée, le chat de
+l'onglet agent π et l'accès web distant. Aucun réglage nouveau, aucun élément
+d'interface nouveau : la ligne d'état existante porte les deux phrases.
+
+**Où c'est dans le code** : décisions **pures** dans `src/js/vocal-nom-garde.js`
+— `VOCAL_ECOUTE_LIBRE_MS` (**20 000 ms**, seule valeur du dépôt),
+`decideVocalVeille` (raisons `hors-mode`, `deja-en-veille`, `reveil`,
+`silence-court`, `silence-atteint`), `VOCAL_STOP_FORMULAS` (**douze** formules,
+seule liste), `isVocalStopFormula` (phrase normalisée **entière**),
+`decideVocalStopListening` (raisons `hors-mode`, `sans-texte`, `pas-formule`,
+`deja-en-veille`, `arret`) et `vocalVeilleSentence` — appliquées à **un seul
+endroit** dans `super-agent.js` : `enterVocal` (écoute libre + départ du compte),
+`vocalNoteWord` et `vocalSetLevel` (toute parole repart le compte),
+`rec.onresult` et `rec.onend` (la formule d'arrêt est reconnue **avant** la
+garde et avant toute écriture), `vocalStatusLine` (l'accusé, une seule phrase),
+`exitVocal` (tout meurt avec l'écran). La garde reçoit `ecouteLibre` de l'état
+réel : absent, elle reste armée (comportement §6quater inchangé pour tout autre
+appelant).
+**Verrou** : `src/js/veille-mot-de-reveil.test.js` (le cycle complet, la
+reconnaissance stricte, l'absence de message en veille, et le branchement — il
+échoue si le compte à rebours, la liste ou l'arrêt disparaissent).
+**Rapport** : `docs/rapports/RAPPORT-veille-mot-de-reveil.md`.
 
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 

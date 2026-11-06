@@ -348,9 +348,11 @@ describe("5. la ligne d'état dit lequel des deux états est actif", () => {
 
   it("la ligne existante porte la phrase, sans nouvel élément ni réglage", () => {
     const ligne = corpsFonction(SUPER, "  function vocalStatusLine(state) {");
-    expect(ligne).toContain(
-      "if (vocalReveilUnePhrase !== true) return vocalNameSentence(superAgentDisplayLabel());",
-    );
+    // La phrase du nom n'est dite QUE quand la veille est armée (20 s de
+    // silence, ou arrêt demandé à la voix) — sinon on est en écoute libre et
+    // c'est la phrase du repos qui parle.
+    expect(ligne).toContain("if (vocalVeilleArmee === true) {");
+    expect(ligne).toContain("return vocalNameSentence(superAgentDisplayLabel());");
     expect(ligne).toContain("return vocalStatusText(state);");
     // L'ordre déjà verrouillé par d'autres tests est intact.
     expect(ligne).toMatch(/if \(state !== "idle"\) return vocalStatusText\(state\);\s*if \(vocalMicFerme\) return vocalMicFerme;/);

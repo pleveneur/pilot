@@ -252,11 +252,16 @@ import {
 // seconde garde.
 import {
   decideVocalNameGate,
+  decideVocalStopListening,
+  decideVocalVeille,
   mentionsAssistantName,
   mentionsWakeWord,
   vocalNameGateArmed,
   vocalNameSentence,
+  vocalVeilleSentence,
+  VOCAL_ECOUTE_LIBRE_MS,
   VOCAL_GATE_JETER,
+  VOCAL_STOP_ARRETER,
   wakeWordsFrom,
 } from "./vocal-nom-garde.js";
 // LE BAS DE L'ECRAN S'EFFACE AU REPOS (CONCEPTION-ecran-vocal-cercle-et-bas.md
@@ -5131,6 +5136,21 @@ export async function createSuperAgent(container) {
   // (provisoire ou definitif). Sans lui, un silence ne fait rien partir : une
   // dictee muette n'envoie rien. Remis a zero a chaque nouvelle session.
   let vocalMotRecu = false;
+  // ── LA VEILLE : 20 SECONDES DE SILENCE (§6quater.2) ──
+  // `vocalVeilleArmee` : la garde du nom est ARMEE — l'ecran n'obeit plus qu'au
+  // nom (ou aux mots de reveil regles). Faux a l'ENTREE du mode : on ecoute
+  // librement, sans prononcer aucun nom. La decision est pure
+  // (`decideVocalVeille`, `decideVocalStopListening`).
+  // `vocalVeilleParCommande` : la veille a ete demandee A LA VOIX (« arrete
+  // d'ecouter ») — la ligne d'etat dit alors l'accuse, en UNE seule phrase.
+  // `vocalVeilleTimer` : UN SEUL compte a rebours de silence. Toute parole
+  // detectee le remet a zero ; il ne tourne PAS quand la garde est armee (etat
+  // stable, jusqu'au nom). Le delai vient de `VOCAL_ECOUTE_LIBRE_MS`, jamais
+  // recopie ici.
+  let vocalVeilleArmee = false;
+  let vocalVeilleParCommande = false;
+  let vocalVeilleTimer = 0;
+  let vocalVeilleDepart = 0;
   // Projet marque SENSIBLE (local-first) : la dictee cloud y est interdite,
   // comme dans l'onglet agent pi. Relu a l'entree du mode.
   let vocalProjectSensible = false;
@@ -5670,6 +5690,10 @@ let vocalMotsDeReveil = [];
           nom: nomAttendu,
           motsDeReveil: vocalMotsDeReveil,
           reveil: vocalReveilUnePhrase === true,
+          // LA VEILLE (§6quater.2) : la garde n'est armée qu'après le compte à
+          // rebours de silence. Tant qu'il court, `ecouteLibre` est vrai et la
+          // phrase passe SANS nom — c'est le cas normal, celui de tous les jours.
+          ecouteLibre: vocalVeilleArmee !== true,
         }) &&
         !mentionsAssistantName(transcript, nomAttendu) &&
         !mentionsWakeWord(transcript, vocalMotsDeReveil)
@@ -5679,6 +5703,30 @@ let vocalMotsDeReveil = [];
         vocalSyncChrome();
         return;
       }
+      // « ARRÊTE D'ÉCOUTER » (§6quater.2) : l'écran se met LUI-MÊME en attente du
+      // mot de réveil. La reconnaissance est STRICTE (phrase normalisée ENTIÈRE,
+      // liste unique `VOCAL_STOP_FORMULAS`) : une phrase ordinaire qui contient
+      // ces mots par hasard ne coupe rien. Rien ne s'écrit, rien ne part, et le
+      // compte à rebours des 20 s n'a plus lieu d'être (la veille est armée).
+      // Une fois en veille, c'est la garde ci-dessus qui jette la phrase : la
+      // formule répétée ne dit donc plus rien (aucun message).
+      if (
+        decideVocalStopListening({
+          modeOuvert: vocalOverlay !== null,
+          texte: finalText,
+          veilleArmee: vocalVeilleArmee !== true ? false : true,
+        }).action === VOCAL_STOP_ARRETER
+      ) {
+        vocalEnterVeille("commande");
+        clearVocalSilenceTimer();
+        if (inputEl.value !== preText) inputEl.value = preText;
+        applyVocalState();
+        return;
+      }
+      // LE NOM (ou un mot de réveil) VIENT D'ÊTRE ENTENDU : la veille tombe et le
+      // compte à rebours de 20 secondes repart (même effet que le bouton
+      // « Réveiller »).
+      if (vocalVeilleArmee === true) vocalExitVeille();
       const sep = preText && !preText.endsWith(" ") ? " " : "";
       inputEl.value = preText + sep + transcript;
       resizeInput();
@@ -5756,6 +5804,20 @@ let vocalMotsDeReveil = [];
       // réarmement automatique repart — l'écoute continue. Le seul état qui
       // change est celui du réveil, consommé par la phrase qu'il a ouverte.
       if (wasActive === true) {
+        // « ARRÊTE D'ÉCOUTER » (§6quater.2), MÊME EN FIN D'ÉCOUTE : un moteur qui
+        // ne rend la phrase qu'à la fermeture ne doit pas l'envoyer comme une
+        // demande. On arme la veille AVANT la garde, qui jette alors la phrase
+        // par le chemin existant (rien n'est envoyé, rien n'est conservé) —
+        // aucune seconde voie de rejet n'est créée.
+        if (
+          decideVocalStopListening({
+            modeOuvert: vocalOverlay !== null,
+            texte: finalText,
+            veilleArmee: vocalVeilleArmee !== true ? false : true,
+          }).action === VOCAL_STOP_ARRETER
+        ) {
+          vocalEnterVeille("commande");
+        }
         const gardeNom = decideVocalNameGate({
           modeOuvert: vocalOverlay !== null,
           texte: finalText,
@@ -5763,8 +5825,20 @@ let vocalMotsDeReveil = [];
           motsDeReveil: vocalMotsDeReveil,
           repriseMain: voiceUserTookOver === true,
           reveil: vocalReveilUnePhrase === true,
+          ecouteLibre: vocalVeilleArmee !== true,
         });
         if (gardeNom.consommeReveil === true) vocalReveilUnePhrase = false;
+        // Le nom (ou un mot de réveil, ou le geste de secours) a ouvert la
+        // phrase : la veille tombe et le compte de 20 s repart.
+        if (
+          vocalVeilleArmee === true &&
+          (gardeNom.raison === "nom-entendu" ||
+            gardeNom.raison === "mot-reveil" ||
+            gardeNom.raison === "reveil" ||
+            gardeNom.raison === "ecoute-libre")
+        ) {
+          vocalExitVeille();
+        }
         if (gardeNom.action === VOCAL_GATE_JETER) {
           // La session se referme comme une fin normale, mais rien ne part : la
           // zone redevient ce qu'elle était avant la phrase, et aucune échéance
@@ -6176,6 +6250,11 @@ let vocalMotsDeReveil = [];
     });
     if (pas.capte !== vocalMicCapte) {
       vocalMicCapte = pas.capte;
+      // LA VEILLE (§A2) : toute parole DÉTECTÉE remet le compte à rebours de
+      // 20 s à zéro — même quand la transcription n'a encore rien rendu. Sans
+      // effet quand la garde est déjà armée (état stable, voir
+      // `vocalRestartVeilleTimer`).
+      if (pas.capte === true) vocalRestartVeilleTimer();
       applyVocalState();
     }
     const plan = planLevel({ niveau, reduit: vocalReducedMotion() });
@@ -6603,16 +6682,23 @@ let vocalMotsDeReveil = [];
         // Le NOM est reçu de la source unique (`superAgentDisplayLabel`) : la
         // phrase est composée par le module de l'oreille, depuis la phrase de la
         // garde du nom — aucune seconde phrase, aucun second texte n'est écrit ici.
-        nom: vocalReveilUnePhrase === true ? "" : superAgentDisplayLabel(),
+        nom: vocalVeilleArmee === true ? superAgentDisplayLabel() : "",
       });
       if (ligneOreille) return ligneOreille;
     }
     // GARDE DU NOM (mode Vocal) : la ligne dit lequel des DEUX états est actif,
     // et nulle part ailleurs. Garde ARMÉE → la phrase qui demande le nom (rien
-    // ne partira sans lui) ; RÉVEILLÉ pour une phrase → la phrase EXISTANTE du
-    // repos (« Je vous écoute. »), qui n'est pas recopiée ici. Aucun nouvel
-    // élément d'interface, aucun réglage nouveau.
-    if (vocalReveilUnePhrase !== true) return vocalNameSentence(superAgentDisplayLabel());
+    // ne partira sans lui) ; l'écran RÉVEILLÉ / en écoute libre → la phrase
+    // EXISTANTE du repos (« Je vous écoute. »), qui n'est pas recopiée ici.
+    // Aucun nouvel élément d'interface, aucun réglage nouveau.
+    // LA VEILLE (§6quater.2) : la garde est armée SEULEMENT après 20 s de
+    // silence, ou quand l'utilisateur a demandé l'arrêt à la voix. Dans ce
+    // second cas la ligne est l'accusé (UNE phrase, qui dit aussi quoi faire),
+    // et elle reste tant que la veille dure : rien n'est répété.
+    if (vocalVeilleArmee === true) {
+      if (vocalVeilleParCommande === true) return vocalVeilleSentence(superAgentDisplayLabel());
+      return vocalNameSentence(superAgentDisplayLabel());
+    }
     return vocalStatusText(state);
   }
 
@@ -7070,6 +7156,71 @@ let vocalMotsDeReveil = [];
     vocalSilenceTimer = 0;
   }
 
+  // ── LA VEILLE : 20 SECONDES DE SILENCE (§6quater.2) ──
+  // Trois operations seulement, et chacune est le SEUL endroit qui la fait :
+  // annuler le compte, le (re)lancer, entrer en veille, en sortir. La decision
+  // du terme et celle de l'arret demande a la voix sont PURES
+  // (`decideVocalVeille`, `decideVocalStopListening`).
+  function clearVocalVeilleTimer() {
+    if (!vocalVeilleTimer) return;
+    clearTimeout(vocalVeilleTimer);
+    vocalVeilleTimer = 0;
+  }
+
+  /**
+   * (Re)lance le compte a rebours de silence — SAUF quand la garde est armee :
+   * la veille est alors un etat STABLE, que seule une phrase avec le nom (ou un
+   * geste de secours) peut lever, et c'est ce meme evenement qui repart le
+   * compte. Ne fait jamais rien hors de l'ecran Vocal.
+   */
+  function vocalRestartVeilleTimer() {
+    clearVocalVeilleTimer();
+    if (!vocalOverlay || vocalVeilleArmee === true) return;
+    vocalVeilleDepart = Date.now();
+    vocalVeilleTimer = setTimeout(() => {
+      vocalVeilleTimer = 0;
+      const decision = decideVocalVeille({
+        modeOuvert: vocalOverlay !== null,
+        reveil: vocalReveilUnePhrase === true,
+        veilleArmee: vocalVeilleArmee,
+        ecouleMs: Date.now() - vocalVeilleDepart,
+      });
+      if (decision.armer !== true) {
+        // Un reveil d'une phrase est en attente : on reverifie plus tard au lieu
+        // de laisser l'ecran sans compte (le geste vaut pour une phrase, pas
+        // pour toujours).
+        if (decision.raison === "reveil") vocalRestartVeilleTimer();
+        return;
+      }
+      vocalEnterVeille("silence");
+      applyVocalState();
+    }, VOCAL_ECOUTE_LIBRE_MS);
+  }
+
+  /**
+   * ARME la veille : l'ecran n'obeit plus qu'au nom jusqu'a ce qu'il l'entende.
+   * @param {"silence"|"commande"} origine compte a rebours echu, ou formule
+   *   d'arret prononcee (l'utilisateur l'a demande : la ligne le dit)
+   */
+  function vocalEnterVeille(origine) {
+    vocalVeilleArmee = true;
+    vocalVeilleParCommande = origine === "commande";
+    // Le reveil d'une phrase ne survit pas a la mise en veille : la prochaine
+    // phrase doit de nouveau contenir le nom.
+    vocalReveilUnePhrase = false;
+    clearVocalVeilleTimer();
+  }
+
+  /**
+   * LEVE la veille (le nom, un mot de reveil, ou le geste de secours ont ete
+   * entendus) et REPART le compte a rebours de 20 s.
+   */
+  function vocalExitVeille() {
+    vocalVeilleArmee = false;
+    vocalVeilleParCommande = false;
+    vocalRestartVeilleTimer();
+  }
+
   /** Etat lu par la decision du silence (memes faits que la conversation). */
   function vocalSilenceState() {
     const base = vocalConversationState();
@@ -7220,6 +7371,9 @@ let vocalMotsDeReveil = [];
    */
   function vocalNoteWord() {
     vocalMotRecu = true;
+    // TOUTE PAROLE DETECTEE REMET LE COMPTE A ZERO (§A2) : une conversation
+    // suivie n'arme jamais la veille.
+    vocalRestartVeilleTimer();
     const decision = decideVocalSilenceSend(vocalSilenceState());
     clearVocalSilenceTimer();
     if (decision.action !== VOCAL_SILENCE_WAIT || !decision.delai) return;
@@ -7665,6 +7819,12 @@ let vocalMotsDeReveil = [];
     vocalSessionsVides = [];
     vocalDicteeSuspendue = false;
     refreshVocalSensitivity();
+    // LA VEILLE (§6quater.2) : on entre en ÉCOUTE LIBRE — le nom n'est pas
+    // exigé pendant les 20 premières secondes de silence. Le compte à rebours
+    // démarre ICI, une seule fois, et repart à chaque parole détectée.
+    vocalVeilleArmee = false;
+    vocalVeilleParCommande = false;
+    vocalRestartVeilleTimer();
     // ── L'ENVELOPPE SUIT LE SON (voix locale) ────────────────────────────────
     // Un seul metre, cree a l'ENTREE et detruit a la sortie : hors du mode
     // Vocal, personne n'ecoute le son de Pilot (aucun cout, aucun analyseur).
@@ -7802,6 +7962,11 @@ let vocalMotsDeReveil = [];
       // garde du nom ne s'applique pas, mais un drapeau oublié ferait passer la
       // première phrase de la prochaine entrée sans le nom. Il meurt donc ici.
       vocalReveilUnePhrase = false;
+      // LA VEILLE (§6quater.2) ne survit pas à l'écran : le compte à rebours et
+      // l'état armé meurent ici (la prochaine entrée repart en écoute libre).
+      vocalVeilleArmee = false;
+      vocalVeilleParCommande = false;
+      clearVocalVeilleTimer();
       vocalApresLecture = false;
       vocalArretManuel = false;
       vocalDictationErreur = "";

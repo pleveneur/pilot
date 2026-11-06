@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-11-06 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-ouvrir-fichier,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-11-06 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,vocal-veille,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-ouvrir-fichier,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1631,6 +1631,37 @@ reconnaissance a écrit son nom autrement : redites-le clairement, cliquez
 rien faire que se déclencher pour une phrase qui ne lui était pas adressée. Un
 **mot de réveil plus simple à reconnaître** (« hey bonjour ») est souvent le
 remède : c'est à cela qu'il sert.
+
+---
+
+<!-- HELP-TOPIC:vocal-veille -->
+### La veille au bout de 20 secondes de silence
+
+- **À l'entrée dans l'écran Vocal, vous parlez librement** : aucune phrase n'a
+  besoin de contenir le nom. C'est le cas normal, celui de tous les jours.
+- **Après 20 secondes SANS PARLER**, l'écran se met en veille et attend son nom :
+  la ligne affiche « Dites « <Nom> » pour me parler. ». Une phrase qui ne
+  contient ni son nom ni un mot de réveil ne part plus.
+- **Toute parole remet le compte à zéro** — même un mot isolé, même une phrase
+  que vous n'adressez pas à Pilot. Une conversation suivie n'arme donc jamais la
+  veille.
+- **Son nom (ou un mot de réveil réglé) lève la veille** et le compte des 20
+  secondes repart. Le bouton **« Réveiller <Nom> »** reste le secours pour une
+  phrase.
+- **Vous pouvez la mettre en veille vous-même, à la voix** : dites
+  **« arrête d'écouter »** (ou « arrête l'écoute », « stoppe l'écoute »,
+  « n'écoute plus », « tais-toi », « silence », « au repos », « tu peux te
+  reposer », « mets-toi en veille », « mode veille »). L'écran répond une seule
+  fois « Je me mets en veille — dites « <Nom> » pour me parler. », et **rien
+  n'est envoyé** : la formule n'est pas une demande.
+- **La comparaison est stricte** : la phrase **entière** doit être la formule.
+  « Silence, le dossier est vide » ou « mets le projet au repos » partent
+  normalement — dans le doute, Pilot continue d'écouter.
+- **Répéter la formule en veille ne dit rien** : aucun message, aucun envoi.
+- **Ce n'est pas un arrêt de tâche** : une mission en cours continue. La veille
+  ne ferme pas le micro et ne coupe pas la lecture à voix haute.
+- **Le clavier n'est jamais filtré**, et sortir de l'écran (logo, Échap,
+  fermeture) remet tout à zéro : la prochaine entrée repart en écoute libre.
 
 ---
 
