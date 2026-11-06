@@ -79,6 +79,13 @@ const TELEGRAM_NOTIFY_SENTINEL = "PILOT_ASSISTANT_TELEGRAM_NOTIFY::";
 // comme `value` de la réponse. Un sentinel DISTINCT de l'action « vider la file »
 // (`/file vide`) : les deux gestes ne passent jamais par le même chemin.
 const QUEUE_REMOVE_SENTINEL = "PILOT_ASSISTANT_QUEUE_REMOVE::";
+// Sentinel préfixant le titre d'un `input` de l'outil `open_file` (tâche 394).
+// Pilot le détecte, VÉRIFIE le fichier sur le disque, l'ouvre par le SEUL mode
+// possible selon son type (onglet de Pilot s'il sait l'afficher, sinon le
+// programme par défaut du système) et renvoie le résultat en JSON comme `value`
+// de la réponse. Aucune commande n'est jamais exécutée : seul un fichier
+// EXISTANT est ouvert, ou l'ouverture est refusée avec un message clair.
+const OPEN_FILE_SENTINEL = "PILOT_ASSISTANT_OPEN_FILE::";
 
 // Garde-fou anti-blocage (bug « agents figés ») : en mode RPC, un `ctx.ui.*`
 // émet un `extension_ui_request` sur stdout et pi attend la réponse SANS
@@ -534,6 +541,34 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text: `La demande a été transmise à ${target} ${mode}. L'agent finalement retenu est indiqué dans le retour de Pilot.` }] };
       }
       return { content: [{ type: "text", text: "Échec de la transmission de la demande à l'agent du projet." }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "open_file",
+    label: "Open File",
+    description:
+      "Ouvrir UN fichier réel du disque sur la machine de l'utilisateur, pour le lui MONTRER : un fichier qu'un agent vient de produire, ou un fichier dont la conversation parle. Le mode d'ouverture est décidé AUTOMATIQUEMENT par Pilot selon le type, il n'y a rien à choisir : si Pilot sait afficher ce type (texte et code, Markdown, PDF, image, CSV), le fichier s'ouvre DANS UN ONGLET de Pilot ; sinon il s'ouvre avec le PROGRAMME PAR DÉFAUT associé à ce type sur la machine. Aucune commande n'est jamais exécutée : l'outil ne fait qu'ouvrir un fichier existant. L'ouverture est REFUSÉE, sans rien lancer, si le fichier n'existe pas, s'il est vide, si c'est un dossier, si le chemin sort des projets connus et de ton espace de travail, ou si le chemin ressemble à une commande. Après l'appel, lis le résultat (`ok`, `mode`, `message`) et dis en UNE phrase ce qui a été ouvert et OÙ regarder.",
+    promptSnippet: "open_file: ouvrir un fichier réel (onglet de Pilot, ou programme par défaut du système) pour le montrer à l'utilisateur",
+    promptGuidelines: [
+      "Use open_file to SHOW a file that already exists on disk: a deliverable an agent just produced, a report, a spec, an image, a PDF. Pass its absolute path.",
+      "The mode is automatic and must never be chosen or asked for: Pilot opens the file in a Pilot tab when it can display that type, and with the system's default program otherwise. Never ask the user which one to use, and never create a setting for it.",
+      "Open ONE file per call. For several files, ask the user first (ask_confirm) instead of opening them all.",
+      "Never use this tool to run anything: it only opens an existing file. If the path looks like a command, the call is refused — do not try to work around it.",
+      "A missing file, an empty file, a directory, or a path outside the known projects and your own workspace is REFUSED. In that case say why plainly, and do not retry the same call.",
+      "After the call, read `ok` and `mode` in the result and tell the user in ONE short sentence which file was opened and where to look (a Pilot tab, or the system's default program).",
+    ],
+    parameters: Type.Object({
+      path: Type.String({ description: "Chemin absolu du fichier à ouvrir (jamais une commande, jamais un dossier)" }),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({ path: String(params.path || "") });
+      const result = await ctx.ui.input(OPEN_FILE_SENTINEL + payload, "", PILOT_UI_OPTS);
+      if (result == null) {
+        return { content: [{ type: "text", text: "Ouverture annulée : aucune réponse de Pilot (délai de 2 min dépassé ou annulation). Aucun fichier n'a été ouvert." }] };
+      }
+      return { content: [{ type: "text", text: String(result) }] };
     },
   });
 }

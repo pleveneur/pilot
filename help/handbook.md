@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-11-06 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-11-06 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-ouvrir-fichier,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -4563,6 +4563,32 @@ Dans **Options**, rubrique **« Assistant (suivi multi-projets) »** :
   simple / Bloquante) ;
 - **« Modèle de checklist par défaut »** : les points proposés par le bouton
   « Ajouter les points du modèle », **un point par ligne**.
+
+---
+
+<!-- HELP-TOPIC:super-agent-ouvrir-fichier -->
+### Ouvrir un fichier (un livrable, un rapport…)
+
+Demandez-le simplement dans la conversation : « ouvre `docs/rapport.md` », « montre-moi
+le fichier que l'agent vient de produire ». L'Assistant **ouvre le fichier** et vous dit
+**où regarder**.
+
+- **Deux façons, choisies toutes seules** selon le type du fichier — il n'y a **rien à
+  régler** et aucune question à trancher :
+  - si Pilot **sait afficher** ce type (texte et code, Markdown, PDF, image, CSV), le
+    fichier s'ouvre **dans un onglet de Pilot**, exactement comme quand vous le
+    double-cliquez dans l'explorateur ;
+  - sinon (une archive, un fichier d'un autre logiciel…), il s'ouvre avec le
+    **programme par défaut de votre ordinateur** pour ce type.
+- **Il annonce ce qu'il a ouvert et comment** : une ligne dans la conversation dit le nom
+  du fichier et si c'est « dans un onglet de Pilot » ou « avec le programme par défaut
+  de cet ordinateur ».
+- **Un fichier à la fois** : pour plusieurs fichiers, il vous demande d'abord.
+- **Il refuse proprement, sans rien lancer**, si le fichier **n'existe pas**, s'il est
+  **vide**, si c'est un **dossier**, si le chemin est **hors de vos projets** (et hors de
+  son propre espace de travail), ou si le chemin **ressemble à une commande**. Dans ces
+  cas il dit pourquoi et n'ouvre rien.
+- **Il n'exécute jamais de commande** : ouvrir un fichier n'est pas lancer un programme.
 
 ---
 

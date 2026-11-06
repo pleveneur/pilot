@@ -77,6 +77,19 @@ import {
   readableMachineText,
   scheduleRequestFrom,
 } from "./machine-sentinel.js";
+// OUVRIR UN FICHIER (tâche 394) : l'Assistant doit pouvoir MONTRER un fichier
+// réel du disque — un livrable qu'un agent vient de produire, ou un fichier dont
+// la conversation parle. La DÉCISION (quel mode selon le type, et quand refuser)
+// est PURE et vit dans `ouvrir-fichier.js` ; l'ACTION est exécutée à UN SEUL
+// endroit (`runOpenFileAction`, `ouvrir-fichier-action.js`), par les deux
+// mécanismes qui existent déjà : l'ouverture d'un onglet de Pilot
+// (`window._pilotTabs.openFile`) et le programme par défaut du système (commande
+// `open_in_browser`). Aucune commande n'est jamais exécutée.
+import { OPEN_FILE_SENTINEL } from "./ouvrir-fichier.js";
+// POINT UNIQUE de l'ACTION d'ouverture (le module de décision ci-dessus ne fait
+// que décider) : inspection du disque + ouverture par les deux mécanismes qui
+// existent déjà (onglet de Pilot, programme par défaut du système).
+import { runOpenFileAction } from "./ouvrir-fichier-action.js";
 // EXPORT PDF SANS IMPRESSION (outil `export_markdown_pdf`) : la sentinelle, la
 // décision « est-ce une demande d'export ? » et la mise en forme du rapport sont
 // dans `pdf-gateway.js` (module PUR, aussi importé par l'extension d'agent et
@@ -10623,6 +10636,26 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       }
       return;
     }
+    // Ouverture d'un fichier par l'Assistant (outil `open_file`, tâche 394) : le
+    // titre porte la sentinelle `PILOT_ASSISTANT_OPEN_FILE::<JSON { path }>`.
+    // La décision et l'action sont dans `runSuperAgentOpenFile` (point unique).
+    if (title.startsWith(OPEN_FILE_SENTINEL)) {
+      // Outil `open_file` (tâche 394) : l'Assistant ouvre UN fichier réel. Le
+      // point unique d'exécution décide (module pur) puis ouvre (onglet de Pilot
+      // ou programme par défaut du système) ; il refuse proprement, sans rien
+      // lancer, tout ce qui n'est pas un fichier existant dans le périmètre.
+      // L'ouverture est SIGNALÉE dans la conversation à côté de la réponse.
+      let req = {};
+      try {
+        req = JSON.parse(title.slice(OPEN_FILE_SENTINEL.length)) || {};
+      } catch (_) {
+        req = {};
+      }
+      const opened = await runSuperAgentOpenFile(req);
+      if (opened && opened.message) appendSystemMessage(messagesEl, opened.message);
+      await respondSuperAgent(id, JSON.stringify(opened), false);
+      return;
+    }
     if (title.startsWith(DELEGATION_SENTINEL)) {
       // Outil get_delegation_result (P5) : l'assistant récupère le résultat
       // d'une délégation. Le titre contient un JSON {project, session_id?,
@@ -10903,6 +10936,29 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     playAssistantSound("attention").catch(() => {});
     renderSuperAgentInput(messagesEl, state, id, title, payload.placeholder || "");
   }
+}
+
+/**
+ * Ouverture d'un fichier demandée par l'Assistant (outil `open_file`, tâche 394).
+ *
+ * Le fichier est INSPECTÉ sur le disque (commande Rust `inspect_open_path`, qui
+ * n'ouvre rien), la DÉCISION est prise par le module pur `ouvrir-fichier.js`
+ * (onglet de Pilot quand Pilot sait afficher ce type, programme par défaut du
+ * système sinon, refus net sinon) et l'ACTION est exécutée par le POINT UNIQUE
+ * `runOpenFileAction` (`ouvrir-fichier-action.js`), qui réutilise les deux
+ * mécanismes existants : `window._pilotTabs.openFile` et `open_in_browser`.
+ * Aucune commande n'est jamais exécutée.
+ *
+ * @param {{path?:unknown}} info payload de l'outil `open_file`
+ * @returns {Promise<{ok:boolean, mode:string|null, path:string, reason:string|null, message:string}>}
+ */
+async function runSuperAgentOpenFile(info) {
+  return runOpenFileAction({
+    info,
+    invoke,
+    tabs: window._pilotTabs,
+    projectPath: window._pilotProjectPath || null,
+  });
 }
 
 /**

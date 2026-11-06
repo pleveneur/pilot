@@ -201,6 +201,55 @@ pub fn open_in_browser(path: String) -> Result<(), String> {
     open::that(&path).map_err(|e| format!("Erreur ouverture navigateur: {}", e))
 }
 
+/// État d'un chemin AVANT de l'ouvrir (tâche 394 : l'Assistant ouvre un fichier).
+///
+/// Cette commande N'OUVRE RIEN : elle constate seulement ce qu'il y a sur le
+/// disque, pour que la fenêtre puisse REFUSER proprement (fichier absent, vide,
+/// dossier) au lieu d'ouvrir quelque chose qui n'existe pas. La décision
+/// (onglet de Pilot ou programme par défaut, et quand refuser) est PURE et vit
+/// dans `src/js/ouvrir-fichier.js`.
+#[derive(serde::Serialize)]
+pub struct OpenPathInfo {
+    /// Chemin tel qu'il sera réellement ouvert (inchangé par cette commande).
+    pub path: String,
+    pub exists: bool,
+    pub is_file: bool,
+    pub is_dir: bool,
+    /// Taille en octets (0 si absent/illisible).
+    pub size: u64,
+    /// Racine de l'espace de travail de l'Assistant (`~/.pilot/assistant`) :
+    /// l'un des deux périmètres autorisés (l'autre étant les projets connus).
+    /// La fenêtre ne devine jamais le dossier personnel.
+    pub assistant_root: String,
+}
+
+#[tauri::command]
+pub fn inspect_open_path(path: String) -> OpenPathInfo {
+    // Dossier de travail de l'Assistant : le dossier lui-même, sans le créer
+    // (une lecture ne doit rien créer sur le disque).
+    let assistant_root = crate::agent_service::pilot_user_dir()
+        .map(|dir| dir.join("assistant").to_string_lossy().to_string())
+        .unwrap_or_default();
+    match fs::metadata(&path) {
+        Ok(meta) => OpenPathInfo {
+            path: path.clone(),
+            exists: true,
+            is_file: meta.is_file(),
+            is_dir: meta.is_dir(),
+            size: if meta.is_file() { meta.len() } else { 0 },
+            assistant_root,
+        },
+        Err(_) => OpenPathInfo {
+            path,
+            exists: false,
+            is_file: false,
+            is_dir: false,
+            size: 0,
+            assistant_root,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +284,52 @@ mod tests {
     #[test]
     fn write_context_handoff_ignores_empty_project_path() {
         assert!(write_context_handoff("  ".to_string(), "x".to_string()).is_ok());
+    }
+
+    #[test]
+    fn inspect_open_path_reports_a_real_file_and_its_size() {
+        let base = crate::test_util::TempDir::new("pilot-open-file");
+        let file = base.join("rapport.md");
+        fs::write(&file, "bonjour").expect("écriture");
+        let info = inspect_open_path(file.to_string_lossy().to_string());
+        assert!(info.exists, "le fichier existe");
+        assert!(info.is_file, "c'est un fichier");
+        assert!(!info.is_dir, "ce n'est pas un dossier");
+        assert_eq!(info.size, 7, "taille réelle en octets");
+    }
+
+    #[test]
+    fn inspect_open_path_sees_a_directory_as_a_directory() {
+        let base = crate::test_util::TempDir::new("pilot-open-dir");
+        let info = inspect_open_path(base.str());
+        assert!(info.exists, "le dossier existe");
+        assert!(!info.is_file, "un dossier n'est pas un fichier");
+        assert!(info.is_dir, "c'est bien un dossier");
+    }
+
+    #[test]
+    fn inspect_open_path_reports_a_missing_file_without_error() {
+        let base = crate::test_util::TempDir::new("pilot-open-missing");
+        let missing = base.join("absent.txt");
+        let info = inspect_open_path(missing.to_string_lossy().to_string());
+        assert!(!info.exists, "le fichier est absent");
+        assert!(!info.is_file, "aucun fichier");
+        assert!(!info.is_dir, "aucun dossier");
+        assert_eq!(info.size, 0);
+    }
+
+    #[test]
+    fn inspect_open_path_announces_the_assistant_workspace() {
+        // Le périmètre autorisé de l'Assistant ne doit jamais être deviné par la
+        // fenêtre : la commande l'annonce (dossier `assistant` sous `~/.pilot`).
+        let info = inspect_open_path(String::new());
+        if !info.assistant_root.is_empty() {
+            assert!(
+                info.assistant_root.replace('\\', "/").ends_with("/.pilot/assistant"),
+                "racine assistant inattendue : {}",
+                info.assistant_root
+            );
+        }
+        assert!(!info.exists, "un chemin vide n'existe pas");
     }
 }

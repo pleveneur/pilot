@@ -3815,6 +3815,9 @@ pub fn run() {
             delete_file_or_dir,
             open_explorer,
             files::open_in_browser,
+            // Tâche 394 : état d'un chemin AVANT ouverture (l'Assistant ouvre un
+            // fichier — dans un onglet de Pilot ou par le programme par défaut).
+            files::inspect_open_path,
             pdf::export_pdf,
             pdf_export::markdown_to_pdf,
             rename_file_or_dir,

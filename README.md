@@ -245,6 +245,20 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   lecture garde la voix du système, sans erreur. Si le moteur manque ou échoue, la lecture **continue
   avec la voix du système** et le dit clairement (aucun blocage, rien ne plante).
 
+### Demander à l'Assistant d'ouvrir un fichier
+- Dites-le dans la conversation de l'onglet **🧭 Assistant** : « ouvre `docs/rapport.md` »,
+  « montre-moi le fichier que l'agent vient de produire ». Il **ouvre le fichier** et dit
+  **où regarder**.
+- **Deux façons, choisies toutes seules** selon le type, **sans aucun réglage** : si Pilot
+  **sait afficher** ce type (texte et code, Markdown, PDF, image, CSV), le fichier s'ouvre
+  **dans un onglet de Pilot**, comme quand tu le double-cliques dans l'explorateur ; sinon il
+  s'ouvre avec le **programme par défaut de ton ordinateur**.
+- **Un fichier à la fois** : pour plusieurs, il demande d'abord.
+- **Il refuse proprement, sans rien lancer**, si le fichier **n'existe pas**, est **vide**,
+  est un **dossier**, si le chemin sort de tes projets (ou de son espace de travail), ou s'il
+  **ressemble à une commande** : il dit pourquoi et n'ouvre rien. Il n'**exécute jamais** de
+  commande.
+
 ### Suivre le travail (entrée « Travail » à droite de la barre d'onglets)
 - L'entrée **« Travail »**, à droite de la barre d'onglets, est le **seul endroit** où se suit le travail :
   sa pastille s'anime quand des agents travaillent, et un clic ouvre le panneau. Un **second panneau**

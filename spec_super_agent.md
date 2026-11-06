@@ -3588,6 +3588,82 @@ omis = cocher) dans `pilot-assistant-tools.ts`, un `input` préfixé
   quand rien n'est forcé). Rapport :
   `docs/rapports/RAPPORT-checklist-et-cloture-des-taches.md`.
 
+<!-- HELP:super-agent-ouvrir-fichier -->
+### Ouvrir un fichier (un livrable, un rapport…)
+
+Demandez-le simplement dans la conversation : « ouvre `docs/rapport.md` », « montre-moi
+le fichier que l'agent vient de produire ». L'Assistant **ouvre le fichier** et vous dit
+**où regarder**.
+
+- **Deux façons, choisies toutes seules** selon le type du fichier — il n'y a **rien à
+  régler** et aucune question à trancher :
+  - si Pilot **sait afficher** ce type (texte et code, Markdown, PDF, image, CSV), le
+    fichier s'ouvre **dans un onglet de Pilot**, exactement comme quand vous le
+    double-cliquez dans l'explorateur ;
+  - sinon (une archive, un fichier d'un autre logiciel…), il s'ouvre avec le
+    **programme par défaut de votre ordinateur** pour ce type.
+- **Il annonce ce qu'il a ouvert et comment** : une ligne dans la conversation dit le nom
+  du fichier et si c'est « dans un onglet de Pilot » ou « avec le programme par défaut
+  de cet ordinateur ».
+- **Un fichier à la fois** : pour plusieurs fichiers, il vous demande d'abord.
+- **Il refuse proprement, sans rien lancer**, si le fichier **n'existe pas**, s'il est
+  **vide**, si c'est un **dossier**, si le chemin est **hors de vos projets** (et hors de
+  son propre espace de travail), ou si le chemin **ressemble à une commande**. Dans ces
+  cas il dit pourquoi et n'ouvre rien.
+- **Il n'exécute jamais de commande** : ouvrir un fichier n'est pas lancer un programme.
+<!-- /HELP:super-agent-ouvrir-fichier -->
+
+### Technique — ouvrir un fichier : une DÉCISION pure, une ACTION unique
+
+Tâche 394. L'Assistant ne modifie aucun fichier des projets, mais il doit pouvoir **montrer**
+un fichier réel (un livrable d'agent, un rapport dont la conversation parle). Deux modes,
+**jamais un troisième** :
+
+- **Décision** — `src/js/ouvrir-fichier.js`, PUR (aucun DOM, aucune I/O, aucun import Tauri) :
+  `pilotTabModeFor(chemin)` rend le mode d'onglet que Pilot sait afficher (`edit` liste
+  blanche de texte/code + noms sans extension, `pdf`, `image`, `csv`) ou `null` ; les
+  constantes `OPEN_FILE_IMAGE_EXTENSIONS` / `_PDF_` / `_CSV_` / `_TEXT_EXTENSIONS` /
+  `_TEXT_FILENAMES` sont la **liste blanche** (un binaire inconnu n'est jamais lu comme du
+  texte) ; `openFileModeFor` en déduit `tab` ou `system`.
+- **Refus, dans cet ordre** (`decideOpenFile`) : chemin vide → `chemin-vide` ; chemin qui
+  ressemble à une commande (`looksLikeCommand` : retour à la ligne, `; & | < > ` `` ` ``,
+  `$(…)`, option en tête, mot de commande connu, deux mots dont le premier n'est pas un
+  chemin) → `chemin-commande` ; chemin relatif sans dossier de travail →
+  `chemin-non-absolu` ; hors périmètre (`openFileIsInsideRoots`, frontière de dossier
+  exigée : `<projet>-annexe` n'est pas `<projet>`) → `hors-perimetre` ; inspection
+  indisponible → `inspection-impossible` ; fichier absent → `fichier-absent` ; dossier →
+  `dossier` ; fichier vide → `fichier-vide`. **Aucune commande n'est jamais exécutée** : les
+  deux modes n'ouvrent qu'un fichier **existant**, et le refus ne lance rien.
+- **Action** — `src/js/ouvrir-fichier-action.js`, **point unique** `runOpenFileAction`
+  (`invoke` et `tabs` REÇUS en paramètres, donc testable sans Tauri ni DOM) : il constate
+  l'état du disque, assemble le périmètre, demande la décision, puis ouvre par les **deux
+  mécanismes qui existent déjà** — `tabs.openFile(chemin, mode)` (`TabsManager`, le geste de
+  l'explorateur) ou la commande `open_in_browser` (`open::that`, programme par défaut du
+  système, déjà utilisée par le Feedback et la prévisualisation). Toute panne d'ouverture est
+  nommée, jamais silencieuse.
+- **Inspection** — commande Rust `inspect_open_path` (`files.rs`, enregistrée dans
+  `lib.rs`) : elle **n'ouvre rien**, elle rend `{ path, exists, is_file, is_dir, size,
+  assistant_root }`. `assistant_root` est l'espace de travail de l'Assistant
+  (`assistant_workspace()`, `<dossier personnel>/.pilot/assistant`) : la fenêtre ne devine
+  jamais le dossier personnel. Le périmètre autorisé = projets **ouverts**
+  (`list_open_projects`) + projets **suivis** (`list_super_agent_projects`) +
+  `assistant_root`.
+- **Chaîne de l'outil** (le motif des autres outils de l'Assistant, aucune voie nouvelle) :
+  outil `open_file` (`pilot-assistant-actions.ts`) → `ctx.ui.input` préfixé
+  `PILOT_ASSISTANT_OPEN_FILE::<JSON { path }>` → interception dans `super-agent.js`
+  (`handleSuperAgentExtensionUiRequest`) → `runSuperAgentOpenFile` → `runOpenFileAction` →
+  réponse JSON (`ok`, `mode`, `path`, `reason`, `message`) ; la ligne d'ouverture est écrite
+  dans la conversation (`appendSystemMessage`).
+- **Couverture** : `src/js/ouvrir-un-fichier.test.js` — décision (type affiché → onglet,
+  type inconnu → programme système, absent, hors périmètre, dossier, vide, commande,
+  relatif), action (deux modes réellement appelés avec des doubles, **rien n'est ouvert**
+  quand la décision refuse, panne d'inspection), et câblage (outil déclaré, même sentinelle
+  des deux côtés, branche non neutralisée, commande d'inspection enregistrée et **sans**
+  `open::that`/`Command::new`, aucun `child_process`/`spawn`/`exec`). Preuve par mutation
+  (voir le rapport) : neutraliser la règle de type, le refus ou la branche fait échouer le
+  test. Côté Rust, quatre tests de `inspect_open_path` (fichier + taille, dossier, absent,
+  racine annoncée). Rapport : `docs/rapports/RAPPORT-ouvrir-un-fichier.md`.
+
 <!-- HELP:super-agent-tracabilite -->
 ### Retrouver ce qui a été livré (traçabilité)
 
