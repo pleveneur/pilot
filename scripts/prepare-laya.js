@@ -50,17 +50,51 @@
 // (DirectML.dll, dxcompiler.dll, dxil.dll) sont écartées : le service demande le
 // fournisseur CPU (vérifié par une exécution réelle).
 //
-// Idempotent : le dossier cible est EFFACÉ puis reconstruit à l'identique.
-// Sans réseau, sans git, sans dépendance npm.
+// Idempotent : la nouvelle version est construite dans `src-tauri/laya.tmp`
+// puis BASCULÉE en une fois sur `src-tauri/laya` (voir plus bas). Sans réseau,
+// sans git, sans dépendance npm.
+//
+// ROBUSTESSE DU LANCEMENT EN DEV (incident « beforeDevCommand terminated with a
+// non-zero status code », `docs/rapports/RAPPORT-diagnostic-lancement-dev.md`) :
+//   - un effacement / renommage refusé pour cause de fichier TENU OUVERT est
+//     réessayé (8 fois, 150 ms d'écart) avant d'être déclaré en échec ;
+//   - au-delà du plafond, le script ne déverse plus de pile d'exception : il dit
+//     quoi faire en français et sort en 2 (`scripts/prepare-laya-decision.js`) ;
+//   - la cible n'est JAMAIS effacée d'abord : elle est remplacée d'un bloc, donc
+//     un échec ne peut plus la laisser amputée.
 
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+import {
+  EXIT_DESTINATION_LOCKED,
+  REMOVE_RETRY_DELAY_MS,
+  copyFailureMessage,
+  failureHeadline,
+  installDestination,
+  lockedDestinationMessage,
+  previousDirFor,
+  removeWithRetries,
+  temporaryCleanupSentence,
+  temporaryDirFor,
+} from "./prepare-laya-decision.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
 const DEST = path.join(ROOT, "src-tauri", "laya");
+// Dossier de travail : la copie s'y construit, la cible n'est touchée qu'à la fin.
+const STAGE = temporaryDirFor(DEST);
+const PREVIOUS = previousDirFor(DEST);
+
+/** Attente courte entre deux tentatives (n'immobilise pas la boucle). */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Effacement récursif tolérant (l'absence n'est pas une erreur). */
+const removeDeep = (target) =>
+  fs.rmSync(target, { recursive: true, force: true });
+
 const SRC = path.resolve(
   process.env.LAYA_SOURCE_DIR || path.join(ROOT, "..", "LayaPL")
 );
@@ -189,26 +223,40 @@ function copyTree(fromAbs, toAbs, keep) {
   }
 }
 
-function fail(message) {
+function fail(message, code = 1) {
+  // La première ligne NOMME l'étape : Tauri n'affichera pas qu'un code non nul.
+  console.error(failureHeadline());
   console.error(message);
-  process.exit(1);
+  process.exit(code);
 }
 
 /// Avertissement de mode tolérant : la construction CONTINUE sans Laya.
-function warnMissing(lines) {
+async function warnMissing(lines) {
   console.warn(lines.join("\n"));
   console.warn(
     `[prepare-laya] ⚠️  Aucune ressource embarquée : ${DEST} reste vide.\n` +
       "[prepare-laya]     La version obtenue ne peut pas démarrer le service " +
       "Laya par elle-même ; l'écran le dira clairement.\n"
   );
+  // La cible est laissée VIDE : on efface au mieux (un dossier tenu ouvert ici
+  // n'a aucune raison d'arrêter un mode tolérant — on le dit et on continue).
+  const removed = await removeWithRetries({
+    dest: DEST,
+    remove: removeDeep,
+    sleep,
+  });
+  if (!removed.ok) {
+    console.warn(
+      `[prepare-laya] ⚠️  L'ancien contenu de ${DEST} n'a pas pu être effacé` +
+        " (un autre programme le tient ouvert).\n" +
+        "[prepare-laya]     Il sera remplacé au prochain lancement réussi."
+    );
+  }
+  fs.mkdirSync(DEST, { recursive: true });
   process.exit(0);
 }
 
-// ── 1. Dossier cible toujours vidé puis recréé (idempotence stricte) ──
-fs.rmSync(DEST, { recursive: true, force: true });
-fs.mkdirSync(DEST, { recursive: true });
-
+// ── 1. Cible validée, puis dossier de travail préparé À CÔTÉ de la cible ──
 // Le format de la cible est validé AVANT tout `path.join`.
 if (!/^[a-z0-9]+\/[a-z0-9]+$/i.test(TARGET)) {
   fail(
@@ -216,6 +264,23 @@ if (!/^[a-z0-9]+\/[a-z0-9]+$/i.test(TARGET)) {
       "   Format attendu : <os>/<arch>, par exemple win32/x64, darwin/arm64, linux/x64."
   );
 }
+
+// Restes d'une exécution interrompue (`.tmp` / `.old`) : effacés au mieux. Un
+// reste non effaçable ne doit pas empêcher un nouveau lancement ; il est alors
+// signalé, et le dossier de travail porte un nom neuf plus bas.
+for (const leftover of [STAGE, PREVIOUS]) {
+  const cleaned = await removeWithRetries({ dest: leftover, remove: removeDeep, sleep });
+  if (!cleaned.ok) {
+    console.warn(
+      `[prepare-laya] ⚠️  Un reste de lancement précédent n'a pas pu être effacé :\n` +
+        `[prepare-laya]     ${leftover}\n` +
+        "[prepare-laya]     Il sera repris au prochain lancement ; la cible actuelle n'est pas touchée."
+    );
+  }
+}
+
+// Dossier de travail : vide et prêt à recevoir la nouvelle version.
+fs.mkdirSync(STAGE, { recursive: true });
 
 // ── 2. Dossier source absent ──
 // Le dossier cible existe quand même (un `bundle.resources` pointant sur un
@@ -238,7 +303,7 @@ if (!fs.existsSync(SRC) || !fs.statSync(SRC).isDirectory()) {
   ];
   if (ALLOW_MISSING) {
     lines.push("    Mode tolérant : la construction se poursuit SANS Laya.", "");
-    warnMissing(lines);
+    await warnMissing(lines);
   }
   fail(
     [
@@ -286,7 +351,7 @@ if (problems.length > 0) {
   ];
   if (ALLOW_MISSING) {
     lines.push("    Mode tolérant : la construction se poursuit SANS Laya.", "");
-    warnMissing(lines);
+    await warnMissing(lines);
   }
   fail(
     [
@@ -297,19 +362,29 @@ if (problems.length > 0) {
   );
 }
 
-// ── 4. Copie ──
+// ── 4. Copie DANS LE DOSSIER DE TRAVAIL (la cible n'est pas encore touchée) ──
 const copied = [];
-for (const rel of FILES) {
-  const src = path.join(SRC, rel);
-  const dst = path.join(DEST, rel);
-  fs.mkdirSync(path.dirname(dst), { recursive: true });
-  fs.copyFileSync(src, dst);
-  copied.push({ name: rel, bytes: fs.statSync(dst).size });
-}
-for (const { from, keep } of TREES) {
-  const dst = path.join(DEST, from);
-  copyTree(path.join(SRC, from), dst, keep);
-  copied.push({ name: from + "/", bytes: sizeOf(dst) });
+let copying = "(préparation)";
+try {
+  for (const rel of FILES) {
+    copying = rel;
+    const src = path.join(SRC, rel);
+    const dst = path.join(STAGE, rel);
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.copyFileSync(src, dst);
+    copied.push({ name: rel, bytes: fs.statSync(dst).size });
+  }
+  for (const { from, keep } of TREES) {
+    copying = from + "/";
+    const dst = path.join(STAGE, from);
+    copyTree(path.join(SRC, from), dst, keep);
+    copied.push({ name: from + "/", bytes: sizeOf(dst) });
+  }
+} catch (e) {
+  // Jamais de pile d'exception dans la figure de l'utilisateur : on nomme la
+  // pièce et le geste, puis on sort. La cible est intacte (copie à côté).
+  await removeWithRetries({ dest: STAGE, remove: removeDeep, sleep });
+  fail(copyFailureMessage({ rel: copying, target: DEST, error: e }));
 }
 
 // ── 5. Interpréteur embarqué (la machine cible peut n'en avoir aucun) ──
@@ -339,9 +414,14 @@ if (process.env.LAYA_EMBED_NODE === "0") {
   }
   const nodeName = path.basename(process.execPath);
   const rel = path.join("node", nodeName);
-  const dst = path.join(DEST, rel);
-  fs.mkdirSync(path.dirname(dst), { recursive: true });
-  fs.copyFileSync(process.execPath, dst);
+  const dst = path.join(STAGE, rel);
+  try {
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.copyFileSync(process.execPath, dst);
+  } catch (e) {
+    await removeWithRetries({ dest: STAGE, remove: removeDeep, sleep });
+    fail(copyFailureMessage({ rel, target: DEST, error: e }));
+  }
   nodeEntry = { name: rel, bytes: fs.statSync(dst).size };
   copied.push(nodeEntry);
 }
@@ -358,3 +438,39 @@ console.log(
     `(cible : ${TARGET})` +
     (nodeEntry ? "" : " — sans interpréteur embarqué")
 );
+
+// ── 7. BASCULE en une fois : la cible n'est jamais effacée d'abord ──
+// C'est ce qui supprime le défaut d'origine : un échec de la bascule laisse
+// `src-tauri/laya` TELLE QU'ELLE ÉTAIT, jamais amputée.
+const install = await installDestination({
+  dest: DEST,
+  tmp: STAGE,
+  exists: (target) => fs.existsSync(target),
+  rename: (from, to) => fs.renameSync(from, to),
+  remove: removeDeep,
+  sleep,
+});
+
+if (!install.ok) {
+  const cleaned = await removeWithRetries({ dest: STAGE, remove: removeDeep, sleep });
+  fail(
+    lockedDestinationMessage({
+      dest: DEST,
+      attempts: install.attempts,
+      delayMs: REMOVE_RETRY_DELAY_MS,
+      error: install.error,
+      stage: install.stage,
+      restored: install.restored === true,
+    }) +
+      "\n" +
+      temporaryCleanupSentence({ tmp: STAGE, removed: cleaned.ok }),
+    EXIT_DESTINATION_LOCKED
+  );
+}
+
+if (install.previousLeftBehind) {
+  console.warn(
+    `[prepare-laya] ⚠️  L'ancienne version (${PREVIOUS}) n'a pas pu être effacée :\n` +
+      "[prepare-laya]     elle n'est plus utilisée et sera reprise au prochain lancement."
+  );
+}

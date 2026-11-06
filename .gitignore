@@ -81,3 +81,10 @@ gds-server/backups/
 # distincts, 114 Mo dont un interpréteur Node). Embarquées dans le paquet livré
 # via bundle.resources.
 src-tauri/laya/
+
+# Dossiers de travail de `npm run prepare:laya` : la copie se construit à côté
+# (`laya.tmp/`) puis l'ancienne version est mise de côté (`laya.old/`) le temps
+# de la bascule. Transitoires, jamais versionnés — et jamais supprimés d'office
+# quand ils sont tenus ouverts.
+src-tauri/laya.tmp/
+src-tauri/laya.old/

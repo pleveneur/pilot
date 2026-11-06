@@ -5,6 +5,9 @@
 // calcule sa racine depuis son propre chemin, donc son dossier cible est
 // `<bac-à-sable>/src-tauri/laya`, jamais le vrai. C'est la fabrication RÉELLE
 // qui est exécutée, pas une réimplémentation du contrôle.
+//
+// Le module de décisions (`prepare-laya-decision.js`) est recopié à côté du
+// script : c'est le seul fichier dont il dépend.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -14,6 +17,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT = fileURLToPath(new URL("./prepare-laya.js", import.meta.url));
+const DECISION = fileURLToPath(
+  new URL("./prepare-laya-decision.js", import.meta.url)
+);
 const TARGET = "win32/x64";
 const PLATFORM_DIR = path.join(
   "laya-ts/node_modules/onnxruntime-node/bin/napi-v6",
@@ -41,6 +47,10 @@ function makeSandbox() {
   sandboxes.push(root);
   fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
   fs.copyFileSync(SCRIPT, path.join(root, "scripts", "prepare-laya.js"));
+  fs.copyFileSync(
+    DECISION,
+    path.join(root, "scripts", "prepare-laya-decision.js")
+  );
   return root;
 }
 
