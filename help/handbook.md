@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-11-05 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-11-06 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -2382,8 +2382,9 @@ apprend et répond.
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
 - **Badges projet par bulle (snapshot à l'envoi)** : chaque bulle de
   l'Assistant porte le nom du/des projet(s) **concerné(s)**, choisi dans cet
-  ordre (règle unique : `resolveBubbleBadgeNames`, module pur
-  `super-agent-badges.js`) : **(1)** les projets **explicitement nommés dans le
+  ordre (règle unique : `decideMessageProjectLabel` / `decideFinalBubbleProjectLabel`,
+  module pur `super-agent-project-label.js` — `resolveBubbleBadgeNames` y
+  délègue) : **(1)** les projets **explicitement nommés dans le
   texte**, dans leur **ordre d'apparition**, sans doublon ; **(2)** sinon, les
   projets **réellement concernés par l'échange** (mission / agents lancés,
   agent ciblé, projet transmis à un agent, projet ouvert par l'Assistant) ;
@@ -2397,15 +2398,27 @@ apprend et répond.
   du texte est **sans IA** : correspondance insensible à la casse sur le **nom
   affiché** du projet (ex: « PLh ») ou la **fin de son chemin** (ex:
   « ia_pl/plh »), avec **frontières de mots** (une demande qui parle de
-  « pilotage » n'étiquette pas le projet « pilot »). La réponse hérite des
-  badges **figés** de la demande qui l'a déclenchée et peut y **ajouter** les
-  projets réellement cités dans le texte de la réponse (jamais en retirer un
-  correct, jamais en inventer un). Les badges sont **figés pour toujours** :
+  « pilotage » n'étiquette pas le projet « pilot »).
+  **La décision est PAR MESSAGE, jamais au niveau de la fenêtre, et elle est
+  corrigée UNE fois en fin de tour.** La bulle de l'Assistant est créée au
+  début de son message, donc **avant** l'appel d'outil qui révèle le projet
+  visé : à cet instant, le seul projet connu peut être celui qui est **ouvert
+  à l'écran**, figé comme dernier recours. À `agent_end`, les projets
+  **réellement visés par le tour** (mission, délégation, agent relayé, projet
+  ouvert par l'Assistant) sont donc placés **en tête** — le premier est le
+  **projet principal de la mission**, les suivants sont **signalés** comme
+  autres projets concernés (infobulle du badge) — et un badge de simple
+  **dernier recours s'efface** (il n'était pas concerné : c'était le défaut
+  corrigé). Un nom **prouvé** (explicite, cité dans le message, projet d'une
+  mission) n'est **jamais retiré** ; la réponse peut seulement y ajouter les
+  projets qu'elle cite. Un badge de dernier recours cède aussi devant un projet
+  cité par la réponse. Les badges restent **figés ensuite pour toujours** :
   changer de projet actif (même via `open_project` pendant le tour) ne modifie
   **jamais** les badges déjà affichés, et aucune bulle n'est re-étiquetée
-  rétrospectivement. La **bulle de continuation** après une question posée à
-  l'utilisateur hérite des badges de la demande initiale (la paire
-  question/réponse porte les mêmes étiquettes).
+  rétrospectivement au-delà de cette unique correction de fin de tour. La
+  **bulle de continuation** après une question posée à l'utilisateur hérite des
+  badges de la demande initiale (la paire question/réponse porte les mêmes
+  étiquettes).
 - **Une bulle par tour d'agent par projet** : un « tour » = depuis que
   l'Assistant commence à répondre jusqu'à `agent_end` (fin du tour, c'est à
   l'utilisateur de parler). Pendant un tour, l'Assistant peut enchaîner
@@ -4512,6 +4525,36 @@ Le contrôle dépend du mode choisi :
 
 Le même comportement s'applique quand vous **clôturez plusieurs tâches d'un
 coup**.
+
+#### Demander à l'Assistant de cocher un point
+
+Dans la conversation, vous pouvez dire : « coche « tests passés » sur la tâche
+12 ». L'Assistant lit d'abord la checklist de la tâche, puis coche le point
+**par son nom** — la casse, les accents et les espaces de bord n'ont pas
+d'importance (« tests passes » désigne le même point que « Tests passés »).
+
+- Si **aucun point ne porte ce nom**, il ne coche **rien** et vous **dit** ce
+  que la tâche porte réellement : rien n'est modifié en silence, et vous
+  corrigez le nom (ou ajoutez le point vous-même).
+- Si le nom correspond à **deux points**, il refuse aussi, sans choisir au
+  hasard, et vous les nomme.
+- Cocher un point ne change **jamais** le statut de la tâche, ni celui des
+  autres tâches.
+- Une tâche **déjà terminée** a une checklist figée : rouvrez-la d'abord.
+
+#### Terminer une tâche malgré des points restants
+
+L'Assistant peut terminer une tâche même si des points ne sont pas cochés (en
+mode **« Rappel simple »**), mais **jamais en silence** : il doit donner un
+**motif**, qui est conservé et **relu dans l'historique du projet** —
+« Clôture forcée de la tâche #12 « … » : 2 point(s) de checklist non cochés
+(« Tests passés », …) — motif : … ». Sans motif, **rien n'est écrit**. En mode
+**Bloquante**, la clôture reste **refusée**, même avec un motif.
+
+Quand c'est **vous** qui forcez la clôture depuis le tableau de bord
+(« Terminer quand même »), la même trace est écrite, avec le motif « clôture
+décidée par l'utilisateur depuis le tableau de bord, sans cocher les points
+restants ».
 
 #### Où régler cela
 

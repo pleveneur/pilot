@@ -3506,6 +3506,36 @@ Le contrôle dépend du mode choisi :
 Le même comportement s'applique quand vous **clôturez plusieurs tâches d'un
 coup**.
 
+#### Demander à l'Assistant de cocher un point
+
+Dans la conversation, vous pouvez dire : « coche « tests passés » sur la tâche
+12 ». L'Assistant lit d'abord la checklist de la tâche, puis coche le point
+**par son nom** — la casse, les accents et les espaces de bord n'ont pas
+d'importance (« tests passes » désigne le même point que « Tests passés »).
+
+- Si **aucun point ne porte ce nom**, il ne coche **rien** et vous **dit** ce
+  que la tâche porte réellement : rien n'est modifié en silence, et vous
+  corrigez le nom (ou ajoutez le point vous-même).
+- Si le nom correspond à **deux points**, il refuse aussi, sans choisir au
+  hasard, et vous les nomme.
+- Cocher un point ne change **jamais** le statut de la tâche, ni celui des
+  autres tâches.
+- Une tâche **déjà terminée** a une checklist figée : rouvrez-la d'abord.
+
+#### Terminer une tâche malgré des points restants
+
+L'Assistant peut terminer une tâche même si des points ne sont pas cochés (en
+mode **« Rappel simple »**), mais **jamais en silence** : il doit donner un
+**motif**, qui est conservé et **relu dans l'historique du projet** —
+« Clôture forcée de la tâche #12 « … » : 2 point(s) de checklist non cochés
+(« Tests passés », …) — motif : … ». Sans motif, **rien n'est écrit**. En mode
+**Bloquante**, la clôture reste **refusée**, même avec un motif.
+
+Quand c'est **vous** qui forcez la clôture depuis le tableau de bord
+(« Terminer quand même »), la même trace est écrite, avec le motif « clôture
+décidée par l'utilisateur depuis le tableau de bord, sans cocher les points
+restants ».
+
 #### Où régler cela
 
 Dans **Options**, rubrique **« Assistant (suivi multi-projets) »** :
@@ -3514,6 +3544,49 @@ Dans **Options**, rubrique **« Assistant (suivi multi-projets) »** :
 - **« Modèle de checklist par défaut »** : les points proposés par le bouton
   « Ajouter les points du modèle », **un point par ligne**.
 <!-- /HELP:super-agent-checklist -->
+
+### Technique — cocher une case NOMMÉE et clôturer délibérément
+
+Chaîne (le motif des autres outils de l'Assistant, **aucune voie nouvelle**) :
+outils `get_task_checklist` (lecture) et `set_task_check` (`label`, `done`
+omis = cocher) dans `pilot-assistant-tools.ts`, un `input` préfixé
+`PILOT_ASSISTANT_TOOLS::<outil>::<JSON>` → interception dans `super-agent.js`
+(cas du `switch` sur le canal commun) → commandes Rust
+`super_agent_task_check_list` / `super_agent_task_check_set_done_by_label`.
+
+- **Décisions PURES, un seul endroit** (`super_agent.rs`) :
+  `check_label_key` (minuscules, sans accents, espaces réduits — miroir de
+  `fold_task_char`), `resolve_task_check_id` (un seul point doit porter le
+  libellé) et `bounded_label_list` (au plus 5 libellés cités dans un message,
+  partagé avec le message du contrôle de checklist).
+- **Refus explicites, aucune écriture partielle** : libellé vide ou sans mot
+  utilisable, tâche inconnue, tâche **sans aucun point**, libellé **inconnu**
+  (le message liste les points présents), libellé porté par **deux** points
+  (les ids sont nommés), checklist d'une tâche **terminée** (même règle que le
+  retrait d'un point). Toutes les vérifications précèdent l'unique `UPDATE` ;
+  le statut de la tâche n'est jamais touché par une coche.
+- **Clôture forcée tracée** : `forced_closure_needs_trace` (pure : `force` +
+  des points restants + **statut visé terminé**) et
+  `check_forced_closure_reason` (pure : motif non vide exigé) sont appelées
+  **après** `guard_task_checklist` (le mode bloquant n'est donc jamais
+  contourné) et **avant** l'écriture ; la trace
+  `db_record_forced_closure` (une ligne `decisions` rattachée à la tâche, donc
+  lue par « Décisions récentes » et par la **traçabilité de livraison**, qui la
+  reprend comme origine) est écrite **après** le succès, en **fail-open**.
+- **Les deux voies de clôture** (`super_agent_update_task_status` et
+  `super_agent_update_task`) portent le même contrat, arguments additifs
+  `force` / `reason` : aucun appelant existant n'est cassé.
+- **L'écran** réutilise la même constante `KANBAN_FORCED_CLOSURE_REASON`
+  (`super-agent-kanban.js`) pour ses **trois** forçages (lot, statut seul, fiche
+  complète) : sans elle, le bouton « Terminer quand même » ne terminerait plus
+  rien.
+- **Couverture** : `src/js/checklist-case-nommee-et-cloture-forcee.test.js`
+  (déclaration et branchement des outils, transmission de `force`/`reason`,
+  ordre « motif avant écriture », motif présent sur les trois forçages de
+  l'écran) et `super_agent::tests` côté Rust (`set_task_check_by_label_*`,
+  `forced_closure_*` : refus sans écriture, trace lisible, absence de trace
+  quand rien n'est forcé). Rapport :
+  `docs/rapports/RAPPORT-checklist-et-cloture-des-taches.md`.
 
 <!-- HELP:super-agent-tracabilite -->
 ### Retrouver ce qui a été livré (traçabilité)

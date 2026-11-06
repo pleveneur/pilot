@@ -3214,6 +3214,165 @@ fn db_set_task_check_done(conn: &Connection, check_id: i64, done: bool) -> Resul
     Ok(())
 }
 
+// ── Cocher / décocher une case NOMMÉE (demande du propriétaire, 2026-11-16) ──
+//
+// L'Assistant ne connaît pas les `id` des points de checklist : il connaît leur
+// LIBELLÉ (« tests passés », « documentation à jour »…). Ces helpers lui
+// permettent donc de désigner une case par son nom, en vérifiant qu'elle existe
+// vraiment : une case inconnue est REFUSÉE avec un message qui dit ce qui existe,
+// jamais ignorée en silence (aucune case cochée par erreur).
+
+/// Nombre maximal de libellés cités dans un message d'erreur (au-delà :
+/// « … et N autre(s) »). Une seule règle de bornage pour tous les messages du
+/// contrôle de checklist.
+const CHECK_LABEL_LIST_MAX: usize = 5;
+
+/// Formate une liste de libellés bornée : « a, b, c … et 2 autre(s) ». Pure.
+fn bounded_label_list(labels: &[String]) -> String {
+    let shown: Vec<&str> = labels
+        .iter()
+        .take(CHECK_LABEL_LIST_MAX)
+        .map(|s| s.as_str())
+        .collect();
+    let mut out = shown.join(", ");
+    if labels.len() > shown.len() {
+        out.push_str(&format!(" … et {} autre(s)", labels.len() - shown.len()));
+    }
+    out
+}
+
+/// Points d'une tâche sous la forme `(id, libellé)`, dans l'ordre d'affichage.
+fn db_task_check_pairs(conn: &Connection, task_id: i64) -> Result<Vec<(i64, String)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, label FROM task_checks WHERE task_id = ?1 ORDER BY position, id")
+        .map_err(|e| format!("Erreur lecture checklist: {}", e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![task_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("Erreur lecture checklist: {}", e))?;
+    Ok(rows.flatten().collect())
+}
+
+/// Clé de comparaison d'un libellé de point : minuscules, sans accents, espaces
+/// réduits. « Tests passés » et « tests   passes » désignent donc le MÊME point
+/// — l'Assistant peut reprendre le libellé tel qu'il l'a lu, sans se soucier de
+/// la casse ni des accents. Pure.
+fn check_label_key(label: &str) -> String {
+    fold_long_task_text(label)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Décision PURE : quel point de checklist porte CE libellé ?
+///
+/// Refuse, sans rien cocher, un libellé vide/vide de sens, une tâche sans aucun
+/// point, un libellé qui n'existe pas (en nommant ceux qui existent) et un
+/// libellé porté par DEUX points (on ne choisit pas au hasard).
+fn resolve_task_check_id(checks: &[(i64, String)], label: &str) -> Result<i64, String> {
+    let raw = label.trim();
+    if raw.is_empty() {
+        return Err(
+            "set_task_check : le libellé du point est requis (par exemple « tests passés »). \
+             Aucune case n'a été cochée."
+                .to_string(),
+        );
+    }
+    let key = check_label_key(raw);
+    if key.is_empty() {
+        return Err(format!(
+            "set_task_check : « {} » ne contient aucun mot utilisable comme libellé de point. \
+             Aucune case n'a été cochée.",
+            raw
+        ));
+    }
+    let matching: Vec<i64> = checks
+        .iter()
+        .filter(|(_, l)| check_label_key(l) == key)
+        .map(|(id, _)| *id)
+        .collect();
+    match matching.len() {
+        1 => return Ok(matching[0]),
+        0 => {}
+        _ => {
+            let ids: Vec<String> = matching.iter().map(|id| format!("#{}", id)).collect();
+            return Err(format!(
+                "set_task_check : deux points portent le libellé « {} » ({}). Renomme l'un des \
+                 deux pour lever l'ambiguïté. Aucune case n'a été cochée.",
+                raw,
+                ids.join(" et ")
+            ));
+        }
+    }
+    if checks.is_empty() {
+        return Err(
+            "set_task_check : cette tâche ne porte AUCUN point de checklist, aucun libellé ne peut \
+             donc lui correspondre. Les points s'ajoutent depuis la fiche de la tâche dans Pilot. \
+             Aucune case n'a été cochée."
+                .to_string(),
+        );
+    }
+    let labels: Vec<String> = checks.iter().map(|(_, l)| l.clone()).collect();
+    Err(format!(
+        "set_task_check : aucun point de checklist ne s'appelle « {} ». Points présents sur cette \
+         tâche : {}. Aucune case n'a été cochée.",
+        raw,
+        bounded_label_list(&labels)
+    ))
+}
+
+/// Coche (ou décoche) la case d'une tâche DÉSIGNÉE PAR SON LIBELLÉ. Toutes les
+/// vérifications ont lieu AVANT l'écriture (tâche connue, case existante et non
+/// ambiguë, checklist encore modifiable) : aucun demi-écrit n'est possible, et
+/// le STATUT de la tâche n'est jamais touché (clore reste un geste distinct).
+///
+/// Renvoie l'état après l'écriture — `remaining` et `total` disent à l'Assistant
+/// s'il reste des points à cocher avant de pouvoir clore.
+fn db_set_task_check_done_by_label(
+    conn: &Connection,
+    task_id: i64,
+    label: &str,
+    done: bool,
+) -> Result<Value, String> {
+    let Some(status) = task_status_of(conn, task_id) else {
+        return Err(format!(
+            "set_task_check : tâche {} introuvable. Aucune case n'a été cochée.",
+            task_id
+        ));
+    };
+    // Même règle que le retrait d'un point (`db_delete_task_check`, C5) : la
+    // checklist d'une tâche TERMINÉE ne se modifie plus. Sinon, cocher les points
+    // après la clôture suffirait à faire croire à une conformité... obtenue
+    // après coup. Rouvrir la tâche est le geste explicite qui débloque.
+    if classify_task_status(&status) == "done" {
+        return Err(format!(
+            "set_task_check : la tâche {} est terminée ({}) et sa checklist ne se modifie plus. \
+             Rouvrez-la si un point doit vraiment être coché. Aucune case n'a été cochée.",
+            task_id, status
+        ));
+    }
+    let checks = db_task_check_pairs(conn, task_id)?;
+    let check_id = resolve_task_check_id(&checks, label)?;
+    let resolved = checks
+        .iter()
+        .find(|(id, _)| *id == check_id)
+        .map(|(_, l)| l.clone())
+        .unwrap_or_default();
+    db_set_task_check_done(conn, check_id, done)?;
+    let remaining = db_unchecked_task_check_labels(conn, task_id)?.len();
+    let total = db_count_task_checks(conn, task_id)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "task_id": task_id,
+        "check_id": check_id,
+        "label": resolved,
+        "done": done,
+        "remaining": remaining,
+        "total": total,
+    }))
+}
+
 /// Supprime un point de checklist. Retourne une erreur si le point n'existe
 /// pas (aucune suppression silencieuse d'un identifiant inconnu).
 ///
@@ -3587,6 +3746,21 @@ pub fn super_agent_task_check_set_done(
     Ok(serde_json::json!({ "ok": true, "check_id": check_id, "done": done }))
 }
 
+/// Coche (ou décoche) la case d'une tâche DÉSIGNÉE PAR SON LIBELLÉ — c'est la
+/// forme dont l'Assistant dispose depuis la conversation, puisqu'il connaît les
+/// libellés et pas les `id`. `done` omis = cocher. Une case inconnue, une tâche
+/// inconnue ou une checklist déjà close sont REFUSÉES sans rien écrire.
+#[tauri::command]
+pub fn super_agent_task_check_set_done_by_label(
+    app: AppHandle,
+    task_id: i64,
+    label: String,
+    done: Option<bool>,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    db_set_task_check_done_by_label(&conn, task_id, &label, done.unwrap_or(true))
+}
+
 /// Supprime un point de checklist. Retourne `{ ok, check_id }`.
 #[tauri::command]
 pub fn super_agent_task_check_delete(app: AppHandle, check_id: i64) -> Result<Value, String> {
@@ -3723,15 +3897,11 @@ fn checklist_gate_message(labels: &[String], verdict: &GateVerdict) -> String {
         GateVerdict::Allowed => return String::new(),
         GateVerdict::ConfirmNeeded { remaining } | GateVerdict::Refused { remaining } => *remaining,
     };
-    let shown: Vec<&str> = labels.iter().take(5).map(|s| s.as_str()).collect();
     let mut message = format!(
         "Checklist de livraison : {} point(s) restent à cocher avant de terminer la tâche : {}",
         remaining,
-        shown.join(", ")
+        bounded_label_list(labels)
     );
-    if labels.len() > shown.len() {
-        message.push_str(&format!(" … et {} autre(s)", labels.len() - shown.len()));
-    }
     message.push('.');
     if matches!(verdict, GateVerdict::ConfirmNeeded { .. }) {
         message.push_str(" Relance avec force = true pour conclure malgré tout.");
@@ -3828,6 +3998,101 @@ fn guard_task_checklist(
         GateVerdict::Allowed => Ok(()),
         _ => Err(checklist_gate_message(&pending, &verdict)),
     }
+}
+
+// ── Clôturer DÉLIBÉRÉMENT une tâche, jamais en silence (2026-11-16) ──
+//
+// Une clôture qui passe MALGRÉ des points non cochés est une clôture FORCÉE :
+// elle doit dire POURQUOI. Deux règles, toutes deux pures :
+//   1. `check_forced_closure_reason` : `force = true` avec des points restants
+//      SANS motif est refusé AVANT la moindre écriture ;
+//   2. `db_record_forced_closure` : la clôture forcée laisse une trace LISIBLE
+//      (une ligne `decisions` rattachée à la tâche, donc visible dans l'historique
+//      du projet et dans les décisions récentes) qui dit qu'elle a été forcée,
+//      combien de points manquaient, lesquels, et pour quel motif.
+// Aucune voie nouvelle : la ligne est écrite sur la MÊME base, au MÊME endroit
+// que la traçabilité de livraison, en fail-open (une trace impossible ne bloque
+// jamais une clôture déjà écrite).
+
+/// Une clôture est-elle FORCÉE ? Oui uniquement quand elle fait passer la tâche
+/// à un état TERMINÉ en étant explicitement forcée (`force = true`) alors que des
+/// points restaient à cocher. Pure : une mise à jour qui ne clôt rien (autre
+/// statut, ou checklist complète) n'exige donc jamais de motif et ne trace rien.
+fn forced_closure_needs_trace(pending: usize, force: bool, new_status: &str) -> bool {
+    force && pending > 0 && classify_task_status(new_status) == "done"
+}
+
+/// Message de refus quand une clôture forcée ne dit pas pourquoi. Il nomme la
+/// sortie de secours exacte (`force` ET `reason`) et affirme qu'aucune écriture
+/// n'a eu lieu (c'est vrai : la vérification précède l'écriture).
+fn forced_closure_reason_required_message() -> String {
+    "Clôture forcée : un MOTIF est requis pour terminer une tâche dont des points de checklist \
+     restent à cocher. Relance avec force = true ET reason = « pourquoi la tâche se termine \
+     malgré ces points ». Aucune écriture n'a été faite."
+        .to_string()
+}
+
+/// Décision PURE : le motif est-il fourni là où il est requis ?
+///
+/// Aucun motif n'est demandé quand la clôture n'est pas forcée (checklist
+/// complète, mode désactivé, simple mise à jour sans changement d'état) : la
+/// règle ne gêne donc jamais le geste normal.
+fn check_forced_closure_reason(
+    pending: usize,
+    force: bool,
+    new_status: &str,
+    reason: Option<&str>,
+) -> Result<(), String> {
+    if !forced_closure_needs_trace(pending, force, new_status) {
+        return Ok(());
+    }
+    match reason.map(str::trim).unwrap_or("") {
+        "" => Err(forced_closure_reason_required_message()),
+        _ => Ok(()),
+    }
+}
+
+/// Résumé LISIBLE d'une clôture forcée (une seule phrase, destinée à être lue
+/// telle quelle dans l'historique du projet). Pure : testable sans base.
+fn forced_closure_summary(task_id: i64, title: &str, pending: &[String], reason: &str) -> String {
+    format!(
+        "Clôture forcée de la tâche #{} « {} » : {} point(s) de checklist non cochés ({}) — motif : {}",
+        task_id,
+        title,
+        pending.len(),
+        bounded_label_list(pending),
+        reason.trim()
+    )
+}
+
+/// Écrit la trace d'une clôture FORCÉE. Sans effet (`Ok(None)`) quand aucun point
+/// ne manquait : il n'y a alors rien de forcé à raconter. Retourne l'id de la
+/// ligne créée. Ne touche ni au statut de la tâche ni à celui des autres.
+fn db_record_forced_closure(
+    conn: &Connection,
+    task_id: i64,
+    pending: &[String],
+    reason: &str,
+) -> Result<Option<i64>, String> {
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    let title = task_title_of(conn, task_id).unwrap_or_else(|| format!("tâche {}", task_id));
+    let project_id: Option<i64> = conn
+        .query_row(
+            "SELECT project_id FROM tasks WHERE id = ?1",
+            rusqlite::params![task_id],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten();
+    let summary = forced_closure_summary(task_id, &title, pending, reason);
+    conn.execute(
+        "INSERT INTO decisions (project_id, task_id, summary) VALUES (?1, ?2, ?3)",
+        rusqlite::params![project_id, task_id, summary],
+    )
+    .map_err(|e| format!("Erreur trace de clôture forcée: {}", e))?;
+    Ok(Some(conn.last_insert_rowid()))
 }
 
 // ── Dependances entre taches du suivi ──
@@ -5390,6 +5655,8 @@ pub fn super_agent_set_task_dependency(
 /// absents (None) ne sont pas touchés ; `updated_at = datetime('now')`.
 /// Retourne `{ ok, task_id }`. Utilisé par la vue Kanban de l'Assistant pour
 /// piloter ses cartes en CRUD (création/édition/projet/échéance/statut).
+/// `force = true` clôture malgré des points non cochés (mode « rappel ») : le
+/// MOTIF (`reason`) devient alors obligatoire et la clôture forcée est tracée.
 #[tauri::command]
 pub fn super_agent_update_task(
     state: State<AppState>,
@@ -5401,6 +5668,7 @@ pub fn super_agent_update_task(
     status: Option<String>,
     deadline: Option<String>,
     force: Option<bool>,
+    reason: Option<String>,
 ) -> Result<Value, String> {
     let conn = open_db(&app)?;
     let mut sets: Vec<String> = Vec::new();
@@ -5451,6 +5719,10 @@ pub fn super_agent_update_task(
     // Le statut AVANT écriture est mémorisé ici : il sert à ne tracer qu'un
     // passage EFFECTIF à l'état livré (idée 4, tranche 4.2).
     let mut previous_status: Option<String> = None;
+    // Points de checklist non cochés, lus AVANT l'écriture : ils décident si la
+    // clôture est FORCÉE (donc si un motif est exigé et une trace écrite).
+    let mut pending: Vec<String> = Vec::new();
+    let force = force.unwrap_or(false);
     if let Some(ref target) = new_status {
         previous_status = task_status_of(&conn, task_id);
         let mode = {
@@ -5462,8 +5734,12 @@ pub fn super_agent_update_task(
             task_id,
             target,
             checklist_mode_from_config(&mode),
-            force.unwrap_or(false),
+            force,
         )?;
+        // La porte vient d'autoriser : si c'est GRÂCE à `force` alors que des
+        // points restaient, le motif est obligatoire (refus AVANT écriture).
+        pending = db_unchecked_task_check_labels(&conn, task_id)?;
+        check_forced_closure_reason(pending.len(), force, target, reason.as_deref())?;
     }
 
     let mut sql = String::from("UPDATE tasks SET ");
@@ -5482,6 +5758,16 @@ pub fn super_agent_update_task(
     // traçabilité (dont une base sans table `deliverables`) ne bloque jamais la
     // mise à jour de la tâche, déjà écrite à ce stade.
     if let Some(ref target) = new_status {
+        // Clôture forcée : la trace LISIBLE est écrite avant la ligne de
+        // traçabilité de livraison, qui la reprend alors comme origine.
+        if forced_closure_needs_trace(pending.len(), force, target) {
+            let _ = db_record_forced_closure(
+                &conn,
+                task_id,
+                &pending,
+                reason.as_deref().unwrap_or(""),
+            );
+        }
         // Tranche 4.5 : le RÉGLAGE décide si la ligne est écrite. Il est lu ici,
         // après l'écriture réussie (jamais pendant la garde du verrou de config).
         let tracabilite = {
@@ -5536,6 +5822,10 @@ pub fn super_agent_delete_task(app: AppHandle, task_id: i64) -> Result<Value, St
 }
 
 /// A4 — Met à jour le statut d'une tâche. Retourne `{ ok, task_id, status }`.
+///
+/// `force = true` clôture MALGRÉ des points de checklist non cochés (mode
+/// « rappel » seulement) : le MOTIF (`reason`) est alors obligatoire, et la
+/// clôture forcée laisse une trace lisible. Sans motif, rien n'est écrit.
 #[tauri::command]
 pub fn super_agent_update_task_status(
     state: State<AppState>,
@@ -5543,6 +5833,7 @@ pub fn super_agent_update_task_status(
     task_id: i64,
     status: String,
     force: Option<bool>,
+    reason: Option<String>,
 ) -> Result<Value, String> {
     let status = status.trim();
     if status.is_empty() {
@@ -5564,13 +5855,18 @@ pub fn super_agent_update_task_status(
     // Le statut AVANT écriture est mémorisé ici : il sert à ne tracer qu'un
     // passage EFFECTIF à l'état livré (idée 4, tranche 4.2).
     let previous_status = task_status_of(&conn, task_id);
+    let force = force.unwrap_or(false);
     guard_task_checklist(
         &conn,
         task_id,
         status,
         checklist_mode_from_config(&mode),
-        force.unwrap_or(false),
+        force,
     )?;
+    // La porte vient d'autoriser : si c'est GRÂCE à `force` alors que des points
+    // restaient, la clôture est FORCÉE — un motif est exigé AVANT toute écriture.
+    let pending = db_unchecked_task_check_labels(&conn, task_id)?;
+    check_forced_closure_reason(pending.len(), force, status, reason.as_deref())?;
     let n = conn
         .execute(
             "UPDATE tasks SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
@@ -5585,6 +5881,16 @@ pub fn super_agent_update_task_status(
     // que si le réglage `super_agent_tracabilite_enabled` est actif (défaut).
     // Fail-open : une panne de traçabilité (dont une base sans table
     // `deliverables`) ne bloque jamais le changement de statut, déjà écrit.
+    // Clôture forcée : la trace LISIBLE passe d'abord (elle devient alors
+    // l'origine de la ligne de traçabilité de livraison).
+    if forced_closure_needs_trace(pending.len(), force, status) {
+        let _ = db_record_forced_closure(
+            &conn,
+            task_id,
+            &pending,
+            reason.as_deref().unwrap_or(""),
+        );
+    }
     let _ = record_delivery_trace_if_enabled(
         &conn,
         task_id,
@@ -7285,6 +7591,13 @@ mod tests {
         list_memory_trash_entries,
         checklist_gate_message, checklist_mode_from_config, db_unchecked_task_check_labels,
         evaluate_checklist_gate, guard_task_checklist, task_status_of, GateVerdict,
+        // Cocher une case NOMMÉE + clôture délibérément forcée (2026-11-16) :
+        // décisions PURES importées explicitement pour que leur disparition fasse
+        // échouer la compilation des tests.
+        bounded_label_list, check_label_key, check_forced_closure_reason,
+        db_record_forced_closure, db_set_task_check_done_by_label, db_task_check_pairs,
+        forced_closure_needs_trace, forced_closure_reason_required_message,
+        forced_closure_summary, resolve_task_check_id, CHECK_LABEL_LIST_MAX,
         // Verrous de livraison (Lot A) : portée d'écriture de `db_execute` (C1) et
         // checklist jamais vide (C5). Importés explicitement pour que la
         // disparition de l'un d'eux fasse ÉCHOUER la compilation des tests.
@@ -9855,6 +10168,268 @@ Identité de genre : au féminin.");
         assert_eq!(total, 0, "aucun point ne doit avoir été inséré");
         // Cas nominal : le rattachement à une tâche réelle fonctionne.
         assert!(db_add_task_check(&conn, t1, "Point réel").is_ok());
+    }
+
+    // ── Cocher une case NOMMÉE, et clôturer délibérément (2026-11-16) ──
+    // Ce que l'Assistant peut faire depuis la conversation : désigner une case
+    // par son LIBELLÉ (il ne connaît pas les `id`), et clore une tâche même si
+    // des points restent — à condition de dire POURQUOI, la clôture forcée
+    // laissant alors une trace lisible. Les refus se font AVANT toute écriture.
+
+    /// Base mémoire avec une tâche portant deux points : `(connexion, tâche)`.
+    fn mem_conn_with_checklist() -> (Connection, i64) {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        db_add_task_check(&conn, t1, "Tests passés").unwrap();
+        db_add_task_check(&conn, t1, "Documentation à jour").unwrap();
+        (conn, t1)
+    }
+
+    /// Rejoue la séquence EXACTE des deux voies de clôture (contrôle de
+    /// checklist, PUIS exigence de motif, écriture, PUIS trace de clôture forcée
+    /// et traçabilité de livraison) : les commandes Tauri exigent un `AppHandle`
+    /// (indisponible hors application graphique).
+    fn close_task_like_the_commands(
+        conn: &Connection,
+        task_id: i64,
+        new_status: &str,
+        mode: &str,
+        force: bool,
+        reason: Option<&str>,
+    ) -> Result<(), String> {
+        let previous_status = task_status_of(conn, task_id);
+        guard_task_checklist(conn, task_id, new_status, mode, force)?;
+        let pending = db_unchecked_task_check_labels(conn, task_id)?;
+        check_forced_closure_reason(pending.len(), force, new_status, reason)?;
+        let n = conn
+            .execute(
+                "UPDATE tasks SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
+                rusqlite::params![new_status, task_id],
+            )
+            .map_err(|e| format!("Erreur mise à jour statut: {}", e))?;
+        if n == 0 {
+            return Err(format!("Tâche {} introuvable", task_id));
+        }
+        if forced_closure_needs_trace(pending.len(), force, new_status) {
+            let _ = db_record_forced_closure(conn, task_id, &pending, reason.unwrap_or(""));
+        }
+        let _ = record_delivery_trace_if_enabled(
+            conn,
+            task_id,
+            previous_status.as_deref(),
+            new_status,
+            true,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn set_task_check_by_label_ticks_only_the_named_item() {
+        let (conn, t1) = mem_conn_with_checklist();
+        let res = db_set_task_check_done_by_label(&conn, t1, "Documentation à jour", true).unwrap();
+        assert_eq!(res["ok"], true);
+        assert_eq!(res["task_id"], t1);
+        assert_eq!(res["label"], "Documentation à jour");
+        assert_eq!(res["done"], true);
+        // L'état rendu dit où en est la checklist : 1 coché sur 2, 1 restant.
+        assert_eq!(res["total"], 2);
+        assert_eq!(res["remaining"], 1);
+        let checks = db_list_task_checks(&conn, t1).unwrap();
+        assert_eq!(checks[0]["done"], false, "la case non nommée n'a pas bougé");
+        assert_eq!(checks[1]["done"], true);
+        // Décocher la même case fonctionne, sans la supprimer.
+        let res = db_set_task_check_done_by_label(&conn, t1, "Documentation à jour", false).unwrap();
+        assert_eq!(res["remaining"], 2);
+        assert_eq!(db_list_task_checks(&conn, t1).unwrap().len(), 2);
+        // Le statut de la tâche n'est JAMAIS touché par une coche.
+        assert_eq!(task_status_of(&conn, t1).as_deref(), Some("demande"));
+    }
+
+    #[test]
+    fn set_task_check_by_label_ignores_case_accents_and_border_spaces() {
+        let (conn, t1) = mem_conn_with_checklist();
+        // L'Assistant peut reprendre le libellé tel qu'il l'a lu, ou le taper
+        // vite : casse, accents et espaces de bord ne changent pas la case visée.
+        for raw in ["tests passes", "TESTS PASSÉS", "  Tests   passes  "] {
+            let res = db_set_task_check_done_by_label(&conn, t1, raw, true).unwrap();
+            assert_eq!(res["label"], "Tests passés", "libellé RÉEL rendu : {}", raw);
+        }
+        assert_eq!(check_label_key("Tests passés"), check_label_key(" tests  PASSES "));
+        assert_ne!(check_label_key("Tests passés"), check_label_key("Documentation à jour"));
+    }
+
+    #[test]
+    fn set_task_check_by_label_refuses_unknown_label_without_writing() {
+        let (conn, t1) = mem_conn_with_checklist();
+        let err = db_set_task_check_done_by_label(&conn, t1, "Recette client", true).unwrap_err();
+        // Le refus NOMME le libellé inconnu ET ce qui existe : jamais un silence.
+        assert!(err.contains("Recette client"), "message : {}", err);
+        assert!(err.contains("Tests passés"), "message : {}", err);
+        assert!(err.contains("Aucune case"), "message : {}", err);
+        for c in db_list_task_checks(&conn, t1).unwrap() {
+            assert_eq!(c["done"], false, "aucune case ne doit avoir été cochée");
+        }
+    }
+
+    #[test]
+    fn set_task_check_by_label_refuses_empty_label_unknown_task_and_task_without_points() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        db_add_task_check(&conn, t1, "Tests passés").unwrap();
+        // Libellé vide ou sans mot utilisable : refusé.
+        for raw in ["", "   ", "…", "!!!"] {
+            assert!(
+                db_set_task_check_done_by_label(&conn, t1, raw, true).is_err(),
+                "libellé inutilisable accepté : {:?}",
+                raw
+            );
+        }
+        // Tâche inconnue : refusée (aucun point orphelin, aucun silence).
+        let err = db_set_task_check_done_by_label(&conn, 9999, "Tests passés", true).unwrap_err();
+        assert!(err.contains("introuvable"), "message : {}", err);
+        // Tâche SANS aucun point : le refus dit qu'il n'y a rien à cocher.
+        let err = db_set_task_check_done_by_label(&conn, t2, "Tests passés", true).unwrap_err();
+        assert!(err.contains("AUCUN point"), "message : {}", err);
+        assert_eq!(db_unchecked_task_check_labels(&conn, t1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn set_task_check_by_label_refuses_ambiguous_label_and_closed_checklist() {
+        let (conn, t1) = mem_conn_with_checklist();
+        // DEUX points de même libellé : on ne choisit pas au hasard.
+        db_add_task_check(&conn, t1, "Tests passés").unwrap();
+        let err = db_set_task_check_done_by_label(&conn, t1, "Tests passés", true).unwrap_err();
+        assert!(err.contains("deux points"), "message : {}", err);
+        assert!(err.contains("Aucune case"), "message : {}", err);
+        for c in db_list_task_checks(&conn, t1).unwrap() {
+            assert_eq!(c["done"], false);
+        }
+        // Tâche déjà TERMINÉE : sa checklist ne se modifie plus (même règle que
+        // le retrait d'un point) — sinon la conformité se fabriquerait après coup.
+        conn.execute("UPDATE tasks SET status = 'terminee' WHERE id = ?1", rusqlite::params![t1])
+            .unwrap();
+        let err = db_set_task_check_done_by_label(&conn, t1, "Documentation à jour", true)
+            .unwrap_err();
+        assert!(err.contains("terminée"), "message : {}", err);
+        for c in db_list_task_checks(&conn, t1).unwrap() {
+            assert_eq!(c["done"], false);
+        }
+    }
+
+    #[test]
+    fn set_task_check_by_label_leaves_other_tasks_untouched() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        db_add_task_check(&conn, t1, "Tests passés").unwrap();
+        db_add_task_check(&conn, t2, "Tests passés").unwrap();
+        db_set_task_check_done_by_label(&conn, t1, "Tests passés", true).unwrap();
+        assert_eq!(db_list_task_checks(&conn, t1).unwrap()[0]["done"], true);
+        assert_eq!(
+            db_list_task_checks(&conn, t2).unwrap()[0]["done"],
+            false,
+            "la case homonyme de l'autre tâche reste intacte"
+        );
+        // Idem pour la résolution pure : elle ne voit que la liste qu'on lui donne.
+        let pairs = db_task_check_pairs(&conn, t2).unwrap();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(resolve_task_check_id(&pairs, "tests passes").unwrap(), pairs[0].0);
+    }
+
+    #[test]
+    fn forced_closure_without_reason_is_refused_before_any_write() {
+        let (conn, t1) = mem_conn_with_checklist();
+        for reason in [None, Some(""), Some("   ")] {
+            let err =
+                close_task_like_the_commands(&conn, t1, "terminee", "warn", true, reason)
+                    .unwrap_err();
+            assert_eq!(err, forced_closure_reason_required_message());
+            assert!(err.contains("MOTIF"));
+            assert!(err.contains("reason"));
+            // Rien n'a bougé : ni statut, ni décision, ni livrable.
+            assert_eq!(task_status_of(&conn, t1).as_deref(), Some("demande"));
+            let decisions: i64 = conn
+                .query_row("SELECT COUNT(*) FROM decisions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(decisions, 0);
+            assert!(db_list_task_deliverables(&conn, t1).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn forced_closure_with_reason_leaves_a_readable_trace() {
+        let (conn, t1) = mem_conn_with_checklist();
+        close_task_like_the_commands(
+            &conn,
+            t1,
+            "terminee",
+            "warn",
+            true,
+            Some("les deux points sont couverts par la recette du 15/11"),
+        )
+        .unwrap();
+        assert_eq!(task_status_of(&conn, t1).as_deref(), Some("terminee"));
+        // LA TRACE : une phrase lisible, dans l'historique du projet, rattachée
+        // à la tâche — « forcée », combien de points, lesquels, et pourquoi.
+        let (summary, task_id, project_id): (String, Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT summary, task_id, project_id FROM decisions ORDER BY id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(task_id, Some(t1));
+        assert_eq!(project_id, Some(1));
+        assert!(summary.starts_with("Clôture forcée de la tâche #"), "{}", summary);
+        assert!(summary.contains("Tâche 1"), "{}", summary);
+        assert!(summary.contains("2 point(s)"), "{}", summary);
+        assert!(summary.contains("Tests passés"), "{}", summary);
+        assert!(
+            summary.contains("motif : les deux points sont couverts"),
+            "{}",
+            summary
+        );
+        // La ligne de traçabilité de livraison existe et prend cette trace comme
+        // ORIGINE : la clôture forcée est donc aussi lisible dans la fiche.
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["origin"], summary);
+    }
+
+    #[test]
+    fn forced_closure_writes_no_trace_when_nothing_was_forced() {
+        let (conn, t1) = mem_conn_with_checklist();
+        // Porte autorisée SANS force (mode désactivé) : la clôture n'est pas
+        // « forcée » — aucun motif demandé, aucune trace de forçage (seule la
+        // traçabilité de livraison habituelle est écrite).
+        close_task_like_the_commands(&conn, t1, "terminee", "off", false, None).unwrap();
+        let forced: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM decisions WHERE summary LIKE 'Clôture forcée%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(forced, 0);
+        // Statut non « terminé » avec force : aucun motif exigé, aucune trace.
+        close_task_like_the_commands(&conn, t1, "en_cours", "warn", true, None).unwrap();
+        assert_eq!(task_status_of(&conn, t1).as_deref(), Some("en_cours"));
+        assert!(!forced_closure_needs_trace(0, true, "terminee"));
+        assert!(!forced_closure_needs_trace(3, false, "terminee"));
+        assert!(forced_closure_needs_trace(3, true, "terminee"));
+        // Une mise à jour qui ne CLÔTURE rien n'exige aucun motif.
+        assert!(!forced_closure_needs_trace(3, true, "en_cours"));
+        // Checklist complète forcée « pour rien » : rien à raconter non plus.
+        assert!(db_record_forced_closure(&conn, t1, &[], "motif").unwrap().is_none());
+    }
+
+    #[test]
+    fn forced_closure_summary_is_bounded_and_lists_at_most_five_items() {
+        let many: Vec<String> = (1..=8).map(|i| format!("point {}", i)).collect();
+        let summary = forced_closure_summary(7, "Ma tâche", &many, "  raison dite  ");
+        assert!(summary.contains("8 point(s)"));
+        assert!(summary.contains("point 5"));
+        assert!(!summary.contains("point 6"), "liste bornée : {}", summary);
+        assert!(summary.contains("… et 3 autre(s)"), "{}", summary);
+        assert!(summary.ends_with("motif : raison dite"), "{}", summary);
+        assert_eq!(CHECK_LABEL_LIST_MAX, 5);
+        assert_eq!(bounded_label_list(&["a".to_string(), "b".to_string()]), "a, b");
     }
 
     #[test]

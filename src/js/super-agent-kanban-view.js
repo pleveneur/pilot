@@ -33,6 +33,7 @@ import { ALL_PROJECTS, IDEAS_GROUP_LABEL, normalizeTaskStatus, columnToStatus,
   formatCardProject, isBlockedTask, isWaitingDependency, dependencyLabel,
   longTaskPill,
   checklistCounterLabel, parseChecklistGate,
+  KANBAN_FORCED_CLOSURE_REASON,
   DEFAULT_CHECKLIST_TEMPLATE, normalizeChecklistMode, normalizeChecklistTemplate,
   parseChecklistTemplate, shouldOfferTemplatePoints,
   TASK_DELIVERABLE_LIST_COMMAND, buildDeliverableBlock, deliverableErrorMessage,
@@ -361,6 +362,9 @@ export function createSuperKanban(container) {
               taskId: change.id,
               status: change.to,
               force: true,
+              // Le motif accompagne le forçage (le cœur l'exige et l'écrit dans
+              // l'historique du projet) : une clôture forcée n'est jamais muette.
+              reason: KANBAN_FORCED_CLOSURE_REASON,
             });
             applied.push(change);
           } catch (err) {
@@ -499,7 +503,12 @@ export function createSuperKanban(container) {
       () => true,
       (err) =>
         handleChecklistGate(err, () =>
-          invoke("super_agent_update_task_status", { taskId, status, force: true })
+          invoke("super_agent_update_task_status", {
+            taskId,
+            status,
+            force: true,
+            reason: KANBAN_FORCED_CLOSURE_REASON,
+          })
         )
     );
   }
@@ -513,7 +522,13 @@ export function createSuperKanban(container) {
   function updateTaskWithGate(params) {
     return invoke("super_agent_update_task", params).then(
       () => true,
-      (err) => handleChecklistGate(err, () => invoke("super_agent_update_task", { ...params, force: true }))
+      (err) =>
+        handleChecklistGate(err, () => {
+          // Le motif voyage AVEC les mêmes paramètres : le cœur l'exige pour une
+          // clôture forcée et le conserve dans l'historique du projet.
+          params.reason = KANBAN_FORCED_CLOSURE_REASON;
+          return invoke("super_agent_update_task", { ...params, force: true });
+        })
     );
   }
 

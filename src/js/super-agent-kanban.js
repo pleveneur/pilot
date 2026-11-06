@@ -621,6 +621,15 @@ export const CHECKLIST_GATE_PREFIX = "Checklist de livraison :";
 /// possible en relançant avec `force = true`.
 export const CHECKLIST_FORCE_HINT = "force = true";
 
+/// MOTIF écrit dans la trace quand c'est l'UTILISATEUR qui force la clôture
+/// depuis le tableau de bord (« Terminer quand même »). Depuis le 2026-11-16 le
+/// cœur exige un motif pour toute clôture forcée, et l'écrit dans l'historique
+/// du projet : sans cette phrase, la clôture forcée depuis l'écran serait refusée
+/// et le bouton « Terminer quand même » ne terminerait plus rien.
+/// Ce n'est pas un motif inventé : c'est ce qui s'est réellement passé.
+export const KANBAN_FORCED_CLOSURE_REASON =
+  "clôture décidée par l'utilisateur depuis le tableau de bord, sans cocher les points restants";
+
 /**
  * Compte les points d'une checklist : `{ total, done, remaining }`. Une liste
  * absente ou vide donne 0/0/0 — une tâche sans point ne change donc jamais

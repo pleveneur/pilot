@@ -10801,6 +10801,26 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             result = await invoke("super_agent_update_task_status", {
               taskId: Number(params.taskId),
               status: String(params.status || ""),
+              // Clôture DÉLIBÉRÉMENT forcée (2026-11-16) : `force` seul ne suffit
+              // plus — Rust exige un `reason` et écrit la trace. On transmet les
+              // deux tels quels, sans jamais inventer un motif.
+              force: params.force === true,
+              reason: params.reason != null ? String(params.reason) : null,
+            });
+            break;
+          case "get_task_checklist":
+            result = await invoke("super_agent_task_check_list", {
+              taskId: Number(params.taskId),
+            });
+            break;
+          case "set_task_check":
+            // Cocher une case NOMMÉE : le libellé part tel quel, la résolution
+            // (casse/accents/espaces ignorés) et le refus d'un libellé inconnu
+            // sont décidés côté Rust, en un seul endroit.
+            result = await invoke("super_agent_task_check_set_done_by_label", {
+              taskId: Number(params.taskId),
+              label: String(params.label || ""),
+              done: params.done === false ? false : true,
             });
             break;
           case "add_decision":

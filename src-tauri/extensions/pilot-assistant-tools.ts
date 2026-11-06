@@ -91,18 +91,83 @@ export default function (pi: ExtensionAPI) {
     name: "update_task_status",
     label: "Update Task Status",
     description:
-      "Mettre à jour le statut d'une tâche de suivi (ex: en_cours, terminee, livree, annulee). Retourne { ok, task_id, status }. Utilise-la pour refléter l'avancement d'une tâche.",
+      "Mettre à jour le statut d'une tâche de suivi (ex: en_cours, terminee, livree, annulee). Retourne { ok, task_id, status }. Utilise-la pour refléter l'avancement d'une tâche. Si la checklist de livraison bloque la clôture, le refus est renvoyé tel quel : pour terminer MALGRÉ des points non cochés, relance avec force: true ET reason (obligatoire) — la clôture forcée est alors tracée.",
     promptSnippet: "update_task_status: mettre à jour le statut d'une tâche",
     promptGuidelines: [
       "Use update_task_status to change the status of a tracked task (e.g. en_cours, terminee, livree, annulee). Provide the task id and the new status.",
+      "The delivery checklist gate may refuse to close a task: the error names the unchecked items. Tick them with set_task_check first. To close anyway, retry with force: true AND reason — a reason is REQUIRED for a forced closure, and it is kept as a readable trace.",
     ],
     parameters: Type.Object({
       taskId: Type.Number({ description: "Identifiant de la tâche" }),
       status: Type.String({ description: "Nouveau statut de la tâche" }),
+      force: Type.Optional(
+        Type.Boolean({
+          description:
+            "Clore malgré des points de checklist non cochés (mode « rappel » seulement). Exige reason.",
+        }),
+      ),
+      reason: Type.Optional(
+        Type.String({
+          description:
+            "Motif de la clôture forcée (pourquoi la tâche se termine malgré les points restants). Obligatoire quand force = true et que des points restent à cocher ; conservé comme trace lisible.",
+        }),
+      ),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const result = await ctx.ui.input(TOOLS_SENTINEL + "update_task_status::" + JSON.stringify(params), "", PILOT_UI_OPTS);
+      if (result == null) {
+        return { content: [{ type: "text", text: "Requête annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "get_task_checklist",
+    label: "Get Task Checklist",
+    description:
+      "Lire la checklist d'une tâche de suivi : chaque point avec son libellé et son état (coché ou non). Retourne { checks: [{ id, label, done, ... }], count }.",
+    promptSnippet: "get_task_checklist: lire la checklist d'une tâche",
+    promptGuidelines: [
+      "Use get_task_checklist to READ a task checklist before ticking anything: it returns each item with its label and done state. The checklist of a task that is not done yet can be modified; the one of a finished task is frozen.",
+    ],
+    parameters: Type.Object({
+      taskId: Type.Number({ description: "Identifiant de la tâche" }),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await ctx.ui.input(TOOLS_SENTINEL + "get_task_checklist::" + JSON.stringify(params), "", PILOT_UI_OPTS);
+      if (result == null) {
+        return { content: [{ type: "text", text: "Requête annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "set_task_check",
+    label: "Set Task Checklist Item",
+    description:
+      "Cocher (ou décocher) un point de checklist d'une tâche, DÉSIGNÉ PAR SON LIBELLÉ (casse, accents et espaces ignorés). Retourne { ok, task_id, check_id, label, done, remaining, total }. Un libellé inconnu est refusé avec la liste des points existants — jamais ignoré.",
+    promptSnippet: "set_task_check: cocher un point de checklist d'une tâche (par son libellé)",
+    promptGuidelines: [
+      "Use set_task_check to tick a task checklist item by its LABEL (the wording you read in the checklist, not an id). Case, accents and surrounding spaces are ignored, so you can reuse the label as you read it. done defaults to true; pass done: false to untick.",
+      "Read the checklist first with get_task_checklist. An unknown label is refused with the list of existing items: correct the label — never assume the tick happened, and never invent an item that the task does not carry. This tool never changes the task status.",
+      "A task whose status is already done (terminée/livrée) has a frozen checklist: reopen it first if an item really must be ticked.",
+    ],
+    parameters: Type.Object({
+      taskId: Type.Number({ description: "Identifiant de la tâche" }),
+      label: Type.String({
+        description: "Libellé du point de checklist à cocher (tel qu'il s'affiche sur la tâche)",
+      }),
+      done: Type.Optional(
+        Type.Boolean({ description: "true (défaut) pour cocher, false pour décocher" }),
+      ),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await ctx.ui.input(TOOLS_SENTINEL + "set_task_check::" + JSON.stringify(params), "", PILOT_UI_OPTS);
       if (result == null) {
         return { content: [{ type: "text", text: "Requête annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
