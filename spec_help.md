@@ -85,7 +85,14 @@ sous forme de blocs marqués :
 
 - `scripts/build-handbook.js` (Node) agrège tous les blocs `<!-- HELP:* -->` des
   fichiers sources (ordre défini) → `help/handbook.md` (fichier **généré**).
-- En-tête auto : `<!-- PILOT-HELP generated=<date> topics=... -->`.
+- En-tête auto : `<!-- PILOT-HELP topics=... -->` — **aucune date, aucun
+  horodatage** : à sources identiques, le texte produit est strictement identique
+  (composition pure, `composeHandbook`).
+- **Écriture paresseuse** : le fichier n'est réécrit que si son contenu change
+  réellement, donc une génération sans changement ne rend pas le worktree sale et
+  ne pollue pas les revues de diff (verrou : `scripts/build-handbook.test.js`).
+- Fins de ligne normalisées en LF à la lecture des sources (handbook canonique,
+  même en worktree CRLF).
 - Lancé en `prebuild` (avant `tauri dev` / `tauri build`).
 - Embarqué dans le binaire via `include_str!("../../help/handbook.md")` → toujours
   présent, pas de gestion de path ni de resource Tauri.
