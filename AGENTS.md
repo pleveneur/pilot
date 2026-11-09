@@ -58,6 +58,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Sous-projets liés (ouverture groupée, local-first + GDS) | `spec_subprojects.md` |
 | Conversion PDF → MD **et export Markdown → PDF** (sans impression) | `spec_pdf2md.md` |
 | Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` + `spec_orchestration_autotest.md` + `spec_orchestration_snapshots.md` + `spec_orchestration_reviewer.md` |
+| Orchestration **multi-agents** parallèles pilotée par l'assistant (phase 0, T1→T6 : plusieurs agents sur un ou plusieurs projets, bus d'agents, `AgentService`) | `spec_orchestration_multiagents.md` |
 | Accès distant web | `spec_web_remote.md` |
 | Dictée vocale (+ **oreille locale, § 9 : pont machine + écran branché** — case « Transcrire avec le service de voix local », repli vers le navigateur **toujours annoncé**, jamais silencieux) | `spec_voice_input.md` |
 | Prise en main à la première ouverture | `spec_onboarding.md` |
@@ -83,11 +84,13 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Gestion des modèles IA (providers + alias) | `spec_rpc.md` § Édition des modèles |
 | Gestion d'agents multi-rôles | `spec_gestion_agents.md` |
 | Agents du projet (multi-onglets configurés) | `spec_project_agents.md` |
+| Créer / mettre à jour `AGENTS.md` par l'IA (bouton de la toolbar agent, issue #5) | `spec_agents_md.md` |
 | Assistant (suivi multi-projets, lecture seule) | `spec_super_agent.md` |
 | Tableau de bord projet (métriques, Git, langages) | `spec_dashboard.md` |
 | Coffre fort de mots de passe (chiffré) | `spec_vault.md` |
 | GDS (gestionnaire de sources) | `plan_gds.md` (roadmap) → `spec_gds.md` (spec détaillée, phases A→B→C) ; **mode réseau multi-postes** (un seul poste tient un projet) : `spec_reseau.md` ; mise en place : `docs/gds-server-setup.md` (serveur, référence) + `docs/gds-guide-mise-en-place.md` (parcours de retest complet, checklist serveur → usage à plusieurs) |
 | Composant web de discussion (issue #56) | `spec_web_component.md` (spec détaillée, phase D) |
+| Synchronisation des **assistants** via GDS (le contexte d'un projet voyage avec lui entre les postes : §6/C1 ; **aucune implémentation** pour le partage du contexte, décrit dans `spec_reseau.md`) | `spec_assistant_sync.md` |
 | Les cinq règles de la chaîne d'agents (ce qu'elles garantissent + le test qui les tient) | `spec_cinq_regles_chaine_agents.md` (source unique) |
 | Roadmap restante | `plan_dev.md` + `idees_evolutions.md` |
 | Protocole anti-régression | `.pi/skills/quality-gate/SKILL.md` |
@@ -112,6 +115,17 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 ---
 
 ## Structure du projet
+
+> **Cette arborescence est PARTIELLE — le disque fait foi.** Elle ne décrit pas le
+> dépôt : elle nomme les fichiers qui portent une **décision structurante** (87 des
+> **161** fichiers JavaScript de production de `src/js/` ; **74 n'y sont pas**),
+> avec un commentaire qui dit *ce qui y est décidé*. Un fichier absent d'ici n'est
+> **pas** un fichier mort, un fichier déplacé n'est pas un fichier supprimé.
+> Pour la vérité du disque : `git ls-files 'src/js/*.js'`,
+> `git ls-files 'src-tauri/src/*.rs'`, `ls docs/rapports` ; pour savoir qui appelle
+> quoi, le wiki du Code Graph (`.pilot/graph-wiki/index.md`) ou `rg`.
+> Les rapports de mission et documents de conception, eux, **ne sont jamais à la
+> racine** : `docs/rapports/` et `docs/conceptions/` (règle 7 ci-dessus).
 
 ```
 pilot/
@@ -322,9 +336,9 @@ pilot/
         ├── rpc_manager.rs    # Gestion processus pi --mode rpc
         ├── tailscale.rs      # Automatisation Tailscale Serve (HTTPS auto, resync port, QR code)
         ├── web_server.rs     # Serveur axum (mode remote) : routes REST + WS
-        ├── web_auth.rs       # Auth distante : argon2, token opaque, sessions
-        ├── web_rate.rs       # Rate limiting login/prompt/WS (garde-fous distants)
-        ├── web_audit.rs      # Journal d'audit distant (ring buffer 500, actions sensibles)
+        │                     # (l'authentification `web_auth`, le rate limiting `web_rate` et
+        │                     #  le journal d'audit `web_audit` vivent désormais dans `gds-core/src/`
+        │                     #  — `auth.rs`, `rate.rs`, `audit.rs` — et sont aliasés dans lib.rs)
         ├── project_agents.rs # Config des agents du projet (.pilot/agents.json, issue #35)
         ├── context_engine.rs # Context Engine V2 (RAG) : embeddings Ollama + index SQLite + cosinus
         ├── code_graph.rs     # Code Graph : extraction heuristique/tree-sitter + graphe SQLite + requêtes
