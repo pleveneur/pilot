@@ -1865,7 +1865,7 @@ pub async fn ensure_can_add_project(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Portage d'un projet — la prise en main EN BASE
-// (mode réseau multi-postes, étape 2 — PLAN-mode-reseau-multipostes.md §6 b,
+// (mode réseau multi-postes, étape 2 — docs/rapports/PLAN-mode-reseau-multipostes.md §6 b,
 //  §7 étape 2).
 //
 // Ce bloc **exécute** ce que `crate::handover` a **décidé** : il ne re-décide

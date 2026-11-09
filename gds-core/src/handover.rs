@@ -1,6 +1,6 @@
 // handover.rs — Règles PURES du portage (prise en main) d'un projet.
 //
-// Mode réseau multi-postes, étape 1 (PLAN-mode-reseau-multipostes.md §3, §6 a,
+// Mode réseau multi-postes, étape 1 (docs/rapports/PLAN-mode-reseau-multipostes.md §3, §6 a,
 // §6 b). Ce module **ne fait QUE décider** : il n'écrit jamais en base, n'ouvre
 // aucune connexion, n'appelle aucun service et **ne lit jamais l'horloge** (le
 // « maintenant » est toujours un paramètre). Aucun job n'est planifié : rien

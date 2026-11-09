@@ -2,7 +2,7 @@
 
 > Ce que fait le mode, comment on s'en sert, ce qui est partagé, ce qui reste
 > privé, ce qui arrive en cas de panne, et **ce que le mode ne fait pas**.
-> Plan d'origine et arbitrages : `PLAN-mode-reseau-multipostes.md` (§1 à §11).
+> Plan d'origine et arbitrages : `docs/rapports/PLAN-mode-reseau-multipostes.md` (§1 à §11).
 >
 > **Statut, à lire avant le reste** — le **portage** est implémenté de bout en
 > bout (étapes 1 à 5 du plan) : règle pure, table serveur, routes, présence,

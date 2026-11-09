@@ -847,7 +847,7 @@ le diff de chaque tâche du codeur, en complément de l'auto-validation `SELF_FI
 
 ## 12. Mode Orchestration V3 — corrections de bugs (2026-06-29)
 
-Première vague de la V3 (cf. `orchestration_V3.md` §5, étape 1) : corrections de bugs silencieux sans changement d'architecture.
+Première vague de la V3 (cf. `docs/rapports/orchestration_V3.md` §5, étape 1) : corrections de bugs silencieux sans changement d'architecture.
 
 ### 12.1 Compression de prompt réparée (Bug 1)
 `compactTaskPrompt` utilisait des libellés de section inexistants (`=== RÉSUMÉS DES TÂCHES PRÉCÉDENTES ===`, `=== TÂCHE À RÉALISER ===`) — la compression des résumés ne s'appliquait donc JAMAIS, seule celle de l'arborescence fonctionnait. Corrigé : la regex cible maintenant le vrai libellé `=== TÂCHES PRÉCÉDENTES TERMINÉES ===` avec les bornes réelles (`=== ARBORESCENCE DU PROJET ===`, `=== TÂCHES SUIVANTES PRÉVUES ===`, `=== FORMAT OBLIGATOIRE POUR LES MODIFICATIONS ===`, `=== ⚠️ RETENTATIVE`).
@@ -883,7 +883,7 @@ Aucun changement de backend Rust, aucun changement de commande Tauri, aucun chan
 
 ## 13. Mode Orchestration V3 — triptyque Réfléchir / Faire / Contrôler (2026-06-29)
 
-Deuxième vague de la V3 (cf. `orchestration_V3.md` §5, étapes 2 et 3). Le codeur local ne se contente plus de produire du code que le frontend valide : il **réfléchit, fait, puis contrôle lui-même** son travail, jusqu'à 3 cycles d'auto-correction dans la même session. C'est le changement de cœur de la V3.
+Deuxième vague de la V3 (cf. `docs/rapports/orchestration_V3.md` §5, étapes 2 et 3). Le codeur local ne se contente plus de produire du code que le frontend valide : il **réfléchit, fait, puis contrôle lui-même** son travail, jusqu'à 3 cycles d'auto-correction dans la même session. C'est le changement de cœur de la V3.
 
 ### 13.1 Prompt codeur structuré en 3 phases
 `buildTaskPrompt` (`orchestration.js`) impose désormais 3 phases explicites avec des en-têtes obligatoires :

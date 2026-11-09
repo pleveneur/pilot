@@ -7,7 +7,7 @@
 >
 > **Statut : 🟢 Phases A + B + C1 (C1.1→C1.5) + C2 (C2.1→C2.3) implémentées,
 > puis refonte GDS (lots L1→L6) implémentée, puis **mode réseau multi-postes**
-> (portage par projet : étapes 1 à 5 de `PLAN-mode-reseau-multipostes.md`).**
+> (portage par projet : étapes 1 à 5 de `docs/rapports/PLAN-mode-reseau-multipostes.md`).**
 > Chaque chantier passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
@@ -917,7 +917,7 @@ machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
 
 > Un seul développeur **tient** un projet à la fois ; les autres postes le voient
 > en **lecture seule** et ne publient rien. Plan complet :
-> `PLAN-mode-reseau-multipostes.md` (§1, §3, §7 étape 5).
+> `docs/rapports/PLAN-mode-reseau-multipostes.md` (§1, §3, §7 étape 5).
 
 - **Où** : dans l'**en-tête de l'écran « 🌐 GDS »** du projet (zone `#gds-handover`),
   donc **dans le corps de l'onglet** : il ne décale **jamais** la rangée d'onglets

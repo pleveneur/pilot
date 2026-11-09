@@ -2264,7 +2264,7 @@ async fn gds_ssh_key_register<S: GdsCtx>(
 // ─────────────────────────────────────────────────────────────────────────────
 // Portage d'un projet — routes HTTP (mode réseau multi-postes, ÉTAPE 3)
 //
-// PLAN-mode-reseau-multipostes.md §6 b et §7 étape 3. Ces routes n'apportent
+// docs/rapports/PLAN-mode-reseau-multipostes.md §6 b et §7 étape 3. Ces routes n'apportent
 // **aucune règle** : elles valident l'entrée, appellent l'étape 2
 // (`gds_db::handover_*`) et traduisent en réponse HTTP la décision rendue par le
 // module pur `crate::handover`. Les codes de refus viennent **exclusivement** de

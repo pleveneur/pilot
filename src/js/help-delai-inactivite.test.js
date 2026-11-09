@@ -1,7 +1,7 @@
 // help-delai-inactivite.test.js — Garde-fou : la valeur annoncée du timeout
 // d'inactivité des agents doit toujours être celle du code.
 //
-// Motif (rapport-delai-inactivite.md, racine du projet) : le passage de 5 min à
+// Motif (docs/rapports/rapport-delai-inactivite.md) : le passage de 5 min à
 // 10 min (commit 31707a9, issue #19) a modifié le code SANS toucher les
 // fichiers de documentation. L'aide intégrée a donc annoncé « 5 min par
 // défaut » pendant plusieurs versions alors que le défaut réel était 10 min.

@@ -754,4 +754,4 @@ Les identifiants `#ae-*` sont **inchangés** : l'enregistrement relit exactement
 
 ---
 
-*Voir aussi : `plan_gestion_agents.md` (plan d'implémentation détaillé).*
+*Voir aussi : `docs/rapports/plan_gestion_agents.md` (plan d'implémentation détaillé).*

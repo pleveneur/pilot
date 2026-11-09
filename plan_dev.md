@@ -9,7 +9,7 @@
   (règle pure `gds-core/src/handover.rs`, table `0008_project_handover`, routes,
   présence, garde d'écriture, bandeau et boutons). Restent les étapes 6 et 7
   (avancement partagé, migration `0009`) et l'étape 9 (test entre deux postes).
-  Voir [`spec_reseau.md`](spec_reseau.md) ; plan : [`PLAN-mode-reseau-multipostes.md`](PLAN-mode-reseau-multipostes.md).
+  Voir [`spec_reseau.md`](spec_reseau.md) ; plan : [`docs/rapports/PLAN-mode-reseau-multipostes.md`](docs/rapports/PLAN-mode-reseau-multipostes.md).
 - ✅ **Refonte serveur GDS** (2026-08) — `gds-server/` tout-en-un, socle `gds-core/`, rôles
   admin/dev/standard, **verrous supprimés**, écrans 🖥️ Serveur · ⚙️ GDS — [`spec_gds.md`](spec_gds.md).
 - Reportés : H6 (routing multi-modèle) · H10 (MCP extensible).

@@ -62,6 +62,15 @@ rtk_analyse.md
 pi-docs/
 rapport_tmp.md
 
+# Sorties BRUTES de tests et fichiers temporaires de mesure : jamais versionnées.
+# Un rapport peut citer la sortie comme preuve, mais l'artefact lui-même reste
+# local (volumineux, reproductible). Décision et preuve :
+# `docs/rapports/RAPPORT-mise-au-propre-depot.md` §7.
+docs/rapports/vitest-*.json
+docs/rapports/sorties/*.json
+models_tmp.json
+diff-css.txt
+
 # GitHub Actions debug artifacts
 jobs.json
 jobs.txt
