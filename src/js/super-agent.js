@@ -259,6 +259,7 @@ import {
   vocalNameGateArmed,
   vocalNameSentence,
   vocalVeilleSentence,
+  vocalVeilleSuspendue,
   VOCAL_ECOUTE_LIBRE_MS,
   VOCAL_GATE_JETER,
   VOCAL_STOP_ARRETER,
@@ -5944,6 +5945,14 @@ let vocalMotsDeReveil = [];
         // à voix haute. On actionne le bouton d'écoute existant (aucune seconde
         // lecture) ; hors mode Vocal, cette fonction ne fait rien.
         if (!demandePartie) autoReadVocalReply();
+        // LA VEILLE (§6quater.2) : le tour de l'assistant est FINI — le compte de
+        // silence repart de ZERO. Il était suspendu pendant le travail (voir
+        // `vocalSyncVeilleSuspension`), donc sans ce relancement l'écran
+        // resterait sans compte jusqu'au prochain état. Si la lecture
+        // automatique vient de démarrer, la première annonce de `read-aloud.js`
+        // annule aussitôt ce compte : jamais deux périodes à la fois. Rien ne se
+        // passe hors du mode Vocal ni quand la veille est armée (état stable).
+        vocalRestartVeilleTimer();
       });
     } catch (err) {
       console.error("[rpc-event-superagent] erreur:", err);
@@ -6745,6 +6754,12 @@ let vocalMotsDeReveil = [];
     if (ligne && ligne.textContent !== texte) ligne.textContent = texte;
     const fix = vocalOverlay.querySelector(".vocal-mic-fix");
     if (fix) fix.classList.toggle("hidden", !vocalMicFerme);
+    // LA VEILLE (§6quater.2) : le compte de 20 s est SUSPENDU pendant que Pilot
+    // parle ou travaille, et repart de zero a la fin de ces deux periodes. Place
+    // apres l'etat visuel et AVANT la dictee : il ne lit que la parole et le
+    // travail, donc rien de l'etat de la dictee ne peut lui manquer — et il ne
+    // touche jamais a la dictee.
+    vocalSyncVeilleSuspension();
     // CONVERSATION PARLEE : la dictee suit l'etat qui vient d'etre applique
     // (armer au repos, desarmer pendant la parole et le travail). Point
     // d'application UNIQUE, en fin de fonction : aucun autre appelant.
@@ -7168,14 +7183,34 @@ let vocalMotsDeReveil = [];
   }
 
   /**
+   * LES DEUX FAITS QUE L'ECRAN CONNAIT DEJA, donnes a la decision de veille :
+   * `pilotParle` (Pilot lit sa reponse a voix haute) et `travaille` (le tour de
+   * l'assistant est en cours). Ce sont EXACTEMENT les faits de l'etat de
+   * conversation (`vocalConversationState`) : aucune seconde source de verite,
+   * aucun nouveau drapeau.
+   * @returns {{pilotParle: boolean, travaille: boolean}}
+   */
+  function vocalVeilleEtat() {
+    const base = vocalConversationState();
+    return { pilotParle: base.pilotParle, travaille: base.reflechit };
+  }
+
+  /**
    * (Re)lance le compte a rebours de silence — SAUF quand la garde est armee :
    * la veille est alors un etat STABLE, que seule une phrase avec le nom (ou un
    * geste de secours) peut lever, et c'est ce meme evenement qui repart le
    * compte. Ne fait jamais rien hors de l'ecran Vocal.
+   *
+   * Il ne TOURNE PAS non plus pendant que Pilot parle ou travaille : ce n'est
+   * pas un silence de conversation (voir `vocalSyncVeilleSuspension`, qui le
+   * relance a la fin de ces deux periodes).
    */
   function vocalRestartVeilleTimer() {
     clearVocalVeilleTimer();
     if (!vocalOverlay || vocalVeilleArmee === true) return;
+    // SUSPENSION : pendant la lecture et pendant le tour, aucun compte ne
+    // demarre — meme si une parole detectee ou un mot recu le demandait.
+    if (vocalVeilleSuspendue(vocalVeilleEtat())) return;
     vocalVeilleDepart = Date.now();
     vocalVeilleTimer = setTimeout(() => {
       vocalVeilleTimer = 0;
@@ -7183,6 +7218,9 @@ let vocalMotsDeReveil = [];
         modeOuvert: vocalOverlay !== null,
         reveil: vocalReveilUnePhrase === true,
         veilleArmee: vocalVeilleArmee,
+        // Les deux faits de l'etat de conversation : la decision PURE refuse
+        // d'armer la veille pendant la lecture et pendant le tour.
+        ...vocalVeilleEtat(),
         ecouleMs: Date.now() - vocalVeilleDepart,
       });
       if (decision.armer !== true) {
@@ -7190,11 +7228,44 @@ let vocalMotsDeReveil = [];
         // de laisser l'ecran sans compte (le geste vaut pour une phrase, pas
         // pour toujours).
         if (decision.raison === "reveil") vocalRestartVeilleTimer();
+        // Suspension : la fin de la lecture ou du tour relancera le compte
+        // (`vocalSyncVeilleSuspension`) ; on ne le pose pas ici.
+        else if (decision.raison === "pilot-parle" || decision.raison === "assistant-travaille")
+          vocalSyncVeilleSuspension();
         return;
       }
       vocalEnterVeille("silence");
       applyVocalState();
     }, VOCAL_ECOUTE_LIBRE_MS);
+  }
+
+  /**
+   * SUSPEND le compte de veille pendant que Pilot PARLE ou TRAVAILLE, et le
+   * RELANCE — de zero — a la fin de ces deux periodes.
+   *
+   * C'est l'application de la decision PURE (`vocalVeilleSuspendue`) et le SEUL
+   * endroit qui l'applique : rien d'autre ne pose ni n'annule ce compte pour
+   * cette raison. Trois consequences voulues :
+   *   - pendant la lecture et pendant le tour, aucun compte ne tourne (il est
+   *     annule a chaque passage, et `vocalRestartVeilleTimer` refuse de le
+   *     poser) ;
+   *   - a la sortie de ces deux etats, il repart de ZERO (jamais une reprise a
+   *     mi-chemin) ;
+   *   - un compte DEJA en cours hors de ces etats n'est jamais touche : la
+   *     fonction n'est pas un « relancement » permanent.
+   * Ne fait rien hors de l'ecran Vocal, ni quand la veille est deja armee (etat
+   * stable, que seul le nom leve).
+   */
+  function vocalSyncVeilleSuspension() {
+    if (!vocalOverlay) return;
+    if (vocalVeilleSuspendue(vocalVeilleEtat())) {
+      clearVocalVeilleTimer();
+      return;
+    }
+    if (vocalVeilleArmee === true) return;
+    // Un compte tourne deja : on n'y touche pas (aucune remise a zero surprise).
+    if (vocalVeilleTimer) return;
+    vocalRestartVeilleTimer();
   }
 
   /**
@@ -8160,6 +8231,11 @@ let vocalMotsDeReveil = [];
     // CONVERSATION PARLEE : la FIN de la lecture est le moment ou l'oreille se
     // rouvre (marge de silence plus longue, `VOCAL_ARM_AFTER_READ_MS`).
     if (parlait && !vocalSpeaking) vocalApresLecture = true;
+    // LA VEILLE (§6quater.2) : une lecture a voix haute n'est pas un silence de
+    // conversation. Pendant qu'elle parle, le compte de 20 s est SUSPENDU ; a sa
+    // FIN il repart de ZERO. Le fait est celui deja connu de l'ecran (le
+    // `parlait -> ne parle plus` ci-dessus) : aucun nouveau signal, aucun seuil.
+    if (parlait && !vocalSpeaking) vocalSyncVeilleSuspension();
     // LOT 4a : la garde du micro ne s'arme QUE pendant la lecture, et se remet a
     // zero a la fin (le residu d'echo d'une lecture ne vaut pas pour la suivante).
     vocalSyncMicSpeaking();

@@ -87,6 +87,17 @@
 // STABLE : elle ne se lève que par le nom, un mot de réveil, ou le geste de
 // secours — et c'est ce même événement qui fait repartir le compte.
 //
+// CE QUE LA VEILLE MESURE : l'ABSENCE DE CONVERSATION, pas l'absence de parole
+// du propriétaire. Deux faits que l'écran connaît déjà SUSPENDENT donc le
+// compte (`vocalVeilleSuspendue`) : Pilot PARLE (`pilotParle`, il lit sa
+// réponse) et Pilot TRAVAILLE (`travaille`, le tour de l'assistant est en
+// cours). Pendant ces deux périodes, le compte ne tourne pas du tout ; à leur
+// fin il repart de zéro (application : `vocalSyncVeilleSuspension` de
+// `super-agent.js`). Sans cette règle, un tour de 120 s ou une lecture longue
+// laissait le compte s'épuiser en pleine conversation : la veille s'armait au
+// milieu du tour, l'écran ne l'affichait pas, et la phrase suivante du
+// propriétaire était jetée sans message.
+//
 // ── « ARRÊTE D'ÉCOUTER » (nouveau, décision du propriétaire) ───────────────
 // « Je veux aussi pouvoir dire à l'assistant d'arrêter d'écouter, donc il doit
 // pouvoir lui-même se mettre en mode attente du wakeword. »
@@ -248,10 +259,19 @@ export function decideVocalStopListening(etats) {
  *   2. déjà en veille ⇒ non (`deja-en-veille`) : l'état est stable ;
  *   3. un réveil d'une phrase est en attente ⇒ non (`reveil`) : un geste
  *      explicite vient de demander l'écoute ;
- *   4. la durée écoulée n'atteint pas le délai ⇒ non (`silence-court`) ;
- *   5. sinon ⇒ oui (`silence-atteint`).
+ *   4. **Pilot PARLE** (`pilotParle`) ⇒ non (`pilot-parle`) : une lecture à
+ *      voix haute est de la conversation, pas du silence ;
+ *   5. **Pilot TRAVAILLE** (`travaille`) ⇒ non (`assistant-travaille`) : le
+ *      tour de l'assistant est en cours, l'utilisateur attend sa réponse (un
+ *      tour peut durer 120 s, une lecture n'est pas bornée) ;
+ *   6. la durée écoulée n'atteint pas le délai ⇒ non (`silence-court`) ;
+ *   7. sinon ⇒ oui (`silence-atteint`).
+ * Les règles 4 et 5 sont les faits que l'écran connaît DÉJÀ (état de parole et
+ * état de travail) : ni seuil nouveau, ni réglage, et les deux champs sont
+ * ABSENTS du comportement d'avant ⇒ un appelant qui ne les passe pas garde
+ * exactement l'ancienne décision.
  * PURE, ne lève jamais.
- * @param {{modeOuvert?: boolean, reveil?: boolean, veilleArmee?: boolean, ecouleMs?: number, delaiMs?: number}} [etats]
+ * @param {{modeOuvert?: boolean, reveil?: boolean, veilleArmee?: boolean, pilotParle?: boolean, travaille?: boolean, ecouleMs?: number, delaiMs?: number}} [etats]
  * @returns {{armer: boolean, raison: string}}
  */
 export function decideVocalVeille(etats) {
@@ -260,10 +280,34 @@ export function decideVocalVeille(etats) {
   if (e.modeOuvert !== true) return non("hors-mode");
   if (e.veilleArmee === true) return non("deja-en-veille");
   if (e.reveil === true) return non("reveil");
+  // Le silence mesuré n'est PAS un silence de conversation : Pilot parle.
+  if (e.pilotParle === true) return non("pilot-parle");
+  // Ni une absence de conversation : le tour de l'assistant est en cours.
+  if (e.travaille === true) return non("assistant-travaille");
   const delai = Number.isFinite(e.delaiMs) && e.delaiMs > 0 ? e.delaiMs : VOCAL_ECOUTE_LIBRE_MS;
   const ecoule = Number.isFinite(e.ecouleMs) ? Math.max(0, e.ecouleMs) : 0;
   if (ecoule < delai) return non("silence-court");
   return { armer: true, raison: "silence-atteint" };
+}
+
+/**
+ * LE COMPTE DE VEILLE DOIT-IL ÊTRE SUSPENDU ?
+ *
+ * Les deux faits que l'écran connaît DÉJÀ, et eux seuls :
+ *   - `pilotParle` : Pilot lit sa réponse à voix haute (`vocalSpeaking`) ;
+ *   - `travaille` : le tour de l'assistant est en cours (`reflectingActive`).
+ * Pendant l'un ou l'autre, l'écran n'est pas silencieux : il ne faut donc pas
+ * mesurer l'absence de parole du propriétaire. C'est la même décision que les
+ * règles 4 et 5 de `decideVocalVeille`, exposée séparément pour que
+ * l'application sache quand ANNULER le compte et quand le RELANCER — sans
+ * qu'aucune règle ne soit réécrite dans l'écran.
+ * PURE, ne lève jamais.
+ * @param {{pilotParle?: boolean, travaille?: boolean}} [etats]
+ * @returns {boolean}
+ */
+export function vocalVeilleSuspendue(etats) {
+  const e = etats || {};
+  return e.pilotParle === true || e.travaille === true;
 }
 
 /** Découpe un texte en mots repliés (jamais de mot vide). */

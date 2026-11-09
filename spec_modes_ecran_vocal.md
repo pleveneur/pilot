@@ -2207,6 +2207,20 @@ Défaut corrigé : la garde du nom (§6quater) s'appliquait **dès l'entrée** d
 l'écran — il fallait dire le nom avant la moindre phrase, ce qui n'est pas une
 conversation.
 
+Second défaut corrigé (2026-11-16) : **le compte des 20 s ne mesurait que le
+silence du propriétaire**. Il n'était repoussé que par cinq événements
+ponctuels (front montant du niveau du micro, texte accepté par la garde,
+sortie de veille, réveil d'une phrase, entrée dans le mode) — **jamais par le
+travail de l'assistant ni par sa lecture à voix haute**. Après un réveil par le
+nom, le compte repartait donc à l'instant du nom et s'armait **au milieu du
+tour** (un tour peut durer 120 s, une lecture n'est pas bornée) : la veille
+s'activait en pleine conversation, l'écran ne l'affichait pas, et la phrase
+suivante était **jetée sans aucun message** par la garde. Règle retenue :
+**la veille mesure l'absence de CONVERSATION, pas l'absence de parole du
+propriétaire.** Pendant que Pilot **parle** (`pilotParle`) et pendant que son
+tour **travaille** (`travaille`), le compte ne tourne pas du tout ; à la fin de
+ces deux périodes il **repart de zéro** (`agent_end` et fin de lecture).
+
 <!-- HELP:vocal-veille -->
 
 ### La veille au bout de 20 secondes de silence
@@ -2216,6 +2230,10 @@ conversation.
 - **Après 20 secondes SANS PARLER**, l'écran se met en veille et attend son nom :
   la ligne affiche « Dites « <Nom> » pour me parler. ». Une phrase qui ne
   contient ni son nom ni un mot de réveil ne part plus.
+- **Le compte ne tourne pas pendant que Pilot travaille ou vous lit sa
+  réponse** : ces deux périodes ne sont pas du silence, et le compte repart de
+  zéro quand elles se terminent. Un long tour de travail ou une longue lecture
+  n'arme donc jamais la veille en pleine conversation.
 - **Toute parole remet le compte à zéro** — même un mot isolé, même une phrase
   que vous n'adressez pas à Pilot. Une conversation suivie n'arme donc jamais la
   veille.
@@ -2242,26 +2260,41 @@ conversation.
 **Ce qui n'est pas touché** : le délai de silence de 2 s et son réglage, le
 micro, la transcription, le service de voix local, la voix imitée, le chat de
 l'onglet agent π et l'accès web distant. Aucun réglage nouveau, aucun élément
-d'interface nouveau : la ligne d'état existante porte les deux phrases.
+d'interface nouveau : la ligne d'état existante porte les deux phrases. Le délai
+de veille reste **20 000 ms** (`VOCAL_ECOUTE_LIBRE_MS`), et les seuils du micro
+sont inchangés : la correction **suspend** le compte, elle ne change aucune
+durée.
 
 **Où c'est dans le code** : décisions **pures** dans `src/js/vocal-nom-garde.js`
 — `VOCAL_ECOUTE_LIBRE_MS` (**20 000 ms**, seule valeur du dépôt),
 `decideVocalVeille` (raisons `hors-mode`, `deja-en-veille`, `reveil`,
-`silence-court`, `silence-atteint`), `VOCAL_STOP_FORMULAS` (**douze** formules,
-seule liste), `isVocalStopFormula` (phrase normalisée **entière**),
-`decideVocalStopListening` (raisons `hors-mode`, `sans-texte`, `pas-formule`,
-`deja-en-veille`, `arret`) et `vocalVeilleSentence` — appliquées à **un seul
-endroit** dans `super-agent.js` : `enterVocal` (écoute libre + départ du compte),
-`vocalNoteWord` et `vocalSetLevel` (toute parole repart le compte),
-`rec.onresult` et `rec.onend` (la formule d'arrêt est reconnue **avant** la
-garde et avant toute écriture), `vocalStatusLine` (l'accusé, une seule phrase),
-`exitVocal` (tout meurt avec l'écran). La garde reçoit `ecouteLibre` de l'état
-réel : absent, elle reste armée (comportement §6quater inchangé pour tout autre
-appelant).
+`pilot-parle`, `assistant-travaille`, `silence-court`, `silence-atteint`),
+`vocalVeilleSuspendue` (les deux faits qui suspendent : `pilotParle`,
+`travaille`), `VOCAL_STOP_FORMULAS` (**douze** formules, seule liste),
+`isVocalStopFormula` (phrase normalisée **entière**), `decideVocalStopListening`
+(raisons `hors-mode`, `sans-texte`, `pas-formule`, `deja-en-veille`, `arret`) et
+`vocalVeilleSentence` — appliquées à **un seul endroit** dans `super-agent.js` :
+`enterVocal` (écoute libre + départ du compte), `vocalNoteWord` et
+`vocalSetLevel` (toute parole repart le compte), `rec.onresult` et `rec.onend`
+(la formule d'arrêt est reconnue **avant** la garde et avant toute écriture),
+`vocalStatusLine` (l'accusé, une seule phrase), `exitVocal` (tout meurt avec
+l'écran). La suspension a **un seul point d'application** :
+`vocalSyncVeilleSuspension()` (dans `applyVocalState`, plus les deux fins
+nommées `agent_end` et fin de lecture) ; `vocalRestartVeilleTimer()` **refuse de
+poser** le compte quand la veille est suspendue, et `vocalVeilleEtat()` lit les
+deux faits dans l'état de conversation **existant** (`vocalConversationState`) :
+ni nouveau drapeau, ni nouvelle minuterie, ni nouveau réglage. La garde reçoit
+`ecouteLibre` de l'état réel : absent, elle reste armée (comportement §6quater
+inchangé pour tout autre appelant).
 **Verrou** : `src/js/veille-mot-de-reveil.test.js` (le cycle complet, la
 reconnaissance stricte, l'absence de message en veille, et le branchement — il
-échoue si le compte à rebours, la liste ou l'arrêt disparaissent).
-**Rapport** : `docs/rapports/RAPPORT-veille-mot-de-reveil.md`.
+échoue si le compte à rebours, la liste ou l'arrêt disparaissent) et
+`src/js/vocal-veille-pendant-le-tour.test.js` (la suspension pendant le tour et
+pendant la lecture, le refus de poser le compte, le redémarrage à zéro aux deux
+fins, l'existant intact à 20 000 ms et aucun second mécanisme — il échoue sur le
+code d'avant).
+**Rapports** : `docs/rapports/RAPPORT-veille-mot-de-reveil.md` et
+`docs/rapports/RAPPORT-vocal-veille-pendant-le-tour.md`.
 
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 

@@ -1642,6 +1642,10 @@ remède : c'est à cela qu'il sert.
 - **Après 20 secondes SANS PARLER**, l'écran se met en veille et attend son nom :
   la ligne affiche « Dites « <Nom> » pour me parler. ». Une phrase qui ne
   contient ni son nom ni un mot de réveil ne part plus.
+- **Le compte ne tourne pas pendant que Pilot travaille ou vous lit sa
+  réponse** : ces deux périodes ne sont pas du silence, et le compte repart de
+  zéro quand elles se terminent. Un long tour de travail ou une longue lecture
+  n'arme donc jamais la veille en pleine conversation.
 - **Toute parole remet le compte à zéro** — même un mot isolé, même une phrase
   que vous n'adressez pas à Pilot. Une conversation suivie n'arme donc jamais la
   veille.
