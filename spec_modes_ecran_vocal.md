@@ -1907,6 +1907,54 @@ s'écrivait, puis on attendait.
   où elle était devenue fausse : c'est le **dernier mot + le délai réglé**
   (deux secondes par défaut) qui décide, plus la fin du moteur.
 
+### 6bis.1 ter Le SON de la voix repousse l'échéance
+
+**Défaut corrigé** (rapport `docs/rapports/RAPPORT-diagnostic-ecoute-coupee-avant-la-fin.md`) :
+le minuteur du § 6bis.1 ne comptait que les **MOTS TRANSCRITS**. Quand la
+transcription rend la main **en retard** (ou par morceaux), on continuait de
+parler sans qu'aucun texte n'arrive : l'échéance tombait et **la dictée se
+refermait au milieu de la phrase**, alors que le micro **entendait** la voix.
+C'était la seule cause constatée des fins d'écoute prématurées en mode Vocal.
+
+- **La règle** : tant que le micro **CAPTE UNE VOIX**, l'échéance **recule**.
+  Le texte n'est plus le seul signal de vie de la dictée ; le **son** en est un
+  aussi. À l'échéance, l'écran ne referme donc plus tant qu'il entend parler.
+- **Le son est celui de la MESURE QUI EXISTE DÉJÀ** : le drapeau `vocalMicCapte`,
+  produit par la décision de niveau à **deux seuils** (`vocalCapte`, hystérésis
+  0,06 / 0,03) — le même mécanisme que la veille de 20 s. **Aucun second
+  capteur, aucun second lissage, aucun seuil nouveau, aucun réglage nouveau** :
+  le micro de mesure est ouvert pendant toute la dictée, quelle que soit l'oreille
+  (navigateur ou service de voix local).
+- **La décision est PURE** : `decideVocalSoundExtension(etats)` dans
+  `src/js/vocal-conversation.js` (`VOCAL_SOUND_RESTART` / `VOCAL_SOUND_HOLD`).
+  Elle ne lit ni l'horloge ni le micro : le temps écoulé depuis le dernier mot
+  (`ecouleMs`) et la voix captée (`voixCaptee`) **arrivent avec l'état**, lu par
+  `vocalSoundState()` — qui n'ajoute que ces deux faits à l'état existant
+  (`vocalSilenceState`). Ordre des règles (testé tel quel) : hors mode → Pilot
+  parle → dictée refermée → reprise en main → aucun mot → pas de voix → plafond →
+  **repousser**.
+- **GARDE-FOU, un bruit de fond permanent ne tient pas l'écran ouvert** : le
+  report est plafonné à `VOCAL_SILENCE_SOUND_MAX_MS` = **15 s**, mesurées depuis
+  le **dernier mot TRANSCRIT** (pas depuis le dernier report : la borne ne
+  s'auto-entretient jamais). Justification : 7,5 × le défaut et 3 × le réglage
+  maximal (assez pour un vrai retard de transcription), **plus court** que la
+  veille de 20 s (« j'attends la fin de la phrase » ne dépasse jamais « je vous
+  crois silencieux »), et bien plus long qu'une hésitation. Sans ce plafond, un
+  ventilateur ou une télé au-dessus du seuil repousserait l'envoi **sans fin** —
+  plus rien ne partirait, ce qui serait pire que le défaut corrigé.
+- **Ce qui n'est PAS touché** : le délai par défaut (2 s) et son réglage
+  (`vocal_silence_send_ms`), les seuils de `decideVocalSilenceSend`, l'ordre de
+  ses règles, **un seul minuteur** (`vocalSilenceTimer`, réarmé par la même
+  fonction imbriquée), la **voie d'envoi unique** (`vocalCloseForSend` →
+  `applyVoiceEnd` → `send`) et l'**interruption par la voix** (barge-in : garde
+  « pendant une dictée, ce n'est pas une prise de parole »), ainsi que la
+  **veille de 20 s** et son rearmement sur toute parole détectée.
+- **Couverture** : `src/js/fin-ecoute-repoussee-par-la-voix.test.js` (décision
+  pure, comportement dans le temps sous horloge simulée, plafond, remise à zéro
+  du plafond par un nouveau mot, absence de second capteur, branchement réel,
+  non-régression du barge-in et de la veille) ; rapport de mission :
+  `docs/rapports/RAPPORT-fin-ecoute-repoussee-par-la-voix.md`.
+
 ### 6bis.2 Pilot parle court : une réponse de conversation, pas de chat écrit
 
 **Décision du propriétaire, appliquée telle quelle** : *« le texte que l'assistant

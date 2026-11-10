@@ -648,6 +648,12 @@ En mode **Vocal** :
   parlez, rien ne part — **chaque nouveau mot repousse l'échéance** —, et rien
   ne part non plus pendant que Pilot lit sa réponse ou travaille, ni si vous
   avez repris la main pour écrire dans la zone.
+- **Votre voix compte autant que le texte.** Si la transcription prend du retard,
+  l'écoute **ne se referme pas au milieu de votre phrase** : tant que le micro
+  vous entend, le compte repart. **Seul garde-fou**, un bruit de fond permanent
+  (ventilateur, télévision) ne peut pas la retenir indéfiniment : au bout de
+  **15 secondes après le dernier mot transcrit**, la demande part quand même —
+  sans quoi elle ne partirait plus jamais.
 - **Ce délai se règle**, à un seul endroit : ⚙️ **Options → onglet
   « Assistant » → section « Mode Vocal »**, de **1 à 5 secondes** par pas d'une
   demi-seconde, **2 secondes** au départ, et la valeur choisie s'affiche en
@@ -1453,7 +1459,10 @@ texte à la voix.
   s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
   travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
   ci-dessus, **après votre dernier mot** (chaque nouveau mot repousse l'échéance,
-  donc rien ne part tant que vous parlez). **L'écoute repart d'elle-même après
+  et **le son de votre voix aussi** tant qu'il est capté : la dictée ne se
+  referme pas au milieu d'une phrase quand la transcription prend du retard —
+  plafond de 15 s contre un bruit de fond permanent, voir
+  `spec_modes_ecran_vocal.md` § 6bis.1 ter, donc rien ne part tant que vous parlez). **L'écoute repart d'elle-même après
   chaque réponse** : si Pilot finit à peine sa phrase ou si le micro se libère un
   instant plus tard, elle réessaie quelques instants (jamais indéfiniment) au lieu
   de rester fermée — le rond « Réveiller … » n'est donc qu'un **secours**. **Un

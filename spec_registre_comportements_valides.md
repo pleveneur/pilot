@@ -63,6 +63,9 @@
 | 22 | Un réarmement ne rouvre aucune oreille tant qu'une dictée est ouverte : une seule oreille à la fois. | `src/js/fin-de-session-perimee-ne-rearme-pas.test.js` :: le réarmement ne rouvre RIEN tant qu'une dictée est ouverte |
 | 23 | La session précédente est fermée par son propre arrêt AVANT l'ouverture de la suivante, et le texte déjà reconnu n'est pas jeté. | `src/js/fin-de-session-perimee-ne-rearme-pas.test.js` :: le texte déjà reconnu de la session close proprement n'est pas jeté |
 | 24 | La cascade du diagnostic (fin étrangère, réarmement, session refermée par le pont, texte perdu) ne peut plus partir. | `src/js/fin-de-session-perimee-ne-rearme-pas.test.js` :: la cascade du diagnostic ne peut plus partir : ni réarmement, ni texte jeté |
+| 25 | Pendant que vous parlez, l'écoute ne se referme plus : le son de la voix repousse l'échéance, même quand la transcription n'a rien rendu depuis un moment. | `src/js/fin-ecoute-repoussee-par-la-voix.test.js` :: une voix continue repousse l'echeance : l'ecoute ne se referme pas pendant la parole |
+| 26 | Un bruit de fond permanent ne tient pas l'écoute ouverte : au plafond de 15 s après le dernier mot transcrit, la demande part quand même. | `src/js/fin-ecoute-repoussee-par-la-voix.test.js` :: le son ne repousse pas indefiniment : le plafond referme, mesure depuis le dernier mot |
+| 27 | Sans voix captée, rien ne change : l'échéance tombe au délai réglé (deux secondes par défaut) et la demande part. | `src/js/fin-ecoute-repoussee-par-la-voix.test.js` :: sans voix, l'echeance tombe au delai regle — le comportement d'avant est intact |
 
 ## Ce que le garde-fou vérifie
 

@@ -208,9 +208,11 @@ import {
   normalizeVocalSilenceSendMs,
   vocalDictationMessage,
   noteEmptyVocalSession,
+  decideVocalSoundExtension,
   VOCAL_DICTATION_ARM,
   VOCAL_SILENCE_CLOSE,
   VOCAL_SILENCE_WAIT,
+  VOCAL_SOUND_RESTART,
   VOCAL_MESSAGE_SANS_DICTEE,
   VOCAL_MESSAGE_DICTEE_ECHEC,
   VOCAL_MESSAGE_SENSIBILITE_INCONNUE,
@@ -5151,6 +5153,13 @@ export async function createSuperAgent(container) {
   // (provisoire ou definitif). Sans lui, un silence ne fait rien partir : une
   // dictee muette n'envoie rien. Remis a zero a chaque nouvelle session.
   let vocalMotRecu = false;
+  // `vocalMotInstant` : l'instant du DERNIER mot TRANSCRIT (ms epoch). Il ne
+  // sert qu'a UNE chose : mesurer le plafond du report par le SON
+  // (`decideVocalSoundExtension`), c'est-a-dire la duree maximale pendant
+  // laquelle un son peut repousser l'echeance sans qu'aucun mot n'arrive.
+  // Remis a zero a chaque nouvelle session et a chaque phrase jetee : le
+  // plafond se compte toujours depuis le dernier mot de la dictee EN COURS.
+  let vocalMotInstant = 0;
   // ── LA VEILLE : 20 SECONDES DE SILENCE (§6quater.2) ──
   // `vocalVeilleArmee` : la garde du nom est ARMEE — l'ecran n'obeit plus qu'au
   // nom (ou aux mots de reveil regles). Faux a l'ENTREE du mode : on ecoute
@@ -5737,8 +5746,11 @@ let vocalMotsDeReveil = [];
     voiceUserTookOver = false;
     voiceStopVoulu = false;
     // Aucune demande ne peut partir sur le silence d'une dictee qui n'a encore
-    // rien transcrit : on repart de zero pour CETTE session.
+    // rien transcrit : on repart de zero pour CETTE session. Le repere du
+    // dernier mot part avec (le plafond du report par le son se compte depuis
+    // un mot de CETTE session, jamais de la precedente).
     vocalMotRecu = false;
+    vocalMotInstant = 0;
     clearVocalSilenceTimer();
     let erreurAffichee = false;
     const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -5977,6 +5989,7 @@ let vocalMotsDeReveil = [];
           voiceActive = false;
           voiceRec = null;
           vocalMotRecu = false;
+          vocalMotInstant = 0;
           // Aucune échéance de silence ne survit à une phrase jetée.
           clearVocalSilenceTimer();
           vocalSessionsVides = [];
@@ -7548,6 +7561,31 @@ let vocalMotsDeReveil = [];
   }
 
   /**
+   * Etat lu par la decision du REPORT PAR LE SON
+   * (`decideVocalSoundExtension`) : les MEMES faits que la decision du silence,
+   * plus DEUX choses et rien de plus.
+   *
+   *  - `voixCaptee` : le drapeau de niveau qui EXISTE DEJA (`vocalMicCapte`,
+   *    deux seuils via `vocalCapte`, le meme que la veille de 20 s). Aucun
+   *    second capteur, aucun second lissage, aucun nouveau seuil : le son dont
+   *    il est question est celui que l'ecran mesure deja a chaque image.
+   *  - `ecouleMs` : le temps ecoule depuis le dernier mot TRANSCRIT, qui borne
+   *    le report (le plafond de `vocal-conversation.js`). La decision reste
+   *    pure : elle ne lit jamais l'horloge elle-meme.
+   *
+   * Aucune seconde source de verite : tout le reste vient de
+   * `vocalSilenceState`, donc de `vocalConversationState`.
+   */
+  function vocalSoundState() {
+    const base = vocalSilenceState();
+    return {
+      ...base,
+      voixCaptee: vocalMicListening === true && vocalMicCapte === true,
+      ecouleMs: vocalMotInstant ? Date.now() - vocalMotInstant : 0,
+    };
+  }
+
+  /**
    * Relit les MOTS DE RÉVEIL réglés (au montage de l'onglet et à chaque
    * changement de réglage : aucun redémarrage nécessaire).
    *
@@ -7677,20 +7715,41 @@ let vocalMotsDeReveil = [];
    */
   function vocalNoteWord() {
     vocalMotRecu = true;
+    // Le dernier mot TRANSCRIT : il ouvre (et remet a zero) la fenetre du
+    // report par le SON. Un nouveau mot est la preuve que la transcription est
+    // vivante ; le plafond se compte toujours depuis lui.
+    vocalMotInstant = Date.now();
     // TOUTE PAROLE DETECTEE REMET LE COMPTE A ZERO (§A2) : une conversation
     // suivie n'arme jamais la veille.
     vocalRestartVeilleTimer();
     const decision = decideVocalSilenceSend(vocalSilenceState());
     clearVocalSilenceTimer();
     if (decision.action !== VOCAL_SILENCE_WAIT || !decision.delai) return;
-    vocalSilenceTimer = setTimeout(() => {
-      vocalSilenceTimer = 0;
-      // Decision REEVALUEE a l'echeance : l'etat a pu changer pendant l'attente
-      // (Pilot s'est mis a parler, l'utilisateur a repris la main, la dictee
-      // s'est refermee). Rien ne part alors.
-      if (decideVocalSilenceSend(vocalSilenceState(), "echeance").action !== VOCAL_SILENCE_CLOSE) return;
-      vocalCloseForSend();
-    }, decision.delai);
+    // ARME (et REARME) l'UNIQUE minuteur d'envoi sur silence. La fonction
+    // imbriquee existe pour une seule raison : le SON doit pouvoir repousser
+    // l'echeance SANS creer un second minuteur (une seule affectation de
+    // `vocalSilenceTimer` dans tout le fichier, et jamais deux en vol).
+    const armer = (delaiMs) => {
+      vocalSilenceTimer = setTimeout(() => {
+        vocalSilenceTimer = 0;
+        // Decision REEVALUEE a l'echeance : l'etat a pu changer pendant l'attente
+        // (Pilot s'est mis a parler, l'utilisateur a repris la main, la dictee
+        // s'est refermee). Rien ne part alors.
+        if (decideVocalSilenceSend(vocalSilenceState(), "echeance").action !== VOCAL_SILENCE_CLOSE) return;
+        // LE SON REPOUSSE L'ECHEANCE (correctif « l'ecoute se coupe avant la fin ») :
+        // le minuteur ne comptait que les MOTS TRANSCRITS. Tant que le micro
+        // CAPTE UNE VOIX, la fenetre ne referme pas — meme si la transcription
+        // n'a rien rendu depuis un moment. La decision est PURE et bornee
+        // (plafond : un bruit de fond permanent ne tient pas l'ecran ouvert).
+        const son = decideVocalSoundExtension(vocalSoundState());
+        if (son.action === VOCAL_SOUND_RESTART && son.delai > 0) {
+          armer(son.delai);
+          return;
+        }
+        vocalCloseForSend();
+      }, delaiMs);
+    };
+    armer(decision.delai);
   }
 
   /**

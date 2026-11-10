@@ -600,3 +600,84 @@ export function decideVocalSilenceSend(etats = {}, moment = "mot") {
   // lue ici : absent ou illisible, il retombe sur le défaut (2 s).
   return { action: VOCAL_SILENCE_WAIT, raison: "mot-entendu", delai: normalizeVocalSilenceSendMs(e.delaiMs) };
 }
+
+/**
+ * LE SON DE LA VOIX REPOUSSE L'ÉCHÉANCE — plafond du report (ms).
+ *
+ * Défaut corrigé (rapport `docs/rapports/RAPPORT-diagnostic-ecoute-coupee-avant-la-fin.md`) : le
+ * minuteur d'envoi ne comptait que les MOTS TRANSCRITS. Quand la transcription
+ * rend la main en retard (ou par morceaux), on continuait de parler alors que
+ * plus rien n'arrivait : l'échéance tombait et la dictée se refermait au milieu
+ * de la phrase, alors que le micro ENTENDAIT parfaitement la voix.
+ *
+ * Ce que ce plafond GARANTIT : un bruit de fond permanent (ventilateur, télé,
+ * conversation voisine) ne peut pas tenir la dictée ouverte indéfiniment — sans
+ * lui, un son au-dessus du seuil de détection repousserait l'envoi sans fin et
+ * RIEN ne partirait plus jamais, ce qui serait pire que le défaut corrigé.
+ *
+ * POURQUOI 15 secondes, exactement :
+ *   - c'est 7,5 × le défaut (2 s) et 3 × le réglage maximal (5 s) : c'est assez
+ *     pour un vrai temps d'arrêt de la transcription, jamais assez pour
+ *     s'installer ;
+ *   - c'est PLUS COURT que l'autre référence de silence du produit
+ *     (`VOCAL_ECOUTE_LIBRE_MS`, 20 s, la veille) : « j'attends la fin de la
+ *     phrase » ne dépasse jamais « je considère l'utilisateur silencieux » ;
+ *   - c'est plus long qu'une hésitation ordinaire (une à deux secondes) et
+ *     qu'un retard de transcription mesuré sur les deux oreilles, donc aucune
+ *     parole réelle n'est coupée par ce plafond.
+ */
+export const VOCAL_SILENCE_SOUND_MAX_MS = 15000;
+
+/** Une voix est captée : le minuteur est réarmé, l'échéance recule. */
+export const VOCAL_SOUND_RESTART = "repousser";
+/** Le son ne change rien : l'échéance est tenue (la dictée se referme). */
+export const VOCAL_SOUND_HOLD = "tenir";
+
+/**
+ * Décide si LE SON entendu par le micro repousse l'échéance du silence.
+ *
+ * PURE : ne lit ni le temps, ni le micro, ni le minuteur. Le temps écoulé
+ * ARRIVE avec l'état (`ecouleMs`, depuis le dernier mot TRANSCRIT), et la voix
+ * captée aussi (`voixCaptee`) : elle vient du mécanisme de niveau qui EXISTE
+ * DÉJÀ (deux seuils, `vocalCapte`, celui de la veille de 20 s) — aucun second
+ * capteur, aucun second lissage, aucun seuil nouveau n'est créé ici.
+ *
+ * L'ORDRE DES RÈGLES EST LA SPÉCIFICATION (testé tel quel) :
+ *   1. hors du mode        → rien (cet écran ne décide de rien quand il est fermé)
+ *   2. Pilot parle         → rien : ce qu'entend le micro, c'est Pilot lui-même
+ *                            (sa propre voix sortie des haut-parleurs) ; la
+ *                            lecture a sa propre règle, inchangée
+ *   3. dictée refermée     → rien (fin du moteur, erreur, arrêt : déjà traité)
+ *   4. reprise en main     → rien : l'utilisateur a tapé, sa saisie prime
+ *   5. aucun mot récupéré  → rien : aucune échéance n'est ouverte
+ *   6. le micro ne capte pas de voix → rien : c'est le silence, la phrase est
+ *                            terminée et la demande doit partir
+ *   7. plafond atteint     → rien : le bruit de fond ne tient pas l'écran ouvert
+ *   8. sinon               → REPOUSSER, d'au plus le délai réglé, et jamais
+ *                            au-delà du plafond (le report ne s'auto-entretient
+ *                            pas : la borne se mesure depuis le dernier mot)
+ *
+ * @param {object} [etats] `modeOuvert`, `pilotParle`, `dicteeOuverte`,
+ *   `repriseMain`, `motEntendu`, `voixCaptee`, `delaiMs`, `ecouleMs`
+ * @returns {{action: string, raison: string, delai: number}} `delai` = durée du
+ *   report (0 quand rien n'est repoussé)
+ */
+export function decideVocalSoundExtension(etats = {}) {
+  const e = etats || {};
+  const tenir = (raison) => ({ action: VOCAL_SOUND_HOLD, raison, delai: 0 });
+  if (e.modeOuvert !== true) return tenir("hors-mode");
+  if (e.pilotParle === true) return tenir("pilot-parle");
+  if (e.dicteeOuverte !== true) return tenir("dictee-fermee");
+  if (e.repriseMain === true) return tenir("reprise-main");
+  if (e.motEntendu !== true) return tenir("sans-mot");
+  if (e.voixCaptee !== true) return tenir("sans-voix");
+  // Le plafond se mesure depuis le dernier MOT TRANSCRIT : le report par le son
+  // ne peut donc jamais s'auto-entretenir, il ne fait que décaler une échéance
+  // déjà ouverte.
+  const ecoule = Number(e.ecouleMs);
+  const deja = Number.isFinite(ecoule) && ecoule > 0 ? ecoule : 0;
+  const reste = VOCAL_SILENCE_SOUND_MAX_MS - deja;
+  if (reste <= 0) return tenir("plafond");
+  const delai = Math.min(normalizeVocalSilenceSendMs(e.delaiMs), reste);
+  return { action: VOCAL_SOUND_RESTART, raison: "voix-entendue", delai };
+}

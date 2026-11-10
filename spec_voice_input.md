@@ -691,7 +691,10 @@ texte à la voix.
   s'ouvre toute seule quand Pilot se tait, se ferme pendant qu'il parle ou qu'il
   travaille, et se rouvre à la fin de sa réponse — le texte part tout seul, comme
   ci-dessus, **après votre dernier mot** (chaque nouveau mot repousse l'échéance,
-  donc rien ne part tant que vous parlez). **L'écoute repart d'elle-même après
+  et **le son de votre voix aussi** tant qu'il est capté : la dictée ne se
+  referme pas au milieu d'une phrase quand la transcription prend du retard —
+  plafond de 15 s contre un bruit de fond permanent, voir
+  `spec_modes_ecran_vocal.md` § 6bis.1 ter, donc rien ne part tant que vous parlez). **L'écoute repart d'elle-même après
   chaque réponse** : si Pilot finit à peine sa phrase ou si le micro se libère un
   instant plus tard, elle réessaie quelques instants (jamais indéfiniment) au lieu
   de rester fermée — le rond « Réveiller … » n'est donc qu'un **secours**. **Un

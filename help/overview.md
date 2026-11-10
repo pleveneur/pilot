@@ -640,6 +640,12 @@ En mode **Vocal** :
   parlez, rien ne part — **chaque nouveau mot repousse l'échéance** —, et rien
   ne part non plus pendant que Pilot lit sa réponse ou travaille, ni si vous
   avez repris la main pour écrire dans la zone.
+- **Votre voix compte autant que le texte.** Si la transcription prend du retard,
+  l'écoute **ne se referme pas au milieu de votre phrase** : tant que le micro
+  vous entend, le compte repart. **Seul garde-fou**, un bruit de fond permanent
+  (ventilateur, télévision) ne peut pas la retenir indéfiniment : au bout de
+  **15 secondes après le dernier mot transcrit**, la demande part quand même —
+  sans quoi elle ne partirait plus jamais.
 - **Ce délai se règle**, à un seul endroit : ⚙️ **Options → onglet
   « Assistant » → section « Mode Vocal »**, de **1 à 5 secondes** par pas d'une
   demi-seconde, **2 secondes** au départ, et la valeur choisie s'affiche en
