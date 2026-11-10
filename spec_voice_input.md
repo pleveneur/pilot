@@ -589,6 +589,65 @@ journal se remplissait de « session précédente refermée ».
 Verrou : `src/js/abandon-ecoute-prevenir-le-service.test.js` (14 verrous). Rapport :
 `docs/rapports/RAPPORT-correction-abandon-ecoute-locale.md`.
 
+### La session de dictée a une IDENTITÉ — et elle est fermée AVANT la suivante
+
+**Défaut corrigé** (rapport `docs/rapports/RAPPORT-diagnostic-coupure-dictee-locale.md`,
+§ 0 et § 4, 11 dictées ouvertes et jamais fermées en 2 min 30) : la dictée locale
+« marchait un moment, puis coupait », puis affichait « La dictée n'a pas
+fonctionné : écrivez votre demande. ». La cause était dans la **fenêtre**, pas
+dans le service :
+
+1. une **fin d'écoute PÉRIMÉE** (celle d'une session remplacée) remettait la
+   fenêtre au repos (`voiceActive = false`) alors que la session locale était
+   **toujours ouverte** au pont ;
+2. le **réarmement** (350-400 ms) appelait donc `startVoiceInput`, qui fabriquait
+   une oreille neuve — donc une **session neuve** — sans fermer la précédente ;
+3. le pont appliquait sa règle (« une seule dictée à la fois : la précédente est
+   refermée », `asr_voicestudio.rs`) : le texte déjà reconnu de la session
+   vivante n'arrivait plus ;
+4. trois fins vides instantanées atteignaient le plafond
+   (`VOCAL_EMPTY_SESSION_LIMIT`), d'où la phrase d'échec.
+
+**Les trois décisions, dans `src/js/session-dictee.js`** (pures, aucun DOM, aucun
+import Tauri — donc décidables en test) :
+
+- **l'IDENTITÉ** : un jeton monotone, jamais réutilisé, jamais 0.
+  `dictationSessionStillCurrent(registre, jeton)` garde les **trois**
+  gestionnaires de l'écran (`onresult`, `onerror`, `onend`) : une fin ou une
+  erreur d'une session remplacée ne touche plus à l'état et ne peut donc plus
+  armer de réarmement. Un registre absent rend `false` : on ne touche à rien.
+- **l'ORDRE** : `startDictationSession(registre, { active, previous, stopPrevious })`
+  ferme la session précédente par **son propre chemin d'arrêt** (`stopVoiceInput`
+  → `rec.stop()`, donc `asr_voicestudio_stop`, qui rend le texte final) **avant**
+  que le jeton n'avance. Le pont n'a plus jamais à refermer lui-même une session,
+  donc son texte n'est plus jeté. Une dictée déjà ouverte n'est **jamais**
+  refermée par une tentative d'ouverture (idempotence).
+- **le TEXTE d'une session remplacée est encore REÇU** (`dictationTextStillAccepted`) :
+  son arrêt est asynchrone, ses mots ont déjà été prononcés — les refuser les
+  effacerait. **Une seule** session en bénéficie (celle qu'on vient de remplacer),
+  jamais une plus ancienne, et **rien d'autre** n'est reçu d'elle : l'état reste
+  protégé.
+
+**Le canal du pont est GLOBAL** : `oreille-locale-moteur.js` ignore désormais les
+évènements dont le `session_id` n'est pas le sien (`if (origine && sessionId &&
+origine !== sessionId) return;`). Sans ce filtre, la fin d'une session remplacée
+refermait l'écran de la session **vivante** — c'était le premier domino de la
+cascade. Un évènement **sans** `session_id` reste accepté (contrat tolérant).
+
+**Le journal se souvient** : `dictationEndLogLine({ raison, jeton, perimee, dureeMs,
+longueurTexte })` compose une ligne (raison, jeton, durée mesurée, **longueur** du
+texte, jamais son contenu) écrite dans le journal **existant** du pont
+(`asr_voicestudio_log`, commande déjà présente, appel `void`, fail-open). Le
+journal du pont ne disait ni la raison d'une fin ni l'identité de la session ;
+c'est ce qui avait rendu le diagnostic long.
+
+Verrou : `src/js/fin-de-session-perimee-ne-rearme-pas.test.js` (11 verrous, pont de
+test appliquant la règle **réelle** d'`asr_voicestudio.rs`). Quatre mutations ont
+été mesurées sur ce verrou : gardes de l'écran neutralisées (1 échec), ordre
+d'ouverture inversé (1 échec), filtre de session du moteur retiré (3 échecs),
+identité toujours vraie (3 échecs). Rapport :
+`docs/rapports/RAPPORT-correction-rearmement-session-perimee.md`.
+
 **La ligne d'état ne ment pas** : elle dit laquelle des deux oreilles écoute
 (« J'écoute avec le service local. » / « Le service local est absent : je dicte
 autrement. »), dans la ligne **existante**, sans nouvel élément d'interface.
@@ -668,4 +727,9 @@ texte à la voix.
   bascule jamais en silence. Limite connue : la transcription locale est plus
   lente (le texte définitif arrive quelques secondes après votre dernier mot) ;
   le texte s'écrit au fur et à mesure, vous n'avez pas à attendre pour parler.
+- **La dictée ne s'arrête plus toute seule** : avant, au bout d'un moment, elle
+  cessait de répondre puis affichait « La dictée n'a pas fonctionné : écrivez
+  votre demande. ». Une dictée qui se termine ne peut plus refermer celle qui
+  est **en cours**, et Pilot ferme toujours proprement la précédente **avant**
+  d'en ouvrir une nouvelle : ce que vous avez déjà dicté n'est plus perdu.
 <!-- /HELP:dictee-vocale -->

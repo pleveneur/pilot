@@ -138,6 +138,19 @@ import {
   localEarFailureMessage,
 } from "./oreille-locale.js";
 import { createLocalEar } from "./oreille-locale-moteur.js";
+// UNE SEULE OREILLE À LA FOIS (correctif de la coupure de la dictée locale) :
+// l'IDENTITÉ de la session de dictée et l'ORDRE d'ouverture (clore la
+// précédente AVANT d'en ouvrir une autre) sont des décisions PURES, dans
+// `session-dictee.js`. Ce fichier ne fait que les appliquer : une fin PÉRIMÉE ne
+// remet plus l'écran au repos, et un réarmement ne laisse plus une session
+// ouverte derrière lui (le pont la refermait alors lui-même en jetant son texte).
+import {
+  createDictationSessionRegistry,
+  dictationEndLogLine,
+  dictationSessionStillCurrent,
+  dictationTextStillAccepted,
+  startDictationSession,
+} from "./session-dictee.js";
 // Envoi AUTOMATIQUE a la fin d'une dictee vocale : la decision et l'ORDRE
 // (refermer la session -> ecrire la zone -> envoyer) vivent dans CE module, le
 // meme que celui de l'onglet agent pi — aucune copie de logique ici, et le
@@ -5598,6 +5611,53 @@ let vocalMotsDeReveil = [];
     return new SR();
   }
 
+  // ── UNE SEULE OREILLE À LA FOIS ───────────────────────────────────────────
+  // Le registre ne connaît qu'un fait : l'identité de la session qui tient la
+  // dictée MAINTENANT (décision pure : `session-dictee.js`). Il rend la garde
+  // qui manquait aux trois gestionnaires d'une session (`onresult`, `onerror`,
+  // `onend`) : une fin venue d'une oreille REMPLACÉE ne touche plus l'état.
+  const dicteeSessions = createDictationSessionRegistry();
+
+  /**
+   * FERME l'oreille d'une session précédente par son PROPRE chemin d'arrêt :
+   * `stopVoiceInput()` (le même que le bouton 🎙️, l'envoi et la sortie du mode),
+   * qui appelle `rec.stop()` — et, pour l'oreille locale, mène à
+   * `asr_voicestudio_stop`, donc au texte final du service. Jamais une seconde
+   * façon de fermer, jamais un abandon.
+   * @param {object|null} rec oreille à fermer
+   * @returns {boolean} vrai si un arrêt a été demandé
+   */
+  function fermerOreilleDictee(rec) {
+    if (!rec) return false;
+    try {
+      if (voiceRec === rec) {
+        stopVoiceInput();
+        return true;
+      }
+      if (typeof rec.stop === "function") rec.stop();
+      return true;
+    } catch (_) {
+      // Un moteur déjà éteint n'empêche pas la dictée suivante de s'ouvrir.
+      return false;
+    }
+  }
+
+  /**
+   * ÉCRIT la raison d'une fin d'écoute dans le journal du pont (commande
+   * EXISTANTE `asr_voicestudio_log`, enregistrée côté Rust et jusqu'ici appelée
+   * par personne). On n'y met JAMAIS le texte reconnu : seulement sa LONGUEUR,
+   * avec la raison, le jeton de session, la durée mesurée et le fait qu'une fin
+   * soit périmée — c'est exactement le trou de trace que le diagnostic a relevé.
+   * Fail-open : le journal ne casse jamais une fin d'écoute.
+   */
+  function journaliserFinDictee(infos) {
+    try {
+      void invoke("asr_voicestudio_log", { message: dictationEndLogLine(infos) }).catch(() => {});
+    } catch (_) {
+      // Le journal est un secours, jamais une condition de fonctionnement.
+    }
+  }
+
   /**
    * LE repli se dit — une fois par panne, jamais en boucle, jamais en silence.
    * Dans le mode Vocal, la ligne d'état le dit déjà (`localEarStatusLine`) : rien
@@ -5636,6 +5696,25 @@ let vocalMotsDeReveil = [];
     // au repos, et un echec qui persiste se reaffiche aussitot.
     clearVocalDictationError();
     if (voiceActive) return true;
+    // UNE SEULE OREILLE À LA FOIS : la session précédente est CLOSE par son
+    // propre chemin d'arrêt AVANT que la nouvelle existe (`session-dictee.js`).
+    // Sans cet ordre, l'ancienne restait ouverte au pont, qui la refermait
+    // lui-même en jetant son texte déjà reconnu (« session précédente refermée »
+    // dans le journal du pont — c'est le défaut corrigé ici). L'arrêt du moteur
+    // est asynchrone : l'ancienne oreille n'émet plus rien vers CETTE session
+    // (garde d'identité ci-dessous), et son texte déjà écrit reste dans la zone.
+    const ouverture = startDictationSession(dicteeSessions, {
+      active: voiceActive === true,
+      previous: voiceRec,
+      stopPrevious: (precedente) => fermerOreilleDictee(precedente),
+    });
+    // IDENTITÉ de CETTE session : la garde des trois gestionnaires ci-dessous.
+    const dicteeJeton = ouverture.jeton;
+    const dicteeCourante = () => dictationSessionStillCurrent(dicteeSessions, dicteeJeton);
+    // Le TEXTE, lui, est reçu aussi de la session que cette ouverture vient de
+    // remplacer : son arrêt est asynchrone, et ce texte-là a déjà été prononcé
+    // (le refuser l'effacerait). L'ÉTAT, non : voir les deux gardes ci-dessous.
+    const dicteeTexteAccepte = () => dictationTextStillAccepted(dicteeSessions, dicteeJeton);
     // DUREE de la session, mesuree a la SEULE fin d'ecoute (`rec.onend`) : elle
     // permet de distinguer un silence ordinaire (la session a vraiment ecoute)
     // d'un retour instantane du moteur (le profil de la boucle). Aucune autre
@@ -5665,6 +5744,11 @@ let vocalMotsDeReveil = [];
     const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
     rec.onresult = (e) => {
       if (!voiceActive) return;
+      // SESSION PÉRIMÉE : le texte d'une session remplacée n'est reçu QUE si
+      // c'est celle que cette ouverture vient de remplacer (son arrêt est
+      // asynchrone, ses mots ont déjà été prononcés). Toute session plus
+      // ancienne est refusée ici : elle écraserait le texte en cours.
+      if (!dicteeTexteAccepte()) return;
       // Chrome Android (continuous=true) finalise des résultats cumulatifs (chaque
       // résultat contient les précédents) ; desktop incrémental → concaténer.
       const finals = [];
@@ -5767,6 +5851,20 @@ let vocalMotsDeReveil = [];
       }
     };
     rec.onerror = (ev) => {
+      // SESSION PÉRIMÉE (la garde qui manquait) : la panne vient d'une oreille
+      // REMPLACÉE ou déjà arrêtée. Elle ne remet pas l'écran au repos — sans
+      // cette garde, elle faisait croire que la dictée locale était fermée
+      // alors que sa session était encore ouverte au pont ; le réarmement en
+      // ouvrait une autre, et le pont refermait la vivante en jetant son texte.
+      if (!dicteeCourante()) {
+        journaliserFinDictee({
+          raison: "erreur-perimee",
+          jeton: dicteeJeton,
+          perimee: true,
+          longueurTexte: finalText.length,
+        });
+        return;
+      }
       // Session refermée ICI : la fin d'écoute qui suit (onend) ne doit RIEN
       // envoyer (erreur de reconnaissance, refus de permission, panne réseau).
       voiceActive = false; voiceRec = null;
@@ -5804,6 +5902,19 @@ let vocalMotsDeReveil = [];
       }
     };
     rec.onend = () => {
+      // SESSION PÉRIMÉE : cette fin appartient à une oreille REMPLACÉE. Elle ne
+      // remet pas l'écran au repos, ne compte pas dans le plafond des sessions
+      // vides et ne réarme RIEN (c'était la seconde cause du réarmement en
+      // cascade : la session en cours, elle, continue d'écouter).
+      if (!dicteeCourante()) {
+        journaliserFinDictee({
+          raison: "fin-perimee",
+          jeton: dicteeJeton,
+          perimee: true,
+          longueurTexte: finalText.length,
+        });
+        return;
+      }
       // `wasActive` est lu AVANT de refermer la session : c'est la seule chose qui
       // distingue une fin NORMALE d'une fin sur erreur / arrêt manuel, et c'est
       // aussi ce qui empêche un second envoi si `onend` arrive deux fois.
@@ -5901,6 +6012,16 @@ let vocalMotsDeReveil = [];
         erreurAffichee,
         arretDemande,
         dureeMs: Date.now() - debutSession,
+      });
+      // JOURNAL DE LA FIN D'ÉCOUTE : raison, jeton, durée mesurée et LONGUEUR du
+      // texte reconnu (jamais son contenu). Le canal existait, il était vide ;
+      // sans lui, aucune fin ne pouvait être reliée à une session ni expliquée.
+      journaliserFinDictee({
+        raison: fin && fin.reason ? fin.reason : "inconnue",
+        jeton: dicteeJeton,
+        perimee: false,
+        dureeMs: Date.now() - debutSession,
+        longueurTexte: String(fin && fin.dictatedText ? fin.dictatedText : "").length,
       });
       if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = micTitleIdle(); }
       // CONVERSATION PARLEE : une fin d'ecoute (silence, arret du moteur, demande

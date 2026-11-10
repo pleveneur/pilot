@@ -1489,6 +1489,11 @@ texte à la voix.
   bascule jamais en silence. Limite connue : la transcription locale est plus
   lente (le texte définitif arrive quelques secondes après votre dernier mot) ;
   le texte s'écrit au fur et à mesure, vous n'avez pas à attendre pour parler.
+- **La dictée ne s'arrête plus toute seule** : avant, au bout d'un moment, elle
+  cessait de répondre puis affichait « La dictée n'a pas fonctionné : écrivez
+  votre demande. ». Une dictée qui se termine ne peut plus refermer celle qui
+  est **en cours**, et Pilot ferme toujours proprement la précédente **avant**
+  d'en ouvrir une nouvelle : ce que vous avez déjà dicté n'est plus perdu.
 
 ---
 

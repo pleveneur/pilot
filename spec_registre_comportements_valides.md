@@ -59,6 +59,10 @@
 | 18 | La troisième sortie est la fermeture de l'onglet, qui arrête la lecture et sort du mode. | `src/js/ecran-vocal-lot2.test.js` :: 3. la fermeture de l'onglet arrete la lecture et sort du Vocal |
 | 19 | L'écran Vocal n'a qu'un seul bouton de masquage, posé par un seul appel. | `src/js/ecran-vocal-bouton-affichage.test.js` :: il est pose dans la barre, par le seul appel de `buildVocalOverlay` |
 | 20 | Ce bouton de masquage n'existe pas dans « Assistant seul » ni ailleurs : aucun second bouton. | `src/js/ecran-vocal-bouton-affichage.test.js` :: il n'existe pas dans « Assistant seul » ni ailleurs |
+| 21 | Une fin d'écoute venue d'une session de dictée REMPLACÉE ne remet plus l'écran au repos : elle ne peut donc plus en ouvrir une troisième. | `src/js/fin-de-session-perimee-ne-rearme-pas.test.js` :: la garde d'identité refuse tout jeton qui n'est pas celui de la session courante |
+| 22 | Un réarmement ne rouvre aucune oreille tant qu'une dictée est ouverte : une seule oreille à la fois. | `src/js/fin-de-session-perimee-ne-rearme-pas.test.js` :: le réarmement ne rouvre RIEN tant qu'une dictée est ouverte |
+| 23 | La session précédente est fermée par son propre arrêt AVANT l'ouverture de la suivante, et le texte déjà reconnu n'est pas jeté. | `src/js/fin-de-session-perimee-ne-rearme-pas.test.js` :: le texte déjà reconnu de la session close proprement n'est pas jeté |
+| 24 | La cascade du diagnostic (fin étrangère, réarmement, session refermée par le pont, texte perdu) ne peut plus partir. | `src/js/fin-de-session-perimee-ne-rearme-pas.test.js` :: la cascade du diagnostic ne peut plus partir : ni réarmement, ni texte jeté |
 
 ## Ce que le garde-fou vérifie
 

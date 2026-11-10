@@ -258,6 +258,14 @@ export function createLocalEar(options = {}) {
   function surEvenement(payload) {
     const p = payload && typeof payload === "object" ? payload : null;
     if (!p || termine) return;
+    // UNE SESSION N'ÉCOUTE QUE SA PROPRE SESSION. Le canal du pont est GLOBAL :
+    // une oreille remplacée (fermeture en cours) reçoit encore les évènements
+    // de la nouvelle, et une oreille neuve peut recevoir la fin de l'ancienne.
+    // Sans ce filtre, la fin d'une session périmée refermait l'écran de la
+    // session VIVANTE — c'est le point de départ de la cascade décrite dans
+    // `docs/rapports/RAPPORT-diagnostic-coupure-dictee-locale.md`.
+    const origine = typeof p.session_id === "string" ? p.session_id : "";
+    if (origine && sessionId && origine !== sessionId) return;
     const kind = typeof p.kind === "string" ? p.kind : "";
     if (kind === "partial") {
       provisoire = typeof p.text === "string" ? p.text : "";
