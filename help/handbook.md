@@ -1639,7 +1639,6 @@ plus facile à reconnaître. C'est à cela que sert ce réglage.
 
 <!-- HELP-TOPIC:vocal-veille -->
 ### La veille au bout de 20 secondes de silence
-
 - **À l'entrée dans l'écran Vocal, vous parlez librement** : aucune phrase n'a
   besoin de contenir le nom. C'est le cas normal, celui de tous les jours.
 - **Après 20 secondes SANS PARLER**, l'écran se met en veille et attend son nom :
@@ -1656,17 +1655,27 @@ plus facile à reconnaître. C'est à cela que sert ce réglage.
   secondes repart. Le bouton **« Réveiller <Nom> »** reste le secours pour une
   phrase.
 - **Vous pouvez la mettre en veille vous-même, à la voix** : dites
-  **« arrête d'écouter »** (ou « arrête l'écoute », « stoppe l'écoute »,
-  « n'écoute plus », « tais-toi », « silence », « au repos », « tu peux te
-  reposer », « mets-toi en veille », « mode veille »). L'écran répond une seule
-  fois « Je me mets en veille — dites « <Nom> » pour me parler. », et **rien
-  n'est envoyé** : la formule n'est pas une demande.
+  **« arrête d'écouter »** (ou « arrêtez d'écouter », « arrête l'écoute »,
+  « stoppe l'écoute », « n'écoute plus », « ne m'écoute plus », « cesse
+  d'écouter », « tais-toi », « taisez-vous », « silence », « au repos », « tu
+  peux te reposer », « mets-toi en veille », « mode veille »). L'écran cesse
+  aussitôt de dire qu'il vous écoute et affiche « Je me mets en veille — dites
+  « <Nom> » pour me parler. ». **Pilot ne vous relit pas sa réponse** : un ordre
+  de silence reste silencieux.
 - **La comparaison est stricte** : la phrase **entière** doit être la formule.
   « Silence, le dossier est vide » ou « mets le projet au repos » partent
-  normalement — dans le doute, Pilot continue d'écouter.
+  normalement — dans le doute, Pilot continue d'écouter. En revanche les petites
+  différences de transcription sont absorbées (mots collés ou séparés,
+  « écouter »/« écoutez », et une politesse en fin de phrase : « s'il te plaît »,
+  « svp », « merci »).
+- **Une formulation inattendue n'est pas perdue** : elle part comme une demande
+  ordinaire et l'assistant la comprend — c'est lui qui met l'écran en veille.
 - **Répéter la formule en veille ne dit rien** : aucun message, aucun envoi.
 - **Ce n'est pas un arrêt de tâche** : une mission en cours continue. La veille
   ne ferme pas le micro et ne coupe pas la lecture à voix haute.
+- **En veille, l'écran ne dit plus « Je vous écoute »** : il attend son nom, et
+  c'est vrai — c'est le même état que l'arrêt à la voix, jamais deux
+  comportements.
 - **Le clavier n'est jamais filtré**, et sortir de l'écran (logo, Échap,
   fermeture) remet tout à zéro : la prochaine entrée repart en écoute libre.
 

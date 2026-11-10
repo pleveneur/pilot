@@ -456,6 +456,17 @@ export function decideVocalDictation(etats = {}) {
   // On arme, avec la marge qui convient au moment. « Après la lecture » passe
   // avant le travail : la voix de Pilot sort encore des haut-parleurs quand le
   // dernier mot est prononcé, et c'est la marge la plus longue des trois.
+  //
+  // LA VEILLE (20 s de silence, ou ordre d'arrêt — c'est le MÊME état) NE SE
+  // DÉCIDE PAS ICI, ET C'EST VOULU. Elle ne ferme pas le micro : c'est
+  // précisément l'oreille ARMÉE qui doit rester ouverte pour entendre le nom de
+  // réveil (personnage, nom réglé, mot de réglage). Ce que la veille change est
+  // ailleurs, à deux endroits seulement : la GARDE du nom jette toute phrase
+  // (`decideVocalNameGate`, `ecouteLibre: false` : rien n'est écrit, rien n'est
+  // envoyé, c'est la dictée réellement désarmée) et l'ÉCRAN ne se présente plus
+  // comme à l'écoute (`vocalEtatAffiche` → état de repos, ligne de veille).
+  // Désarmer la dictée ici rendrait le réveil par le nom impossible — le nom ne
+  // serait plus jamais entendu.
   const apresLecture = e.apresLecture === true;
   const travaille = e.reflechit === true || e.occupe === true;
   return {

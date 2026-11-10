@@ -571,4 +571,36 @@ export default function (pi: ExtensionAPI) {
       return { content: [{ type: "text", text: String(result) }] };
     },
   });
+
+  // ARRÊT D'ÉCOUTE DE L'ÉCRAN VOCAL (décision du propriétaire, 2026-11-16).
+  // La phrase prononcée (« arrête d'écouter », « ne m'écoute plus », « tais-toi »…)
+  // est TRANSMISE comme une demande : c'est l'assistant qui appelle cet outil, et
+  // c'est Pilot qui produit l'état d'arrêt — exactement celui de la veille
+  // automatique de 20 s. L'outil ne décide donc RIEN, il demande.
+  pi.registerTool({
+    name: "stop_listening",
+    label: "Stop Listening",
+    description:
+      "Arrêter l'écoute de l'écran Vocal : l'écran se met en veille et n'écoute plus que son nom de réveil. À appeler quand l'utilisateur demande d'arrêter d'écouter, de se taire, de ne plus écouter, de se mettre en veille — c'est-à-dire dès qu'il donne un ORDRE de silence, même formulé poliment. L'effet est EXACTEMENT celui de la veille automatique de 20 s : le micro reste OUVERT et armé sur le nom de l'assistant (ou son personnage, ou un mot de réveil réglé), donc prononcer ce nom réveille l'écoute. Aucun réglage, aucun bouton, aucun nouvel état : n'en invente pas. Ta réponse à cet ordre n'est PAS prononcée (l'écran fait le silence) : réponds court, en une phrase, et ne relance pas la lecture.",
+    promptSnippet: "stop_listening: arrêter l'écoute de l'écran Vocal (veille, réveil par le nom, réponse non prononcée)",
+    promptGuidelines: [
+      "Use stop_listening whenever the user ORDERS silence in the vocal screen: « arrête d'écouter », « ne m'écoute plus », « arrêtez d'écouter », « tais-toi », « silence », « mets-toi en veille ». The order may arrive as a normal user message — it is not a command syntax you have to parse.",
+      "Never ask for confirmation and never create a setting or a button for this: the tool IS the confirmation. After the call, the screen is in standby and only the assistant's name wakes it up again.",
+      "Do NOT use it for an ordinary sentence that merely contains the word « écoute » (« écoute, j'ai une idée »): only call it on an explicit order to stop listening.",
+      "Your answer to this order is NOT read aloud. Keep it to one short sentence, and do not offer to read anything.",
+      "If the result says the vocal screen is not open, say so in one sentence and stop there: there is nothing to stop outside the vocal screen.",
+    ],
+    parameters: Type.Object({
+      reason: Type.Optional(Type.String({ description: "Formulation de l'ordre entendu, recopiée telle quelle (facultatif)" })),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({ action: "stop_listening", reason: String(params.reason || "") });
+      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload, PILOT_UI_OPTS);
+      if (ok) {
+        return { content: [{ type: "text", text: "L'écoute de l'écran Vocal est arrêtée : l'écran est en veille et n'écoutera plus que le nom de l'assistant (ou un mot de réveil réglé). Le micro n'a pas été fermé. Ta réponse à cet ordre n'est pas prononcée." }] };
+      }
+      return { content: [{ type: "text", text: "L'écoute n'a PAS été arrêtée : l'écran Vocal n'est pas ouvert (ou Pilot n'a pas répondu). Dis-le en une phrase, sans réessayer." }] };
+    },
+  });
 }

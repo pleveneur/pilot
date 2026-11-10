@@ -3822,6 +3822,39 @@ un fichier réel (un livrable d'agent, un rapport dont la conversation parle). D
   test. Côté Rust, quatre tests de `inspect_open_path` (fichier + taille, dossier, absent,
   racine annoncée). Rapport : `docs/rapports/RAPPORT-ouvrir-un-fichier.md`.
 
+### Technique — arrêter l'écoute du mode Vocal (outil `stop_listening`)
+
+Décision du propriétaire du 2026-11-16 : l'ordre de silence prononcé dans l'écran Vocal est
+une **demande comme une autre**, et c'est l'**outil `stop_listening`** qui produit l'arrêt
+(l'ancien point 4 de `docs/rapports/FICHE-a-ajuster-arret-ecoute-vocale.md` — « ne doit pas
+être envoyée comme demande » — est **ABANDONNÉ**).
+
+- **Une seule chaîne, le motif des autres outils** : outil `stop_listening`
+  (`pilot-assistant-actions.ts`, `PILOT_ASSISTANT_ACTION::<JSON { action: "stop_listening",
+  reason }>`) → interception dans `super-agent.js` (`handleSuperAgentAction`) → pont
+  `window._pilotVocalStopListening` (même modèle que `window._pilotTabs`, posé à
+  l'ouverture de l'onglet et remis à `null` à la fermeture) → point d'application
+  **unique** `vocalStopListeningFromAssistant(origine)` → `vocalEnterVeille` →
+  `applyVocalState()`. Aucun réglage, aucun bouton, aucun état nouveau.
+- **Un seul état, deux entrées** : le minuteur de 20 s de silence et l'outil traversent la
+  **même** fonction (`vocalEnterVeille`), et `vocalVeilleArmee = true` n'est écrit qu'**une
+  fois** dans tout le dépôt. L'effet est donc identique par construction, jamais approché.
+- **Le micro n'est pas fermé** : la veille garde l'oreille ouverte et **armée sur le nom**
+  (`vocalNameGateArmed` / `decideVocalNameGate`, `ecouteLibre: false`) ; c'est la garde qui
+  jette toute phrase ordinaire. Désarmer la dictée rendrait le réveil par le nom impossible.
+- **Rien n'est lu à voix haute** pour cet ordre : `vocalCoupeSilencieuse` est posé avant
+  l'envoi et **consommé** par `autoReadVocalReply` (le seul lecteur automatique de l'écran) ;
+  la réponse reste écrite, avec son bouton « Écouter ».
+- **La phrase part par le chemin d'envoi unique** (`send`, donc file d'attente, refus du
+  moteur, vidage de la zone : identiques), avec deux gardes seulement — une question en
+  attente (`hasPendingQuestion`) et un moteur qui ne peut pas démarrer (`canAssistantReflect`).
+- **Couverture** : `src/js/arret-ecoute-vocale.test.js` (l'état affiché n'est plus « je vous
+  écoute » et c'est le même pour les deux entrées, la dictée ne produit plus rien, le micro
+  n'est jamais fermé, l'outil existe et est exposé, la réponse n'est jamais lue, le réveil par
+  le nom fonctionne, une phrase contenant « écoute » dans un autre sens ne coupe rien).
+  Comportement utilisateur et liste des formules : `spec_modes_ecran_vocal.md` § 6quater.2.
+  Rapport : `docs/rapports/RAPPORT-arret-ecoute-vocale.md`.
+
 <!-- HELP:super-agent-tracabilite -->
 ### Retrouver ce qui a été livré (traçabilité)
 

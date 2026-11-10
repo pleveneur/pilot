@@ -2233,10 +2233,31 @@ propriétaire.** Pendant que Pilot **parle** (`pilotParle`) et pendant que son
 tour **travaille** (`travaille`), le compte ne tourne pas du tout ; à la fin de
 ces deux périodes il **repart de zéro** (`agent_end` et fin de lecture).
 
+Troisième défaut corrigé (2026-11-16, constat d'usage du propriétaire :
+« prononcer *arrête d'écouter* ne coupe rien ») : **deux causes, dont aucune
+n'était la reconnaissance.**
+
+1. **L'écran mentait.** `vocalStatusLine` testait l'état animé **avant** la
+   branche de la veille : tant que la mesure du micro captait quelque chose
+   (`listening`), la ligne rendait « Je vous écoute… » — la veille était
+   pourtant armée. C'est désormais une décision **pure** (`vocalEtatAffiche`)
+   qui traduit l'état **affiché** : en veille, `listening` devient `idle`, la
+   branche de la veille est enfin atteinte et la ligne dit « Je me mets en
+   veille — dites « <Nom> » pour me parler. ». **La classe visuelle suit la même
+   décision** ; la parole et la réflexion gardent leur état et leur phrase. Hors
+   veille, la fonction rend l'état **à l'identique**.
+2. **La phrase était avalée.** Elle posait la veille puis tombait dans la garde
+   du nom, qui la jetait : personne ne recevait l'ordre. Elle **part maintenant
+   comme une demande** (point 4 de la fiche **abandonné** par le propriétaire),
+   et c'est l'assistant qui appelle l'outil `stop_listening`. **Un seul état pour
+   les deux entrées** : l'outil passe par `vocalEnterVeille`, exactement comme
+   les 20 s de silence. Le micro **reste ouvert** — sinon le nom ne réveillerait
+   plus rien — et l'ordre n'est **jamais lu à voix haute**.
+
+
 <!-- HELP:vocal-veille -->
 
 ### La veille au bout de 20 secondes de silence
-
 - **À l'entrée dans l'écran Vocal, vous parlez librement** : aucune phrase n'a
   besoin de contenir le nom. C'est le cas normal, celui de tous les jours.
 - **Après 20 secondes SANS PARLER**, l'écran se met en veille et attend son nom :
@@ -2253,17 +2274,27 @@ ces deux périodes il **repart de zéro** (`agent_end` et fin de lecture).
   secondes repart. Le bouton **« Réveiller <Nom> »** reste le secours pour une
   phrase.
 - **Vous pouvez la mettre en veille vous-même, à la voix** : dites
-  **« arrête d'écouter »** (ou « arrête l'écoute », « stoppe l'écoute »,
-  « n'écoute plus », « tais-toi », « silence », « au repos », « tu peux te
-  reposer », « mets-toi en veille », « mode veille »). L'écran répond une seule
-  fois « Je me mets en veille — dites « <Nom> » pour me parler. », et **rien
-  n'est envoyé** : la formule n'est pas une demande.
+  **« arrête d'écouter »** (ou « arrêtez d'écouter », « arrête l'écoute »,
+  « stoppe l'écoute », « n'écoute plus », « ne m'écoute plus », « cesse
+  d'écouter », « tais-toi », « taisez-vous », « silence », « au repos », « tu
+  peux te reposer », « mets-toi en veille », « mode veille »). L'écran cesse
+  aussitôt de dire qu'il vous écoute et affiche « Je me mets en veille — dites
+  « <Nom> » pour me parler. ». **Pilot ne vous relit pas sa réponse** : un ordre
+  de silence reste silencieux.
 - **La comparaison est stricte** : la phrase **entière** doit être la formule.
   « Silence, le dossier est vide » ou « mets le projet au repos » partent
-  normalement — dans le doute, Pilot continue d'écouter.
+  normalement — dans le doute, Pilot continue d'écouter. En revanche les petites
+  différences de transcription sont absorbées (mots collés ou séparés,
+  « écouter »/« écoutez », et une politesse en fin de phrase : « s'il te plaît »,
+  « svp », « merci »).
+- **Une formulation inattendue n'est pas perdue** : elle part comme une demande
+  ordinaire et l'assistant la comprend — c'est lui qui met l'écran en veille.
 - **Répéter la formule en veille ne dit rien** : aucun message, aucun envoi.
 - **Ce n'est pas un arrêt de tâche** : une mission en cours continue. La veille
   ne ferme pas le micro et ne coupe pas la lecture à voix haute.
+- **En veille, l'écran ne dit plus « Je vous écoute »** : il attend son nom, et
+  c'est vrai — c'est le même état que l'arrêt à la voix, jamais deux
+  comportements.
 - **Le clavier n'est jamais filtré**, et sortir de l'écran (logo, Échap,
   fermeture) remet tout à zéro : la prochaine entrée repart en écoute libre.
 
@@ -2282,15 +2313,36 @@ durée.
 `decideVocalVeille` (raisons `hors-mode`, `deja-en-veille`, `reveil`,
 `pilot-parle`, `assistant-travaille`, `silence-court`, `silence-atteint`),
 `vocalVeilleSuspendue` (les deux faits qui suspendent : `pilotParle`,
-`travaille`), `VOCAL_STOP_FORMULAS` (**douze** formules, seule liste),
-`isVocalStopFormula` (phrase normalisée **entière**), `decideVocalStopListening`
+`travaille`), `vocalEtatAffiche` (en veille, l'état **affiché** n'est plus
+« écoute » : le seul endroit qui décide que l'écran ne dit plus « Je vous
+écoute »), `VOCAL_STOP_FORMULAS` (**vingt** formules, seule liste),
+`stopFormulaKey` / `isVocalStopFormula` (phrase normalisée **entière**, trois
+écarts de transcription absorbés et pas un de plus : frontières de mots, finale
+du verbe `-er/-ez/-es`, politesse finale), `decideVocalStopListening`
 (raisons `hors-mode`, `sans-texte`, `pas-formule`, `deja-en-veille`, `arret`) et
 `vocalVeilleSentence` — appliquées à **un seul endroit** dans `super-agent.js` :
 `enterVocal` (écoute libre + départ du compte), `vocalNoteWord` et
 `vocalSetLevel` (toute parole repart le compte), `rec.onresult` et `rec.onend`
 (la formule d'arrêt est reconnue **avant** la garde et avant toute écriture),
 `vocalStatusLine` (l'accusé, une seule phrase), `exitVocal` (tout meurt avec
-l'écran). La suspension a **un seul point d'application** :
+l'écran). **Un seul état, deux entrées** : le minuteur de 20 s et l'outil
+`stop_listening` passent tous les deux par `vocalEnterVeille` (une seule
+affectation de `vocalVeilleArmee = true` dans tout le dépôt).
+
+**L'arrêt demandé à la voix passe par un OUTIL de l'assistant** (décision du
+propriétaire, 2026-11-16 ; l'ancien point 4 de
+`docs/rapports/FICHE-a-ajuster-arret-ecoute-vocale.md` — « ne doit pas être
+envoyée comme demande » — est **ABANDONNÉ**) : la phrase part comme une demande
+par le chemin d'envoi **unique** (`vocalRendreOrdreArret` → `send`), l'assistant
+appelle l'outil `stop_listening`
+(`src-tauri/extensions/pilot-assistant-actions.ts`, sentinelle
+`PILOT_ASSISTANT_ACTION::`), et Pilot produit l'état d'arrêt par le **point
+d'application unique** `vocalStopListeningFromAssistant`
+(`window._pilotVocalStopListening`, même pont que `window._pilotTabs`). L'outil
+**ne décide rien** : il demande. **Aucune lecture à voix haute** pour cet ordre :
+`vocalCoupeSilencieuse` est posé avant l'envoi et consommé par
+`autoReadVocalReply` (la réponse reste écrite, avec son bouton « Écouter »). Le
+micro **n'est jamais fermé** : c'est ce qui permet au nom de réveiller. La suspension a **un seul point d'application** :
 `vocalSyncVeilleSuspension()` (dans `applyVocalState`, plus les deux fins
 nommées `agent_end` et fin de lecture) ; `vocalRestartVeilleTimer()` **refuse de
 poser** le compte quand la veille est suspendue, et `vocalVeilleEtat()` lit les
@@ -2300,13 +2352,19 @@ ni nouveau drapeau, ni nouvelle minuterie, ni nouveau réglage. La garde reçoit
 inchangé pour tout autre appelant).
 **Verrou** : `src/js/veille-mot-de-reveil.test.js` (le cycle complet, la
 reconnaissance stricte, l'absence de message en veille, et le branchement — il
-échoue si le compte à rebours, la liste ou l'arrêt disparaissent) et
+échoue si le compte à rebours, la liste ou l'arrêt disparaissent),
 `src/js/vocal-veille-pendant-le-tour.test.js` (la suspension pendant le tour et
 pendant la lecture, le refus de poser le compte, le redémarrage à zéro aux deux
 fins, l'existant intact à 20 000 ms et aucun second mécanisme — il échoue sur le
-code d'avant).
-**Rapports** : `docs/rapports/RAPPORT-veille-mot-de-reveil.md` et
-`docs/rapports/RAPPORT-vocal-veille-pendant-le-tour.md`.
+code d'avant) et `src/js/arret-ecoute-vocale.test.js` (l'état affiché n'est plus
+celui de l'écoute et c'est **le même** pour les deux entrées, la dictée ne
+produit plus rien, le micro n'est jamais fermé, l'outil `stop_listening` existe
+et est exposé, la réponse à l'ordre n'est jamais lue, le réveil par le nom
+fonctionne encore, et une phrase qui contient « écoute » dans un autre sens ne
+coupe rien — il échoue sur le code d'avant).
+**Rapports** : `docs/rapports/RAPPORT-veille-mot-de-reveil.md`,
+`docs/rapports/RAPPORT-vocal-veille-pendant-le-tour.md` et
+`docs/rapports/RAPPORT-arret-ecoute-vocale.md` (2026-11-16).
 
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 

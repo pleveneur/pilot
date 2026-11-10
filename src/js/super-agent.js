@@ -256,6 +256,7 @@ import {
   decideVocalVeille,
   mentionsAssistantName,
   mentionsWakeWord,
+  vocalEtatAffiche,
   vocalNameGateArmed,
   vocalNameSentence,
   vocalVeilleSentence,
@@ -5152,6 +5153,14 @@ export async function createSuperAgent(container) {
   let vocalVeilleParCommande = false;
   let vocalVeilleTimer = 0;
   let vocalVeilleDepart = 0;
+  // L'ORDRE D'ARRÊT N'EST JAMAIS LU (décision du propriétaire, 2026-11-16) : la
+  // phrase qui demande d'arrêter l'écoute part comme une demande à l'assistant
+  // (il appelle l'outil `stop_listening`), mais sa réponse n'est PAS prononcée —
+  // une seconde voix sur un ordre de silence serait le comble. Le drapeau est
+  // posé au moment où la phrase part et CONSOMMÉ (remis à faux) par
+  // `autoReadVocalReply`, qui est le seul lecteur automatique de l'écran. Aucun
+  // réglage, aucun bouton : il ne vit que le temps d'un tour.
+  let vocalCoupeSilencieuse = false;
   // Projet marque SENSIBLE (local-first) : la dictee cloud y est interdite,
   // comme dans l'onglet agent pi. Relu a l'entree du mode.
   let vocalProjectSensible = false;
@@ -5722,6 +5731,10 @@ let vocalMotsDeReveil = [];
         clearVocalSilenceTimer();
         if (inputEl.value !== preText) inputEl.value = preText;
         applyVocalState();
+        // LA PHRASE N'EST PLUS AVALÉE (décision du propriétaire, 2026-11-16) :
+        // elle part comme une DEMANDE, par le chemin unique d'envoi. La réponse
+        // ne sera pas lue. L'état d'arrêt, lui, est déjà posé ci-dessus.
+        vocalRendreOrdreArret(finalText);
         return;
       }
       // LE NOM (ou un mot de réveil) VIENT D'ÊTRE ENTENDU : la veille tombe et le
@@ -5806,10 +5819,12 @@ let vocalMotsDeReveil = [];
       // change est celui du réveil, consommé par la phrase qu'il a ouverte.
       if (wasActive === true) {
         // « ARRÊTE D'ÉCOUTER » (§6quater.2), MÊME EN FIN D'ÉCOUTE : un moteur qui
-        // ne rend la phrase qu'à la fermeture ne doit pas l'envoyer comme une
-        // demande. On arme la veille AVANT la garde, qui jette alors la phrase
-        // par le chemin existant (rien n'est envoyé, rien n'est conservé) —
-        // aucune seconde voie de rejet n'est créée.
+        // ne rend la phrase qu'à la fermeture la reconnaît ici. La veille est
+        // armée AVANT la garde (qui jette ensuite la phrase : rien n'est
+        // conservé, rien n'est affiché) et la phrase part comme une DEMANDE par
+        // le chemin unique d'envoi — une seule voie, aucun envoi en double (si
+        // les résultats l'avaient déjà fait partir, la veille est déjà armée et
+        // cette reconnaissance répond `deja-en-veille`).
         if (
           decideVocalStopListening({
             modeOuvert: vocalOverlay !== null,
@@ -5818,6 +5833,7 @@ let vocalMotsDeReveil = [];
           }).action === VOCAL_STOP_ARRETER
         ) {
           vocalEnterVeille("commande");
+          vocalRendreOrdreArret(finalText);
         }
         const gardeNom = decideVocalNameGate({
           modeOuvert: vocalOverlay !== null,
@@ -6660,6 +6676,14 @@ let vocalMotsDeReveil = [];
     // elle partira des que le travail en cours sera fini. Cette ligne est le
     // SEUL texte de l'ecran Vocal : sans elle, l'accuse resterait invisible.
     if (demandesEnAttente.length > 0) return VOCAL_MESSAGE_DEMANDE_ACCUSEE;
+    // LA VEILLE N'ÉCOUTE PLUS (décision du propriétaire, 2026-11-16) : quand la
+    // veille est armée — par 20 s de silence ou par l'ordre d'arrêt, c'est le
+    // MÊME état — l'écran ne dit plus « Je vous écoute ». La décision est PURE
+    // et vit dans `vocalEtatAffiche` (vocal-nom-garde.js) : l'état « écoute »
+    // devient le REPOS, la parole et la réflexion gardent leur phrase. La ligne
+    // tombe alors sur la branche de la veille, plus bas, qui dit quoi faire.
+    // Aucun second état n'est inventé, et hors veille rien ne change.
+    state = vocalEtatAffiche({ veilleArmee: vocalVeilleArmee, etat: state });
     if (state !== "idle") return vocalStatusText(state);
     if (vocalMicFerme) return vocalMicFerme;
     const raison = decideVocalDictation(vocalConversationState()).raison;
@@ -6679,11 +6703,17 @@ let vocalMotsDeReveil = [];
     // lignes existantes qui parlent. La phrase du NOM n'est pas recopiée : elle
     // est composée depuis la source unique (`vocalNameSentence`), et rien n'est
     // affiché quand le réglage est inactif (`""` ⇒ écran inchangé).
+    // EN VEILLE, L'OREILLE LOCALE SE TAIT (décision du propriétaire, 2026-11-16) :
+    // « J'écoute avec le service local » est une phrase d'écoute, et la veille
+    // n'écoute plus rien sauf son nom. Le cas `deja-ouverte` — la dictée reste
+    // ouverte en veille, c'est ce qui permet d'entendre le nom — n'est donc PAS
+    // compté comme une oreille armée : l'ordre des branches ci-dessous laisse
+    // alors parler la ligne de la veille, seule phrase juste.
     const oreilleArmee =
       raison === "au-repos" ||
       raison === "tour-en-cours" ||
       raison === "apres-lecture" ||
-      raison === "deja-ouverte";
+      (raison === "deja-ouverte" && vocalVeilleArmee !== true);
     if (oreilleArmee) {
       const ligneOreille = localEarStatusLine({
         plan: localEarPlan,
@@ -6738,13 +6768,20 @@ let vocalMotsDeReveil = [];
       listening: vocalMicListening && vocalMicCapte,
     };
     const state = vocalScreenState(etats);
+    // LA VEILLE N'ÉCOUTE PLUS (décision du propriétaire, 2026-11-16) : l'état
+    // AFFICHÉ est celui du module pur, et c'est le MÊME pour les deux entrées de
+    // la veille (20 s de silence, ordre d'arrêt) — un seul état, jamais deux
+    // comportements. Seul « écoute » devient le repos ; la parole et la
+    // réflexion gardent leur classe et leur phrase. Hors veille, `affiche`
+    // vaut `state` : rien ne change.
+    const affiche = vocalEtatAffiche({ veilleArmee: vocalVeilleArmee === true, etat: state });
     vocalOverlay.classList.remove(
       "vocal-state-idle",
       "vocal-state-listening",
       "vocal-state-thinking",
       "vocal-state-speaking"
     );
-    vocalOverlay.classList.add(vocalStateClass(etats));
+    vocalOverlay.classList.add(vocalStateClass({ ...etats, listening: affiche === "listening" }));
     const ligne = vocalStatusNode();
     // Une seule ligne (§2.3) : les phrases de l'ecran et, au repos seulement,
     // les messages clairs (micro ferme, dictee indisponible, plafond de
@@ -7290,6 +7327,80 @@ let vocalMotsDeReveil = [];
     vocalVeilleArmee = false;
     vocalVeilleParCommande = false;
     vocalRestartVeilleTimer();
+  }
+
+  /**
+   * L'OUTIL D'ARRÊT D'ÉCOUTE — point d'APPLICATION UNIQUE (décision du
+   * propriétaire, 2026-11-16).
+   *
+   * La phrase d'arrêt part comme une demande, l'assistant appelle l'outil
+   * `stop_listening` (`pilot-assistant-actions.ts`), et Pilot produit ICI l'état
+   * d'arrêt. Cet état est **exactement** celui de la veille automatique de 20 s
+   * : `vocalEnterVeille("commande")` — un seul état pour les deux entrées, jamais
+   * deux comportements. Le micro n'est PAS fermé (sinon le nom ne pourrait plus
+   * réveiller) : l'écoute du nom, du personnage et des mots de réglage continue,
+   * et l'écran dit quoi faire.
+   *
+   * Aucune lecture à voix haute : `vocalCoupeSilencieuse` est posé ici aussi, car
+   * l'ordre peut arriver par le clavier de la conversation, pas seulement par la
+   * dictée.
+   *
+   * Exposé à `handleSuperAgentAction` par `window._pilotVocalStopListening` :
+   * l'interception de l'outil vit hors de cette portée (même modèle que
+   * `window._pilotTabs`).
+   * @param {string} [origine] origine de l'ordre (journal) ; l'état est le même
+   * @returns {{ok: boolean, deja: boolean, phrase: string}} résultat lisible
+   */
+  function vocalStopListeningFromAssistant(origine) {
+    // Hors de l'écran Vocal, il n'y a rien à arrêter : on le dit, sans rien
+    // inventer (aucun état caché n'est posé pour un écran fermé).
+    if (!vocalOverlay) return { ok: false, deja: false, phrase: "" };
+    const deja = vocalVeilleArmee === true;
+    vocalEnterVeille(String(origine || "commande"));
+    vocalCoupeSilencieuse = true;
+    applyVocalState();
+    // La phrase rendue est CELLE DE L'ÉCRAN, relue à la source unique
+    // (`vocalStatusLine` → `vocalVeilleSentence`) : elle n'est pas recomposée.
+    return { ok: true, deja, phrase: vocalStatusLine("listening") };
+  }
+
+  /**
+   * L'ORDRE D'ARRÊT PART COMME UNE DEMANDE À L'ASSISTANT (décision du
+   * propriétaire, 2026-11-16 — l'ancien point 4 de la fiche est ABANDONNÉ : la
+   * phrase ne doit plus être avalée).
+   *
+   * La formule d'arrêt n'est plus seulement un ordre local : c'est une
+   * demande, comme n'importe quelle autre parole, et c'est l'ASSISTANT qui
+   * appelle l'outil `stop_listening` (`pilot-assistant-actions.ts`), lequel
+   * produit l'état d'arrêt par UN SEUL point d'application
+   * (`window._pilotVocalStopListening` → `vocalEnterVeille("commande")`).
+   *
+   * UN SEUL envoi : le chemin EXISTANT (`send`), donc la même file d'attente,
+   * le même refus quand le moteur réfléchit, le même vidage de la zone. Aucun
+   * second mécanisme n'est créé.
+   *
+   * Les deux seules choses qui ne passent PAS par `send` (et qui justifient les
+   * deux gardes ci-dessous) : une QUESTION en attente (le chemin d'envoi la
+   * validerait à la place de l'utilisateur — on ne répond jamais à sa place) et
+   * un moteur qui ne peut pas démarrer (le chemin d'envoi laisserait la phrase
+   * dans la zone et empêcherait le bas de l'écran de s'effacer).
+   *
+   * AUCUNE LECTURE À VOIX HAUTE : `vocalCoupeSilencieuse` est posé AVANT
+   * l'envoi et consommé par `autoReadVocalReply` à la fin du tour.
+   * @param {string} phrase texte entendu, déjà reconnu comme formule d'arrêt
+   */
+  function vocalRendreOrdreArret(phrase) {
+    const texte = String(phrase == null ? "" : phrase).replace(/\s+/g, " ").trim();
+    if (!texte) return;
+    if (hasPendingQuestion()) return;
+    if (!canAssistantReflect()) return;
+    // La réponse à CET ordre n'est jamais prononcée (une seconde voix sur un
+    // ordre de silence serait le comble) — posé AVANT l'envoi, consommé par la
+    // fin de tour.
+    vocalCoupeSilencieuse = true;
+    inputEl.value = texte;
+    resizeInput();
+    send();
   }
 
   /** Etat lu par la decision du silence (memes faits que la conversation). */
@@ -8162,6 +8273,17 @@ let vocalMotsDeReveil = [];
    */
   function autoReadVocalReply() {
     if (!vocalOverlay) return;
+    // L'ORDRE D'ARRÊT N'EST JAMAIS LU (décision du propriétaire, 2026-11-16) :
+    // quand la dernière demande était un ORDRE D'ARRÊT D'ÉCOUTE, Pilot l'a reçu
+    // et a répondu — mais sa réponse n'est PAS prononcée. Le drapeau est
+    // CONSOMMÉ ici, à la seule lecture automatique de l'écran : un tour peut
+    // avoir plusieurs fins (`agent_end` de relance), la première le retire. La
+    // réponse reste écrite dans la conversation, avec son bouton « Écouter » :
+    // l'utilisateur garde la main, rien n'est caché.
+    if (vocalCoupeSilencieuse === true) {
+      vocalCoupeSilencieuse = false;
+      return;
+    }
     const boutons = messagesEl.querySelectorAll(".agent-message-assistant .agent-read-btn");
     const bouton = boutons.length ? boutons[boutons.length - 1] : null;
     if (!bouton || bouton.disabled) return;
@@ -8744,6 +8866,11 @@ let vocalMotsDeReveil = [];
   // devant lui. Enregistré ici, retiré dans `unlisten` avec le jeton.
   setPrimaryAgentQuestionSurface(assistantQuestionSurfaceToken);
   window._pilotSuperAgentOpen = true;
+  // L'OUTIL D'ARRÊT D'ÉCOUTE (décision du propriétaire, 2026-11-16) : l'action
+  // `stop_listening` arrive hors de cette portée (`handleSuperAgentAction`),
+  // elle emprunte donc le MÊME pont que `window._pilotTabs`. Le point
+  // d'application, lui, est unique : `vocalStopListeningFromAssistant`.
+  window._pilotVocalStopListening = vocalStopListeningFromAssistant;
   // Anti-doublon Telegram (lot 3) : l'onglet est VIVANT — un tour de l'Assistant
   // en cours repousse l'envoi des avis bruts retardés jusqu'à sa fin (fin de tour
   // où l'Assistant aura parlé, ou non).
@@ -8948,6 +9075,7 @@ let vocalMotsDeReveil = [];
       window.removeEventListener("pilot-exit-assistant-only", onExitAssistantOnly);
       window.removeEventListener(SCREEN_MODE_APPLY_EVENT, onScreenModeApply);
       window._pilotSuperAgentOpen = false;
+      window._pilotVocalStopListening = null;
       // Chantier #132 + tâche #141 : nettoyer la barre des questions en attente.
       // IMPORTANT : avant de vider la file, LIBÉRER le backend pour chaque
       // question pendante (répondre {cancelled:true} via le responder). Sinon le
@@ -11886,6 +12014,26 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       } catch (e) {
         console.error("Erreur create_agent (assistant):", e);
         appendSystemMessage(messagesEl, `❌ Échec de la création de l'agent : ${e}`);
+        await respondSuperAgentAction(id, false);
+      }
+    } else if (action === "stop_listening") {
+      // ARRÊT D'ÉCOUTE DEMANDÉ PAR L'ASSISTANT (outil `stop_listening`, décision
+      // du propriétaire 2026-11-16). L'outil ne fait QUE produire l'état d'arrêt
+      // de l'écran Vocal, par le point d'application unique de l'onglet
+      // (`vocalStopListeningFromAssistant` → `vocalEnterVeille("commande")`) :
+      // même état que la veille de 20 s, micro toujours ouvert sur le nom. Aucun
+      // réglage, aucun bouton, aucun second état.
+      const stopListening = window._pilotVocalStopListening;
+      const resultat =
+        typeof stopListening === "function" ? stopListening(info.reason || "commande") : null;
+      if (resultat && resultat.ok === true) {
+        appendSystemMessage(messagesEl, `🤫 ${resultat.phrase}`);
+        await respondSuperAgentAction(id, true);
+      } else {
+        appendSystemMessage(
+          messagesEl,
+          "🤫 L'écran Vocal n'est pas ouvert : il n'y a aucune écoute à arrêter.",
+        );
         await respondSuperAgentAction(id, false);
       }
     } else {

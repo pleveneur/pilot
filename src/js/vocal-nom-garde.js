@@ -106,6 +106,22 @@
 // ordinaire qui contient ces mots par hasard ne coupe **jamais** l'écoute : dans
 // le doute, on continue d'écouter (`pas-formule`). Une fois en veille, la
 // formule n'a plus d'effet (`deja-en-veille`) : rien ne se passe, aucun message.
+//
+// « STRICTE » ne veut pas dire « au caractère près » : la reconnaissance
+// vocale française ne rend pas toujours la même graphie. La comparaison passe
+// donc par une clé (`stopFormulaKey`) qui absorbe TROIS écarts de
+// transcription, et trois seulement :
+//   - les frontières de mots (apostrophes et espaces) : « arrête d'écouter »,
+//     « arrête découter » et « arrêtedécouter » sont la même demande ;
+//   - la finale du verbe (`-er`, `-ez`, `-es`) : « arrêtez d'écouter »,
+//     « arrêtes d'écouter » et « arrêter d'écouter » valent « arrête
+//     d'écouter » — c'est l'hésitation la plus fréquente du français ;
+//   - une formule de politesse en fin de phrase (« s'il te plaît », « s'il
+//     vous plaît », « stp », « svp », « merci »).
+// AUCUN mot supplémentaire n'est toléré : « arrête d'écouter la radio »,
+// « silence, le dossier est vide » ou « écoute, j'ai une idée » ne coupent
+// rien. La tolérance ne peut donc pas transformer une phrase ordinaire en
+// ordre : elle ne fait que reconnaître une même demande écrite autrement.
 
 /** Le nom est absent (ou l'écran ne garde pas la phrase) : la phrase est jetée. */
 export const VOCAL_GATE_JETER = "jeter";
@@ -139,11 +155,19 @@ export const VOCAL_ECOUTE_LIBRE_MS = 20000;
 export const VOCAL_STOP_FORMULAS = Object.freeze([
   "arrête d'écouter",
   "arrête l'écoute",
+  "arrêtez d'écouter",
+  "arrêtez l'écoute",
+  "arrêter d'écouter",
   "arrête d'écouter s'il te plaît",
+  "arrête d'écouter s'il vous plaît",
   "stoppe l'écoute",
   "stop l'écoute",
+  "cesse d'écouter",
   "n'écoute plus",
+  "ne m'écoute plus",
+  "ne m'écoutez plus",
   "tais-toi",
+  "taisez-vous",
   "silence",
   "au repos",
   "tu peux te reposer",
@@ -163,9 +187,69 @@ export const VOCAL_STOP_RIEN = "rien";
 let vocalStopKeys = null;
 function vocalStopKeySet() {
   if (!vocalStopKeys) {
-    vocalStopKeys = new Set(VOCAL_STOP_FORMULAS.map((formule) => foldSpoken(formule)));
+    vocalStopKeys = new Set(VOCAL_STOP_FORMULAS.map((formule) => stopFormulaKey(formule)));
   }
   return vocalStopKeys;
+}
+
+/**
+ * Les formules de politesse qui peuvent suivre une formule d'arrêt, en fin de
+ * phrase uniquement (mots déjà repliés par `foldSpoken`). Données, pas de règle
+ * cachée : la liste est courte et se lit.
+ */
+const STOP_POLITENESS = Object.freeze([
+  Object.freeze(["s", "il", "te", "plait"]),
+  Object.freeze(["s", "il", "vous", "plait"]),
+  Object.freeze(["stp"]),
+  Object.freeze(["svp"]),
+  Object.freeze(["merci"]),
+  Object.freeze(["merci", "beaucoup"]),
+]);
+
+/**
+ * Retire une (ou plusieurs) formule(s) de politesse en FIN de phrase. PURE.
+ * Ne retire jamais le dernier mot utile : « merci » seul reste « merci ».
+ * @param {string[]} mots mots repliés
+ * @returns {string[]} mots sans la politesse finale
+ */
+function sansPolitesseFinale(mots) {
+  let suite = mots.slice();
+  let retire = true;
+  while (retire) {
+    retire = false;
+    for (const formule of STOP_POLITENESS) {
+      const n = formule.length;
+      if (suite.length <= n) continue;
+      const fin = suite.slice(suite.length - n);
+      if (formule.every((mot, i) => fin[i] === mot)) {
+        suite = suite.slice(0, suite.length - n);
+        retire = true;
+        break;
+      }
+    }
+  }
+  return suite;
+}
+
+/**
+ * LA CLÉ COMPARABLE d'une formule d'arrêt entendue.
+ *
+ * Elle absorbe les trois écarts de transcription décrits en tête de fichier, et
+ * rien d'autre : frontières de mots ignorées (concaténation sans espaces),
+ * finale de verbe ramenée à `-e` (`-er`, `-ez`, `-es`), politesse finale
+ * retirée. Aucun mot en plus n'est toléré : la clé d'une phrase de dix mots
+ * reste longue et ne peut pas égaler une formule.
+ *
+ * PURE, ne lève jamais : une valeur absente donne la chaîne vide.
+ * @param {unknown} texte phrase transcrite
+ * @returns {string} clé comparable
+ */
+export function stopFormulaKey(texte) {
+  const mots = foldSpoken(texte).split(" ").filter(Boolean);
+  if (!mots.length) return "";
+  return sansPolitesseFinale(mots)
+    .map((mot) => mot.replace(/(er|ez|es)$/, "e"))
+    .join("");
 }
 
 /** Ce qui sépare deux mots de réveil dans le champ unique. */
@@ -217,7 +301,7 @@ export function phoneticKey(mot) {
  * @returns {boolean}
  */
 export function isVocalStopFormula(texte) {
-  const cle = foldSpoken(texte);
+  const cle = stopFormulaKey(texte);
   if (!cle) return false;
   return vocalStopKeySet().has(cle);
 }
@@ -526,4 +610,33 @@ export function vocalNameGateArmed(etats) {
   if (e.ecouteLibre === true) return false;
   if (wordsOf(e.nom).length > 0) return true;
   return wakeWordsFrom(e.motsDeReveil).length > 0;
+}
+
+/**
+ * L'ÉTAT AFFICHÉ de l'écran, une fois la veille ARMÉE.
+ *
+ * LA VEILLE N'ÉCOUTE PLUS (décision du propriétaire, 2026-11-16) : l'écran de
+ * l'écran Vocal ne dit plus « Je vous écoute » quand la veille est armée — par
+ * les 20 s de silence comme par l'ordre d'arrêt, c'est le MÊME état. Les deux
+ * entrées produisent donc exactement le même affichage, et il n'y a rien à
+ * distinguer ailleurs.
+ *
+ * Ce que la fonction fait, et rien de plus : l'état « écoute » (le rond qui
+ * écoute) devient le REPOS. Elle ne touche ni à ce que le micro fait, ni au halo
+ * de parole, ni à la réflexion : une phrase en cours de lecture
+ * (`speaking`) ou une réponse en cours (`thinking`) garde sa phrase, comme
+ * avant. Hors veille, l'état est rendu À L'IDENTIQUE : aucun appelant existant
+ * ne voit de différence.
+ *
+ * PURE, sans DOM ni minuterie. Le choix de la PHRASE reste à
+ * `vocalStatusLine` (`vocalVeilleSentence` / `vocalNameSentence`) : ici on ne
+ * décide que du fait « est-ce que l'écran écoute ? ».
+ * @param {{veilleArmee?: boolean, etat?: string}} [etats]
+ * @returns {string} état à afficher
+ */
+export function vocalEtatAffiche(etats) {
+  const e = etats || {};
+  const etat = typeof e.etat === "string" && e.etat ? e.etat : "idle";
+  if (e.veilleArmee !== true) return etat;
+  return etat === "listening" ? "idle" : etat;
 }
