@@ -5771,10 +5771,13 @@ let vocalMotsDeReveil = [];
       // envoyer (erreur de reconnaissance, refus de permission, panne réseau).
       voiceActive = false; voiceRec = null;
       if (micBtn) { micBtn.classList.remove("rec"); micBtn.title = micTitleIdle(); }
-      // OREILLE LOCALE (étape 2) : le service de voix local s'est arrêté pendant
-      // la dictée. Sa phrase est DITE (ligne d'état en mode Vocal, message dans
-      // la conversation ailleurs), et la prochaine dictée repart sur le moteur
-      // du navigateur — annoncé par la ligne d'état, jamais en silence.
+      // OREILLE LOCALE (étape 2) : la dictée locale s'est arrêtée pendant
+      // l'écoute (une panne du pont, une session refusée, un abandon). Sa phrase
+      // est DITE (ligne d'état en mode Vocal, message dans la conversation
+      // ailleurs), et la prochaine dictée repart sur le moteur du navigateur —
+      // annoncé par la ligne d'état, jamais en silence. Le TEXTE DÉJÀ OBTENU,
+      // lui, est resté dans la zone : le moteur le remet avant de se taire, le
+      // gestionnaire de résultat l'écrit, et rien ici ne l'efface.
       const phraseLocale = localEarFailureMessage(ev);
       if (phraseLocale) {
         erreurAffichee = true;

@@ -117,13 +117,51 @@ export function createLocalEar(options = {}) {
   }
 
   /**
-   * Une panne : elle est DITE (une seule fois), la session est refermée, et la
-   * fin d'écoute suit — exactement comme une erreur du moteur du navigateur.
+   * LA SEULE façon d'ABANDONNER une session auprès du pont : la prévenir
+   * (`asr_voicestudio_cancel`) pour qu'elle ne reste pas vivante derrière nous.
+   *
+   * Pourquoi c'est indispensable, et pourquoi c'est ICI et pas ailleurs : une
+   * session abandonnée sans prévenir reste ouverte côté pont, et c'est la
+   * TENTATIVE SUIVANTE qui la referme (`asr_voicestudio_start` interrompt la
+   * session précédente) — le texte qu'elle avait déjà reconnu est alors jeté,
+   * et le journal se remplit de « session précédente refermée ». L'abandon se
+   * fait donc TOUJOURS par cette fonction, jamais par un `invoke` recopié.
+   *
+   * Ne lève jamais : interrompre une session déjà finie n'est pas une erreur.
+   *
+   * @param {string} id session à abandonner
+   * @returns {Promise<void>}
+   */
+  async function abandonnerSession(id) {
+    const cible = typeof id === "string" ? id : "";
+    if (!cible || !invoke) return;
+    try {
+      await invoke("asr_voicestudio_cancel", { sessionId: cible });
+    } catch (_) {
+      /* une session déjà refermée n'a rien à interrompre */
+    }
+  }
+
+  /**
+   * Une panne : le TEXTE DÉJÀ OBTENU est remis à l'écran, la session est
+   * ABANDONNÉE auprès du pont (jamais laissée ouverte), la panne est DITE (une
+   * seule fois), et la fin d'écoute suit — exactement comme une erreur du moteur
+   * du navigateur.
    */
   function panner(message) {
     if (termine) return;
     termine = true;
     fermerRobinet();
+    // 1. Ce qui a déjà été reconnu n'est plus perdu : il repart par la porte
+    //    UNIQUE du texte (`onresult`), avant que la session soit fermée — sans
+    //    cela, un abandon jetait les mots déjà transcrits.
+    emettreResultat();
+    // 2. La session est abandonnée AUPRÈS DU PONT, tout de suite : elle ne
+    //    reste pas vivante pour être refermée (et son texte jeté) par la
+    //    tentative suivante.
+    const abandonnee = sessionId;
+    sessionId = "";
+    void abandonnerSession(abandonnee);
     const phrase = String(message == null ? "" : message).trim();
     try {
       if (typeof rec.onerror === "function") {
@@ -272,14 +310,7 @@ export function createLocalEar(options = {}) {
     }
     if (arrete) {
       // Arrêtée pendant l'ouverture : rien n'est gardé, rien n'est laissé ouvert.
-      const ouverte = session && session.session_id ? session.session_id : "";
-      if (ouverte) {
-        try {
-          await invoke("asr_voicestudio_cancel", { sessionId: ouverte });
-        } catch (_) {
-          /* une session déjà refermée n'a rien à interrompre */
-        }
-      }
+      await abandonnerSession(session && session.session_id ? session.session_id : "");
       return;
     }
     sessionId = session && session.session_id ? session.session_id : "";
@@ -307,11 +338,7 @@ export function createLocalEar(options = {}) {
     if (typeof unlisten !== "function") {
       // Sans écoute, le texte ne reviendrait JAMAIS : mieux vaut le dire et ne
       // rien ouvrir que de laisser croire à une dictée qui ne rendra rien.
-      try {
-        await invoke("asr_voicestudio_cancel", { sessionId });
-      } catch (_) {
-        /* idem */
-      }
+      await abandonnerSession(sessionId);
       sessionId = "";
       panner("la fenêtre ne peut pas écouter la dictée locale");
       return;

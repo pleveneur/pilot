@@ -312,7 +312,12 @@ describe("4. Le repli est VISIBLE, jamais silencieux", () => {
   it("une panne PENDANT l'écoute est dite, et le retour en ligne est annoncé", () => {
     const phrase = localEarFailureMessage({ error: "local-ear", local: true, message: "socket fermée" });
     expect(phrase).not.toBe("");
-    expect(phrase).toContain("s'est arrêté pendant la dictée");
+    // La phrase dit ce qui est PROUVÉ (la dictée locale s'est arrêtée), et
+    // n'accuse plus le service de voix local, qui peut être parfaitement sain.
+    expect(phrase).toContain("La dictée locale s'est arrêtée pendant l'écoute");
+    expect(phrase).not.toContain("service de voix local s'est arrêté");
+    // La cause réelle remonte dans le détail, sans être inventée.
+    expect(phrase).toContain("socket fermée");
     expect(phrase).toContain("Rien n'a été envoyé");
     // Le basculement est ANNONCÉ, pas subi en silence.
     expect(phrase).toContain("Je repasse à la dictée du navigateur");

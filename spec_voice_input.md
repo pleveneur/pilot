@@ -561,8 +561,33 @@ pas le code ; Pilot n'installe rien, ne télécharge rien, n'accepte aucune lice
 |---|---|
 | Case décochée | rien de plus (comportement historique) |
 | Service absent / muet / sans modèle français / dictée non prête | phrase dans la conversation **ou** ligne d'état du mode Vocal, disant qu'on **dicte autrement** et que le son repart vers un **service en ligne** |
-| Pendant l'écoute (service qui s'arrête) | phrase immédiate, décision **recalculée sans statut** (donc « absent »), retour au navigateur **annoncé** |
+| Pendant l'écoute (panne du pont, session refusée, abandon) | phrase immédiate disant ce qui est **prouvé** — « La dictée locale s'est arrêtée pendant l'écoute » —, le **détail** de la cause réelle quand le pont le donne, et le retour au navigateur **annoncé** |
 | Réglage coché au démarrage | « Je vérifie si la dictée locale peut servir… » avant toute dictée ; l'écoute automatique **attend** la réponse du pont au lieu de partir en ligne |
+
+### L'abandon d'une écoute PRÉVIENT le service (correctif du 2026-11-18)
+
+Un abandon d'écoute (panne du pont, session refusée, écoute jetée) était
+silencieux **côté service** : la session restait ouverte pour rien, et c'est la
+tentative **suivante** qui la refermait (`asr_voicestudio_start` interrompt la
+précédente) — le texte qu'elle avait déjà reconnu partait avec elle, et le
+journal se remplissait de « session précédente refermée ».
+
+- **Une seule façon d'abandonner** : `abandonnerSession(id)` dans
+  `oreille-locale-moteur.js`, seul site de `asr_voicestudio_cancel` du module,
+  utilisée par l'abandon **et** par les deux refus de démarrage. L'arrêt
+  **normal** garde son propre chemin (`asr_voicestudio_stop`, le service rend
+  son texte final).
+- **Le texte déjà obtenu n'est plus jeté** : avant d'abandonner, le moteur
+  remet à l'écran ce qu'il a déjà reconnu, par la porte **unique** du texte
+  (`onresult`) — l'écran l'écrit dans la zone, et la branche d'erreur ne
+  l'efface pas. Rien n'est envoyé pour autant (règle inchangée : aucun envoi sur
+  une erreur).
+- **La phrase n'accuse plus un service sain** : `localEarFailureMessage` dit la
+  seule chose prouvée et laisse la **cause réelle** au détail rendu par le pont
+  (qui, lui, nomme le service à bon escient).
+
+Verrou : `src/js/abandon-ecoute-prevenir-le-service.test.js` (14 verrous). Rapport :
+`docs/rapports/RAPPORT-correction-abandon-ecoute-locale.md`.
 
 **La ligne d'état ne ment pas** : elle dit laquelle des deux oreilles écoute
 (« J'écoute avec le service local. » / « Le service local est absent : je dicte

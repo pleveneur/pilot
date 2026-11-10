@@ -221,9 +221,16 @@ export function localEarStatusLine(etats = {}) {
 }
 
 /**
- * La phrase d'une panne SURVENUE PENDANT l'écoute (le service s'arrête, la
- * session se ferme, le son ne part plus). Elle est dite à l'écran, une fois,
- * par le chemin de message déjà existant : ce n'est jamais un silence.
+ * La phrase d'une panne SURVENUE PENDANT l'écoute. Elle est dite à l'écran, une
+ * fois, par le chemin de message déjà existant : ce n'est jamais un silence.
+ *
+ * Elle ne nomme PLUS le service de voix local. Le défaut corrigé : chaque panne
+ * de la fenêtre (le son du micro qui n'arrive plus au pont, une session
+ * refusée) était annoncée par « Le service de voix local s'est arrêté », alors
+ * que le service était sain — l'utilisateur, et le diagnostic suivant, étaient
+ * envoyés sur une fausse piste. La phrase dit donc la seule chose PROUVÉE : la
+ * dictée locale s'est arrêtée ; le détail, lui, porte la cause réelle quand le
+ * pont la connaît (et c'est alors lui qui nomme le service, à bon escient).
  *
  * @param {{message?: string, error?: string}|null|undefined} evenement
  * @returns {string} la phrase, ou "" si ce n'est pas une panne locale
@@ -234,7 +241,7 @@ export function localEarFailureMessage(evenement) {
   const detail = typeof ev.message === "string" ? ev.message.replace(/\s+/g, " ").trim() : "";
   const fin = detail ? ` (${detail})` : "";
   return (
-    `Le service de voix local s'est arrêté pendant la dictée${fin}. ` +
+    `La dictée locale s'est arrêtée pendant l'écoute${fin}. ` +
     "Rien n'a été envoyé. Je repasse à la dictée du navigateur, donc à un service en ligne."
   );
 }
