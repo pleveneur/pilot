@@ -2082,7 +2082,7 @@ sans que personne ne se soit adressé à Pilot.
 ### 6quater.1 Les mots de réveil (réglage unique, `vocal_wake_words`)
 
 **Décision du propriétaire** : à côté de son nom, l'écran Vocal doit pouvoir
-obéir à des **mots de réveil libres** (« hey bonjour, allô »), réglés à **un seul
+obéir à des **mots de réveil libres** (« allô, salut »), réglés à **un seul
 endroit** — le champ texte ajouté dans la section **« Mode Vocal »** des
 Paramètres (onglet Assistant), juste sous la dictée locale.
 
@@ -2106,6 +2106,15 @@ Paramètres (onglet Assistant), juste sous la dictée locale.
   la comparaison est **la fonction existante** `mentionsAssistantName`, jamais
   une seconde règle. Un mot de réveil **inutilisable** (vide, ou fait uniquement
   de ponctuation) est **ignoré** : il n'ouvre rien et ne fonde aucun refus.
+- **L'EXEMPLE AFFICHÉ EST EXACT** (correctif `docs/rapports/RAPPORT-exemple-mots-de-reveil.md`) :
+  le champ montre `allô, salut` — deux mots de réveil d'**un seul mot** chacun,
+  donc exactement ce que la comparaison accepte. L'ancien exemple
+  `hey bonjour, allô` était un **piège** : `hey bonjour` est UN mot de réveil à
+  deux mots, qui ne part ni sur « hey » ni sur « bonjour » ; qui le recopiait
+  obtenait un réglage ne se déclenchant presque jamais. La note dit désormais
+  qu'une entrée de plusieurs mots doit être dite **en entier**. Verrou :
+  `src/js/mots-de-reveil.test.js` (l'exemple est lu dans `index.html`, chaque
+  entrée doit tenir en un mot, et chaque mot de l'exemple doit ouvrir la phrase).
 - **La règle du fail-open est préservée** (`nom-inutilisable`) : elle ne joue
   que si **aucun mot de réveil utilisable** n'est réglé. Un nom illisible **et**
   des mots de réveil lisibles ⇒ ce sont eux qui filtrent.
@@ -2138,9 +2147,11 @@ continue simplement de vous écouter.
   très proches passent (« Bernar » pour « Bernard »).
 - **Vous pouvez régler d'autres mots de réveil** : ⚙️ **Options → onglet
   « Assistant » → section « Mode Vocal »**, champ **« Mots de réveil »**.
-  Écrivez-les séparés par des virgules (« hey bonjour, allô ») : une phrase qui
+  Écrivez-les séparés par des virgules (« allô, salut ») : une phrase qui
   contient **un seul** de ces mots part, où qu'il soit, et les majuscules comme
-  les accents n'ont aucune importance. **Son nom reste toujours accepté en
+  les accents n'ont aucune importance. Une entrée de **plusieurs mots** doit
+  être dite **en entier** (« hey bonjour » ne part pas sur « bonjour » seul).
+  **Son nom reste toujours accepté en
   plus.** Champ **vide** : seul son nom compte, exactement comme avant. Le
   réglage s'applique **tout de suite**, sans redémarrer Pilot.
 - **Quel nom ?** Celui que Pilot affiche déjà : le **personnage** déposé par le
@@ -2161,8 +2172,9 @@ continue simplement de vous écouter.
 reconnaissance a écrit son nom autrement : redites-le clairement, cliquez
 **« Réveiller <Nom> »**, ou tapez votre demande au clavier. Pilot préfère ne
 rien faire que se déclencher pour une phrase qui ne lui était pas adressée. Un
-**mot de réveil plus simple à reconnaître** (« hey bonjour ») est souvent le
-remède : c'est à cela qu'il sert.
+**mot de réveil d'un seul mot** (« allô », « salut ») est souvent le remède :
+un exemple de plusieurs mots doit être prononcé en entier, et un mot court est
+plus facile à reconnaître. C'est à cela que sert ce réglage.
 <!-- /HELP:vocal-garde-du-nom -->
 
 **Le point de franchise (à dire à l'utilisateur)** : la garde est **étroite par

@@ -1606,9 +1606,11 @@ continue simplement de vous écouter.
   très proches passent (« Bernar » pour « Bernard »).
 - **Vous pouvez régler d'autres mots de réveil** : ⚙️ **Options → onglet
   « Assistant » → section « Mode Vocal »**, champ **« Mots de réveil »**.
-  Écrivez-les séparés par des virgules (« hey bonjour, allô ») : une phrase qui
+  Écrivez-les séparés par des virgules (« allô, salut ») : une phrase qui
   contient **un seul** de ces mots part, où qu'il soit, et les majuscules comme
-  les accents n'ont aucune importance. **Son nom reste toujours accepté en
+  les accents n'ont aucune importance. Une entrée de **plusieurs mots** doit
+  être dite **en entier** (« hey bonjour » ne part pas sur « bonjour » seul).
+  **Son nom reste toujours accepté en
   plus.** Champ **vide** : seul son nom compte, exactement comme avant. Le
   réglage s'applique **tout de suite**, sans redémarrer Pilot.
 - **Quel nom ?** Celui que Pilot affiche déjà : le **personnage** déposé par le
@@ -1629,8 +1631,9 @@ continue simplement de vous écouter.
 reconnaissance a écrit son nom autrement : redites-le clairement, cliquez
 **« Réveiller <Nom> »**, ou tapez votre demande au clavier. Pilot préfère ne
 rien faire que se déclencher pour une phrase qui ne lui était pas adressée. Un
-**mot de réveil plus simple à reconnaître** (« hey bonjour ») est souvent le
-remède : c'est à cela qu'il sert.
+**mot de réveil d'un seul mot** (« allô », « salut ») est souvent le remède :
+un exemple de plusieurs mots doit être prononcé en entier, et un mot court est
+plus facile à reconnaître. C'est à cela que sert ce réglage.
 
 ---
 

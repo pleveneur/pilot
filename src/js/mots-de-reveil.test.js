@@ -336,7 +336,35 @@ describe("7. le reglage vit a un seul endroit", () => {
     // L'EXEMPLE est visible, et la promesse du champ vide est ecrite noire sur
     // blanc. L'exemple est NEUTRE : il ne nomme aucun personnage (un nom ecrit
     // en dur dans un texte livre ne suivrait pas le personnage actif).
-    expect(section).toContain("hey bonjour");
+    // L'EXEMPLE est visible, et il decrit EXACTEMENT ce que le produit accepte :
+    // une virgule separe DEUX mots de reveil, donc chaque entree de l'exemple
+    // est ici UN SEUL mot. L'ancien exemple « hey bonjour, allô » etait un
+    // piege : « hey bonjour » est UN mot de reveil a DEUX mots, qui ne se
+    // declenche ni sur « hey » ni sur « bonjour » — celui qui le recopiait
+    // obtenait un reglage qui ne partait presque jamais.
+    const exemple =
+      (section.match(/id="setting-vocal-wake-words"[^>]*placeholder="([^"]*)"/) || [])[1] || "";
+    expect(exemple).toBe("allô, salut");
+    const motsExemple = wakeWordsFrom(exemple);
+    expect(motsExemple).toHaveLength(2);
+    for (const mot of motsExemple) {
+      expect(mot.trim().split(/\s+/), `l'entree « ${mot} » compte plusieurs mots`).toHaveLength(1);
+    }
+    // Chaque mot de l'exemple AFFICHE ouvre vraiment la phrase, seul.
+    for (const phrase of ["allô tu m'entends", "salut ça va"]) {
+      const garde = decideVocalNameGate({
+        modeOuvert: true,
+        texte: phrase,
+        nom: NOM,
+        motsDeReveil: exemple,
+      });
+      expect(garde.raison, `« ${phrase} » n'a pas ete reconnue`).toBe("mot-reveil");
+    }
+    // ... et un mot de reveil de plusieurs mots ne part JAMAIS sur un seul des
+    // siens : c'est exactement ce que la note affichee doit dire.
+    expect(mentionsWakeWord("bonjour, range le projet", "hey bonjour, allô")).toBe(false);
+    expect(mentionsWakeWord("hey bonjour range le projet", "hey bonjour, allô")).toBe(true);
+    expect(section).toContain("en entier");
     expect(section).toContain("Champ vide");
     // Aucun prenom de personnage dans l'aide affichee.
     for (const prenom of ["Nova", "Sylvie", "Camille", "Magnus"]) {

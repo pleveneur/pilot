@@ -801,9 +801,10 @@ struct AppConfig {
     local_dictation: bool,
     // Mode Vocal (écran vocal) : MOTS DE RÉVEIL de la garde du nom (§ 6quater de
     // `spec_modes_ecran_vocal.md`). UN seul champ texte, UNE clé, VIDE par
-    // défaut (vide ; à remplir par exemple avec « hey bonjour, allô »). Vide, le
-    // comportement historique est
-    // inchangé : seul le nom de l'assistante ouvre la phrase. Rempli, ces mots
+    // défaut (vide ; à remplir par exemple avec « allô, salut » : une virgule
+    // sépare deux mots de réveil, et un mot d'un seul mot est celui qui se
+    // reconnaît le mieux). Vide, le comportement historique est inchangé :
+    // seul le nom de l'assistante ouvre la phrase. Rempli, ces mots
     // s'AJOUTENT au nom — qui reste toujours accepté — et une phrase qui en
     // contient un seul part. La séparation, les doublons, la casse et les
     // accents sont traités par la source unique (`vocal-nom-garde.js`,
