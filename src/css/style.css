@@ -13535,7 +13535,18 @@ body.glass-refresh .vocal-side-tasks {
    animation : la retirer ne retire aucune information.
 
    Dernière règle du fichier, donc dernière dans la cascade : elle gagne sur
-   les règles `.breathing` énoncées plus haut, quelle que soit leur position. */
+   les règles `.breathing` énoncées plus haut, quelle que soit leur position.
+
+   EXCEPTION VOULUE — LA BARRE DE SAISIE DE L'ASSISTANT NE S'ARRÊTE PAS
+   (décision du propriétaire du 2026-11-17). Sur un poste dont les effets
+   d'animation Windows sont désactivés, l'application annonce en permanence
+   `prefers-reduced-motion: reduce` : la respiration de la barre était donc
+   coupée en permanence, alors que c'est le SEUL signe que l'Assistant
+   travaille dans cet onglet. Elle n'est plus supprimée : elle est RALENTIE
+   (2,8 s au lieu de 1 s) et ne fait varier que l'INTENSITÉ du voile — sa
+   TAILLE ne bouge pas, donc aucun mouvement de mise en page ni de position,
+   aucun risque de gêne visuelle. Les huit autres indicateurs d'activité
+   gardent, eux, `animation: none`. */
 @media (prefers-reduced-motion: reduce) {
   #agent-activity-dot.breathing,
   .agent-activity-item-dot.breathing,
@@ -13544,8 +13555,32 @@ body.glass-refresh .vocal-side-tasks {
   .agent-status.agent-status-streaming,
   .sa-missions-dot,
   .agent-tool-inline.running .agent-tool-dot,
-  .dash-tracking-agent.busy i,
-  .agent-chat-input-bar.superagent-input-reflecting .agent-input {
+  .dash-tracking-agent.busy i {
     animation: none;
+  }
+  /* Version RALENTIE de la respiration (même sélecteur que la règle normale,
+     plus bas dans la cascade : elle gagne quand le mouvement est réduit).
+     La taille du dégradé est FIXE : seule son opacité respire. */
+  .agent-chat-input-bar.superagent-input-reflecting .agent-input {
+    background-size: 80% 80%;
+    animation: assistant-input-breathe-reduced 2.8s ease-in-out infinite;
+  }
+  @keyframes assistant-input-breathe-reduced {
+    0%, 100% {
+      background-image: radial-gradient(
+        circle at center,
+        color-mix(in srgb, var(--superagent-accent) 4%, transparent) 0%,
+        color-mix(in srgb, var(--superagent-accent) 2%, transparent) 55%,
+        transparent 100%
+      );
+    }
+    50% {
+      background-image: radial-gradient(
+        circle at center,
+        color-mix(in srgb, var(--superagent-accent) 18%, transparent) 0%,
+        color-mix(in srgb, var(--superagent-accent) 9%, transparent) 55%,
+        transparent 100%
+      );
+    }
   }
 }

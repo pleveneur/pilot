@@ -4176,8 +4176,14 @@ ou « Repos », la mission porte « en cours » et sa durée. Sous
 `prefers-reduced-motion: reduce`, un bloc **en fin** de `src/css/style.css` coupe
 (`animation: none`) les six indicateurs d'activité — pastille de session, point du
 suivi, statut « en train de répondre », point de mission en cours, outil en cours,
-compteur du tableau de bord, respiration de la barre de saisie — **sans retirer
-un seul texte**.
+compteur du tableau de bord — **sans retirer un seul texte**. Seule exception
+(décision du 2026-11-17) : la **respiration de la barre de saisie de l'Assistant**
+n'est plus coupée mais **ralentie** (`assistant-input-breathe-reduced`, 2,8 s au
+lieu de 1 s, intensité seulement, aucune taille ni position) — sans elle, un poste
+dont les effets d'animation Windows sont désactivés (donc `reduce` en
+permanence) n'avait plus **aucun** signe que l'Assistant travaille dans l'onglet.
+Verrou : `src/js/barre-de-saisie-respire-toujours.test.js` (résout la cascade, non
+la présence d'un texte).
 
 Couverture : `src/js/au-repos-ce-n-est-pas-du-travail.test.js` (cas a/b/c passant
 par la chaîne réelle `mergeProbeActivity → flattenAgents → buildRunningMissions →
