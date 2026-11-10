@@ -80,6 +80,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Historique de sessions searchable (H9) | `spec_session_history.md` |
 | Feedback utilisateurs (remarques/évolutions) | `spec_feedback.md` |
 | Quality-gate interne | `spec_quality_gate.md` |
+| Registre des comportements validés (ce qui a été validé par le propriétaire, et LE test qui le protège) | `spec_registre_comportements_valides.md` + garde-fou `src/js/registre-comportements-valides.test.js` (il lit le registre et refuse une ligne sans test, un titre disparu, un test sauté, un doublon) |
 | Lancements de processus (aucune fenêtre noire) | `spec_pilot.md` § 2 (point unique `gds_core::proc::hide_console`) + garde `src/js/fenetres-noires-lancements.test.js` + `docs/rapports/RAPPORT-fenetres-noires-correction.md` |
 | Gestion des modèles IA (providers + alias) | `spec_rpc.md` § Édition des modèles |
 | Gestion d'agents multi-rôles | `spec_gestion_agents.md` |
@@ -143,6 +144,7 @@ pilot/
 ├── spec_web_remote.md         # Spécifications accès distant web (implémenté)
 ├── spec_voice_input.md        # Spécifications dictée vocale (implémenté) + OREILLE LOCALE § 9 (pont machine livré, écran pas encore branché)
 ├── spec_quality_gate.md       # Spécifications quality-gate interne (implémenté)
+├── spec_registre_comportements_valides.md # REGISTRE des comportements validés : une ligne par comportement, avec le test de comportement qui le protège ; garde-fou `src/js/registre-comportements-valides.test.js` (lit le registre, refuse une ligne sans test / un titre disparu / un test sauté / un doublon / un numéro manquant)
 ├── spec_cinq_regles_chaine_agents.md # SOURCE UNIQUE des 5 règles de la chaîne d'agents : garantie + test qui la tient
 ├── spec_help.md               # Réponse sur la documentation : socle + outil de l'Assistant (l'écran « Aide » a été retiré)
 ├── spec_review.md             # Spécifications revue de code assistée (H5)
