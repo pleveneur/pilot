@@ -566,13 +566,47 @@ import {
 
 /**
  * Projet à afficher en tête des messages Telegram de l'Assistant : le nom court
- * du projet actif, ou « Assistant » quand aucun projet n'est ouvert.
- * @returns {string}
+ * du projet RÉELLEMENT CONCERNÉ par l'échange en cours, ou « Assistant » quand
+ * aucun projet n'est identifiable.
+ *
+ * DÉFAUT CORRIGÉ (docs/rapports/RAPPORT-etiquette-telegram-projet-reel.md) :
+ * cette fonction ne lisait QUE `window._pilotProjectPath`, c'est-à-dire le projet
+ * OUVERT dans la fenêtre. Avec MakeFilm ouvert et un travail réel sur Pilot, les
+ * messages Telegram de l'Assistant étaient donc préfixés « MakeFilm ».
+ *
+ * La règle n'est PAS réécrite ici : on DELEGUE à la source unique de l'étiquette
+ * des bulles (`decideFinalBubbleProjectLabel`, `super-agent-project-label.js`),
+ * avec les mêmes entrées qu'à la fin de tour — badge figé + sa provenance +
+ * projets réellement visés. Aucun ordre de priorité dupliqué.
+ *
+ * Un message Telegram = UN projet (règle de `telegram-messages.js`) : on retient
+ * `decision.main`, c'est-à-dire le PREMIER nom dans l'ordre de priorité déjà
+ * appliqué (explicite > nommé dans le texte > projet visé par le tour > projet
+ * ouvert en DERNIER RECOURS).
+ *
+ * @param {object} [options]
+ * @param {string[]|null} [options.concerned] - projets réellement visés par
+ *   l'échange (défaut : ceux du tour en cours). L'appelant qui possède une COPIE
+ *   (ex: `respConcerned`, `currentTurnConcernedBadges` avant une remise à zéro)
+ *   la transmet : la fonction ne relit jamais un état qui peut avoir été remis à zéro.
+ * @param {string[]|null} [options.frozen] - badges figés de la bulle de réponse
+ *   (défaut : aucun, le projet ouvert est alors le dernier recours).
+ * @param {string|null} [options.frozenSource] - provenance de ces badges
+ *   (`PROJECT_LABEL_SOURCE`) : elle distingue un nom prouvé d'un simple dernier recours.
+ * @returns {string} nom court du projet, jamais un chemin.
  */
-function assistantTelegramProject() {
-  const active =
-    typeof window !== "undefined" && window ? window._pilotProjectPath || "" : "";
-  return projectShortName(active) || "Assistant";
+export function assistantTelegramProject(options = {}) {
+  const opts = options || {};
+  const concerned =
+    opts.concerned !== undefined ? opts.concerned : currentTurnConcernedBadges;
+  const frozen = Array.isArray(opts.frozen) ? opts.frozen : null;
+  const hasFrozen = !!(frozen && frozen.length);
+  // Dernier recours : le projet ouvert à cet instant (`currentOpenProjectBadges`),
+  // exactement comme à la création de la bulle.
+  const base = hasFrozen ? frozen : currentOpenProjectBadges();
+  const baseSource = hasFrozen ? opts.frozenSource : PROJECT_LABEL_SOURCE.OPEN_PROJECT;
+  const decision = decideFinalBubbleProjectLabel(base, baseSource, concerned, null);
+  return projectShortName(decision.main) || "Assistant";
 }
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -4174,9 +4208,16 @@ function appendSystemMessage(messagesEl, text) {
   // modèle non chargé → repli STRICT sur la règle de mots-clés d'avant. C'est un
   // feu et oubli : jamais bloquant pour l'affichage, jamais d'erreur visible.
   if (isTelegramDialogActive()) {
+    // Les projets RÉELLEMENT visés par le tour sont COPIÉS maintenant : le
+    // classement Laya est asynchrone et le tour peut avoir été remis à zéro
+    // (`currentTurnConcernedBadges`) avant la résolution. L'étiquette du message
+    // Telegram ne doit jamais être recalculée à partir d'un état vidé.
+    const concernedForAlert = [...currentTurnConcernedBadges];
     classifyAssistantMessageWithLaya(trimmed).then((verdict) => {
       if (verdict.kind === "alert") {
-        relayAssistantMessageToTelegram(trimmed, { project: assistantTelegramProject() });
+        relayAssistantMessageToTelegram(trimmed, {
+          project: assistantTelegramProject({ concerned: concernedForAlert }),
+        });
       }
     });
   }
@@ -10078,7 +10119,14 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // écartée par le filtre), les avis bruts retardés pendant ce tour partent
     // maintenant — un événement ne peut plus rester sans aucune information.
     const spokenToTelegram = relayAssistantMessageToTelegram(respText, {
-      project: assistantTelegramProject(),
+      // MÊMES entrées que la correction d'étiquette de la bulle juste en dessous
+      // (`respBase`/`respBaseSource`/`respConcerned`) : Telegram nomme le projet
+      // réellement concerné, et ne retombe sur le projet ouvert que par défaut.
+      project: assistantTelegramProject({
+        concerned: respConcerned,
+        frozen: respBase,
+        frozenSource: respBaseSource,
+      }),
     });
     onEnd();
     if (!spokenToTelegram) flushRawTelegramAvis();

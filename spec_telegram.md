@@ -107,6 +107,10 @@ Telegram et **aucun message d'erreur** ne s'affiche. Décocher le réglage suffi
   **vos réponses** — voir ci-dessous ;
 - **pas de détails techniques** : ni chemin de fichier, ni nom de fonction, ni
   numéro de session, ni compte de tests, ni branche ni commit ;
+- **le nom en tête est celui du projet dont il est QUESTION** : si vous parlez
+  de Pilot alors qu'un autre projet est ouvert à l'écran, le message dit
+  « Pilot ». Le projet simplement ouvert ne sert que si aucun autre projet n'est
+  identifiable ; sans aucun projet, le message dit « Assistant » ;
 - **aucune heure dans les messages** : un message dit **ce qui se passe**, pas
   quand ;
 - **aucun récapitulatif** : pas de bilan du soir, pas de message à heure fixe,
@@ -950,6 +954,41 @@ absence.
   **alerte sans décision possible** (une alerte qui n'appelle aucune action est
   du bruit). Les textes triviaux (« ok », « bien reçu », « tout va bien ») sont
   écartés par `isTrivialMessage`.
+
+### 13.1 bis Le projet nommé en tête de la conversation (`ASSISTANT`)
+
+Défaut corrigé le 2026-11-11, rapport
+`docs/rapports/RAPPORT-etiquette-telegram-projet-reel.md` : le message de
+conversation portait le nom du projet **OUVERT** dans la fenêtre
+(`window._pilotProjectPath`), donc « MakeFilm » pendant que la conversation
+portait sur Pilot.
+
+- **Une seule règle, celle des bulles** : `assistantTelegramProject()`
+  (`src/js/super-agent.js`) ne compose rien, elle **délègue** à
+  `decideFinalBubbleProjectLabel` (`src/js/super-agent-project-label.js`, § des
+  étiquettes de bulle) avec les **mêmes entrées** que la correction de fin de
+tour : badge figé de la bulle + sa **provenance** + projets **réellement visés**
+  par l'échange.
+- **Ordre appliqué** (aucun ordre recopié) : projet **explicitement** désigné >
+  projet **nommé dans le texte** > projet **visé** par le tour (mission,
+  délégation, agent relayé) > projet **ouvert** en **dernier recours** >
+  « Assistant » si rien n'est identifiable.
+- **Un message = un projet** : on retient `decision.main`, c'est-à-dire le
+  **premier** nom de cet ordre — la règle « deux projets dans un message = aucun
+  message » reste portée par `projectShortName`.
+- **Ce que l'appelant transmet** : le site de la réponse finale passe une
+  **copie** des projets visés (`respConcerned`) et le badge figé
+  (`respBase`/`respBaseSource`) ; le site des alertes copie
+  `[...currentTurnConcernedBadges]` **avant** le classement asynchrone, sinon le
+  tour est déjà remis à zéro quand la promesse se résout. Aucun appelant ne
+  relit le DOM ni ne recalcule la règle.
+- **Limite connue** : quand aucun projet n'est visé et que la réponse ne fait
+  que **citer** un projet, la détection des projets cités est **asynchrone**
+  (elle interroge les projets ouverts) et n'est pas attendue par l'envoi
+  Telegram : le message retombe alors sur le projet ouvert. La bulle, elle, est
+  corrigée juste après.
+- **Verrou** : `src/js/etiquette-telegram-projet-reel.test.js` (10 tests) —
+  échoue sur le code d'avant (6 rouges, « expected 'MakeFilm' to be 'pilot' »).
 
 ### 13.2 Porte unique de publication
 

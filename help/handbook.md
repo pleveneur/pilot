@@ -5123,6 +5123,10 @@ Telegram et **aucun message d'erreur** ne s'affiche. Décocher le réglage suffi
   **vos réponses** — voir ci-dessous ;
 - **pas de détails techniques** : ni chemin de fichier, ni nom de fonction, ni
   numéro de session, ni compte de tests, ni branche ni commit ;
+- **le nom en tête est celui du projet dont il est QUESTION** : si vous parlez
+  de Pilot alors qu'un autre projet est ouvert à l'écran, le message dit
+  « Pilot ». Le projet simplement ouvert ne sert que si aucun autre projet n'est
+  identifiable ; sans aucun projet, le message dit « Assistant » ;
 - **aucune heure dans les messages** : un message dit **ce qui se passe**, pas
   quand ;
 - **aucun récapitulatif** : pas de bilan du soir, pas de message à heure fixe,
