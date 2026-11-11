@@ -217,6 +217,12 @@ aux tâches 409/410 du suivi) — `test-macos` et les deux builds macOS sont en
 n'a rien eu à autoriser, et aucune phrase d'absence de macOS n'apparaît dans les
 notes (vérifié dans `latest.json`, cf. ci-dessous).
 
+> **Dernier constat daté** (re-vérifié après l'envoi de ce rapport) :
+> `build-linux` = `in_progress`, tous les autres jobs = `success`,
+> `run 43061827158` = `in_progress` **du seul fait de ce job**, qui est hors
+> chemin critique. Conséquence : les fichiers livrés et `latest.json` restent
+> ceux décrits en § 8, aucune autre plateforme n'est retirée.
+
 **Seul élément non terminé au moment de ce rapport** : `build-linux`. Il est
 **hors chemin critique** par construction (plafond 90 min, `continue-on-error`,
 aucun job ne le déclare dans ses `needs`) : son absence ne retire rien aux
