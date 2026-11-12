@@ -23,3 +23,18 @@ members = ["src-tauri", "gds-core", "gds-server"]
 # ignorer (le correctif de dictée vocale disparaîtrait).
 [patch.crates-io]
 wry = { path = "src-tauri/vendor/wry" }
+# ── `whisper-rs-sys` patché localement : l'OREILLE INTÉGRÉE COMPILE SANS LLVM ──
+# `whisper-rs-sys` génère ses liaisons FFI avec `bindgen`, qui exige `libclang`
+# et dont le chargeur PANIQUE quand il est absent (le repli prévu par l'amont
+# n'est jamais atteint) : sans ce correctif, la feature `whisper` ne compilait
+# que sur une machine fournie en LLVM. La copie locale (crate 0.15.0 à
+# l'identique) change EXACTEMENT deux choses (détail et re-application :
+# `src-tauri/vendor/whisper-rs-sys/VENDOR-PATCH.md`) :
+#   1. `build.rs` emploie les liaisons PRÉ-GÉNÉRÉES livrées par l'amont dès que
+#      `libclang` est introuvable (comportement identique s'il est présent) ;
+#   2. `src/bindings.rs` borne à `target_env = "gnu"` trois assertions de
+#      disposition qui ne décrivaient que `stdio.h` de la glibc (aucun type de
+#      l'API Whisper) — c'est ce qui faisait échouer Windows et macOS.
+# Rien d'autre n'est modifié : whisper.cpp est compilé par cmake + MSVC, comme
+# l'amont le prévoit, et le build PAR DÉFAUT n'active toujours pas la feature.
+whisper-rs-sys = { path = "src-tauri/vendor/whisper-rs-sys" }

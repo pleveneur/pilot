@@ -5,13 +5,15 @@ edition = "2021"
 
 # ── Features ───────────────────────────────────────────────────────────────
 # `whisper` : active l'OREILLE INTÉGRÉE (transcription Whisper DANS Pilot,
-# `asr_whisper.rs`). La feature est DÉSACTIVÉE par défaut, et c'est une décision :
-# `whisper-rs` dépend de `whisper-rs-sys`, qui a besoin de `libclang` (bindgen)
-# pour se construire. Une machine sans LLVM ne peut pas compiler cette feature,
-# et le build de Pilot ne doit PAS en dépendre : sans elle, tout le reste
-# compile et fonctionne à l'identique, l'écran reçoit la raison
+# `asr_whisper.rs`). La feature est DÉSACTIVÉE par défaut : sans elle, tout le
+# reste compile et fonctionne à l'identique, l'écran reçoit la raison
 # `moteur-non-compile` et la dictée repart sur l'autre oreille (dit en clair).
-# Pour l'activer, avec LLVM/Clang installé et `LIBCLANG_PATH` renseigné :
+#
+# ELLE COMPILE SANS RIEN INSTALLER (correctif du 2026-11-16) : `whisper-rs-sys`
+# exigeait `libclang` (bindgen) ; la copie locale déclarée en `[patch.crates-io]`
+# du manifeste racine emploie désormais les liaisons PRÉ-GÉNÉRÉES quand `libclang`
+# est introuvable. Il ne reste que ce que la machine a déjà : `cmake` et le
+# compilateur C++ du système (MSVC sous Windows). Activer :
 #   cargo build --features whisper
 [features]
 default = []
@@ -95,6 +97,9 @@ tree-sitter-rust = "0.24.2"
 # haut) : sans la feature elle n'est ni compilée ni employée, et le moteur se
 # déclare `moteur-non-compile`.
 whisper-rs = { version = "0.16", optional = true }
+# `whisper-rs-sys` est PATCHÉ localement (manifeste RACINE, `[patch.crates-io]`) :
+# c'est ce qui rend la feature compilable sans `libclang`. Ne pas retirer ce
+# patch « par propreté » — la compilation du moteur échouerait aussitôt.
 
 # ── Terminal intégré (Windows) : PATH complet depuis la registry ──
 # Le PTY hérite de l'environnement du processus Pilot, qui peut ne pas avoir

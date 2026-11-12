@@ -18,12 +18,19 @@
 // PCM déjà captés par la fenêtre (robinet de `vocal-mic.js`).
 //
 // ── LA FEATURE `whisper` EST OPTIONNELLE, ET C'EST VOULU ────────────────────
-// `whisper-rs` dépend de `whisper-rs-sys`, qui exige `libclang` (bindgen) pour
-// se compiler. Une machine sans LLVM ne peut donc PAS construire cette feature.
 // Le build PAR DÉFAUT n'active pas la feature : Pilot compile et fonctionne
 // exactement comme avant, et l'écran reçoit la raison `moteur-non-compile` —
 // une phrase française qui dit que le moteur intégré n'est pas compilé dans
 // cette version, et que la dictée repart ailleurs (jamais un silence).
+//
+// ELLE COMPILE SANS RIEN INSTALLER (correctif du 2026-11-16) : la caisse
+// `whisper-rs-sys` exigeait `libclang` (bindgen) ; sa copie locale, déclarée en
+// `[patch.crates-io]` du manifeste RACINE (`src-tauri/vendor/whisper-rs-sys`,
+// voir son `VENDOR-PATCH.md`), emploie les liaisons pré-générées quand
+// `libclang` est introuvable. Reste seulement ce que la machine a déjà :
+// `cmake` et le compilateur C++ du système. Le test
+// `avec_la_feature_le_moteur_natif_est_lie_et_repond` prouve, quand la feature
+// est active, que `whisper.cpp` est réellement lié et appelé.
 //
 // ── AUCUN TÉLÉCHARGEMENT ICI ───────────────────────────────────────────────
 // Ce module ne télécharge RIEN : il CONSTATE la présence du fichier de modèle
@@ -649,6 +656,24 @@ mod tests {
             assert!(erreur.is_err());
             assert!(erreur.unwrap_err().contains("n'est pas compilé"));
         }
+    }
+
+    /// PREUVE DE LIAISON (feature `whisper`) : la bibliothèque native est bien
+    /// LIÉE et APPELÉE. Un chemin de modèle inexistant fait répondre
+    /// `whisper.cpp` lui-même — donc le moteur est vivant — au lieu de la phrase
+    /// « pas compilé » qui ne dépend d'aucun code natif. Ce test échoue si le
+    /// correctif de compilation (`src-tauri/vendor/whisper-rs-sys`) est perdu.
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn avec_la_feature_le_moteur_natif_est_lie_et_repond() {
+        assert!(ENGINE_COMPILED, "la feature whisper doit se déclarer compilée");
+        let erreur = transcrire(Path::new("modele-absent-pour-ce-test.bin"), &[0.0_f32; 1600])
+            .expect_err("un modèle inexistant ne peut pas être chargé");
+        assert!(
+            erreur.contains("n'a pas pu être chargé"),
+            "phrase inattendue : {erreur}"
+        );
+        assert_ne!(erreur, human_reason(REASON_NOT_COMPILED));
     }
 
     #[test]

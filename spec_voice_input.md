@@ -728,15 +728,30 @@ utilisant un modèle présent sur le disque et fonctionnant **hors ligne**.
    **rien**, renommage seulement à taille exacte. L'agent ne télécharge jamais
    rien de lui-même.
 8. **La feature Cargo est optionnelle** : `whisper-rs` n'est compilé que par
-   `cargo build --features whisper` (il exige `libclang` et un outillage C++).
-   Sans elle, le module **compile quand même** et répond `moteur-non-compile` avec
-   une phrase française : jamais un échec de compilation, jamais un silence.
+   `cargo build --features whisper`. Sans elle, le module **compile quand même**
+   et répond `moteur-non-compile` avec une phrase française : jamais un échec de
+   compilation, jamais un silence.
+   **Elle compile sans rien installer** (correctif du 2026-11-16) : la caisse
+   `whisper-rs-sys` exigeait `libclang` (bindgen, dont le chargeur panique quand
+   il est absent) ; sa copie locale `src-tauri/vendor/whisper-rs-sys`, déclarée
+   en `[patch.crates-io]` du manifeste **racine** (même précédent que
+   `vendor/wry`), emploie les **liaisons pré-générées** livrées par l'amont dès
+   que `libclang` est introuvable — comportement d'origine conservé s'il est
+   présent. Il ne reste que ce que la machine a déjà : `cmake` et le compilateur
+   C++ du système. Détail et ré-application : `VENDOR-PATCH.md` de la caisse
+   vendu·e ; preuve de liaison : test
+   `avec_la_feature_le_moteur_natif_est_lie_et_repond`.
 9. **Le web distant ne change pas** : pas de Tauri, oreille du navigateur.
 
 Verrous : `src/js/oreille-integree-whisper.test.js` (33 verrous : défaut
 inchangé, contrat de session, micro unique, phrases de repli, aucune adresse,
-téléchargement sur geste, un seul écrivain de la clé). Rapport :
-`docs/rapports/RAPPORT-oreille-integree-whisper.md`.
+téléchargement sur geste, un seul écrivain de la clé) et
+`src/js/oreille-integree-whisper-sans-outillage.test.js` (10 verrous : la caisse
+vendue reste celle que cargo compile, `bindgen` n'est plus une condition de
+compilation, les liaisons sont neutres de plateforme, la feature reste
+optionnelle, la preuve de liaison existe). Rapports :
+`docs/rapports/RAPPORT-oreille-integree-whisper.md` et
+`docs/rapports/RAPPORT-oreille-integree-whisper-deblocage.md`.
 
 ---
 

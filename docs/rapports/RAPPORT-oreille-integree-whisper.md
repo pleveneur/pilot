@@ -261,7 +261,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib asr_whisper
 # Le build par défaut doit rester vert (c'est la règle de ce lot)
 cargo check --manifest-path src-tauri/Cargo.toml --lib
 
-# Activer le moteur (à faire SEULEMENT une fois libclang + C++ installés)
+# Activer le moteur (aucun outillage C++ à installer depuis le correctif
+# du 2026-11-16 — voir RAPPORT-oreille-integree-whisper-deblocage.md)
 cargo build --manifest-path src-tauri/Cargo.toml --features whisper
 ```
 
@@ -271,6 +272,14 @@ L'oreille intégrée existe **de bout en bout** (réglage → décision → sess
 pont machine → installation du modèle sur geste), elle est **désactivée par
 défaut**, elle **ne déplace aucune décision existante**, et son indisponibilité est
 **toujours dite en français** avec sa conséquence réelle. Le seul point non
-franchi est l'outillage de compilation de `whisper-rs` sur cette machine
+franchi à l'époque de ce lot était l'outillage de compilation de `whisper-rs`
 (`libclang`), documenté au § 4 — sans bricolage, sans installation, et sans que le
 build par défaut en souffre.
+
+**Suite (2026-11-16)** : ce point est franchi. La caisse `whisper-rs-sys` est
+copiée localement et patchée (`[patch.crates-io]` racine,
+`src-tauri/vendor/whisper-rs-sys`) : elle emploie les liaisons pré-générées quand
+`libclang` est introuvable, et seuls `cmake` + le compilateur C++ du système
+restent nécessaires — les deux sont déjà présents sur la machine du
+propriétaire. Mesures, limites et verrous :
+`docs/rapports/RAPPORT-oreille-integree-whisper-deblocage.md`.
