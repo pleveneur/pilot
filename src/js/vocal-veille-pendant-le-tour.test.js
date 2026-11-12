@@ -150,11 +150,17 @@ describe("2. le branchement : les deux faits arrives jusqu'a la decision", () =>
     // `vocalVeilleEtat` ne fabrique aucun fait : il ne lit que ceux-la.
     expect(etat).not.toMatch(/vocalSpeaking\s*=[^=]|reflectingActive\s*=[^=]/);
 
-    const minuteur = corpsFonction(SUPER, "  function vocalRestartVeilleTimer() {");
-    expect(minuteur).toContain("decideVocalVeille({");
+    // LA DECISION EST CONSTRUITE A UN SEUL ENDROIT (`vocalVeilleDecision`), que
+    // le minuteur du compte ET le reexamen periodique interrogent : la
+    // factorisation ne retire aucune garantie, elle en ajoute une (une seule
+    // construction, donc aucune regle recopiee dans un second appelant).
+    const decision = corpsFonction(SUPER, "  function vocalVeilleDecision(veilleArmee) {");
+    expect(decision).toContain("decideVocalVeille({");
     // Les deux faits sont passes a la decision PURE (aucune regle recopiee ici).
-    expect(minuteur).toContain("...vocalVeilleEtat(),");
-    expect(minuteur).not.toContain('raison === "silence-atteint"');
+    expect(decision).toContain("...vocalVeilleEtat(),");
+    expect(decision).not.toContain('raison === "silence-atteint"');
+    const minuteur = corpsFonction(SUPER, "  function vocalRestartVeilleTimer() {");
+    expect(minuteur).toContain("vocalVeilleDecision(vocalVeilleArmee)");
   });
 
   it("pendant ces deux etats, le compte n'est ni pose ni laisse tourner", () => {

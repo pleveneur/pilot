@@ -1498,6 +1498,10 @@ texte à la voix.
   bascule jamais en silence. Limite connue : la transcription locale est plus
   lente (le texte définitif arrive quelques secondes après votre dernier mot) ;
   le texte s'écrit au fur et à mesure, vous n'avez pas à attendre pour parler.
+- **Avec la transcription locale, la mise en veille de 20 secondes marche comme
+  avant** : au bout de 20 s sans parler, l'écran se met en veille et attend son nom.
+  Avant, la veille ne s'armait **jamais** quand la transcription locale était
+  cochée : l'écran restait à l'écoute indéfiniment.
 - **La dictée ne s'arrête plus toute seule** : avant, au bout d'un moment, elle
   cessait de répondre puis affichait « La dictée n'a pas fonctionné : écrivez
   votre demande. ». Une dictée qui se termine ne peut plus refermer celle qui

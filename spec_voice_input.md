@@ -661,6 +661,30 @@ Verrous : `src/js/oreille-locale-etape2.test.js` (28 verrous) + `oreille-locale-
 (la porte unique) + `vocal-nom-garde.test.js` (la garde du nom, intacte).
 Rapport : `docs/rapports/RAPPORT-oreille-locale-etape2-ecran-branche.md`.
 
+**La mise en veille de 20 s fonctionne avec l'oreille locale** (défaut constaté en
+version installée : la veille ne s'armait **jamais** quand la case était cochée).
+Deux causes, deux corrections, **aucun seuil touché** (`VOCAL_ECOUTE_LIBRE_MS` reste
+20 000 ms) :
+
+1. **Un texte rendu sans voix n'est pas une parole.** Le compte de 20 s repartait à
+   chaque texte du moteur ; l'oreille du navigateur ne rend rien dans une pièce
+   silencieuse, le service local **transcrit la pièce en continu** (micro armé et
+   silence compris) : le compte était remis à zéro toutes les quelques secondes et
+   ne pouvait jamais atteindre son terme. Règle pure `texteCompteCommeParole`
+   (`vocal-nom-garde.js`) : seul un texte accompagné d'une **voix réellement mesurée**
+   (`vocalMicCapte`) compte ; **fail-open** quand aucune mesure n'est ouverte.
+2. **Le compte perdu est recréé.** Le compte n'est qu'un minuteur, que la lecture et
+   le tour annulent ; avec l'oreille locale, la session de reconnaissance ne se ferme
+   jamais d'elle-même, donc plus rien ne le recréait. `vocalVeilleReexamenPass`
+   (`super-agent.js`, 1 s, `VOCAL_VEILLE_REEXAMEN_MS`) rejoue **la même décision**
+   (`vocalVeilleDecision`, **seul** site de construction) avec le même délai et le
+   même repère ; il sort dès qu'un compte tourne, donc il **ne raccourcit rien**.
+
+L'écoute **non locale** est inchangée (la règle ne regarde pas le moteur), l'aspect de
+la veille et la phrase d'invitation ne bougent pas, et le nom réveille du premier coup.
+Verrou : `src/js/veille-transcription-locale.test.js` (échoue sur le code d'avant).
+Rapport : `docs/rapports/RAPPORT-veille-transcription-locale.md`.
+
 ---
 
 <!-- HELP:dictee-vocale -->
@@ -730,6 +754,10 @@ texte à la voix.
   bascule jamais en silence. Limite connue : la transcription locale est plus
   lente (le texte définitif arrive quelques secondes après votre dernier mot) ;
   le texte s'écrit au fur et à mesure, vous n'avez pas à attendre pour parler.
+- **Avec la transcription locale, la mise en veille de 20 secondes marche comme
+  avant** : au bout de 20 s sans parler, l'écran se met en veille et attend son nom.
+  Avant, la veille ne s'armait **jamais** quand la transcription locale était
+  cochée : l'écran restait à l'écoute indéfiniment.
 - **La dictée ne s'arrête plus toute seule** : avant, au bout d'un moment, elle
   cessait de répondre puis affichait « La dictée n'a pas fonctionné : écrivez
   votre demande. ». Une dictée qui se termine ne peut plus refermer celle qui

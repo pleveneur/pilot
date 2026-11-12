@@ -271,6 +271,7 @@ import {
   decideVocalVeille,
   mentionsAssistantName,
   mentionsWakeWord,
+  texteCompteCommeParole,
   vocalEtatAffiche,
   vocalNameGateArmed,
   vocalNameSentence,
@@ -280,6 +281,7 @@ import {
   VOCAL_GATE_JETER,
   VOCAL_STOP_ARRETER,
   VOCAL_VEILLE_CLASS,
+  VOCAL_VEILLE_REEXAMEN_MS,
   wakeWordsFrom,
 } from "./vocal-nom-garde.js";
 // LE BAS DE L'ECRAN S'EFFACE AU REPOS (CONCEPTION-ecran-vocal-cercle-et-bas.md
@@ -5217,6 +5219,13 @@ export async function createSuperAgent(container) {
   let vocalVeilleParCommande = false;
   let vocalVeilleTimer = 0;
   let vocalVeilleDepart = 0;
+  // LE RÉEXAMEN PÉRIODIQUE DU COMPTE (§6quater.2) : un seul intervalle, ouvert
+  // SEULEMENT pendant l'écran Vocal, qui rejoue la MÊME décision que le minuteur
+  // pour qu'un compte annulé par un chemin de suspension ne puisse plus se
+  // perdre (transcription locale : la session de reconnaissance ne se ferme
+  // jamais d'elle-même, donc aucun événement ne recréait le compte). Il ne
+  // raccourcit jamais les 20 s : voir `vocalVeilleReexamenPass`.
+  let vocalVeilleReexamen = 0;
   // L'ORDRE D'ARRÊT N'EST JAMAIS LU (décision du propriétaire, 2026-11-16) : la
   // phrase qui demande d'arrêter l'écoute part comme une demande à l'assistant
   // (il appelle l'outil `stop_listening`), mais sa réponse n'est PAS prononcée —
@@ -7412,6 +7421,26 @@ let vocalMotsDeReveil = [];
   }
 
   /**
+   * LA QUESTION POSÉE À LA DÉCISION PURE DE VEILLE, construite à UN SEUL endroit :
+   * le minuteur du compte et le réexamen périodique posent la MÊME question,
+   * avec le MÊME repère et les MÊMES faits. Aucune seconde construction, aucun
+   * second appel de `decideVocalVeille` dans le fichier.
+   * @param {boolean} veilleArmee l'état que l'appelant croit
+   * @returns {{armer: boolean, raison: string}}
+   */
+  function vocalVeilleDecision(veilleArmee) {
+    return decideVocalVeille({
+      modeOuvert: vocalOverlay !== null,
+      reveil: vocalReveilUnePhrase === true,
+      veilleArmee,
+      // Les deux faits de l'etat de conversation : la decision PURE refuse
+      // d'armer la veille pendant la lecture et pendant le tour.
+      ...vocalVeilleEtat(),
+      ecouleMs: Date.now() - vocalVeilleDepart,
+    });
+  }
+
+  /**
    * (Re)lance le compte a rebours de silence — SAUF quand la garde est armee :
    * la veille est alors un etat STABLE, que seule une phrase avec le nom (ou un
    * geste de secours) peut lever, et c'est ce meme evenement qui repart le
@@ -7423,22 +7452,18 @@ let vocalMotsDeReveil = [];
    */
   function vocalRestartVeilleTimer() {
     clearVocalVeilleTimer();
+    // LE REPÈRE DU DERNIER SIGNE DE VIE (parole mesurée, mot reçu, fin de
+    // lecture ou de tour) est posé AVANT les sorties anticipées : c'est lui que
+    // relit le réexamen périodique (`vocalVeilleReexamenPass`), qui ne doit
+    // jamais compter 20 s depuis un repère périmé.
+    vocalVeilleDepart = Date.now();
     if (!vocalOverlay || vocalVeilleArmee === true) return;
     // SUSPENSION : pendant la lecture et pendant le tour, aucun compte ne
     // demarre — meme si une parole detectee ou un mot recu le demandait.
     if (vocalVeilleSuspendue(vocalVeilleEtat())) return;
-    vocalVeilleDepart = Date.now();
     vocalVeilleTimer = setTimeout(() => {
       vocalVeilleTimer = 0;
-      const decision = decideVocalVeille({
-        modeOuvert: vocalOverlay !== null,
-        reveil: vocalReveilUnePhrase === true,
-        veilleArmee: vocalVeilleArmee,
-        // Les deux faits de l'etat de conversation : la decision PURE refuse
-        // d'armer la veille pendant la lecture et pendant le tour.
-        ...vocalVeilleEtat(),
-        ecouleMs: Date.now() - vocalVeilleDepart,
-      });
+      const decision = vocalVeilleDecision(vocalVeilleArmee);
       if (decision.armer !== true) {
         // Un reveil d'une phrase est en attente : on reverifie plus tard au lieu
         // de laisser l'ecran sans compte (le geste vaut pour une phrase, pas
@@ -7476,12 +7501,56 @@ let vocalMotsDeReveil = [];
     if (!vocalOverlay) return;
     if (vocalVeilleSuspendue(vocalVeilleEtat())) {
       clearVocalVeilleTimer();
+      // Le repère suit la suspension : à la sortie, le réexamen périodique
+      // compte depuis la fin de la lecture / du tour, jamais depuis un signe de
+      // vie ancien (même règle que la relance « de zéro » ci-dessous).
+      vocalVeilleDepart = Date.now();
       return;
     }
     if (vocalVeilleArmee === true) return;
     // Un compte tourne deja : on n'y touche pas (aucune remise a zero surprise).
     if (vocalVeilleTimer) return;
     vocalRestartVeilleTimer();
+  }
+
+  /**
+   * LE RÉEXAMEN PÉRIODIQUE DU COMPTE DE VEILLE (§6quater.2) — 1 seconde.
+   *
+   * LE DÉFAUT CORRIGÉ (transcription locale active : la veille ne s'arme
+   * JAMAIS, alors qu'elle s'arme sans la case locale). Le compte n'existe que
+   * sous la forme d'UN `setTimeout`, et plusieurs chemins l'ANNULENT avant son
+   * terme (suspension pendant la lecture ou le tour, sortie du mode). Rien ne
+   * garantit qu'un événement ULTÉRIEUR le recrée : avec l'oreille du navigateur,
+   * chaque fin de session de reconnaissance (`no-speech`, quelques secondes)
+   * réapplique l'état et le relance ; avec l'oreille LOCALE, la session ne se
+   * ferme JAMAIS d'elle-même (le pont n'envoie la fin de flux que si Pilot la
+   * demande, aucun événement n'arrive dans une pièce silencieuse) : après le
+   * dernier signe de vie, plus rien ne réévalue la veille et le compte reste
+   * perdu — l'écran reste à l'écoute indéfiniment.
+   *
+   * Ce réexamen ne DÉCIDE rien : il rejoue la MÊME décision pure
+   * (`decideVocalVeille`), avec le MÊME délai (`VOCAL_ECOUTE_LIBRE_MS`) et le
+   * MÊME repère. Il ne touche JAMAIS un compte en cours (aucun raccourcissement,
+   * aucune remise à zéro surprise) : il ne fait que recréer le compte perdu.
+   * Aucun second état, aucune seconde règle, aucun second seuil.
+   */
+  function clearVocalVeilleReexamen() {
+    if (!vocalVeilleReexamen) return;
+    clearInterval(vocalVeilleReexamen);
+    vocalVeilleReexamen = 0;
+  }
+
+  function vocalVeilleReexamenPass() {
+    if (!vocalOverlay || vocalVeilleArmee === true) return;
+    // Un compte tourne : il porte la décision, on n'y touche pas.
+    if (vocalVeilleTimer) return;
+    if (vocalVeilleSuspendue(vocalVeilleEtat())) return;
+    // LA MÊME décision que le minuteur (`vocalVeilleDecision`) : aucune règle
+    // n'est réécrite ici, aucun second seuil n'existe.
+    const decision = vocalVeilleDecision(false);
+    if (decision.armer !== true) return;
+    vocalEnterVeille("silence");
+    applyVocalState();
   }
 
   /**
@@ -7789,8 +7858,19 @@ let vocalMotsDeReveil = [];
     // vivante ; le plafond se compte toujours depuis lui.
     vocalMotInstant = Date.now();
     // TOUTE PAROLE DETECTEE REMET LE COMPTE A ZERO (§A2) : une conversation
-    // suivie n'arme jamais la veille.
-    vocalRestartVeilleTimer();
+    // suivie n'arme jamais la veille. « Parole détectée » = parole que le MICRO
+    // A MESURÉE : un texte rendu alors que la mesure est ouverte et n'entend
+    // aucune voix (l'oreille locale transcrit la pièce en continu, micro armé et
+    // silence compris) n'est pas une parole et ne doit pas tenir l'écran éveillé
+    // — sinon les 20 s ne s'armaient jamais (règle pure `texteCompteCommeParole`).
+    if (
+      texteCompteCommeParole({
+        microMesure: vocalMicListening === true,
+        voixMesuree: vocalMicCapte === true,
+      })
+    ) {
+      vocalRestartVeilleTimer();
+    }
     const decision = decideVocalSilenceSend(vocalSilenceState());
     clearVocalSilenceTimer();
     if (decision.action !== VOCAL_SILENCE_WAIT || !decision.delai) return;
@@ -8259,6 +8339,11 @@ let vocalMotsDeReveil = [];
     vocalVeilleArmee = false;
     vocalVeilleParCommande = false;
     vocalRestartVeilleTimer();
+    // LE RÉEXAMEN PÉRIODIQUE (voir `vocalVeilleReexamenPass`) : il n'existe QUE
+    // pendant l'écran Vocal (ouvert ici, annulé dans `exitVocal`). Il ne
+    // raccourcit jamais les 20 s : il ne recrée qu'un compte perdu.
+    clearVocalVeilleReexamen();
+    vocalVeilleReexamen = setInterval(vocalVeilleReexamenPass, VOCAL_VEILLE_REEXAMEN_MS);
     // ── L'ENVELOPPE SUIT LE SON (voix locale) ────────────────────────────────
     // Un seul metre, cree a l'ENTREE et detruit a la sortie : hors du mode
     // Vocal, personne n'ecoute le son de Pilot (aucun cout, aucun analyseur).
@@ -8401,6 +8486,9 @@ let vocalMotsDeReveil = [];
       vocalVeilleArmee = false;
       vocalVeilleParCommande = false;
       clearVocalVeilleTimer();
+      // Le réexamen périodique meurt avec l'écran : aucun intervalle ne survit
+      // au mode Vocal.
+      clearVocalVeilleReexamen();
       vocalApresLecture = false;
       vocalArretManuel = false;
       vocalDictationErreur = "";

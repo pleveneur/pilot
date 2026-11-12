@@ -394,6 +394,54 @@ export function vocalVeilleSuspendue(etats) {
   return e.pilotParle === true || e.travaille === true;
 }
 
+/**
+ * UN TEXTE TRANSCRIT COMPTE-T-IL COMME UNE PAROLE POUR LE COMPTE DE VEILLE ?
+ *
+ * LE DÉFAUT CORRIGÉ (transcription LOCALE active : la veille de 20 s ne s'arme
+ * JAMAIS). Le compte à rebours repart à chaque TEXTE rendu par le moteur. Avec
+ * l'oreille du navigateur, une pièce silencieuse ne rend rien (et la session se
+ * ferme d'elle-même : `no-speech`). Avec l'oreille LOCALE, le service transcrit
+ * la pièce EN CONTINU — micro armé et silence compris (le commentaire de
+ * `onresult` dans super-agent.js le dit déjà, correctif « la barre du bas ne
+ * s'efface plus ») : chaque texte rendu remettait le compte à zéro AVANT son
+ * terme, et l'écran restait à l'écoute indéfiniment.
+ *
+ * La règle est celle que l'écran applique déjà partout : une parole DÉTECTÉE
+ * est une parole que le MICRO A MESURÉE (`vocalMicCapte`, deux seuils,
+ * hystérésis). Un texte rendu alors que le micro mesure et n'entend AUCUNE voix
+ * n'est donc pas une parole : il ne tient pas l'écran éveillé.
+ *
+ * FAIL-OPEN, et c'est voulu : quand aucune mesure n'est ouverte, on ne prive
+ * jamais un vrai mot de son effet (rien ne permet de le contredire).
+ * PURE, ne lève jamais.
+ * @param {{microMesure?: boolean, voixMesuree?: boolean}} [etats]
+ * @returns {boolean} vrai si ce texte doit remettre le compte à zéro
+ */
+export function texteCompteCommeParole(etats) {
+  const e = etats || {};
+  if (e.microMesure !== true) return true;
+  return e.voixMesuree === true;
+}
+
+/**
+ * LA SÉCURITÉ DU COMPTE DE VEILLE : sa réévaluation périodique (1 seconde).
+ *
+ * Le compte n'existe que sous la forme d'UN minuteur unique, que plusieurs chemins
+ * annulent avant son terme (suspension pendant la lecture ou le tour, sortie du
+ * mode, mot reçu). Rien ne garantit qu'un événement ULTÉRIEUR le recrée : avec
+ * l'oreille du navigateur, chaque fin de session de reconnaissance (`no-speech`,
+ * quelques secondes) réapplique l'état et le relance ; avec l'oreille LOCALE, la
+ * session ne se ferme JAMAIS d'elle-même (le pont n'envoie la fin de flux que
+ * si Pilot la demande) — après le dernier signe de vie, plus rien ne réévalue la
+ * veille, le compte reste perdu et l'écran reste à l'écoute indéfiniment.
+ *
+ * Ce réexamen ne décide RIEN de nouveau : il rejoue la MÊME décision pure
+ * (`decideVocalVeille`) avec le MÊME délai (`VOCAL_ECOUTE_LIBRE_MS`) et le MÊME
+ * repère. Il ne touche jamais un compte en cours : il ne fait que recréer le
+ * compte perdu. Aucun second état, aucune seconde règle, aucun second seuil.
+ */
+export const VOCAL_VEILLE_REEXAMEN_MS = 1000;
+
 /** Découpe un texte en mots repliés (jamais de mot vide). */
 function wordsOf(texte) {
   const plie = foldSpoken(texte);

@@ -2302,6 +2302,50 @@ n'était la reconnaissance.**
    les 20 s de silence. Le micro **reste ouvert** — sinon le nom ne réveillerait
    plus rien — et l'ordre n'est **jamais lu à voix haute**.
 
+Quatrième défaut corrigé (constat en version installée, **transcription LOCALE
+activée**) : **la veille ne s'armait JAMAIS** — l'écran restait à l'écoute
+indéfiniment — alors qu'elle s'armait normalement sans la case « Transcrire avec
+le service de voix local ». **Deux causes, toutes deux propres à l'oreille
+locale, et les deux sont corrigées :**
+
+1. **Un texte qui n'est pas une parole tenait l'écran éveillé.** Le compte
+   repartait à chaque **texte** rendu par le moteur. L'oreille du navigateur ne
+   rend rien dans une pièce silencieuse (et sa session se ferme d'elle-même,
+   `no-speech`, ce qui réapplique l'état) ; le **service local transcrit la pièce
+   en continu** — micro armé et silence compris, c'est déjà écrit dans le
+   correctif « la barre du bas ne s'efface plus ». Chaque texte remettait donc le
+   compte à zéro **avant son terme**, indéfiniment. Règle retenue, pure
+   (`texteCompteCommeParole`) : **une parole « détectée » est une parole que le
+   MICRO A MESURÉE** (`vocalMicCapte`, deux seuils, hystérésis, §4ter). Un texte
+   rendu alors que la mesure est ouverte et n'entend **aucune voix** n'est pas
+   une parole et ne remet pas le compte à zéro. **Fail-open** : quand aucune
+   mesure n'est ouverte, le mot compte quand même (rien ne permet de le
+   contredire) — un vrai locuteur ne perd donc jamais son mot. Le chemin ne
+   regarde **pas** le moteur : une voix mesurée accompagne toujours un vrai mot,
+   l'écoute non locale est inchangée.
+2. **Le compte perdu n'était jamais recréé.** Le compte n'existe que sous la
+   forme d'**un** minuteur, que plusieurs chemins annulent (suspension pendant la
+   lecture ou le tour, entrée/sortie du mode). Avec l'oreille du navigateur,
+   chaque fin de session de reconnaissance le recrée de fait ; avec l'oreille
+   **locale**, la session **ne se ferme jamais d'elle-même** (le pont n'envoie la
+   fin de flux que si Pilot la demande, et une pièce silencieuse ne produit aucun
+   événement) : après le dernier signe de vie, plus rien ne réévaluait la veille.
+   Un **réexamen périodique** (`vocalVeilleReexamenPass`, **1 s**,
+   `VOCAL_VEILLE_REEXAMEN_MS`) rejoue **la même décision pure**,
+   `vocalVeilleDecision`, avec le **même** délai (`VOCAL_ECOUTE_LIBRE_MS`) et le
+   **même** repère (`vocalVeilleDepart`, posé au dernier signe de vie). Il **ne
+   décide rien de nouveau et ne raccourcit jamais un compte en cours** (il sort
+   dès qu'un minuteur tourne) et n'existe que pendant l'écran Vocal. **La décision
+   de veille n'est construite qu'à un seul endroit** (`vocalVeilleDecision`), pour
+   que le minuteur et le réexamen ne puissent pas diverger.
+
+**Seuil, invitation, aspect et réveil : inchangés.** `VOCAL_ECOUTE_LIBRE_MS` vaut
+toujours **20 000 ms** (une seule occurrence dans le dépôt), la phrase
+d'invitation et la classe `vocal-veille` ne bougent pas, et le nom réveille
+toujours du premier coup par le même chemin. **Verrou** :
+`src/js/veille-transcription-locale.test.js` (il échoue sur le code d'avant) ;
+rapport `docs/rapports/RAPPORT-veille-transcription-locale.md`.
+
 
 <!-- HELP:vocal-veille -->
 

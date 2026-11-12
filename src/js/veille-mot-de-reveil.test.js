@@ -238,9 +238,11 @@ describe("3. le branchement dans l'écran", () => {
   });
 
   it("le nom lève la veille par le SEUL chemin prévu", () => {
-    const fin = corpsFonction(SUPER, "  function vocalRestartVeilleTimer() {");
+    const decision = corpsFonction(SUPER, "  function vocalVeilleDecision(veilleArmee) {");
     // La décision reste PURE : elle est demandée, jamais réécrite ici.
-    expect(fin).toContain("decideVocalVeille({");
+    expect(decision).toContain("decideVocalVeille({");
+    const fin = corpsFonction(SUPER, "  function vocalRestartVeilleTimer() {");
+    expect(fin).toContain("vocalVeilleDecision(vocalVeilleArmee)");
     expect(fin).toContain("vocalEnterVeille(\"silence\");");
     const sortie = corpsFonction(SUPER, "  function vocalExitVeille() {");
     expect(sortie).toContain("vocalVeilleArmee = false;");
