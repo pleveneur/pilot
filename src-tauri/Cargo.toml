@@ -3,6 +3,20 @@ name = "pilot"
 version = "0.6.24"
 edition = "2021"
 
+# ── Features ───────────────────────────────────────────────────────────────
+# `whisper` : active l'OREILLE INTÉGRÉE (transcription Whisper DANS Pilot,
+# `asr_whisper.rs`). La feature est DÉSACTIVÉE par défaut, et c'est une décision :
+# `whisper-rs` dépend de `whisper-rs-sys`, qui a besoin de `libclang` (bindgen)
+# pour se construire. Une machine sans LLVM ne peut pas compiler cette feature,
+# et le build de Pilot ne doit PAS en dépendre : sans elle, tout le reste
+# compile et fonctionne à l'identique, l'écran reçoit la raison
+# `moteur-non-compile` et la dictée repart sur l'autre oreille (dit en clair).
+# Pour l'activer, avec LLVM/Clang installé et `LIBCLANG_PATH` renseigné :
+#   cargo build --features whisper
+[features]
+default = []
+whisper = ["dep:whisper-rs"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 embed-resource = "3"
@@ -75,6 +89,12 @@ tree-sitter-javascript = "0.25.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
+# ── Oreille INTÉGRÉE de la dictée (spec_voice_input.md, ajout additif) ──
+# Transcription Whisper DANS Pilot, sans port réseau ni service externe. La
+# dépendance est OPTIONNELLE et rattachée à la feature `whisper` (voir plus
+# haut) : sans la feature elle n'est ni compilée ni employée, et le moteur se
+# déclare `moteur-non-compile`.
+whisper-rs = { version = "0.16", optional = true }
 
 # ── Terminal intégré (Windows) : PATH complet depuis la registry ──
 # Le PTY hérite de l'environnement du processus Pilot, qui peut ne pas avoir

@@ -1531,6 +1531,29 @@
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
               <span id="local-dictation-note" role="note">Coch&eacute;e, <b>dans l'&eacute;cran Vocal</b>, la dict&eacute;e est transcrite <b>sur cet ordinateur</b> par le logiciel de voix local&nbsp;: aucun son ne part vers Internet. Ailleurs (fen&ecirc;tre d'&eacute;dition, onglet agent), la dict&eacute;e reste celle du navigateur. Le mod&egrave;le employ&eacute; est choisi automatiquement parmi ceux qui sont install&eacute;s&nbsp;; Pilot n'installe rien, ne t&eacute;l&eacute;charge rien et n'accepte aucune licence &agrave; votre place. Si le service local est absent ou s'arr&ecirc;te, Pilot revient &agrave; la dict&eacute;e du navigateur, donc &agrave; un service en ligne, et le dit &agrave; l'&eacute;cran.</span>
             </div>
+            <!-- QUELLE OREILLE TRANSCRIT : UN second contrôle, UNE seconde clé
+                 (`local_dictation_engine`, additive). La case ci-dessus dit
+                 SI on transcrit sur cet ordinateur ; ce choix dit PAR QUI. Ses
+                 options sont remplies par settings.js depuis le module pur
+                 `oreille-locale.js` (aucun libellé recopié ici), et la valeur
+                 par défaut est le service de voix local : une configuration
+                 ancienne (clé absente) garde donc le comportement d'avant. -->
+            <div class="setting-row">
+              <label for="setting-local-dictation-engine" title="Qui transcrit votre dictée quand elle est faite sur cet ordinateur. « Service de voix local » : le logiciel de voix déjà installé (comportement d'origine). « Moteur intégré » : un modèle Whisper employé directement par Pilot, sans service à lancer — le modèle doit être installé d'abord, et la transcription est plus lente que l'ancienne.">Oreille&nbsp;:</label>
+              <select id="setting-local-dictation-engine" aria-describedby="local-dictation-note local-dictation-engine-note local-dictation-state"></select>
+            </div>
+            <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
+              <span id="local-dictation-engine-note" role="note">Ce choix ne sert que si la case ci-dessus est coch&eacute;e, et seulement <b>dans l'&eacute;cran Vocal</b>. Le <b>moteur int&eacute;gr&eacute;</b> transcrit sur cet ordinateur, sans service &agrave; lancer&nbsp;: il demande un mod&egrave;le install&eacute; une fois, sur votre geste, et fonctionne ensuite hors ligne. S'il n'est pas disponible (mod&egrave;le absent, ou version de Pilot sans ce moteur), la dict&eacute;e repart vers le moteur du navigateur, donc vers un service en ligne, et Pilot le dit &agrave; l'&eacute;cran.</span>
+            </div>
+            <!-- INSTALLATION du mod&egrave;le du moteur int&eacute;gr&eacute; : UN bouton, UN
+                 geste. Rien n'est t&eacute;l&eacute;charg&eacute; sans ce clic, et un
+                 t&eacute;l&eacute;chargement interrompu se reprend (rien n'est supprim&eacute;).
+                 La rang&eacute;e n'appara&icirc;t que quand le moteur int&eacute;gr&eacute; est choisi. -->
+            <div class="setting-row setting-row-indent" id="local-dictation-install-row" style="font-size:11px;color:var(--text-muted);">
+              <button type="button" id="btn-local-dictation-install" class="btn">Installer le mod&egrave;le de dict&eacute;e</button>
+              <button type="button" id="btn-local-dictation-install-cancel" class="btn" style="display:none;">Arr&ecirc;ter le t&eacute;l&eacute;chargement</button>
+              <span id="local-dictation-download-state" role="status" aria-live="polite"></span>
+            </div>
             <div class="setting-row setting-row-indent" style="font-size:11px;color:var(--text-muted);">
               <span id="local-dictation-state" role="status" aria-live="polite"></span>
             </div>

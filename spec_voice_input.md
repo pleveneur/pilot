@@ -685,6 +685,59 @@ la veille et la phrase d'invitation ne bougent pas, et le nom réveille du premi
 Verrou : `src/js/veille-transcription-locale.test.js` (échoue sur le code d'avant).
 Rapport : `docs/rapports/RAPPORT-veille-transcription-locale.md`.
 
+### 9bis. Le MOTEUR INTÉGRÉ (Whisper dans Pilot) — ajout additif, 2026-11-19
+
+Décision : offrir, **à côté** du service de voix local, une oreille qui n'a
+besoin d'**aucun service à lancer** — un moteur de reconnaissance embarqué dans
+Pilot (Whisper `large-v3-turbo` q8_0, via la bibliothèque Rust `whisper-rs`),
+utilisant un modèle présent sur le disque et fonctionnant **hors ligne**.
+
+1. **Rien n'est détourné.** La case `local_dictation` garde son sens (« la dictée
+   locale, oui/non »). Une **seconde clé additive** dit QUI transcrit :
+   `local_dictation_engine` (`voicestudio` = service local, **défaut** ;
+   `integre` = moteur intégré). Absente, vide ou inconnue ⇒ service local, sans
+   migration : le comportement d'avant est **identique au mot près**.
+2. **Un seul contrôle de plus**, dans la MÊME section « Mode Vocal » de l'onglet
+   Assistant : « Oreille : Service de voix local (actuel) / Moteur intégré (dans
+   Pilot) ». Les libellés viennent de la source unique
+   (`DICTATION_ENGINE_OPTIONS`, `oreille-locale.js`) — jamais recopiés dans le
+   HTML.
+3. **La décision reste UNE fonction** : `planLocalEar({ requested, status,
+   engine })` délègue à `planIntegratedEar` pour le moteur intégré. Les règles de
+   repli et la phrase annoncée sont les mêmes, et le repli est **toujours dit**
+   avec sa conséquence réelle (retour à la dictée du navigateur, donc à un
+   service en ligne). Chaque panne a sa phrase : `moteur-non-compile`,
+   `modele-absent`, `modele-illisible`, `moteur-occupe`, défaut.
+4. **Une seule couture de session** : `createDictationSession` branche sur le plan,
+   et `createIntegratedEar` (`oreille-integree-moteur.js`) rend un objet de la
+   **même forme** qu'une session du navigateur (`start` / `stop` / `onresult` /
+   `onerror` / `onend`, plus `lang`, `interimResults`, `continuous`). Tout ce qui
+   décide ensuite (garde du nom, envoi sur silence, reprise en main, envoi
+   automatique, plafond des sessions vides) reste écrit **une seule fois**.
+5. **Le micro ne change pas** : le moteur intégré ne capture rien, il consomme le
+   robinet `setAudioTap` de `vocal-mic.js` (une seule capture dans Pilot), et
+   convertit en PCM 16 bits mono 16 kHz, par morceaux de 100 ms.
+6. **Côté machine, un module frère** (`src-tauri/src/asr_whisper.rs`) : six
+   commandes `asr_whisper_*` (`status`, `start`, `send`, `stop`, `cancel`, `log`),
+   toutes `pub async fn` + `spawn_blocking`, **un seul évènement**
+   `asr-whisper-transcript` au format `started` / `partial` / `final` / `error` /
+   `ended`. Aucun port réseau, aucun programme externe, aucune fenêtre noire.
+7. **Le modèle s'installe sur un GESTE** (`asr_whisper_download.rs`, frère de
+   `tts_local_download.rs`) : un seul téléchargement à la fois, fichier `.part`
+   voisin du final, reprise par `Range`, pourcentage borné, arrêt qui ne supprime
+   **rien**, renommage seulement à taille exacte. L'agent ne télécharge jamais
+   rien de lui-même.
+8. **La feature Cargo est optionnelle** : `whisper-rs` n'est compilé que par
+   `cargo build --features whisper` (il exige `libclang` et un outillage C++).
+   Sans elle, le module **compile quand même** et répond `moteur-non-compile` avec
+   une phrase française : jamais un échec de compilation, jamais un silence.
+9. **Le web distant ne change pas** : pas de Tauri, oreille du navigateur.
+
+Verrous : `src/js/oreille-integree-whisper.test.js` (33 verrous : défaut
+inchangé, contrat de session, micro unique, phrases de repli, aucune adresse,
+téléchargement sur geste, un seul écrivain de la clé). Rapport :
+`docs/rapports/RAPPORT-oreille-integree-whisper.md`.
+
 ---
 
 <!-- HELP:dictee-vocale -->
@@ -754,6 +807,18 @@ texte à la voix.
   bascule jamais en silence. Limite connue : la transcription locale est plus
   lente (le texte définitif arrive quelques secondes après votre dernier mot) ;
   le texte s'écrit au fur et à mesure, vous n'avez pas à attendre pour parler.
+- **Choisir l'oreille : service de voix local, ou moteur intégré** (nouveau,
+  désactivé par défaut). Juste sous la case précédente, le réglage **« Oreille : »**
+  propose « Service de voix local (actuel) » ou « **Moteur intégré (dans Pilot)** ».
+  Le moteur intégré ne demande **aucun logiciel à lancer** : il fonctionne dans
+  Pilot, hors ligne, avec un modèle installé sur votre disque. Sa première
+  utilisation demande une **installation** : un bouton **« Installer le modèle de
+  dictée »** apparaît, **rien n'est téléchargé sans votre clic**, le téléchargement
+  se reprend s'il est interrompu, et le bouton **« Arrêter le téléchargement »**
+  n'efface aucun fichier. Tant que le modèle n'est pas installé (ou si le moteur
+  n'est pas compilé dans votre version), Pilot **vous le dit** et revient à la
+  dictée du navigateur — jamais en silence. Laisser le réglage sur « Service de
+  voix local » ne change **rien** à ce que vous connaissiez.
 - **Avec la transcription locale, la mise en veille de 20 secondes marche comme
   avant** : au bout de 20 s sans parler, l'écran se met en veille et attend son nom.
   Avant, la veille ne s'armait **jamais** quand la transcription locale était

@@ -134,10 +134,17 @@ import {
 import {
   planLocalEar,
   localDictationRequested,
+  dictationEngineRequested,
+  normalizeDictationEngine,
+  DICTATION_ENGINE_BUILTIN,
   localEarStatusLine,
   localEarFailureMessage,
 } from "./oreille-locale.js";
 import { createLocalEar } from "./oreille-locale-moteur.js";
+// LE MOTEUR INTÉGRÉ (Whisper dans Pilot) a la MÊME FORME que l'oreille locale
+// (déjà la forme d'une session du navigateur) : une branche de plus, jamais un
+// second chemin de dictée.
+import { createIntegratedEar } from "./oreille-integree-moteur.js";
 // UNE SEULE OREILLE À LA FOIS (correctif de la coupure de la dictée locale) :
 // l'IDENTITÉ de la session de dictée et l'ORDRE d'ouverture (clore la
 // précédente AVANT d'en ouvrir une autre) sont des décisions PURES, dans
@@ -5481,6 +5488,11 @@ export async function createSuperAgent(container) {
   // `localEarPlan` : la décision (qui consomme le son, ce que dit l'écran),
   //   recalculée à chaque relecture par `planLocalEar` — jamais écrite à la main.
   let localDictationOn = false;
+  // QUELLE OREILLE LOCALE ? (ajout ADDITIF) : `voicestudio` (le service de voix
+  // local, comportement d'avant) ou `integre` (le moteur dans Pilot). Valeur
+  // relue à chaque sonde, jamais devinée : un réglage illisible retombe sur le
+  // service, donc sur le comportement historique.
+  let localDictationEngine = "";
   let localEarStatus = null;
   let localEarPlan = planLocalEar({ requested: false });
   // `localEarVerifie` : la réponse du pont pour le réglage COURANT est arrivée.
@@ -5628,6 +5640,19 @@ let vocalMotsDeReveil = [];
   }
 
   /**
+   * Le nom de l'oreille RÉGLÉE, tel qu'il doit être écrit dans une phrase :
+   * « le service de voix local » (comportement d'avant) ou « le moteur intégré
+   * de dictée ». UNE seule composition, pour que les phrases de repli ne se
+   * trompent jamais de coupable.
+   * @returns {string}
+   */
+  function oreilleLocalePhrase() {
+    return localEarPlan && localEarPlan.engine === DICTATION_ENGINE_BUILTIN
+      ? "Le moteur intégré de dictée"
+      : "Le service de voix local";
+  }
+
+  /**
    * QUELLE OREILLE TRANSCRIT CETTE DICTÉE (étape 2 de l'oreille locale).
    *
    * Deux fournisseurs possibles, UN SEUL contrat : celui d'une session de
@@ -5652,10 +5677,24 @@ let vocalMotsDeReveil = [];
         // Sans le micro de l'écran (mode Vocal non monté), il n'y a pas de son à
         // diriger : on le dit et on garde la dictée du navigateur.
         annoncerRepliLocal(
-          "Le service de voix local ne peut pas recevoir le son du micro hors du mode " +
+          `${oreilleLocalePhrase()} ne peut pas recevoir le son du micro hors du mode ` +
             "Vocal. Ici, la dictée passe par le navigateur, donc par un service en ligne.",
         );
       } else {
+        // LE CHOIX DE L'OREILLE est déjà dans le plan : une branche de plus,
+        // de MÊME FORME. Les deux fabriques rendent un objet identique
+        // (`start` / `stop` / `onresult` / `onerror` / `onend`) : rien d'autre
+        // dans la dictée ne sait laquelle écoute.
+        if (localEarPlan.engine === DICTATION_ENGINE_BUILTIN) {
+          return createIntegratedEar({
+            invoke,
+            listen,
+            mic: vocalMic,
+            onModel: (modele) => {
+              localEarModele = modele && typeof modele === "object" ? modele : null;
+            },
+          });
+        }
         return createLocalEar({
           invoke,
           listen,
@@ -5945,7 +5984,11 @@ let vocalMotsDeReveil = [];
         // Plus aucune preuve que le service répond : la décision est recalculée
         // SANS statut, ce qui vaut « service absent » et le fait dire à l'écran.
         localEarStatus = null;
-        localEarPlan = planLocalEar({ requested: localDictationOn, status: null });
+        localEarPlan = planLocalEar({
+          requested: localDictationOn,
+          status: null,
+          engine: localDictationEngine,
+        });
         reportVoiceFailure(phraseLocale, phraseLocale);
         return;
       }
@@ -7795,26 +7838,42 @@ let vocalMotsDeReveil = [];
    */
   async function refreshLocalDictation() {
     let demande = false;
+    let moteur = "";
     try {
       const cfg = await invoke("get_config");
       demande = localDictationRequested(cfg);
+      // QUELLE OREILLE : lue dans la MÊME configuration, une clé de plus. Un
+      // fichier ancien (clé absente) rend `voicestudio`, donc le comportement
+      // d'avant, à l'identique.
+      moteur = dictationEngineRequested(cfg);
     } catch (_) {
       demande = false;
+      moteur = normalizeDictationEngine(null);
     }
     localDictationOn = demande;
+    localDictationEngine = normalizeDictationEngine(moteur);
     // L'écoute automatique attend la réponse : ouvrir l'oreille du navigateur
     // pendant la vérification serait basculer en ligne sans le dire.
     localEarVerifie = !demande;
     let statut = null;
     if (demande) {
+      // Le pont interrogé dépend de l'oreille choisie : deux réponses de MÊME
+      // FORME (`available`, `reason`, `model_id`, `model_label`), donc une seule
+      // décision ensuite. La fenêtre ne joint jamais un service : elle demande.
+      const commande =
+        localDictationEngine === DICTATION_ENGINE_BUILTIN ? "asr_whisper_status" : "asr_voicestudio_status";
       try {
-        statut = await invoke("asr_voicestudio_status");
+        statut = await invoke(commande);
       } catch (_) {
         statut = null;
       }
     }
     localEarStatus = statut && typeof statut === "object" ? statut : null;
-    localEarPlan = planLocalEar({ requested: demande, status: localEarStatus });
+    localEarPlan = planLocalEar({
+      requested: demande,
+      status: localEarStatus,
+      engine: localDictationEngine,
+    });
     localEarVerifie = true;
     // Une oreille locale redevenue utilisable efface la mémoire du repli : une
     // panne se dit UNE fois, pas à chaque dictée.

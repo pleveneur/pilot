@@ -149,8 +149,17 @@ describe("1. Un seul réglage, une seule clé, comportement historique intact", 
     expect(i, "champ local_dictation absent de AppConfig").toBeGreaterThan(-1);
     expect(LIB.slice(Math.max(0, i - 20), i)).toContain("#[serde(default)]");
     expect(LIB).toContain("local_dictation: false,");
-    // Deux occurrences en tout : la declaration et le defaut. Aucune autre cle.
-    expect((LIB.match(/local_dictation/g) || []).length).toBe(2);
+    // UN SEUL champ booléen : la clé n'est jamais détournée pour dire QUI
+    // transcrit (« qui » a sa propre clé, additive elle aussi).
+    expect((LIB.match(/^\s*local_dictation: bool,/gm) || []).length).toBe(1);
+    // La seconde clé existe une seule fois, elle est additive, et son défaut
+    // est le SERVICE de voix local (donc le comportement d'avant).
+    expect((LIB.match(/^\s*local_dictation_engine: String,/gm) || []).length).toBe(1);
+    const j = LIB.indexOf("    local_dictation_engine: String,");
+    expect(j).toBeGreaterThan(-1);
+    expect(LIB.slice(Math.max(0, j - 20), j)).toContain("#[serde(default)]");
+    expect(LIB).toContain("local_dictation_engine: default_local_dictation_engine(),");
+    expect(LIB).toContain('fn default_local_dictation_engine() -> String { "voicestudio".to_string() }');
   });
 });
 
@@ -334,7 +343,12 @@ describe("4. Le repli est VISIBLE, jamais silencieux", () => {
     // La décision est RECALCULÉE sans statut (donc « absent ») : l'écran ne
     // promet plus une oreille locale dont on n'a plus de preuve.
     expect(erreur).toContain("localEarStatus = null;");
-    expect(erreur).toContain("planLocalEar({ requested: localDictationOn, status: null })");
+    // La décision est RECALCULÉE sans statut (donc « absent ») ET avec l'oreille
+    // demandée : elle ne promet plus une oreille locale dont on n'a plus de
+    // preuve, et elle ne se trompe pas de moteur en le disant.
+    expect(erreur).toContain("planLocalEar({");
+    expect(erreur).toContain("status: null,");
+    expect(erreur).toContain("engine: localDictationEngine,");
     expect(erreur).toContain("reportVoiceFailure(phraseLocale, phraseLocale);");
   });
 

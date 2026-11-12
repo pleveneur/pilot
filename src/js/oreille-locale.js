@@ -43,6 +43,68 @@ import { vocalNameSentence } from "./vocal-nom-garde.js";
 /** La clé unique du réglage (côté Rust : `AppConfig.local_dictation`). */
 export const LOCAL_DICTATION_KEY = "local_dictation";
 
+// ── QUELLE OREILLE ? (ajout ADDITIF, 2026-11-17) ────────────────────────────
+// Une SECONDE clé, à côté de `local_dictation` (jamais à sa place) : elle ne
+// dit pas « transcrire ici ou en ligne » — c'est le rôle de la case à cocher —
+// mais « QUI transcrit ici ». Valeur absente, vide ou inconnue = `voicestudio`,
+// donc le comportement d'avant, à l'identique : aucune migration, aucun défaut
+// changé par cette addition.
+export const LOCAL_DICTATION_ENGINE_KEY = "local_dictation_engine";
+
+/** Les deux seules oreilles locales possibles. */
+export const DICTATION_ENGINE_SERVICE = "voicestudio";
+export const DICTATION_ENGINE_BUILTIN = "integre";
+
+/** La liste affichée dans les Paramètres (source unique des libellés). */
+export const DICTATION_ENGINE_OPTIONS = Object.freeze([
+  { value: DICTATION_ENGINE_SERVICE, label: "Service de voix local (actuel)" },
+  { value: DICTATION_ENGINE_BUILTIN, label: "Moteur intégré (dans Pilot)" },
+]);
+
+/**
+ * Ramène une valeur quelconque à l'une des DEUX oreilles connues.
+ *
+ * Tout ce qui n'est pas explicitement le moteur intégré retombe sur le service
+ * de voix local : c'est la règle qui interdit à une valeur inconnue (faute de
+ * frappe, fichier ancien, futur réglage) de changer le comportement par défaut.
+ * @param {unknown} valeur valeur relue de la configuration ou d'un menu
+ * @returns {string} `integre` ou `voicestudio`
+ */
+export function normalizeDictationEngine(valeur) {
+  const brut = typeof valeur === "string" ? valeur : "";
+  const nu = brut
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  if (["integre", "integree", "whisper", "builtin", "moteurintegre"].includes(nu)) {
+    return DICTATION_ENGINE_BUILTIN;
+  }
+  return DICTATION_ENGINE_SERVICE;
+}
+
+/**
+ * Le libellé lisible d'une oreille (jamais un identifiant technique).
+ * @param {unknown} valeur valeur de configuration
+ * @returns {string}
+ */
+export function dictationEngineLabel(valeur) {
+  const choix = normalizeDictationEngine(valeur);
+  const trouve = DICTATION_ENGINE_OPTIONS.find((option) => option.value === choix);
+  return trouve ? trouve.label : "";
+}
+
+/**
+ * L'oreille RÉGLÉE, lue dans la configuration (même forme que
+ * `localDictationRequested` : une seule fonction de lecture par clé).
+ * @param {object|null|undefined} config configuration lue (`get_config`)
+ * @returns {string} `integre` ou `voicestudio`
+ */
+export function dictationEngineRequested(config) {
+  const cfg = config && typeof config === "object" ? config : null;
+  return normalizeDictationEngine(cfg ? cfg[LOCAL_DICTATION_ENGINE_KEY] : null);
+}
+
 /**
  * Taille d'un morceau de son envoyé au pont : 100 ms à 16 kHz mono 16 bits
  * (le pont plafonne à ~0,5 s par morceau ; 100 ms donne du texte plus tôt).
@@ -77,12 +139,18 @@ export function localEarReason(status) {
 /**
  * LA décision : la dictée passe-t-elle par le service local, et sinon pourquoi ?
  *
- * @param {{requested?: boolean, status?: object|null}} etats
+ * Le CHOIX DE L'OREILLE (`engine`) ne change QUE le fournisseur : les règles de
+ * repli, les phrases annoncées et le comportement quand la case est décochée
+ * restent identiques. Sans `engine` (ou avec une valeur inconnue), la décision
+ * est celle du service de voix local — exactement celle d'avant.
+ *
+ * @param {{requested?: boolean, status?: object|null, engine?: string}} etats
  * @returns {{use: boolean, reason: string, modelId: string, modelLabel: string,
- *            sentence: string, fallback: string}}
+ *            sentence: string, fallback: string, engine: string}}
  */
 export function planLocalEar(etats = {}) {
   const e = etats && typeof etats === "object" ? etats : {};
+  const engine = normalizeDictationEngine(e.engine);
   if (e.requested !== true) {
     return {
       use: false,
@@ -91,7 +159,13 @@ export function planLocalEar(etats = {}) {
       modelLabel: "",
       sentence: "",
       fallback: "",
+      engine,
     };
+  }
+  // MOTEUR INTÉGRÉ : même forme, mêmes règles, autre fournisseur. La décision
+  // est prise par SA fonction (aucune règle recopiée), et le repli reste dit.
+  if (engine === DICTATION_ENGINE_BUILTIN) {
+    return planIntegratedEar({ requested: true, status: e.status });
   }
   const status = e.status && typeof e.status === "object" ? e.status : null;
   const reason = localEarReason(status);
@@ -104,6 +178,7 @@ export function planLocalEar(etats = {}) {
       modelLabel: "",
       sentence: "",
       fallback: localEarFallbackSentence(reason),
+      engine,
     };
   }
   return {
@@ -113,7 +188,122 @@ export function planLocalEar(etats = {}) {
     modelLabel: typeof status.model_label === "string" ? status.model_label.trim() : "",
     sentence: localEarModelSentence(status),
     fallback: "",
+    engine,
   };
+}
+
+// ── MOTEUR INTÉGRÉ (Whisper dans Pilot, ajout du 2026-11-17) ─────────────────
+
+/**
+ * La raison, en code stable, pour laquelle le moteur INTÉGRÉ ne peut pas servir.
+ * Un état illisible vaut « pas de preuve » : on ne promet jamais un moteur qu'on
+ * n'a pas vu répondre, exactement comme pour le service de voix local.
+ * @param {object|null|undefined} status réponse de `asr_whisper_status`
+ * @returns {string}
+ */
+export function integratedEarReason(status) {
+  if (!status || typeof status !== "object") return "moteur-absent";
+  const raison = typeof status.reason === "string" ? status.reason.trim() : "";
+  if (raison) return raison;
+  return status.available === true ? "disponible" : "moteur-absent";
+}
+
+/**
+ * LA décision du moteur intégré — même forme, mêmes règles que `planLocalEar`.
+ * @param {{requested?: boolean, status?: object|null}} etats
+ * @returns {{use: boolean, reason: string, modelId: string, modelLabel: string,
+ *            sentence: string, fallback: string, engine: string}}
+ */
+export function planIntegratedEar(etats = {}) {
+  const e = etats && typeof etats === "object" ? etats : {};
+  const base = { engine: DICTATION_ENGINE_BUILTIN };
+  if (e.requested !== true) {
+    return { ...base, use: false, reason: "desactivee", modelId: "", modelLabel: "", sentence: "", fallback: "" };
+  }
+  const status = e.status && typeof e.status === "object" ? e.status : null;
+  const reason = integratedEarReason(status);
+  const available = reason === "disponible" && status && status.available === true;
+  if (!available) {
+    return {
+      ...base,
+      use: false,
+      reason,
+      modelId: "",
+      modelLabel: "",
+      sentence: "",
+      fallback: integratedEarFallbackSentence(reason),
+    };
+  }
+  return {
+    ...base,
+    use: true,
+    reason: "disponible",
+    modelId: typeof status.model_id === "string" ? status.model_id : "",
+    modelLabel: typeof status.model_label === "string" ? status.model_label.trim() : "",
+    sentence: integratedEarModelSentence(status),
+    fallback: "",
+  };
+}
+
+/**
+ * Ce que l'utilisateur doit comprendre quand le moteur intégré ne peut pas
+ * servir : UNE phrase par raison, et la conséquence RÉELLE est toujours dite —
+ * la voix repart vers la dictée du navigateur, donc vers un service en ligne.
+ * @param {string} reason code stable rendu par le pont
+ * @returns {string}
+ */
+export function integratedEarFallbackSentence(reason) {
+  const consequence =
+    "Je dicte autrement : la voix repart vers la dictée du navigateur, " +
+    "donc vers un service en ligne.";
+  switch (String(reason == null ? "" : reason)) {
+    case "moteur-non-compile":
+      return `Le moteur intégré n'est pas compilé dans cette version de Pilot. ${consequence}`;
+    case "modele-absent":
+      return `Le modèle de dictée du moteur intégré n'est pas installé sur cet ordinateur (il se télécharge sur votre demande). ${consequence}`;
+    case "modele-illisible":
+      return `Le fichier du modèle de dictée du moteur intégré est incomplet ou illisible. ${consequence}`;
+    case "moteur-occupe":
+      return `Le moteur intégré travaille déjà sur une autre dictée. ${consequence}`;
+    default:
+      return `Le moteur intégré de dictée n'est pas disponible sur cet ordinateur. ${consequence}`;
+  }
+}
+
+/**
+ * La phrase qui nomme le modèle employé par le moteur intégré (lu dans la
+ * réponse du pont, jamais choisi ici).
+ * @param {object|null|undefined} status réponse de `asr_whisper_status`
+ * @returns {string}
+ */
+export function integratedEarModelSentence(status) {
+  const s = status && typeof status === "object" ? status : null;
+  const label = s && typeof s.model_label === "string" ? s.model_label.trim() : "";
+  const base = label
+    ? `Dans l'écran Vocal, la dictée se fait sur cet ordinateur avec le moteur intégré de Pilot (« ${label} ») : aucun son ne part vers Internet, aucun service n'est nécessaire.`
+    : "Dans l'écran Vocal, la dictée se fait sur cet ordinateur avec le moteur intégré de Pilot : aucun son ne part vers Internet, aucun service n'est nécessaire.";
+  return base;
+}
+
+/**
+ * L'état d'un téléchargement de modèle du moteur intégré, en une phrase.
+ * Aucun chiffre n'est inventé : tout vient de la réponse du pont.
+ * @param {object|null|undefined} state réponse de `asr_whisper_download_state`
+ * @returns {string}
+ */
+export function integratedEarDownloadSentence(state) {
+  const s = state && typeof state === "object" ? state : null;
+  if (!s) return "";
+  const total = Number(s.bytes_total) > 0 ? Math.round(Number(s.bytes_total) / 1048576) : 0;
+  const fait = Number(s.bytes) > 0 ? Number(s.bytes) : 0;
+  if (s.running === true) {
+    const pct = Number(s.percent) >= 0 && Number.isFinite(Number(s.percent)) ? Math.round(Number(s.percent)) : 0;
+    return `Téléchargement du modèle de dictée : ${pct} %${total > 0 ? ` (${fait} sur ${total} Mo)` : ""}. Vous pouvez arrêter : rien n'est supprimé.`;
+  }
+  if (s.outcome === "ok") return "Le modèle de dictée est installé : le moteur intégré peut servir.";
+  if (s.outcome === "cancelled") return "Téléchargement arrêté. Ce qui a déjà été reçu reste en place : reprendre continuera là où cela s'est arrêté.";
+  if (s.outcome === "error") return "Le téléchargement du modèle de dictée a échoué. Ce qui a déjà été reçu reste en place.";
+  return "";
 }
 
 /**
@@ -208,16 +398,20 @@ export function localEarStatusLine(etats = {}) {
   // ouvrir l'oreille du navigateur pendant la vérification serait basculer en
   // ligne sans le dire.
   if (e.verification === true) return "Je vérifie si la dictée locale peut servir…";
+  // LE MOTEUR INTÉGRÉ a SES DEUX phrases (il n'y a aucun service à accuser) ;
+  // le service de voix local garde les siennes, au mot près.
+  const integre = normalizeDictationEngine(plan.engine) === DICTATION_ENGINE_BUILTIN;
   if (plan.use === true) {
     const nom = typeof e.nom === "string" ? e.nom.trim() : "";
     // La phrase du nom vient du module de la GARDE (source unique) : jamais un
     // second texte, jamais une seconde règle de nom.
     const phraseNom = nom ? vocalNameSentence(nom) : "";
-    return phraseNom
-      ? `J'écoute avec le service local. ${phraseNom}`
-      : "J'écoute avec le service local.";
+    const base = integre ? "J'écoute avec le moteur intégré." : "J'écoute avec le service local.";
+    return phraseNom ? `${base} ${phraseNom}` : base;
   }
-  return "Le service local est absent : je dicte autrement.";
+  return integre
+    ? "Le moteur intégré n'est pas disponible : je dicte autrement."
+    : "Le service local est absent : je dicte autrement.";
 }
 
 /**

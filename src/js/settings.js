@@ -157,6 +157,16 @@ import {
 // donc jamais recopiés ici, et l'écran des Paramètres dit exactement ce que dit
 // la ligne d'état du mode Vocal.
 import { planLocalEar, localDictationRequested } from "./oreille-locale.js";
+// QUELLE OREILLE transcrit (ajout additif) : la seconde clé, ses deux valeurs et
+// leurs libellés viennent du MÊME module pur. Aucun libellé n'est recopié ici,
+// et la valeur inconnue ou absente retombe sur le service de voix local (donc le
+// comportement d'avant).
+import {
+  DICTATION_ENGINE_BUILTIN,
+  DICTATION_ENGINE_OPTIONS,
+  integratedEarDownloadSentence,
+  normalizeDictationEngine,
+} from "./oreille-locale.js";
 // MOTS DE RÉVEIL de la garde du nom (§ 6quater) : la clé et la normalisation
 // (séparateurs, doublons, casse, accents) viennent du module PUR de la garde —
 // jamais une seconde règle écrite ici, et jamais un texte mémorisé que la garde
@@ -985,28 +995,105 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   }
 
   /**
-   * Affiche l'état de l'OREILLE LOCALE sous sa case à cocher : quel modèle
-   * transcrit, et — s'il ne peut pas servir — pourquoi, en français.
+   * Remplit et aligne le CHOIX DE L'OREILLE (`local_dictation_engine`).
+   *
+   * Les options viennent de la source unique (`DICTATION_ENGINE_OPTIONS`) : les
+   * libellés ne sont jamais recopiés ici. Une valeur absente ou inconnue donne
+   * le service de voix local — le comportement d'avant, sans migration.
+   * @param {string|null|undefined} value valeur lue dans la configuration
+   */
+  function refreshLocalDictationEngine(value) {
+    if (!selectLocalDictationEngine) return;
+    if (selectLocalDictationEngine.options.length === 0) {
+      for (const option of DICTATION_ENGINE_OPTIONS) {
+        const optionNode = document.createElement("option");
+        optionNode.value = option.value;
+        optionNode.textContent = option.label;
+        selectLocalDictationEngine.appendChild(optionNode);
+      }
+    }
+    const brut = value == null ? currentConfig && currentConfig.local_dictation_engine : value;
+    selectLocalDictationEngine.value = normalizeDictationEngine(brut);
+    // La rangée d'installation ne concerne QUE le moteur intégré : avec le
+    // service de voix local, l'écran reste exactement celui d'avant.
+    if (localDictationInstallRow) {
+      localDictationInstallRow.style.display =
+        selectLocalDictationEngine.value === DICTATION_ENGINE_BUILTIN ? "" : "none";
+    }
+  }
+
+  /**
+   * Affiche l'état de l'installation du modèle du moteur intégré (une phrase,
+   * celle du module partagé) et l'état des deux boutons.
+   * @param {object|null} state réponse de `asr_whisper_download(_state)`
+   */
+  function showIntegratedDownloadState(state) {
+    const running = !!(state && state.running === true);
+    if (localDictationDownloadStateEl) {
+      localDictationDownloadStateEl.textContent = integratedEarDownloadSentence(state);
+      localDictationDownloadStateEl.dataset.state = !state
+        ? ""
+        : running
+          ? "running"
+          : state.outcome || "";
+    }
+    if (btnLocalDictationInstall) btnLocalDictationInstall.disabled = running;
+    if (btnLocalDictationInstallCancel) {
+      btnLocalDictationInstallCancel.style.display = running ? "" : "none";
+    }
+  }
+
+  /**
+   * Relit l'état de l'installation du modèle intégré — SANS rien lancer :
+   * aucun téléchargement ne part d'ici, seulement d'un clic.
+   * @returns {Promise<void>}
+   */
+  async function refreshIntegratedDownloadState() {
+    if (!selectLocalDictationEngine) return;
+    if (normalizeDictationEngine(selectLocalDictationEngine.value) !== DICTATION_ENGINE_BUILTIN) {
+      return;
+    }
+    let state = null;
+    try {
+      state = await invoke("asr_whisper_download_state");
+    } catch (_) {
+      state = null;
+    }
+    showIntegratedDownloadState(state);
+  }
+
+  /**
+   * Affiche l'état de l'OREILLE LOCALE sous sa case à cocher : quelle oreille
+   * transcrit, avec quel modèle, et — si elle ne peut pas servir — pourquoi, en
+   * français.
    *
    * Les phrases viennent du module PARTAGÉ (`oreille-locale.js`) : les mêmes que
    * celles de la ligne d'état de l'écran Vocal, donc jamais deux textes pour la
-   * même chose. Rien n'est affiché quand la case est décochée (comportement
-   * historique inchangé, aucune information en plus).
-   * @param {object|null} status réponse de `asr_voicestudio_status`
+   * même chose. Le choix de l'oreille est transmis tel quel : `planLocalEar`
+   * délègue au moteur intégré quand il est demandé (aucune règle recopiée).
+   * Rien n'est affiché quand la case est décochée (comportement historique
+   * inchangé, aucune information en plus).
+   * @param {object|null} status réponse de `asr_voicestudio_status` ou
+   *        `asr_whisper_status` selon l'oreille demandée
    */
   function refreshLocalDictationState(status) {
     if (!localDictationStateEl) return;
     const plan = planLocalEar({
       requested: !!(chkLocalDictation && chkLocalDictation.checked),
       status: status || null,
+      engine: selectLocalDictationEngine
+        ? normalizeDictationEngine(selectLocalDictationEngine.value)
+        : undefined,
     });
     localDictationStateEl.textContent = plan.use === true ? plan.sentence : plan.fallback;
   }
 
   /**
-   * Interroge le pont machine de l'étape 1 (jamais le service directement : la
-   * fenêtre ne connaît aucune adresse) et met la phrase à jour. Silencieux en
-   * cas d'échec : la phrase du repli est alors celle du service absent.
+   * Interroge le pont machine de l'oreille DEMANDÉE (jamais le service
+   * directement : la fenêtre ne connaît aucune adresse) et met la phrase à jour.
+   * Les deux ponts répondent la même forme (`available`, `reason`, `model_id`,
+   * `model_label`), donc la décision reste UNE seule fonction. Silencieux en cas
+   * d'échec : la phrase du repli est alors celle de l'oreille absente.
    * @returns {Promise<void>}
    */
   async function refreshLocalDictationStatus() {
@@ -1015,9 +1102,12 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
       localDictationStateEl.textContent = "";
       return;
     }
+    const integre =
+      !!selectLocalDictationEngine &&
+      normalizeDictationEngine(selectLocalDictationEngine.value) === DICTATION_ENGINE_BUILTIN;
     let status = null;
     try {
-      status = await invoke("asr_voicestudio_status");
+      status = await invoke(integre ? "asr_whisper_status" : "asr_voicestudio_status");
     } catch (_) {
       status = null;
     }
@@ -1517,6 +1607,15 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   // le modèle annoncé est celui que le service dit employer.
   const chkLocalDictation = document.getElementById("setting-local-dictation");
   const localDictationStateEl = document.getElementById("local-dictation-state");
+  // QUELLE OREILLE (seconde clé additive `local_dictation_engine`) : un seul
+  // contrôle, rempli depuis `DICTATION_ENGINE_OPTIONS`, à côté de la case.
+  const selectLocalDictationEngine = document.getElementById("setting-local-dictation-engine");
+  // INSTALLATION du modèle du moteur intégré : un seul bouton, un seul geste.
+  // Rien n'est téléchargé sans ce clic (l'agent n'installe jamais rien).
+  const localDictationInstallRow = document.getElementById("local-dictation-install-row");
+  const btnLocalDictationInstall = document.getElementById("btn-local-dictation-install");
+  const btnLocalDictationInstallCancel = document.getElementById("btn-local-dictation-install-cancel");
+  const localDictationDownloadStateEl = document.getElementById("local-dictation-download-state");
   // MOTS DE RÉVEIL de la garde du nom (même section, même mécanisme) : UN
   // champ texte, UNE clé (`vocal_wake_words`). La normalisation (séparateurs,
   // doublons, casse, accents) vient du module pur `vocal-nom-garde.js` : rien
@@ -2407,7 +2506,12 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
   // est demandé SANS clic à l'ouverture (le service a pu être lancé ou fermé) :
   // c'est le seul moyen de dire la vérité sur le modèle employé.
   if (chkLocalDictation) chkLocalDictation.checked = localDictationRequested(currentConfig);
+  // Meme section : QUELLE oreille transcrit (cle additive, defaut = le service
+  // de voix local). Lue avant la sonde, qui choisit sa commande selon ce choix.
+  refreshLocalDictationEngine(currentConfig && currentConfig.local_dictation_engine);
   refreshLocalDictationStatus();
+  // Etat du DERNIER telechargement du modele integre : relu, jamais relance.
+  void refreshIntegratedDownloadState();
   // Meme section : les MOTS DE REVEIL de la garde du nom (champ vide par
   // defaut ⇒ le nom seul, comportement inchange).
   refreshVocalWakeWords(currentConfig && currentConfig.vocal_wake_words);
@@ -2623,6 +2727,57 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
     chkLocalDictation.addEventListener("change", () => {
       refreshLocalDictationStatus();
     });
+  }
+  // Changer d'OREILLE relit l'etat de CELLE qui vient d'etre choisie : la phrase
+  // sous la case dit alors la verite du moteur demande, jamais celle de l'autre.
+  if (selectLocalDictationEngine) {
+    selectLocalDictationEngine.addEventListener("change", () => {
+      if (localDictationInstallRow) {
+        localDictationInstallRow.style.display =
+          normalizeDictationEngine(selectLocalDictationEngine.value) === DICTATION_ENGINE_BUILTIN
+            ? ""
+            : "none";
+      }
+      refreshLocalDictationStatus();
+      void refreshIntegratedDownloadState();
+    });
+  }
+  // INSTALLATION du modèle intégré : le SEUL geste qui télécharge. Un clic =
+  // une demande ; le pont refuse une seconde demande concurrente en clair, et
+  // un arrêt ne supprime RIEN (la reprise repart de ce qui a été reçu).
+  if (btnLocalDictationInstall) {
+    btnLocalDictationInstall.addEventListener("click", async () => {
+      btnLocalDictationInstall.disabled = true;
+      let state = null;
+      try {
+        state = await invoke("asr_whisper_download");
+      } catch (erreur) {
+        state = null;
+      }
+      if (state) showIntegratedDownloadState(state);
+      // Dans tous les cas, la phrase de l'oreille est relue : un modèle installé
+      // change ce que la dictée peut faire, et l'écran doit le dire tout de suite.
+      refreshLocalDictationStatus();
+    });
+  }
+  if (btnLocalDictationInstallCancel) {
+    btnLocalDictationInstallCancel.addEventListener("click", async () => {
+      let state = null;
+      try {
+        state = await invoke("asr_whisper_cancel_download");
+      } catch (_) {
+        state = null;
+      }
+      if (state) showIntegratedDownloadState(state);
+    });
+  }
+  // Progression poussée par le pont du modèle intégré (un seul abonnement).
+  const unlistenWhisperDownload = listen("asr-whisper-download-progress", (event) => {
+    if (!event || !event.payload) return;
+    showIntegratedDownloadState(event.payload);
+  });
+  if (unlistenWhisperDownload && typeof unlistenWhisperDownload.catch === "function") {
+    unlistenWhisperDownload.catch(() => {});
   }
   if (btnAssistantSoundTest) {
     btnAssistantSoundTest.addEventListener("click", async () => {
@@ -3540,6 +3695,12 @@ const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-
         // cochee : la valeur par defaut (absente) garde la dictee du navigateur,
         // donc le comportement historique, sans migration.
         local_dictation: chkLocalDictation ? chkLocalDictation.checked === true : false,
+        // QUELLE OREILLE transcrit (cle ADDITIVE, distincte) : la valeur passe par
+        // la source unique, donc une valeur inconnue ou un controle absent
+        // enregistre le SERVICE de voix local — jamais un moteur choisi par defaut.
+        local_dictation_engine: normalizeDictationEngine(
+          selectLocalDictationEngine ? selectLocalDictationEngine.value : undefined
+        ),
         // MOTS DE REVEIL (garde du nom) : la valeur enregistree passe par la
         // normalisation de la source unique — un champ vide reste vide, donc
         // le comportement historique (le nom seul), sans migration.

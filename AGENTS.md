@@ -60,7 +60,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` + `spec_orchestration_autotest.md` + `spec_orchestration_snapshots.md` + `spec_orchestration_reviewer.md` |
 | Orchestration **multi-agents** parallèles pilotée par l'assistant (phase 0, T1→T6 : plusieurs agents sur un ou plusieurs projets, bus d'agents, `AgentService`) | `spec_orchestration_multiagents.md` |
 | Accès distant web | `spec_web_remote.md` |
-| Dictée vocale (+ **oreille locale, § 9 : pont machine + écran branché** — case « Transcrire avec le service de voix local », repli vers le navigateur **toujours annoncé**, jamais silencieux) | `spec_voice_input.md` |
+| Dictée vocale (+ **oreille locale, § 9 : pont machine + écran branché** — case « Transcrire avec le service de voix local », repli vers le navigateur **toujours annoncé**, jamais silencieux ; **§ 9bis : moteur intégré Whisper**, clé ADDITIVE `local_dictation_engine` (`voicestudio` = défaut, `integre` = moteur embarqué), modèle installé **sur geste** seulement, feature Cargo optionnelle `whisper` — sans elle le pont répond `moteur-non-compile` en français ; même contrat de session (`createIntegratedEar`), même micro (`setAudioTap`), un seul évènement `asr-whisper-transcript`, verrou `src/js/oreille-integree-whisper.test.js`) | `spec_voice_input.md` |
 | Prise en main à la première ouverture | `spec_onboarding.md` |
 | Service Laya (classification locale) | `spec_laya.md` |
 | Réponse sur la documentation (ex-aide intégrée ❓) | `spec_help.md` |

@@ -96,6 +96,16 @@ mod tts_voicestudio;
 // `tts_voicestudio.rs`, jamais à sa place. Aucun modèle téléchargé, aucun fichier
 // audio écrit, boucle locale seulement.
 mod asr_voicestudio;
+// OREILLE INTÉGRÉE de la dictée (`spec_voice_input.md`, ajout additif) : la parole
+// est transcrite DANS Pilot par un modèle Whisper présent sur le disque (feature
+// Cargo `whisper`, désactivée par défaut). Module FRÈRE de `asr_voicestudio.rs`,
+// jamais à sa place : aucun port réseau, aucun programme lancé, aucun fichier
+// audio écrit, et le service de voix local reste intact.
+mod asr_whisper;
+// Installation du modèle de dictée intégré, UNIQUEMENT sur un geste de
+// l'utilisateur (calqué sur `tts_local_download.rs` : un seul à la fois, `.part`
+// avec reprise, annulable, aucun fichier existant supprimé).
+mod asr_whisper_download;
 mod pi_update;
 mod project_agents;
 mod db;
@@ -799,6 +809,14 @@ struct AppConfig {
     // le choix du modèle et le repli sont décidés à l'exécution, jamais réglés.
     #[serde(default)]
     local_dictation: bool,
+    // Oreille employée QUAND la dictée locale est demandée (`local_dictation` ci-
+    // dessus) : `voicestudio` (le service local, HISTORIQUE et défaut) ou
+    // `integre` (le moteur de dictée intégré à Pilot, `asr_whisper.rs`).
+    // Clé ADDITIVE et distincte : une configuration ancienne (champ absent ou
+    // valeur vide / inconnue) donne `voicestudio`, donc le comportement d'avant,
+    // à l'identique. Aucune migration, aucun défaut changé.
+    #[serde(default)]
+    local_dictation_engine: String,
     // Mode Vocal (écran vocal) : MOTS DE RÉVEIL de la garde du nom (§ 6quater de
     // `spec_modes_ecran_vocal.md`). UN seul champ texte, UNE clé, VIDE par
     // défaut (vide ; à remplir par exemple avec « allô, salut » : une virgule
@@ -1107,6 +1125,9 @@ fn default_assistant_sound_volume() -> u32 { 100 }
 fn default_vocal_silence_send_ms() -> u32 { 2000 }
 /// Mode Vocal : longueur des réponses orales (« courtes » = deux phrases).
 fn default_vocal_brevity_level() -> String { "courtes".to_string() }
+/// Oreille de la dictée locale : le SERVICE de voix local (valeur historique).
+/// Le moteur intégré (`integre`) est un choix explicite, jamais un défaut.
+fn default_local_dictation_engine() -> String { "voicestudio".to_string() }
 fn default_super_agent_name() -> String { "Assistant".to_string() }
 fn default_context_budget() -> u32 { 8000 }
 fn default_rag_endpoint() -> String { "http://127.0.0.1:11434".to_string() }
@@ -1345,6 +1366,7 @@ impl Default for AppConfig {
             vocal_silence_send_ms: default_vocal_silence_send_ms(),
             vocal_brevity_level: default_vocal_brevity_level(),
             local_dictation: false,
+            local_dictation_engine: default_local_dictation_engine(),
             vocal_wake_words: String::new(),
             super_agent_concise: false,
             super_agent_adaptive_personality: false,
@@ -3844,6 +3866,15 @@ pub fn run() {
             asr_voicestudio::asr_voicestudio_stop,
             asr_voicestudio::asr_voicestudio_cancel,
             asr_voicestudio::asr_voicestudio_log,
+            asr_whisper::asr_whisper_status,
+            asr_whisper::asr_whisper_start,
+            asr_whisper::asr_whisper_send,
+            asr_whisper::asr_whisper_stop,
+            asr_whisper::asr_whisper_cancel,
+            asr_whisper::asr_whisper_log,
+            asr_whisper_download::asr_whisper_download,
+            asr_whisper_download::asr_whisper_cancel_download,
+            asr_whisper_download::asr_whisper_download_state,
             persona::read_assistant_persona,
             persona::read_assistant_persona_stamp,
             persona::read_assistant_persona_model,

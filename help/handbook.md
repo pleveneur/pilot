@@ -1498,6 +1498,18 @@ texte à la voix.
   bascule jamais en silence. Limite connue : la transcription locale est plus
   lente (le texte définitif arrive quelques secondes après votre dernier mot) ;
   le texte s'écrit au fur et à mesure, vous n'avez pas à attendre pour parler.
+- **Choisir l'oreille : service de voix local, ou moteur intégré** (nouveau,
+  désactivé par défaut). Juste sous la case précédente, le réglage **« Oreille : »**
+  propose « Service de voix local (actuel) » ou « **Moteur intégré (dans Pilot)** ».
+  Le moteur intégré ne demande **aucun logiciel à lancer** : il fonctionne dans
+  Pilot, hors ligne, avec un modèle installé sur votre disque. Sa première
+  utilisation demande une **installation** : un bouton **« Installer le modèle de
+  dictée »** apparaît, **rien n'est téléchargé sans votre clic**, le téléchargement
+  se reprend s'il est interrompu, et le bouton **« Arrêter le téléchargement »**
+  n'efface aucun fichier. Tant que le modèle n'est pas installé (ou si le moteur
+  n'est pas compilé dans votre version), Pilot **vous le dit** et revient à la
+  dictée du navigateur — jamais en silence. Laisser le réglage sur « Service de
+  voix local » ne change **rien** à ce que vous connaissiez.
 - **Avec la transcription locale, la mise en veille de 20 secondes marche comme
   avant** : au bout de 20 s sans parler, l'écran se met en veille et attend son nom.
   Avant, la veille ne s'armait **jamais** quand la transcription locale était
