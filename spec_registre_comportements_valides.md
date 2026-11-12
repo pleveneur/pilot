@@ -67,6 +67,7 @@
 | 26 | Un bruit de fond permanent ne tient pas l'écoute ouverte : au plafond de 15 s après le dernier mot transcrit, la demande part quand même. | `src/js/fin-ecoute-repoussee-par-la-voix.test.js` :: le son ne repousse pas indefiniment : le plafond referme, mesure depuis le dernier mot |
 | 27 | Sans voix captée, rien ne change : l'échéance tombe au délai réglé (deux secondes par défaut) et la demande part. | `src/js/fin-ecoute-repoussee-par-la-voix.test.js` :: sans voix, l'echeance tombe au delai regle — le comportement d'avant est intact |
 | 28 | Le message Telegram de l'assistant nomme le projet dont il est QUESTION, jamais celui qui est simplement ouvert à l'écran (le projet ouvert ne sert que par défaut, « Assistant » si rien n'est identifiable). | `src/js/etiquette-telegram-projet-reel.test.js` :: VERROU : MakeFilm ouvert, travail réel sur Pilot → « pilot », jamais « MakeFilm » |
+| 29 | Pendant la veille, l'écran le dit : la ligne qui demande le nom reste visible et le cercle prend l'aspect de l'attente. | `src/js/ecran-vocal-veille-affichee.test.js` :: l'exception ne rend visible que la ligne d'etat, et le dit en clair |
 
 ## Ce que le garde-fou vérifie
 

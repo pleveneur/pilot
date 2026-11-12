@@ -12714,6 +12714,25 @@ body.pilot-vocal-active #agent-activity {
 .pilot-vocal.vocal-state-idle .vocal-orb {
   animation: vocal-breathe 4s ease-in-out infinite;
 }
+/* --- LA VEILLE SE VOIT SUR LE CERCLE (decision du proprietaire, 2026-11-16) ---
+   L'etat AFFICHE de la veille est le repos (`vocalEtatAffiche`, verrouille) :
+   sans cette regle, le cercle de l'attente serait rigoureusement celui du
+   repos ordinaire. Il prend donc sa propre forme, et rien d'autre ne bouge :
+     - l'anneau passe en POINTILLES (un trait interrompu dit « en attente », pas
+       « a l'ecoute ») ; il garde sa couleur d'etat, son epaisseur et son disque
+       — aucune taille, aucune place, aucun centrage ne change ;
+     - la respiration du repos s'ARRETE : un cercle qui respire dit « je vis »,
+       or ici l'ecran attend un nom sans rien faire ;
+     - la couronne lumineuse (`.vocal-orb::before`) reste au repos, sans
+       pulsation nouvelle : aucune animation n'est inventee.
+   La classe ne vise QUE l'etat repos : une phrase en cours de lecture
+   (`speaking`) ou une reflexion (`thinking`) garde exactement son aspect,
+   comme avant, meme si la veille est armee.
+   Hors veille, la classe est absente : le bloc ci-dessus s'applique tel quel. */
+.pilot-vocal.vocal-veille.vocal-state-idle .vocal-orb {
+  animation: none;
+  border-style: dashed;
+}
 
 /* --- LOT B — LE HALO D'ECOUTE : la voix de l'UTILISATEUR, a l'interieur du
    disque (CONCEPTION-cercle-equaliseur.md §6). Un seul element, ENFANT du
@@ -13062,6 +13081,33 @@ body.pilot-vocal-active #agent-activity {
   pointer-events: none;
   transition: opacity var(--transition), transform var(--transition),
     visibility 0s linear 180ms;
+}
+/* --- LA VEILLE GARDE SA LIGNE D'ETAT (decision du proprietaire, 2026-11-16) ---
+   LE DEFAUT CORRIGE : les 10 s de repos effacent le bas bien AVANT que la
+   veille ne s'arme (20 s de silence). Quand elle s'armait, la seule ligne qui
+   demande le nom venait donc de partir : rien a l'ecran ne disait qu'on
+   attendait un nom, et il fallait parler pour le decouvrir.
+   CE QUI CHANGE, ET RIEN DE PLUS : tant que la veille est armee (`vocal-veille`,
+   posee par `vocalSyncVeilleClass` au moment MEME de l'armement), la ligne
+   d'etat REVIENT a l'ecran et y reste. La zone de saisie et le bouton de
+   depannage gardent leur effacement normal : la liste des trois noeuds masques
+   ne bouge pas (aucun quatrieme nom), et cette regle ne les nomme pas.
+   ELLE N'AJOUTE AUCUNE PRISE DE CLIC : `pointer-events` reste celui de la regle
+   ci-dessus (`none`), donc rien ne s'interpose entre le doigt et l'ecran
+   (issue #381) — la ligne n'a d'ailleurs aucun gestionnaire.
+   FORME : la meme remontee, a l'envers, avec les memes valeurs — opacite 1,
+   aucune translation, `visibility` immediate (elle ne doit pas attendre 180 ms
+   pour etre lisible). Hors veille, la classe est absente : le bloc ci-dessus
+   s'applique tel quel, l'effacement au repos est INCHANGE.
+   PLACE : immediatement apres le bloc d'effacement (le decoupage des tests qui
+   le lisent s'arrete a sa premiere accolade fermante) et AVANT le bloc du
+   mouvement reduit, qui pose `transition: none` et doit donc gagner ici. */
+.pilot-vocal.vocal-veille.vocal-chrome-hidden .vocal-status {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  transition: opacity var(--transition), transform var(--transition),
+    visibility 0s linear 0s;
 }
 /* Mouvement reduit : l'effacement est INSTANTANE (aucun fondu, aucune
    translation animee). L'espace reste reserve et le bas revient au premier

@@ -279,6 +279,7 @@ import {
   VOCAL_ECOUTE_LIBRE_MS,
   VOCAL_GATE_JETER,
   VOCAL_STOP_ARRETER,
+  VOCAL_VEILLE_CLASS,
   wakeWordsFrom,
 } from "./vocal-nom-garde.js";
 // LE BAS DE L'ECRAN S'EFFACE AU REPOS (CONCEPTION-ecran-vocal-cercle-et-bas.md
@@ -7484,6 +7485,25 @@ let vocalMotsDeReveil = [];
   }
 
   /**
+   * POINT D'ECRITURE UNIQUE de `.vocal-veille` (l'aspect de la VEILLE).
+   *
+   * LE DEFAUT CORRIGE : la veille s'armait sans que RIEN ne le dise. Le bas
+   * s'effaçant bien avant les 20 s de silence, la ligne qui demande le nom
+   * partait avec lui, et le cercle reprenait l'aspect du repos ordinaire.
+   *
+   * Il ne DECIDE rien : la seule verite est `vocalVeilleArmee`, et la classe
+   * vient du module pur `vocal-nom-garde.js` (`VOCAL_VEILLE_CLASS`). Il est
+   * appele par les DEUX fonctions qui changent cet etat — `vocalEnterVeille` et
+   * `vocalExitVeille` — donc au MOMENT ou la veille s'arme et ou elle tombe, et
+   * non au prochain geste. Aucun minuteur, aucune seconde classe, aucun ecrit
+   * dans le DOM : l'aspect est entierement dans la feuille de style.
+   */
+  function vocalSyncVeilleClass() {
+    if (!vocalOverlay) return;
+    vocalOverlay.classList.toggle(VOCAL_VEILLE_CLASS, vocalVeilleArmee === true);
+  }
+
+  /**
    * ARME la veille : l'ecran n'obeit plus qu'au nom jusqu'a ce qu'il l'entende.
    * @param {"silence"|"commande"} origine compte a rebours echu, ou formule
    *   d'arret prononcee (l'utilisateur l'a demande : la ligne le dit)
@@ -7495,6 +7515,10 @@ let vocalMotsDeReveil = [];
     // phrase doit de nouveau contenir le nom.
     vocalReveilUnePhrase = false;
     clearVocalVeilleTimer();
+    // L'ECRAN LE DIT TOUT DE SUITE (aspect de la veille : la ligne qui demande
+    // le nom reste visible, le cercle passe en attente). Pose ICI, dans la
+    // meme tache que l'etat : aucun geste n'est necessaire pour le voir.
+    vocalSyncVeilleClass();
   }
 
   /**
@@ -7504,6 +7528,10 @@ let vocalMotsDeReveil = [];
   function vocalExitVeille() {
     vocalVeilleArmee = false;
     vocalVeilleParCommande = false;
+    // L'ASPECT DE LA VEILLE TOMBE AVEC ELLE : le cercle reprend son etat (et la
+    // ligne d'etat redevient effacable au repos), sans attendre le prochain
+    // rendu de l'etat visuel.
+    vocalSyncVeilleClass();
     vocalRestartVeilleTimer();
   }
 

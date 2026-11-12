@@ -2343,6 +2343,11 @@ n'était la reconnaissance.**
 - **En veille, l'écran ne dit plus « Je vous écoute »** : il attend son nom, et
   c'est vrai — c'est le même état que l'arrêt à la voix, jamais deux
   comportements.
+- **Vous VOYEZ que l'écran est en veille** : la ligne « Dites « <Nom> » pour me
+  parler. » **revient et reste affichée**, même quand le bas de l'écran s'est
+  effacé, et le cercle prend l'aspect de l'attente (anneau pointillé, immobile).
+  Vous n'avez plus à parler pour découvrir qu'il attendait un nom.
+- **Hors veille, rien ne change** : au repos la barre s'efface comme avant.
 - **Le clavier n'est jamais filtré**, et sortir de l'écran (logo, Échap,
   fermeture) remet tout à zéro : la prochaine entrée repart en écoute libre.
 
@@ -2413,6 +2418,53 @@ coupe rien — il échoue sur le code d'avant).
 **Rapports** : `docs/rapports/RAPPORT-veille-mot-de-reveil.md`,
 `docs/rapports/RAPPORT-vocal-veille-pendant-le-tour.md` et
 `docs/rapports/RAPPORT-arret-ecoute-vocale.md` (2026-11-16).
+
+## 6quater.3 La veille SE VOIT : sa ligne reste visible, son cercle attend
+
+Défaut corrigé (constat du propriétaire, 2026-11-16) : **la veille s'armait sans
+que rien à l'écran ne le dise.** Le bas s'efface après 10 s de repos, la veille
+s'arme à 20 s : quand elle s'armait, la seule ligne qui demande le nom —
+« Dites « <Nom> » pour me parler. » — venait de partir. Et comme l'état affiché
+de la veille est le **repos** (§6quater.2, verrouillé), le cercle reprenait
+l'aspect du repos ordinaire. Il fallait **parler** pour découvrir qu'on
+attendait un nom.
+
+Ce que la correction ajoute, et **rien de plus** :
+
+- **Une classe, `vocal-veille`, posée dans `vocalEnterVeille` et retirée dans
+  `vocalExitVeille`** — donc au **moment même** de l'armement (les 20 s de
+  silence comme l'ordre à la voix), jamais au geste suivant. Un seul écrivain,
+  `vocalSyncVeilleClass()`, qui ne décide rien : la seule vérité est
+  `vocalVeilleArmee`, la classe vient du module pur
+  (`VOCAL_VEILLE_CLASS` dans `src/js/vocal-nom-garde.js`). Aucun minuteur, aucune
+  seconde classe, aucun état nouveau.
+- **La ligne d'état revient et reste** tant que la veille dure : une règle CSS
+  (`.pilot-vocal.vocal-veille.vocal-chrome-hidden .vocal-status`, placée juste après le
+  bloc d'effacement et **avant** celui du mouvement réduit) rétablit opacité 1,
+  aucune translation et `visibility` immédiate. **Seule la ligne d'état est
+  concernée** : la zone de saisie et le bouton de dépannage gardent leur
+  effacement, la liste des trois nœuds masqués ne bouge pas (aucun quatrième
+  nom), et `pointer-events` reste `none` — aucune prise de clic nouvelle
+  (issue #381).
+- **Le cercle prend l'aspect de l'attente** : anneau **pointillé** et
+  respiration **arrêtée** (`.pilot-vocal.vocal-veille.vocal-state-idle .vocal-orb`), sans
+  une ligne de géométrie — ni taille, ni position, ni centrage, ni couleur
+  nouvelle. La règle ne vise que l'état repos : une phrase en cours de lecture
+  ou une réflexion garde exactement son aspect.
+- **Hors veille, l'écran est celui d'avant** : sans la classe, la seule règle
+  qui parle du bas est celle des trois nœuds ; la respiration du repos et
+  l'effacement au repos sont intacts.
+
+**Ce qui n'est pas touché** : les 20 000 ms (`VOCAL_ECOUTE_LIBRE_MS`), la
+suspension pendant le tour et la lecture, la garde du nom et les mots de réveil,
+le micro, la transcription locale, et le texte de la ligne — qui vient toujours
+de `vocalStatusLine` → `vocalNameSentence` / `vocalVeilleSentence`, avec le nom
+de `superAgentDisplayLabel()` (aucune phrase ni aucun nom recopié).
+
+**Verrou** : `src/js/ecran-vocal-veille-affichee.test.js` (la classe et son point
+unique, la ligne visible et seule, l'absence de prise de clic, le cercle
+pointillé sans géométrie, l'état affiché et les 20 s inchangés, et le retour à
+l'effacement normal hors veille — il échoue sur le code d'avant).
 
 ## 7. Pourquoi cela peut légitimement ne pas se déclencher
 

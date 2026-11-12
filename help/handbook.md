@@ -1690,6 +1690,11 @@ plus facile à reconnaître. C'est à cela que sert ce réglage.
 - **En veille, l'écran ne dit plus « Je vous écoute »** : il attend son nom, et
   c'est vrai — c'est le même état que l'arrêt à la voix, jamais deux
   comportements.
+- **Vous VOYEZ que l'écran est en veille** : la ligne « Dites « <Nom> » pour me
+  parler. » **revient et reste affichée**, même quand le bas de l'écran s'est
+  effacé, et le cercle prend l'aspect de l'attente (anneau pointillé, immobile).
+  Vous n'avez plus à parler pour découvrir qu'il attendait un nom.
+- **Hors veille, rien ne change** : au repos la barre s'efface comme avant.
 - **Le clavier n'est jamais filtré**, et sortir de l'écran (logo, Échap,
   fermeture) remet tout à zéro : la prochaine entrée repart en écoute libre.
 

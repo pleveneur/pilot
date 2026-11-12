@@ -640,3 +640,25 @@ export function vocalEtatAffiche(etats) {
   if (e.veilleArmee !== true) return etat;
   return etat === "listening" ? "idle" : etat;
 }
+
+/**
+ * LA CLASSE DE LA VEILLE, posée sur l'overlay de l'écran Vocal.
+ *
+ * LE DÉFAUT CORRIGÉ (constat du propriétaire) : quand la veille s'armait, RIEN
+ * à l'écran ne le disait. Le bas s'efface au repos bien avant que les 20 s de
+ * silence ne soient échues ; la ligne d'état — la seule qui demande le nom —
+ * partait donc avec lui, et l'objet lumineux retombait sur le repos ordinaire.
+ * On ne pouvait deviner qu'en parlant que l'écran attendait un nom.
+ *
+ * Ce que cette classe commande, et rien de plus : la ligne d'état RESTE
+ * VISIBLE malgré l'effacement du bas (§2.6), et le cercle prend l'aspect de
+ * l'attente (anneau pointillé, aucune respiration) au lieu de celui du repos.
+ * La PHASE et le texte ne sont pas ici : la ligne garde sa phrase
+ * (`vocalStatusLine` → `vocalNameSentence` / `vocalVeilleSentence`) et son nom
+ * vient de `superAgentDisplayLabel()`, comme avant.
+ *
+ * Elle ne retient aucun minuteur, ne change aucun seuil (les 20 s, les deux
+ * seuils de voix et la garde du nom sont intacts) et ne rouvre rien : hors
+ * veille la classe est absente, donc l'écran est EXACTEMENT celui d'avant.
+ */
+export const VOCAL_VEILLE_CLASS = "vocal-veille";
