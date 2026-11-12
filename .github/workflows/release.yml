@@ -353,7 +353,22 @@ jobs:
           # changelog). Le job `latest-json` ci-dessous génère un latest.json
           # avec le changelog (depuis les commits) et l'upload lui-même.
           includeUpdaterJson: false
-          args: --target ${{ matrix.rust_target }}
+          # `--features whisper` : l'OREILLE INTÉGRÉE (transcription Whisper dans
+          # Pilot, `asr_whisper.rs`) est EMBARQUÉE dans l'application livrée sur
+          # les trois cibles publiées (Windows, macOS arm64, macOS x64). Sans ce
+          # drapeau, la fonctionnalité existait dans le code mais PAS dans le
+          # binaire installé : l'écran ne pouvait que répondre « moteur non
+          # compilé » et le propriétaire n'avait rien à tester.
+          #
+          # Ce que ce drapeau ne change PAS : le défaut reste l'oreille du
+          # service de voix local (`local_dictation_engine = "voicestudio"`) ;
+          # l'oreille intégrée n'est proposée que si l'utilisateur la choisit,
+          # ET elle exige en plus le modèle (874 Mo, téléchargé sur un geste).
+          # `whisper.cpp` est compilé par `cmake` + le compilateur C++ du runner
+          # (présents par défaut sur `windows-latest` et `macos-latest`) ;
+          # `libclang` n'est PAS requis (copie locale `vendor/whisper-rs-sys`).
+          # Coût mesuré : ~1 min de C++ par cible.
+          args: --target ${{ matrix.rust_target }} --features whisper
 
   # ─────────────────────────────────────────────────────────────────────
   # build-linux — fabrication de la cible Linux, SÉPARÉE de Windows/macOS.

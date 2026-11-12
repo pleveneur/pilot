@@ -112,6 +112,26 @@ describe("2. `bindgen` n'est plus une condition de compilation", () => {
     const indexBindgen = BUILD_SYS.indexOf("bindgen::Builder::default()");
     expect(indexBindgen).toBeGreaterThan(indexAiguillage);
   });
+
+  it("le `PATH` des binaires lancés par cargo n'est plus noyé (4e changement)", () => {
+    // L'amont annonçait CHAQUE sous-dossier de l'arbre CMake (200+) comme
+    // `rustc-link-search` ; cargo les reporte dans le `PATH` des binaires qu'il
+    // exécute, et au-delà de 8 191 caractères `cmd.exe` ne trouve plus `ping` :
+    // quatre tests tombaient sous `--features whisper`, sans rapport avec le
+    // produit. Le filtre ne doit pas être retiré.
+    expect(BUILD_SYS).toContain("fn dossier_porte_une_bibliotheque");
+    const lignes = BUILD_SYS.split("\n");
+    const index = ligneDe(BUILD_SYS, "fn add_link_search_path(dir: &std::path::Path)");
+    expect(index).toBeGreaterThan(0);
+    expect(
+      lignes.slice(index, index + 12).join("\n"),
+      "l'annonce des chemins de liaison n'est plus filtrée",
+    ).toContain("dossier_porte_une_bibliotheque(dir)");
+    // Les extensions qui portent réellement une bibliothèque restent couvertes.
+    for (const extension of [".lib", ".a", ".dylib", ".so"]) {
+      expect(BUILD_SYS).toContain(`"${extension}"`);
+    }
+  });
 });
 
 describe("3. Les liaisons pré-générées sont neutres de plateforme", () => {

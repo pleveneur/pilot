@@ -727,9 +727,17 @@ utilisant un modèle présent sur le disque et fonctionnant **hors ligne**.
    voisin du final, reprise par `Range`, pourcentage borné, arrêt qui ne supprime
    **rien**, renommage seulement à taille exacte. L'agent ne télécharge jamais
    rien de lui-même.
-8. **La feature Cargo est optionnelle** : `whisper-rs` n'est compilé que par
-   `cargo build --features whisper`. Sans elle, le module **compile quand même**
-   et répond `moteur-non-compile` avec une phrase française : jamais un échec de
+8. **La feature Cargo est optionnelle, et ACTIVE dans les livraisons** :
+   `whisper-rs` n'est compilé que par `cargo build --features whisper` —
+   `default = []` ne change pas (un build sans drapeau reste vert, et c'est ce
+   que lancent `cargo test` et le job `test`). Le job `build` de
+   `.github/workflows/release.yml` **pose désormais le drapeau**
+   (`args: --target <cible> --features whisper`), donc l'application INSTALLÉE
+   sur les trois plateformes publiées (Windows, macOS arm64, macOS x64) contient
+   le moteur — sinon la fonctionnalité n'existait que dans le code (décision de
+   livraison du 2026-11-16, `RAPPORT-oreille-integree-whisper-livraison.md`).
+   Sans elle (build local, Linux), le module **compile quand même** et répond
+   `moteur-non-compile` avec une phrase française : jamais un échec de
    compilation, jamais un silence.
    **Elle compile sans rien installer** (correctif du 2026-11-16) : la caisse
    `whisper-rs-sys` exigeait `libclang` (bindgen, dont le chargeur panique quand
@@ -745,13 +753,19 @@ utilisant un modèle présent sur le disque et fonctionnant **hors ligne**.
 
 Verrous : `src/js/oreille-integree-whisper.test.js` (33 verrous : défaut
 inchangé, contrat de session, micro unique, phrases de repli, aucune adresse,
-téléchargement sur geste, un seul écrivain de la clé) et
-`src/js/oreille-integree-whisper-sans-outillage.test.js` (10 verrous : la caisse
+téléchargement sur geste, un seul écrivain de la clé),
+`src/js/oreille-integree-whisper-sans-outillage.test.js` (11 verrous : la caisse
 vendue reste celle que cargo compile, `bindgen` n'est plus une condition de
 compilation, les liaisons sont neutres de plateforme, la feature reste
-optionnelle, la preuve de liaison existe). Rapports :
-`docs/rapports/RAPPORT-oreille-integree-whisper.md` et
-`docs/rapports/RAPPORT-oreille-integree-whisper-deblocage.md`.
+optionnelle, la preuve de liaison existe, et l'annonce des chemins de liaison
+reste filtrée — sans ce filtre, le `PATH` des binaires lancés par cargo
+dépassait 8 191 caractères et quatre tests tombaient sous `--features whisper`) et
+`src/js/oreille-integree-whisper-livraison.test.js` (le drapeau est posé sur les
+**trois** cibles du job `build`, la feature reste `default = []`, le journal de
+publication ne peut plus perdre le drapeau). Rapports :
+`docs/rapports/RAPPORT-oreille-integree-whisper.md`,
+`docs/rapports/RAPPORT-oreille-integree-whisper-deblocage.md` et
+`docs/rapports/RAPPORT-oreille-integree-whisper-livraison.md`.
 
 ---
 

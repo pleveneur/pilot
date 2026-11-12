@@ -464,9 +464,35 @@ fn get_cpp_link_stdlib(target: &str) -> Option<&'static str> {
     }
 }
 
+// PILOT (VENDOR-PATCH, 4e changement) — n'annoncer que les dossiers qui
+// CONTIENNENT réellement une bibliothèque. L'amont annonce TOUS les
+// sous-dossiers de l'arbre CMake (plus de 200 : `.tlog`, `CMakeFiles`, copies
+// de travail…). Cargo reporte ces chemins dans le `PATH` des binaires qu'il
+// EXÉCUTE (`cargo test`, `cargo run`), et un `PATH` de plus de 8 191
+// caractères fait perdre à `cmd.exe` les entrées suivantes : le témoin
+// `cmd /C ping` de `plface` n'était plus trouvé et quatre tests échouaient
+// (`cargo test --features whisper`). Le filtre ne change RIEN à l'édition de
+// liens : les dossiers portant `whisper.lib`, `ggml*.lib`, `.a`, `.so`,
+// `.dylib` sont toujours annoncés, et la récursion est conservée.
+fn dossier_porte_une_bibliotheque(dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let chemin = entry.path();
+        if chemin.is_dir() {
+            return false;
+        }
+        let nom = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        [".lib", ".a", ".dylib", ".so"].iter().any(|ext| nom.ends_with(ext))
+    })
+}
+
 fn add_link_search_path(dir: &std::path::Path) -> std::io::Result<()> {
     if dir.is_dir() {
-        println!("cargo:rustc-link-search={}", dir.display());
+        if dossier_porte_une_bibliotheque(dir) {
+            println!("cargo:rustc-link-search={}", dir.display());
+        }
         for entry in std::fs::read_dir(dir)? {
             add_link_search_path(&entry?.path())?;
         }

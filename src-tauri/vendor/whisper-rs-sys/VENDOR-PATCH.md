@@ -29,7 +29,7 @@ copier ce fichier. Le seul outil réellement nécessaire pour construire
 `whisper.cpp` est **`cmake` + le compilateur C++ du système** (MSVC sous
 Windows), tous deux déjà présents.
 
-## Les trois changements, et rien d'autre
+## Les quatre changements, et rien d'autre
 
 1. **`build.rs` — plus de `bindgen` quand `libclang` est absent.**
    L'aiguillage `if env::var("WHISPER_DONT_GENERATE_BINDINGS").is_ok()` devient
@@ -61,6 +61,19 @@ Windows), tous deux déjà présents.
      deviennent `c_uint` hors Windows-MSVC et `c_int` sur Windows-MSVC : c'est
      exactement ce que `bindgen` produirait sur chaque plateforme (13 erreurs
      `E0308` `expected i32, found u32` avant cette correction).
+4. **`build.rs` — `cargo:rustc-link-search` seulement pour les dossiers qui
+   portent une bibliothèque** (correctif du 2026-11-16, livraison de l'oreille).
+   L'amont annonce **tous** les sous-dossiers de l'arbre CMake (plus de 200 :
+   `CMakeFiles`, `.tlog`, copies de travail…). Cargo reporte ces chemins dans le
+   `PATH` des binaires qu'il **exécute** (`cargo test`, `cargo run`) : `PATH`
+   dépassait 8 191 caractères, seuil au-delà duquel `cmd.exe` ne trouve plus les
+   programmes des entrées suivantes — le témoin `cmd /C ping` de `plface`
+   sortait aussitôt (`'ping' n'est pas reconnu…`) et **quatre tests**
+   échouaient sous `--features whisper` (`plface` × 2,
+   `agent_service` × 2), sans aucun rapport avec le produit. Le filtre
+   (`dossier_porte_une_bibliotheque`) ne change **rien** à l'édition de liens :
+   tout dossier contenant `whisper.lib`, `ggml*.lib`, `.a`, `.so` ou `.dylib`
+   est toujours annoncé, et la récurrence est conservée.
 
 **Aucune** autre ligne n'est modifiée : `whisper.cpp`, `wrapper.h`,
 `src/lib.rs`, `Cargo.toml` et le reste du `build.rs` sont ceux de l'amont.
@@ -79,13 +92,20 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib --features whisper asr_whi
 # 3. Le build PAR DÉFAUT reste vert, feature désactivée :
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 
+# 3 bis. Et la suite COMPLÈTE sous la feature (975 tests ; c'est le point 4
+# qui la rend verte : sans le filtre, 4 tests tombaient sur le `PATH`) :
+cargo test --manifest-path src-tauri/Cargo.toml --lib --features whisper
+
 # 4. Le verrou du correctif (côté JS) :
 npx vitest run src/js/oreille-integree-whisper-sans-outillage.test.js
+npx vitest run src/js/oreille-integree-whisper-livraison.test.js
 ```
 
 Résultat mesuré le 2026-11-16 (Windows, MSVC 14.50, `cmake` 4.3.1, **ni LLVM
 ni `libclang`**) : étapes 1 à 4 vertes ; `cargo:warning=whisper-rs-sys (Pilot) :
-libclang introuvable — liaisons pré-générées employées`.
+libclang introuvable — liaisons pré-générées employées`. Suite complète sous la
+feature : **975 réussis, 3 ignorés, 0 échec** ; sans la feature : **974
+réussis, 3 ignorés, 0 échec**.
 
 ## Ré-appliquer le correctif lors d'une montée de version
 
@@ -104,11 +124,11 @@ ré-appliquer les trois points ci-dessus.
    rm -f src-tauri/vendor/whisper-rs-sys/.cargo-ok
    ```
 
-3. Ré-appliquer les trois points (blocs commentés `PILOT` dans `build.rs` et
+3. Ré-appliquer les quatre points (blocs commentés `PILOT` dans `build.rs` et
    `src/bindings.rs` : les chercher avec `rg "PILOT|VENDOR-PATCH"`).
 4. Mettre à jour la version annoncée dans `src/js/oreille-integree-whisper-sans-outillage.test.js`
    (le verrou vérifie `version = "0.15.0"` dans le `Cargo.toml` vendu).
-5. Relancer les quatre vérifications ci-dessus.
+5. Relancer les vérifications ci-dessus.
 
-Le verrou JS échoue dès que l'un des trois changements disparaît : le correctif
-ne peut pas être perdu en silence.
+Le verrou JS échoue dès que l'un des changements vérifiés disparaît : le
+correctif ne peut pas être perdu en silence.
