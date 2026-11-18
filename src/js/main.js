@@ -1488,6 +1488,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   const bootOverlay = document.getElementById("boot-overlay");
   if (bootOverlay) bootOverlay.classList.add("hidden");
 
+  // MARQUEUR DE DÉMARRAGE RÉUSSI (tâche 424, décision du 16/11/2026).
+  // C'est la SEULE preuve positive que l'initialisation est allée au bout :
+  // l'écran de chargement, lui, est aussi masqué par le filet de sécurité des
+  // 30 s ci-dessus ET par le `catch` d'erreur — le masquage ne prouve donc
+  // rien. Le garde de démarrage (`src/js/garde-demarrage.js`, attribut
+  // `data-pilot-pret`) exige CETTE marque pour déclarer l'application
+  // réellement démarrée. Posée uniquement ici, jamais dans le `catch`.
+  document.documentElement.setAttribute("data-pilot-pret", "1");
+
   // 12 bis. PRÉ-CHAUFFAGE DE LA VOIX IMITÉE (VoiceStudio) — APRÈS l'affichage,
   // donc jamais sur le chemin du démarrage. Le premier appel à froid du service
   // prend ≈ 6 s : sans ce préchauffage, la PREMIÈRE phrase lue après le

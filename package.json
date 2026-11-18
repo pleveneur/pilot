@@ -13,6 +13,7 @@
     "prepare:laya": "node scripts/prepare-laya.js",
     "gds:reload": "node scripts/gds-reload.js",
     "gds:image": "node scripts/gds-reload.js --image-only",
+    "verif:demarrage": "node scripts/verifier-demarrage.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

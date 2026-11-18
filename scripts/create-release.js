@@ -16,6 +16,16 @@
 // pas même la Release, et les trois fabrications ne sont pas lancées.
 // Sortie de secours explicite : `ALLOW_MISSING_RELEASE_NOTES=1`.
 //
+// La PREUVE DE DÉMARRAGE est exigée juste après (porte 0 bis, tâche 424,
+// décision du 16/11/2026) : `release-notes/demarrage-v<version>.json` doit
+// exister, dire que l'application a VRAIMENT été lancée et que son écran
+// principal s'est ouvert, concerner CETTE version et être fraîche. Sans elle,
+// aucune version n'est fabriquée : la mission est DÉCLARÉE RATÉE. La décision
+// PURE vit à un seul endroit, `src/js/garde-demarrage.js`
+// (`verdictPreuveDemarrage`) ; la preuve se fabrique sur le poste avec
+// `npm run verif:demarrage`. Sortie de secours explicite (elle ne tolère que
+// l'ABSENCE, jamais une preuve ratée) : `ALLOW_NO_STARTUP_PROOF=1`.
+//
 // Usage :
 //   node scripts/create-release.js <tag> <repo> [commitish]
 //
@@ -34,6 +44,12 @@ import {
   flagEnabled,
   notesPathForTag,
 } from "./release-gates.js";
+import {
+  ALLOW_NO_STARTUP_PROOF_ENV,
+  GARDE_DEMARRAGE_PREUVE_ENV,
+  cheminPreuveDemarrage,
+  verdictPreuveDemarrage,
+} from "../src/js/garde-demarrage.js";
 import { readFileSync } from "fs";
 
 const TAG = process.argv[2];
@@ -84,6 +100,19 @@ function lireChangelog(tag) {
   }
 }
 
+/**
+ * Lit la preuve de démarrage de la version du tag, ou null. Le chemin vient de
+ * `src/js/garde-demarrage.js` (une seule définition dans le dépôt).
+ */
+function lirePreuveDemarrage(version) {
+  const chemin = process.env[GARDE_DEMARRAGE_PREUVE_ENV] || cheminPreuveDemarrage(version);
+  try {
+    return readFileSync(chemin, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 (async () => {
   // ── Porte 0 : CHANGELOG OBLIGATOIRE, avant TOUTE publication ────────────
   // Placée ici, elle refuse avant que la Release existe : une version ne part
@@ -99,6 +128,25 @@ function lireChangelog(tag) {
   if (notesDecision.accepted) {
     console.log(`↷ ${notesDecision.reason}`);
     if (process.env.GITHUB_ACTIONS) console.log(`::warning::${notesDecision.reason}`);
+  }
+
+  // ── Porte 0 bis : PREUVE DE DÉMARRAGE OBLIGATOIRE (tâche 424) ───────────
+  // Placée ici, elle refuse avant que la Release existe : rien n'est fabriqué
+  // pour une version dont on n'a pas VU l'application démarrer. La tolérance
+  // explicite (`ALLOW_NO_STARTUP_PROOF=1`) ne couvre que l'ABSENCE de preuve :
+  // une preuve qui dit « ça n'a pas démarré » refuse toujours.
+  const versionDuTag = TAG.replace(/^v/, "");
+  const demarrageDecision = verdictPreuveDemarrage({
+    preuve: lirePreuveDemarrage(versionDuTag),
+    version: versionDuTag,
+    allowMissing: flagEnabled(process.env[ALLOW_NO_STARTUP_PROOF_ENV]),
+  });
+  if (!demarrageDecision.livrer) refuse(demarrageDecision.raison);
+  if (demarrageDecision.raison.includes("tolérée explicitement")) {
+    console.log(`↷ ${demarrageDecision.raison}`);
+    if (process.env.GITHUB_ACTIONS) console.log(`::warning::${demarrageDecision.raison}`);
+  } else {
+    console.log(`✓ ${demarrageDecision.raison}`);
   }
 
   // GET /releases/tags/{tag} : la réponse décide, via la porte unique.
