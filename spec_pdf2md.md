@@ -57,7 +57,7 @@ Si la conversion IA échoue (pi non installé, modèle introuvable, timeout), le
 
 - **Paramètres** → champ « Modèle IA pour PDF → MD » (ex: `openai/gpt-4o-mini`, `anthropic/claude-sonnet-4-20250514`)
 - Si le champ est vide, seule la Phase 1 (heuristiques) est utilisée
-- Timeout : 120 secondes
+- Timeout : 120 secondes — **échéance réelle** : la lecture de stdout tourne dans un fil dédié et l'attente est bornée (`recv_timeout`), donc un moteur **muet** est lui aussi interrompu à 120 s (avant, le délai n'était vérifié qu'à l'arrivée d'une ligne). À l'échéance le processus pi est tué et récolté. Verrous : `rpc_manager::tests::pdf2md_moteur_muet_interrompu_a_l_echeance` (faux moteur muet, délai court injecté dans `run_pdf_conversion`) et `pdf2md_moteur_qui_repond_rend_le_texte_avant_l_echeance` (Linux). Non vérifié : l'effet sur pi de la fermeture de stdin après le `prompt` (comportement inchangé).
 
 ### Fichiers
 
