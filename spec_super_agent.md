@@ -8,8 +8,10 @@
 ## Aide utilisateur — Assistant
 
 L'onglet **🧭 Assistant** est un assistant dédié qui **suit tous vos projets**
-(organisés par client) sans jamais modifier vos fichiers. Il lit, observe,
-apprend et répond.
+(organisés par client). Par règle de travail, il ne modifie pas vos fichiers :
+il lit, observe, apprend et répond. Ses outils d'écriture (`write`/`edit`) sont
+refusés hors de `~/.pilot/assistant/`, mais l'outil `bash` n'est pas confiné
+par ce garde.
 - **Tâche #136 — Détection d'absence d'outils** : à l'ouverture de l'onglet,
   si l'assistant n'a **aucun outil** à sa disposition (ex: outils qui ne
   remontent pas depuis le backend), une bannière d'anomalie s'affiche en haut
@@ -546,8 +548,9 @@ uniquement un bloc d'instructions dans le prompt système.
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
   il enregistre les tâches, leur état, les décisions et l'historique.
-- Il **n'effectue aucune action** sur les projets : il ne modifie, ne crée ni
-  ne supprime aucun fichier. Il est **lecture seule**.
+- Il **ne modifie pas les fichiers des projets** : la lecture seule est sa
+  règle de travail. Ses outils d'écriture (`write`/`edit`) sont refusés hors de
+  `~/.pilot/assistant/`, mais `bash` n'est pas confiné par ce garde.
 - Il construit **sa propre base de données locale** (SQLite) pour organiser
   clients, projets et tâches, et s'enrichit au fil du temps.
 
@@ -885,9 +888,12 @@ uniquement un bloc d'instructions dans le prompt système.
   systématique). Le dossier projet utilise le **nom du projet** (dernier
   segment du chemin), avec repli sur le chemin complet en cas de collision
   entre clients.
-- **Garantie technique** : l'Assistant ne peut **jamais** écrire hors de
-  `~/.pilot/assistant/` (une extension dédiée bloque toute écriture dans les
-  projets). La base SQLite reste la **source de vérité** pour le suivi
+- **Garde technique (partielle)** : l'extension `pilot-assistant-files` refuse
+  les outils `write`/`edit` dont le chemin **réel** (liens symboliques suivis)
+  sort de `~/.pilot/assistant/`, et refuse aussi en cas de doute (chemin
+  manquant ou invalide, segment `..`, erreur de résolution ou de droits). Elle
+  ne couvre **pas** `bash` ni les autres outils, et ne peut exclure un lien
+  modifié entre la vérification et l'écriture. La base SQLite reste la **source de vérité** pour le suivi
   structuré (tâches, décisions, statuts).
 
 ### Poser des questions à l'utilisateur
@@ -1698,8 +1704,9 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   Il **construit ses propres tables** de suivi selon ses besoins, et fait le
   maximum pour que ses données soient à jour (il vérifie dans les projets ou
   réfléchit sur vos demandes).
-- Il ne touche **jamais** aux fichiers des projets (lecture seule stricte,
-  garantie technique).
+- Il ne touche **pas** aux fichiers des projets : la lecture seule est sa règle
+  de travail. Ses outils d'écriture (`write`/`edit`) sont refusés hors de
+  `~/.pilot/assistant/`, mais `bash` n'est pas confiné par ce garde.
 - Il ne peut **pas** modifier directement les tables de suivi (tâches,
   checklists, livrables) par SQL : ces changements passent par les outils de
   suivi, qui appliquent les contrôles (une tentative est refusée sans rien
@@ -1981,12 +1988,14 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   automatiquement sur l'onglet Assistant **si celui-ci est ouvert** (assistant
   activé). Si l'utilisateur n'utilise pas l'assistant, rien n'est forcé.
 
-### Lecture seule — garantie
-- L'Assistant est **strictement en lecture seule** sur vos projets : il ne
-  peut pas écrire dedans. Seul son **espace dédié** `~/.pilot/assistant/` et
-  sa base de données (dans `~/.pilot/`) sont modifiables par lui.
-- Cette garantie est **technique** (extension qui bloque toute écriture hors
-  de l'espace dédié), pas seulement une consigne système.
+### Lecture seule — portée réelle
+- L'Assistant n'a **pas d'outil d'écriture de fichiers** sur vos projets : ses
+  outils d'édition de fichiers sont refusés hors de son **espace dédié**
+  `~/.pilot/assistant/` (et de sa base de données dans `~/.pilot/`).
+- Cette restriction est appliquée par une extension (`pilot-assistant-files`)
+  et pas seulement par une consigne système, mais elle porte **uniquement sur
+  les outils de fichier** : elle **ne filtre pas les commandes shell** (Bash).
+  Ce n'est donc pas une garantie absolue de non-écriture.
 
 ### Relance automatique (anti-blocage)
 - L'Assistant **ne s'arrête pas au premier obstacle**. Si une tâche déléguée ou
@@ -2790,7 +2799,9 @@ question : **l'Assistant travaille-t-il, lui ?**
 
 - Fournir un **assistant de suivi** nommé, distinct des agents de coding.
 - Suivre **tous les projets** (organisés par **client**) de la demande à la
-  livraison, **sans aucune action** sur les projets (lecture seule stricte).
+  livraison, **sans modifier leurs fichiers** : la lecture seule est sa règle de
+  travail (ses outils `write`/`edit` sont refusés hors de `~/.pilot/assistant/`,
+  `bash` n'est pas confiné par ce garde).
 - **Apprendre en continu** : à chaque fin de session d'agent, un résumé est
   injecté automatiquement à l'Assistant.
 - Répondre à **toute question** sur l'ensemble des projets.
@@ -2832,10 +2843,11 @@ Sessions d'agents (chat / orchestration)
 
 - **Session dédiée** : un processus `pi --mode rpc` (ou `plh`) séparé, canal
   d'événements propre `rpc-event-superagent` (ne pollue pas les canaux existants).
-- **Lecture seule stricte (technique)** : l'extension `pilot-assistant-files`
-  intercepte les outils `write`/`edit` et **bloque toute écriture hors de
-  `~/.pilot/assistant/`** (création automatique de l'arborescence client/projet
-  au besoin). L'extension `pilot-choices` fournit les outils de question
+- **Garde des écritures (partielle)** : l'extension `pilot-assistant-files`
+  intercepte les outils `write`/`edit` et **les refuse quand le chemin réel
+  sort de `~/.pilot/assistant/`** ou en cas d'erreur (refus par défaut ;
+  création de l'arborescence client/projet au besoin, seulement dans
+  l'espace vérifié). `bash` n'est pas couvert par ce garde. L'extension `pilot-choices` fournit les outils de question
   (ask_choice, ask_confirm, ask_input, ask_multi_choice). L'extension
   `pilot-assistant-actions` fournit les outils `open_project` (ouvrir un projet
   pour le rendre actif), `delegate_to_coder` (déléguer une demande de code à
@@ -3026,8 +3038,10 @@ Tables (V1) :
   avec repli sur le chemin complet en cas de collision entre clients.
 - **Création à la demande** : l'Assistant crée ses fichiers lui-même au fil de
   l'usage (pas de création systématique). L'extension `pilot-assistant-files`
-  crée les dossiers parents au besoin et **bloque toute écriture hors de cette
-  racine** (garantie technique de lecture seule sur les projets).
+  crée les dossiers parents au besoin (uniquement sous le chemin réel de la
+  racine) et **refuse les `write`/`edit` dont le chemin réel sort de cette
+  racine**, y compris via un lien symbolique, ou en cas d'erreur. Ce garde ne
+  couvre pas `bash` : ce n'est pas une isolation complète des projets.
 
 ### Registre de configuration `~/.pilot/super-agent.json`
 
@@ -3300,9 +3314,11 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   `super_agent::tests::les_regles_communes_sont_injectees_dans_le_prompt`,
   `agent_service::tests::write_regles_communes_ecrit_la_source_unique`.
   Rapport : `docs/rapports/RAPPORT-regles-communes-assistants.md`.
-- **Lecture seule stricte (technique)** : l'extension `pilot-assistant-files`
-  bloque toute écriture hors de `~/.pilot/assistant/` (les projets sont
-  inaccessibles en écriture, indépendamment de la consigne système).
+- **Garde des écritures (partielle)** : l'extension `pilot-assistant-files`
+  refuse les outils `write`/`edit` dont le chemin réel sort de
+  `~/.pilot/assistant/` (liens symboliques suivis, refus en cas d'erreur),
+  indépendamment de la consigne système. Non couverts : `bash`, les sessions
+  lancées sans cette extension, les courses entre vérification et écriture.
 - **Espace d'écriture dédié** : `~/.pilot/assistant/<client>/<projet>/` pour
   les fichiers libres ; la base SQLite reste la source de vérité structurée.
 - **Questions** : l'Assistant peut poser des questions (choix/confirmation/
@@ -3324,7 +3340,9 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   UPDATE/DELETE/ALTER/DROP/PRAGMA) sur **la base de l'assistant uniquement**
   (`~/.pilot/super-agent.db`), via des commandes Rust (`super_agent_db_query` /
   `super_agent_db_execute`). L'assistant construit et met à jour ses propres
-  tables de suivi ; il ne touche jamais aux fichiers des projets.
+  tables de suivi ; la lecture seule des projets est sa règle de travail (les
+  outils `write`/`edit` sont refusés hors de `~/.pilot/assistant/`, `bash` n'est
+  pas confiné par ce garde).
 - **Répondre sur la documentation (mode d'emploi de Pilot)** : l'extension
   `pilot-assistant-doc` fournit l'outil `answer_from_documentation(question)` —
   **une seule entrée**, la question : aucun chemin de projet, aucun fichier,
@@ -4082,7 +4100,7 @@ commande simple) reste intact — verrouillé par
 ## 12. Anti-régression
 
 - Session et canal dédiés (`rpc-event-superagent`).
-- Lecture seule garantie techniquement (extension `pilot-assistant-files`).
+- Lecture seule des projets = règle de travail ; garde partielle : les outils `write`/`edit` sont refusés hors de `~/.pilot/assistant/` (extension `pilot-assistant-files`), `bash` n'est pas confiné.
 - Base interne isolée dans `~/.pilot/` + espace d'écriture `~/.pilot/assistant/`.
 - Ne pas modifier les modules existants d'agents ni `ask_pi_caged_timed`.
 

@@ -2222,8 +2222,10 @@ tâche** à un autre projet, dont l'agent est lancé pour la traiter.
 ## Aide utilisateur — Assistant
 
 L'onglet **🧭 Assistant** est un assistant dédié qui **suit tous vos projets**
-(organisés par client) sans jamais modifier vos fichiers. Il lit, observe,
-apprend et répond.
+(organisés par client). Par règle de travail, il ne modifie pas vos fichiers :
+il lit, observe, apprend et répond. Ses outils d'écriture (`write`/`edit`) sont
+refusés hors de `~/.pilot/assistant/`, mais l'outil `bash` n'est pas confiné
+par ce garde.
 - **Tâche #136 — Détection d'absence d'outils** : à l'ouverture de l'onglet,
   si l'assistant n'a **aucun outil** à sa disposition (ex: outils qui ne
   remontent pas depuis le backend), une bannière d'anomalie s'affiche en haut
@@ -2760,8 +2762,9 @@ uniquement un bloc d'instructions dans le prompt système.
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
   il enregistre les tâches, leur état, les décisions et l'historique.
-- Il **n'effectue aucune action** sur les projets : il ne modifie, ne crée ni
-  ne supprime aucun fichier. Il est **lecture seule**.
+- Il **ne modifie pas les fichiers des projets** : la lecture seule est sa
+  règle de travail. Ses outils d'écriture (`write`/`edit`) sont refusés hors de
+  `~/.pilot/assistant/`, mais `bash` n'est pas confiné par ce garde.
 - Il construit **sa propre base de données locale** (SQLite) pour organiser
   clients, projets et tâches, et s'enrichit au fil du temps.
 
@@ -3099,9 +3102,12 @@ uniquement un bloc d'instructions dans le prompt système.
   systématique). Le dossier projet utilise le **nom du projet** (dernier
   segment du chemin), avec repli sur le chemin complet en cas de collision
   entre clients.
-- **Garantie technique** : l'Assistant ne peut **jamais** écrire hors de
-  `~/.pilot/assistant/` (une extension dédiée bloque toute écriture dans les
-  projets). La base SQLite reste la **source de vérité** pour le suivi
+- **Garde technique (partielle)** : l'extension `pilot-assistant-files` refuse
+  les outils `write`/`edit` dont le chemin **réel** (liens symboliques suivis)
+  sort de `~/.pilot/assistant/`, et refuse aussi en cas de doute (chemin
+  manquant ou invalide, segment `..`, erreur de résolution ou de droits). Elle
+  ne couvre **pas** `bash` ni les autres outils, et ne peut exclure un lien
+  modifié entre la vérification et l'écriture. La base SQLite reste la **source de vérité** pour le suivi
   structuré (tâches, décisions, statuts).
 
 ### Poser des questions à l'utilisateur
@@ -3912,8 +3918,9 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   Il **construit ses propres tables** de suivi selon ses besoins, et fait le
   maximum pour que ses données soient à jour (il vérifie dans les projets ou
   réfléchit sur vos demandes).
-- Il ne touche **jamais** aux fichiers des projets (lecture seule stricte,
-  garantie technique).
+- Il ne touche **pas** aux fichiers des projets : la lecture seule est sa règle
+  de travail. Ses outils d'écriture (`write`/`edit`) sont refusés hors de
+  `~/.pilot/assistant/`, mais `bash` n'est pas confiné par ce garde.
 - Il ne peut **pas** modifier directement les tables de suivi (tâches,
   checklists, livrables) par SQL : ces changements passent par les outils de
   suivi, qui appliquent les contrôles (une tentative est refusée sans rien
@@ -4195,12 +4202,14 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   automatiquement sur l'onglet Assistant **si celui-ci est ouvert** (assistant
   activé). Si l'utilisateur n'utilise pas l'assistant, rien n'est forcé.
 
-### Lecture seule — garantie
-- L'Assistant est **strictement en lecture seule** sur vos projets : il ne
-  peut pas écrire dedans. Seul son **espace dédié** `~/.pilot/assistant/` et
-  sa base de données (dans `~/.pilot/`) sont modifiables par lui.
-- Cette garantie est **technique** (extension qui bloque toute écriture hors
-  de l'espace dédié), pas seulement une consigne système.
+### Lecture seule — portée réelle
+- L'Assistant n'a **pas d'outil d'écriture de fichiers** sur vos projets : ses
+  outils d'édition de fichiers sont refusés hors de son **espace dédié**
+  `~/.pilot/assistant/` (et de sa base de données dans `~/.pilot/`).
+- Cette restriction est appliquée par une extension (`pilot-assistant-files`)
+  et pas seulement par une consigne système, mais elle porte **uniquement sur
+  les outils de fichier** : elle **ne filtre pas les commandes shell** (Bash).
+  Ce n'est donc pas une garantie absolue de non-écriture.
 
 ### Relance automatique (anti-blocage)
 - L'Assistant **ne s'arrête pas au premier obstacle**. Si une tâche déléguée ou
