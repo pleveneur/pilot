@@ -205,18 +205,9 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         .route("/api/prompt/templates", get(prompt_templates))
         // Issue #61 : mode d'interface du web remote (assistant/agents), persisté
         // côté serveur (config) au lieu du localStorage.
-        .route("/api/settings", get(web_settings_get).post(web_settings_set))
-        // GDS (spec_gds.md) : l'adaptateur de montage du poste
-        // (`gds_web::gds_router`) monte **en un seul point** le routeur partagé
-        // `gds_core::http::gds_routes` (authentification + routes purement base :
-        // suivi, tickets, utilisateurs, projets et dépôts git en lecture —
-        // L1.8a) puis les routes métier propres au poste (provision, ajout de
-        // projet, poussée forcée, sync locale — L1.8b/c). Aucune copie locale du
-        // routeur partagé : `web_server.rs` ne connaît que l'adaptateur.
-        // Les deux groupes déclarent des méthodes disjointes sur
-        // `/api/gds/projects` (GET partagé / POST poste) : `merge` les combine.
-        .merge(crate::gds_web::gds_router::<WebCtx>())
-        .layer(from_fn_with_state(ctx.clone(), auth_middleware::<WebCtx>));
+        .route("/api/settings", get(web_settings_get).post(web_settings_set));
+    // GDS merge + protection layers: single assembly point shared with the tests.
+    let protected = protect_api(protected, &ctx);
 
     Router::new()
         .route("/api/auth/login", post(login))
@@ -224,6 +215,80 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         .merge(protected)
         .fallback(serve_static)
         .with_state(ctx)
+}
+
+/// Live read of the desk's `web_readonly` setting (injectable so the protected
+/// assembly can be exercised without a Tauri window).
+pub(crate) trait WebReadonly {
+    /// Current value of `web_readonly`, read at call time (never a startup copy).
+    fn web_readonly(&self) -> bool;
+}
+
+impl WebReadonly for WebCtx {
+    fn web_readonly(&self) -> bool {
+        is_readonly(&self.app_handle)
+    }
+}
+
+/// Protected API assembly of the desk (single point, used by `build_router`).
+///
+/// GDS (spec_gds.md) : l'adaptateur de montage du poste
+/// (`gds_web::gds_router`) monte **en un seul point** le routeur partagé
+/// `gds_core::http::gds_routes` (authentification + routes purement base :
+/// suivi, tickets, utilisateurs, projets et dépôts git en lecture — L1.8a)
+/// puis les routes métier propres au poste (provision, ajout de projet, poussée
+/// forcée, sync locale — L1.8b/c). Aucune copie locale du routeur partagé :
+/// `web_server.rs` ne connaît que l'adaptateur. Les deux groupes déclarent des
+/// méthodes disjointes sur `/api/gds/projects` (GET partagé / POST poste) :
+/// `merge` les combine.
+///
+/// Layer order: authentication runs first (401 without a valid token), then
+/// `readonly_guard` refuses every mutation before any handler or extractor.
+fn protect_api<S>(api: Router<Arc<S>>, ctx: &Arc<S>) -> Router<Arc<S>>
+where
+    S: crate::gds_web::DesktopGdsCtx + WebReadonly,
+{
+    api.merge(crate::gds_web::gds_router::<S>())
+        .layer(from_fn_with_state(ctx.clone(), readonly_guard::<S>))
+        .layer(from_fn_with_state(ctx.clone(), auth_middleware::<S>))
+}
+
+/// Non-safe-method requests still allowed in readonly mode (spec_web_remote.md
+/// § 6.4 c). Keep this list short: each entry must neither change
+/// the desk state nor the GDS data.
+const READONLY_POST_EXCEPTIONS: &[&str] = &[
+    // GDS sign-in: authentication only (issues a session token).
+    "/api/gds/users/login",
+    // Pure lookup (database read + path existence); POST only to carry a body.
+    "/api/gds/projects/repo-exists",
+];
+
+/// `true` when a request may pass while `web_readonly` is on.
+fn readonly_allows(method: &axum::http::Method, path: &str) -> bool {
+    use axum::http::Method;
+    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+        || (*method == Method::POST && READONLY_POST_EXCEPTIONS.contains(&path))
+}
+
+/// WEB-01: single readonly gate for the whole protected API (desk routes and
+/// mounted GDS routes). The setting is read on every request, so enabling it
+/// also blocks sessions that were opened before.
+async fn readonly_guard<S>(
+    State(ctx): State<Arc<S>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response
+where
+    S: gds_core::http::GdsCtx + WebReadonly,
+{
+    if ctx.web_readonly() && !readonly_allows(req.method(), req.uri().path()) {
+        if let Some(c) = req.extensions().get::<AuthedClient>() {
+            let what = format!("{} {}", req.method(), req.uri().path());
+            ctx.audit().record(&c.ip, &c.key, "readonly_denied", &what, false);
+        }
+        return forbidden();
+    }
+    next.run(req).await
 }
 
 // ── Authentification ──
@@ -1743,6 +1808,307 @@ fn validate_within_roots_canon(path: &str, roots: &[PathBuf]) -> Result<PathBuf,
     }
     Ok(canon)
 }
+
+// ── WEB-01 : lecture seule distante appliquée au routeur protégé réel ──
+
+#[cfg(test)]
+mod readonly_guard_tests {
+    use super::*;
+    use axum::http::{Method, Request};
+    use gds_core::http::GdsCtx;
+    use sqlx::PgPool;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    const READONLY_ERROR: &str = "Mode lecture seule : action désactivée";
+
+    /// Spy context: no Tauri, no database. Every capability a handler could use
+    /// to act (pool access, pool replacement, desk handler body) bumps `effects`
+    /// and the pool accessors fail, so a reached handler stops right after.
+    struct TestCtx {
+        auth: Arc<WebAuth>,
+        guard: Arc<WebGuard>,
+        audit: Arc<WebAudit>,
+        readonly: AtomicBool,
+        effects: AtomicUsize,
+    }
+
+    impl TestCtx {
+        fn new(readonly: bool) -> Arc<Self> {
+            Arc::new(Self {
+                auth: Arc::new(WebAuth::new()),
+                guard: Arc::new(WebGuard::new()),
+                audit: Arc::new(WebAudit::new()),
+                readonly: AtomicBool::new(readonly),
+                effects: AtomicUsize::new(0),
+            })
+        }
+        fn effects(&self) -> usize {
+            self.effects.load(Ordering::SeqCst)
+        }
+        fn touch(&self) {
+            self.effects.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl GdsCtx for TestCtx {
+        fn pool(&self) -> Result<PgPool, String> {
+            self.touch();
+            Err("spy: no pool".to_string())
+        }
+        fn auth(&self) -> &Arc<WebAuth> {
+            &self.auth
+        }
+        fn guard(&self) -> &Arc<WebGuard> {
+            &self.guard
+        }
+        fn audit(&self) -> &Arc<WebAudit> {
+            &self.audit
+        }
+    }
+
+    impl crate::gds_web::DesktopGdsCtx for TestCtx {
+        fn desktop_pool(&self) -> Result<PgPool, String> {
+            self.touch();
+            Err("spy: no pool".to_string())
+        }
+        fn desktop_pool_optional(&self) -> Result<Option<PgPool>, String> {
+            self.touch();
+            Err("spy: no pool".to_string())
+        }
+        fn set_desktop_pool(&self, _pool: PgPool) {
+            self.touch();
+        }
+    }
+
+    impl WebReadonly for TestCtx {
+        fn web_readonly(&self) -> bool {
+            self.readonly.load(Ordering::SeqCst)
+        }
+    }
+
+    async fn spy(State(ctx): State<Arc<TestCtx>>) -> StatusCode {
+        ctx.touch();
+        StatusCode::OK
+    }
+
+    /// Desk's own API table (same methods and paths as `build_router`) with spy
+    /// handlers: the real handlers need a Tauri `AppHandle`. The GDS part, the
+    /// readonly guard and the authentication come from the production
+    /// `protect_api` unchanged.
+    fn app(ctx: &Arc<TestCtx>) -> Router {
+        let desk = Router::new()
+            .route("/api/agent/state", get(spy))
+            .route("/api/agent/messages", get(spy))
+            .route("/api/agent/stats", get(spy))
+            .route("/api/models", get(spy))
+            .route("/api/agent/prompt", post(spy))
+            .route("/api/agent/abort", post(spy))
+            .route("/api/agent/new", post(spy))
+            .route("/api/agent/compact", post(spy))
+            .route("/api/agent/model", post(spy))
+            .route("/api/superagent/prompt", post(spy))
+            .route("/api/tree", get(spy))
+            .route("/api/file", get(spy).put(spy).post(spy))
+            .route("/api/file/meta", get(spy))
+            .route("/api/project", get(spy))
+            .route("/api/project/open", post(spy))
+            .route("/api/project/select", post(spy))
+            .route("/api/project/create", post(spy))
+            .route("/api/project/browse", get(spy))
+            .route("/api/commands", get(spy))
+            .route("/api/commands/run", post(spy))
+            .route("/api/commands/stop", post(spy))
+            .route("/api/prompt/templates", get(spy))
+            .route("/api/settings", get(spy).post(spy));
+        protect_api(desk, ctx).with_state(ctx.clone())
+    }
+
+    /// Desk mutations named by WEB-01 and the other desk writes.
+    const DESK_MUTATIONS: &[(&str, &str)] = &[
+        ("POST", "/api/agent/prompt"),
+        ("POST", "/api/agent/abort"),
+        ("POST", "/api/agent/new"),
+        ("POST", "/api/agent/compact"),
+        ("POST", "/api/agent/model"),
+        ("POST", "/api/superagent/prompt"),
+        ("PUT", "/api/file"),
+        ("POST", "/api/file"),
+        ("POST", "/api/project/open"),
+        ("POST", "/api/project/select"),
+        ("POST", "/api/project/create"),
+        ("POST", "/api/commands/run"),
+        ("POST", "/api/commands/stop"),
+        ("POST", "/api/settings"),
+    ];
+
+    /// Every mutating route mounted by `gds_web::gds_router` (shared core routes
+    /// + desk-only routes), with a well-formed fictitious body.
+    fn gds_mutations() -> Vec<(&'static str, &'static str, Value)> {
+        let project = json!({ "project": "/tmp/projet-fictif" });
+        vec![
+            ("POST", "/api/gds/provision", json!({
+                "db_addr": "adresse-invalide", "db_user": "u", "db_password": "p",
+                "admin_email": "", "admin_password": ""
+            })),
+            ("POST", "/api/gds/projects", json!({
+                "project": "/tmp/projet-fictif", "email": "fictif@example.invalid"
+            })),
+            ("POST", "/api/gds/sync", project.clone()),
+            ("POST", "/api/gds/tracking/force", project),
+            ("POST", "/api/gds/users/register", json!({
+                "email": "fictif@example.invalid", "name": "Fictif", "password": "x"
+            })),
+            ("POST", "/api/gds/tracking/clients", json!({})),
+            ("POST", "/api/gds/tracking/clients/delete", json!({})),
+            ("POST", "/api/gds/tracking/projects", json!({})),
+            ("POST", "/api/gds/tracking/projects/delete", json!({})),
+            ("POST", "/api/gds/tracking/tasks", json!({})),
+            ("POST", "/api/gds/tracking/tasks/delete", json!({})),
+            ("POST", "/api/gds/tracking/decisions", json!({})),
+            ("POST", "/api/gds/tracking/decisions/delete", json!({})),
+            ("POST", "/api/gds/tickets", json!({})),
+            ("POST", "/api/gds/tickets/{id}/comments", json!({})),
+            ("POST", "/api/gds/tickets/{id}/status", json!({})),
+            ("POST", "/api/gds/projects/create", json!({ "name": "demo" })),
+            ("POST", "/api/gds/ssh-keys", json!({ "public_key": "ssh-ed25519 AAAA fictif" })),
+            ("POST", "/api/gds/handover/take", json!({ "project_id": 1, "poste_id": "p" })),
+            ("POST", "/api/gds/handover/heartbeat", json!({ "project_id": 1, "poste_id": "p" })),
+            ("POST", "/api/gds/handover/return", json!({ "project_id": 1, "poste_id": "p" })),
+        ]
+    }
+
+    async fn call(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let mut b = Request::builder()
+            .method(Method::from_bytes(method.as_bytes()).unwrap())
+            .uri(uri)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(t) = token {
+            b = b.header(header::AUTHORIZATION, format!("Bearer {}", t));
+        }
+        let mut req = b.body(Body::from(body.to_string())).unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 40000))));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    fn is_readonly_refusal(status: StatusCode, body: &Value) -> bool {
+        status == StatusCode::FORBIDDEN && body["error"] == READONLY_ERROR
+    }
+
+    /// WEB-01: with `web_readonly` on, every mounted mutation (desk + GDS) is
+    /// refused by the readonly answer and no handler effect happens.
+    #[tokio::test]
+    async fn lecture_seule_refuse_chaque_mutation_avant_effet() {
+        let ctx = TestCtx::new(true);
+        let app = app(&ctx);
+        let token = ctx.auth.create_session(Duration::from_secs(600));
+        let mut leaks = Vec::new();
+        for (m, uri) in DESK_MUTATIONS {
+            let (s, b) = call(&app, m, uri, Some(&token), json!({})).await;
+            if !is_readonly_refusal(s, &b) {
+                leaks.push(format!("{} {} -> {} {}", m, uri, s, b));
+            }
+        }
+        for (m, uri, body) in gds_mutations() {
+            let (s, b) = call(&app, m, uri, Some(&token), body).await;
+            if !is_readonly_refusal(s, &b) {
+                leaks.push(format!("{} {} -> {} {}", m, uri, s, b));
+            }
+        }
+        assert!(leaks.is_empty(), "mutations not refused in readonly:\n{}", leaks.join("\n"));
+        assert_eq!(ctx.effects(), 0, "a handler acted despite readonly");
+    }
+
+    /// Readonly keeps consultation and authentication usable: GET routes and the
+    /// two explicit POST exceptions reach their handler; an unauthenticated
+    /// mutation still gets 401 (authentication runs first).
+    #[tokio::test]
+    async fn lecture_seule_laisse_passer_consultations_et_authentification() {
+        let ctx = TestCtx::new(true);
+        let app = app(&ctx);
+        let token = ctx.auth.create_session(Duration::from_secs(600));
+        let reads: &[(&str, &str, Value)] = &[
+            ("GET", "/api/agent/state", Value::Null),
+            ("GET", "/api/agent/messages", Value::Null),
+            ("GET", "/api/models", Value::Null),
+            ("GET", "/api/file", Value::Null),
+            ("GET", "/api/project", Value::Null),
+            ("GET", "/api/project/browse", Value::Null),
+            ("GET", "/api/settings", Value::Null),
+            ("GET", "/api/gds/projects", Value::Null),
+            ("GET", "/api/gds/tracking/clients", Value::Null),
+            // Explicit exceptions: GDS sign-in and a pure existence lookup.
+            ("POST", "/api/gds/users/login", json!({ "email": "fictif@example.invalid", "password": "x" })),
+            ("POST", "/api/gds/projects/repo-exists", json!({ "name": "demo" })),
+        ];
+        for (i, (m, uri, body)) in reads.iter().enumerate() {
+            let (s, b) = call(&app, m, uri, Some(&token), body.clone()).await;
+            assert!(!is_readonly_refusal(s, &b), "{} {} refused in readonly", m, uri);
+            assert_eq!(ctx.effects(), i + 1, "{} {} did not reach its handler ({})", m, uri, s);
+        }
+        let (s, _) = call(&app, "POST", "/api/agent/compact", None, json!({})).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, _) = call(&app, "POST", "/api/gds/provision", None, json!({})).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    /// Write mode is unchanged: no mutation gets the readonly refusal and every
+    /// desk mutation reaches its handler.
+    #[tokio::test]
+    async fn ecriture_inchangee_hors_lecture_seule() {
+        let ctx = TestCtx::new(false);
+        let app = app(&ctx);
+        let token = ctx.auth.create_session(Duration::from_secs(600));
+        for (m, uri) in DESK_MUTATIONS {
+            let (s, b) = call(&app, m, uri, Some(&token), json!({})).await;
+            assert_eq!(s, StatusCode::OK, "{} {} -> {}", m, uri, b);
+        }
+        assert_eq!(ctx.effects(), DESK_MUTATIONS.len());
+        for (m, uri, body) in gds_mutations() {
+            let (s, b) = call(&app, m, uri, Some(&token), body).await;
+            assert!(!is_readonly_refusal(s, &b), "{} {} refused outside readonly", m, uri);
+            assert!(
+                s != StatusCode::NOT_FOUND && s != StatusCode::METHOD_NOT_ALLOWED,
+                "{} {} not mounted ({})", m, uri, s
+            );
+        }
+    }
+
+    /// The setting is read per request: a session opened in write mode is
+    /// blocked as soon as readonly is switched on, and released when it is off.
+    #[tokio::test]
+    async fn activation_a_chaud_sans_reconnexion() {
+        let ctx = TestCtx::new(false);
+        let app = app(&ctx);
+        let token = ctx.auth.create_session(Duration::from_secs(600));
+        let (s, _) = call(&app, "POST", "/api/agent/compact", Some(&token), json!({})).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(ctx.effects(), 1);
+
+        ctx.readonly.store(true, Ordering::SeqCst);
+        let (s, b) = call(&app, "POST", "/api/agent/compact", Some(&token), json!({})).await;
+        assert!(is_readonly_refusal(s, &b), "compact after activation -> {} {}", s, b);
+        let (s, b) = call(&app, "POST", "/api/gds/sync", Some(&token), json!({ "project": "x" })).await;
+        assert!(is_readonly_refusal(s, &b), "gds sync after activation -> {} {}", s, b);
+        assert_eq!(ctx.effects(), 1, "no effect once readonly is on");
+
+        ctx.readonly.store(false, Ordering::SeqCst);
+        let (s, _) = call(&app, "POST", "/api/agent/compact", Some(&token), json!({})).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(ctx.effects(), 2);
+    }
+}
+
 // ── Module partagé bureau ↔ web distant (envoi automatique de fin de dictée) ──
 
 #[cfg(test)]
