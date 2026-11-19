@@ -221,7 +221,8 @@ export function createSessionHistory(container) {
         const roleLabel = role === "user" ? "🧑 Toi" : "🤖 Agent";
         let body = "";
         if (text) {
-          body += renderMarkdown(text);
+          // Recorded agent text is untrusted: same rule as the live chat.
+          body += renderMarkdown(text, { allowHtml: false });
         }
         if (tools.length) {
           body += `<div class="history-msg-tools">`;

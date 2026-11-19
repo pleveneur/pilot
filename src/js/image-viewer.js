@@ -61,6 +61,9 @@ export async function createImageViewer(container, filePath) {
     img.src = dataUri;
   } catch (err) {
     viewer.innerHTML = `<div class="pdf-error">❌ Erreur : impossible de charger l'image<br><small>${err.message || err}</small></div>`;
+    // The caller never attaches the returned wrapper: attach it here so the
+    // error frame is actually shown (success path attaches it further down).
+    container.appendChild(wrapper);
     return wrapper;
   }
 

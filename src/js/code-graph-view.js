@@ -76,6 +76,16 @@ function withAlpha(hex, alpha) {
   return hex;
 }
 
+/** Escapes text (e.g. a file name from the project tree) for HTML insertion. */
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /** Trace un rectangle aux coins arrondis (compatible WebView2). */
 function roundRectPath(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -405,11 +415,15 @@ export function createCodeGraphView(wrapper) {
       canvasEl.innerHTML = "";
       graph = ForceGraph()(canvasEl)
         .nodeId("id")
-        .nodeLabel((n) => `${n.label}${n._count ? ` (${n._count} symboles)` : ` (${n.kind})`} — ${n.path}${n.line ? " L" + n.line : ""}`)
+        // The tooltip library inserts a string label as HTML: names and paths
+        // come from the project, so the whole text is escaped.
+        .nodeLabel((n) => escapeHtml(`${n.label}${n._count ? ` (${n._count} symboles)` : ` (${n.kind})`} — ${n.path}${n.line ? " L" + n.line : ""}`))
         .nodeColor((n) => kindColors()[n.kind] || "#8b949e")
         .nodeVal((n) => (n._count ? Math.min(3 + Math.sqrt(n._count), 12) : (n.kind === "file" ? 3 : 1.5)))
         .linkColor((e) => relationColors()[e.relation] || "#888")
-        .linkLabel((e) => `${e.relation} [${e.confidence}]`)
+        // Relation and confidence are read back from the project's own
+        // .pilot/context-index.db: escaped for the same reason.
+        .linkLabel((e) => escapeHtml(`${e.relation} [${e.confidence}]`))
         .linkWidth(2)
         .nodeRelSize(5)
         .linkDirectionalArrowLength(4)
@@ -535,8 +549,14 @@ export function createCodeGraphView(wrapper) {
       // Peupler le filtre fichier.
       const files = [...new Set(fullData.nodes.map((n) => n.path))].sort();
       const prev = fileEl.value;
-      fileEl.innerHTML = '<option value="">Tous les fichiers</option>' +
-        files.map((f) => `<option value="${f}">${f}</option>`).join("");
+      fileEl.innerHTML = '<option value="">Tous les fichiers</option>';
+      // File names come from the project tree: set them as data, never as markup.
+      for (const f of files) {
+        const opt = document.createElement("option");
+        opt.value = f;
+        opt.textContent = f;
+        fileEl.appendChild(opt);
+      }
       fileEl.value = prev;
       applyFilters();
     } catch (e) {
@@ -554,7 +574,7 @@ export function createCodeGraphView(wrapper) {
       ? ` · ${buildProgress.done}/${buildProgress.total} fichiers`
       : "";
     const file = buildProgress && buildProgress.file
-      ? ` · <span class="cg-file">${buildProgress.file}</span>`
+      ? ` · <span class="cg-file">${escapeHtml(buildProgress.file)}</span>`
       : "";
     statusEl.innerHTML =
       `<span class="cg-building"><span class="cg-spinner"></span> Construction du graphe…${prog}${file}</span>`;

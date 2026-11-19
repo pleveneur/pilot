@@ -144,6 +144,17 @@ function relativeTime(ms) {
   return new Date(ms).toLocaleDateString();
 }
 
+/** Escapes a value for safe insertion into HTML text or a quoted attribute.
+ * Project data (file names, paths, branch, error messages) is DATA, never HTML. */
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /** Formate un nombre avec séparateur de milliers. */
 function fmt(n) {
   return (n ?? 0).toLocaleString("fr-FR");
@@ -200,7 +211,7 @@ function card(title, icon) {
 function metric(label, value, sub) {
   const el = document.createElement("div");
   el.className = "dash-metric";
-  el.innerHTML = `<div class="dash-metric-value">${value}</div><div class="dash-metric-label">${label}</div>`;
+  el.innerHTML = `<div class="dash-metric-value">${escapeHtml(value)}</div><div class="dash-metric-label">${escapeHtml(label)}</div>`;
   if (sub) {
     const s = document.createElement("div");
     s.className = "dash-metric-sub";
@@ -388,7 +399,7 @@ export function createDashboard(container) {
       render(data, tracking, supervision, assistantTracking, cfg);
       refreshStatusEl.textContent = `✓ ${data.project?.refreshed_at || ""}`;
     } catch (e) {
-      contentEl.innerHTML = `<div class="dash-error">❌ ${e}</div>`;
+      contentEl.innerHTML = `<div class="dash-error">❌ ${escapeHtml(e)}</div>`;
       refreshStatusEl.textContent = "✗ Échec";
     } finally {
       refreshBtn.disabled = false;
@@ -430,7 +441,7 @@ export function createDashboard(container) {
       const label = document.createElement("span");
       label.className = "dash-purge-label";
       const rel = String(it.path || "").replace(projectPath, "").replace(/^[\\\\/]+/, "");
-      label.innerHTML = `<strong>${it.name}</strong> <span class="dash-muted">${rel}</span>`;
+      label.innerHTML = `<strong>${escapeHtml(it.name)}</strong> <span class="dash-muted">${escapeHtml(rel)}</span>`;
       const size = document.createElement("span");
       size.className = "dash-list-val";
       size.textContent = it.size_h || humanSize(it.size);
@@ -467,7 +478,7 @@ export function createDashboard(container) {
       const totalBytes = selected.reduce((s, it) => s + (Number(it.size) || 0), 0);
       const isGcOnly = selected.length === 1 && selected[0].category === "git_gc";
       const summary = selected
-        .map((it) => `<li>${it.name} ${it.category !== "git_gc" ? `<span class=\"dash-muted\">(${it.size_h || humanSize(it.size)})</span>` : ""}</li>`)
+        .map((it) => `<li>${escapeHtml(it.name)} ${it.category !== "git_gc" ? `<span class=\"dash-muted\">(${escapeHtml(it.size_h || humanSize(it.size))})</span>` : ""}</li>`)
         .join("");
       const body = isGcOnly
         ? `<p>Voulez-vous compacter le dépôt Git (git gc) ?</p><p class="dash-muted">L'historique n'est pas supprimé.</p>`
@@ -483,13 +494,13 @@ export function createDashboard(container) {
         const failCount = details.length - okCount;
         feedback.innerHTML = `<strong>${res.freed_h || humanSize(res.freed)} libérés</strong> — ${okCount} réussite(s)${failCount ? `, ${failCount} échec(s)` : ""}.`;
         if (failCount) {
-          const errs = details.filter((d) => !d.ok).map((d) => `${d.name}: ${d.error}`).join("\n");
+          const errs = details.filter((d) => !d.ok).map((d) => `${escapeHtml(d.name)}: ${escapeHtml(d.error)}`).join("\n");
           feedback.innerHTML += `<div class="dash-muted" style="white-space:pre-wrap;margin-top:4px">${errs}</div>`;
         }
         // Rafraîchir le dashboard (métriques + purge) après purge.
         await load();
       } catch (e) {
-        feedback.innerHTML = `<span class="dash-error">❌ ${e}</span>`;
+        feedback.innerHTML = `<span class="dash-error">❌ ${escapeHtml(e)}</span>`;
         btn.disabled = false;
       }
     });
@@ -702,8 +713,8 @@ export function createDashboard(container) {
           const nameCell = document.createElement("span");
           nameCell.className = "dash-tracking-name";
           nameCell.innerHTML =
-            `${open.active ? "📍 " : ""}${entry.name}` +
-            `<span class="dash-tracking-path" title="${entry.path}">${entry.path}</span>` +
+            `${open.active ? "📍 " : ""}${escapeHtml(entry.name)}` +
+            `<span class="dash-tracking-path" title="${escapeHtml(entry.path)}">${escapeHtml(entry.path)}</span>` +
             (time ? `<span class="dash-tracking-time">⏱ ${time}</span>` : "");
           const clientCell = document.createElement("span");
           clientCell.textContent = entry.client || "—";
@@ -805,7 +816,7 @@ export function createDashboard(container) {
           row.className = "dash-tracking-row";
           const projCell = document.createElement("span");
           projCell.className = "dash-tracking-name";
-          projCell.innerHTML = `${proj.name || ""}<span class="dash-tracking-path" title="${proj.path || ""}">${proj.path || ""}</span>`;
+          projCell.innerHTML = `${escapeHtml(proj.name || "")}<span class="dash-tracking-path" title="${escapeHtml(proj.path || "")}">${escapeHtml(proj.path || "")}</span>`;
           const agentCell = document.createElement("span");
           agentCell.textContent = ag.agent || "—";
           const stateCell = document.createElement("span");
@@ -878,7 +889,7 @@ export function createDashboard(container) {
         for (const f of s.heaviest.slice(0, 5)) {
           const li = document.createElement("li");
           const rel = String(f.path || "").split(/[\\/]/).pop();
-          li.innerHTML = `<span class="dash-list-path" title="${f.path}">${rel}</span><span class="dash-list-val">${f.size_h}</span>`;
+          li.innerHTML = `<span class="dash-list-path" title="${escapeHtml(f.path)}">${escapeHtml(rel)}</span><span class="dash-list-val">${escapeHtml(f.size_h)}</span>`;
           list.appendChild(li);
         }
         storage.body.appendChild(list);
@@ -1070,7 +1081,7 @@ export function createDashboard(container) {
         list.className = "dash-list";
         for (const f of c.recent_files) {
           const li = document.createElement("li");
-          li.innerHTML = `<span class="dash-list-path">${f.path}</span><span class="dash-list-val">${relativeTime(f.mtime)}</span>`;
+          li.innerHTML = `<span class="dash-list-path">${escapeHtml(f.path)}</span><span class="dash-list-val">${escapeHtml(relativeTime(f.mtime))}</span>`;
           list.appendChild(li);
         }
         ctx.body.appendChild(list);

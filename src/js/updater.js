@@ -154,7 +154,8 @@ async function enrichWithHistory(latestVersion) {
   if (!historyMd) return; // fallback : on garde le body de la dernière version.
   // Ne pas écraser si la modale a été fermée entre-temps.
   if (!modalEl || modalEl.classList.contains("hidden")) return;
-  notesEl.innerHTML = renderMarkdown(historyMd);
+  // Release notes come from the network (GitHub Releases): no raw HTML.
+  notesEl.innerHTML = renderMarkdown(historyMd, { allowHtml: false });
   notesEl.querySelectorAll("a").forEach((a) => {
     a.setAttribute("target", "_blank");
     a.setAttribute("rel", "noopener noreferrer");
@@ -540,7 +541,8 @@ function showUpdateModal(update) {
   // Le champ `body` contient le `notes` de latest.json (Markdown GitHub).
   const body = update.body || update.notes || "";
   if (body.trim()) {
-    notesEl.innerHTML = renderMarkdown(body);
+    // `notes` of latest.json: untrusted text, no raw HTML (links still rendered).
+    notesEl.innerHTML = renderMarkdown(body, { allowHtml: false });
     // Les liens du changelog pointent vers GitHub : on les ouvre dans le
     // navigateur externe (target=_blank) plutôt que dans la WebView.
     notesEl.querySelectorAll("a").forEach((a) => {

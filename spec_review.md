@@ -45,7 +45,9 @@ pas une auto-validation : il ne modifie aucun fichier.
   - bouton **🔍 Lancer la revue** → `ask_review(scope, "", [])` (revue initiale) ;
   - textarea + ➤ pour les **questions de suivi** → `ask_review(scope, question, history)` ;
   - historique géré côté frontend, réinjecté à chaque tour (pi est sans mémoire) ;
-  - rendu Markdown via `renderMarkdown` (réutilise `preview.js`).
+  - rendu Markdown via `renderMarkdown(…, { allowHtml: false })` (réutilise
+    `preview.js`) : la réponse dérive d'un diff non fiable, le HTML brut y reste
+    du texte (verrou `src/js/rendu-markdown-contenus-non-fiables.test.js`).
 - **`src/js/tabs.js`** : mode `"review"` + `_openReview` + cleanup
   (`unlistenReview`) + exclusion de la persistance d'onglets.
 - **`index.html`** : bouton 🔍 (`btn-review`, `project-only`) dans l'action-panel.

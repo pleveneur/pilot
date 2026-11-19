@@ -258,6 +258,8 @@ projet (ouverture, fermeture, bascule).
 | Contexte & Documentation | README (extrait, rendu Markdown), fichiers mémoire/décisions, derniers fichiers modifiés |
 | Alertes & Suggestions | Règles : fichiers volumineux, éléments non commités, langage principal, taille globale |
 
+Noms et chemins de fichiers, nom de branche, noms et chemins de projets et messages d'erreur sont des **données** : ils sont échappés avant toute insertion HTML (`escapeHtml` de `dashboard.js`), jamais interprétés (verrou `src/js/tableau-de-bord-noms-echappes.test.js`).
+
 ## Purge des fichiers inutiles
 
 Le tableau de bord propose une **purge des fichiers inutiles**, par projet, pour libérer de l'espace disque.

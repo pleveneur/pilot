@@ -233,7 +233,8 @@ function appendAssistant(messagesEl, markdown) {
   el.className = "help-msg help-msg-assistant";
   const body = document.createElement("div");
   body.className = "help-msg-body";
-  body.innerHTML = renderMarkdown(markdown);
+  // The reviewer's answer derives from an untrusted diff: no raw HTML.
+  body.innerHTML = renderMarkdown(markdown, { allowHtml: false });
   el.appendChild(body);
   messagesEl.appendChild(el);
   scrollToBottom(messagesEl);
