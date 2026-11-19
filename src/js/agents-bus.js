@@ -102,7 +102,7 @@ import { isPdfExportRequest, pdfReportStatus, pdfToolErrorAnswer } from "./pdf-g
 import { runPdfSentinelRequest } from "./pdf-export.js";
 import {
   enqueueExclusivity,
-  dequeueExclusivity,
+  dequeueExclusivityEntry,
   exclusivityKey,
   findExclusivityKey,
   isAgentActiveOnProject as isAgentActiveOnProjectSessions,
@@ -2170,13 +2170,24 @@ export async function launchNextQueuedForProject(agentId, project, ownRunKey) {
 }
 
 /**
- * Relance la demande en TÊTE de file d'exclusivité de (project, agent).
- * Contrat de retour — c'est lui qui décide du sort du verrou de run :
+ * Relance la prochaine demande EXÉCUTABLE de la file d'exclusivité de
+ * (project, agent). Contrat de retour — c'est lui qui décide du sort du verrou
+ * de run :
  *  - `{ launched: true,  reason: "launched" }` : le tour est RÉELLEMENT parti ;
  *  - `{ launched: false, reason }` : `no-demand` (file vide), `owner-gone`
- *    (mission propriétaire disparue → entrée CONSERVÉE, jamais exécutée pour une
- *    autre mission), `agent-missing`, `turn-not-started`.
+ *    (AUCUNE entrée exécutable : les missions propriétaires ont disparu → les
+ *    entrées sont CONSERVÉES, jamais exécutées pour une autre mission),
+ *    `agent-missing`, `turn-not-started`.
  * Un `launched: false` ne tient JAMAIS le verrou (voir verrou-de-run.js).
+ *
+ * DÉFAUT CORRIGÉ (file bloquée après l'arrêt d'un agent) : la file vit au niveau
+ * du PROJET et survit à la run qui l'a remplie. Une tête dont la run
+ * propriétaire a disparu est INEXÉCUTABLE ; la CONSERVER est obligatoire (RÈGLE
+ * 4), mais elle ne doit pas BARRER les demandes arrivées derrière elle. On
+ * parcourt donc la file dans l'ordre : les entrées mortes sont signalées (une
+ * fois) et laissées en place, et la PREMIÈRE entrée dont le propriétaire vit
+ * est lancée. Sans ce parcours, une seule tête morte rendait le couple
+ * (projet, agent) définitivement inutilisable, sans aucun message.
  * @param {string} agentId
  * @param {string} project - projet réel (clé de la file)
  * @param {string} [runKeyOverride] - clé de run appelante
@@ -2191,50 +2202,70 @@ async function launchNextQueued(agentId, project, runKeyOverride) {
   // normaux ; un contexte dont la file a été remplacée garde SA file).
   const queue = (callerCtx && callerCtx.exclusivityQueue) || exclusivityQueueOfProject(project);
   const qk = exclusivityKey(project, agentId);
-  const head = (queue[qk] || [])[0];
-  if (!head) return { launched: false, reason: "no-demand" };
-  // RÈGLE 4 : une entrée porte la clé de la run QUI L'A MISE EN FILE
-  // (`ownerRunKey`). Sans propriétaire identifié (entrée héritée), c'est la run
-  // appelante qui l'a mise en file.
-  const ownerKey = head.ownerRunKey || callerKey;
-  const ownerCtx = busState.runs[ownerKey];
-  // DÉCISION UNIQUE (module pur) : une entrée sans propriétaire identifié vient
-  // d'une run antérieure au marquage — c'est la run appelante qui l'a mise en
-  // file, elle peut la relancer dans SON contexte. Un propriétaire identifié mais
-  // DISPARU (arrêt d'agent → contexte détruit) interdit le lancement.
-  const placement = decideQueuedDemandPlacement({
-    ownerKey: head.ownerRunKey || "",
-    ownerAlive: !!ownerCtx,
-  });
-  if (placement.placement !== "launch" || !ownerCtx) {
-    // Le contexte propriétaire n'existe plus. Lancer la demande dans un AUTRE
-    // contexte la ferait exécuter POUR UNE AUTRE MISSION (rapport livré à la
-    // mauvaise mission, `pending` décrémenté au mauvais endroit, sink absent) :
-    // c'est exactement la perte silencieuse interdite. On CONSERVE l'entrée en
-    // file, on écrit le motif au journal des arrêts et on le DIT à l'utilisateur.
-    if (!head.ownerMissingReported) {
-      head.ownerMissingReported = true;
-      const message = `⏸️ Une demande en file d'attente (agent ${agentId}) ne peut pas être relancée : la run qui l'avait mise en file n'existe plus. Elle est CONSERVÉE en file (jamais exécutée pour une autre mission).`;
-      console.warn("[agents-bus] file d'attente :", message);
-      traceAutomaticAgentStop({
-        reason: "queue-replay-no-owner",
-        detected: "queue-owner-gone",
-        agentId,
-        projectPath: projectOfRunKey(project),
-        detail: String((head && (head.brief || head.task)) || "").slice(0, 300),
-      }).catch(() => {});
-      try {
-        emit("notify", { agentId, message });
-      } catch (_) {
-        /* aucun écouteur : la console a déjà l'information */
-      }
+  const candidates = queue[qk] || [];
+  if (candidates.length === 0) return { launched: false, reason: "no-demand" };
+
+  // PARCOURS de la file : on choisit la première demande EXÉCUTABLE, c'est-à-dire
+  // celle dont la run propriétaire existe encore (RÈGLE 4 : jamais exécutée dans
+  // le contexte d'une autre mission).
+  let next = null;
+  let ownerCtx = null;
+  const orphaned = [];
+  for (const candidate of candidates) {
+    // RÈGLE 4 : une entrée porte la clé de la run QUI L'A MISE EN FILE
+    // (`ownerRunKey`). Sans propriétaire identifié (entrée héritée), c'est la
+    // run appelante qui l'a mise en file.
+    const ownerKey = candidate.ownerRunKey || callerKey;
+    const ctx = busState.runs[ownerKey];
+    // DÉCISION UNIQUE (module pur) : une entrée sans propriétaire identifié vient
+    // d'une run antérieure au marquage — c'est la run appelante qui l'a mise en
+    // file, elle peut la relancer dans SON contexte. Un propriétaire identifié
+    // mais DISPARU (arrêt d'agent → contexte détruit) interdit le lancement.
+    const placement = decideQueuedDemandPlacement({
+      ownerKey: candidate.ownerRunKey || "",
+      ownerAlive: !!ctx,
+    });
+    if (placement.placement === "launch" && ctx) {
+      next = candidate;
+      ownerCtx = ctx;
+      break;
     }
-    // Refus RENDU à l'appelant : il ne compte JAMAIS comme un lancement, donc
-    // il ne tient jamais le verrou de run (invariant A/B du module).
+    orphaned.push(candidate);
+  }
+
+  // Les entrées inexécutables sont SIGNALÉES (une seule fois chacune) et
+  // CONSERVÉES : le contexte propriétaire n'existe plus, les lancer dans un AUTRE
+  // contexte les ferait exécuter POUR UNE AUTRE MISSION (rapport livré à la
+  // mauvaise mission, `pending` décrémenté au mauvais endroit, sink absent) :
+  // c'est exactement la perte silencieuse interdite.
+  for (const orphan of orphaned) {
+    if (orphan.ownerMissingReported) continue;
+    orphan.ownerMissingReported = true;
+    const message = `⏸️ Une demande en file d'attente (agent ${agentId}) ne peut pas être relancée : la run qui l'avait mise en file n'existe plus. Elle est CONSERVÉE en file (jamais exécutée pour une autre mission) et ne bloque plus les demandes suivantes.`;
+    console.warn("[agents-bus] file d'attente :", message);
+    traceAutomaticAgentStop({
+      reason: "queue-replay-no-owner",
+      detected: "queue-owner-gone",
+      agentId,
+      projectPath: projectOfRunKey(project),
+      detail: String((orphan && (orphan.brief || orphan.task)) || "").slice(0, 300),
+    }).catch(() => {});
+    try {
+      emit("notify", { agentId, message });
+    } catch (_) {
+      /* aucun écouteur : la console a déjà l'information */
+    }
+  }
+
+  if (!next || !ownerCtx) {
+    // AUCUNE demande exécutable : refus RENDU à l'appelant — il ne compte JAMAIS
+    // comme un lancement, donc il ne tient jamais le verrou de run (invariant
+    // A/B du module). Les entrées restent en file.
     return { launched: false, reason: QUEUE_REFUSED_OWNER_GONE };
   }
-  const next = dequeueExclusivity(queue, agentId, project);
-  if (!next) return { launched: false, reason: "no-demand" };
+  // Retrait de l'entrée CHOISIE (elle n'est pas forcément la tête : les entrées
+  // sans propriétaire restent devant, sans barrer la file).
+  dequeueExclusivityEntry(queue, agentId, project, next);
   const id = next.agentId || agentId;
   const agent = busState.agents.get(id);
   if (!agent) {

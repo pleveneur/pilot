@@ -81,6 +81,33 @@ export function dequeueExclusivity(queue, agentId, project) {
 }
 
 /**
+ * Retire et retourne UNE demande PRÉCISE de la file de (project, agent_id),
+ * sans supposer qu'elle est en tête. Mutate la map (supprime la clé si vide).
+ *
+ * Nécessaire parce qu'une tête de file dont la run propriétaire a disparu est
+ * INEXÉCUTABLE (elle ne doit jamais tourner dans le contexte d'une autre
+ * mission) : elle reste en file pour ne pas disparaître en silence, mais elle
+ * ne doit plus barrer les demandes suivantes — c'est à l'appelant de décider
+ * laquelle il lance, et de retirer CELLE-LÀ.
+ * @param {object} queue
+ * @param {string} agentId
+ * @param {string} project
+ * @param {object} entry - l'entrée à retirer (identité d'objet)
+ * @returns {object|null} l'entrée retirée, ou null si elle n'est plus en file
+ */
+export function dequeueExclusivityEntry(queue, agentId, project, entry) {
+  if (!queue || !entry) return null;
+  const key = findExclusivityKey(queue, agentId, project) || exclusivityKey(project, agentId);
+  const arr = queue[key];
+  if (!arr || arr.length === 0) return null;
+  const idx = arr.indexOf(entry);
+  if (idx < 0) return null;
+  arr.splice(idx, 1);
+  if (arr.length === 0) delete queue[key];
+  return entry;
+}
+
+/**
  * Indique si un agent est déjà actif sur un projet, d'après une liste de
  * sessions (mode agent_process, en train d'exécuter une tâche, même projet).
  * Fonction pure.
