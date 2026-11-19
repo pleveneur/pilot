@@ -90,3 +90,17 @@ passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
 - **Copie** : via `navigator.clipboard.writeText` (pattern existant du projet).
 - **Robustesse** : mot de passe maître min. 4 caractères ; erreurs claires
   (mot de passe incorrect, coffre verrouillé, coffre non initialisé).
+- **Écriture sans troncature** (VLT-01) : `write_entries` et
+  `set_master_password_at` (cœur de `vault_set_master_password`) passent par
+  `src-tauri/src/atomic_file.rs::write_replacing` — fichier temporaire
+  EXCLUSIF dans `~/.pilot/` (`.vault.json.<uuid>.tmp`, droits `0600` sous
+  Unix), écriture complète + `sync_all`, puis `std::fs::rename` par-dessus
+  `vault.json` (l'ancien fichier n'est jamais supprimé d'abord). Échec avant le
+  renommage → erreur remontée, ancien coffre intact et déchiffrable, temporaire
+  supprimé. La clé en mémoire n'est remplacée qu'après un renommage réussi.
+  Aucune copie de sauvegarde du coffre n'est créée (politique non décidée).
+  Limites : une coupure brutale peut laisser un `.vault.json.<uuid>.tmp`
+  (chiffré) non nettoyé ; le remplacement sous Windows (cible verrouillée par
+  un autre programme → erreur, ancien coffre conservé) n'est pas validé sur
+  poste Windows. Tests : `vault::tests::ecriture_interrompue_*`,
+  `changement_de_mot_de_passe_interrompu_*`, `ecritures_reussies_*`.
