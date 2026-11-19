@@ -923,9 +923,17 @@ pub struct AuthorizedKeysSync {
 /// Lignes `authorized_keys` (`type base64 email`) des clefs **enregistrées en
 /// base** : la table `ssh_keys` (rattachée aux utilisateurs par email) est la
 /// seule source de vérité. Les clefs de format inattendu sont ignorées.
+///
+/// COMP-01 (first sub-point): only keys whose owner has `status = 'active'`
+/// are selected. A `pending` or `disabled` account's keys are left out (they
+/// stay in `ssh_keys`, so a reactivation brings them back). Order (`k.id`) and
+/// format are unchanged. A status change goes through
+/// `POST /api/gds/admin/users/status`, which regenerates the file immediately
+/// on the server side; the maintenance loop remains the periodic safety net.
 pub async fn stored_key_lines(pool: &PgPool) -> Result<Vec<String>, String> {
     let rows = sqlx::query(
-        "SELECT k.public_key, u.email FROM ssh_keys k JOIN users u ON u.id = k.user_id ORDER BY k.id",
+        "SELECT k.public_key, u.email FROM ssh_keys k JOIN users u ON u.id = k.user_id \
+         WHERE u.status = 'active' ORDER BY k.id",
     )
     .fetch_all(pool)
     .await
@@ -1562,5 +1570,129 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         pool.close().await;
+    }
+
+    // ── COMP-01 (first sub-point) — only keys of ACTIVE accounts are rewritten ──
+    //
+    // Behaviour test on a disposable migrated database
+    // (`crate::db::tests::fresh_migrated_test_db`, `pilot_gds_test_*` guard).
+    // It drives the same chain as `regenerate_authorized_keys`
+    // (`stored_key_lines` → `render_authorized_keys` → `write_authorized_keys`)
+    // but writes to an explicit TEMPORARY path: the real `git` account, its
+    // `authorized_keys`, sshd and system permissions are never touched.
+    //
+    // Environment guard: without `PILOT_GDS_TEST_URL` AND without
+    // `PILOT_GDS_TEST_REQUIRED`, the test reports that it did NOT run (CI
+    // without PostgreSQL). If the URL is present (even unusable) or
+    // `PILOT_GDS_TEST_REQUIRED` is set, an unavailable database is a FAILURE.
+    #[tokio::test]
+    async fn authorized_keys_exclude_keys_of_inactive_accounts() {
+        let url_present = std::env::var("PILOT_GDS_TEST_URL")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        let required = std::env::var("PILOT_GDS_TEST_REQUIRED")
+            .map(|v| {
+                let v = v.trim();
+                !v.is_empty() && v != "0"
+            })
+            .unwrap_or(false);
+        let Some((pool, _guard)) = crate::db::tests::fresh_migrated_test_db().await else {
+            if url_present || required {
+                panic!(
+                    "COMP-01: PostgreSQL test database unavailable although \
+                     PILOT_GDS_TEST_URL is set or PILOT_GDS_TEST_REQUIRED is set"
+                );
+            }
+            eprintln!(
+                "authorized_keys_exclude_keys_of_inactive_accounts: NOT EXECUTED \
+                 (no PILOT_GDS_TEST_URL, PILOT_GDS_TEST_REQUIRED unset) — no integration proof"
+            );
+            return;
+        };
+
+        // Fictitious accounts and public keys only (no private key anywhere).
+        let alice = "alice@comp01.test";
+        let bob = "bob@comp01.test";
+        let carol = "carol@comp01.test";
+        let dave = "dave@comp01.test";
+        let alice_id = crate::db::create_user(&pool, alice, "Alice", "", "dev", "active")
+            .await
+            .unwrap();
+        let bob_id = crate::db::create_user(&pool, bob, "Bob", "", "dev", "active")
+            .await
+            .unwrap();
+        let carol_id = crate::db::create_user(&pool, carol, "Carol", "", "standard", "pending")
+            .await
+            .unwrap();
+        let dave_id = crate::db::create_user(&pool, dave, "Dave", "", "dev", "disabled")
+            .await
+            .unwrap();
+        let ka = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIComp01Alice==";
+        let kb = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIComp01Bob==";
+        let kc = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIComp01Carol==";
+        let kd = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIComp01Dave==";
+        for (uid, key) in [(alice_id, ka), (bob_id, kb), (carol_id, kc), (dave_id, kd)] {
+            assert!(crate::db::create_ssh_key(&pool, uid, key).await.unwrap() > 0);
+        }
+        let line_a = format!("{} {}", ka, alice);
+        let line_b = format!("{} {}", kb, bob);
+
+        let dir = std::env::temp_dir().join(format!(
+            "pilot-comp01-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let auth = dir.join("authorized_keys").to_string_lossy().to_string();
+
+        // 1) Both active accounts: their keys are selected and written, in key
+        //    order, with the email as comment.
+        let lines = stored_key_lines(&pool).await.unwrap();
+        assert!(lines.contains(&line_a), "active key missing: {:?}", lines);
+        assert!(lines.contains(&line_b), "active key missing: {:?}", lines);
+        assert!(write_authorized_keys(&auth, &render_authorized_keys(&lines)).unwrap());
+
+        // 2) Alice is disabled: her key leaves the selection AND the rewritten
+        //    file; Bob's active key stays.
+        crate::db::set_user_status(&pool, alice, "disabled").await.unwrap();
+        let lines = stored_key_lines(&pool).await.unwrap();
+        assert!(
+            !lines.iter().any(|l| l.contains("Comp01Alice")),
+            "key of a disabled account still selected: {:?}",
+            lines
+        );
+        assert!(lines.contains(&line_b), "active key lost: {:?}", lines);
+        assert!(write_authorized_keys(&auth, &render_authorized_keys(&lines)).unwrap());
+        let content = std::fs::read_to_string(&auth).unwrap();
+        assert!(!content.contains("Comp01Alice"), "disabled key still authorized: {}", content);
+        assert_eq!(content, format!("{}\n", line_b));
+
+        // 3) Non-active statuses never authorize their key (pending, disabled).
+        for marker in ["Comp01Carol", "Comp01Dave"] {
+            assert!(
+                !lines.iter().any(|l| l.contains(marker)),
+                "key of a non-active account selected ({}): {:?}",
+                marker,
+                lines
+            );
+        }
+
+        // 4) Reactivation: Alice's key comes back, exactly once, original order;
+        //    a second pass is idempotent (no rewrite).
+        crate::db::set_user_status(&pool, alice, "active").await.unwrap();
+        let lines = stored_key_lines(&pool).await.unwrap();
+        assert_eq!(lines, vec![line_a.clone(), line_b.clone()]);
+        assert!(write_authorized_keys(&auth, &render_authorized_keys(&lines)).unwrap());
+        let content = std::fs::read_to_string(&auth).unwrap();
+        assert_eq!(content, format!("{}\n{}\n", line_a, line_b));
+        assert_eq!(content.matches("Comp01Alice").count(), 1);
+        let again = stored_key_lines(&pool).await.unwrap();
+        assert!(!write_authorized_keys(&auth, &render_authorized_keys(&again)).unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+        pool.close().await;
+        eprintln!("COMP01_DB_EXECUTED");
     }
 }

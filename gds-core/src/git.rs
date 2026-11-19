@@ -541,6 +541,31 @@ pub fn bare_path_in_root(bare_root: &str, project_name: &str) -> Result<PathBuf,
     Ok(bare)
 }
 
+/// Supprime le dépôt bare d'un projet **dans la racine du serveur**
+/// (`<bare_root>/<projet>.git`, le chemin même où `create_project_in_root` le
+/// crée). Pendant de `remove_bare`, dont le contrat poste
+/// (`<gds_local_dir>/repos/<projet>.git`) reste inchangé. Nom validé
+/// (`validate_project_name`, anti path traversal), chemin verrouillé sous la
+/// racine : on ne supprime JAMAIS hors de `bare_root`. Idempotent : un dépôt
+/// absent n'est pas une erreur.
+pub fn remove_bare_in_root(bare_root: &str, project_name: &str) -> Result<(), String> {
+    let name = validate_project_name(project_name)?;
+    let bare = bare_path_in_root(bare_root, &name)?;
+    // Ceinture + bretelles : le chemin doit rester sous la racine des dépôts.
+    let root = PathBuf::from(bare_root);
+    if !bare.starts_with(&root) || bare == root {
+        return Err(format!(
+            "Chemin bare invalide (hors racine des dépôts): {}",
+            bare.display()
+        ));
+    }
+    if bare.exists() {
+        std::fs::remove_dir_all(&bare)
+            .map_err(|e| format!("Suppression du dépôt bare {}: {}", bare.display(), e))?;
+    }
+    Ok(())
+}
+
 /// Chemin retenu pour le dépôt d'un projet (pure — testable sans base) :
 ///
 /// * le `path_on_server` **enregistré** est respecté s'il désigne un chemin
@@ -934,6 +959,34 @@ mod tests {
         std::fs::create_dir_all(&evil).unwrap();
         assert!(remove_bare(&gds, "../outside").is_err());
         assert!(evil.exists(), "le dossier externe ne doit JAMAIS être supprimé");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Purge serveur : supprime `<racine>/<projet>.git` (chemin de
+    /// `create_project_in_root`), idempotente, jamais hors de la racine.
+    #[test]
+    fn remove_bare_in_root_deletes_only_the_root_repo() {
+        let dir = std::env::temp_dir().join(format!("pilot-gds-rembare-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root_dir = dir.join("root");
+        std::fs::create_dir_all(&root_dir).unwrap();
+        let root = root_dir.to_string_lossy().to_string();
+        // 1. Chemin réel de création : supprimé, puis idempotent.
+        let bare = root_dir.join("proj.git");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert_eq!(bare, bare_path_in_root(&root, "proj").unwrap());
+        remove_bare_in_root(&root, "proj").unwrap();
+        assert!(!bare.exists(), "le dépôt de la racine doit être supprimé");
+        assert!(root_dir.exists(), "la racine elle-même ne doit pas être supprimée");
+        remove_bare_in_root(&root, "proj").unwrap(); // idempotent (absent → ok)
+        // 2. Anti path traversal : refusé, le dossier externe voisin reste intact.
+        let outside = dir.join("outside");
+        let outside_git = dir.join("outside.git");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&outside_git).unwrap();
+        assert!(remove_bare_in_root(&root, "../outside").is_err());
+        assert!(outside.exists(), "le dossier externe ne doit JAMAIS être supprimé");
+        assert!(outside_git.exists(), "le dossier externe ne doit JAMAIS être supprimé");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

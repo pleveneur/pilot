@@ -558,7 +558,9 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   d'empreinte de mot de passe), `POST /api/gds/admin/users` (création d'un
   compte directement `active`), `POST .../users/role`, `POST .../users/status`
   (réutilise `set_user_status` ; la désactivation du **dernier administrateur
-  actif** est refusée en `409`) et `POST .../users/password`
+  actif** est refusée en `409` ; le changement de statut régénère
+  `authorized_keys` immédiatement côté serveur (COMP-01), la boucle de
+  maintenance restant le filet périodique) et `POST .../users/password`
   (réinitialisation, empreinte Argon2id écrite, mot de passe jamais renvoyé).
 
 ### 2.3 Migrations
