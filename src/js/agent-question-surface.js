@@ -353,6 +353,35 @@ function hasSentinel(text) {
 }
 
 /**
+ * `confirmed` À LA RACINE de la réponse, ou `null` quand ce n'en est pas une.
+ *
+ * CONTRAT DE PI (vérifié dans pi 1.6.0, `dist/modes/rpc/rpc-mode.js`) : une
+ * demande `confirm` n'est résolue QUE par ce champ —
+ * `"cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false`.
+ * Le champ `value` n'est PAS lu par `confirm` (seuls `select` et `input` le
+ * lisent). Or la réponse d'une confirmation transite justement sous forme de
+ * `value` (`agentQuestionAnswer` → `{"confirmed":…}`) : elle était donc relue
+ * comme un REFUS — l'utilisateur cliquait « Oui » sans que rien ne soit
+ * autorisé. Ce champ accompagne donc la réponse, sans la remplacer.
+ *
+ * @param {unknown} value - réponse transmise (`value` de `extension_ui_response`)
+ * @returns {boolean|null} valeur à poser à la racine, `null` = rien à ajouter
+ */
+export function agentAnswerConfirmedRoot(value) {
+  if (typeof value !== "string") return null;
+  const texte = value.trim();
+  if (!texte.startsWith("{")) return null;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(texte);
+  } catch (_) {
+    return null;
+  }
+  if (parsed && typeof parsed.confirmed === "boolean") return parsed.confirmed;
+  return null;
+}
+
+/**
  * Traduit la réponse d'un dialogue en commande `extension_ui_response`
  * (`{cancelled:true}` ou `{value}`), au format EXACT qu'attend l'extension
  * `pilot-choices.ts` (JSON `{selected}` / `{selected:[]}` / `{confirmed}`,

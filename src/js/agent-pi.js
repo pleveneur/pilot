@@ -15,6 +15,21 @@ import { exportConversationMarkdown, copyConversationHtml } from "./conversation
 import { renderEditGateDialog } from "./diff-view.js";
 // Contrôle de l'écran (serveurs MCP « écran ») : dialogue de confirmation dédié.
 import { SCREEN_GATE_SENTINEL } from "./screen-guard.js";
+// GARDE-FOU DES COMMANDES DESTRUCTRICES (décision du propriétaire, 2026-11-20) :
+// la porte `pilot-bash-guard` demande l'accord AVANT d'exécuter une commande qui
+// efface, formate, éteint, force un envoi ou réécrit l'historique. La décision
+// (familles, textes) vit dans `destructive-command.js` — SOURCE UNIQUE, jamais
+// recopiée ici.
+import {
+  BASH_GATE_SENTINEL,
+  destructiveCommandMessage,
+  destructiveGateTitle,
+  parseDestructiveGateMessage,
+} from "./destructive-command.js";
+// Réponse à une confirmation : le champ `confirmed` À LA RACINE est le seul que
+// pi lit pour résoudre une demande `confirm` (source unique de la décision :
+// `agent-question-surface.js`).
+import { agentAnswerConfirmedRoot } from "./agent-question-surface.js";
 // Relais des questions d'agent (SOURCE UNIQUE partagée avec le bus d'agents) :
 // décision « relayable » + nom de l'événement de relais vers l'assistant.
 import { AGENT_RELAY_EVENT, isRelayableAgentChoice } from "./agent-choice-relay.js";
@@ -9038,6 +9053,14 @@ async function handleExtensionUiRequest(payload, container, state) {
       await handleScreenGateConfirm(id, rawMsg.slice(SCREEN_GATE_SENTINEL.length), container, state);
       return;
     }
+    // ── GARDE-FOU DES COMMANDES DESTRUCTRICES (outils `bash` / `shell`) ──
+    // Placé AVANT le mode orchestration : une session autonome ne peut pas
+    // autoriser une suppression massive à la place de l'utilisateur (même
+    // règle que le contrôle de l'écran).
+    if (rawMsg.startsWith(BASH_GATE_SENTINEL)) {
+      await handleBashGateConfirm(id, rawMsg, container, state);
+      return;
+    }
     // Mode Orchestration autonome : ne pas bloquer sur une saisie → auto-répondre.
     if (state.orchestrationRunning) {
       await invoke("send_rpc_command", {
@@ -9276,13 +9299,14 @@ function renderInlineConfirm(container, state, id, title, message) {
     inputs.forEach((i) => { i.disabled = true; });
     wrapper.classList.add("resolved");
     try {
-      await invoke("send_rpc_command", {
-        command: {
-          type: "extension_ui_response",
-          id,
-          value: JSON.stringify({ confirmed, note: note.value.trim() }),
-        },
-      });
+      const value = JSON.stringify({ confirmed, note: note.value.trim() });
+      const command = { type: "extension_ui_response", id, value };
+      // CONTRAT DE PI : `confirm` ne lit QUE `confirmed` à la racine (`value`
+      // n'est lu que par `select`/`input`). Sans ce champ, « Oui » était relu
+      // comme un refus par le moteur.
+      const racine = agentAnswerConfirmedRoot(value);
+      if (racine !== null) command.confirmed = racine;
+      await invoke("send_rpc_command", { command });
     } catch (e) {
       console.error("Erreur extension_ui_response (confirm):", e);
     }
@@ -9490,6 +9514,79 @@ function domScreenConfirm(title, bodyHtml) {
     actions.appendChild(stopBtn);
   }
   return pending;
+}
+
+/**
+ * GARDE-FOU DES COMMANDES DESTRUCTRICES (décision du propriétaire, 2026-11-20).
+ *
+ * L'extension `pilot-bash-guard` intercepte un outil de commande (`bash` /
+ * `shell`) AVANT exécution et demande l'accord. On affiche la commande, POURQUOI
+ * elle est dangereuse et ce qui arriverait si l'on acceptait (textes composés par
+ * la source unique `destructive-command.js`). Refuser → la commande n'est pas
+ * lancée (pi reçoit `confirmed: false`).
+ *
+ * Aucune réponse automatique ici : en mode orchestration autonome, personne ne
+ * peut cliquer ⇒ REFUS explicite et visible (un accord automatique donnerait à
+ * un agent autonome le droit d'effacer un disque sans témoin).
+ */
+async function handleBashGateConfirm(id, rawMessage, container, state) {
+  const info = parseDestructiveGateMessage(rawMessage) || {};
+  const command = String(info.command || "(commande illisible)");
+
+  const answer = async (accepted) => {
+    // `confirmed` est OBLIGATOIRE : une réponse sans ce champ est lue comme un
+    // refus par pi (`cancelled` seul ne suffit pas).
+    await invoke("send_rpc_command", {
+      command: { type: "extension_ui_response", id, confirmed: !!accepted, cancelled: !accepted },
+    });
+  };
+
+  // Mode Orchestration autonome : personne ne peut cliquer ⇒ refus explicite.
+  if (state.orchestrationRunning) {
+    appendSystemMessage(
+      container,
+      `🛑 Commande refusée : aucune réponse possible en mode orchestration autonome.\n` +
+        `    ${command}`,
+    );
+    await answer(false);
+    return;
+  }
+
+  // Charge utile illisible : on ne peut pas décrire le danger ⇒ REFUS (jamais
+  // un accord par défaut sur une commande qu'on n'a pas pu analyser).
+  if (!info.command) {
+    appendSystemMessage(
+      container,
+      "🛑 Commande refusée : la demande de l'agent est illisible, par précaution rien n'a été lancé.",
+    );
+    await answer(false);
+    return;
+  }
+
+  const lines = [destructiveCommandMessage(info)];
+  const bodyHtml = `<p style="margin:0;white-space:pre-wrap;word-break:break-word">${escapeHtmlText(
+    lines.join("\n"),
+  )}</p>`;
+
+  let accepted = false;
+  try {
+    accepted =
+      (await _domDialog({
+        title: destructiveGateTitle(info),
+        bodyHtml,
+        okLabel: "Autoriser cette commande",
+        cancelLabel: "Refuser",
+      })) === true;
+  } catch (_) {
+    accepted = false; // fail-closed : jamais de commande sans accord explicite.
+  }
+  await answer(accepted);
+  appendSystemMessage(
+    container,
+    accepted
+      ? `⚠️ Commande autorisée : ${command}`
+      : `🛑 Commande refusée, rien n'a été lancé : ${command}`,
+  );
 }
 
 /** Confirmation d'une action sur l'écran demandée par l'extension MCP. */

@@ -77,6 +77,18 @@ import {
   readableMachineText,
   scheduleRequestFrom,
 } from "./machine-sentinel.js";
+// GARDE-FOU DES COMMANDES DESTRUCTRICES (décision du propriétaire, 2026-11-20) :
+// quand l'Assistant lui-même veut lancer une commande qui efface, formate,
+// éteint, force un envoi ou réécrit l'historique, l'accord est demandé AVANT.
+// Les familles reconnues et les phrases françaises vivent dans
+// `destructive-command.js` (SOURCE UNIQUE) : ce fichier ne fait qu'afficher sa
+// réponse dans le dialogue de confirmation existant.
+import {
+  BASH_GATE_SENTINEL,
+  destructiveCommandMessage,
+  destructiveGateTitle,
+  parseDestructiveGateMessage,
+} from "./destructive-command.js";
 // OUVRIR UN FICHIER (tâche 394) : l'Assistant doit pouvoir MONTRER un fichier
 // réel du disque — un livrable qu'un agent vient de produire, ou un fichier dont
 // la conversation parle. La DÉCISION (quel mode selon le type, et quand refuser)
@@ -109,6 +121,7 @@ import {
   normalizeAgentAnswerArgs,
   releaseAgentQuestion,
   setPrimaryAgentQuestionSurface,
+  agentAnswerConfirmedRoot,
 } from "./agent-question-surface.js";
 // LOT 3 (ecran Vocal) : le NIVEAU DU MICRO. Toute la capture (demande de
 // permission, flux, analyseur, lissage, ARRET reel) vit dans vocal-mic.js ; ce
@@ -10664,6 +10677,39 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       handleSuperAgentAction(id, rawMsg.slice(ACTION_SENTINEL.length), messagesEl);
       return;
     }
+    // GARDE-FOU DES COMMANDES DESTRUCTRICES : l'Assistant (ou un agent relayé)
+    // demande à lancer une commande reconnue destructrice. On affiche la
+    // commande, POURQUOI c'est dangereux et ce qui arriverait si l'on acceptait —
+    // puis on attend la réponse de l'utilisateur, par le dialogue de
+    // confirmation EXISTANT (`renderSuperAgentConfirm`).
+    if (rawMsg.startsWith(BASH_GATE_SENTINEL)) {
+      const info = parseDestructiveGateMessage(rawMsg);
+      playAssistantSound("attention").catch(() => {});
+      if (!info || !info.command) {
+        // Demande illisible : on ne peut pas décrire le danger ⇒ refus immédiat
+        // (jamais un accord par défaut sur une commande non analysée).
+        pushSuperAgentSystemEvent(
+          "warn",
+          "Commande refusée : la demande de l'agent est illisible, par précaution rien n'a été lancé.",
+        );
+        try {
+          await invoke("send_super_agent_command", {
+            command: { type: "extension_ui_response", id, confirmed: false, cancelled: true },
+          });
+        } catch (e) {
+          console.error("Erreur extension_ui_response (garde-fou commande) :", e);
+        }
+        return;
+      }
+      renderSuperAgentConfirm(
+        messagesEl,
+        state,
+        id,
+        destructiveGateTitle(info),
+        destructiveCommandMessage(info),
+      );
+      return;
+    }
     // Son « attention » : l'assistant pose une question (si le son est activé).
     playAssistantSound("attention").catch(() => {});
     renderSuperAgentConfirm(messagesEl, state, id, payload.title || "Confirmation", payload.message || "");
@@ -13202,7 +13248,15 @@ function getSuperAgentAttachTarget(messagesEl, state) {
 async function respondSuperAgent(id, value, cancelled) {
   const cmd = { type: "extension_ui_response", id };
   if (cancelled) cmd.cancelled = true;
-  else cmd.value = value;
+  else {
+    cmd.value = value;
+    // CONTRAT DE PI : une demande `confirm` (porte pré-écriture, contrôle de
+    // l'écran, garde-fou des commandes destructrices…) n'est résolue QUE par
+    // `confirmed` à la RACINE — `value` n'est pas lu par `confirm`. Sans ce
+    // champ, l'accord de l'utilisateur était relu comme un refus.
+    const racine = agentAnswerConfirmedRoot(value);
+    if (racine !== null) cmd.confirmed = racine;
+  }
   try {
     await invoke("send_super_agent_command", { command: cmd });
   } catch (e) {
@@ -13217,7 +13271,14 @@ async function respondSuperAgent(id, value, cancelled) {
 export async function respondAgentRelay(projectPath, agentId, id, value, cancelled) {
   const cmd = { type: "extension_ui_response", id };
   if (cancelled) cmd.cancelled = true;
-  else cmd.value = value;
+  else {
+    cmd.value = value;
+    // Même contrat que `respondSuperAgent` : le `confirm` d'un agent (garde-fou
+    // des commandes destructrices, porte pré-écriture) n'est résolu que par
+    // `confirmed` à la racine, sinon « Oui » est relu comme un refus.
+    const racine = agentAnswerConfirmedRoot(value);
+    if (racine !== null) cmd.confirmed = racine;
+  }
   try {
     await invoke("send_agent_command_to", { projectPath, agentId, command: cmd });
   } catch (e) {
