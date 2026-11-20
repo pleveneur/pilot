@@ -399,30 +399,6 @@ travailles t'est donc proposée **sans redémarrer** l'application.
   mise à jour, elle, n'est jamais bloquée.
 <!-- /HELP:pilot-update -->
 
-<!-- HELP:commandes-dangereuses -->
-## Une commande qui efface ou casse : l'accord est toujours demandé
-
-Quand un agent (l'onglet π, 🧭 Assistant, ou un agent qu'il a lancé) veut lancer
-une commande **qui peut détruire quelque chose**, Pilot l'arrête et vous demande
-votre accord. Le dialogue montre **la commande exacte**, **pourquoi elle est
-dangereuse** et **ce qui se passerait si vous acceptiez**. Deux boutons :
-**« Autoriser cette commande »** et **« Refuser »**.
-
-Sont reconnues : la suppression récursive d'un dossier, la suppression forcée,
-l'effacement direct d'un disque ou d'une partition, le formatage, l'arrêt ou le
-redémarrage de l'ordinateur, le changement massif de droits d'accès, l'envoi
-forcé qui écrase un dépôt git, le nettoyage (réécriture) de l'historique git, et
-**toute écriture en dehors du projet ouvert**.
-
-- **Sans réponse de votre part, la commande n'est pas lancée** (au bout de
-  quelques minutes, la demande expire et reste refusée).
-- **Les commandes ordinaires ne sont pas ralenties** : installer, compiler,
-  lancer les tests, lire un fichier, `git status`… passent normalement, sans
-  aucune question.
-- Cette protection **ne dépend d'aucun modèle** et ne peut pas être désactivée
-par le réglage d'autonomie des écritures de fichiers.
-<!-- /HELP:commandes-dangereuses -->
-
 <!-- HELP:multi-agents -->
 ## Plusieurs agents sur un même projet (multi-onglets)
 

@@ -1,4 +1,4 @@
-<!-- PILOT-HELP topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,commandes-dangereuses,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,vocal-veille,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-ouvrir-fichier,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,pilot-update,multi-agents,modes-ecran,lire-reponses,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,vocal-colonnes-portrait,vocal-garde-du-nom,vocal-veille,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-ouvrir-fichier,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,super-agent-extensions-fiables,file-attente-limites,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -403,31 +403,6 @@ travailles t'est donc proposée **sans redémarrer** l'application.
   laisse une trace écrite (quel service, et pourquoi) dans le journal de
   l'application, dossier de données de Pilot, fichier `services-arret.log` — la
   mise à jour, elle, n'est jamais bloquée.
-
----
-
-<!-- HELP-TOPIC:commandes-dangereuses -->
-## Une commande qui efface ou casse : l'accord est toujours demandé
-
-Quand un agent (l'onglet π, 🧭 Assistant, ou un agent qu'il a lancé) veut lancer
-une commande **qui peut détruire quelque chose**, Pilot l'arrête et vous demande
-votre accord. Le dialogue montre **la commande exacte**, **pourquoi elle est
-dangereuse** et **ce qui se passerait si vous acceptiez**. Deux boutons :
-**« Autoriser cette commande »** et **« Refuser »**.
-
-Sont reconnues : la suppression récursive d'un dossier, la suppression forcée,
-l'effacement direct d'un disque ou d'une partition, le formatage, l'arrêt ou le
-redémarrage de l'ordinateur, le changement massif de droits d'accès, l'envoi
-forcé qui écrase un dépôt git, le nettoyage (réécriture) de l'historique git, et
-**toute écriture en dehors du projet ouvert**.
-
-- **Sans réponse de votre part, la commande n'est pas lancée** (au bout de
-  quelques minutes, la demande expire et reste refusée).
-- **Les commandes ordinaires ne sont pas ralenties** : installer, compiler,
-  lancer les tests, lire un fichier, `git status`… passent normalement, sans
-  aucune question.
-- Cette protection **ne dépend d'aucun modèle** et ne peut pas être désactivée
-par le réglage d'autonomie des écritures de fichiers.
 
 ---
 

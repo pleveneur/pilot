@@ -33,20 +33,6 @@ export const SCHEDULE_SENTINEL = "PILOT_ASSISTANT_SCHEDULE::";
  *  l'assistant. */
 export const PDF_EXPORT_SENTINEL = "PILOT_PDF_EXPORT::";
 
-/** Sentinelle du GARDE-FOU DES COMMANDES DESTRUCTRICES (`confirm` de l'extension
- *  `pilot-bash-guard.ts`, famille PROPRE elle aussi : les outils `bash` /
- *  `shell` existent dans toutes les sessions). La valeur vient de la SOURCE
- *  UNIQUE de la décision (`destructive-command.js`), jamais d'une copie. */
-export { BASH_GATE_SENTINEL } from "./destructive-command.js";
-import { BASH_GATE_SENTINEL as BASH_GATE } from "./destructive-command.js";
-
-/** Phrase lisible de la porte des commandes (repli quand la charge utile de la
- *  sentinelle est illisible : le message complet est alors inexploitable, mais
- *  l'utilisateur doit quand même comprendre qu'on lui demande son accord pour
- *  une commande qui peut tout effacer). */
-export const BASH_GATE_SENTENCE =
-  "Je vais lancer une commande qui peut effacer des fichiers ou modifier cet ordinateur. Je continue ?";
-
 /** Phrase lisible de l'export PDF (aucune fenêtre d'impression : c'est le
  *  moteur embarqué qui écrit le fichier). */
 export const PDF_EXPORT_SENTENCE =
@@ -199,12 +185,6 @@ export function sentinelSentenceFor(text) {
   }
   if (found.name === PDF_EXPORT_SENTINEL) {
     return PDF_EXPORT_SENTENCE;
-  }
-  if (found.name === BASH_GATE) {
-    // La charge utile porte le texte complet de la décision (`title`) ; si elle
-    // est illisible, la phrase de repli dit l'essentiel sans rien inventer.
-    const fromJson = readableFromJsonPayload(payload);
-    return fromJson || BASH_GATE_SENTENCE;
   }
   // Sentinelles de PRÉSENTATION : elles portent elles-mêmes le texte de la
   // question. Si le JSON est exploitable, on garde la question de l'auteur.

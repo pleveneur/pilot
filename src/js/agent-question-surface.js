@@ -362,7 +362,8 @@ function hasSentinel(text) {
  * lisent). Or la réponse d'une confirmation transite justement sous forme de
  * `value` (`agentQuestionAnswer` → `{"confirmed":…}`) : elle était donc relue
  * comme un REFUS — l'utilisateur cliquait « Oui » sans que rien ne soit
- * autorisé. Ce champ accompagne donc la réponse, sans la remplacer.
+ * autorisé (porte pré-écriture, contrôle de l'écran, choix de l'agent…). Ce
+ * champ accompagne donc la réponse, sans la remplacer.
  *
  * @param {unknown} value - réponse transmise (`value` de `extension_ui_response`)
  * @returns {boolean|null} valeur à poser à la racine, `null` = rien à ajouter

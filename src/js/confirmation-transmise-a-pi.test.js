@@ -1,7 +1,7 @@
 /**
  * CONFIRMATION TRANSMISE À PI — verrou du champ `confirmed` À LA RACINE.
  *
- * Défaut réel constaté en vérifiant la garde des commandes destructrices : dans
+ * Défaut réel constaté en vérifiant une porte de confirmation de Pilot : dans
  * pi 1.6.0 (`dist/modes/rpc/rpc-mode.js`), une demande `confirm` n'est résolue
  * QUE par ce champ :
  *
@@ -11,8 +11,8 @@
  * `value` n'est lu que par `select` et `input`. Or les trois transports de
  * réponse de Pilot envoyaient la confirmation sous forme de `value`
  * (`{"confirmed":…}`) SANS ce champ à la racine : l'accord de l'utilisateur
- * était relu comme un REFUS. Une garde qui refuse tout, même acceptée, n'est pas
- * une garde : elle bloque l'usage courant sans rien dire.
+ * était relu comme un REFUS — le clic sur « Oui » n'autorisait rien (porte
+ * pré-écriture, contrôle de l'écran, choix d'un agent relayé…).
  *
  * Ce fichier tient les deux moitiés :
  *  - la DÉCISION (pure) : `agentAnswerConfirmedRoot` ;
@@ -63,7 +63,7 @@ describe("décision pure : `confirmed` à la racine", () => {
   });
 
   it("la réponse d'une confirmation porte la décision (bout en bout, pure)", () => {
-    const vue = agentQuestionView({ method: "confirm", title: "Commande dangereuse", message: "…" });
+    const vue = agentQuestionView({ method: "confirm", title: "Confirmation", message: "…" });
     const accepte = agentQuestionAnswer(vue, true);
     const refuse = agentQuestionAnswer(vue, false);
     expect(agentAnswerConfirmedRoot(accepte.value)).toBe(true);

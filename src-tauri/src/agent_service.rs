@@ -2978,22 +2978,13 @@ impl AgentService {
                 if std::fs::create_dir_all(&dir).is_ok() {
                     // Écriture FIABLE (tâche 361) : jamais de fichier périmé passé
                     // en --extension, échec journalisé.
-                    let mut report = crate::extension_write::write_embedded_batch(
+                    let report = crate::extension_write::write_embedded_batch(
                         &dir,
                         &[(
                             "pilot-group-assistant.ts",
                             include_str!("../extensions/pilot-group-assistant.ts"),
                         )],
                     );
-                    // GARDE-FOU DES COMMANDES DESTRUCTRICES : l'assistant de
-                    // groupe (discussion inter-projets) travaille sur PLUSIEURS
-                    // projets à la fois ; sa commande destructrice demande donc
-                    // l'accord comme celle des autres sessions. Sans cet ajout,
-                    // ce chemin serait le seul à ne rien demander.
-                    match Self::write_bash_guard_extension(&dir) {
-                        Ok(guard_files) => report.paths.extend(guard_files),
-                        Err(e) => report.failures.push(e),
-                    }
                     Self::log_extension_failures("assistant de groupe", &report);
                     extensions = report.paths;
                 } else {
@@ -3292,18 +3283,6 @@ impl AgentService {
             Ok(pdf_file) => report.paths.push(pdf_file),
             Err(e) => report.failures.push(e),
         }
-        // GARDE-FOU DES COMMANDES DESTRUCTRICES (fait mesuré du 2026-11-20 :
-        // 3 essais sur 3, un modèle local a proposé une suppression massive
-        // sans demander d'accord) : la porte `pilot-bash-guard.ts` et son cœur
-        // de décision sont écrits pour que l'agent demande TOUJOURS l'accord
-        // avant une commande qui efface un disque, formate, éteint la machine,
-        // change les droits en masse, force un envoi ou réécrit l'historique.
-        // Écrit même quand `confirm_file_edits` est faux : ce réglage ne vaut
-        // jamais accord préalable pour une commande destructrice.
-        match Self::write_bash_guard_extension(&dir) {
-            Ok(guard_files) => report.paths.extend(guard_files),
-            Err(e) => report.failures.push(e),
-        }
         report
     }
 
@@ -3580,13 +3559,6 @@ impl AgentService {
                             Ok(pdf_file) => report.paths.push(pdf_file),
                             Err(e) => report.failures.push(e),
                         }
-                        // GARDE-FOU DES COMMANDES DESTRUCTRICES : l'assistant
-                        // lui-même demande l'accord avant une commande
-                        // destructrice (aucune autonomie ne l'en dispense).
-                        match Self::write_bash_guard_extension(&dir) {
-                            Ok(guard_files) => report.paths.extend(guard_files),
-                            Err(e) => report.failures.push(e),
-                        }
                     }
                     Self::log_extension_failures("super-agent", &report);
                     extensions = report.paths;
@@ -3740,14 +3712,6 @@ impl AgentService {
                     // les agents multi-rôles — comme l'outil Laya.
                     match Self::write_pdf_extension(&dir) {
                         Ok(pdf_file) => report.paths.push(pdf_file),
-                        Err(e) => report.failures.push(e),
-                    }
-                    // GARDE-FOU DES COMMANDES DESTRUCTRICES : ce chemin lance les
-                    // agents en arrière-plan (`run_agents`, agents multi-rôles),
-                    // c'est-à-dire précisément ceux dont personne ne regarde les
-                    // commandes — la porte y est donc indispensable.
-                    match Self::write_bash_guard_extension(&dir) {
-                        Ok(guard_files) => report.paths.extend(guard_files),
                         Err(e) => report.failures.push(e),
                     }
                     // Règles communes des assistants (source unique) : le module
@@ -3928,34 +3892,6 @@ impl AgentService {
         .map_err(|e| format!("regles-communes-assistants.js : {}", e))
     }
 
-    /// Écrit le couple du GARDE-FOU DES COMMANDES DESTRUCTRICES : l'extension
-    /// `pilot-bash-guard.ts` (porte sur les outils de commande `bash` / `shell`)
-    /// et son cœur de décision `destructive-command.js`, importé par
-    /// `./destructive-command.js`. Partagé par TOUS les chemins de session (chat
-    /// du projet, agents multi-rôles, assistant, assistant de groupe, agents
-    /// lancés par l'assistant) : sans cela, un agent lancerait une suppression
-    /// massive sans jamais demander d'accord (fait mesuré du 2026-11-20 : 3
-    /// essais sur 3 sur un modèle local).
-    ///
-    /// L'extension est écrite même quand `confirm_file_edits` est désactivé :
-    /// ce réglage concerne l'écriture de fichier, il ne vaut jamais accord
-    /// préalable pour une commande qui efface un disque ou réécrit l'historique
-    /// d'un dépôt. Tâche 361 : l'échec est REMONTÉ, jamais avalé.
-    fn write_bash_guard_extension(dir: &std::path::Path) -> Result<Vec<String>, String> {
-        crate::extension_write::write_embedded(
-            &dir.join("destructive-command.js"),
-            include_str!("../../src/js/destructive-command.js"),
-        )
-        .map_err(|e| format!("destructive-command.js : {}", e))?;
-        let gate_file = dir.join("pilot-bash-guard.ts");
-        crate::extension_write::write_embedded(
-            &gate_file,
-            include_str!("../extensions/pilot-bash-guard.ts"),
-        )
-        .map_err(|e| format!("pilot-bash-guard.ts : {}", e))?;
-        Ok(vec![gate_file.to_string_lossy().to_string()])
-    }
-
     fn spawn_session(app: &AppHandle, project: &str, agent_id: &str) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
         let (pi_path, no_session, session_dir, qg_enabled, confirm_file_edits, mcp_enabled) = {
@@ -4059,13 +3995,6 @@ impl AgentService {
                     // lancés par l'assistant, par le même chemin d'écriture.
                     match Self::write_pdf_extension(&dir) {
                         Ok(pdf_file) => report.paths.push(pdf_file),
-                        Err(e) => report.failures.push(e),
-                    }
-                    // GARDE-FOU DES COMMANDES DESTRUCTRICES : la session du chat
-                    // du projet (et l'orchestration) demande l'accord avant une
-                    // commande destructrice, comme toutes les autres sessions.
-                    match Self::write_bash_guard_extension(&dir) {
-                        Ok(guard_files) => report.paths.extend(guard_files),
                         Err(e) => report.failures.push(e),
                     }
                     // Règles communes des assistants (source unique) : importées
@@ -7458,46 +7387,5 @@ mod tests {
             .expect("cœur lisible");
         assert!(gateway.contains("PILOT_PDF_EXPORT::"), "sentinelle dans le cœur");
         assert!(gateway.contains("formatPdfToolResult"), "mise en forme du rapport");
-    }
-
-    /// La porte des COMMANDES DESTRUCTRICES est écrite avec son cœur, et son
-    /// contenu porte bien la sentinelle, la borne d'attente (fail-closed) et
-    /// l'import de la source unique : c'est ce test qui empêche la porte de
-    /// disparaître en silence d'un chemin de session (elle serait alors sans
-    /// effet, et un agent lancerait une suppression massive sans accord).
-    #[test]
-    fn write_bash_guard_extension_ecrit_porte_et_coeur() {
-        let dir = crate::test_util::TempDir::new("pilot-bash-guard");
-
-        let files = AgentService::write_bash_guard_extension(&dir).expect("porte écrite");
-        assert_eq!(files.len(), 1, "un seul fichier passé en --extension : {files:?}");
-        assert!(files[0].ends_with("pilot-bash-guard.ts"), "chemin attendu : {}", files[0]);
-        let source = std::fs::read_to_string(&files[0]).expect("porte lisible");
-        assert!(
-            source.contains("./destructive-command.js"),
-            "la porte importe la source unique de la décision"
-        );
-        assert!(
-            source.contains("planShellToolCall"),
-            "la décision d'analyser une commande vient du cœur, jamais d'une copie"
-        );
-        assert!(
-            source.contains("timeout:"),
-            "la porte doit borner son attente (bug des agents figés)"
-        );
-        assert!(
-            source.contains("block: true"),
-            "un refus doit empêcher l'exécution (fail-closed)"
-        );
-        let core = std::fs::read_to_string(dir.join("destructive-command.js"))
-            .expect("cœur lisible");
-        assert!(
-            core.contains("PILOT_BASH_GATE::"),
-            "sentinelle présente dans la source unique"
-        );
-        assert!(
-            !core.contains("\nimport ") && !core.contains("\nimport{"),
-            "le cœur ne doit avoir AUCUN import (il est écrit à côté de l'extension)"
-        );
     }
 }
