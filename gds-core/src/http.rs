@@ -71,6 +71,27 @@ pub trait GdsCtx: Send + Sync + 'static {
     fn repos_root(&self) -> Option<std::path::PathBuf> {
         None
     }
+    /// COMP-01: rewrites the SSH `authorized_keys` file from the database right
+    /// after an account status change (`POST /api/gds/admin/users/status`).
+    ///
+    /// - `Ok(None)` (default): this context does not manage SSH — nothing is
+    ///   written anywhere (desktop, API/test contexts without SSH handling);
+    /// - `Ok(Some(sync))`: the file was regenerated (`sync.rewritten` = it
+    ///   changed);
+    /// - `Err(e)`: the regeneration failed; the caller must report a partial
+    ///   result, never a successful SSH revocation.
+    ///
+    /// Injection point: a test context overrides it to write an explicit
+    /// temporary file, so no test ever reaches the real `git` account.
+    fn refresh_authorized_keys(
+        &self,
+        pool: &PgPool,
+    ) -> impl std::future::Future<
+        Output = Result<Option<crate::ssh::AuthorizedKeysSync>, String>,
+    > + Send {
+        let _ = pool;
+        std::future::ready(Ok(None))
+    }
 }
 
 /// Contexte du serveur GDS autonome (conteneur) : un seul pool, fixe.
@@ -102,6 +123,15 @@ impl GdsCtx for ServerCtx {
 
     fn repos_root(&self) -> Option<std::path::PathBuf> {
         Some(self.repos_root.clone())
+    }
+
+    /// COMP-01 — le serveur autonome gère le compte `git` : un changement de
+    /// statut régénère `authorized_keys` depuis la base, immédiatement.
+    async fn refresh_authorized_keys(
+        &self,
+        pool: &PgPool,
+    ) -> Result<Option<crate::ssh::AuthorizedKeysSync>, String> {
+        crate::ssh::regenerate_authorized_keys(pool).await.map(Some)
     }
 }
 
@@ -553,6 +583,11 @@ struct AdminUserStatusBody {
 /// se retrouver sans personne pour gérer les comptes. Réponses : `200`, `400`
 /// (statut hors vocabulaire), `404` (email inconnu), `409` (dernier admin),
 /// `500`.
+///
+/// COMP-01: after a successful status change, `GdsCtx::refresh_authorized_keys`
+/// is called immediately. If it fails, the answer is `500` with an explicit
+/// partial-result message and a failed `user_status` audit entry (the status
+/// change and the web session revocation are kept).
 async fn gds_admin_user_status<S: GdsCtx>(
     State(ctx): State<Arc<S>>,
     Extension(authed): Extension<AuthedClient>,
@@ -613,9 +648,42 @@ async fn gds_admin_user_status<S: GdsCtx>(
             // désactivé ne doit pas garder ses droits jusqu'à l'expiration de son
             // jeton.
             ctx.auth().revoke_user(user.id);
-            ctx.audit()
-                .record(&authed.ip, &authed.key, "user_status", &email, true);
-            Json(json!({ "ok": true, "email": email, "status": status })).into_response()
+            // COMP-01: rewrite authorized_keys now (keys of non-active accounts
+            // are excluded by `stored_key_lines`) instead of waiting for the
+            // maintenance loop. Contexts without SSH handling do nothing
+            // (`Ok(None)`). Existing SSH sessions are NOT closed by this.
+            match ctx.refresh_authorized_keys(&pool).await {
+                Ok(sync) => {
+                    ctx.audit()
+                        .record(&authed.ip, &authed.key, "user_status", &email, true);
+                    Json(json!({
+                        "ok": true,
+                        "email": email,
+                        "status": status,
+                        // `null` = this context does not manage SSH keys.
+                        "authorized_keys_rewritten": sync.map(|s| s.rewritten),
+                    }))
+                    .into_response()
+                }
+                Err(e) => {
+                    // Partial result: the database change and the web session
+                    // revocation are kept (never rolled back, never
+                    // reactivated); the SSH file is NOT confirmed up to date.
+                    ctx.audit().record(
+                        &authed.ip,
+                        &authed.key,
+                        "user_status",
+                        &format!("{} (status={}, authorized_keys refresh failed)", email, status),
+                        false,
+                    );
+                    err_response(format!(
+                        "Résultat partiel : le statut « {} » est enregistré pour {} et ses \
+                         sessions web sont révoquées, mais la mise à jour des clefs SSH \
+                         autorisées a échoué ({}). L'accès SSH n'est PAS confirmé à jour.",
+                        status, email, e
+                    ))
+                }
+            }
         }
         Err(e) => err_response(e),
     }
@@ -1102,8 +1170,8 @@ struct ProjectRemoveBody {
 /// n'est supprimé du disque que si `purge` est vrai : la purge est une action
 /// destructive, elle est donc optionnelle et jamais implicite. Le nom du projet
 /// est relu côté serveur depuis `project_id` (jamais celui fourni par l'écran),
-/// et `git::remove_bare` valide le chemin (anti path traversal) et le verrouille
-/// sous le dossier `repos` du serveur.
+/// et `git::remove_bare_in_root` valide le nom (anti path traversal) et verrouille
+/// le chemin sous la racine des dépôts du serveur (`<bare_root>/<projet>.git`).
 async fn gds_admin_project_remove<S: GdsCtx>(
     State(ctx): State<Arc<S>>,
     Extension(authed): Extension<AuthedClient>,
@@ -1130,7 +1198,7 @@ async fn gds_admin_project_remove<S: GdsCtx>(
     if body.purge {
         if let Some(root) = ctx.repos_root() {
             let root_str = root.to_string_lossy().to_string();
-            if let Err(e) = crate::git::remove_bare(&root_str, &name) {
+            if let Err(e) = crate::git::remove_bare_in_root(&root_str, &name) {
                 return err_response(e);
             }
         }
@@ -3014,6 +3082,255 @@ mod tests {
             revalidate_session(&ctx, id, "admin").await,
             SessionRevalidation::Rejected
         );
+    }
+
+    // ── COMP-01: an account status change refreshes authorized_keys at once ──
+
+    /// Context with a real pool whose SSH hook writes an explicit TEMPORARY
+    /// file through the real lot-12 chain (`stored_key_lines` →
+    /// `render_authorized_keys` → `write_authorized_keys`). It never calls
+    /// `regenerate_authorized_keys`: no `git` account, no `~/.ssh`, no chown,
+    /// no sshd, no global environment variable.
+    struct SshTestCtx {
+        pool: PgPool,
+        auth: Arc<WebAuth>,
+        guard: Arc<WebGuard>,
+        audit: Arc<WebAudit>,
+        auth_path: String,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SshTestCtx {
+        fn new(pool: &PgPool, auth_path: String) -> Arc<Self> {
+            Arc::new(SshTestCtx {
+                pool: pool.clone(),
+                auth: Arc::new(WebAuth::new()),
+                guard: Arc::new(WebGuard::new()),
+                audit: Arc::new(WebAudit::new()),
+                auth_path,
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl GdsCtx for SshTestCtx {
+        fn pool(&self) -> Result<PgPool, String> {
+            Ok(self.pool.clone())
+        }
+        fn auth(&self) -> &Arc<WebAuth> {
+            &self.auth
+        }
+        fn guard(&self) -> &Arc<WebGuard> {
+            &self.guard
+        }
+        fn audit(&self) -> &Arc<WebAudit> {
+            &self.audit
+        }
+        async fn refresh_authorized_keys(
+            &self,
+            pool: &PgPool,
+        ) -> Result<Option<crate::ssh::AuthorizedKeysSync>, String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let lines = crate::ssh::stored_key_lines(pool).await?;
+            let rendered = crate::ssh::render_authorized_keys(&lines);
+            let rewritten = crate::ssh::write_authorized_keys(&self.auth_path, &rendered)?;
+            Ok(Some(crate::ssh::AuthorizedKeysSync {
+                keys: rendered.lines().count(),
+                rewritten,
+            }))
+        }
+    }
+
+    /// COMP-01 (status trigger): `POST /api/gds/admin/users/status`, through
+    /// the real service router (auth + `require_admin`) on a disposable
+    /// PostgreSQL, must refresh `authorized_keys` IMMEDIATELY (no sleep, no
+    /// maintenance loop), drop the disabled key, keep the other active keys and
+    /// revoke the web sessions. Refusals (non-admin, last active admin,
+    /// unknown status/email) trigger nothing. A failed refresh is reported as a
+    /// partial result (500 + failed audit), with no rollback/reactivation.
+    ///
+    /// Environment guard (same as lot 12): without `PILOT_GDS_TEST_URL` AND
+    /// without `PILOT_GDS_TEST_REQUIRED`, reports NOT EXECUTED; otherwise an
+    /// unavailable database is a FAILURE.
+    #[tokio::test]
+    async fn comp01_status_route_refreshes_authorized_keys_immediately() {
+        let url_present = std::env::var("PILOT_GDS_TEST_URL")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        let required = std::env::var("PILOT_GDS_TEST_REQUIRED")
+            .map(|v| {
+                let v = v.trim();
+                !v.is_empty() && v != "0"
+            })
+            .unwrap_or(false);
+        let Some((pool, _guard)) = crate::db::tests::fresh_migrated_test_db().await else {
+            if url_present || required {
+                panic!(
+                    "COMP-01: PostgreSQL test database unavailable although \
+                     PILOT_GDS_TEST_URL is set or PILOT_GDS_TEST_REQUIRED is set"
+                );
+            }
+            eprintln!(
+                "comp01_status_route_refreshes_authorized_keys_immediately: NOT EXECUTED \
+                 (no PILOT_GDS_TEST_URL, PILOT_GDS_TEST_REQUIRED unset) — no integration proof"
+            );
+            return;
+        };
+
+        // Fictitious accounts and public keys only (no private key anywhere).
+        let admin = "admin@comp01-http.test";
+        let alice = "alice@comp01-http.test";
+        let bob = "bob@comp01-http.test";
+        let carol = "carol@comp01-http.test";
+        let admin_id = gds_db::create_user(&pool, admin, "Admin", "", "admin", "active")
+            .await
+            .unwrap();
+        let alice_id = gds_db::create_user(&pool, alice, "Alice", "", "dev", "active")
+            .await
+            .unwrap();
+        let bob_id = gds_db::create_user(&pool, bob, "Bob", "", "dev", "active")
+            .await
+            .unwrap();
+        let carol_id = gds_db::create_user(&pool, carol, "Carol", "", "dev", "active")
+            .await
+            .unwrap();
+        let ka = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIComp01HttpAlice==";
+        let kb = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIComp01HttpBob==";
+        let kc = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIComp01HttpCarol==";
+        for (uid, key) in [(alice_id, ka), (bob_id, kb), (carol_id, kc)] {
+            assert!(gds_db::create_ssh_key(&pool, uid, key).await.unwrap() > 0);
+        }
+        let line_a = format!("{} {}", ka, alice);
+        let line_b = format!("{} {}", kb, bob);
+        let line_c = format!("{} {}", kc, carol);
+
+        let dir = std::env::temp_dir().join(format!(
+            "pilot-comp01-http-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let auth_path = dir.join("ok").join("authorized_keys");
+        let auth_path_s = auth_path.to_string_lossy().to_string();
+        // Initial state: the three active keys are authorized.
+        let initial = crate::ssh::render_authorized_keys(
+            &crate::ssh::stored_key_lines(&pool).await.unwrap(),
+        );
+        assert_eq!(initial, format!("{}\n{}\n{}\n", line_a, line_b, line_c));
+        assert!(crate::ssh::write_authorized_keys(&auth_path_s, &initial).unwrap());
+
+        let ctx = SshTestCtx::new(&pool, auth_path_s.clone());
+        let app = server_router(ctx.clone());
+        let ttl = Duration::from_secs(3600);
+        let admin_token = ctx.auth.create_session_for(admin_id, "admin", ttl);
+        let alice_token = ctx.auth.create_session_for(alice_id, "dev", ttl);
+        let bob_token = ctx.auth.create_session_for(bob_id, "dev", ttl);
+        let status_uri = "/api/gds/admin/users/status";
+        let status_of = |email: &'static str| {
+            let pool = pool.clone();
+            async move {
+                gds_db::get_user_by_email(&pool, email)
+                    .await
+                    .unwrap()
+                    .expect("account exists")
+                    .status
+            }
+        };
+
+        // 1) Refusals trigger nothing: no hook call, file and database intact.
+        let refusals = [
+            (Some(&bob_token), json!({ "email": alice, "status": "disabled" }), 403u16),
+            (Some(&admin_token), json!({ "email": admin, "status": "disabled" }), 409),
+            (Some(&admin_token), json!({ "email": alice, "status": "banni" }), 400),
+            (
+                Some(&admin_token),
+                json!({ "email": "nobody@comp01-http.test", "status": "disabled" }),
+                404,
+            ),
+        ];
+        for (token, body, expected) in refusals {
+            let (code, value) =
+                call_route(&app, "POST", status_uri, token.map(|t| t.as_str()), Some(body)).await;
+            assert_eq!(code, expected, "refusal expected: {}", value);
+        }
+        assert_eq!(ctx.calls(), 0, "a refused request must not refresh SSH keys");
+        assert_eq!(std::fs::read_to_string(&auth_path).unwrap(), initial);
+        assert_eq!(status_of(alice).await, "active");
+        assert_eq!(status_of(admin).await, "active");
+        assert!(ctx.auth.validate(&alice_token), "a refusal must not revoke sessions");
+
+        // 2) Disabling Alice: the hook runs during the request itself, her key
+        //    leaves the file, Bob's and Carol's stay, her session is revoked.
+        let (code, value) = call_route(
+            &app,
+            "POST",
+            status_uri,
+            Some(&admin_token),
+            Some(json!({ "email": alice, "status": "disabled" })),
+        )
+        .await;
+        assert_eq!(code, 200, "disable: {}", value);
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["status"], "disabled");
+        assert_eq!(
+            ctx.calls(),
+            1,
+            "the status route must refresh authorized_keys immediately (COMP-01)"
+        );
+        assert_eq!(value["authorized_keys_rewritten"], true, "{}", value);
+        let content = std::fs::read_to_string(&auth_path).unwrap();
+        assert!(!content.contains("Comp01HttpAlice"), "disabled key still authorized: {}", content);
+        assert_eq!(content, format!("{}\n{}\n", line_b, line_c));
+        assert_eq!(status_of(alice).await, "disabled");
+        assert!(!ctx.auth.validate(&alice_token), "web session of the disabled account kept");
+        assert!(ctx.auth.validate(&bob_token), "other sessions must survive");
+        let entries = ctx.audit.recent(1);
+        assert_eq!((entries[0].action.as_str(), entries[0].ok), ("user_status", true));
+
+        // 3) Refresh failure (real `write_authorized_keys` on a path whose
+        //    parent is a regular file): partial result reported (500), the
+        //    database change is kept (no rollback, no reactivation), the web
+        //    session is revoked, the audit entry is a failure.
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let failing = SshTestCtx::new(
+            &pool,
+            blocker.join("authorized_keys").to_string_lossy().to_string(),
+        );
+        let failing_app = server_router(failing.clone());
+        let failing_admin = failing.auth.create_session_for(admin_id, "admin", ttl);
+        let bob_failing_token = failing.auth.create_session_for(bob_id, "dev", ttl);
+        let (code, value) = call_route(
+            &failing_app,
+            "POST",
+            status_uri,
+            Some(&failing_admin),
+            Some(json!({ "email": bob, "status": "disabled" })),
+        )
+        .await;
+        assert_eq!(code, 500, "a failed SSH refresh must not look successful: {}", value);
+        assert_ne!(value["ok"], true, "{}", value);
+        let error = value["error"].as_str().unwrap_or_default();
+        assert!(error.contains("SSH") && error.contains("disabled"), "{}", error);
+        assert_eq!(failing.calls(), 1);
+        assert_eq!(status_of(bob).await, "disabled", "no rollback/reactivation on failure");
+        assert!(!failing.auth.validate(&bob_failing_token), "web session must still be revoked");
+        let entries = failing.audit.recent(1);
+        let last = &entries[0];
+        assert_eq!(last.action, "user_status");
+        assert!(!last.ok, "the audit must record a failure: {:?}", last.detail);
+        assert!(last.detail.contains(bob), "{:?}", last.detail);
+        assert!(!blocker.join("authorized_keys").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+        pool.close().await;
+        eprintln!("COMP01_HTTP_DB_EXECUTED");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

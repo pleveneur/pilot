@@ -1326,6 +1326,55 @@ mod tests {
         }
     }
 
+    /// Bac à sable `PILOT_GIT_USER_HOME` (COMP-01) : dossier jetable **unique**
+    /// (pid + nanosecondes) sous `std::env::temp_dir()`, vers lequel la variable
+    /// est forcée le temps du test — le vrai `~git` de la machine n'est jamais
+    /// écrit. Au `Drop` (y compris sur panique d'une assertion), la valeur
+    /// précédente de la variable est restaurée (ou la variable retirée) et le
+    /// dossier supprimé.
+    ///
+    /// À créer **après** `GIT_HOME_ENV_LOCK.lock()` et à déclarer **après** le
+    /// verrou : les variables locales tombant en ordre inverse, la restauration
+    /// a lieu avant que le verrou ne soit rendu.
+    struct GitHomeSandbox {
+        root: std::path::PathBuf,
+        previous: Option<String>,
+    }
+
+    impl GitHomeSandbox {
+        fn new(tag: &str) -> Self {
+            let previous = std::env::var("PILOT_GIT_USER_HOME").ok();
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let root = std::env::temp_dir().join(format!(
+                "pilot-{}-sandbox-{}-{}",
+                tag,
+                std::process::id(),
+                nanos
+            ));
+            let git_home = root.join("git-home");
+            std::fs::create_dir_all(&git_home).expect("home git jetable");
+            std::env::set_var("PILOT_GIT_USER_HOME", &git_home);
+            Self { root, previous }
+        }
+
+        fn git_home(&self) -> std::path::PathBuf {
+            self.root.join("git-home")
+        }
+    }
+
+    impl Drop for GitHomeSandbox {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(v) => std::env::set_var("PILOT_GIT_USER_HOME", v),
+                None => std::env::remove_var("PILOT_GIT_USER_HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
     /// L3.2 — **scénario HTTP complet sur une base réelle jetable** (facultatif) :
     /// l'admin crée un compte, le liste (sans empreinte de mot de passe), change
     /// son rôle, réinitialise son mot de passe, le désactive — puis la connexion
@@ -1392,6 +1441,13 @@ mod tests {
         gds_core::db::migrate(&pool)
             .await
             .expect("migrations sur la base jetable");
+
+        // COMP-01 : `POST /api/gds/admin/users/status` régénère désormais
+        // `authorized_keys` côté serveur. Avant toute requête, le home `git`
+        // est forcé vers un bac à sable jetable (verrou pris : variable globale
+        // au processus) ; la valeur précédente est restaurée au Drop.
+        let _env_lock = GIT_HOME_ENV_LOCK.lock().await;
+        let _git_home = GitHomeSandbox::new("l32");
 
         let ctx = Arc::new(ServerCtx {
             pool: pool.clone(),
@@ -1616,6 +1672,177 @@ mod tests {
         // (aucun `DELETE FROM users` nécessaire — elle est dédiée à ce test).
         pool.close().await;
         admin_pool.close().await;
+        // Restauration explicite de `PILOT_GIT_USER_HOME` (et suppression du
+        // bac à sable) avant de rendre le verrou.
+        drop(_git_home);
+    }
+
+    /// COMP-01 — **preuve de production** : le VRAI `ServerCtx` derrière le VRAI
+    /// `server_router` régénère `authorized_keys` dès
+    /// `POST /api/gds/admin/users/status`, dans les deux sens (désactivation :
+    /// la clef du compte disparaît ; réactivation : elle revient), sans attendre
+    /// la boucle de maintenance. Clefs publiques fictives, aucun secret ; le
+    /// home `git` est un bac à sable jetable, jamais le vrai `~git`.
+    ///
+    /// Sans `PILOT_GDS_HTTP_TEST_URL`, le test ne s'exécute pas (CI verte).
+    #[tokio::test]
+    async fn comp01_server_ctx_status_route_regenerates_authorized_keys() {
+        let url = match std::env::var("PILOT_GDS_HTTP_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "comp01_server_ctx_status_route_regenerates_authorized_keys: \
+                     PILOT_GDS_HTTP_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_HTTP_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let db_name = opts.get_database().unwrap_or("").to_string();
+        if !db_name.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_HTTP_TEST_URL doit viser une base jetable \
+                 `pilot_gds_test_*` (base visée : {:?}) — test ignoré",
+                db_name
+            );
+            return;
+        }
+
+        let seq = HTTP_TEST_DB_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let test_db = format!("pilot_gds_test_comp01_{}_{}", std::process::id(), seq);
+        let admin_pool = PgPool::connect(&url)
+            .await
+            .expect("connexion d'administration de la base de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création de la base jetable");
+        let _guard = HttpTestDbGuard {
+            admin_url: url.clone(),
+            db_name: test_db.clone(),
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(opts.clone().database(&test_db))
+            .await
+            .expect("connexion à la base jetable");
+        gds_core::db::migrate(&pool)
+            .await
+            .expect("migrations sur la base jetable");
+
+        // Home `git` jetable AVANT toute requête (verrou : variable globale).
+        let _env_lock = GIT_HOME_ENV_LOCK.lock().await;
+        let git_home = GitHomeSandbox::new("comp01");
+        let auth_path = git_home.git_home().join(".ssh").join("authorized_keys");
+
+        // Comptes : un admin actif, deux développeurs actifs porteurs d'une
+        // clef publique FICTIVE chacun.
+        let admin_email = "admin-comp01@gds.test";
+        let keeper_email = "keeper-comp01@gds.test";
+        let victim_email = "victim-comp01@gds.test";
+        let keeper_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIComp01KeeperFictiveKey==";
+        let victim_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIComp01VictimFictiveKey==";
+        let hash = WebAuth::hash_password("mot-de-passe-comp01").unwrap();
+        gds_core::db::create_user(&pool, admin_email, "Admin COMP01", &hash, "admin", "active")
+            .await
+            .expect("admin de test");
+        let keeper_id =
+            gds_core::db::create_user(&pool, keeper_email, "Keeper", &hash, "dev", "active")
+                .await
+                .expect("keeper de test");
+        let victim_id =
+            gds_core::db::create_user(&pool, victim_email, "Victim", &hash, "dev", "active")
+                .await
+                .expect("victim de test");
+        gds_core::db::create_ssh_key(&pool, keeper_id, keeper_key)
+            .await
+            .expect("clef keeper");
+        gds_core::db::create_ssh_key(&pool, victim_id, victim_key)
+            .await
+            .expect("clef victim");
+
+        let keeper_line = format!("{} {}\n", keeper_key, keeper_email);
+        let victim_line = format!("{} {}\n", victim_key, victim_email);
+        let both = format!("{}{}", keeper_line, victim_line);
+        std::fs::create_dir_all(auth_path.parent().unwrap()).expect("dossier .ssh jetable");
+        std::fs::write(&auth_path, &both).expect("authorized_keys initial (bac à sable)");
+
+        let ctx = Arc::new(ServerCtx {
+            pool: pool.clone(),
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+            repos_root: git_home.git_home(),
+        });
+        let admin = ctx
+            .auth
+            .create_session_as("admin", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+
+        // 1) Désactivation de `victim` : sa clef quitte le fichier IMMÉDIATEMENT.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/users/status",
+                &admin,
+                serde_json::json!({ "email": victim_email, "status": "disabled" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(
+            value["authorized_keys_rewritten"],
+            serde_json::json!(true),
+            "ServerCtx doit régénérer authorized_keys : {}",
+            value
+        );
+        let content = std::fs::read_to_string(&auth_path).expect("relecture authorized_keys");
+        assert_eq!(content, keeper_line, "seule la clef du keeper doit rester");
+        assert!(!content.contains(victim_key), "clef de victim encore autorisée");
+        let victim = gds_core::db::get_user_by_email(&pool, victim_email)
+            .await
+            .unwrap()
+            .expect("victim en base");
+        assert_eq!(victim.status, "disabled");
+
+        // 2) Réactivation : la clef revient IMMÉDIATEMENT (DB → fichier).
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/users/status",
+                &admin,
+                serde_json::json!({ "email": victim_email, "status": "active" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["authorized_keys_rewritten"], serde_json::json!(true));
+        let content = std::fs::read_to_string(&auth_path).expect("relecture authorized_keys");
+        assert_eq!(content, both, "keeper ET victim doivent être autorisés");
+        let victim = gds_core::db::get_user_by_email(&pool, victim_email)
+            .await
+            .unwrap()
+            .expect("victim en base");
+        assert_eq!(victim.status, "active");
+
+        eprintln!("COMP01_SERVER_CTX_EXECUTED");
+
+        pool.close().await;
+        admin_pool.close().await;
+        drop(git_home);
     }
 
     // ── L4.4 / L4.5 — écran d'administration (projets, purge, journal, clefs) ──
@@ -1724,18 +1951,14 @@ mod tests {
         // sérialise ce test avec les autres tests qui forcent la même variable
         // (elle est globale au processus).
         let _env_lock = GIT_HOME_ENV_LOCK.lock().await;
-        let sandbox = std::env::temp_dir().join(format!("pilot-l45-sandbox-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&sandbox);
-        std::fs::create_dir_all(&sandbox).expect("bac à sable");
-        let repos_root = sandbox.join("repos");
+        // Garde déclaré APRÈS le verrou : au `Drop` (y compris sur panique),
+        // `PILOT_GIT_USER_HOME` est restaurée (ou retirée) avant que le verrou
+        // ne soit rendu, et le bac à sable est supprimé.
+        let sandbox = GitHomeSandbox::new("l45");
+        let repos_root = sandbox.root.join("repos");
         std::fs::create_dir_all(&repos_root).expect("racine de dépôts");
         let repos_root_str = repos_root.to_string_lossy().to_string();
-        let git_home = sandbox.join("git-home");
-        std::fs::create_dir_all(&git_home).expect("home git jetable");
-        let git_home_str = git_home.to_string_lossy().to_string();
-        // Sûr ici : le test est facultatif (jamais exécuté en CI) et le binaire de
-        // test est le seul à lire cette variable.
-        std::env::set_var("PILOT_GIT_USER_HOME", &git_home_str);
+        let git_home_str = sandbox.git_home().to_string_lossy().to_string();
 
         let ctx = Arc::new(ServerCtx {
             pool: pool.clone(),
@@ -1785,7 +2008,10 @@ mod tests {
         )
         .await
         .expect("projet de test");
-        let bare = gds_core::git::repo_bare_path(&repos_root_str, "projet-l45");
+        // Chemin RÉEL de la route `POST /api/gds/projects/create` côté serveur :
+        // `<racine>/<projet>.git` (sans le sous-dossier `repos/` du poste).
+        let bare = gds_core::git::bare_path_in_root(&repos_root_str, "projet-l45")
+            .expect("chemin bare du projet sous la racine des dépôts");
         std::fs::create_dir_all(&bare).unwrap();
         std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
         assert!(bare.exists());
@@ -1929,8 +2155,12 @@ mod tests {
         )
         .await
         .expect("second projet de test");
-        let bare2 = gds_core::git::repo_bare_path(&repos_root_str, "projet-l45-b");
+        // Même résolution que la route de retrait (`<racine>/<nom>.git`) : sans
+        // elle, l'assertion de purge porterait sur un dossier jamais créé.
+        let bare2 = gds_core::git::bare_path_in_root(&repos_root_str, "projet-l45-b")
+            .expect("chemin bare du second projet sous la racine des dépôts");
         std::fs::create_dir_all(&bare2).unwrap();
+        assert!(bare2.exists(), "le second dépôt bare doit exister avant la purge");
         std::fs::write(bare2.join("HEAD"), "ref: refs/heads/main\n").unwrap();
         let res = app
             .clone()
@@ -2115,8 +2345,9 @@ mod tests {
         assert!(status["repos_bytes"].as_u64().is_some());
         assert!(status["db_bytes"].as_u64().is_some());
 
-        // Nettoyage : bac à sable jetable + base supprimée par le garde.
-        let _ = std::fs::remove_dir_all(&sandbox);
+        // Nettoyage : bac à sable + variable restaurés par `GitHomeSandbox`
+        // (explicitement ici, avant le verrou), base supprimée par son garde.
+        drop(sandbox);
         pool.close().await;
     }
 
@@ -2197,15 +2428,14 @@ mod tests {
         // sérialise ce test avec les autres tests qui forcent la même variable
         // (elle est globale au processus).
         let _env_lock = GIT_HOME_ENV_LOCK.lock().await;
-        let sandbox = std::env::temp_dir().join(format!("pilot-l2-sandbox-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&sandbox);
-        let repos_root = sandbox.join("repos");
+        // Garde déclaré APRÈS le verrou : au `Drop` (y compris sur panique),
+        // `PILOT_GIT_USER_HOME` est restaurée (ou retirée) avant que le verrou
+        // ne soit rendu, et le bac à sable est supprimé.
+        let sandbox = GitHomeSandbox::new("l2");
+        let repos_root = sandbox.root.join("repos");
         std::fs::create_dir_all(&repos_root).expect("racine de dépôts");
         let repos_root_str = repos_root.to_string_lossy().to_string();
-        let git_home = sandbox.join("git-home");
-        std::fs::create_dir_all(&git_home).expect("home git jetable");
-        let git_home_str = git_home.to_string_lossy().to_string();
-        std::env::set_var("PILOT_GIT_USER_HOME", &git_home_str);
+        let git_home_str = sandbox.git_home().to_string_lossy().to_string();
 
         let ctx = Arc::new(ServerCtx {
             pool: pool.clone(),
@@ -2478,8 +2708,9 @@ mod tests {
             .unwrap();
         assert_eq!(audit_actions(&json_body(res).await).len(), 2, "deux créations journalisées");
 
-        // Nettoyage : bac à sable jetable + base supprimée par le garde.
-        let _ = std::fs::remove_dir_all(&sandbox);
+        // Nettoyage : bac à sable + variable restaurés par `GitHomeSandbox`
+        // (explicitement ici, avant le verrou), base supprimée par son garde.
+        drop(sandbox);
         pool.close().await;
         admin_pool.close().await;
     }
@@ -2817,12 +3048,34 @@ mod tests {
         .await
         .unwrap();
 
+        // Racine de dépôts DÉDIÉE et jetable : le dépôt `projet-l34.git` y est
+        // pré-créé au chemin réel de la route (`<racine>/<projet>.git`), si bien
+        // que la publication du projet existant est idempotente
+        // (`bare_created == false`) sans jamais toucher au `temp_dir()` partagé.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let repos_root = std::env::temp_dir().join(format!(
+            "pilot-l34-repos-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let _ = std::fs::remove_dir_all(&repos_root);
+        std::fs::create_dir_all(&repos_root).expect("racine de dépôts jetable");
+        let repos_root_str = repos_root.to_string_lossy().to_string();
+        let bare = gds_core::git::bare_path_in_root(&repos_root_str, "projet-l34")
+            .expect("chemin bare du projet sous la racine des dépôts");
+        std::fs::create_dir_all(&bare).expect("dépôt bare pré-créé");
+        std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD du dépôt");
+        assert!(bare.exists());
+
         let ctx = Arc::new(ServerCtx {
             pool: pool.clone(),
             auth: Arc::new(WebAuth::new()),
             guard: Arc::new(WebGuard::new()),
             audit: Arc::new(WebAudit::new()),
-            repos_root: std::env::temp_dir(),
+            repos_root: repos_root.clone(),
         });
         let admin = ctx
             .auth
@@ -3010,6 +3263,7 @@ mod tests {
 
         pool.close().await;
         admin_pool.close().await;
+        let _ = std::fs::remove_dir_all(&repos_root);
     }
 
     /// L2.10 — cycle de vie du service : `GET /api/gds/admin/service` et les deux
