@@ -224,11 +224,52 @@ fn write_entries(path: &Path, key: &[u8], entries: &[VaultEntry]) -> Result<(), 
         nonce: B64.encode(nonce),
         ciphertext: B64.encode(ct),
     };
-    std::fs::write(
-        path,
-        serde_json::to_string_pretty(&new_file).map_err(|e| format!("Erreur écriture: {}", e))?,
-    )
-    .map_err(|e| format!("Erreur écriture coffre: {}", e))
+    let raw =
+        serde_json::to_string_pretty(&new_file).map_err(|e| format!("Erreur écriture: {}", e))?;
+    crate::atomic_file::write_replacing(path, raw.as_bytes())
+        .map_err(|e| format!("Erreur écriture coffre: {}", e))
+}
+
+/// Core of `vault_set_master_password`, on an explicit path: re-encrypts the
+/// existing entries (or none) under a key derived from `master_password` with a
+/// fresh salt, writes the file and returns the new key. The caller stores the
+/// key in memory ONLY when this returns `Ok`, i.e. once the file is replaced.
+fn set_master_password_at(
+    path: &Path,
+    current_key: Option<Vec<u8>>,
+    master_password: &str,
+) -> Result<[u8; 32], String> {
+    let existing: Vec<VaultEntry> = if path.exists() {
+        match current_key {
+            Some(key) => read_entries_with_key(path, &key)?,
+            None => {
+                return Err(
+                    "Le coffre existe déjà : déverrouillez-le d'abord pour changer le mot de passe maître"
+                        .to_string(),
+                )
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+    let key = derive_key(master_password, &salt)?;
+    let plaintext =
+        serde_json::to_vec(&existing).map_err(|e| format!("Erreur sérialisation: {}", e))?;
+    let (ct, nonce) = encrypt(&plaintext, &key)?;
+    let file = VaultFile {
+        version: 1,
+        salt: B64.encode(salt),
+        nonce: B64.encode(nonce),
+        ciphertext: B64.encode(ct),
+    };
+    let raw =
+        serde_json::to_string_pretty(&file).map_err(|e| format!("Erreur écriture: {}", e))?;
+    crate::atomic_file::write_replacing(path, raw.as_bytes())
+        .map_err(|e| format!("Erreur écriture coffre: {}", e))?;
+    Ok(key)
 }
 
 // ── Commandes Tauri ──
@@ -295,38 +336,8 @@ pub fn vault_set_master_password(
         return Err("Le mot de passe maître doit contenir au moins 4 caractères".to_string());
     }
     let path = vault_path()?;
-    let existing: Vec<VaultEntry> = if path.exists() {
-        let key_opt = state.vault_key.lock().unwrap().clone();
-        match key_opt {
-            Some(key) => read_entries_with_key(&path, &key)?,
-            None => {
-                return Err(
-                    "Le coffre existe déjà : déverrouillez-le d'abord pour changer le mot de passe maître"
-                        .to_string(),
-                )
-            }
-        }
-    } else {
-        Vec::new()
-    };
-
-    let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
-    let key = derive_key(&master_password, &salt)?;
-    let plaintext =
-        serde_json::to_vec(&existing).map_err(|e| format!("Erreur sérialisation: {}", e))?;
-    let (ct, nonce) = encrypt(&plaintext, &key)?;
-    let file = VaultFile {
-        version: 1,
-        salt: B64.encode(salt),
-        nonce: B64.encode(nonce),
-        ciphertext: B64.encode(ct),
-    };
-    std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&file).map_err(|e| format!("Erreur écriture: {}", e))?,
-    )
-    .map_err(|e| format!("Erreur écriture coffre: {}", e))?;
+    let current_key = state.vault_key.lock().unwrap().clone();
+    let key = set_master_password_at(&path, current_key, &master_password)?;
     *state.vault_key.lock().unwrap() = Some(key.to_vec());
     Ok(())
 }
@@ -501,6 +512,119 @@ mod tests {
         assert!(!err.contains("cle-fictive-987"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── VLT-01 : une écriture du coffre qui échoue ne doit jamais détruire le
+    // coffre précédent. Coffre FICTIF dans un dossier temporaire unique ; les
+    // échecs sont injectés (test seulement) dans l'écrivain réellement utilisé
+    // par `write_entries` / `set_master_password_at`. Ce n'est PAS une coupure
+    // de courant : c'est une erreur d'E/S rendue pendant ou après l'écriture.
+
+    use crate::atomic_file::{inject_fault, Fault};
+
+    fn entree_fictive(id: &str, password: &str) -> VaultEntry {
+        VaultEntry {
+            id: id.into(),
+            description: format!("entrée fictive {}", id),
+            login: "utilisateur-fictif".into(),
+            password: password.into(),
+            scope: "global".into(),
+            project_path: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// Noms présents dans le dossier du coffre (pour détecter un résidu).
+    fn noms_du_dossier(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn ecriture_interrompue_des_entrees_garde_l_ancien_coffre_dechiffrable() {
+        for fault in [Fault::DuringWrite, Fault::BeforeReplace] {
+            let dir = crate::test_util::TempDir::new("pilot_vault_vlt01_entries");
+            let path = dir.join("vault.json");
+            let anciennes = vec![entree_fictive("ancienne", "secret-fictif-ancien")];
+            let key = write_test_vault(&path, "mot-de-passe-fictif", &anciennes);
+            let nouvelles = vec![
+                entree_fictive("ancienne", "secret-fictif-ancien"),
+                entree_fictive("nouvelle", "secret-fictif-nouveau"),
+            ];
+
+            inject_fault(fault);
+            let res = write_entries(&path, &key, &nouvelles);
+            assert!(res.is_err(), "{:?} : l'échec doit être remonté", fault);
+
+            let relues = read_entries_with_key(&path, &key).unwrap_or_else(|e| {
+                panic!("{:?} : l'ancien coffre ne se déchiffre plus : {}", fault, e)
+            });
+            assert_eq!(relues.len(), 1, "{:?}", fault);
+            assert_eq!(relues[0].password, "secret-fictif-ancien", "{:?}", fault);
+            assert_eq!(noms_du_dossier(&dir), vec!["vault.json"], "{:?} : résidu", fault);
+        }
+    }
+
+    #[test]
+    fn changement_de_mot_de_passe_interrompu_garde_l_ancien_coffre() {
+        for fault in [Fault::DuringWrite, Fault::BeforeReplace] {
+            let dir = crate::test_util::TempDir::new("pilot_vault_vlt01_master");
+            let path = dir.join("vault.json");
+            let anciennes = vec![entree_fictive("ancienne", "secret-fictif-ancien")];
+            let key = write_test_vault(&path, "mot-de-passe-fictif", &anciennes);
+
+            inject_fault(fault);
+            let res = set_master_password_at(&path, Some(key.clone()), "nouveau-fictif");
+            assert!(res.is_err(), "{:?} : l'échec doit être remonté", fault);
+
+            // The in-memory key is only replaced on Ok: the OLD key (and the old
+            // master password, same salt) must still open the file.
+            let relues = read_entries_with_key(&path, &key).unwrap_or_else(|e| {
+                panic!("{:?} : l'ancien coffre ne se déchiffre plus : {}", fault, e)
+            });
+            assert_eq!(relues[0].password, "secret-fictif-ancien", "{:?}", fault);
+            assert_eq!(noms_du_dossier(&dir), vec!["vault.json"], "{:?} : résidu", fault);
+        }
+    }
+
+    #[test]
+    fn ecritures_reussies_du_coffre_restent_identiques() {
+        let dir = crate::test_util::TempDir::new("pilot_vault_vlt01_ok");
+        let path = dir.join("vault.json");
+        let key = write_test_vault(&path, "mot-de-passe-fictif", &[]);
+        let salt_avant: VaultFile =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+        // Entries: same salt kept, new content readable with the same key.
+        let entrees = vec![entree_fictive("a", "secret-fictif-a")];
+        write_entries(&path, &key, &entrees).unwrap();
+        let fichier: VaultFile =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(fichier.version, 1);
+        assert_eq!(fichier.salt, salt_avant.salt);
+        assert_eq!(read_entries_with_key(&path, &key).unwrap()[0].id, "a");
+
+        // Master password: the returned key opens the file, the old one no longer.
+        let nouvelle = set_master_password_at(&path, Some(key.clone()), "nouveau-fictif").unwrap();
+        assert_eq!(read_entries_with_key(&path, &nouvelle).unwrap()[0].password, "secret-fictif-a");
+        assert!(read_entries_with_key(&path, &key).is_err());
+        // Locked vault that already exists: refused, file untouched.
+        let avant = std::fs::read(&path).unwrap();
+        assert!(set_master_password_at(&path, None, "autre-fictif").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), avant);
+        assert_eq!(noms_du_dossier(&dir), vec!["vault.json"]);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "le coffre doit être lisible par son seul propriétaire");
+        }
     }
 
     // Non-régression (défaut : champ « Clé » impossible à remplir) : la liste

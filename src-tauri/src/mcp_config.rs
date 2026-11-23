@@ -184,11 +184,18 @@ pub fn read_mcp_config(app: &AppHandle) -> Result<McpConfig, String> {
 /// Écrit le mcp.json (backup `.bak` avant écriture).
 pub fn write_mcp_config(app: &AppHandle, cfg: &McpConfig) -> Result<(), String> {
     let path = mcp_config_path(app)?;
+    write_mcp_config_at(&path, cfg)
+}
+
+/// Same as `write_mcp_config`, on an explicit path (testable without `AppHandle`).
+fn write_mcp_config_at(path: &Path, cfg: &McpConfig) -> Result<(), String> {
     if path.exists() {
-        let _ = std::fs::copy(&path, path.with_extension("json.bak"));
+        let _ = std::fs::copy(path, path.with_extension("json.bak"));
     }
     let raw = serde_json::to_string_pretty(cfg).map_err(|e| format!("Sérialisation mcp.json: {}", e))?;
-    std::fs::write(&path, raw).map_err(|e| format!("Écriture mcp.json: {}", e))
+    // Temp file + sync + rename: a failed write never truncates mcp.json.
+    crate::atomic_file::write_replacing(path, raw.as_bytes())
+        .map_err(|e| format!("Écriture mcp.json: {}", e))
 }
 
 /// Lit un `mcp.json` depuis un chemin explicite (sans `AppHandle`). Fichier
@@ -1307,6 +1314,54 @@ pub async fn mcp_test_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── COMP-13 : une écriture de mcp.json qui échoue ne doit jamais détruire
+    // la configuration précédente. Dossier temporaire unique, configuration
+    // FICTIVE ; l'échec est injecté (test seulement) dans l'écrivain réellement
+    // utilisé par `write_mcp_config_at`. La sauvegarde `.bak` existante garde
+    // son rôle : copie de la version précédente avant chaque écriture.
+    #[test]
+    fn ecriture_interrompue_de_mcp_json_garde_l_ancienne_configuration() {
+        use crate::atomic_file::{inject_fault, Fault};
+        let fictif = |enabled: bool| McpConfig {
+            servers: vec![McpServer {
+                id: "serveur-fictif".to_string(),
+                name: "Serveur fictif".to_string(),
+                enabled,
+                command: "commande-fictive".to_string(),
+                args: vec!["argument-fictif".to_string()],
+                secret_ref: Some("entree-fictive".to_string()),
+                ..McpServer::default()
+            }],
+        };
+        let noms = |dir: &Path| {
+            let mut v: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+                .collect();
+            v.sort();
+            v
+        };
+        for fault in [Fault::DuringWrite, Fault::BeforeReplace] {
+            let dir = crate::test_util::TempDir::new("pilot_mcp_comp13");
+            let path = dir.join("mcp.json");
+            let bak = dir.join("mcp.json.bak");
+            write_mcp_config_at(&path, &fictif(true)).unwrap();
+            assert!(!bak.exists(), "aucune sauvegarde sans version précédente");
+
+            inject_fault(fault);
+            assert!(write_mcp_config_at(&path, &fictif(false)).is_err(), "{:?}", fault);
+            assert_eq!(read_mcp_config_at(&path), fictif(true), "{:?} : configuration perdue", fault);
+            assert_eq!(read_mcp_config_at(&bak), fictif(true), "{:?} : sauvegarde", fault);
+            assert_eq!(noms(&dir), vec!["mcp.json", "mcp.json.bak"], "{:?} : résidu", fault);
+
+            // A later successful write: new content, `.bak` = previous version.
+            write_mcp_config_at(&path, &fictif(false)).unwrap();
+            assert_eq!(read_mcp_config_at(&path), fictif(false));
+            assert_eq!(read_mcp_config_at(&bak), fictif(true));
+            assert_eq!(noms(&dir), vec!["mcp.json", "mcp.json.bak"]);
+        }
+    }
 
     fn sample_server() -> McpServer {
         McpServer {

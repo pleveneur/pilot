@@ -82,6 +82,9 @@ mod interproject;
 mod super_agent;
 mod dashboard;
 mod project_snapshot;
+// Replacement of a file without truncating its previous version in place
+// (vault.json, mcp.json): exclusive temp file, sync, then rename.
+mod atomic_file;
 mod vault;
 // Voix française LOCALE (hors ligne, sans clé, sans GPU) de la lecture à voix
 // haute : moteur Piper + modèle ~63 Mo. Repli visible et journalisé si absent.
