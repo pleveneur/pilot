@@ -371,22 +371,24 @@ async function main(argv) {
     });
   }
 
-  // 3. Une plateforme sans protocole de débogage exploitable : on REFUSE.
+  // 3. L'exécutable doit exister : sinon rien n'a été lancé. Checked BEFORE the
+  // platform so the refusal names the actionable cause on every OS (CI runs on Linux).
+  const exe = path.resolve(opts.exe || exeParDefaut());
+  if (!existsSync(exe)) {
+    return conclure(false, `l'exécutable à lancer est introuvable (« ${exe} ») : construisez l'application puis relancez`, {
+      exe,
+    });
+  }
+
+  // 4. Une plateforme sans protocole de débogage exploitable : on REFUSE.
   if (process.platform !== "win32") {
     return conclure(
       false,
       `le contrôle ne peut pas s'exécuter sur cette plateforme (${process.platform}) : ` +
         "le protocole de débogage de la fenêtre n'est pas joignable en automatique. " +
         "La livraison est refusée faute de preuve, jamais réputée bonne",
+      { exe },
     );
-  }
-
-  // 4. L'exécutable doit exister : sinon rien n'a été lancé.
-  const exe = path.resolve(opts.exe || exeParDefaut());
-  if (!existsSync(exe)) {
-    return conclure(false, `l'exécutable à lancer est introuvable (« ${exe} ») : construisez l'application puis relancez`, {
-      exe,
-    });
   }
 
   // 5. Une seule instance : sinon on observerait la fenêtre d'une autre.
