@@ -52,7 +52,7 @@ function showAgentOpenError(tab, err) {
     <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:24px;text-align:center;color:var(--danger);">
       <div style="font-size:36px;margin-bottom:12px;">π</div>
       <div style="font-size:14px;font-weight:600;margin-bottom:6px;">Impossible d'ouvrir l'agent</div>
-      <div style="font-size:12px;opacity:.85;">${err}</div>
+      <div style="font-size:12px;opacity:.85;">${esc(err)}</div>
     </div>`;
 }
 
@@ -687,7 +687,7 @@ export class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">π</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">${agentDisplayLabel()}</div>
-          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+          <div style="font-size:13px;">❌ Erreur: ${esc(e)}</div>
         </div>
       `;
     } finally {
@@ -1430,7 +1430,8 @@ export class TabsManager {
     try {
       tab.view = await createPdfPreview(tab.wrapper, path);
     } catch (err) {
-      tab.wrapper.innerHTML = `<div style="padding:2em;color:var(--danger);">❌ Erreur: ${err.message || err}</div>`;
+      // PDF.js page errors (getPage/render) land here: untrusted text, escaped.
+      tab.wrapper.innerHTML = `<div style="padding:2em;color:var(--danger);">❌ Erreur: ${esc(err.message || err)}</div>`;
     } finally {
       hideLoading();
     }

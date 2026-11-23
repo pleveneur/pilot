@@ -52,7 +52,12 @@ export async function createPdfPreview(container, filePath) {
       standardFontDataUrl: "/pdfjs/standard_fonts/",
     }).promise;
   } catch (err) {
-    viewer.innerHTML = `<div class="pdf-error">❌ Erreur : impossible de charger le PDF<br><small>${err.message || err}</small></div>`;
+    viewer.innerHTML = `<div class="pdf-error">❌ Erreur : impossible de charger le PDF<br><small></small></div>`;
+    // PDF.js parses untrusted bytes: its message is data, rendered as text only.
+    viewer.querySelector(".pdf-error small").textContent = String(err?.message || err);
+    // The caller never attaches the returned wrapper: attach it here so the
+    // error frame is actually shown (success path attaches it further down).
+    container.appendChild(wrapper);
     return wrapper;
   }
 

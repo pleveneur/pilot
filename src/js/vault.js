@@ -110,7 +110,8 @@ export function createVault(container) {
     try {
       entries = await invoke("vault_list");
     } catch (e) {
-      bodyEl.innerHTML = `<div class="vault-error">${e}</div>`;
+      bodyEl.innerHTML = "";
+      bodyEl.appendChild(errorBox(e));
       return;
     }
     renderUnlocked(entries);
@@ -248,7 +249,7 @@ export function createVault(container) {
           renderUnlocked(updated);
         } catch (err) {
           const errEl = container.querySelector("#vault-entries");
-          errEl.insertAdjacentHTML("afterbegin", `<div class="vault-error">${err}</div>`);
+          errEl.prepend(errorBox(err));
         }
       });
 
@@ -305,7 +306,7 @@ export function createVault(container) {
         <label class="vault-label">Portée</label>
         <div class="vault-scope-row">
           <label class="vault-radio"><input type="radio" name="vault-scope" value="global" ${e.scope === "global" ? "checked" : ""}> 🌐 Global (tous les projets)</label>
-          <label class="vault-radio"><input type="radio" name="vault-scope" value="project" ${e.scope === "project" ? "checked" : ""}> 📁 Projet : ${projectName}</label>
+          <label class="vault-radio"><input type="radio" name="vault-scope" value="project" ${e.scope === "project" ? "checked" : ""}> 📁 Projet : ${escHtml(projectName)}</label>
         </div>
         <div id="vault-edit-err" class="vault-error"></div>
         <div class="vault-actions">
@@ -407,13 +408,41 @@ export function createVault(container) {
         await loadUnlocked();
       }
     } catch (e) {
-      bodyEl.innerHTML = `<div class="vault-error">${e}</div>`;
+      bodyEl.innerHTML = "";
+      bodyEl.appendChild(errorBox(e));
     }
   })();
 
   return { wrapper: container, unlisten: null };
 }
 
+/**
+ * Error block rendered as text: a backend error message is data, never markup.
+ * Same element and class as the former `<div class="vault-error">…</div>`.
+ */
+function errorBox(message) {
+  const div = document.createElement("div");
+  div.className = "vault-error";
+  div.textContent = String(message);
+  return div;
+}
+
+/** Escapes text (e.g. the project folder name) for insertion as HTML content. */
+function escHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Escapes a stored value for a double-quoted `value="…"` attribute.
+ * `&` is escaped first so that a value already containing a character
+ * reference (e.g. `&lt;`, `&#34;`) is not decoded by the HTML parser:
+ * the edit form must show and re-save exactly the stored value.
+ */
 function escAttr(s) {
-  return String(s ?? "").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }

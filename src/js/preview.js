@@ -15,6 +15,17 @@ const md = markdownit({
   breaks: true,
 }).use(mkkatex, { throwOnError: false, errorColor: "#cc0000" });
 
+// Same rendering WITHOUT raw HTML, for untrusted text (agent replies kept in the
+// session history, code review answers, release notes) — the rule of the live
+// chat (`html: false` in agent-pi.js / super-agent.js). Raw HTML stays visible
+// as escaped text; Markdown and KaTeX are rendered as before.
+const mdNoHtml = markdownit({
+  html: false,
+  linkify: true,
+  typographer: true,
+  breaks: true,
+}).use(mkkatex, { throwOnError: false, errorColor: "#cc0000" });
+
 // --- Mermaid.js initialization ---
 let mermaidInitialized = false;
 let diagramIdCounter = 0;
@@ -313,10 +324,13 @@ export async function imageToBase64(absPath) {
 /**
  * Convertit du Markdown en HTML
  * @param {string} markdownContent
+ * @param {{allowHtml?: boolean}} [options] — `allowHtml: false` for untrusted
+ *   text: raw HTML is shown as text, never parsed. Default (file preview)
+ *   unchanged: raw HTML allowed.
  * @returns {string}
  */
-export function renderMarkdown(markdownContent) {
-  return md.render(markdownContent);
+export function renderMarkdown(markdownContent, { allowHtml = true } = {}) {
+  return (allowHtml ? md : mdNoHtml).render(markdownContent);
 }
 
 /**

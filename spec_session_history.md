@@ -113,7 +113,10 @@ ignoré (erreur non fatale).
 - Liste des entrées (date, prompt tronqué, modèle, badge kind, fichiers touchés,
   coût, tags cliquables).
 - Clic sur une entrée → `get_session_detail` → panneau de détail (messages
-  rendus en Markdown, tool calls repliables) — lecture seule.
+  rendus en Markdown, tool calls repliables) — lecture seule. Comme dans la
+  discussion en direct, le HTML brut d'un message reste du **texte**
+  (`renderMarkdown(…, { allowHtml: false })`, verrou
+  `src/js/rendu-markdown-contenus-non-fiables.test.js`).
 - Édition des tags (chips + autocomplétion via `list_session_tags`).
 - Bouton « 🔄 Réindexer » → `index_sessions` (toast + rafraîchissement).
 
