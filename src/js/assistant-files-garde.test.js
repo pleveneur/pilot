@@ -40,6 +40,22 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// Symlink creation needs a privilege on Windows (admin or Developer Mode).
+// Probe it once: the symlink cases run wherever the OS really allows links,
+// and are skipped (claiming nothing) where it refuses, instead of failing.
+const SYMLINKS_OK = (() => {
+  const dir = mkdtempSync(join(HERE, ".tmp-symlink-probe-"));
+  try {
+    symlinkSync(dir, join(dir, "probe-link"), "dir");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+const itSymlink = it.runIf(SYMLINKS_OK);
 let BASE;
 let HOME;
 let ROOT;
@@ -206,7 +222,7 @@ describe("espaces Unicode — pi les remplace par un espace ASCII avant d'écrir
 });
 
 describe("défaut 2 — un lien symbolique dans l'espace assistant ne permet pas d'écrire ailleurs", () => {
-  it("refuse d'écrire à travers un lien de DOSSIER sortant, sans rien créer hors de l'espace", async () => {
+  itSymlink("refuse d'écrire à travers un lien de DOSSIER sortant, sans rien créer hors de l'espace", async () => {
     const link = join(ROOT, "lien-dossier");
     symlinkSync(OUTSIDE, link, "dir");
     expectBlocked(await decide("write", { path: join(link, "x.md"), content: "x" }));
@@ -218,14 +234,14 @@ describe("défaut 2 — un lien symbolique dans l'espace assistant ne permet pas
     expectBlocked(await decide("write", { path: "lien-dossier/y.md", content: "x" }));
   });
 
-  it("refuse d'écrire à travers un lien de dossier sortant placé en profondeur", async () => {
+  itSymlink("refuse d'écrire à travers un lien de dossier sortant placé en profondeur", async () => {
     mkdirSync(join(ROOT, "client-z"), { recursive: true });
     symlinkSync(OUTSIDE, join(ROOT, "client-z", "projet"), "dir");
     expectBlocked(await decide("write", { path: join(ROOT, "client-z", "projet", "a", "b.md"), content: "x" }));
     expect(existsSync(join(OUTSIDE, "a"))).toBe(false);
   });
 
-  it("refuse d'écrire à travers un lien de FICHIER sortant existant", async () => {
+  itSymlink("refuse d'écrire à travers un lien de FICHIER sortant existant", async () => {
     const link = join(ROOT, "lien-fichier.txt");
     symlinkSync(join(OUTSIDE, "existant.txt"), link, "file");
     expectBlocked(await decide("write", { path: link, content: "écrasé" }));
@@ -233,7 +249,7 @@ describe("défaut 2 — un lien symbolique dans l'espace assistant ne permet pas
     expect(readFileSync(join(OUTSIDE, "existant.txt"), "utf8")).toBe("contenu projet");
   });
 
-  it("refuse un lien de fichier dont la cible finale n'existe pas encore (hors de l'espace)", async () => {
+  itSymlink("refuse un lien de fichier dont la cible finale n'existe pas encore (hors de l'espace)", async () => {
     const link = join(ROOT, "lien-pendant.md");
     symlinkSync(join(OUTSIDE, "pas-encore-cree.md"), link, "file");
     expectBlocked(await decide("write", { path: link, content: "x" }));
@@ -250,7 +266,7 @@ describe("défaut 2 — un lien symbolique dans l'espace assistant ne permet pas
     expect(existsSync(join(BASE, "x.md"))).toBe(false);
   });
 
-  it("autorise encore un lien qui reste DANS l'espace, et les écritures normales à côté des liens", async () => {
+  itSymlink("autorise encore un lien qui reste DANS l'espace, et les écritures normales à côté des liens", async () => {
     mkdirSync(join(ROOT, "reel", "projet"), { recursive: true });
     symlinkSync(join(ROOT, "reel"), join(ROOT, "alias-interne"), "dir");
     expect(await decide("write", { path: join(ROOT, "alias-interne", "projet", "n.md"), content: "x" })).toBeUndefined();
