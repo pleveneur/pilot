@@ -1537,14 +1537,16 @@ fn stream_pipe<R: Read + Send + 'static>(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
+        // Bytes of a UTF-8 character cut between two chunks (RPC-01): kept for
+        // the next chunk instead of dropping the whole chunk from the log.
+        let mut utf8_pending: Vec<u8> = Vec::new();
         loop {
             match r.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
                     let data = buf[..n].to_vec();
-                    if let Ok(s) = std::str::from_utf8(&data) {
-                        log.lock().unwrap().push_str(s);
-                    }
+                    let text = crate::rpc_manager::decode_utf8_chunk(&mut utf8_pending, &data);
+                    log.lock().unwrap().push_str(&text);
                     let _ = event_tx.send(json!({
                         "type": "command_output", "run_id": run_id.clone(),
                         "stream": stream, "data": data
@@ -1552,6 +1554,11 @@ fn stream_pipe<R: Read + Send + 'static>(
                 }
                 Err(_) => break,
             }
+        }
+        // End of stream: an incomplete character is marked, not lost.
+        if !utf8_pending.is_empty() {
+            let rest = crate::rpc_manager::flush_utf8_pending(&mut utf8_pending);
+            log.lock().unwrap().push_str(&rest);
         }
     })
 }
@@ -1743,6 +1750,77 @@ fn validate_within_roots_canon(path: &str, roots: &[PathBuf]) -> Result<PathBuf,
     }
     Ok(canon)
 }
+#[cfg(test)]
+mod stream_pipe_utf8_tests {
+    use super::*;
+
+    /// Fake reader: returns exactly one chunk per `read`, then EOF.
+    struct ChunkedReader(std::collections::VecDeque<Vec<u8>>);
+
+    impl Read for ChunkedReader {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.pop_front() {
+                None => Ok(0),
+                Some(c) => {
+                    out[..c.len()].copy_from_slice(&c);
+                    Ok(c.len())
+                }
+            }
+        }
+    }
+
+    /// RPC-01 (volet web) : le journal final `command_end.output` ne doit perdre
+    /// AUCUN contenu quand un caractère multi-octets chevauche deux blocs. Avant
+    /// le correctif, tout bloc non décodable seul était retiré du journal.
+    #[test]
+    fn stream_pipe_utf8_coupe_entre_blocs_journal_complet() {
+        let text = "Compilation r\u{e9}ussie \u{1f680}\nfin : \u{e0} bient\u{f4}t\n";
+        let all = text.as_bytes().to_vec();
+        let e = all.windows(2).position(|w| w == "\u{e9}".as_bytes()).unwrap();
+        let r = all.windows(4).position(|w| w == "\u{1f680}".as_bytes()).unwrap();
+        let o = all.windows(2).position(|w| w == "\u{f4}".as_bytes()).unwrap();
+        let cuts = [e + 1, r + 2, o + 1];
+        let mut chunks = std::collections::VecDeque::new();
+        let mut prev = 0;
+        for c in cuts {
+            chunks.push_back(all[prev..c].to_vec());
+            prev = c;
+        }
+        chunks.push_back(all[prev..].to_vec());
+
+        let (event_tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let log = Arc::new(Mutex::new(String::new()));
+        stream_pipe(ChunkedReader(chunks), "run_t".into(), "out", event_tx, log.clone())
+            .join()
+            .unwrap();
+
+        assert_eq!(*log.lock().unwrap(), text, "journal final intact");
+        // Live broadcast unchanged: raw bytes, all of them, in order.
+        let mut live = Vec::new();
+        while let Ok(v) = rx.try_recv() {
+            assert_eq!(v["type"], "command_output");
+            for b in v["data"].as_array().unwrap() {
+                live.push(b.as_u64().unwrap() as u8);
+            }
+        }
+        assert_eq!(live, all);
+    }
+
+    /// Octet réellement invalide au milieu, caractère tronqué à l'EOF : marqués
+    /// U+FFFD, le reste du bloc est conservé (plus de bloc retiré en entier).
+    #[test]
+    fn stream_pipe_utf8_invalide_et_fin_tronquee_sans_perte() {
+        let mut chunk = b"ok \xFF suite ".to_vec();
+        chunk.extend_from_slice(&"\u{e9}".as_bytes()[..1]); // « é » truncated at EOF
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let log = Arc::new(Mutex::new(String::new()));
+        stream_pipe(ChunkedReader(vec![chunk].into()), "run_t".into(), "err", event_tx, log.clone())
+            .join()
+            .unwrap();
+        assert_eq!(*log.lock().unwrap(), "ok \u{FFFD} suite \u{FFFD}");
+    }
+}
+
 // ── Module partagé bureau ↔ web distant (envoi automatique de fin de dictée) ──
 
 #[cfg(test)]

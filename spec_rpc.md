@@ -328,6 +328,7 @@ par des tests :
 | Syntaxe des extensions embarquées (`src-tauri/extensions/*.ts`, incluses par `include_str!`) : une seule extension invalide fait **sortir `pi` immédiatement** (`ParseError`, code 1) — l'Assistant ne démarre plus et chaque sondage bloque l'UI | test `scripts/extensions-syntax.test.js` (esbuild) |
 | Le verrou du registre de sessions n'est tenu que pendant **l'écriture** de la commande, jamais pendant l'attente de la réponse (`send_command_register` + `wait_response`) | `agent_service.rs`, `rpc_manager.rs` |
 | Mort de `pi` (EOF / erreur de lecture) → table des réponses attendues vidée ⇒ attentes réveillées **immédiatement** au lieu du timeout complet (30 s) | `rpc_manager.rs` (`read_jsonl_loop`) |
+| Caractère UTF-8 multi-octets (é, à, emoji) coupé entre deux lectures de 4096 octets : ses premiers octets sont **gardés pour le bloc suivant** (`decode_utf8_chunk`), jamais décodés seuls en « �� » ; seule une séquence réellement invalide devient U+FFFD. Même helper pour le journal final `command_end.output` des commandes web (`stream_pipe`), qui ne retire plus un bloc entier | `rpc_manager.rs` (`read_jsonl_loop`, tests `rpc_utf8_coupe_*`), `web_server.rs` (`stream_pipe`, tests `stream_pipe_utf8_*`) |
 | Commandes **sondées** en boucle qui démarrent la session de l'Assistant (`get_super_agent_state`, `new_super_agent_session`, `set_super_agent_model`) : `async` + `spawn_blocking`, jamais sur le thread principal | `super_agent.rs` |
 
 ---

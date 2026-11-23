@@ -290,6 +290,47 @@ pub fn stop_session(session: &mut RpcSession) {
     session.child.wait().ok();
 }
 
+// ── UTF-8 decoding of a stream read in chunks ──
+
+/// Decodes `chunk` after the bytes left in `pending`.
+/// A multi-byte character cut at the end of a chunk (é, à, emoji) is NOT
+/// decoded: its leading bytes stay in `pending` until the next chunk (RPC-01).
+/// Only a really invalid sequence becomes U+FFFD (like `from_utf8_lossy`);
+/// no valid byte is ever lost.
+pub(crate) fn decode_utf8_chunk(pending: &mut Vec<u8>, chunk: &[u8]) -> String {
+    pending.extend_from_slice(chunk);
+    let mut out = String::new();
+    loop {
+        let (valid, invalid_len) = match std::str::from_utf8(&pending[..]) {
+            Ok(_) => (pending.len(), None),
+            Err(e) => (e.valid_up_to(), e.error_len()),
+        };
+        if let Ok(s) = std::str::from_utf8(&pending[..valid]) {
+            out.push_str(s);
+        }
+        match invalid_len {
+            Some(len) => {
+                // Invalid sequence in the middle of the stream: replaced, then go on.
+                out.push('\u{FFFD}');
+                pending.drain(..valid + len);
+            }
+            None => {
+                // Everything is decoded, or only an incomplete char remains at the end.
+                pending.drain(..valid);
+                return out;
+            }
+        }
+    }
+}
+
+/// End of stream: bytes still pending (truncated character) become U+FFFD
+/// instead of being lost.
+pub(crate) fn flush_utf8_pending(pending: &mut Vec<u8>) -> String {
+    let rest = String::from_utf8_lossy(pending).into_owned();
+    pending.clear();
+    rest
+}
+
 // ── JSONL Parser (thread stdout) ──
 
 /// Lit le stdout JSONL de pi jusqu'à EOF. Retourne `true` si la sortie est
@@ -310,6 +351,9 @@ fn read_jsonl_loop(
     broadcast_channel: Option<String>,
 ) -> bool {
     let mut buffer = String::new();
+    // Bytes of a UTF-8 character cut between two reads (RPC-01). A last line
+    // without a final `\n` stays ignored at EOF, as before: no flush here.
+    let mut utf8_pending: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];
     let mut involuntary_exit = false;
 
@@ -338,7 +382,7 @@ fn read_jsonl_loop(
                     continue;
                 }
 
-                buffer.push_str(&String::from_utf8_lossy(&buf[..n]));
+                buffer.push_str(&decode_utf8_chunk(&mut utf8_pending, &buf[..n]));
 
                 // Split sur \n uniquement (pas U+2028, U+2029)
                 while let Some(pos) = buffer.find('\n') {
@@ -503,14 +547,41 @@ pub fn convert_text_with_pi(
 
     // Spawn pi --mode rpc --no-session
     let mut cmd = std::process::Command::new(pi_exe);
-    cmd.args(["--mode", "rpc", "--no-session"])
-        .current_dir(cwd)
-        .stdin(std::process::Stdio::piped())
+    cmd.args(["--mode", "rpc", "--no-session"]).current_dir(cwd);
+    crate::hide_console(&mut cmd);
+    run_pdf_conversion(cmd, provider, model_id, prompt, PDF_CONVERT_TIMEOUT)
+}
+
+/// Functional deadline of the PDF → Markdown conversion (unchanged: 2 minutes).
+const PDF_CONVERT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Deadline message ("… plus de 2 minutes" for the default delay).
+fn pdf_timeout_message(timeout: std::time::Duration) -> String {
+    let secs = timeout.as_secs();
+    let label = if secs >= 60 && secs % 60 == 0 {
+        let min = secs / 60;
+        format!("{} minute{}", min, if min > 1 { "s" } else { "" })
+    } else {
+        format!("{} ms", timeout.as_millis())
+    };
+    format!("Timeout : la conversion a pris plus de {}", label)
+}
+
+/// Body of `convert_text_with_pi`: `cmd` (program + arguments + cwd) and
+/// `timeout` are injected so the deadline can be tested with a fake engine.
+fn run_pdf_conversion(
+    mut cmd: std::process::Command,
+    provider: &str,
+    model_id: &str,
+    prompt: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    crate::hide_console(&mut cmd);
-
+    // `cmd` arrives already hidden (`hide_console` is set by the caller, where
+    // the command is created — guard `fenetres-noires-lancements.test.js`).
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Impossible de lancer pi pour la conversion PDF → MD : {}", e))?;
@@ -549,18 +620,38 @@ pub fn convert_text_with_pi(
     // Fermer stdin pour signaler à pi qu'on n'enverra plus de commandes
     drop(stdin);
 
-    // Lire la réponse de stdout jusqu'à agent_end ou timeout
-    let reader = BufReader::new(stdout);
+    // Lire la réponse de stdout jusqu'à agent_end ou timeout.
+    // RPC-02: the blocking read lives in a dedicated thread, the wait here has a
+    // REAL deadline (`recv_timeout`) — a silent engine is interrupted too.
+    // At the deadline the process is killed: its stdout closes, the thread reads
+    // EOF (or sees the closed channel) and ends by itself.
+    let (line_tx, line_rx) = mpsc::channel::<std::io::Result<String>>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let failed = line.is_err();
+            if line_tx.send(line).is_err() || failed {
+                break;
+            }
+        }
+    });
     let mut collected_text = String::new();
-    let timeout = std::time::Duration::from_secs(120);
-    let start = std::time::Instant::now();
+    let deadline = std::time::Instant::now() + timeout;
 
-    for line in reader.lines() {
-        if start.elapsed() > timeout {
+    loop {
+        // Deadline passed even if lines keep coming (chatty engine without
+        // agent_end): same stop as for a silent engine.
+        let now = std::time::Instant::now();
+        if now >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("Timeout : la conversion a pris plus de 2 minutes".to_string());
+            return Err(pdf_timeout_message(timeout));
         }
+        let line = match line_rx.recv_timeout(deadline - now) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue, // → stop above
+            // Reader thread ended: end of the stdout stream.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
 
         match line {
             Ok(line) => {
@@ -780,5 +871,196 @@ mod tests {
             project_busy(&activity),
             "un arrêt volontaire ne doit PAS réémettre de reset (pas de faux « Déconnecté »)"
         );
+    }
+
+    /// Fake reader that returns EXACTLY the given chunks, one per `read`, then
+    /// EOF. Lets a multi-byte UTF-8 character be cut between two reads.
+    struct ChunkedReader {
+        chunks: std::collections::VecDeque<Vec<u8>>,
+    }
+
+    impl ChunkedReader {
+        fn new(chunks: Vec<Vec<u8>>) -> Self {
+            Self { chunks: chunks.into() }
+        }
+    }
+
+    impl Read for ChunkedReader {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            match self.chunks.pop_front() {
+                None => Ok(0),
+                Some(chunk) => {
+                    assert!(chunk.len() <= out.len(), "bloc de test trop grand");
+                    out[..chunk.len()].copy_from_slice(&chunk);
+                    Ok(chunk.len())
+                }
+            }
+        }
+    }
+
+    /// RPC-01 : un caractère sur plusieurs octets (é, 🚀, à) coupé entre deux
+    /// lectures doit arriver intact, dans l'ordre, ligne JSONL par ligne JSONL,
+    /// y compris quand la coupure tombe sur le tout dernier bloc avant EOF.
+    /// Sans le correctif, chaque bloc était décodé seul → « �� ».
+    #[test]
+    fn rpc_utf8_coupe_entre_blocs_reste_intact() {
+        let l1 = "{\"type\":\"message_update\",\"t\":\"Caf\u{e9} \u{e9}t\u{e9}\"}\n";
+        let l2 = "{\"type\":\"message_update\",\"t\":\"go \u{1f680} !\"}\r\n";
+        let l3 = "{\"type\":\"agent_end\",\"t\":\"voil\u{e0}\"}\n";
+        let all: Vec<u8> = [l1, l2, l3].concat().into_bytes();
+
+        // Cut points: in the middle of the first « é » (2 bytes), after 1 then
+        // 3 bytes of 🚀 (4 bytes), and in the middle of « à » on the last chunk.
+        let e_pos = all.windows(2).position(|w| w == "\u{e9}".as_bytes()).unwrap();
+        let rocket = all.windows(4).position(|w| w == "\u{1f680}".as_bytes()).unwrap();
+        let a_pos = all.windows(2).position(|w| w == "\u{e0}".as_bytes()).unwrap();
+        let cuts = [e_pos + 1, rocket + 1, rocket + 3, a_pos + 1];
+        let mut chunks = Vec::new();
+        let mut prev = 0;
+        for c in cuts {
+            chunks.push(all[prev..c].to_vec());
+            prev = c;
+        }
+        chunks.push(all[prev..].to_vec()); // last chunk: 2nd byte of « à » + end
+
+        let emitted: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+        let running = Arc::new(AtomicBool::new(true));
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(8);
+        let involuntary = read_jsonl_loop(
+            Box::new(ChunkedReader::new(chunks)),
+            &|v: &Value| emitted.lock().unwrap().push(v.clone()),
+            running.clone(),
+            pending,
+            event_tx,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let texts: Vec<String> = emitted
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|v| v["t"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["Caf\u{e9} \u{e9}t\u{e9}", "go \u{1f680} !", "voil\u{e0}"],
+            "texte UTF-8 intact et ordre des événements préservé"
+        );
+        // Same content, same order, on the WebSocket fan-out.
+        let mut fanout = Vec::new();
+        while let Ok(v) = event_rx.try_recv() {
+            fanout.push(v["t"].as_str().unwrap_or("").to_string());
+        }
+        assert_eq!(fanout, texts);
+        // Stream close unchanged: EOF while running was still true.
+        assert!(involuntary, "EOF inattendu toujours signalé");
+        assert!(!running.load(Ordering::Relaxed));
+    }
+
+    /// Une dernière ligne sans `\n` (ici tronquée au milieu d'un « é ») reste
+    /// ignorée comme avant, sans panique ni événement fantôme.
+    #[test]
+    fn rpc_utf8_coupe_fin_de_flux_sans_saut_de_ligne() {
+        let full = "{\"type\":\"a\",\"t\":\"\u{e9}\"}\n{\"type\":\"b\",\"t\":\"\u{e9}";
+        let bytes = full.as_bytes();
+        let chunks = vec![bytes[..bytes.len() - 1].to_vec()]; // 2nd byte of « é » lost
+        let emitted: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(8);
+        let involuntary = read_jsonl_loop(
+            Box::new(ChunkedReader::new(chunks)),
+            &|v: &Value| emitted.lock().unwrap().push(v.clone()),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(HashMap::new())),
+            event_tx,
+            None,
+            None,
+            None,
+            None,
+        );
+        let got = emitted.lock().unwrap().clone();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["t"], "\u{e9}");
+        assert!(involuntary);
+    }
+
+    /// Temp directory private to the test (fictitious, removed at the end).
+    #[cfg(target_os = "linux")]
+    fn pdf_fake_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pilot-pdf2md-test-{}-{}-{}",
+            tag,
+            std::process::id(),
+            uuid_simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Fake engine: `/bin/sh` that records its PID then runs `script` (the PID
+    /// stays that of the final process thanks to `exec`). No real pi, no network.
+    #[cfg(target_os = "linux")]
+    fn pdf_fake_engine(dir: &std::path::Path, script: &str) -> std::process::Command {
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.args(["-c", &format!("echo $$ > pid; {}", script)]).current_dir(dir);
+        cmd
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pdf_fake_pid_alive(dir: &std::path::Path) -> bool {
+        let pid = std::fs::read_to_string(dir.join("pid")).expect("PID du faux moteur");
+        std::path::Path::new(&format!("/proc/{}", pid.trim())).exists()
+    }
+
+    /// RPC-02 : un moteur MUET (aucune ligne sur stdout) doit être interrompu à
+    /// l'échéance — erreur de délai rendue à temps, processus tué et récolté.
+    /// Avant le correctif, le délai n'était vérifié qu'à l'arrivée d'une ligne :
+    /// l'attente durait autant que le moteur (ici 8 s, en vrai sans fin).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pdf2md_moteur_muet_interrompu_a_l_echeance() {
+        let dir = pdf_fake_dir("muet");
+        let cmd = pdf_fake_engine(&dir, "exec sleep 8");
+        let start = std::time::Instant::now();
+        let res = run_pdf_conversion(cmd, "", "", "texte fictif",
+            std::time::Duration::from_millis(400));
+        let elapsed = start.elapsed();
+        let alive = pdf_fake_pid_alive(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let err = res.expect_err("un moteur muet ne doit pas produire de texte");
+        assert!(err.starts_with("Timeout"), "erreur de délai attendue, reçu : {}", err);
+        assert!(elapsed < std::time::Duration::from_secs(4), "échéance non tenue : {:?}", elapsed);
+        assert!(!alive, "le faux moteur doit être tué et récolté à l'échéance");
+        // The default functional delay and its message are unchanged.
+        assert_eq!(PDF_CONVERT_TIMEOUT, std::time::Duration::from_secs(120));
+        assert_eq!(
+            pdf_timeout_message(PDF_CONVERT_TIMEOUT),
+            "Timeout : la conversion a pris plus de 2 minutes"
+        );
+    }
+
+    /// Non-régression : un moteur qui répond (`text_delta` puis `agent_end`)
+    /// rend son texte tout de suite, puis il est arrêté (il dormait ensuite).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pdf2md_moteur_qui_repond_rend_le_texte_avant_l_echeance() {
+        let dir = pdf_fake_dir("repond");
+        let delta = r##"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"# Titre é"}}"##;
+        let script = format!("printf '%s\\n' '{}' '{{\"type\":\"agent_end\"}}'; exec sleep 8", delta);
+        let cmd = pdf_fake_engine(&dir, &script);
+        let start = std::time::Instant::now();
+        let res = run_pdf_conversion(cmd, "", "", "texte fictif",
+            std::time::Duration::from_secs(5));
+        let elapsed = start.elapsed();
+        let alive = pdf_fake_pid_alive(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(res, Ok("# Titre \u{e9}".to_string()));
+        assert!(elapsed < std::time::Duration::from_secs(4), "{:?}", elapsed);
+        assert!(!alive, "le moteur doit être arrêté après agent_end");
     }
 }
