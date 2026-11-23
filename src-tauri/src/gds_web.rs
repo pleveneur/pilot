@@ -40,6 +40,8 @@ use tauri::Manager;
 
 /// Routes GDS propres au poste (montées par `gds_router`, donc derrière
 /// `auth_middleware` dans `web_server.rs`, comme le routeur partagé).
+/// `web_server::protect_api` also puts every mutation behind the desk's
+/// readonly gate (WEB-01); the standalone GDS server is not affected.
 pub(crate) fn gds_desktop_routes<S: DesktopGdsCtx>() -> Router<Arc<S>> {
     Router::new()
         .route("/api/gds/provision", post(gds_provision_web::<S>))
@@ -234,6 +236,12 @@ async fn gds_sync_web<S: DesktopGdsCtx>(
 /// POST /api/gds/tracking/force — force la poussée du suivi local vers Postgres
 /// (réservé à l'administrateur ou à un développeur attribué au projet — L3.6).
 /// Phase C1.3.
+///
+/// Note (WEB-01): this handler does not check the HTTP caller's role itself.
+/// The role check happens downstream in `gds_sync::force_push_tracking` (service
+/// path: the GDS account's role; legacy path: `ensure_project_publisher` with
+/// the identity configured in the project's `.pilot/gds.json`). Desk readonly
+/// mode is enforced upstream by `web_server::readonly_guard`.
 async fn gds_tracking_force_web<S: DesktopGdsCtx>(
     State(ctx): State<Arc<S>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
